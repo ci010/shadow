@@ -3,8 +3,26 @@ import { test, type TestContext } from 'node:test'
 import { Bus } from '../bus/bus.ts'
 import { DiscordChannel } from './discord.ts'
 import { DiscordPermission as P } from './discord-permissions.ts'
+import type { InboundMessage } from '../bus/events.ts'
 
 const all = P.view | P.send | P.attach | P.createPublicThreads | P.sendInThreads
+
+test('Discord names guild sessions from channels and private sessions from the other participant', async t => {
+  const channel = new DiscordChannel(new Bus(), { token: 'synthetic-token' })
+  t.after(() => channel.stop())
+  const received: InboundMessage[] = []
+  channel.setReceiver(async message => {
+    received.push(message)
+    return { status: 'accepted', sessionId: `discord:${message.chatId}`, inputId: message.messageId }
+  })
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ name: 'Readable channel' }))
+  const base = { content: 'hello', author: { id: 'person', username: 'username', global_name: 'Readable person' } }
+  await channel['handleDispatch']('MESSAGE_CREATE', { ...base, id: 'group-message', channel_id: 'group', guild_id: 'guild' })
+  await channel['handleDispatch']('MESSAGE_CREATE', { ...base, id: 'private-message', channel_id: 'private' })
+  assert.deepEqual(received.map(message => [message.chatId, message.chatName]), [
+    ['group', 'Readable channel'], ['private', 'Readable person'],
+  ])
+})
 
 function fixture(t: TestContext, type = 0) {
   let now = Date.now()

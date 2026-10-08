@@ -42,7 +42,7 @@ test('host starts Projects concurrently with bounded pressure and waits for thei
         async shutdown() { stopped.push(dependencies.project.id) },
         updateConfig() {},
       }
-    }, process.cwd()).then(value => { resolved = true; return value })
+    }).then(value => { resolved = true; return value })
     const wait = async (check: () => boolean) => {
       const deadline = Date.now() + 5000
       while (!check()) {
@@ -96,7 +96,7 @@ test('a failed Project remains explicitly unavailable without taking the shared 
         app: new Hono(), folders: new FolderRegistry(dependencies.home), ready: Promise.resolve(),
         async shutdown() { publisher.close() }, updateConfig() {},
       }
-    }, process.cwd())
+    })
     try {
       assert(hub)
       const unavailable = { kind: 'sessions' as const, projectId: failed.id }

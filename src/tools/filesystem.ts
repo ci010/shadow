@@ -250,7 +250,6 @@ export class WriteTool implements Tool {
 
   constructor(
     private workspace: string,
-    private selfCodeRoot?: string,
     private restrictToWorkspace: boolean = false,
     private virtualFs?: VirtualFs,
   ) {}
@@ -296,7 +295,7 @@ export class WriteTool implements Tool {
       return await this.writeRemote(args, context)
     }
     const filePath = this.resolve(String(args.path), context)
-    const restriction = this.checkWriteAllowed(filePath, context)
+    const restriction = this.checkWriteAllowed(filePath)
     if (restriction) return restriction
 
     const content = String(args.content)
@@ -451,16 +450,9 @@ export class WriteTool implements Tool {
 
   private checkWriteAllowed(
     filePath: string,
-    context: ExecutionContext,
   ): string | null {
     if (this.restrictToWorkspace && !isWithinPath(this.workspace, filePath)) {
       return 'Error: write restricted to workspace directory'
-    }
-    if (
-      this.selfCodeRoot && isWithinPath(this.selfCodeRoot, filePath) &&
-      !context.admin
-    ) {
-      return 'Error: write to src/ is restricted to admin sessions.'
     }
     return null
   }

@@ -409,7 +409,7 @@
                 :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
             <div class="composer-submit">
-            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? t('Stopping current request; waiting for Main...') : preparingSend ? t('Starting conversation...') : submittingMessage ? t('Sending...') : queueModifier ? t('Ctrl+Enter to add to queue') : answeringQuestion ? t('Enter to answer · Shift+Enter for a new line') : imageEditsBusy.size ? t('Preparing marked image...') : attachmentDropTarget ? t('Drop files to attach') : savingSettings ? t('Saving conversation settings...') : pickingContext ? t('Choosing context...') : requestBusy ? t('Enter for guidance · Ctrl+Enter to queue') : t('Enter to send · Ctrl+Enter to queue') }}</span>
+            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? t('Stopping current request; waiting for Main...') : preparingSend ? t('Starting conversation...') : submittingMessage ? t('Sending...') : pastingFiles ? t('Reading copied files...') : queueModifier ? t('Ctrl+Enter to add to queue') : answeringQuestion ? t('Enter to answer · Shift+Enter for a new line') : imageEditsBusy.size ? t('Preparing marked image...') : attachmentDropTarget ? t('Drop files to attach') : savingSettings ? t('Saving conversation settings...') : pickingContext ? t('Choosing context...') : requestBusy ? t('Enter for guidance · Ctrl+Enter to queue') : t('Enter to send · Ctrl+Enter to queue') }}</span>
             <button
               v-if="requestBusy"
               class="composer-send composer-stop"
@@ -530,7 +530,7 @@ import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
 import { createFolderChatDraft, createRemoteChatDraft } from '../remote-conversations.ts'
 import { createExecutionLocationDraft, type ExecutionLocation } from '../execution-locations.ts'
 import type { SessionDetails } from '../session-details.ts'
-import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
+import { appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { isUserMessage, resendableUserMessage, messageHistoryMarkers, groupMessageHistoryMarkers } from '../message-history.ts'
@@ -685,6 +685,7 @@ const readonlyContextError = ref('')
 const preparingSend = ref(false)
 const submittingMessage = ref(false)
 const pickingContext = ref(false)
+const pastingFiles = ref(false)
 const attachmentInput = ref<HTMLInputElement>()
 const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && typeof File === 'function' && typeof FormData === 'function')
 const canPickContext = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
@@ -701,7 +702,7 @@ const canSend = computed(() => !modelSelection?.loading.value && !modelSelection
   contextItems.value.length,
   pendingAttachments.value.length,
 ) && !submissionBusy.value && !currentRequest.value?.state.stopping && installation.value.uiScopes.includes('chat:write')
-  && !pickingContext.value && !savingSettings.value && imageEditsBusy.value.size === 0)
+  && !pickingContext.value && !pastingFiles.value && !savingSettings.value && imageEditsBusy.value.size === 0)
 let sendRequest: AbortController | undefined
 let historyRequest: AbortController | undefined
 const { activeSessionId, selectedMode, requestSession, selectSession, inspectExecution, restoreSession } = useConversationNavigation({
@@ -1704,25 +1705,43 @@ function handleAttachmentInput(event: Event): void {
   chatInput.value?.focus({ preventScroll: true })
 }
 
-function handleComposerPaste(event: ClipboardEvent): void {
+async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
   if (!canQuoteSelection.value) { event.preventDefault(); return }
-  if (!canAttachFiles.value) {
-    if (clipboardImageFiles(event.clipboardData).length) {
-      if (!event.clipboardData?.getData('text/plain')) event.preventDefault()
-      composerError.value = t('Local image attachments are not transferred to the selected remote workspace.')
-    }
-    return
-  }
+  const generation = sessionSelectionGeneration
+  let readingNative = false
   try {
-    const images = clipboardImageFiles(event.clipboardData)
-    if (!images.length) return
+    const text = event.clipboardData?.getData('text/plain')
+    const native = window.shadowDesktop?.clipboardFiles
+    let files: File[]
+    try { files = clipboardChatFiles(event.clipboardData) }
+    catch (error) {
+      if (!native || text) throw error
+      files = []
+    }
+    if (!files.length && (text || !native || pastingFiles.value)) return
     // Keep native text paste/undo when the clipboard also contains plain text.
-    if (!event.clipboardData?.getData('text/plain')) event.preventDefault()
-    pendingAttachments.value = appendChatAttachments(pendingAttachments.value, images)
+    if (!text) event.preventDefault()
+    if (!canAttachFiles.value) {
+      composerError.value = t('Local file attachments are not transferred to the selected remote workspace.')
+      return
+    }
+    if (!files.length && native) {
+      readingNative = true
+      pastingFiles.value = true
+      const copied = await native.readFiles()
+      if (generation !== sessionSelectionGeneration || !canAttachFiles.value || !canQuoteSelection.value) return
+      files = nativeClipboardChatFiles(copied)
+    }
+    pendingAttachments.value = appendChatAttachments(pendingAttachments.value, files)
     composerError.value = ''
   } catch (cause) {
-    event.preventDefault()
-    composerError.value = cause instanceof Error ? cause.message : t('Could not paste the image. Paste again or use Add file.')
+    if (!event.clipboardData?.getData('text/plain')) event.preventDefault()
+    if (generation === sessionSelectionGeneration) {
+      composerError.value = t('Could not paste the files. Copy readable files (not folders), up to 100 files and 100 MiB, and try again or use Add file.')
+      console.warn('[chat] Clipboard attachment read failed', cause)
+    }
+  } finally {
+    if (readingNative && generation === sessionSelectionGeneration) pastingFiles.value = false
   }
 }
 
@@ -1787,6 +1806,7 @@ function resetConversation(): void {
   preparingSend.value = false
   submittingMessage.value = false
   pickingContext.value = false
+  pastingFiles.value = false
   streaming.value = false
   streamPhase.value = undefined
   clearPendingAttachments()
@@ -2381,7 +2401,7 @@ async function sendMessage(overrideContent?: string, opts?: {
   }
   if ((!content && !retry && attachments.length === 0) || submissionBusy.value || currentRequest.value?.state.stopping
     || !installation.value.uiScopes.includes('chat:write') || retry && requestBusy.value
-    || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0) return
+    || pickingContext.value || pastingFiles.value || savingSettings.value || imageEditsBusy.value.size > 0) return
   if (!retry && !opts?.queue && answeringQuestion.value && activeAsk.value) {
     await sendQuestionAnswer(activeAsk.value, content, attachments)
     return

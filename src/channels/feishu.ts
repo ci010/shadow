@@ -71,6 +71,7 @@ const CHAT_CACHE_TTL_MS = 30_000
 
 interface FeishuConversation {
   conversation?: 'direct' | 'group'
+  name?: string
   eligible: boolean
 }
 
@@ -530,10 +531,10 @@ export class FeishuChannel extends AbstractChannel {
             const mode = response.data?.chat_mode
             if (mode === 'p2p') return { conversation: 'direct', eligible: false }
             if (mode === 'group' || mode === 'topic') {
-              return { conversation: 'group', eligible: response.data?.chat_post_permission === 'all' }
+              return { conversation: 'group', name: response.data?.name, eligible: response.data?.chat_post_permission === 'all' }
             }
           }
-        } catch { /* Inbound chat_type identifies conversation type, not posting rights. */ }
+        } catch { console.debug('[feishu] Could not resolve chat metadata') }
       }
       return { conversation: this.conversations.get(chatId), eligible: false }
     })()
@@ -1082,6 +1083,7 @@ export class FeishuChannel extends AbstractChannel {
 
       // Best-effort display name: resolve from contact API with local cache
       const authorName = await this._fetchUserName(senderId)
+      const chatName = isGroup ? (await this._conversationMetadata(outerChatId, false)).name : authorName
       if (!this._running || this.generation !== generation) return
 
       await this.handleIncoming(
@@ -1093,6 +1095,7 @@ export class FeishuChannel extends AbstractChannel {
           messageId,
           isGroup,
           senderName: authorName,
+          chatName,
           silent,
         },
         fileMedia,

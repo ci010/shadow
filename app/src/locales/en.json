@@ -1,4 +1,9 @@
 {
+  "Folders cannot be pasted as attachments. Copy files instead.": "Folders cannot be pasted as attachments. Copy files instead.",
+  "Could not read the clipboard file. Paste again or use Add file.": "Could not read the clipboard file. Paste again or use Add file.",
+  "Could not paste the files. Copy readable files (not folders), up to 100 files and 100 MiB, and try again or use Add file.": "Could not paste the files. Copy readable files (not folders), up to 100 files and 100 MiB, and try again or use Add file.",
+  "Local file attachments are not transferred to the selected remote workspace.": "Local file attachments are not transferred to the selected remote workspace.",
+  "Reading copied files...": "Reading copied files...",
   "Enable QQ's receive-all-messages capability to retain group context even without a mention.": "Enable QQ's receive-all-messages capability to retain group context even without a mention.",
   "Trigger model on": "Trigger model on",
   "Default: only @mentions trigger a model call in groups. Other messages are saved as context without a model call. All messages triggers on every received group message. Direct messages always trigger.": "Default: only {'@'}mentions trigger a model call in groups. Other messages are saved as context without a model call. All messages triggers on every received group message. Direct messages always trigger.",

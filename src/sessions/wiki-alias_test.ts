@@ -130,7 +130,7 @@ async function scenario(
     const tools = new Tools(home)
     tools.register(new ReadTool(home, vfs))
     tools.register(new SearchTool(home, undefined, vfs))
-    tools.register(new WriteTool(home, undefined, false, vfs))
+    tools.register(new WriteTool(home, false, vfs))
     const calls: ObservedCall[] = []
     const skillLoads = new Set<string>()
     tools.addHook({

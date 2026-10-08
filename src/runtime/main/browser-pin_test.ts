@@ -30,7 +30,7 @@ test('PIN-only Main requires a browser session at both host and Project admin bo
       const app = new Hono()
       app.get('/api/admin-fixture', async c => c.json({ allowed: await dependencies.authorize(c.req.raw) }))
       return { app, folders: new FolderRegistry(dependencies.home), ready: Promise.resolve(), async shutdown() {}, updateConfig() {} }
-    }, process.cwd())
+    })
     try {
       const base = `http://127.0.0.1:${address.port}`
       assert.equal((await fetch(base + '/api/projects')).status, 401)

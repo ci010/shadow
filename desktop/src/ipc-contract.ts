@@ -7,6 +7,7 @@ import type { DesktopWebPairingApi } from './web-pairing-contract.js'
 import type { ChildPairInput, ChildSetupInfo } from './bootstrap/child.js'
 import { parseChildPairInput } from './bootstrap/child.js'
 import type { DesktopMicroAppsApi } from './micro-app-contract.js'
+import type { DesktopClipboardFilesApi } from './clipboard-files-contract.js'
 
 export const IPC_CHANNELS = {
   loadWizard: 'shadow:bootstrap:load',
@@ -59,6 +60,7 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+  readonly clipboardFiles: DesktopClipboardFilesApi
   readonly microApps: DesktopMicroAppsApi
   readonly webPairing: DesktopWebPairingApi
   readonly diagnostics: {

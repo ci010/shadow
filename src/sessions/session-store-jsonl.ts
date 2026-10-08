@@ -43,6 +43,7 @@ export class JsonlSessionStore implements SessionStore {
       const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
       if (!state.sessionId) return null
       if (state.name !== undefined) state.name = parseSessionName(state.name)
+      if (state.chatName !== undefined) state.chatName = parseSessionName(state.chatName)
       parsePhysicalIdVersion(state.physicalIdVersion)
       parseContextResetAt(state.contextResetAt)
       parseChannelBoundary(state.channelBoundary)
@@ -59,6 +60,7 @@ export class JsonlSessionStore implements SessionStore {
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
     if (state.name !== undefined) state = { ...state, name: parseSessionName(state.name) }
+    if (state.chatName !== undefined) state = { ...state, chatName: parseSessionName(state.chatName) }
     state = normalizeInitiativeMetadata(validateOwnership({ ...state, ownershipVersion: state.ownershipVersion ?? 2 })) as unknown as SessionState
     parseAutomationSessionRef(state.automation)
     parsePhysicalIdVersion(state.physicalIdVersion)
@@ -115,6 +117,7 @@ export class JsonlSessionStore implements SessionStore {
           const parsed = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
           if (!parsed.sessionId) continue
           if (parsed.name !== undefined) parsed.name = parseSessionName(parsed.name)
+          if (parsed.chatName !== undefined) parsed.chatName = parseSessionName(parsed.chatName)
           parsePhysicalIdVersion(parsed.physicalIdVersion)
           parseContextResetAt(parsed.contextResetAt)
           parseChannelBoundary(parsed.channelBoundary)
@@ -145,6 +148,7 @@ export class JsonlSessionStore implements SessionStore {
           const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
           if (!state.sessionId) continue
           if (state.name !== undefined) state.name = parseSessionName(state.name)
+          if (state.chatName !== undefined) state.chatName = parseSessionName(state.chatName)
           parsePhysicalIdVersion(state.physicalIdVersion)
           parseContextResetAt(state.contextResetAt)
           parseChannelBoundary(state.channelBoundary)

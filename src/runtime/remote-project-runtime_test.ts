@@ -49,7 +49,7 @@ test('production project composition creates remote folders and sessions with op
   let scope = createProjectScope('default')
   const startRuntime = () => scope.run(() => createProjectRuntime(effective, {
     project, home, scope, catalog, configStore, mainCluster: cluster, copilotAuth: new CopilotAuthenticator(),
-    chromePortAllocator: new ChromePortAllocator(), authorize: () => true, selfCodeRoot: process.cwd(),
+    chromePortAllocator: new ChromePortAllocator(), authorize: () => true,
   }))
   let runtime = await startRuntime()
   try {

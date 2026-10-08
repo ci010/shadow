@@ -200,7 +200,7 @@ export class LearningTools {
       }
       const continuity = 'If you change this file, tell the user'
       if (!args.content.includes(continuity)) throw new Error('Preserve the SOUL continuity and user-notification clause.')
-      await new WriteTool(this.runtime.sessions.workspace, undefined, true).execute({ path: file, content: args.content }, context)
+      await new WriteTool(this.runtime.sessions.workspace, true).execute({ path: file, content: args.content }, context)
       const saved = readFileSync(file, 'utf8')
       if (saved !== args.content) throw new Error('Soul change did not persist.')
       this.runtime.ledger.artifact(batch.id, { kind: 'soul', path: 'SOUL.md', revision: fingerprint(saved) })

@@ -364,6 +364,15 @@ restrictions. These are entry-point checks, not an OS sandbox for host commands.
 
 ## Requests for input
 
+The message box accepts pasted files as attachments, not just images. In the
+Electron desktop app on Windows, copy one or more files in File Explorer and
+paste into the message box. They appear in the attachment tray and are uploaded
+only when you send. Plain text and text paths remain text; folders are not
+attached. Native clipboard reads are limited to 100 files and 100 MiB in total.
+Other desktop platforms support native file-URL clipboard lists when supplied
+by their file manager; browser support depends on the files exposed by the paste
+event. Local attachments are still unavailable for remote working directories.
+
 When an agent asks a question in a direct web conversation, choose a suggested
 option and **Continue**, or write your own answer in the ordinary message box
 below the question. The box is explicitly labeled **Your answer** while a

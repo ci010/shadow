@@ -335,7 +335,6 @@ test('audience lookup uses the exact bot address and current configuration on ev
   }
   const first = (await provider.getPromptSection(ctx))!
   assert.match(first, /Trusted group/)
-  assert.match(first, /Self-code \(src\/\) writes\*\*: NOT ALLOWED/)
   trusted = false
   const next = (await provider.getPromptSection({ ...ctx, admin: true }))!
   assert.match(next, /Shared group/)
@@ -424,7 +423,6 @@ test('runtime advertises only mode-and-role permitted delegation', async t => {
     }))!
     assert.match(prompt, /Allowed Delegation Modes\*\*: none/)
     assert.match(prompt, /Coordinator tool limits are enforced by the runtime/)
-    assert.match(prompt, /Self-code \(src\/\) writes\*\*: NOT ALLOWED/)
     assert.match(prompt, /Worker role catalog/)
     assert.doesNotMatch(prompt, /Ask decisions with yield|Managed Subagents|fixture:child/)
     assert.equal(activeLookups, 0)

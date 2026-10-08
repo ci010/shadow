@@ -20,7 +20,6 @@ export interface ProjectRuntimeDependencies {
   copilotAuth: CopilotAuthenticator
   chromePortAllocator: ChromePortAllocator
   authorize: (request: Request) => boolean | Promise<boolean>
-  selfCodeRoot: string
   realtimeHub?: RealtimeHub
 }
 

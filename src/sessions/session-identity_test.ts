@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { join } from 'node:path'
 import { mkdir } from 'node:fs/promises'
 import { Bus } from '../bus/bus.ts'
-import { channelSessionId } from '../bus/events.ts'
+import { channelSessionId, type InboundMessage } from '../bus/events.ts'
 import { ContextBuilder } from '../agent/context/builder.ts'
 import { IdentityManager } from '../agent/identity.ts'
 import { BackgroundTaskManager } from '../agent/background-task.ts'
@@ -73,7 +73,7 @@ function fixture(workspace: string, store: SessionStore) {
     handoffManager: new HandoffManager(provider, llm.contextWindow, { autoHandoff: false }, workspace, store),
     getLlmRuntimeConfig: () => llm,
   })
-  async function send(conversationId: string, content: string) {
+  async function send(conversationId: string, content: string, fields: Partial<InboundMessage> = {}) {
     const messageId = crypto.randomUUID()
     const finished = Promise.withResolvers<SessionTurnFact>()
     const subscription = bus.on('session.turn.finished', fact => {
@@ -84,6 +84,7 @@ function fixture(workspace: string, store: SessionStore) {
         channel: 'qq', chatId: conversationId, channelAddress: address(conversationId),
         senderId: 'synthetic-user', messageId, timestamp: new Date().toISOString(), content,
         isGroup: conversationId.startsWith('group:'),
+        ...fields,
       }, llm)
       const fact = await finished.promise
       assert.equal(fact.status, 'completed', fact.error)
@@ -94,6 +95,56 @@ function fixture(workspace: string, store: SessionStore) {
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  for (const platform of ['qq', 'discord', 'feishu']) {
+    test(`${Store.name}: ${platform} conversation names persist, refresh and preserve manual names`, async () => {
+      await withTempWorkspace(async workspace => {
+        const directory = join(workspace, 'sessions')
+        let store: SessionStore = new Store(directory)
+        await store.init()
+        let f = fixture(workspace, store)
+        const target = { ...address('group:room'), platform }
+        const sessionId = channelSessionId(target)
+        const fields = { channel: platform, channelAddress: target, isGroup: true }
+        try {
+          await f.sessions.start()
+          await f.send(target.conversationId, 'First message', { ...fields, chatName: 'Readable room', senderName: 'Alice' })
+          assert.equal(f.sessions.listSessions().find(s => s.sessionId === sessionId)?.name, 'Readable room')
+          await f.send(target.conversationId, 'Name unavailable', fields)
+          assert.equal(f.sessions.getSessionState(sessionId)?.chatName, 'Readable room')
+          await f.send(target.conversationId, 'Renamed on platform', { ...fields, chatName: 'Renamed room' })
+          assert.equal((await f.sessions.getSessionDetails(sessionId))?.name, 'Renamed room')
+          await f.close()
+          store.close?.()
+          store = new Store(directory)
+          await store.init()
+          f = fixture(workspace, store)
+          await f.sessions.start()
+          assert.equal((await f.sessions.getSessionDetails(sessionId))?.name, 'Renamed room')
+          const app = new Hono()
+          sessionsApiPlugin(f.sessions)(app)
+          const graph = await (await app.request('/api/sessions/graph')).json()
+          assert.equal(graph.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId)?.title, 'Renamed room')
+          await f.sessions.renameSession(sessionId, 'My custom name')
+          await f.send(target.conversationId, 'Another rename', { ...fields, chatName: 'Latest platform name' })
+          assert.equal((await f.sessions.getSessionDetails(sessionId))?.name, 'My custom name')
+          assert.equal(f.sessions.listSessions().find(s => s.sessionId === sessionId)?.name, 'My custom name')
+          assert.equal((await store.getState(sessionId))?.chatName, 'Latest platform name')
+          const dm = { ...target, conversationId: 'direct:person' }
+          await f.send(dm.conversationId, 'Private hello', {
+            ...fields, channelAddress: dm, isGroup: false, senderName: 'Alice',
+          })
+          assert.equal((await f.sessions.getSessionDetails(channelSessionId(dm)))?.name, 'Alice')
+          const unknown = { ...target, conversationId: 'group:unknown' }
+          await f.send(unknown.conversationId, 'Fallback message', {
+            ...fields, channelAddress: unknown, senderName: 'Not the group name', chatName: '  ',
+          })
+          assert.equal(f.sessions.getSessionState(channelSessionId(unknown))?.chatName, undefined)
+          assert.equal((await f.sessions.getSessionDetails(channelSessionId(unknown)))?.name, 'Fallback message')
+        } finally { await f.close(); store.close?.() }
+      })
+    })
+  }
+
   test(`${Store.name}: same-bot private and group histories, provider inputs and deletion remain isolated across restart`, { timeout: 15000 }, async () => {
     await withTempWorkspace(async workspace => {
       const directory = join(workspace, 'sessions')

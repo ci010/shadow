@@ -15,6 +15,7 @@ import { createStartupDiagnosticsApi } from './startup-diagnostics-ipc.js'
 import { createWebPairingApi } from './web-pairing-preload.js'
 import type { ChildPairInput } from './bootstrap/child.js'
 import { MICRO_APP_CHANNELS, parseMicroAppIdentity, type MicroAppIdentity } from './micro-app-contract.js'
+import { createPasteClipboardFilesApi } from './clipboard-files-contract.js'
 
 const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction) => {
   window.dispatchEvent(new CustomEvent(DOCUMENT_TAB_CHANNEL, { detail: direction }))
@@ -22,6 +23,7 @@ const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction)
 window.addEventListener('unload', disposeDocumentTabs, { once: true })
 
 const api: ShadowDesktopApi = Object.freeze({
+  clipboardFiles: createPasteClipboardFilesApi(ipcRenderer, window),
   microApps: Object.freeze({
     open: (identity: MicroAppIdentity) => ipcRenderer.invoke(MICRO_APP_CHANNELS.open, parseMicroAppIdentity(identity)),
     refresh: () => ipcRenderer.invoke(MICRO_APP_CHANNELS.refresh),

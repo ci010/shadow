@@ -1,5 +1,5 @@
 import { trace } from '@opentelemetry/api'
-import { parseSessionName } from './session-name.ts'
+import { parseSessionName, SESSION_NAME_MAX_LENGTH } from './session-name.ts'
 import { parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
 import { readSessionFileChanges } from './file-changes.ts'
 import { mkdir } from 'node:fs/promises'
@@ -1273,6 +1273,9 @@ ${JSON.stringify(request)}`,
       }
       try {
         this.deps.conversationPolicies?.authorize(sessionId, input)
+        if (input.source.kind === 'user') {
+          await this.updateChannelConversationName(sessionId, input.source.sender)
+        }
         session.dispatch(deliveryInput, resolveInferenceSettings(
           config, this.deps.conversationPolicies?.resolve(sessionId)?.agent, state?.config,
         ))
@@ -2079,7 +2082,7 @@ ${JSON.stringify(request)}`,
       ...parseTopicSessionFields(state),
       description: state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
       sessionId,
-      name: state.name ?? state.topic?.title ?? (state.sessionKind === 'orchestrator' ? 'Project coordination' : await this.getFirstUserMessage(sessionId)),
+      name: state.name ?? state.topic?.title ?? state.chatName ?? (state.sessionKind === 'orchestrator' ? 'Project coordination' : await this.getFirstUserMessage(sessionId)),
       workdir: {
         kind: remote ? 'remote' as const : 'local' as const,
         displayPath: remote
@@ -2256,7 +2259,7 @@ ${JSON.stringify(request)}`,
     return Object.values(this.sessionStates).map((s) => ({
       ...(s.projectId ? { projectId: s.projectId } : {}),
       sessionId: s.sessionId,
-      name: s.name ?? s.topic?.title,
+      name: s.name ?? s.topic?.title ?? s.chatName,
       description: s.description ?? (s.topic ? [s.topic.goal, s.topic.scope, s.topic.nonGoals].filter(Boolean).join('\n') : undefined),
       segmentIndex: s.segmentIndex,
       lastActivityAt: s.lastActivityAt,
@@ -2564,12 +2567,30 @@ ${JSON.stringify(request)}`,
   }
 
   /** Commands need durable identity and local session data, but no model loop. */
-  async prepareCommandSession(sessionId: string): Promise<void> {
+  async prepareCommandSession(sessionId: string, sender?: InboundMessage): Promise<void> {
     this.assertHistoryWritable(sessionId)
     await this.withStateCreation(sessionId, async () => {
       const state = await this.createMissingState(sessionId)
       await this.ensureSessionDataDirectory(state)
+      if (sender) await this.updateChannelConversationName(sessionId, sender)
     })
+  }
+
+  private async updateChannelConversationName(
+    sessionId: string,
+    sender: Pick<InboundMessage, 'channel' | 'chatId' | 'chatName' | 'senderName' | 'senderId' | 'isGroup'>,
+  ): Promise<void> {
+    const state = this.sessionStates[sessionId]
+    if (!state || state.mode !== 'session' || !['qq', 'discord', 'feishu'].includes(sender.channel)) return
+    const candidate = sender.chatName || (sender.isGroup === false && sender.senderName !== sender.senderId
+      ? sender.senderName : undefined)
+    if (typeof candidate !== 'string') return
+    const chatName = candidate.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, SESSION_NAME_MAX_LENGTH)
+    if (!chatName || chatName === sender.chatId || chatName === state.chatName
+      || (sender.isGroup === false && chatName === sender.senderId)) return
+    await this.store.saveState(sessionId, { ...state, chatName })
+    state.chatName = chatName
+    this.deps.bus.emit('session.changed', { sessionId })
   }
 
   async recordCommandResult(sessionId: string, receipt: CommandReceipt): Promise<void> {

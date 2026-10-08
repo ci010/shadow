@@ -62,6 +62,9 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+	readonly clipboardFiles?: {
+		readFiles(): Promise<Array<{ name: string; bytes: Uint8Array; lastModified: number }>>
+	}
 	readonly microApps?: DesktopMicroAppsApi
 	readonly webPairing?: DesktopWebPairingApi
 	readonly diagnostics?: {

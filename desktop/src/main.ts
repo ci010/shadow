@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import {
   app,
   BrowserWindow,
+  clipboard,
   desktopCapturer,
   dialog,
   ipcMain,
@@ -78,6 +79,7 @@ import { parseMicroAppArguments, type MicroAppIdentity } from './micro-app-contr
 import { installMicroAppIpc } from './micro-app-ipc.js'
 import { desktopReleaseReadiness } from './release-readiness.js'
 import { readManagedDeploymentProfile, type ManagedDeploymentProfile } from './deployment-profile.js'
+import { installClipboardFiles, readClipboardFiles, readClipboardPaths } from './clipboard-files.js'
 
 export { secureWebPreferences } from './window-controls.js'
 
@@ -212,6 +214,7 @@ export function createMainWindow(target: RendererTarget, showOnReady = true): Br
     shell.showItemInFolder(path)
   })
   installDocumentTabShortcuts(window)
+  installClipboardFiles(ipcMain, window, target, async () => readClipboardFiles(await readClipboardPaths(clipboard)))
   installFolderDirectoryPicker(ipcMain, window, async () => {
     const result = await dialog.showOpenDialog(window, {
       properties: ['openDirectory', 'createDirectory'],

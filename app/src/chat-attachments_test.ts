@@ -3,7 +3,8 @@ import test from 'node:test'
 import {
   appendChatAttachments,
   canSendChatMessage,
-  clipboardImageFiles,
+  clipboardChatFiles,
+  nativeClipboardChatFiles,
   droppedChatFiles,
   composeImageReferenceMessage,
   isImageAttachment,
@@ -18,29 +19,56 @@ test('image detection recognizes supported image files by mime or extension', ()
   assert.equal(isImageAttachment(new File(['a'], 'notes.txt', { type: 'text/plain' })), false)
 })
 
-test('clipboard images use the file list once and ignore text and non-image files', () => {
+test('clipboard files use the file list once and retain mixed file types', () => {
   const image = new File(['image'], 'clipboard.png', { type: 'image/png' })
   const text = new File(['notes'], 'notes.txt', { type: 'text/plain' })
-  assert.deepEqual(clipboardImageFiles(null), [])
-  assert.deepEqual(clipboardImageFiles({ files: [text] }), [])
-  assert.deepEqual(clipboardImageFiles({
+  assert.deepEqual(clipboardChatFiles(null), [])
+  assert.deepEqual(clipboardChatFiles({ files: [text] }), [text])
+  assert.deepEqual(clipboardChatFiles({
     files: [text, image],
     items: [{ kind: 'file', type: 'image/png', getAsFile: () => { assert.fail('Do not duplicate the file list') } }],
-  }), [image])
+  }), [text, image])
 })
 
-test('clipboard item fallback supports multiple images without treating HTML or text as files', () => {
+test('clipboard item fallback supports mixed files without treating HTML or text as files', () => {
   const first = new File(['a'], 'image.png', { type: 'image/png' })
   const second = new File(['b'], 'image.webp', { type: 'image/webp' })
-  assert.deepEqual(clipboardImageFiles({ items: [
+  const document = new File(['report'], 'report.pdf', { type: 'application/pdf' })
+  assert.deepEqual(clipboardChatFiles({ items: [
     { kind: 'string', type: 'text/html', getAsFile: () => { assert.fail('Do not read HTML as an image') } },
     { kind: 'file', type: 'image/png', getAsFile: () => first },
     { kind: 'file', type: 'image/webp', getAsFile: () => second },
-    { kind: 'file', type: 'text/plain', getAsFile: () => null },
-  ] }), [first, second])
-  assert.throws(() => clipboardImageFiles({ items: [
+    { kind: 'file', type: 'application/pdf', getAsFile: () => document },
+  ] }), [first, second, document])
+  assert.throws(() => clipboardChatFiles({ items: [
     { kind: 'file', type: 'image/png', getAsFile: () => null },
-  ] }), /Could not read the clipboard image/)
+  ] }), /Could not read the clipboard file/)
+  assert.throws(() => clipboardChatFiles({ items: [
+    { kind: 'file', type: 'application/pdf', getAsFile: () => document },
+    { kind: 'file', type: 'text/plain', getAsFile: () => null },
+  ] }), /Could not read the clipboard file/)
+})
+
+test('native clipboard bytes become ordinary attachments with names, timestamps and empty files preserved', async () => {
+  const files = nativeClipboardChatFiles([
+    { name: '\u6587\u6863.pdf', bytes: new Uint8Array([0, 1, 255]), lastModified: 123 },
+    { name: 'photo.PNG', bytes: new Uint8Array([1]), lastModified: 456 },
+    { name: 'empty.txt', bytes: new Uint8Array(), lastModified: 789 },
+  ])
+  assert.deepEqual([...new Uint8Array(await files[0]!.arrayBuffer())], [0, 1, 255])
+  assert.deepEqual(files.map(file => [file.name, file.size, file.lastModified]), [
+    ['\u6587\u6863.pdf', 3, 123], ['photo.PNG', 1, 456], ['empty.txt', 0, 789],
+  ])
+  const first = appendChatAttachments([], files, { createObjectUrl: () => 'blob:photo' })
+  assert.deepEqual(first.map(file => file.kind), ['file', 'image', 'file'])
+  assert.equal(appendChatAttachments(first, files).length, 3)
+})
+
+test('clipboard folder entries fail explicitly instead of attaching an empty directory file', () => {
+  assert.throws(() => clipboardChatFiles({
+    files: [new File([], 'folder')],
+    items: [{ kind: 'file', getAsFile: () => new File([], 'folder'), webkitGetAsEntry: () => ({ isDirectory: true }) }],
+  }), /Folders cannot be pasted as attachments/)
 })
 
 test('file drops preserve mixed file types, empty files and order without duplicating the item list', () => {

@@ -24,7 +24,7 @@ async function fixture(t: TestContext) {
   const vfs = new VirtualFs()
   const memory = createMemoryHandler(home, 'a')
   vfs.mount('v:memory', 'Project memory', memory.read, memory.list, memory.write)
-  const tool = new WriteTool(home, undefined, false, vfs)
+  const tool = new WriteTool(home, false, vfs)
   const base = new Tools(home)
   base.register(tool)
   const tools = new SessionTools(base, home)

@@ -56,6 +56,12 @@ test('composer file drops attach mixed types and send file-only messages on desk
   await runFixture(t, 'image-annotation-smoke', ['--file-attachments'])
 })
 
+test('Windows Explorer clipboard files paste into the Electron composer and upload only on send', {
+  timeout: 150_000, skip: process.platform !== 'win32',
+}, async t => {
+  await runFixture(t, 'image-annotation-smoke', ['--clipboard-files'])
+})
+
 test('model menu combines model and effort without changing conversation drafts', { timeout: 150_000 }, async (t) => {
   await runFixture(t, 'model-menu-smoke')
 })

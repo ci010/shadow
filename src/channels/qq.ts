@@ -198,6 +198,7 @@ export class QQChannel extends AbstractChannel {
   private _lastMsgId = new Map<string, string>()
   private passiveReplies = new QQPassiveReplies()
   private references = new QQReferences()
+  private channelNames = new Map<string, string>()
 
   constructor(bus: Bus, opts: QQChannelOptions) {
     super(bus, opts.allowFrom, false, opts.adminChats)
@@ -255,6 +256,7 @@ export class QQChannel extends AbstractChannel {
     this.seq = null
     this.passiveReplies.clear()
     this._lastMsgId.clear()
+    this.channelNames.clear()
     this.references.clear()
     this.reportState('disconnected')
     console.info('[qq] Channel stopped')
@@ -824,6 +826,15 @@ export class QQChannel extends AbstractChannel {
     })
 
     switch (event) {
+      case 'CHANNEL_CREATE':
+      case 'CHANNEL_UPDATE':
+        if (typeof data.id === 'string' && typeof data.name === 'string' && data.name.trim()) {
+          this.rememberChannelName(data.id, data.name)
+        }
+        break
+      case 'CHANNEL_DELETE':
+        if (typeof data.id === 'string') this.channelNames.delete(data.id)
+        break
       case 'GROUP_MESSAGE_CREATE':
       case 'GROUP_AT_MESSAGE_CREATE':
         await this.onGroupMessage(data, event === 'GROUP_AT_MESSAGE_CREATE')
@@ -862,6 +873,7 @@ export class QQChannel extends AbstractChannel {
     await this.passiveReplies.admit(chatId, msgId, data.timestamp, () => this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: true,
+      ...(typeof data.group_name === 'string' ? { chatName: data.group_name } : {}),
       ...(typeof author?.username === 'string' ? { senderName: author.username } : {}),
       displayMetadata,
       silent: this.triggerMode === 'mention' && !mentionsBot,
@@ -907,6 +919,7 @@ export class QQChannel extends AbstractChannel {
 
     const member = data.member as Record<string, unknown> | undefined
     const senderName = (member?.nick as string) ?? author?.username ?? senderId
+    const chatName = isDirect ? senderName : await this.resolveChannelName(data.channel_id)
 
     const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, stripGuildMention((data.content as string) ?? '').trim())
     if (!content && !media) return
@@ -915,12 +928,41 @@ export class QQChannel extends AbstractChannel {
       platformMessageId: msgId,
       isGroup: !isDirect,
       senderName,
+      chatName,
       displayMetadata,
     }, media)
     this.rememberIncoming(chatId, data, content, media, displayMetadata)
   }
 
   // ── Attachments ────────────────────────────────────────────────────────────
+
+  private rememberChannelName(id: string, name: string): void {
+    this.channelNames.set(id, name)
+    if (this.channelNames.size > 500) this.channelNames.delete(this.channelNames.keys().next().value!)
+  }
+
+  private async resolveChannelName(id: unknown): Promise<string | undefined> {
+    if (typeof id !== 'string' || !id) return undefined
+    const cached = this.channelNames.get(id)
+    if (cached) return cached
+    try {
+      const response = await this.request(`${this.apiBase}/channels/${encodeURIComponent(id)}`, {
+        headers: await this.authHeaders(),
+      })
+      if (!response.ok) {
+        console.debug('[qq] Could not resolve channel name', { status: response.status })
+        return undefined
+      }
+      const data: unknown = await response.json()
+      if (data && typeof data === 'object' && 'name' in data && typeof data.name === 'string' && data.name.trim()) {
+        this.rememberChannelName(id, data.name)
+        return data.name
+      }
+    } catch {
+      console.debug('[qq] Could not resolve channel name')
+    }
+    return undefined
+  }
 
   private isNewIncoming(chatId: string, msgId: string, data: Record<string, unknown>): boolean {
     const { messageIndex } = qqMessageIndices(data)

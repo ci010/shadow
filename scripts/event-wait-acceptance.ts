@@ -212,7 +212,7 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
     const vfs = new VirtualFs()
     const importer = new ImportTool(new Map(), workspace, undefined, name => skills.getSkillDirectory(name))
     tools.register(new ReadTool(workspace, vfs))
-    tools.register(new WriteTool(workspace, undefined, false, vfs))
+    tools.register(new WriteTool(workspace, false, vfs))
     tools.register(new SearchTool(workspace, undefined, vfs))
     tools.register(new InvokeTool(importer))
     tools.register(new ExecTool(workspace, 30_000, new CommandHandlerManager(), new ProcessManager(), defaultManagedShell(), background))

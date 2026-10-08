@@ -84,22 +84,31 @@ export function isImageAttachment(file: Pick<File, 'name' | 'type'>): boolean {
   return IMAGE_EXTENSIONS.has(ext)
 }
 
-export function clipboardImageFiles(data: {
+export function clipboardChatFiles(data: {
   files?: Iterable<File>
-  items?: Iterable<Pick<DataTransferItem, 'kind' | 'type' | 'getAsFile'>>
+  items?: Iterable<Pick<DataTransferItem, 'kind' | 'type' | 'getAsFile'> & {
+    webkitGetAsEntry?: () => { isDirectory: boolean } | null
+  }>
 } | null): File[] {
   if (!data) return []
-  const files = Array.from(data.files ?? []).filter(isImageAttachment)
+  if (Array.from(data.items ?? []).some(item => item.kind === 'file' && item.webkitGetAsEntry?.()?.isDirectory)) {
+    throw new Error(t('Folders cannot be pasted as attachments. Copy files instead.'))
+  }
+  const files = Array.from(data.files ?? [])
   if (files.length) return files
   for (const item of data.items ?? []) {
     if (item.kind !== 'file') continue
     const file = item.getAsFile()
-    if (file && isImageAttachment(file)) files.push(file)
-    else if (!file && item.type.toLowerCase().startsWith('image/')) {
-      throw new Error(t('Could not read the clipboard image. Paste again or use Add file.'))
-    }
+    if (!file) throw new Error(t('Could not read the clipboard file. Paste again or use Add file.'))
+    files.push(file)
   }
   return files
+}
+
+export function nativeClipboardChatFiles(files: readonly {
+  name: string; bytes: Uint8Array; lastModified: number
+}[]): File[] {
+  return files.map(file => new File([new Uint8Array(file.bytes)], file.name, { lastModified: file.lastModified }))
 }
 
 export function droppedChatFiles(data: {

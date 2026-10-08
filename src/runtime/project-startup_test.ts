@@ -53,7 +53,6 @@ test('project becomes locally ready while QQ connects, and shutdown cancels pend
   const starting = scope.run(() => createProjectRuntime(effective, {
     project, home, scope, catalog, configStore, mainCluster: cluster, copilotAuth: new CopilotAuthenticator(),
     chromePortAllocator: new ChromePortAllocator(), authorize: () => true,
-    selfCodeRoot: process.cwd(),
   }))
   let timer: ReturnType<typeof setTimeout> | undefined
   try {

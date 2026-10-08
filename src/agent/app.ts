@@ -103,7 +103,7 @@ export class AgentApp {
     let failed = false
     if (input.kind === 'message' && input.policy === 'interactive'
       && !this.sessions.isManagedConversation(sessionId) && input.content.trimStart().startsWith('/')) {
-      await this.sessions.prepareCommandSession(sessionId)
+      await this.sessions.prepareCommandSession(sessionId, msg)
       try {
         output = await this.commandDispatcher.dispatch(input.content, {
           sessionId, msg, admin: !!msg.admin, llm,

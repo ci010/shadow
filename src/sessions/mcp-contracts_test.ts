@@ -51,7 +51,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const config = createMcpConfigHandler({ projectId: 'fixture', configStore, isReservedName: name => base.has(name) })
     vfs.mount('v:config', 'Project MCP config', config.read, undefined, config.write)
     base.register(new ReadTool(home, vfs))
-    base.register(new WriteTool(home, undefined, true, vfs))
+    base.register(new WriteTool(home, true, vfs))
     base.register(new InvokeTool(loader))
     const tools = new SessionTools(base, home)
     const bus = new Bus()

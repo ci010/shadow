@@ -40,7 +40,6 @@ export async function startProjectHost(
   config: Config,
   options: MainRuntimeOptions,
   factory: ProjectRuntimeFactory,
-  selfCodeRoot: string,
 ): Promise<MainRuntimeHandle> {
   const startup = new StartupTimings('host')
   const baseHome = resolve(config.agent.workspace)
@@ -181,7 +180,7 @@ export async function startProjectHost(
         const projectConfig = await projectStartup.measure('config', () => store.init())
         runtime = await scope.run(() => factory(projectConfig, {
           project, home: paths.home, scope, catalog, configStore: store,
-          mainCluster, copilotAuth, chromePortAllocator, authorize, selfCodeRoot, realtimeHub,
+          mainCluster, copilotAuth, chromePortAllocator, authorize, realtimeHub,
         }))
         await runtime.ready
         if (stopping) {

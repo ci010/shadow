@@ -45,6 +45,7 @@ async function fixture(t: TestContext, options: Partial<FeishuChannelOptions> = 
       return Response.json(chatApiFailure ? { code: 999 } : {
         code: 0, data: {
           chat_mode: path.endsWith('oc_direct') ? 'p2p' : 'group',
+          name: 'Readable group',
           chat_post_permission: permission, chat_status: 'normal',
         },
       })
@@ -157,8 +158,11 @@ test('Feishu inbound chat_type governs privileges even when p2p has an oc_ ID', 
   assert.equal(f.received[0].chatId, 'oc_direct')
   assert.equal(f.received[0].admin, true)
   assert.equal(f.received[0].silent, false)
+  assert.equal(f.received[0].chatName, 'User')
   assert.equal(f.received[1].admin, false)
   assert.equal(f.received[1].silent, true)
+  assert.equal(f.received[1].chatName, 'Readable group')
+  f.channel['chatMetadata'].clear()
   f.failChatApi()
   assert.equal((await f.channel.getCapabilities('oc_group')).conversation, 'group')
   assert.equal((await f.channel.getCapabilities('oc_group')).threads, 'none')

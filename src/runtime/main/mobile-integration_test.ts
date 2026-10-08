@@ -44,7 +44,7 @@ test('Main composes isolated mobile access, scoped authorization and revocable r
           app, folders: new FolderRegistry(dependencies.home), ready: Promise.resolve(), updateConfig() {},
           async shutdown() { publisher.close() },
         }
-      }, process.cwd())
+      })
       await runtime.ready
       const mainBase = `http://127.0.0.1:${mainPort}`
       const mobileBase = `http://127.0.0.1:${mobilePort}`

@@ -7,4 +7,4 @@ conversion: "Convert between formats — PDF, Word, Markdown, audio transcriptio
 setup: "Install runtimes, tools, and dependencies."
 integration: "Third-party services — GitHub, Feishu/Lark."
 scheduling: "Cron scheduling and long-running task management."
-meta: "Skill creation, self-modification, and learning workflows."
+meta: "Skill creation and learning workflows."

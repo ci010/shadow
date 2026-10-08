@@ -57,7 +57,7 @@ async function fixture(t: TestContext, mcp: Record<string, unknown> = initialMcp
     signal: new AbortController().signal, tools: new SessionTools(new Tools(root), root),
   }
   const reader = new ReadTool(root, vfs)
-  const writer = new WriteTool(root, undefined, false, vfs)
+  const writer = new WriteTool(root, false, vfs)
   const read = () => reader.execute({ path }, context)
   const overwrite = (document: unknown, ctx = context) =>
     writer.execute({ path, content: JSON.stringify(document) }, ctx)

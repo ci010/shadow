@@ -3,10 +3,12 @@ import { DOCUMENT_TAB_CHANNEL, receiveDocumentTabShortcuts } from '../../src/doc
 import type { ShadowDesktopApi, DesktopWindowState } from '../../src/ipc-contract.js'
 import type { MainRuntimeContext } from '../../src/bootstrap/coordinator.js'
 import type { WizardState } from '../../src/wizard/state-machine.js'
+import { createPasteClipboardFilesApi } from '../../src/clipboard-files-contract.js'
 
 const prefix = '--layout-api-base='
 const apiBase = process.argv.find((argument) => argument.startsWith(prefix))?.slice(prefix.length)
 if (!apiBase || !/^http:\/\/127\.0\.0\.1:\d+$/.test(apiBase)) throw new Error('Layout fixture requires its isolated API origin')
+window.localStorage.setItem('shadow.locale', 'en')
 
 const context: MainRuntimeContext = {
   version: 1,
@@ -31,6 +33,7 @@ const disposeDocumentShortcuts = receiveDocumentTabShortcuts(ipcRenderer, direct
 window.addEventListener('unload', disposeDocumentShortcuts, { once: true })
 
 const api: ShadowDesktopApi = {
+  clipboardFiles: createPasteClipboardFilesApi(ipcRenderer, window),
   folders: {
     selectDirectory: async (...args: unknown[]) => {
       if (args.length) throw new Error('Folder directory picker accepts no arguments')

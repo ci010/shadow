@@ -40,6 +40,17 @@ test('full writes return compact receipts without echoing file content', async t
   assert.equal(await readFile(join(root, 'unicode.txt'), 'utf8'), unicode)
 })
 
+test('non-admin writes and edits use the same workspace policy for source files', async t => {
+  const { root, context } = await fixture(t)
+  const tool = new WriteTool(root, true)
+  const path = join('src', 'example.ts')
+  assert.match(await tool.execute({ path, content: 'export const value = 1\n' }, { ...context, admin: false }), /^OK write/)
+  assert.match(await tool.execute({ path, match: 'value = 1', content: 'value = 2' }, { ...context, admin: false }), /^OK edit/)
+  assert.match(await tool.execute({ path, content: 'export const other = 3\n', flag: 'a' }, { ...context, admin: false }), /^OK append/)
+  assert.equal(await readFile(join(root, path), 'utf8'), 'export const value = 2\nexport const other = 3\n')
+  assert.match(await tool.execute({ path: join('..', 'outside.ts'), content: 'bad' }, { ...context, admin: false }), /restricted to workspace/)
+})
+
 test('explicit UTF-8 BOM writes preserve exact bytes across edits without changing default encoding', async t => {
   const { root, context, tool } = await fixture(t)
   const text = 'Write-Output "\u4e2d\u6587\u65e5\u672c\u8a9e"\n'
@@ -126,7 +137,7 @@ test('no-match, I/O failures, workspace restrictions and aborts never return suc
   assert.match(await tool.execute({ path: 'safe.txt', match: 'missing', content: 'bad' }, context), /^Error:/)
   assert.equal(await readFile(join(root, 'safe.txt'), 'utf8'), 'unchanged')
   await assert.rejects(tool.execute({ path: '.', content: 'bad', flag: 'a' }, context))
-  assert.match(await new WriteTool(root, undefined, true).execute({ path: join('..', 'outside.txt'), content: 'bad' }, context), /^Error:/)
+  assert.match(await new WriteTool(root, true).execute({ path: join('..', 'outside.txt'), content: 'bad' }, context), /^Error:/)
   await assert.rejects(tool.execute({ path: 'safe.txt', content: 'bad' }, { ...context, signal: AbortSignal.abort() }), { name: 'AbortError' })
   assert.equal(await readFile(join(root, 'safe.txt'), 'utf8'), 'unchanged')
 })

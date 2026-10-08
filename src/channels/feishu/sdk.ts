@@ -387,7 +387,7 @@ class Client {
   readonly im = {
     chat: {
       get: (req: { path: { chat_id: string }; signal?: AbortSignal }): Promise<ApiResp & {
-        data?: { chat_mode?: string; chat_status?: string; chat_post_permission?: string }
+        data?: { name?: string; chat_mode?: string; chat_status?: string; chat_post_permission?: string }
       }> => apiRequest(this._tokens, 'GET', `/open-apis/im/v1/chats/${encodeURIComponent(req.path.chat_id)}`, { signal: req.signal }),
     },
     chatMembers: {

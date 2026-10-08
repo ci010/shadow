@@ -3034,8 +3034,7 @@ automatically replaced. Later turns resolve the latest inherited defaults.
   and automation act with the backend user's OS permissions.
 - **Tool policies:** allow/block lists and remote-workdir checks apply at tool
   dispatch. `restrictToWorkspace` is a write-tool option, not blanket filesystem,
-  process, network, or MCP confinement. Self-code admin checks also do not
-  constrain arbitrary host code.
+  process, network, or MCP confinement.
 - **Untrusted content:** user text, attachments, web pages, tool output, and
   learned files can influence the model. Prompt guidelines are not enforced
   access-control rules.

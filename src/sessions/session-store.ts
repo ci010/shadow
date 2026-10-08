@@ -93,6 +93,8 @@ export interface SessionState {
   workPolicy?: WorkPolicy
   /** User-selected display name, independent of identity and topic instructions. */
   name?: string
+  /** Last known platform conversation name; never overrides a user-selected name. */
+  chatName?: string
   sessionKind?: 'topic' | 'orchestrator'
   topic?: TopicMetadata
   /** Creation provenance only; never lifecycle or directory ownership. */

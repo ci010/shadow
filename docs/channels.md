@@ -7,6 +7,14 @@ App-wide. A saved bot configuration is not proof of platform delivery or
 verified connectivity; the backend can be locally ready while a bot is
 offline. Legacy WeChat/iLink adapters are not started by Project runtimes.
 
+Bot conversations display the last known group/channel name or, for direct
+messages, the other participant's display name. Names are persisted across
+restarts and refreshed on incoming messages; a manually selected session name
+still takes precedence. Existing conversations acquire a platform name on their
+next incoming message. If a platform does not supply a name (notably some QQ
+group/C2C events) or name lookup lacks permission, the existing label remains.
+Stable conversation and Bot IDs continue to identify and route sessions.
+
 QQ and Discord conversations do not expose the `ask` tool, including private
 messages and Bot chats opened inside Shadow. Agents ask clarification questions
 in ordinary replies and end the turn; the next user message continues the

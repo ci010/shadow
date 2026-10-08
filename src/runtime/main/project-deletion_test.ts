@@ -62,7 +62,7 @@ test('Main revokes admission, drains project services before deleting Home and r
             publisher.close()
           },
         }
-      }, process.cwd())
+      })
     try {
       assert.deepEqual(new Set(started), new Set(['default', project.id]))
       await assert.rejects(stat(projectPaths(catalog.hostHome, interrupted.id).root), { code: 'ENOENT' })

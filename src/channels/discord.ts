@@ -1039,7 +1039,9 @@ export class DiscordChannel extends AbstractChannel {
         }
       }
 
-      const channelName = admission?.location.name ?? await this.resolveChannelName(channelId)
+      const channelName = guildId
+        ? admission?.location.name ?? await this.resolveChannelName(channelId)
+        : authorName
       const parentChannelId = this.threadParentMap.get(channelId)
 
       if (parentChannelId && !state && !this.integration) {

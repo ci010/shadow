@@ -9,6 +9,51 @@ import { sessionWorkspacePath } from '../utils/paths.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { QQChannel, type QQChannelOptions } from './qq.ts'
 
+test('QQ supplies known group, guild-channel and direct-message display names without changing IDs', async t => {
+  const channel = new QQChannel(new Bus(), { appId: 'synthetic', secret: 'synthetic' })
+  t.after(() => channel.stop())
+  const received: InboundMessage[] = []
+  channel.setReceiver(async message => {
+    received.push(message)
+    return { status: 'accepted', sessionId: `qq:${message.chatId}`, inputId: message.messageId }
+  })
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const url = new URL(input instanceof Request ? input.url : input)
+    if (url.pathname === '/app/getAppAccessToken') return Response.json({ access_token: 'synthetic', expires_in: 7200 })
+    assertEquals(url.pathname, '/channels/channel-id')
+    return Response.json({ id: 'channel-id', name: 'Guild channel' })
+  })
+  await channel['handleDispatch']('GROUP_AT_MESSAGE_CREATE', {
+    id: 'group-message', group_openid: 'group-id', group_name: 'QQ group',
+    author: { member_openid: 'member', username: 'Group member' },
+    content: 'hello', timestamp: new Date().toISOString(),
+  })
+  await channel['handleDispatch']('C2C_MESSAGE_CREATE', {
+    id: 'private-message', author: { user_openid: 'person', username: 'Private person' },
+    content: 'hello', timestamp: new Date().toISOString(),
+  })
+  await channel['handleDispatch']('AT_MESSAGE_CREATE', {
+    id: 'channel-message', channel_id: 'channel-id', guild_id: 'guild-id',
+    author: { id: 'member', username: 'Member' }, content: 'hello',
+  })
+  await channel['handleDispatch']('CHANNEL_UPDATE', { id: 'channel-id', name: 'Renamed channel' })
+  await channel['handleDispatch']('AT_MESSAGE_CREATE', {
+    id: 'next-message', channel_id: 'channel-id', guild_id: 'guild-id',
+    author: { id: 'member', username: 'Member' }, content: 'hello',
+  })
+  await channel['handleDispatch']('DIRECT_MESSAGE_CREATE', {
+    id: 'guild-dm', guild_id: 'dm-id', author: { id: 'person', username: 'Guild person' },
+    content: 'hello',
+  })
+  assertEquals(received.map(message => [message.chatId, message.chatName, message.senderName]), [
+    ['group:group-id', 'QQ group', 'Group member'],
+    ['c2c:person', undefined, 'Private person'],
+    ['channel:channel-id', 'Guild channel', 'Member'],
+    ['channel:channel-id', 'Renamed channel', 'Member'],
+    ['dms:dm-id', 'Guild person', 'Guild person'],
+  ])
+})
+
 for (const events of [
   ['GROUP_MESSAGE_CREATE', 'GROUP_AT_MESSAGE_CREATE'],
   ['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE'],

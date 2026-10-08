@@ -470,7 +470,7 @@ export function createMemoryHandler(workspace: string, projectId?: string): {
   write: VirtualFsWriteHandler
 } {
   const memoryRoot = join(workspace, 'memory')
-  const writer = new WriteTool(workspace, undefined, true)
+  const writer = new WriteTool(workspace, true)
 
   const read: VirtualFsHandler = async (subpath, context) => {
     if (subpath.includes('..')) return 'Invalid path.'

@@ -198,7 +198,6 @@ export async function createProjectRuntime(
   const { scope, project, mainCluster, copilotAuth, configStore } = dependencies
   const startup = new StartupTimings('project', project.id)
   const workspace = config.agent.workspace
-  const selfCodeRoot = dependencies.selfCodeRoot
   const cleanup: Array<() => unknown> = []
   const promptCaptures = createPromptCaptureStore(project.id)
   if (promptCaptures) cleanup.push(() => promptCaptures.clear())
@@ -270,7 +269,6 @@ export async function createProjectRuntime(
   tools.register(
     new WriteTool(
       workspace,
-      selfCodeRoot,
       config.tools.restrictToWorkspace,
       vfs,
     ),

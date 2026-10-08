@@ -1,4 +1,9 @@
 {
+  "Folders cannot be pasted as attachments. Copy files instead.": "不能将文件夹粘贴为附件。请复制文件。",
+  "Could not read the clipboard file. Paste again or use Add file.": "无法读取剪贴板文件。请再次粘贴或使用“添加文件”。",
+  "Could not paste the files. Copy readable files (not folders), up to 100 files and 100 MiB, and try again or use Add file.": "无法粘贴文件。请复制可读取的文件（不含文件夹，最多 100 个、合计 100 MiB），重试或使用“添加文件”。",
+  "Local file attachments are not transferred to the selected remote workspace.": "本地文件附件不会传输到所选远程工作区。",
+  "Reading copied files...": "正在读取复制的文件……",
   "Enable QQ's receive-all-messages capability to retain group context even without a mention.": "开启 QQ 的接收全部消息功能，即使未被提及也能保留群聊上下文。",
   "Trigger model on": "模型触发条件",
   "Default: only @mentions trigger a model call in groups. Other messages are saved as context without a model call. All messages triggers on every received group message. Direct messages always trigger.": "默认仅在群聊中被 {'@'} 时调用模型，其他消息只保存为上下文。选择全部消息后，每条收到的群消息都会触发模型。私聊消息始终触发。",

@@ -182,9 +182,6 @@ export function runtimeIdentityProvider(
             : 'Shared group (not configured as trusted).'
             : conversation === 'unknown' ? 'Unknown; replies may be visible to others.'
             : 'Direct conversation; normal assistant behavior.'}`,
-          `- **Self-code (src/) writes**: ${
-            ctx.admin && !coordinator ? 'ALLOWED' : 'NOT ALLOWED'
-          }`,
       )
       if (coordinator) lines.push('- Coordinator tool limits are enforced by the runtime; see Coordinator Capability Boundary. Resource publication requires owner review.')
 

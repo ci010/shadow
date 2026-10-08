@@ -79,6 +79,7 @@ export const integrationConfigurationGuide = {
   boundaries: [
     'Names are communication labels; returned Project/Bot/channel/user IDs authorize. Resolve ambiguous names with the human.',
     'Unassigned channels and DMs are closed. Thread inheritance copies configuration, never history. DMs require explicit users and no roles.',
+    'Forum channels (type 15) are assignment containers, not message destinations. Enable inheritThreads to cover their public posts; each post has its own conversation and live participant/permission checks. Forum directory canSend means Send Messages in Threads. Private threads, automatic post creation and archived-thread scanning remain unsupported.',
     'Agent tools/domains are ceilings; bindings may only narrow them. A chat manager cannot widen its own scope, manage another Bot or self-approve.',
     'Participants control who invokes the Agent, not who can read its Discord replies. Confidential work belongs in a private channel.',
     'Project-private memory, global SOUL and other conversation epochs are not inherited. Shared knowledge requires explicit fixed-copy human publication and binding grants.',

@@ -3,11 +3,14 @@ import { mkdirSync } from 'node:fs'
 import { readFile, realpath, unlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join, resolve } from 'node:path'
-import { app, BrowserWindow, nativeImage, session } from 'electron'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { app, BrowserWindow, clipboard, ClipboardItem, ipcMain, nativeImage, session } from 'electron'
 import { Hono } from 'hono'
 import { uiPlugin } from '../../../src/gateway/ui.ts'
 import { serveLocalFiles } from '../../../src/gateway/local-files.ts'
 import { LiveFixture } from './live-fixture.ts'
+import { installClipboardFiles, readClipboardFiles, readClipboardPaths } from '../../src/clipboard-files.js'
 
 function argument(name: string): string {
   const value = process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -83,6 +86,7 @@ const server = createServer(async (request, response) => {
     if (route) {
       assert.equal(decodeURIComponent(route[1]), sessionId, 'The fixture must not create or switch conversations')
       const kind = route[2]
+      if (kind === 'work') return json({ records: [], effects: [] })
       if (kind === 'background-tasks') return json({ sessionId, total: 0, tasks: [] })
       if (kind === 'files' || kind === 'raw' || kind === 'preview') {
         assert.equal(request.method, 'GET', 'Image source is read-only')
@@ -677,6 +681,11 @@ async function main(): Promise<void> {
     callback({ cancel: !allowed })
   })
   window = new BrowserWindow({ width: 1400, height: 1000, show: false, webPreferences: { offscreen: true, backgroundThrottling: false, preload: join(directory, 'layout-preload.cjs'), additionalArguments: [`--layout-api-base=${origin}`] } })
+  if (process.argv.includes('--clipboard-files')) {
+    installClipboardFiles(ipcMain, window, {
+      kind: 'url', url: `${origin}/chat/${encodeURIComponent(sessionId)}`, origin,
+    }, async () => readClipboardFiles(await readClipboardPaths(clipboard)))
+  }
   window.webContents.on('console-message', (details) => {
     if (details.level === 'error') errors.push(`Renderer: ${details.message} (${details.sourceId}:${details.lineNumber})`)
   })
@@ -684,6 +693,10 @@ async function main(): Promise<void> {
   await window.loadURL(`${origin}/chat/${encodeURIComponent(sessionId)}`)
   window.webContents.debugger.attach('1.3')
   await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+  if (process.argv.includes('--clipboard-files')) {
+    await clipboardRegression()
+    return
+  }
   if (process.argv.includes('--file-attachments')) {
     await fileDropRegression()
     return
@@ -903,6 +916,83 @@ async function fileDropRegression(): Promise<void> {
   }
   assert.deepEqual(errors, [])
   console.log('LAYOUT_RESULT ' + JSON.stringify({ ok: true, fixture: 'file-attachments', uploads: uploads.length, sends: sends.length }))
+}
+
+async function clipboardRegression(): Promise<void> {
+  phase = 'native Windows clipboard files'
+  await waitFor(`!!document.querySelector('.composer-input textarea') && !document.querySelector('.composer-input textarea').disabled`)
+  const saved = await Promise.all((await clipboard.read()).map(async item => new ClipboardItem(Object.fromEntries(
+    await Promise.all(item.types.map(async type => [type, await item.getType(type)])),
+  ))))
+  const files = [join(sourceDirectory, 'copied document.txt'), join(sourceDirectory, 'empty.txt'), join(sourceDirectory, fileName)]
+  await writeFile(files[0], 'Copied document bytes')
+  await writeFile(files[1], '')
+  const copyFiles = async (paths: string[]) => {
+    const encoded = Buffer.from(JSON.stringify(paths), 'utf8').toString('base64')
+    const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+$paths = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')) | ConvertFrom-Json
+$files = [System.Collections.Specialized.StringCollection]::new()
+$files.AddRange([string[]]$paths)
+[System.Windows.Forms.Clipboard]::SetFileDropList($files)
+`
+    await promisify(execFile)(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand',
+      Buffer.from(script, 'utf16le').toString('base64'),
+    ], { windowsHide: true, timeout: 10_000 })
+  }
+  const paste = async () => {
+    await evaluate(`document.querySelector('.composer-input textarea').focus()`)
+    window!.webContents.paste()
+  }
+  try {
+    await assert.rejects(evaluate(`window.shadowDesktop.clipboardFiles.readFiles()`), /trusted paste/)
+    await copyFiles(files)
+    assert.deepEqual(await readClipboardPaths(clipboard), files, 'Read the real Explorer-compatible CF_HDROP list')
+    // Exercise the native fallback even when Chromium exposes CF_HDROP as DOM files.
+    await evaluate(`window.addEventListener('paste', event => {
+      if (!event.clipboardData?.getData('text/plain')) {
+        Object.defineProperty(event, 'clipboardData', { value: new DataTransfer() })
+      }
+    }, true)`)
+    await paste()
+    await waitFor(`document.querySelectorAll('.attachment-chip').length === 3 && !document.querySelector('.composer-send').disabled`)
+    assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '')
+    assert.equal(await evaluate(`document.querySelectorAll('.attachment-thumb').length`), 1)
+    assert.equal(uploads.length, 0, 'Pasting stages attachments without uploading')
+    await paste()
+    await waitFor(`document.querySelector('.composer-hint').textContent === 'Reading copied files...'`)
+    assert.equal(await evaluate(`(async () => {
+      const data = new DataTransfer()
+      data.setData('text/plain', 'ordinary text')
+      document.querySelector('.composer-input textarea').dispatchEvent(new ClipboardEvent('paste', {
+        clipboardData: data, bubbles: true, cancelable: true,
+      }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      return document.querySelector('.composer-send').disabled
+    })()`), true, 'Text paste cannot clear a pending native file read or enable sending early')
+    await waitFor(`document.querySelector('.composer-hint').textContent !== 'Reading copied files...'`)
+    assert.equal(await evaluate(`document.querySelectorAll('.attachment-chip').length`), 3, 'Repeated native paste deduplicates')
+    await click('.composer-send')
+    await waitRequest(() => sends.length === 1, 'native clipboard file-only send')
+    assert.equal(uploads.length, 3)
+    assert.equal(uploads.find(file => file.name === 'copied document.txt')?.bytes.toString(), 'Copied document bytes')
+    assert.equal(uploads.find(file => file.name === 'empty.txt')?.bytes.length, 0)
+    assert.deepEqual(uploads.find(file => file.name === fileName)?.bytes, original)
+    assert.equal(sends[0].content, '')
+    finishSend!()
+    await waitFor(`document.querySelectorAll('.attachment-chip').length === 0 && !document.querySelector('.composer-stop')`)
+    await clipboard.writeText('C:\\plain-text-path.pdf')
+    await paste()
+    await waitFor(`document.querySelector('.composer-input textarea').value === 'C:\\\\plain-text-path.pdf'`)
+    assert.equal(await evaluate(`document.querySelectorAll('.attachment-chip').length`), 0, 'Text paths remain text')
+    assert.deepEqual(errors, [])
+    console.log('LAYOUT_RESULT ' + JSON.stringify({ ok: true, fixture: 'clipboard-files', uploads: uploads.length, sends: sends.length }))
+  } finally {
+    if (saved.length) await clipboard.write(saved)
+    else clipboard.clear()
+  }
 }
 main().catch(error => {
   console.error(error)
