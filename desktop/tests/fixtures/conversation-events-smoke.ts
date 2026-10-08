@@ -16,8 +16,8 @@ export async function verifyConversationEvents(
   const externalEvent = '[data-event-id="external:fixture"]'
   assert.equal(await execute(`document.querySelector('${startEvent}').open`), false)
   assert.equal(await execute(`document.querySelector('${completeEvent} .event-details').open`), false)
-  assert.equal(await execute(`document.querySelector('[data-event-id="cancelled:fixture"]').open`), true)
-  assert.equal(await execute(`document.querySelector('[data-event-id="legacy:fixture"]').open`), true)
+  assert.equal(await execute(`document.querySelector('[data-event-id="cancelled:fixture"]').dataset.expanded`), 'false')
+  assert.equal(await execute(`document.querySelector('[data-event-id="legacy:fixture"]').dataset.expanded`), 'false')
   assert.equal(await execute(`document.querySelector('[data-event-id="legacy:fixture"] .event-inspect')`), null,
     'Old completion records without a source remain readable without a fake execution link')
   const ownBackground = '[data-event-id="own-background:fixture"]'
@@ -26,10 +26,14 @@ export async function verifyConversationEvents(
   for (const selector of [ownBackground, ownCompletion]) {
     assert.equal(await execute(`document.querySelector('${selector} .event-inspect, ${selector} .event-inspect-header')`), null,
       'Events from the displayed session must not offer navigation back to themselves')
-    await execute(`document.querySelector('${selector}').open = true`)
+    await execute(`(() => {
+      const event = document.querySelector('${selector}');
+      if (event.matches('.message-preview-card')) event.dispatchEvent(new Event('message-card-expand'));
+      else event.open = true;
+    })()`)
   }
   assert.match(await execute(`document.querySelector('${ownBackground} .event-body').textContent`), /no output, exit code 0/)
-  assert.match(await execute(`document.querySelector('${ownCompletion} .event-body').textContent`), /Own completion remains readable/)
+  assert.match(await execute(`document.querySelector('${ownCompletion} .event-content').textContent`), /Own completion remains readable/)
   await execute(`document.querySelector('${ownBackground} .event-metadata').open = true`)
   assert.match(await execute(`document.querySelector('${ownBackground} .event-fields').textContent`), /source-session-id.*web:owner/)
   assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0)
@@ -55,7 +59,11 @@ export async function verifyConversationEvents(
   await execute(`document.querySelector('${startEvent} .event-inspect').click()`)
   await wait(`window.__conversationFixture.navigation.length === 1`)
   assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[0]))`), { event:'navigate', id:'web:peer' })
-  await execute(`window.__conversationFixture.navigation = []; document.querySelector('${completeEvent} .event-details > summary').click()`)
+  await execute(`window.__conversationFixture.navigation = [];
+    document.querySelector('${completeEvent}').dispatchEvent(new Event('message-card-expand'))`)
+  await wait(`document.querySelector('${completeEvent}').dataset.expanded === 'true'
+    && document.querySelector('${completeEvent}').getAnimations({subtree:true}).length === 0`)
+  await execute(`document.querySelector('${completeEvent} .event-details > summary').click()`)
   await wait(`document.querySelector('${completeEvent} .event-details').open`)
   assert.match(await execute(`document.querySelector('${completeEvent} .event-content').textContent`), /still requires a verified receipt/)
   assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0)
@@ -74,6 +82,8 @@ export async function verifyConversationEvents(
     for (const dark of [false, true]) {
       await execute(`document.documentElement.classList.toggle('dark', ${dark})`)
       await frame()
+      await wait(`[...document.querySelectorAll('.system-event')].every(event =>
+        event.getAnimations({subtree:true}).every(animation => !(animation instanceof CSSTransition)))`)
       const eventLayout = await execute(`(() => {
         const root = getComputedStyle(document.documentElement);
         const token = name => {

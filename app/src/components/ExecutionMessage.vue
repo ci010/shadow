@@ -1,15 +1,18 @@
 <template>
-  <article class="execution-card" :data-execution-id="execution.sessionId" :data-execution-mode="execution.mode">
-    <button class="execution-inspect trace-header" :disabled="!execution.sessionId" :aria-pressed="execution.sessionId ? !!selected : undefined"
-      :aria-label="t('Inspect {mode}: {label}', { mode: execution.mode, label: execution.label })" @click="inspect">
-      <span class="execution-icon i-lucide-git-branch" aria-hidden="true" />
-      <span class="execution-copy"><strong>{{ execution.label }}</strong><span>{{ execution.mode === 'call' ? t('Call · inherited context · blocking') : t('Task · fresh context · async') }}<template v-if="execution.agentType"> · {{ execution.agentType }}</template></span></span>
-      <span v-if="execution.blocked" class="execution-blocked">{{ t('Blocked') }}</span>
-      <SessionActivity v-else :stage="execution.stage" />
-      <span v-if="execution.sessionId" class="i-lucide-chevron-right execution-icon" aria-hidden="true" />
-    </button>
-    <div class="execution-trace">
-      <div v-if="execution.output || execution.partialWork" class="execution-output trace-guide"><slot /><p v-if="execution.partialWork" class="execution-partial">{{ execution.partialWork }}</p></div>
+  <MessagePreviewCard class="execution-card" :label="execution.label" :collapsible="!!(execution.output || execution.partialWork)"
+    :data-execution-id="execution.sessionId" :data-execution-mode="execution.mode" @interact="emit('interact')">
+    <template #heading>
+      <button class="execution-inspect trace-header" :disabled="!execution.sessionId" :aria-pressed="execution.sessionId ? !!selected : undefined"
+        :aria-label="t('Inspect {mode}: {label}', { mode: execution.mode, label: execution.label })" @click.stop="emit('interact'); inspect()">
+        <span class="execution-icon i-lucide-git-branch" aria-hidden="true" />
+        <span class="execution-copy"><strong>{{ execution.label }}</strong><span>{{ execution.mode === 'call' ? t('Call · inherited context · blocking') : t('Task · fresh context · async') }}<template v-if="execution.agentType"> · {{ execution.agentType }}</template></span></span>
+        <span v-if="execution.blocked" class="execution-blocked">{{ t('Blocked') }}</span>
+        <SessionActivity v-else :stage="execution.stage" />
+        <span v-if="execution.sessionId" class="i-lucide-chevron-right execution-icon" aria-hidden="true" />
+      </button>
+    </template>
+    <div v-if="execution.output || execution.partialWork" class="execution-output"><slot /><p v-if="execution.partialWork" class="execution-partial">{{ execution.partialWork }}</p></div>
+    <template #details>
       <details v-disclosure-motion class="execution-details" @toggle.self="detailsOpen = ($event.currentTarget as HTMLDetailsElement).open">
         <summary class="trace-header" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Tool details') }}</summary>
         <div v-if="detailsOpen" class="trace-guide">
@@ -21,8 +24,8 @@
           </template>
         </div>
       </details>
-    </div>
-  </article>
+    </template>
+  </MessagePreviewCard>
 </template>
 
 <script setup lang="ts">
@@ -32,6 +35,7 @@ import type { InlineExecution } from '../execution-messages.ts'
 import { vDisclosureMotion } from '../disclosure-motion.ts'
 import SessionActivity from './SessionActivity.vue'
 import ToolPayload from './ToolPayload.vue'
+import MessagePreviewCard from './MessagePreviewCard.vue'
 const props = defineProps<{ execution: InlineExecution; selected?: boolean }>()
 const emit = defineEmits<{ inspect: [id: string]; interact: [] }>()
 const detailsOpen = ref(false)
@@ -42,7 +46,7 @@ function inspect() {
 
 <style scoped>
 .execution-card { min-width: 0; }
-.execution-inspect { width: 100%; border: 0; background: transparent; color: var(--c-text); font: inherit; text-align: left; cursor: pointer; }
+.execution-inspect { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--c-text); font: inherit; text-align: left; cursor: pointer; }
 .execution-inspect:hover:not(:disabled) { background: var(--c-bg-muted); }
 .execution-inspect[aria-pressed="true"] { background: var(--c-bg-muted); }
 .execution-inspect:disabled { cursor: default; }

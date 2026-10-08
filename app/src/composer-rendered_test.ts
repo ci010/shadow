@@ -34,7 +34,7 @@ test('rendered composer distinguishes queue actions and routes custom question a
             <script setup>defineExpose({showConversation(){},openLinkedFile(){}})</script>`
         }
         if (id.replaceAll('\\', '/').includes('/components/') && id.endsWith('.vue')
-          && !['ChatTab', 'YieldQuestion', 'ComposerPopover', 'SlashCommandMenu', 'MessageAttachments', 'ModelSelector', 'ReasoningControls', 'MobileSheet'].some(name => id.endsWith(`/${name}.vue`))) {
+          && !['ChatTab', 'YieldQuestion', 'ComposerPopover', 'OverlayTransition', 'SlashCommandMenu', 'MessageAttachments', 'ModelSelector', 'ReasoningControls', 'MobileSheet'].some(name => id.endsWith(`/${name}.vue`))) {
           return '<template><span/></template><script setup>defineExpose({dismiss(){},show(){},rename(){},showDetails(){}})</script>'
         }
         if (id !== '\0composer-fixture') return

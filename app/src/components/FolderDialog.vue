@@ -1,5 +1,6 @@
 <template>
   <Teleport to="body">
+    <OverlayTransition>
     <div v-if="mode" class="folder-dialog-backdrop" @click.self="close" @keydown="dialogKeydown">
       <section ref="dialog" class="folder-dialog" role="dialog" aria-modal="true" aria-labelledby="folder-dialog-title" tabindex="-1">
         <header>
@@ -48,6 +49,7 @@
         </form>
       </section>
     </div>
+    </OverlayTransition>
   </Teleport>
 </template>
 
@@ -56,6 +58,7 @@ import { t } from '../i18n.ts'
 import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { createCloneController, type CloneView, type FolderRecord, type FoldersClient } from '../folders-client.ts'
 import { isAbsoluteFolderPath, suggestCloneDirectory } from '../folders-sidebar.ts'
+import OverlayTransition from './OverlayTransition.vue'
 
 const props = defineProps<{ mode: 'open' | 'clone' | null; client: FoldersClient }>()
 const emit = defineEmits<{

@@ -2,21 +2,24 @@
   <button ref="trigger" class="composer-control" :class="{ active: open }" :disabled="disabled" :aria-disabled="disabled || busy" :aria-busy="busy" :aria-label="label" :title="title ?? label" aria-haspopup="dialog" :aria-expanded="open" @click="toggle" @keydown.down.prevent="show">
     <slot name="trigger" />
   </button>
-  <MobileSheet v-if="sheetLayout && open" :open="open" :label="label" @update:open="close(true)">
+  <MobileSheet v-if="sheetLayout && sheetMounted" :open="open" :label="label" :return-focus="trigger" @update:open="close(true)" @after-leave="sheetMounted = false">
     <slot :close="() => close(true)" />
   </MobileSheet>
   <Teleport v-if="!sheetLayout" to="body">
+    <OverlayTransition>
     <div v-if="open" class="composer-popover-backdrop" @pointerdown.self="close(false)">
       <div ref="panel" class="composer-popover" role="dialog" tabindex="-1" :aria-label="label" :style="position" @keydown="keydown">
         <slot :close="() => close(true)" />
       </div>
     </div>
+    </OverlayTransition>
   </Teleport>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import MobileSheet from './MobileSheet.vue'
+import OverlayTransition from './OverlayTransition.vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 
 const props = withDefaults(defineProps<{ label: string; title?: string; disabled?: boolean; busy?: boolean; width?: number; sheet?: boolean }>(), { width: 340 })
@@ -24,6 +27,7 @@ const emit = defineEmits<{ opened: []; closed: [] }>()
 const mobile = useMobileChrome()
 const sheetLayout = computed(() => props.sheet || !!mobile?.enabled.value)
 const open = ref(false)
+const sheetMounted = ref(false)
 const trigger = ref<HTMLButtonElement>()
 const panel = ref<HTMLElement>()
 const position = ref<Record<string, string>>({})
@@ -41,6 +45,7 @@ async function show() {
     ...(down ? { top: `${rect.bottom + 8}px` } : { bottom: `${window.innerHeight - rect.top + 8}px` }),
     maxHeight: `${Math.max(100, down ? below : above)}px`,
   }
+  sheetMounted.value = true
   open.value = true
   emit('opened')
   window.addEventListener('resize', dismissOnResize)

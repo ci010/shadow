@@ -116,11 +116,13 @@
     </div>
     <FolderDialog :mode="dialogMode" :client="client" @close="dialogMode = null" @registered="folderRegistered" @status="cloneStatus = $event" />
     <Teleport to="body">
+      <OverlayTransition>
       <div v-if="menuOpen" class="folder-menu-backdrop" @click.self="closeMenu(false)" @keydown.esc.prevent.stop="closeMenu(true)">
         <div :id="domId('folder-actions')" ref="menu" class="folder-menu" role="menu" :aria-label="menuFolder ? t('Folder actions for {name}', { name: menuFolder.name }) : t('Add folder')" :style="menuPosition" @keydown="menuKeydown">
           <button v-for="action in menuActions" :key="action.id" role="menuitem" @click="runAction(action.id)">{{ action.label }}</button>
         </div>
       </div>
+      </OverlayTransition>
     </Teleport>
   </aside>
 </template>
@@ -133,6 +135,7 @@ import FolderSessionList from './FolderSessionList.vue'
 import TreeRow from './TreeRow.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import HoverInfo from './HoverInfo.vue'
+import OverlayTransition from './OverlayTransition.vue'
 import SessionActivity from './SessionActivity.vue'
 import WorkingWave from './WorkingWave.vue'
 import CopyableId from './CopyableId.vue'

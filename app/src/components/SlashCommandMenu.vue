@@ -1,5 +1,6 @@
 <template>
   <Teleport to="body">
+    <OverlayTransition>
     <div v-if="open" class="slash-menu" :style="position" @pointerdown.prevent>
       <div v-if="loading" class="slash-status" role="status">{{ t('Loading commands...') }}</div>
       <div v-else-if="error" class="slash-status" role="alert">
@@ -21,6 +22,7 @@
         <span><kbd>Esc</kbd> {{ t('Close') }}</span>
       </div>
     </div>
+    </OverlayTransition>
   </Teleport>
 </template>
 
@@ -28,6 +30,7 @@
 import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { filterSlashCommands, slashCommandQuery, useSlashCommandCatalog, type SlashCommand } from '../slash-commands.ts'
+import OverlayTransition from './OverlayTransition.vue'
 
 const props = defineProps<{
   apiBase: string

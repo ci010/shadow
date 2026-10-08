@@ -2368,17 +2368,58 @@ when more markers can be scrolled into view in that direction. Its alpha mask
 updates after scrolling, marker changes, and viewport/composer resizing; it does
 not fade the mobile history list or teleported message previews.
 
+Custom tooltips, hover information cards, composer popovers, context and selection
+menus, slash suggestions, history previews, connection notices, folder forms and
+session-work popups share `OverlayTransition.vue`. They fade in over 160ms and out
+over 100ms. `HoverInfo` sources share one floating surface: moving
+between sidebar/chat controls updates its content and accessibility owner in place,
+with a 180ms translation to the next anchor. Its first appearance adds a small
+4px rise; anchor placement uses unscaled dimensions and clamps to the viewport.
+Interactive hover cards reuse that surface with their dialog role and focus
+behavior intact. The chat history rail also reuses and translates its preview
+between markers. Other anchored
+popups use opacity-only motion to preserve their measurements. Leaving
+content is immediately inert and hidden from accessibility APIs, while its DOM
+remains for the exit transition. Interrupted exits restore interaction on reopening.
+Mobile bottom sheets use the same timing with a short 12px rise; side drawers
+keep their existing swipe-driven motion. Composer sheets remain mounted through
+exit and are then released, rather than disappearing before their transition.
+All these transitions respect `prefers-reduced-motion`. Browser-owned `title`
+tooltips are not controlled by this motion layer.
+
 Message presentation distinguishes human input from session-to-session handoffs
 and background events using recorded source envelopes, independently of the
 model protocol's `user` role. Human input uses a blue-tinted surface and border;
-incoming session messages stay right-aligned but use a neutral surface, dashed
-border and labelled source-session link. They remain
+incoming session messages and outgoing message tool calls use the same neutral,
+fixed-height preview card with a labelled session link. Collapsed cards show one
+heading row and a five-line window onto the rendered message body. Both directions
+use the same Markdown typography, paragraph spacing and code styling as ordinary
+chat messages; the card only clips the existing body, without overriding it.
+Clicking the card expands that same body without duplicating it, with animated
+expansion and collapse respecting reduced-motion preferences. The header's toggle
+also works by keyboard; the session link navigates without toggling the card.
+Collapsed body content is inert, keeping clipped links and controls out of the
+tab order; conversation search expands the card before highlighting a match.
+Call results and task completion/failure/cancellation responses use the same
+preview card, including historical completions without a navigable source.
+A bottom gradient fades the collapsed body into its card surface and disappears
+when expanded. Assistant replies and all these cards share the tool-entry rail's
+outer width. The centered conversation rail, rather than each Markdown body,
+owns the reading measure: it is capped at 860 CSS pixels, matching the composer's
+maximum width, with desktop gutters reserved for history navigation and safe-area
+gutters on mobile. Chat Markdown fills its containing card without a separate
+character-based width cap; code blocks keep their local horizontal scrolling.
+Human bubbles remain content-sized and right-aligned. Preview expansion changes
+height, not body width, and Markdown's existing source-newline behavior is unchanged.
+Delivery status remains visible on outgoing headers, with
+receipts and tool details inside the expansion. Incoming session messages remain
+on the same list spacing as ordinary tool rows, without additional outer margins, and are
 excluded from human resend actions. Trace provides a separate `SESSION` filter and keeps the original
 envelope available as raw evidence. Missing legacy provenance is not inferred
 from a sender name or session-like ID; these labels do not grant permissions.
 The web channel preserves the same sender envelope on live peer-message
 projections, so progress and request cards do not wait for a history reload to
-show their origin. Their headings open the source conversation (or its read-only
+show their origin. Their session links open the source conversation (or its read-only
 execution trace). Human-history markers scroll to the corresponding rendered
 message in the current pane. Manual scrolling away from the bottom also suspends
 automatic jumps during incoming messages, streaming output, and history refreshes.
@@ -2391,10 +2432,9 @@ individually navigable messages. Human input, explicit peer requests/questions/
 handoffs, unclassified peer messages, decisions, completion events and context boundaries are not folded into
 these groups. Blue human marks, neutral collaboration marks and thicker horizontal rectangular decision
 marks distinguish sources and decisions without relying on color alone; the
-mobile history list exposes the same grouping. Long explicit progress and
-acknowledgement messages (over 600 characters) show a deterministic excerpt
-with lazy full-content expansion; requests/questions and unclassified messages
-are not automatically folded.
+mobile history list exposes the same grouping. All incoming session messages,
+including requests/questions and unclassified messages, use the same full-content
+expansion regardless of length; history-rail grouping remains intent-specific.
 
 Decision `ask` calls render as decision records rather than generic tool activity, with
 the question, choices, paired answer and raw receipt available. User answers,

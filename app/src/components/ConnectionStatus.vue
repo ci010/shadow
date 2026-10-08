@@ -5,6 +5,7 @@
       <span role="status">{{ notices.length === 1 ? notices[0]!.title : t('{length} connection notices', { length: notices.length }) }}</span>
       <svg viewBox="0 0 16 16" aria-hidden="true" :class="{ expanded }"><path d="m5 6 3 3 3-3" /></svg>
     </button>
+    <OverlayTransition>
     <div v-show="expanded" :id="id" class="status-popover">
       <section v-for="notice in notices" :key="notice.id" class="status-notice">
         <h2>{{ notice.title }}</h2>
@@ -13,12 +14,14 @@
         <button v-if="notice.id === 'live'" type="button" @click="$emit('retry')">{{ t('Retry live updates') }}</button>
       </section>
     </div>
+    </OverlayTransition>
   </section>
 </template>
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import OverlayTransition from './OverlayTransition.vue'
 
 const props = defineProps<{ childTitle?: string; liveError?: string; notificationError?: string }>()
 defineEmits<{ retry: []; 'manage-node': [] }>()

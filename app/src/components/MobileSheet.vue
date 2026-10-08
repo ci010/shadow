@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <Transition name="mobile-drawer" :css="!!side">
+    <Transition :name="side ? 'mobile-drawer' : 'mobile-sheet'" appear @after-leave="emit('after-leave')">
     <div v-show="open || dragProgress !== undefined" class="mobile-sheet-backdrop" :class="{ 'is-drawer': side, 'is-dragging': dragProgress !== undefined }"
       :inert="!open" :aria-hidden="!open ? true : undefined"
       :style="{ '--mobile-available-height': mobile ? `${mobile.viewportHeight.value}px` : undefined, '--drawer-progress': dragProgress ?? (open ? 1 : 0) }" @pointerdown.self="close">
@@ -22,7 +22,7 @@ import { nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 
 const props = defineProps<{ open: boolean; label: string; side?: boolean; returnFocus?: HTMLElement; dragProgress?: number }>()
-const emit = defineEmits<{ 'update:open': [open: boolean] }>()
+const emit = defineEmits<{ 'update:open': [open: boolean]; 'after-leave': [] }>()
 const panel = ref<HTMLElement>()
 const mobile = useMobileChrome()
 let returnTo: HTMLElement | undefined
@@ -78,5 +78,14 @@ defineExpose({ panel })
 .mobile-drawer-enter-from:not(.is-dragging), .mobile-drawer-leave-to { background: transparent; }
 .mobile-drawer-enter-from:not(.is-dragging) .mobile-sheet, .mobile-drawer-leave-to .mobile-sheet { transform: translateX(-100%); }
 .is-dragging, .is-dragging .mobile-sheet { transition: none; }
-@media (prefers-reduced-motion: reduce) { .is-drawer, .is-drawer .mobile-sheet { transition: none; } }
+.mobile-sheet-enter-active, .mobile-sheet-leave-active { transition: opacity var(--overlay-enter-duration) var(--overlay-easing); }
+.mobile-sheet-leave-active { transition-duration: var(--overlay-leave-duration); pointer-events: none; }
+.mobile-sheet-enter-active .mobile-sheet, .mobile-sheet-leave-active .mobile-sheet { transition: transform var(--overlay-enter-duration) var(--overlay-easing); }
+.mobile-sheet-leave-active .mobile-sheet { transition-duration: var(--overlay-leave-duration); }
+.mobile-sheet-enter-from, .mobile-sheet-leave-to { opacity: 0; }
+.mobile-sheet-enter-from .mobile-sheet, .mobile-sheet-leave-to .mobile-sheet { transform: translateY(12px); }
+@media (prefers-reduced-motion: reduce) {
+  .is-drawer, .is-drawer .mobile-sheet, .mobile-sheet-enter-active, .mobile-sheet-leave-active,
+  .mobile-sheet-enter-active .mobile-sheet, .mobile-sheet-leave-active .mobile-sheet { transition: none; }
+}
 </style>

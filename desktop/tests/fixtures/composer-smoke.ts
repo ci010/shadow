@@ -96,6 +96,7 @@ async function main() {
     assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false)
     await screenshot('qq-model-mobile')
     const openSettings = async (page: 'model' | 'effort') => {
+      await wait(`!document.querySelector('.overlay-leave-active, .mobile-sheet-leave-active')`)
       await execute(`document.querySelector('.channel-conversation-settings button').click()`)
       await wait(`!!document.querySelector('.model-menu-${page}')`)
       await execute(`document.querySelector('.model-menu-${page}').click()`)

@@ -14,12 +14,33 @@ async function main() {
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
   const errors: string[] = []
   window.webContents.on('console-message', details => { if (details.level === 'error') errors.push(details.message) })
-  const execute = (code: string) => window.webContents.executeJavaScript(code)
+  const execute = async (code: string) => {
+    try {
+      return await window.webContents.executeJavaScript(code)
+    } catch (cause) {
+      throw new Error(`Renderer script failed:\n${code}\n${errors.join('\n')}`, { cause })
+    }
+  }
   const frame = () => execute('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   const wait = async (code: string) => {
     const deadline = Date.now() + 12_000
     while (Date.now() < deadline) { if (await execute(code)) return; await delay(50) }
     throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}\n${errors.join('\n')}`)
+  }
+  const setCardOpen = async (selector: string, open: boolean) => {
+    await execute(`(() => {
+      const card = document.querySelector('${selector}');
+      if (card.dataset.expanded !== '${open}') card.querySelector('.message-preview-toggle').click();
+    })()`)
+    await wait(`document.querySelector('${selector}').dataset.expanded === '${open}'
+      && document.querySelector('${selector}').getAnimations({subtree:true}).length === 0`)
+  }
+  const setCardsOpen = async (expanded: boolean) => {
+    await execute(`document.querySelectorAll('.message-preview-card').forEach(card => {
+      if (card.dataset.expanded !== '${expanded}') card.querySelector('.message-preview-toggle').click();
+    })`)
+    await wait(`[...document.querySelectorAll('.message-preview-card')].every(card =>
+      card.dataset.expanded === '${expanded}' && card.getAnimations({subtree:true}).length === 0)`)
   }
   const screenshot = async (name: string) => {
     if (process.env.CONVERSATION_SCREENSHOTS) {
@@ -29,6 +50,152 @@ async function main() {
   try {
     await window.loadURL(new URL('__conversation', process.env.CONVERSATION_SMOKE_URL).href)
     await wait(`!!document.querySelector('.conversation-skeleton')`)
+    if (process.env.CONVERSATION_READING_LAYOUT_ONLY) {
+      await execute(`window.__showReadingLayout()`)
+      await wait(`document.querySelectorAll('.message-preview-card').length === 4`)
+      for (const width of [1800, 1100, 760, 390]) {
+        window.setContentSize(width, 844)
+        await execute(`window.__conversationFixture.mobileLayout = ${width === 390}`)
+        await frame()
+        const before = await execute(`JSON.stringify([...document.querySelectorAll('.message-preview-card .prose')].map(el => el.getBoundingClientRect().width))`)
+        await setCardsOpen(true)
+        assert.equal(await execute(`JSON.stringify([...document.querySelectorAll('.message-preview-card .prose')].map(el => el.getBoundingClientRect().width))`),
+          before, 'Expansion changes height without reflowing the body width')
+        await execute(`document.querySelector('.compaction-summary').open = true`)
+        await wait(`!!document.querySelector('.compaction-summary-body')`)
+        const layout = await execute(`(() => {
+          const list = document.querySelector('.chat-message-list').getBoundingClientRect();
+          const pane = document.querySelector('.chat-history').getBoundingClientRect();
+          const scroll = document.querySelector('.chat-messages');
+          const scrollBounds = scroll.getBoundingClientRect();
+          const composer = document.querySelector('.chat-composer').getBoundingClientRect();
+          const user = document.querySelector('.chat-user').getBoundingClientRect();
+          const prose = document.querySelector('.chat-assistant > .prose');
+          const code = prose.querySelector('pre');
+          const mobile = window.__conversationFixture.mobileLayout;
+          return {list:list.width,expected:Math.min(860, mobile ? scroll.clientWidth - 16 : pane.width - 112),
+            center:mobile ? (list.left + list.right - 2 * scrollBounds.left - scroll.clientWidth) / 2
+              : (list.left + list.right - pane.left - pane.right) / 2,
+            composer:composer.width,user:user.width,userRight:user.right,listRight:list.right,
+            widths:[...document.querySelectorAll('.message-preview-card,.chat-assistant,.tool-activity,.compaction-summary')].map(el => el.getBoundingClientRect().width),
+            markdown:[...document.querySelectorAll('.chat-message-list .prose')].map(el => ({
+              cap:getComputedStyle(el).maxWidth,width:el.getBoundingClientRect().width,
+              parent:el.parentElement.clientWidth,padding:parseFloat(getComputedStyle(el.parentElement).paddingLeft) + parseFloat(getComputedStyle(el.parentElement).paddingRight),
+            })),
+            sourceBreak:!!prose.querySelector('br'),codeScroll:code.scrollWidth > code.clientWidth,
+            codeOverflow:getComputedStyle(code).overflowX,pageOverflow:document.documentElement.scrollWidth > innerWidth,
+            scrollOverflow:document.querySelector('.chat-messages').scrollWidth > document.querySelector('.chat-messages').clientWidth};
+        })()`)
+        assert.ok(Math.abs(layout.list - layout.expected) < 1, `The centered rail owns the desktop cap and mobile gutters: ${JSON.stringify(layout)}`)
+        assert.ok(Math.abs(layout.center) < 1)
+        assert.ok(layout.widths.every((value: number) => Math.abs(value - layout.list) < 1), 'All assistant, tool and response surfaces fill the rail')
+        assert.ok(layout.markdown.every((value: {cap: string}) => value.cap === 'none'), 'Chat Markdown has no independent character-width cap')
+        assert.ok(layout.markdown.slice(0, -1).every((value: {width: number; parent: number; padding: number}) => Math.abs(value.width - value.parent + value.padding) < 1),
+          'Ordinary message and response bodies fill their containers')
+        assert.ok(layout.user < layout.list * .8)
+        assert.ok(Math.abs(layout.userRight - layout.listRight) < 1, 'Short human messages remain right-aligned')
+        if (width >= 1100) assert.ok(Math.abs(layout.composer - layout.list) < 1, 'The wide reading rail matches the composer maximum')
+        assert.equal(layout.sourceBreak, true, 'Source newlines keep their existing rendering')
+        assert.equal(layout.codeScroll, true)
+        assert.equal(layout.codeOverflow, 'auto')
+        assert.equal(layout.pageOverflow || layout.scrollOverflow, false, 'Long code scrolls locally without widening the conversation')
+        await setCardsOpen(false)
+        for (const dark of [false, true]) {
+          await execute(`document.documentElement.classList.toggle('dark', ${dark});
+            document.querySelector('.chat-messages').scrollTop = 0`)
+          await frame()
+          await wait(`[...document.querySelectorAll('.message-preview-card')].every(card =>
+            card.getAnimations({subtree:true}).every(animation => !(animation instanceof CSSTransition)))`)
+          await screenshot(`reading-layout-${width}-${dark ? 'dark' : 'light'}`)
+        }
+      }
+      assert.deepEqual(errors, [])
+      console.log('CONVERSATION_SMOKE_OK')
+      return
+    }
+    if (process.env.CONVERSATION_RESPONSE_CARDS_ONLY) {
+      await execute(`window.__showResponses()`)
+      await wait(`document.querySelectorAll('.message-preview-card').length === 4`)
+      const selectors = ['[data-execution-mode="call"]', '[data-execution-mode="task"]',
+        '[data-event-id="task-result"]', '[data-event-id="legacy-result"]']
+      for (const width of [1100, 390]) {
+        window.setContentSize(width, 844)
+        for (const dark of [false, true]) {
+          await execute(`document.documentElement.classList.toggle('dark', ${dark})`)
+          await frame()
+          const railWidth = await execute(`document.querySelector('.tool-activity').getBoundingClientRect().width`)
+          assert.ok(await execute(`Math.abs(document.querySelector('.chat-assistant').getBoundingClientRect().width - ${railWidth}) < 1`), 'Normal assistant replies fill the same rail as tools')
+          for (const selector of selectors) {
+            const state = await execute(`(() => {
+              const card = document.querySelector('${selector}');
+              const body = card.querySelector('.message-preview-body');
+              const fade = getComputedStyle(body, '::after');
+              const normal = document.querySelector('.chat-assistant > .chat-content');
+              const markdown = card.querySelector('.chat-content');
+              const typography = root => ['', 'h2', 'p', 'strong', 'code', 'pre', 'pre code', 'ul', 'li'].map(selector => {
+                const style = getComputedStyle(selector ? root.querySelector(selector) : root);
+                return ['fontSize','lineHeight','marginTop','marginBottom','paddingLeft','backgroundColor'].map(key => style[key]);
+              });
+              return {expanded:card.dataset.expanded,width:card.getBoundingClientRect().width,
+                bodyHeight:body.getBoundingClientRect().height,lineHeight:parseFloat(getComputedStyle(body).lineHeight),
+                copies:card.querySelectorAll('.prose').length,fade:fade.backgroundImage,opacity:fade.opacity,
+                pointer:fade.pointerEvents,cardType:typography(markdown),normalType:typography(normal),
+                headingWidth:card.querySelector('.event-copy')?.getBoundingClientRect().width,
+                overflow:card.scrollWidth > card.clientWidth};
+            })()`)
+            assert.equal(state.expanded, 'false', 'Call and task results start as preview cards')
+            assert.ok(Math.abs(state.width - railWidth) < 1)
+            assert.ok(Math.abs(state.bodyHeight - state.lineHeight * 5) < 1, 'Responses show five lines by default')
+            assert.equal(state.copies, 1)
+            assert.match(state.fade, /linear-gradient/)
+            assert.equal(state.opacity, '1')
+            assert.equal(state.pointer, 'none')
+            assert.deepEqual(state.cardType, state.normalType, 'Response Markdown keeps ordinary message typography')
+            if (state.headingWidth !== undefined) assert.ok(state.headingWidth >= 80, 'Narrow event headings remain readable instead of wrapping character by character')
+            assert.equal(state.overflow, false)
+          }
+          await execute(`document.querySelector('${selectors[0]}').scrollIntoView({block:'start'})`)
+          await screenshot(`response-cards-${width}-${dark ? 'dark' : 'light'}-collapsed`)
+          await execute(`window.__responseBodies = [...document.querySelectorAll('.message-preview-card .prose')]`)
+          await setCardsOpen(true)
+          const expandedCards = await execute(`[...document.querySelectorAll('.message-preview-card')].map((card, index) => {
+            const body = card.querySelector('.message-preview-body');
+            return {sameBody:card.querySelector('.prose') === window.__responseBodies[index],
+              revealsMore:body.getBoundingClientRect().height > 5 * parseFloat(getComputedStyle(body).lineHeight),
+              fade:getComputedStyle(body, '::after').opacity};
+          })`)
+          for (const card of expandedCards) {
+            assert.equal(card.sameBody, true, 'Response expansion never duplicates the body')
+            assert.equal(card.revealsMore, true)
+            assert.equal(card.fade, '0')
+          }
+          await screenshot(`response-cards-${width}-${dark ? 'dark' : 'light'}-expanded`)
+          await setCardsOpen(false)
+          assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false)
+        }
+      }
+      await execute(`document.querySelector('[data-event-id="legacy-result"] .event-header').click()`)
+      await wait(`document.querySelector('[data-event-id="legacy-result"]').dataset.expanded === 'true'`)
+      assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0, 'A heading without a source expands the card rather than navigating')
+      await setCardOpen(selectors[3], false)
+      await execute(`document.querySelector('${selectors[0]} .execution-inspect').click();
+        document.querySelector('[data-event-id="task-result"] .event-inspect-header').click()`)
+      assert.equal(await execute(`window.__conversationFixture.navigation.length`), 2, 'Response source links still navigate')
+      assert.equal(await execute(`document.querySelector('${selectors[0]}').dataset.expanded`), 'false', 'Inspection does not expand a result')
+      assert.equal(await execute(`!!document.querySelector('[data-event-id="legacy-result"] .event-inspect-header')`), false, 'Legacy responses do not invent source links')
+      await setCardOpen(selectors[0], true)
+      await execute(`document.querySelector('${selectors[0]} .execution-details > summary').click()`)
+      await wait(`document.querySelector('${selectors[0]} .execution-details').open`)
+      assert.match(await execute(`document.querySelector('${selectors[0]} .execution-details').textContent`), /mode.*call/)
+      await execute(`window.__conversationFixture.executionFixtures[0].output = '';
+        window.__conversationFixture.executionFixtures[0].stage = 'running'`)
+      await frame()
+      assert.equal(await execute(`document.querySelector('${selectors[0]}').dataset.collapsible`), 'false', 'Executions without a response do not show an empty preview')
+      assert.equal(await execute(`!!document.querySelector('${selectors[0]} .message-preview-toggle')`), false)
+      assert.deepEqual(errors, [])
+      console.log('CONVERSATION_SMOKE_OK')
+      return
+    }
     if (process.env.CONVERSATION_EVENTS_ONLY) {
       await verifyConversationEvents(window, wait, frame, screenshot)
       assert.deepEqual(errors, [])
@@ -39,15 +206,18 @@ async function main() {
       await execute(`window.__showConversation(); window.__conversationFixture.embedded = true;
         window.__conversationFixture.enableChildPane = true;
         window.__conversationFixture.messages[1].sessionSource.intent = 'progress'`)
-      await wait(`!!document.querySelector('.message-recipient') && document.querySelector('.chat-session-source strong').textContent === 'Session progress'`)
+      await wait(`!!document.querySelector('.message-action .session-message-link') && document.querySelector('.chat-session strong').textContent === 'Session progress'`)
       for (const width of [1100, 390]) {
         window.setContentSize(width, 844)
         await frame()
-        await execute(`window.__conversationFixture.navigation = []; document.querySelector('.message-action-details summary').click()`)
+        await execute(`window.__conversationFixture.navigation = []`)
+        await setCardOpen('.message-action', true)
+        await wait(`!!document.querySelector('.message-action-details summary')`)
+        await execute(`document.querySelector('.message-action-details summary').click()`)
         await wait(`document.querySelector('.message-action-details').open`)
         assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0, 'Expanding tool details does not navigate')
-        await execute(`document.querySelector('.message-action-details summary').click(); document.querySelector('.message-recipient').click()`)
-        await execute(`document.querySelector('.chat-session-source').focus()`)
+        await execute(`document.querySelector('.message-action-details summary').click(); document.querySelector('.message-action .session-message-link').click()`)
+        await execute(`document.querySelector('.chat-session .session-message-link').focus()`)
         window.webContents.debugger.attach('1.3')
         await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
         await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
@@ -63,7 +233,7 @@ async function main() {
         ], 'Coordinator recipient and progress source links reach workspace navigation')
         assert.equal(await execute(`window.__conversationFixture.activeSessionId`), 'web:owner', 'Navigation does not reset the cached coordinator')
       }
-      await execute(`window.__conversationFixture.enableChildPane = false; document.querySelector('.chat-session-source').click()`)
+      await execute(`window.__conversationFixture.enableChildPane = false; document.querySelector('.chat-session .session-message-link').click()`)
       assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation.at(-1)))`),
         { event: 'child-navigation', id: 'web:peer' }, 'An actual child pane still forwards inspection to its workspace')
       assert.deepEqual(errors, [])
@@ -92,11 +262,157 @@ async function main() {
     window.webContents.debugger.detach()
     await execute(`window.__showConversation()`)
     await wait(`!!document.querySelector('.message-action') && !document.querySelector('.conversation-skeleton')`)
+    const previewHeight = await execute(`5 * parseFloat(getComputedStyle(document.querySelector('.message-preview-body')).lineHeight)`)
+    const collapsedHeight = await execute(`(() => {
+      const card = document.querySelector('.session-message');
+      const style = getComputedStyle(card);
+      const body = getComputedStyle(card.querySelector('.message-preview-body'));
+      return card.querySelector('.message-preview-header').getBoundingClientRect().height
+        + parseFloat(body.marginTop) + 5 * parseFloat(body.lineHeight)
+        + ['paddingTop','paddingBottom','borderTopWidth','borderBottomWidth'].reduce((total, key) => total + parseFloat(style[key]), 0);
+    })()`)
+    if (process.env.CONVERSATION_EXCHANGES_ONLY) {
+      const selectors = ['.chat-session', '.message-action']
+      for (const selector of selectors) {
+        assert.equal(await execute(`document.querySelector('${selector}').dataset.expanded`), 'false')
+        assert.equal(await execute(`document.querySelectorAll('${selector} .prose').length`), 1, 'There is one body, not separate preview and expanded copies')
+        assert.ok(await execute(`Math.abs(document.querySelector('${selector}').getBoundingClientRect().height - ${collapsedHeight}) < 1`))
+        await execute(`window.__cardBody = document.querySelector('${selector} .prose');
+          document.querySelector('${selector} .message-preview-toggle').click()`)
+        await wait(`document.querySelector('${selector}').getAnimations({subtree:true}).some(animation => animation.transitionProperty === 'grid-template-rows')`)
+        await wait(`document.querySelector('${selector}').getAnimations({subtree:true}).length === 0`)
+        assert.equal(await execute(`document.querySelector('${selector} .prose') === window.__cardBody`), true)
+        assert.equal(await execute(`document.querySelector('${selector} .message-preview-body').inert`), false)
+        await setCardOpen(selector, false)
+      }
+      assert.equal(await execute(`document.querySelector('.message-action-content strong').textContent`), 'the changes', 'The preview uses actual rendered Markdown')
+      await execute(`(() => {
+        const markdown = '## Matching heading\\n\\nBody with **strong** and \`inline code\`.\\n\\n- First item\\n- Second item\\n\\n\`\`\`ts\\nconst value = 1\\n\`\`\`\\n\\n' + 'Full collaboration body. '.repeat(30);
+        window.__conversationFixture.messages[1].content = markdown;
+        window.__conversationFixture.messages[2].toolCall.arguments.content = markdown;
+        window.__conversationFixture.messages[6].content = markdown;
+      })()`)
+      await frame()
+      for (const width of [1100, 390]) {
+        window.setContentSize(width, 844)
+        for (const dark of [false, true]) {
+          await execute(`document.documentElement.classList.toggle('dark', ${dark});
+            document.querySelector('.chat-session').scrollIntoView({block:'start'})`)
+          await frame()
+          for (const selector of selectors) {
+            const layout = await execute(`(() => {
+              const card = document.querySelector('${selector}');
+              const body = card.querySelector('.message-preview-body');
+              return {height:card.getBoundingClientRect().height,body:body.getBoundingClientRect().height,
+                lineHeight:getComputedStyle(body).lineHeight,inert:body.inert,
+                overflow:card.scrollWidth > card.clientWidth,
+                copies:card.querySelectorAll('.prose').length};
+            })()`)
+            assert.ok(Math.abs(layout.height - collapsedHeight) < 1, 'All cards have the same collapsed height')
+            assert.ok(Math.abs(layout.body - previewHeight) < 1, 'Five lines of the ordinary Markdown body remain visible')
+            assert.equal(layout.inert, true, 'Clipped controls cannot receive focus')
+            assert.equal(layout.overflow, false)
+            assert.equal(layout.copies, 1)
+            const fade = await execute(`(() => {
+              const style = getComputedStyle(document.querySelector('${selector} .message-preview-body'), '::after');
+              return {background:style.backgroundImage,opacity:style.opacity,pointer:style.pointerEvents};
+            })()`)
+            assert.match(fade.background, /linear-gradient/)
+            assert.equal(fade.opacity, '1')
+            assert.equal(fade.pointer, 'none')
+            const typography = await execute(`(() => {
+              const normal = document.querySelector('.chat-assistant > .chat-content');
+              const card = document.querySelector('${selector} .chat-content');
+              const read = root => ['', 'h2', 'p', 'strong', 'code', 'pre', 'pre code', 'ul', 'li'].map(selector => {
+                const style = getComputedStyle(selector ? root.querySelector(selector) : root);
+                return Object.fromEntries(['fontSize','fontFamily','lineHeight','marginTop','marginBottom',
+                  'paddingTop','paddingLeft','color','backgroundColor'].map(key => [key, style[key]]));
+              });
+              return {normal:read(normal),card:read(card)};
+            })()`)
+            assert.deepEqual(typography.card, typography.normal, 'Preview and expanded Markdown match ordinary messages without style overrides')
+          }
+          assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false)
+          const widths = await execute(`['.chat-assistant','.chat-session','.message-action','.tool-activity']
+            .map(selector => document.querySelector(selector).getBoundingClientRect().width)`)
+          assert.ok(widths.every((width: number) => Math.abs(width - widths[0]) < 1), 'Assistant messages, cards and tools share the same outer width')
+          const gaps = await execute(`(() => {
+            const incoming = document.querySelector('.chat-session').getBoundingClientRect();
+            const outgoing = document.querySelector('.message-action').getBoundingClientRect();
+            const tool = document.querySelector('.tool-activity').getBoundingClientRect();
+            const gap = parseFloat(getComputedStyle(document.querySelector('.chat-message-list')).rowGap);
+            return [outgoing.top - incoming.bottom - gap, tool.top - outgoing.bottom - gap];
+          })()`)
+          assert.ok(gaps.every((gap: number) => Math.abs(gap) < 1), 'Cards use the shared list spacing')
+          await screenshot(`session-exchange-${width}-${dark ? 'dark' : 'light'}-collapsed`)
+          for (const selector of selectors) await setCardOpen(selector, true)
+          assert.ok(await execute(`document.querySelector('.message-action .message-preview-body').getBoundingClientRect().height > ${previewHeight}`), 'Expansion reveals more of the existing body')
+          assert.equal(await execute(`getComputedStyle(document.querySelector('.message-action .message-preview-body'), '::after').opacity`), '0', 'Expanded content is not faded')
+          assert.equal(await execute(`document.querySelectorAll('.message-action .prose').length`), 1)
+          await screenshot(`session-exchange-${width}-${dark ? 'dark' : 'light'}-expanded`)
+          for (const selector of selectors) await setCardOpen(selector, false)
+        }
+      }
+      await execute(`window.__conversationFixture.navigation = [];
+        document.querySelector('.message-action .session-message-link').click();
+        document.querySelector('.chat-session .session-message-link').click()`)
+      assert.equal(await execute(`window.__conversationFixture.navigation.length`), 2)
+      for (const selector of selectors) assert.equal(await execute(`document.querySelector('${selector}').dataset.expanded`), 'false', 'Navigation does not expand the card')
+      for (const intent of ['progress', 'handoff', 'request', 'question']) {
+        await execute(`window.__conversationFixture.messages[1].sessionSource.intent = '${intent}';
+          window.__conversationFixture.messages[1].content = 'Full collaboration body. '.repeat(60)`)
+        await frame()
+        assert.ok(await execute(`Math.abs(document.querySelector('.chat-session').getBoundingClientRect().height - ${collapsedHeight}) < 1`))
+        assert.equal(await execute(`document.querySelectorAll('.chat-session .prose').length`), 1)
+      }
+      await execute(`document.querySelector('.chat-session').dispatchEvent(new Event('message-card-expand'))`)
+      await wait(`document.querySelector('.chat-session').dataset.expanded === 'true'
+        && document.querySelector('.chat-session').getAnimations({subtree:true}).length === 0`)
+      assert.ok(await execute(`document.querySelector('.chat-session .message-preview-body').getBoundingClientRect().height > ${previewHeight}`), 'Search can reveal the complete body')
+      await execute(`document.querySelector('.chat-session .message-preview-toggle').focus()`)
+      window.webContents.debugger.attach('1.3')
+      await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+      for (const type of ['keyDown', 'keyUp']) {
+        await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}),
+        })
+      }
+      await wait(`document.querySelector('.chat-session').dataset.expanded === 'false'
+        && document.querySelector('.chat-session').getAnimations({subtree:true}).length === 0`)
+      await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+      await setCardOpen('.message-action', true)
+      assert.equal(await execute(`document.querySelector('.message-action').getAnimations({subtree:true}).length`), 0)
+      await setCardOpen('.message-action', false)
+      window.webContents.debugger.detach()
+      await execute(`window.__conversationFixture.messages[3].content = 'Error: peer is unavailable';
+        window.__conversationFixture.messages[2].toolCall.arguments.content = ''`)
+      await wait(`document.querySelector('.message-action-status').textContent === 'Failed'`)
+      assert.ok(await execute(`Math.abs(document.querySelector('.message-action').getBoundingClientRect().height - ${collapsedHeight}) < 1`), 'Empty content still has a fixed-height card')
+      assert.equal(await execute(`getComputedStyle(document.querySelector('.message-action .message-preview-details')).visibility`), 'hidden', 'Receipts are not part of the collapsed body preview')
+      await setCardOpen('.message-action', true)
+      assert.match(await execute(`document.querySelector('.message-action-note').textContent`), /peer is unavailable/)
+      assert.deepEqual(errors, [])
+      console.log('CONVERSATION_SMOKE_OK')
+      return
+    }
     assert.equal(await execute(`document.querySelectorAll('.message-action').length`), 1)
     assert.equal(await execute(`document.querySelectorAll('.tool-activity').length`), 1)
     assert.match(await execute(`document.querySelector('.tool-activity').textContent`), /View file.ts/)
     assert.equal(await execute(`document.querySelector('.message-action-status').textContent`), 'Queued')
-    assert.equal(await execute(`document.querySelector('.message-action strong').textContent`), 'the changes')
+    for (const selector of ['.message-action', '.chat-session']) {
+      assert.equal(await execute(`document.querySelector('${selector}').dataset.expanded`), 'false', 'Session messages start collapsed regardless of direction or length')
+      assert.equal(await execute(`document.querySelectorAll('${selector} .prose').length`), 1, 'Preview and expanded body use a single Markdown node')
+      assert.ok(await execute(`Math.abs(document.querySelector('${selector}').getBoundingClientRect().height - ${collapsedHeight}) < 1`), 'Collapsed cards have a fixed heading and five-line preview including device-pixel-rounded borders')
+      assert.ok(await execute(`Math.abs(document.querySelector('${selector} .message-preview-body').getBoundingClientRect().height - ${previewHeight}) < 1`), 'Preview shows a five-line body window')
+      assert.equal(await execute(`document.querySelector('${selector} .message-preview-body').inert`), true, 'Clipped body links cannot receive focus')
+      await execute(`window.__previewBody = document.querySelector('${selector} .prose'); document.querySelector('${selector} .message-preview-toggle').click()`)
+      await wait(`document.querySelector('${selector}').getAnimations({subtree:true}).some(animation => animation.transitionProperty === 'grid-template-rows')`)
+      await wait(`document.querySelector('${selector}').getAnimations({subtree:true}).length === 0`)
+      assert.equal(await execute(`window.__previewBody === document.querySelector('${selector} .prose')`), true, 'Expansion reveals the same rendered body rather than duplicating it')
+    }
+    assert.equal(await execute(`document.querySelector('.message-action-content strong').textContent`), 'the changes')
+    assert.match(await execute(`document.querySelector('.chat-session .prose').textContent`), /review the changes/)
+    assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0, 'Expanding messages does not navigate')
     assert.equal(await execute(`document.querySelectorAll('.yield-decision').length`), 1)
     assert.match(await execute(`document.querySelector('.yield-decision').textContent`), /Default selected by timeout/)
     assert.equal(await execute(`document.querySelector('.yield-decision').getAttribute('data-msg-idx')`), '7')
@@ -109,11 +425,11 @@ async function main() {
     await execute(`document.querySelector('.system-event .event-details summary').click()`)
     await wait(`document.querySelector('.system-event .event-details').open`)
     assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0, 'Opening event details does not navigate')
-    assert.match(await execute(`document.querySelector('.system-event .event-body').textContent`), /terminated[\s\S]*subagent-failed/)
+    assert.match(await execute(`document.querySelector('.system-event').textContent`), /terminated[\s\S]*subagent-failed/)
     assert.match(await execute(`document.querySelector('.execution-card .execution-copy').textContent`), /Compile and finish native helper.*fresh context/)
     assert.ok(await execute(`document.querySelector('.execution-details summary .trace-chevron')`), 'Tool details use a chevron, not a permanently visible guide')
     assert.equal(await execute(`document.querySelector('.execution-details').open`), false)
-    assert.equal(await execute(`getComputedStyle(document.querySelector('.execution-trace')).borderLeftStyle`), 'none', 'Closed tool details have no always-visible guide')
+    assert.equal(await execute(`getComputedStyle(document.querySelector('.execution-details')).borderLeftStyle`), 'none', 'Closed tool details have no always-visible guide')
     assert.ok(await execute(`{ const headers=['.tool-activity-summary','.response-disclosure > summary','.system-event .event-inspect-header','.execution-inspect']
       .map(selector => getComputedStyle(document.querySelector(selector)).minHeight);
       new Set(headers).size === 1 && headers[0] === '40px'; }`), 'Execution and event headers share the trace rhythm')
@@ -121,7 +437,8 @@ async function main() {
       const event=document.querySelector('.system-event').getBoundingClientRect();
       const execution=document.querySelector('.execution-card').getBoundingClientRect();
       Math.abs(response.right - event.right) < 2 && Math.abs(event.right - execution.right) < 2; }`), 'All trace rows share the same edge')
-    assert.equal(await execute(`getComputedStyle(document.querySelector('.system-event .prose h2')).fontSize`), '13px')
+    assert.equal(await execute(`getComputedStyle(document.querySelector('.system-event .prose')).fontSize`),
+      await execute(`getComputedStyle(document.querySelector('.chat-assistant .prose')).fontSize`))
     const workEvent = '[data-event-id="work:fixture"]'
     assert.equal(await execute(`document.querySelector('${workEvent}').open`), false)
     assert.equal(await execute(`!!document.querySelector('${workEvent} .event-payload')`), false, 'Collapsed work events do not mount raw payloads')
@@ -154,19 +471,33 @@ async function main() {
     await frame()
     assert.equal(await execute(`document.querySelector('.response-disclosure').open`), true, 'Message refresh preserves disclosure intent')
     await execute(`window.__conversationFixture.messages[1].content = 'Routine progress. '.repeat(60)`)
-    await wait(`!!document.querySelector('.collaboration-message')`)
-    assert.equal(await execute(`!!document.querySelector('.collaboration-message .prose')`), false, 'Long routine progress does not mount hidden Markdown')
-    await execute(`document.querySelector('.collaboration-message').open = true`)
-    await wait(`!!document.querySelector('.collaboration-message .prose')`)
-    await execute(`window.__conversationFixture.messages[1].sessionSource.intent = 'question'`)
-    await wait(`!document.querySelector('.collaboration-message')`)
-    assert.match(await execute(`document.querySelector('.chat-session').textContent`), /Routine progress/)
+    await frame()
+    assert.equal(await execute(`document.querySelector('.chat-session').dataset.expanded`), 'true', 'Content refresh preserves expansion')
+    await setCardOpen('.chat-session', false)
+    for (const intent of ['question', 'request', 'handoff', undefined]) {
+      await execute(`window.__conversationFixture.messages[1].sessionSource.intent = ${JSON.stringify(intent)}`)
+      await frame()
+      assert.equal(await execute(`document.querySelector('.chat-session').dataset.expanded`), 'false', 'Requests and unclassified messages use the same preview card')
+      assert.equal(await execute(`document.querySelectorAll('.chat-session .prose').length`), 1)
+    }
+    await execute(`document.querySelector('.chat-session .message-preview-toggle').focus()`)
+    window.webContents.debugger.attach('1.3')
+    await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+    for (const type of ['keyDown', 'keyUp']) {
+      await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}),
+      })
+    }
+    await wait(`document.querySelector('.chat-session').dataset.expanded === 'true'`)
+    window.webContents.debugger.detach()
+    assert.match(await execute(`document.querySelector('.chat-session .prose').textContent`), /Routine progress/)
     await execute(`window.__conversationFixture.messages[1].content = 'I will review the changes and send feedback shortly.'; window.__conversationFixture.messages[1].sessionSource.intent = 'acknowledgement'`)
     for (const width of [1800, 1100, 390]) {
       window.setContentSize(width, 844)
       for (const dark of [false, true]) {
         await execute(`document.documentElement.classList.toggle('dark', ${dark})`)
         await frame()
+        await delay(160)
         const layout = await execute(`(() => {
           const list = document.querySelector('.chat-message-list').getBoundingClientRect();
           const user = document.querySelector('.chat-user:not(.chat-session)').getBoundingClientRect();
@@ -174,21 +505,27 @@ async function main() {
           const action = document.querySelector('.message-action').getBoundingClientRect();
           const content = document.querySelector('.message-action-content').getBoundingClientRect();
           const prose = document.querySelector('.message-action-content .prose').getBoundingClientRect();
-          return { userRight:user.right, incomingRight:incoming.right, listLeft:list.left,
+          const incomingHeader = getComputedStyle(document.querySelector('.chat-session .message-preview-header'));
+          const outgoingHeader = getComputedStyle(document.querySelector('.message-action .message-preview-header'));
+          return { incomingLeft:incoming.left, listLeft:list.left,
             actionLeft:action.left, actionWidth:action.width, listWidth:list.width,
+            incomingWidth:incoming.width, headersMatch:['fontSize','lineHeight','minHeight','padding','color'].every(key => incomingHeader[key] === outgoingHeader[key]),
             contentWidth:content.width, proseWidth:prose.width,
             proseMaxWidth:getComputedStyle(document.querySelector('.message-action-content .prose')).maxWidth,
             userProseMaxWidth:getComputedStyle(document.querySelector('.chat-user .prose')).maxWidth,
             overflow:document.documentElement.scrollWidth > innerWidth,
             actionOverflow:document.querySelector('.message-action').scrollWidth > document.querySelector('.message-action').clientWidth };
         })()`)
-        assert(Math.abs(layout.userRight - layout.incomingRight) < 1, 'Incoming peer messages align with human messages on the right')
+        assert(Math.abs(layout.incomingLeft - layout.listLeft) < 1, 'Incoming messages share the assistant trace rail')
         assert(Math.abs(layout.actionLeft - layout.listLeft) < 1, 'Outgoing actions stay in the assistant column')
-        assert(layout.actionWidth <= layout.listWidth * .8 + 1)
-        assert(Math.abs(layout.proseWidth - layout.contentWidth) < 1, 'The card fits its readable Markdown instead of leaving a wide empty right side')
-        assert.notEqual(layout.proseMaxWidth, 'none', 'Outgoing message Markdown retains its reading measure')
-        if (width === 1800) assert(layout.actionWidth < layout.listWidth * .6, 'Wide panes do not stretch message actions to panel width')
-        assert.notEqual(layout.userProseMaxWidth, 'none', 'Other message prose retains its reading measure')
+        assert(Math.abs(layout.actionWidth - layout.incomingWidth) < 1, 'Both exchange directions share the same heading width')
+        assert.equal(layout.headersMatch, true, 'Incoming and outgoing heading typography and spacing match')
+        assert(layout.actionWidth <= layout.listWidth + 1)
+        assert(layout.proseWidth <= layout.contentWidth + 1, 'Expanded Markdown stays within its rail')
+        assert.equal(layout.proseMaxWidth, 'none', 'Outgoing message Markdown uses the shared conversation measure')
+        assert.ok(await execute(`Math.abs(document.querySelector('.message-action').getBoundingClientRect().width
+          - document.querySelector('.response-disclosure').getBoundingClientRect().width) < 1`), 'Session exchanges share the bounded trace width on wide panes')
+        assert.equal(layout.userProseMaxWidth, 'none', 'Human message Markdown fills its content-sized bubble')
         assert.equal(layout.overflow, false)
         assert.equal(layout.actionOverflow, false)
         assert.equal(await execute(`document.querySelector('.response-disclosure').scrollWidth > document.querySelector('.response-disclosure').clientWidth`), false)
@@ -226,10 +563,10 @@ async function main() {
             foreground:style('.chat-assistant').color, expectedForeground:token('--c-text'),
             assistant:style('.chat-assistant').backgroundColor, expectedAssistant:token('--c-bg-card'),
             user:style('.chat-user').backgroundColor, expectedUser:token('--c-info-bg'),
-            peer:style('.chat-session').backgroundColor, expectedPeer:token('--c-bg-soft'),
+            peer:style('.chat-session').backgroundColor, expectedPeer:token('--c-chat-action-bg'),
             decision:style('.yield-decision').borderLeftColor, expectedDecision:token('--c-purple'),
-            action:style('.message-action').backgroundColor, expectedAction:token('--c-bg-soft'),
-            source:style('.chat-session-source strong').color, secondary:token('--c-text-secondary'),
+            action:style('.message-action').backgroundColor, expectedAction:token('--c-chat-action-bg'),
+            source:style('.chat-session strong').color, secondary:token('--c-text-secondary'),
             thinking:style('.thinking-header').color,
             shadow:style('.chat-assistant').boxShadow,
             stages:Object.fromEntries(['idle','llm','tool','waiting','completed','failed'].map(stage => [stage, style('.fixture-stages .' + stage).color])),
@@ -250,6 +587,27 @@ async function main() {
         assert.equal(colors.stages.waiting, colors.warning)
         assert.equal(colors.stages.completed, colors.success)
         assert.equal(colors.stages.failed, colors.error)
+        await execute(`document.querySelector('.chat-session').scrollIntoView({block:'start'})`)
+        await frame()
+        await screenshot(`session-exchange-${width}-${dark ? 'dark' : 'light'}-expanded`)
+        await setCardOpen('.chat-session', false)
+        await setCardOpen('.message-action', false)
+        for (const selector of ['.message-action', '.chat-session']) {
+          assert.ok(await execute(`Math.abs(document.querySelector('${selector}').getBoundingClientRect().height - ${collapsedHeight}) < 1`), 'Short and long previews share the same fixed card height even on mobile')
+        }
+        const spacing = await execute(`(() => {
+          const incoming = document.querySelector('.chat-session').getBoundingClientRect();
+          const outgoing = document.querySelector('.message-action').getBoundingClientRect();
+          const tool = document.querySelector('.tool-activity').getBoundingClientRect();
+          return { expected:parseFloat(getComputedStyle(document.querySelector('.chat-message-list')).rowGap),
+            exchange:outgoing.top - incoming.bottom, tool:tool.top - outgoing.bottom };
+        })()`)
+        assert.ok(Math.abs(spacing.exchange - spacing.expected) < 1, 'Session exchanges use the list gap without added margins')
+        assert.ok(Math.abs(spacing.tool - spacing.expected) < 1, 'Session messages and ordinary tools share the same spacing')
+        if (process.env.CONVERSATION_SCREENSHOTS) await delay(200)
+        await screenshot(`session-exchange-${width}-${dark ? 'dark' : 'light'}-collapsed`)
+        await setCardOpen('.chat-session', true)
+        await setCardOpen('.message-action', true)
         await screenshot(`conversation-${width}-${dark ? 'dark' : 'light'}`)
         if (process.env.CONVERSATION_SCREENSHOTS) {
           await execute(`document.querySelector('${workEvent}').scrollIntoView({block:'center'})`)
@@ -266,7 +624,7 @@ async function main() {
     await wait(`document.querySelector('.decision-status').textContent.includes('did not complete')`)
     await execute(`void window.__conversationFixture.messages.splice(8, 1)`)
     await wait(`document.querySelector('.decision-status').textContent.includes('No confirmed answer')`)
-    const target = '.message-recipient'
+    const target = '.message-action .session-message-link'
     await execute(`document.querySelector('${target}').focus()`)
     assert.equal(await execute(`document.activeElement.matches('${target}')`), true)
     window.webContents.debugger.attach('1.3')
@@ -282,7 +640,8 @@ async function main() {
     assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[0]))`), { event: 'navigate', id: 'web:peer' })
     await execute(`window.__conversationFixture.embedded = true; document.querySelector('${target}').click()`)
     assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[1]))`), { event: 'child-navigation', id: 'web:peer' })
-    await execute(`document.querySelector('.chat-session-source').click()`)
+    await execute(`document.querySelector('.chat-session .session-message-link').click()`)
+    assert.equal(await execute(`document.querySelector('.chat-session').dataset.expanded`), 'true', 'Session navigation does not toggle expansion')
     assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[2]))`), { event: 'child-navigation', id: 'web:peer' })
     await execute(`window.__conversationFixture.decisionRecords = [{
       request: { id:'budget', sessionId:'web:owner', question:'Increase the experiment budget?',
@@ -323,6 +682,19 @@ async function main() {
     await execute(`window.__conversationFixture.messages[3].content = 'Error: peer is unavailable'`)
     await wait(`document.querySelector('.message-action-status').textContent === 'Failed'`)
     assert.match(await execute(`document.querySelector('.message-action-note').textContent`), /peer is unavailable/)
+    await execute(`document.querySelector('.message-action .message-preview-toggle').click()`)
+    await wait(`document.querySelector('.message-action').getAnimations({subtree:true}).some(animation => animation.transitionProperty === 'grid-template-rows' && animation.effect.getComputedTiming().duration === 160)`)
+    await wait(`document.querySelector('.message-action').getAnimations({subtree:true}).length === 0`)
+    assert.ok(await execute(`Math.abs(document.querySelector('.message-action').getBoundingClientRect().height - ${collapsedHeight}) < 1`), 'Closing animation includes the border without a final height jump')
+    assert.equal(await execute(`document.querySelector('.message-action-status').textContent`), 'Failed', 'Failure remains visible while collapsed')
+    await execute(`window.__conversationFixture.messages[1].sessionSource.id = 'web:' + 'long-session-id'.repeat(30);
+      window.__conversationFixture.messages[2].toolCall.arguments.sessionId = 'web:' + 'long-session-id'.repeat(30)`)
+    await frame()
+    for (const selector of ['.message-action', '.chat-session']) {
+      assert.equal(await execute(`document.querySelector('${selector}').scrollWidth > document.querySelector('${selector}').clientWidth`), false, 'Long session IDs do not overflow narrow headers')
+    }
+    await setCardOpen('.message-action', true)
+    await wait(`!!document.querySelector('.message-action-details')`)
     await execute(`document.querySelector('.message-action-details').open = true`)
     await wait(`document.querySelector('.message-action-details').textContent.includes('Error: peer is unavailable')`)
     await execute(`void window.__conversationFixture.messages.splice(3, 1)`)
@@ -330,8 +702,23 @@ async function main() {
     await execute(`window.__conversationFixture.streaming = true`)
     await wait(`document.querySelector('.message-action-status').textContent === 'Sending...'`)
     await execute(`window.__conversationFixture.messages[2].toolCall.arguments.sessionId = ''`)
-    await wait(`!document.querySelector('.message-recipient')`)
+    await wait(`!document.querySelector('.message-action .session-message-link')`)
     assert.match(await execute(`document.querySelector('.message-action').textContent`), /Unknown recipient/)
+    await wait(`document.querySelector('.message-action').getAnimations({subtree:true}).length === 0`)
+    window.webContents.debugger.attach('1.3')
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    await execute(`document.querySelector('.message-action .message-preview-toggle').click()`)
+    await wait(`document.querySelector('.message-action').dataset.expanded === 'false'`)
+    assert.equal(await execute(`document.querySelector('.message-action').getAnimations({subtree:true}).length`), 0, 'Reduced motion disables height and chevron transitions')
+    await execute(`document.querySelector('.message-action .message-preview-toggle').click()`)
+    await wait(`document.querySelector('.message-action').dataset.expanded === 'true'`)
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] })
+    window.webContents.debugger.detach()
+    if (process.env.CONVERSATION_EXCHANGES_ONLY) {
+      assert.deepEqual(errors, [])
+      console.log('CONVERSATION_SMOKE_OK')
+      return
+    }
     await execute(`(() => {
       const state = window.__conversationFixture;
       const request = {

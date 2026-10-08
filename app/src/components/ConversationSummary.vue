@@ -48,7 +48,6 @@ function onToggle(event: Event) {
 .compaction-summary-title { min-width: 0; font-weight: 500; overflow-wrap: anywhere; }
 .compaction-summary-body {
   box-sizing: border-box;
-  max-width: 76ch;
   margin: 0 8px 16px 15px;
   padding: 4px 0 12px 14px;
   border-left: 1px solid var(--c-border);

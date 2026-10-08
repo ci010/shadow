@@ -25,8 +25,11 @@ const renderedOptions = {
 test('conversation presentation and compacted history render across themes and viewport sizes', renderedOptions, t => renderConversation(t))
 test('system events preserve hierarchy, navigation and metadata across themes and viewport sizes', renderedOptions, t => renderConversation(t, 'events'))
 test('coordinator progress and outgoing message links navigate from the embedded primary pane', renderedOptions, t => renderConversation(t, 'coordinator-navigation'))
+test('session exchanges use fixed-height preview cards with accessible animated expansion', renderedOptions, t => renderConversation(t, 'session-exchanges'))
+test('call and task responses share five-line faded preview cards and the tool rail width', renderedOptions, t => renderConversation(t, 'response-cards'))
+test('conversation reading rail owns width while Markdown fills cards across desktop and mobile', renderedOptions, t => renderConversation(t, 'reading-layout'))
 
-async function renderConversation(t: TestContext, scenario: 'presentation' | 'events' | 'coordinator-navigation' = 'presentation') {
+async function renderConversation(t: TestContext, scenario: 'presentation' | 'events' | 'coordinator-navigation' | 'session-exchanges' | 'response-cards' | 'reading-layout' = 'presentation') {
   const directory = resolve(root, '.test-artifacts', `conversation-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
@@ -42,13 +45,17 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
   const segmentNavigation = template.match(/<SegmentNavigation[\s\S]*?\/>/)?.[0]
   assert.ok(segmentNavigation)
   const compiled = compileTemplate({
-    source: `<div>
+    source: `<div :class="{ 'mobile-chat': mobileLayout }">
       <div v-if="compactionFixture" class="conversation-heading-row"><SessionHeading :api-base="apiBase" :session-id="activeSessionId"
         name="Daily preliminary review" project-name="Default" :topic="headingTopic" :physical-id="viewingPhysicalId"
         :revision="0" :active="true" :can-rename="true" />${segmentNavigation}</div>
-      <div class="chat-history"><div class="chat-message-list">${skeleton}${template.slice(continuityStart, end)}
+      <div class="chat-history" :style="readingLayout ? {height:'calc(100vh - 160px)'} : undefined">
+      <div :class="readingLayout ? 'chat-messages' : undefined" :style="readingLayout ? undefined : {display:'contents'}">
+      <div class="chat-message-list">${skeleton}${template.slice(continuityStart, end)}
       <div class="fixture-stages"><SessionActivity v-for="stage in ['idle', 'llm', 'tool', 'waiting', 'completed', 'failed']" :key="stage" :stage="stage" /></div>
-      </div></div></div>`,
+      </div></div></div>
+      <div v-if="readingLayout" class="chat-composer"><div class="composer-box"><div class="composer-input"><textarea aria-label="Message" placeholder="Message..." /></div></div></div>
+      </div>`,
     filename: 'ConversationRows.vue', id: 'data-v-fixture', scoped: true,
   })
   assert.deepEqual(compiled.errors, [])
@@ -78,7 +85,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
           import ConversationSkeleton from '/src/components/ConversationSkeleton.vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
           import YieldDecision from '/src/components/YieldDecision.vue';
-          import CollaborationMessage from '/src/components/CollaborationMessage.vue';
+          import SessionMessageDisclosure from '/src/components/SessionMessageDisclosure.vue';
           import { inlineYieldDecisions } from '/src/yield-history.ts';
           import MessageTimestamp from '/src/components/MessageTimestamp.vue';
           import SessionActivity from '/src/components/SessionActivity.vue';
@@ -94,10 +101,13 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
           import { useConversationNavigation } from '/src/composables/useConversationNavigation.ts';
           import { render } from '/conversation-rows.js';
           const state = reactive({ loadingHistory:true, messages:[], visible:true, conversationDocumentVisible:true,
+            readingLayout:false, mobileLayout:false,
             activePanel:'conversation', route:{name:'chat'}, viewingPhysicalId:null, activeSessionId:'web:owner',
             streaming:false, streamContent:'', isDirectChat:true, requestBusy:false, currentRecovery:null,
             embedded:false, enableChildPane:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]},
             compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[], childSessionId:null,
+            executionFixtures:{11:{mode:'task',label:'Compile and finish native helper',agentType:'sub',
+              sessionId:'web:peer',stage:'completed',blocked:false,arguments:'{"mode":"task"}',receipt:'Task completed.'}},
             headingTopic:{ title:'Daily preliminary review', goal:'Preserve independently verifiable review results.',
               scope:'Review the current theme and brand kit.\\nDocument changes since the previous review.',
               nonGoals:'Do not publish or change the source materials.' } });
@@ -131,6 +141,49 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
                 JSON.stringify({key:'work:fixture',revision:1,assignee:'web:chat-' + 'long-session-id-'.repeat(8)}) },
           ];
           Object.assign(window, { __conversationFixture:state, __showConversation:() => { state.messages = samples; state.loadingHistory = false } });
+          window.__showResponses = () => {
+            const content = '## Review outcome\\n\\nA **verified** result with \`inline code\`.\\n\\n' +
+              '- First finding\\n- Second finding\\n\\n\`\`\`ts\\nconst result = 1\\n\`\`\`\\n\\n' + 'Detailed evidence remains available. '.repeat(40);
+            state.loadingHistory = false; state.navigation = [];
+            state.executionFixtures = {
+              0:{mode:'call',label:'Context review',sessionId:'web:peer',stage:'completed',blocked:false,output:content,arguments:'{"mode":"call"}',receipt:'Completed'},
+              1:{mode:'task',label:'Task failure with partial work',sessionId:'web:peer',stage:'failed',blocked:false,output:content,partialWork:'Partial work is not a successful result.',arguments:'{"mode":"task"}',receipt:'Failed'},
+            };
+            state.messages = [
+              {role:'assistant',event:'tool_call',content:'',toolCallId:'call-response'},
+              {role:'assistant',event:'tool_call',content:'',toolCallId:'task-failure'},
+              {role:'user',isSystemEvent:true,content,eventMeta:{type:'subagent-complete',source:'subagent',
+                attrs:{mode:'task','event-id':'task-result','source-session-id':'web:peer'}}},
+              {role:'user',isSystemEvent:true,content,eventMeta:{type:'subagent-cancelled',source:'legacy worker',
+                attrs:{mode:'call','event-id':'legacy-result'}}},
+              {role:'assistant',content},
+              {role:'assistant',event:'tool_call',content:'',toolCallId:'ordinary-read',toolCall:{name:'read',arguments:{path:'file.ts'}}},
+              {role:'tool',event:'tool_result',toolCallId:'ordinary-read',content:'File contents'},
+            ];
+          };
+          window.__showReadingLayout = () => {
+            window.__showConversation();
+            const content = '## Review outcome\\n\\n' + 'The response fills the shared reading rail. '.repeat(16) +
+              '\\n\\nFirst source line.\\nSecond source line.\\n\\n- Preserve **Markdown** and \`inline code\`.\\n\\n\`\`\`ts\\nconst evidence = "' + '0123456789'.repeat(120) + '"\\n\`\`\`';
+            state.readingLayout = true;
+            state.executionFixtures = {4:{mode:'call',label:'Review result',sessionId:'web:peer',stage:'completed',blocked:false,
+              output:content,arguments:'{"mode":"call"}',receipt:'Completed'}};
+            state.messages = [
+              {role:'user',content:'Please review.'},
+              {role:'user',content,sessionSource:{id:'web:peer',intent:'handoff'}},
+              {role:'assistant',event:'tool_call',content:'',toolCallId:'send',
+                toolCall:{name:'message',arguments:{sessionId:'web:peer',content}}},
+              {role:'tool',event:'tool_result',toolCallId:'send',content:'Message sent to web:peer. Queued for a response.'},
+              {role:'assistant',event:'tool_call',content:'',toolCallId:'call-result'},
+              {role:'user',isSystemEvent:true,content,timestamp:'2026-10-08T08:30:00Z',
+                eventMeta:{type:'subagent-complete',source:'subagent',attrs:{mode:'task','event-id':'reading-task','source-session-id':'web:peer'}}},
+              {role:'assistant',content},
+              {role:'assistant',event:'tool_call',content:'',toolCallId:'read',
+                toolCall:{name:'read',arguments:{path:'file.ts'}}},
+              {role:'tool',event:'tool_result',toolCallId:'read',content:'File contents'},
+              {role:'user',isSummary:true,content},
+            ];
+          };
           window.__showEvents = () => {
             Object.assign(state, { compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[],
               viewingPhysicalId:null, decisionRecords:[], navigation:[], childSessionId:null, embedded:false });
@@ -188,7 +241,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
           const empty = { render:() => null };
           createApp({
             __scopeId:'data-v-fixture',
-            components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, CollaborationMessage,
+            components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, SessionMessageDisclosure,
               SessionHeading, SegmentNavigation, ConversationSummary, ResponseDisclosure, ExecutionMessage, ConversationEvent, CommandResult:empty,
               MessageAttachments:empty, IoRequestCard:empty },
             render,
@@ -203,14 +256,14 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
                 router:{replace(){}}, emit:(event, id) => state.navigation.push({event,id}),
                 sessions:() => sessions, reset(){}, refresh(){}, mounted:() => true, newDraft(){},
               });
-              return { ...toRefs(state), t, formatNumber, messageActions, yieldDecisions,
+              return { ...toRefs(state), t, formatNumber, messageActions, yieldDecisions, SessionMessageDisclosure,
                 expandedResponses, isBackgroundResponse,
                 setResponseExpanded(context, open) { if (!context) return; if (open) expandedResponses.add(context.responseId); else expandedResponses.delete(context.responseId) },
                 displayMessages:computed(() => state.messages.map(msg => ({ ...msg, attachmentBody:messageAttachments(msg.content) }))),
-                inlineExecutions:{entries:new Map([[11,{mode:'task',label:'Compile and finish native helper',agentType:'sub',
-                  sessionId:'web:peer',stage:'completed',blocked:false,arguments:'{"mode":"task"}',receipt:'Task completed.'}]])},
+                inlineExecutions:computed(() => ({entries:new Map(Object.entries(state.executionFixtures).map(([index, value]) => [Number(index), value]))})),
                 ioAfter:new Map(), expandedThinking:new Set(),
-                toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded, 11, 12]))),
+                toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded,
+                  ...Object.keys(state.executionFixtures).map(Number), 12]))),
                 inspectExecution:nav.inspectExecution, sourceForEvent:meta => meta.attrs['source-session-id'] ? ({
                   ...sessions[0],sessionId:meta.attrs['source-session-id'],
                   mode:meta.type === 'exec-complete' || meta.attrs['source-session-id'] === 'web:owner' ? 'session' : 'task',
@@ -220,7 +273,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
                 viewPreviousSegment(){ state.viewingPhysicalId = state.previousPhysicalId },
                 goBackToCurrentSegment(){ state.viewingPhysicalId = null },
                 viewNextSegment(){ state.viewingPhysicalId = null },
-                renderMarkdown:text => DOMPurify.sanitize(marked.parse(text)), isErrorMessage:() => false };
+                renderMarkdown:text => DOMPurify.sanitize(marked.parse(text, {breaks:true})), isErrorMessage:() => false };
             },
           }).use(i18n).mount('#app');`
       },
@@ -276,6 +329,9 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
   const env: NodeJS.ProcessEnv = { CONVERSATION_SMOKE_URL: server.resolvedUrls.local[0] }
   if (scenario === 'events') env.CONVERSATION_EVENTS_ONLY = '1'
   if (scenario === 'coordinator-navigation') env.CONVERSATION_NAVIGATION_ONLY = '1'
+  if (scenario === 'session-exchanges') env.CONVERSATION_EXCHANGES_ONLY = '1'
+  if (scenario === 'response-cards') env.CONVERSATION_RESPONSE_CARDS_ONLY = '1'
+  if (scenario === 'reading-layout') env.CONVERSATION_READING_LAYOUT_ONLY = '1'
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'CONVERSATION_SCREENSHOTS']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }

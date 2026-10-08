@@ -19,12 +19,13 @@
       </button>
     </div>
     <Teleport to="body">
+      <OverlayTransition @after-leave="shownPanel = null">
       <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" role="dialog" tabindex="-1"
-        :aria-labelledby="`${id}-${expanded || 'background'}`" :style="position" @keydown="popupKeydown">
-        <div v-show="expanded === 'background'">
+        :aria-labelledby="`${id}-${shownPanel || 'background'}`" :style="position" @keydown="popupKeydown">
+        <div v-show="shownPanel === 'background'">
           <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />
         </div>
-        <div v-show="expanded === 'subagents'" class="subagent-list" :aria-label="t('Active subagents')">
+        <div v-show="shownPanel === 'subagents'" class="subagent-list" :aria-label="t('Active subagents')">
           <p v-if="!subagents?.length">{{ t('No subagents active.') }}</p>
           <button v-for="agent in subagents" :key="agent.sessionId" type="button" class="subagent-inspect"
             :data-subagent-id="agent.sessionId" :aria-label="t('Inspect subagent: {label}', { label: agent.label })" @click="inspect(agent.sessionId)">
@@ -34,6 +35,7 @@
           </button>
         </div>
       </div>
+      </OverlayTransition>
     </Teleport>
   </section>
 </template>
@@ -43,6 +45,7 @@ import { t } from '../i18n.ts'
 import { computed, nextTick, onDeactivated, ref, useId, watch } from 'vue'
 import BackgroundTasks from './BackgroundTasks.vue'
 import SessionActivity from './SessionActivity.vue'
+import OverlayTransition from './OverlayTransition.vue'
 import type { SidebarSession } from '../folders-sidebar.ts'
 import { executionDisplayStage, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 
@@ -51,6 +54,7 @@ const emit = defineEmits<{ inspect: [sessionId: string] }>()
 const id = useId()
 type Panel = 'background' | 'subagents'
 const expanded = ref<Panel | null>(null)
+const shownPanel = ref<Panel | null>(null)
 const backgroundStatus = ref({ total: 0, loading: false, error: '' })
 const subagentStatus = computed(() => summarizeSubagents(props.subagents ?? [], props.stages ?? {}))
 const backgroundTrigger = ref<HTMLButtonElement>()
@@ -89,6 +93,7 @@ function popupKeydown(event: KeyboardEvent) {
 }
 watch(expanded, async (panel, _previous, onCleanup) => {
   if (!panel) return
+  shownPanel.value = panel
   const anchor = trigger(panel)
   if (!anchor) return
   const viewport = window.visualViewport

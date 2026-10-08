@@ -134,11 +134,11 @@
             <ExecutionMessage v-else-if="inlineExecutions.entries.has(idx)" :execution="inlineExecutions.entries.get(idx)!"
               :selected="childSessionId === inlineExecutions.entries.get(idx)!.sessionId"
               @inspect="inspectExecution" @interact="clearSelection">
-              <div v-if="inlineExecutions.entries.get(idx)!.output" class="prose" v-html="renderMarkdown(inlineExecutions.entries.get(idx)!.output!)" />
+              <div v-if="inlineExecutions.entries.get(idx)!.output" class="chat-content prose" v-html="renderMarkdown(inlineExecutions.entries.get(idx)!.output!)" />
             </ExecutionMessage>
             <MessageAction v-else-if="messageActions.entries.has(idx)" :message="messageActions.entries.get(idx)!"
               :running="streaming && !viewingPhysicalId" @inspect="inspectExecution" @interact="clearSelection">
-              <div class="prose" v-html="renderMarkdown(messageActions.entries.get(idx)!.content)" />
+              <div class="chat-content prose" v-html="renderMarkdown(messageActions.entries.get(idx)!.content)" />
             </MessageAction>
             <YieldDecision v-else-if="yieldDecisions.entries.has(idx)" :decision="yieldDecisions.entries.get(idx)!"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
@@ -154,7 +154,7 @@
               :meta="msg.eventMeta" :content="msg.content" :timestamp="msg.timestamp" :source="sourceForEvent(msg.eventMeta)"
               :selected="childSessionId === eventSourceSession(msg.eventMeta)"
               @inspect="inspectExecution" @interact="clearSelection">
-              <div v-if="msg.content" class="prose" v-html="renderMarkdown(msg.content)" />
+              <div v-if="msg.content" class="chat-content prose" v-html="renderMarkdown(msg.content)" />
             </ConversationEvent>
             <!-- Compaction summary (previous conversation context) -->
             <ConversationSummary v-else-if="msg.isSummary" :content="msg.content"
@@ -163,25 +163,22 @@
             <ResponseDisclosure v-else :context="msg.responseContext" :message-index="idx" :timestamp="msg.timestamp"
               :open="expandedResponses.has(msg.responseContext?.responseId ?? '')"
               @update:open="setResponseExpanded(msg.responseContext, $event)" @interact="clearSelection">
-            <div
-              class="chat-bubble"
+            <component :is="msg.sessionSource ? SessionMessageDisclosure : 'div'"
+              v-bind="msg.sessionSource ? {
+                title: sessionMessageTitle(msg.sessionSource),
+                recipient: msg.sessionSource.id || msg.sessionSource.name || t('Unknown session'),
+                sessionId: msg.sessionSource.id,
+                timestamp: msg.timestamp,
+              } : {}"
               :data-msg-idx="isBackgroundResponse(msg.responseContext) ? undefined : idx"
               :class="[
-                msg.sessionSource ? 'chat-user chat-session' : msg.role === 'user' ? 'chat-user' : 'chat-assistant',
+                msg.sessionSource ? 'chat-session' : msg.role === 'user' ? 'chat-bubble chat-user' : 'chat-bubble chat-assistant',
               ]"
-              role="article"
+              @inspect="inspectExecution" @interact="clearSelection"
+              :role="msg.sessionSource ? undefined : 'article'"
               :aria-label="msg.sessionSource ? t('{value1} from {value2}', { value1: sessionMessageTitle(msg.sessionSource), value2: msg.sessionSource.id || msg.sessionSource.name || t('unknown session') }) : msg.role === 'user' ? (msg.senderName ? t('Message from {senderName}', { senderName: msg.senderName }) : t('User message')) : t('Assistant message')"
             >
-              <component :is="msg.sessionSource.id ? 'button' : 'div'" v-if="msg.sessionSource" class="chat-session-source"
-                :type="msg.sessionSource.id ? 'button' : undefined"
-                :aria-label="msg.sessionSource.id ? t('Open conversation {id}', { id: msg.sessionSource.id }) : undefined"
-                @click="msg.sessionSource.id && inspectExecution(msg.sessionSource.id)">
-                <span class="i-lucide-messages-square" aria-hidden="true" />
-                <strong>{{ sessionMessageTitle(msg.sessionSource) }}</strong>
-                <span>{{ msg.sessionSource.id || msg.sessionSource.name || t('Unknown session') }}</span>
-                <span v-if="msg.sessionSource.id" class="i-lucide-arrow-up-right" aria-hidden="true" />
-              </component>
-              <div v-else-if="msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
+              <div v-if="!msg.sessionSource && msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
               <!-- Reasoning / thinking content (collapsible) -->
               <div v-if="msg.reasoningContent || msg.reasoningText" class="thinking-block">
                 <div class="thinking-header" @click="toggleThinking(idx)">
@@ -191,10 +188,7 @@
                 </div>
                 <div v-if="expandedThinking.has(idx)" class="thinking-content prose" v-html="renderMarkdown(msg.reasoningContent || msg.reasoningText || '')" />
               </div>
-              <CollaborationMessage v-if="msg.sessionSource && ['progress', 'acknowledgement'].includes(msg.sessionSource.intent || '') && msg.attachmentBody.text.length > 600" :content="msg.attachmentBody.text">
-                <div class="chat-content prose" v-html="renderMarkdown(msg.attachmentBody.text)" />
-              </CollaborationMessage>
-              <div v-else-if="msg.attachmentBody.text" class="chat-content prose" v-html="renderMarkdown(msg.attachmentBody.text)" />
+              <div v-if="msg.attachmentBody.text" class="chat-content prose" v-html="renderMarkdown(msg.attachmentBody.text)" />
               <div
                 v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
                 class="retry-row"
@@ -208,9 +202,9 @@
                 <span class="usage-badge">{{ formatNumber(msg.usage.completionTokens) }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ formatNumber(usageDelta(idx)!.completion) }})</span> {{ t('completion') }}</span>
                 <span class="usage-badge total">{{ formatNumber(msg.usage.totalTokens) }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ formatNumber(usageDelta(idx)!.total) }})</span> {{ t('total') }}</span>
               </div>
-              <MessageTimestamp :timestamp="msg.timestamp" />
+              <MessageTimestamp v-if="!msg.sessionSource" :timestamp="msg.timestamp" />
               </div>
-            </div>
+            </component>
             </ResponseDisclosure>
             <YieldDecision v-for="[index, decision] in yieldDecisions.after.get(idx)"
               :key="decision.requestId" :decision="decision" :api-base="apiBase"
@@ -500,7 +494,7 @@ import { composerSubmitIntent } from '../composer-submit.ts'
 import SessionWorkControls from './SessionWorkControls.vue'
 import SessionWorkStatus from './SessionWorkStatus.vue'
 import { ensureProjectOrchestrator } from '../projects.ts'
-import CollaborationMessage from './CollaborationMessage.vue'
+import SessionMessageDisclosure from './SessionMessageDisclosure.vue'
 import YieldDecision from './YieldDecision.vue'
 import { inlineYieldDecisions, parseDecisionRecords } from '../yield-history.ts'
 import type { YieldRequest, YieldDecisionRecord } from '../../../src/sessions/yield-contract.ts'
@@ -2122,6 +2116,7 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
     if (parent instanceof HTMLDetailsElement) parent.open = true
   }
   for (const details of wrapper.querySelectorAll('details')) details.open = true
+  for (const card of wrapper.querySelectorAll('.message-preview-card')) card.dispatchEvent(new Event('message-card-expand'))
   // Lazy disclosure bodies mount after the native toggle event, not on the same Vue tick.
   await new Promise<void>(resolve => setTimeout(resolve, 0))
   await nextTick()
@@ -2892,7 +2887,7 @@ function resendLastMessage() {
 .conversation-dock > * { pointer-events: auto; }
 .conversation-dock > .session-status-row:last-child { margin-bottom: 16px; }
 .conversation-dock.in-flow { position: static; flex: 0 0 auto; }
-.channel-conversation-settings { box-sizing: border-box; width: calc(100% - 40px); max-width: 860px; margin: 8px auto 16px; padding: 8px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); }
+.channel-conversation-settings { box-sizing: border-box; width: calc(100% - 40px); max-width: var(--conversation-max-width); margin: 8px auto 16px; padding: 8px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); }
 .channel-settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
 .channel-settings-scope, .channel-settings-note { color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
 .channel-settings-note { margin: 4px 9px; }
@@ -2921,7 +2916,7 @@ function resendLastMessage() {
 .conversation-find:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .conversation-find:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .chat-messages { position: relative; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding-block: 12px calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
-.session-status-row { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0 8px; width: calc(100% - 40px); max-width: 860px; min-width: 0; margin: 0 auto; }
+.session-status-row { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0 8px; width: calc(100% - 40px); max-width: var(--conversation-max-width); min-width: 0; margin: 0 auto; }
 .chat-working { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: min(240px, 100%); min-height: 32px; margin: 8px 0 0 auto; padding: 5px 10px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-control); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }
 .chat-working.waiting { border-color: var(--c-warn); background: var(--c-warn-bg); color: var(--c-warn); }
 .chat-working-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
@@ -2931,7 +2926,7 @@ function resendLastMessage() {
 .session-status-row .execution-summary .chat-working-detail { display: block; }
 .execution-summary .chat-working-detail { display: block; white-space: normal; }
 .chat-working :deep(.working-wave) { flex: 0 0 auto; }
-.chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: 860px; margin: 12px auto 16px; }
+.chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: var(--conversation-max-width); margin: 12px auto 16px; }
 .composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
 .composer-box:focus-within, .composer-box:has(.composer-control[aria-expanded="true"]) { border-color: var(--c-blue); }
 .composer-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
@@ -3110,7 +3105,13 @@ function resendLastMessage() {
   gap: 0.5rem;
   /* Use the pane's width, not the scrollbar-reduced scrollport, to stay centered with the composer. */
   width: calc(100cqw - 112px);
+  max-width: var(--conversation-max-width);
   margin-inline: auto;
+}
+
+.chat-message-list :deep(.prose) {
+  min-width: 0;
+  max-width: none;
 }
 
 .mobile-chat { --conversation-item-max-width: 100%; }
@@ -3170,18 +3171,15 @@ function resendLastMessage() {
 }
 
 .chat-assistant {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--conversation-item-max-width);
   align-self: flex-start;
   background: var(--c-chat-assistant-bg);
   color: var(--c-text);
 }
 
-.chat-session { box-shadow: none; border-style: dashed; border-color: var(--c-chat-border); background: var(--c-bg-soft); }
-.chat-session-source { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; text-align: left; }
-button.chat-session-source { cursor: pointer; }
-button.chat-session-source:hover { color: var(--c-text); text-decoration: underline; }
-button.chat-session-source:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
-.chat-session-source strong { font-weight: 600; color: var(--c-text-secondary); }
-.chat-session-source > span { min-width: 0; overflow-wrap: anywhere; }
+.chat-session { max-width: var(--conversation-item-max-width); align-self: flex-start; }
 
 /* ── Segment navigation bar ──────────────────────────────── */
 

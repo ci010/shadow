@@ -21,6 +21,7 @@
     </div>
   </nav>
   <Teleport to="body">
+    <OverlayTransition>
     <div v-if="preview" :id="tooltipId" class="history-preview" :class="[preview.kind, preview.status]"
       :role="preview.members ? 'dialog' : 'tooltip'" :aria-label="preview.members ? t('Internal collaboration messages') : undefined"
       :style="previewPosition" @mouseenter="keepPreview" @mouseleave="scheduleHide" @focusin="keepPreview" @focusout="scheduleHide"
@@ -35,6 +36,7 @@
       <div v-else class="history-preview-message">{{ preview.preview }}</div>
       <time :datetime="preview.timestamp" :title="preview.timestamp">{{ formatMessageTime(preview.timestamp) }}</time>
     </div>
+    </OverlayTransition>
   </Teleport>
 </template>
 
@@ -42,6 +44,7 @@
 import { t } from '../i18n.ts'
 import { nextTick, onActivated, onDeactivated, onUnmounted, ref, useId, watch } from 'vue'
 import { formatMessageTime, type MessageHistoryMarker } from '../message-history.ts'
+import OverlayTransition from './OverlayTransition.vue'
 
 const props = withDefaults(defineProps<{ entries: readonly MessageHistoryMarker[]; container?: HTMLElement; active?: boolean; list?: boolean }>(), { active: true })
 const emit = defineEmits<{ navigate: [] }>()
@@ -72,8 +75,10 @@ function showPreview(entry: MessageHistoryMarker, event: Event) {
   const width = Math.min(360, Math.max(120, rect.left - 24))
   previewPosition.value = {
     width: `${width}px`,
-    left: `${Math.max(8, rect.left - width - 10)}px`,
-    top: `${Math.max(8, Math.min(rect.top - 24, window.innerHeight - (entry.members ? 340 : 220)))}px`,
+    left: '0px',
+    top: '0px',
+    transform: `translate3d(${Math.max(8, rect.left - width - 10)}px, ${Math.max(8, Math.min(rect.top - 24, window.innerHeight - (entry.members ? 340 : 220)))}px, 0)`,
+    '--tooltip-move-duration': preview.value ? '180ms' : '0ms',
   }
   preview.value = entry
 }
@@ -207,6 +212,9 @@ onUnmounted(deactivate)
 .history-marker:hover span, .history-marker.previewing span, .history-marker:focus-visible span { transform: scaleX(1); background: var(--c-blue); border-color: var(--c-blue); }
 .history-marker:focus-visible { outline: 1px solid var(--c-blue); outline-offset: -1px; border-radius: var(--radius-control); }
 .history-preview { position: fixed; z-index: 980; box-sizing: border-box; max-height: calc(100dvh - 16px); overflow-y: auto; padding: 12px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 8px 28px var(--c-shadow); }
+.history-preview { transition: transform var(--tooltip-move-duration, 0ms) var(--overlay-easing); }
+.history-preview.overlay-enter-active { transition: opacity var(--overlay-enter-duration) var(--overlay-easing), transform var(--tooltip-move-duration, 0ms) var(--overlay-easing); }
+.history-preview.overlay-leave-active { transition: opacity var(--overlay-leave-duration) ease-out; }
 .history-preview.decision { border-left: 3px solid var(--c-purple); }
 .history-preview.waiting-user, .history-preview.waiting-parent { border-left-color: var(--c-warn); }
 .history-preview.decision .history-preview-message { -webkit-line-clamp: 5; white-space: pre-line; }
@@ -230,5 +238,7 @@ onUnmounted(deactivate)
 .history-list .history-marker.decision { border-left: 3px solid var(--c-purple); }
 .history-list .history-marker.waiting-user, .history-list .history-marker.waiting-parent { border-left-color: var(--c-warn); }
 .history-list .history-marker.user strong { color: var(--c-blue); }
-@media (prefers-reduced-motion: reduce) { .history-marker span { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .history-marker span, .history-preview, .history-preview.overlay-enter-active, .history-preview.overlay-leave-active { transition: none; }
+}
 </style>

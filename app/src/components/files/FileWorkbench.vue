@@ -108,6 +108,7 @@
             </HoverInfo>
           </div>
           <Teleport to="body">
+            <OverlayTransition>
             <div v-if="tabMenu" class="document-menu-backdrop" @pointerdown.self="dismissTabMenu(true)" @contextmenu.prevent.self="dismissTabMenu(true)">
               <div ref="menuElement" class="document-menu" role="menu" :aria-label="t('Document tab actions')" :style="menuPosition" @keydown="menuKey">
                 <button type="button" role="menuitem" @click="runTabAction('close')">{{ t('Close') }}</button>
@@ -115,6 +116,7 @@
                 <button type="button" role="menuitem" @click="runTabAction('all')"><span>{{ t('Close all') }}</span><span class="document-menu-shortcut">Ctrl+Shift+W</span></button>
               </div>
             </div>
+            </OverlayTransition>
           </Teleport>
           </div>
         </div>
@@ -174,6 +176,7 @@ import FileDiffPreview from './FileDiffPreview.vue'
 import { isPermanentDocumentTab } from '../../file-workbench.ts'
 import { fileIcon } from '../../file-icons.ts'
 import HoverInfo from '../HoverInfo.vue'
+import OverlayTransition from '../OverlayTransition.vue'
 import KnowledgeView from '../KnowledgeView.vue'
 import ProjectSettings from '../ProjectSettings.vue'
 import AgentsTab from '../AgentsTab.vue'

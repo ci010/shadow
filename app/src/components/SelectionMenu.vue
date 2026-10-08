@@ -1,5 +1,6 @@
 <template>
   <Teleport to="body">
+    <OverlayTransition>
     <div v-if="selection" ref="menu" class="selection-menu" role="menu" :aria-label="t('Text selection')" :style="position" @pointerdown.prevent>
       <button role="menuitem" aria-keyshortcuts="Q" :disabled="!canQuote" :title="canQuote ? t('Insert quote into the message') : t('Quoting needs an editable conversation')" @click="quote">
         <span class="i-lucide-quote" aria-hidden="true" /><span>{{ t('Quote') }}</span><kbd>q</kbd>
@@ -9,6 +10,7 @@
       </button>
       <p v-if="error" class="selection-menu-error" role="alert">{{ error }}</p>
     </div>
+    </OverlayTransition>
   </Teleport>
 </template>
 
@@ -16,6 +18,7 @@
 import { t } from '../i18n.ts'
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { selectionAction } from '../selection-actions.ts'
+import OverlayTransition from './OverlayTransition.vue'
 
 const props = defineProps<{ container?: HTMLElement | null; active: boolean; canQuote: boolean }>()
 const emit = defineEmits<{ quote: [text: string, range: Range] }>()

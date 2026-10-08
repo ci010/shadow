@@ -28,7 +28,7 @@ function stylesheet(source: string, filename: string): Sheet {
 
 const globalStyles = stylesheet(await readFile(new URL('./styles.css', import.meta.url), 'utf8'), 'styles.css')
 const components = new Map(await Promise.all([
-  'ChatTab', 'MessageAction', 'ExecutionMessage', 'SessionActivity', 'ProjectCoordinator', 'ToolActivityGroup',
+  'ChatTab', 'MessageAction', 'MessagePreviewCard', 'SessionMessageDisclosure', 'ExecutionMessage', 'SessionActivity', 'ProjectCoordinator', 'ToolActivityGroup',
 ].map(async name => {
   const filename = `${name}.vue`
   const { descriptor, errors } = parse(await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8'))
@@ -204,20 +204,43 @@ test('conversation surfaces consume the shared chat aliases', () => {
   for (const [component, selector, token] of [
     ['ChatTab', '.chat-user', '--c-chat-user-bg'],
     ['ChatTab', '.chat-assistant', '--c-chat-assistant-bg'],
-    ['MessageAction', '.message-action', '--c-chat-action-bg'],
-    ['ExecutionMessage', '.execution-card', '--c-chat-action-bg'],
+    ['MessagePreviewCard', '.message-preview-card', '--c-chat-action-bg'],
   ]) {
     assert.equal(property(component!, selector!, 'background'), `var(${token})`)
   }
   for (const [component, selector] of [
-    ['ChatTab', '.chat-bubble'], ['MessageAction', '.message-action'], ['ExecutionMessage', '.execution-card'],
+    ['ChatTab', '.chat-bubble'], ['MessagePreviewCard', '.message-preview-card'],
   ]) {
     assert.ok(property(component!, selector!, 'border').includes('var(--c-chat-border)'), `${component} ${selector} border uses chat alias`)
   }
 })
 
+test('message preview cards reserve five lines without changing Markdown typography', () => {
+  assert.equal(property('MessagePreviewCard', '.message-preview-content', 'min-height'), '5lh')
+  assert.equal(property('MessagePreviewCard', '.message-preview-card', 'font-size'), property('ChatTab', '.chat-bubble', 'font-size'))
+  assert.equal(property('MessagePreviewCard', '.message-preview-card', 'line-height'), property('ChatTab', '.chat-bubble', 'line-height'))
+  assert.equal(property('MessagePreviewCard', '.message-preview-body', 'grid-template-rows'), '0fr')
+  assert.equal(property('MessagePreviewCard', '.message-preview-card[data-expanded="true"] .message-preview-body', 'grid-template-rows'), '1fr')
+  assert.match(property('MessagePreviewCard', '.message-preview-body::after', 'background'), /linear-gradient.*var\(--c-chat-action-bg\)/)
+  assert.equal(property('MessagePreviewCard', '.message-preview-body::after', 'pointer-events'), 'none')
+  assert.equal(property('MessagePreviewCard', '.message-preview-card[data-expanded="true"] .message-preview-body::after', 'opacity'), '0')
+})
+
+test('conversation reading width belongs to the rail rather than Markdown', () => {
+  assert.equal(light.get('--conversation-max-width'), '860px')
+  assert.equal(light.get('--conversation-item-max-width'), '100%')
+  for (const selector of ['.chat-message-list', '.chat-composer', '.session-status-row']) {
+    assert.equal(property('ChatTab', selector, 'max-width'), 'var(--conversation-max-width)')
+  }
+  assert.equal(property('ChatTab', '.chat-message-list :deep(.prose)', 'max-width'), 'none')
+  assert.equal(property('ChatTab', '.chat-user', 'align-self'), 'flex-end')
+  assert.equal(property('ChatTab', '.chat-bubble', 'max-width'), '80%')
+})
+
 test('session source, reasoning and running tool text remain neutral rather than semantic status colors', () => {
-  assert.equal(property('ChatTab', '.chat-session-source strong', 'color'), 'var(--c-text-secondary)')
+  assert.equal(property('MessagePreviewCard', '.message-preview-card', 'color'), 'var(--c-text-secondary)')
+  assert.equal(property('MessagePreviewCard', '.message-preview-card', 'background'), 'var(--c-chat-action-bg)')
+  assert.ok(property('MessagePreviewCard', '.message-preview-card', 'border').includes('var(--c-chat-border)'))
   for (const { name, tokens } of themes) {
     for (const [component, selector] of [
       ['ChatTab', '.thinking-header'], ['ChatTab', '.thinking-content'], ['ToolActivityGroup', '.activity-status'],

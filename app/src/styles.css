@@ -11,7 +11,11 @@
   --radius-pill: 0px;
   --radius-circle: 0px;
 
-  --conversation-item-max-width: 80%;
+  --conversation-max-width: 860px;
+  --conversation-item-max-width: 100%;
+  --overlay-enter-duration: 160ms;
+  --overlay-leave-duration: 100ms;
+  --overlay-easing: cubic-bezier(.22, 1, .36, 1);
 
   /* Sidebar rhythm: rows stay together; headings and groups own the whitespace. */
   --sidebar-row-height: 32px;
@@ -412,6 +416,13 @@ input:not([type]), textarea {
 
 .mono {
   font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.overlay-enter-active { transition: opacity var(--overlay-enter-duration) var(--overlay-easing); }
+.overlay-leave-active { transition: opacity var(--overlay-leave-duration) ease-out; pointer-events: none; }
+.overlay-enter-from, .overlay-leave-to { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .overlay-enter-active, .overlay-leave-active { transition: none; }
 }
 
 .fade-in {

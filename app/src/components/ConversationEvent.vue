@@ -1,23 +1,28 @@
 <template>
-  <article v-if="source && !isCurrentSource && presentation.completion" class="system-event" :class="eventClasses" :data-event-id="meta.attrs['event-id']">
-    <button type="button" class="event-inspect-header event-header" :aria-pressed="!!selected"
-      :aria-label="t('Inspect execution: {sessionId}', { sessionId: source.label || source.sessionId })" @click="$emit('inspect', source.sessionId)">
-      <span class="event-symbol event-icon i-lucide-git-branch" aria-hidden="true" />
-      <span class="event-copy">
-        <strong>{{ presentation.title }}</strong>
-        <span class="event-source" :title="source.label || meta.source">{{ source.label || meta.source }}</span>
-      </span>
-      <MessageTimestamp :timestamp="timestamp" />
-      <span class="event-icon i-lucide-chevron-right" aria-hidden="true" />
-    </button>
-    <details class="event-details">
-      <summary class="event-disclosure" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Event details') }}</summary>
-      <div class="event-body">
-        <div class="event-content"><slot /></div>
+  <MessagePreviewCard v-if="presentation.completion" class="system-event event-response" :label="presentation.title"
+    :class="eventClasses" :data-event-id="meta.attrs['event-id']" @interact="$emit('interact')">
+    <template #heading>
+      <component :is="source && !isCurrentSource ? 'button' : 'div'" :type="source && !isCurrentSource ? 'button' : undefined"
+        class="event-header" :class="{ 'event-inspect-header': source && !isCurrentSource }" :aria-pressed="source && !isCurrentSource ? !!selected : undefined"
+        :aria-label="source && !isCurrentSource ? t('Inspect execution: {sessionId}', { sessionId: source.label || source.sessionId }) : undefined"
+        @click="inspect">
+        <span class="event-symbol event-icon i-lucide-git-branch" aria-hidden="true" />
+        <span class="event-copy">
+          <strong>{{ presentation.title }}</strong>
+          <span class="event-source" :title="source?.label || meta.source">{{ source?.label || meta.source }}</span>
+        </span>
+        <MessageTimestamp :timestamp="timestamp" />
+        <span v-if="source && !isCurrentSource" class="event-icon i-lucide-chevron-right" aria-hidden="true" />
+      </component>
+    </template>
+    <div class="event-content"><slot /></div>
+    <template #details>
+      <details class="event-details">
+        <summary class="event-disclosure" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Event details') }}</summary>
         <dl class="event-fields"><template v-for="(value, key) in meta.attrs" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl>
-      </div>
-    </details>
-  </article>
+      </details>
+    </template>
+  </MessagePreviewCard>
   <details v-else class="system-event" :class="eventClasses" :open="presentation.completion" :data-event-id="meta.attrs['event-id']" @toggle.self="toggle">
     <summary class="event-header" @click="$emit('interact')">
       <span class="event-symbol event-icon" :class="presentation.completion ? 'i-lucide-git-pull-request' : 'i-lucide-radio'" aria-hidden="true" />
@@ -49,8 +54,9 @@ import { eventPresentation, type ChatEventMeta } from '../chat-events.ts'
 import type { SidebarSession } from '../folders-sidebar.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import ToolPayload from './ToolPayload.vue'
+import MessagePreviewCard from './MessagePreviewCard.vue'
 const props = defineProps<{ meta: ChatEventMeta; content?: string; timestamp?: string; source?: SidebarSession; selected?: boolean; currentSessionId?: string }>()
-defineEmits<{ inspect: [id: string]; interact: [] }>()
+const emit = defineEmits<{ inspect: [id: string]; interact: [] }>()
 const presentation = computed(() => eventPresentation(props.meta))
 const isCurrentSource = computed(() => !!props.source && props.source.sessionId === props.currentSessionId)
 const eventClasses = computed(() => ({
@@ -60,6 +66,11 @@ const eventClasses = computed(() => ({
 }))
 const rawContent = computed(() => props.meta.type === 'work-realignment' ? props.content : undefined)
 const expanded = ref(false)
+function inspect(event: MouseEvent) {
+  if (!props.source || isCurrentSource.value) return
+  event.stopPropagation()
+  emit('inspect', props.source.sessionId)
+}
 function toggle(event: Event) {
   if (event.currentTarget instanceof HTMLDetailsElement) expanded.value = event.currentTarget.open
 }
@@ -67,6 +78,9 @@ function toggle(event: Event) {
 
 <style scoped>
 .system-event { container: conversation-event / inline-size; width: 100%; min-width: 0; border: 1px solid var(--c-chat-border); border-radius: var(--radius-surface); background: var(--c-chat-action-bg); color: var(--c-text-secondary); font-size: 13px; line-height: 1.5; }
+.event-response { font-size: 0.8rem; }
+.event-response .event-header { flex: 1; width: auto; padding: 0; }
+.event-response .event-fields { padding-inline: 0; }
 .event-header { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: var(--trace-row-height); padding: 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; list-style: none; cursor: pointer; }
 .event-copy { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
 .event-copy strong { color: var(--c-text); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
@@ -78,7 +92,7 @@ function toggle(event: Event) {
 .event-content { min-width: 0; }
 .event-content:empty { display: none; }
 .event-payload { margin: 0; padding: 10px 12px; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 'IBM Plex Mono', ui-monospace, monospace; background: var(--c-bg-muted); border-radius: var(--radius-control); color: var(--c-text-secondary); }
-.event-body :deep(.prose) { max-width: 72ch; color: inherit; font-size: 13px; line-height: 1.6; }
+.event-body :deep(.prose) { color: inherit; font-size: 13px; line-height: 1.6; }
 .event-body :deep(.prose > :first-child) { margin-top: 0; }
 .event-body :deep(.prose > :last-child) { margin-bottom: 0; }
 .event-body :deep(.prose :is(h1, h2, h3, h4)) { margin: 4px 0; font-size: 13px; font-weight: 500; }
@@ -105,6 +119,11 @@ summary:focus-visible, button:focus-visible { outline: 2px solid var(--c-blue); 
 .event-fields:empty { display: none; }
 @container conversation-event (max-width: 440px) {
   .event-header { gap: 8px; }
+  .event-response .event-header { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 4px 8px; }
+  .event-response .event-symbol { grid-column: 1; grid-row: 1; }
+  .event-response .event-copy { grid-column: 2; grid-row: 1; }
+  .event-response .event-header > .event-icon:last-child { grid-column: 3; grid-row: 1; }
+  .event-response .event-header :deep(.message-time) { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
   .event-fields { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .event-fields dt:not(:first-child) { margin-top: 10px; }
 }
