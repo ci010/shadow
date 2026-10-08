@@ -1,9 +1,29 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { currentEffort, effortOptions, effortOptionsForModel, reasoningSettingsForEffort, updateSessionSettings } from './session-settings.ts'
+import { currentEffort, effortOptions, effortOptionsForModel, isChannelConversation, reasoningSettingsForEffort, updateSessionSettings } from './session-settings.ts'
 import { parseSessionGraph } from './folders-sidebar.ts'
 import { readFile } from 'node:fs/promises'
 import { compileScript, compileStyle, compileTemplate, parse } from 'vue/compiler-sfc'
+
+for (const platform of ['qq', 'discord', 'feishu']) test(`${platform} conversation controls keep inherited defaults separate from session overrides and exclude executions`, () => {
+  const sessionId = `bot:project-a:bot-a:${platform}:group%3Aa`
+  const inferenceDefaults = { model: 'agent-model', thinking: { type: 'enabled' }, reasoningEffort: 'low' }
+  const graph = (extra: Record<string, unknown> = {}) => ({ nodes: [], sessions: [
+    { sessionId, mode: 'session', config: { model: 'override', reasoningEffort: 'high' }, inferenceDefaults, ...extra },
+  ] })
+  const session = parseSessionGraph(graph(), 'project-a')[0]!
+  assert.equal(isChannelConversation(session), true)
+  assert.deepEqual(session.inferenceDefaults, inferenceDefaults)
+  assert.equal(session.config?.model, 'override')
+  assert.equal(isChannelConversation({ ...session, sessionId: `${platform}:group:legacy`, channelAddress: undefined }), true)
+  for (const mode of ['task', 'call'] as const) assert.equal(isChannelConversation({ ...session, mode }), false)
+  for (const sessionId of ['web:chat-fixture', 'cron:fixture', 'system:fixture']) assert.equal(isChannelConversation({ sessionId }), false)
+  assert.equal(isChannelConversation(undefined), false)
+  assert.equal(parseSessionGraph(graph({ inferenceDefaults: null }), 'project-a')[0]!.inferenceDefaults, undefined)
+  for (const invalid of [{}, { model: 1 }, { model: 'a', thinking: { type: 'auto' } }, { model: 'a', reasoningEffort: 'extreme' }]) {
+    assert.throws(() => parseSessionGraph(graph({ inferenceDefaults: invalid }), 'project-a'))
+  }
+})
 
 test('unified effort choices update thinking and effort together and represent disabled legacy settings', () => {
   assert.deepEqual(effortOptions.map(option => option.value), ['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max'])

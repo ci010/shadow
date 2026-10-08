@@ -1,5 +1,5 @@
 import { t } from './i18n.ts'
-import { isRecord } from './folders-sidebar.ts'
+import { isRecord, type SidebarSession } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
 import { isGptModel, isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 
@@ -10,6 +10,11 @@ export interface ReasoningSettings {
 
 export interface ConversationSettings extends ReasoningSettings {
   model?: string | null
+}
+
+export function isChannelConversation(session: SidebarSession | undefined): boolean {
+  return !!session && (!session.mode || session.mode === 'session') &&
+    ['qq', 'discord', 'feishu'].includes(session.channelAddress?.platform ?? session.sessionId.split(':', 1)[0])
 }
 
 export const effortOptions = [

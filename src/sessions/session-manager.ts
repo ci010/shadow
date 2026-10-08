@@ -1871,6 +1871,14 @@ ${JSON.stringify(request)}`,
     return state?.config ?? {}
   }
 
+  getSessionInferenceDefaults(sessionId: string) {
+    if (!this.sessionStates[sessionId]) throw new Error('session_not_found')
+    const defaults = this.deps.getLlmRuntimeConfig?.()
+    if (!defaults) return undefined
+    const resolved = resolveInferenceSettings(defaults, this.deps.conversationPolicies?.resolve(sessionId)?.agent)
+    return { model: resolved.model, thinking: resolved.thinking, reasoningEffort: resolved.reasoningEffort }
+  }
+
   async applySessionConfigPatch(
     sessionId: string,
     patch: SessionConfigPatch,

@@ -112,6 +112,14 @@ An absent request alone never means publication succeeded.
 Check/status responses include compact assertions and errors; full scenario
 transcripts remain available through the saved `run` ID rather than chat scraping.
 
+When viewing a QQ, Discord, or Feishu conversation in Shadow, the bottom model/effort menu saves
+overrides for that logical conversation only, including after reopening it.
+It does not edit the Bot, shared Agent, or other conversations. Choose
+**Follow configured default** for the model or **Default** for effort to remove
+that override and inherit the published Agent/runtime defaults. Changes apply to
+subsequent turns, not an already running inference. Historical segments and
+one-shot execution traces do not expose these controls.
+
 **Participants control invocation, not reply visibility.** Anyone who can read
 the Discord channel can read the Bot's replies, even if they cannot invoke it.
 Use private channels for confidential work. Privileged Agents cannot be assigned

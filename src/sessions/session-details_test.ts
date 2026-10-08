@@ -43,6 +43,64 @@ const invalidConfigs = [
 ]
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  for (const platform of ['qq', 'discord', 'feishu']) test(`${Store.name}: ${platform} conversation PATCH persists only selected overrides and null restores inherited settings`, async t => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const key = `bot:project-a:bot-a:${platform}:group%3Aa`
+      const peer = `bot:project-a:bot-a:${platform}:group%3Ab`
+      const legacy = `${platform}:legacy`
+      const sessions = makeManager(workspace, store)
+      try {
+        await store.saveState(key, { sessionId: key, segmentIndex: 0, mode: 'session' })
+        await store.saveState(peer, { sessionId: peer, segmentIndex: 0, mode: 'session' })
+        await store.saveState(legacy, { sessionId: legacy, segmentIndex: 0, mode: 'session' })
+        await sessions.start()
+        const app = new Hono()
+        sessionsApiPlugin(sessions)(app)
+        const config = { model: `${platform}-override`, thinking: { type: 'enabled' }, reasoningEffort: 'high' }
+        const response = await app.request(`/api/sessions/${encodeURIComponent(key)}/config`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config),
+        })
+        equal(response.status, 200)
+        deepEqual(await response.json(), { key, config })
+        deepEqual(sessions.getSessionConfig(peer), {})
+        const graph = await (await app.request('/api/sessions/graph')).json()
+        for (const id of [key, peer, legacy]) {
+          deepEqual(graph.sessions.find((s: { sessionId: string }) => s.sessionId === id).inferenceDefaults, { model: 'fixture' })
+        }
+        const defaults = sessions.getSessionInferenceDefaults.bind(sessions)
+        const unavailable = t.mock.method(sessions, 'getSessionInferenceDefaults', (id: string) => {
+          if (id === key) throw new Error('Synthetic disabled binding')
+          return defaults(id)
+        })
+        try {
+          const response = await app.request('/api/sessions/graph')
+          equal(response.status, 200, 'A disabled binding must not break the conversation list')
+          const graph = await response.json()
+          equal(graph.sessions.find((s: { sessionId: string }) => s.sessionId === key).inferenceDefaults, null)
+          deepEqual(graph.sessions.find((s: { sessionId: string }) => s.sessionId === peer).inferenceDefaults, { model: 'fixture' })
+        } finally { unavailable.mock.restore() }
+        await sessions.stop()
+        const restarted = makeManager(workspace, store)
+        try {
+          await restarted.start()
+          deepEqual(restarted.getSessionConfig(key), config)
+          deepEqual(restarted.getSessionConfig(peer), {})
+          equal(restarted.getSessionInferenceDefaults(key)?.model, 'fixture')
+          const http = new Hono()
+          sessionsApiPlugin(restarted)(http)
+          equal((await http.request(`/api/sessions/${encodeURIComponent(key)}/config`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: null, thinking: null, reasoningEffort: null }),
+          })).status, 200)
+          deepEqual(restarted.getSessionConfig(key), {})
+          equal((await store.getState(key))?.config, undefined)
+        } finally { await restarted.stop() }
+      } finally { await sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: committed creation, metadata, configuration and deletion invalidate the session catalog`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

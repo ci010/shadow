@@ -39,6 +39,11 @@ export interface SidebarSession {
     thinking?: { type: 'enabled' | 'disabled' }
     reasoningEffort?: ReasoningEffort
   }
+  inferenceDefaults?: {
+    model: string
+    thinking?: { type: 'enabled' | 'disabled' }
+    reasoningEffort?: ReasoningEffort
+  }
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -130,10 +135,19 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
     const direct = isDirectConversation(session.sessionId, session.mode as string | undefined)
     const topic = parseTopicMetadata(session.topic)
     const config = isRecord(session.config) ? session.config : undefined
+    const defaults = session.inferenceDefaults
+    if (defaults != null && (!isRecord(defaults) || typeof defaults.model !== 'string' || !defaults.model.trim()
+      || (defaults.thinking !== undefined && (!isRecord(defaults.thinking) || (defaults.thinking.type !== 'enabled' && defaults.thinking.type !== 'disabled')))
+      || (defaults.reasoningEffort !== undefined && !isReasoningEffort(defaults.reasoningEffort)))) throw invalid()
     return {
       sessionId: session.sessionId,
       projectId: session.projectId as string | undefined,
       channelAddress,
+      inferenceDefaults: isRecord(defaults) && typeof defaults.model === 'string' ? {
+        model: defaults.model,
+        thinking: isRecord(defaults.thinking) ? { type: defaults.thinking.type === 'enabled' ? 'enabled' : 'disabled' } : undefined,
+        reasoningEffort: isReasoningEffort(defaults.reasoningEffort) ? defaults.reasoningEffort : undefined,
+      } : undefined,
       sessionKind: session.sessionKind as SidebarSession['sessionKind'],
       topic,
       createdBySessionId: session.createdBySessionId as string | undefined,

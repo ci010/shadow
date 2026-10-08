@@ -1,7 +1,7 @@
 <template>
   <ComposerPopover v-if="selection" :label="t('Choose model')" :title="triggerTitle" :disabled="unavailable" :busy="pending" @opened="resetMenu">
     <template #trigger>
-      <span class="model-label">{{ selection.inheriting?.value ? t('Project · ') : '' }}{{ modelDisplayName(selection.current.value) || (selection.loading.value ? t('Loading models...') : t('Choose model')) }}</span>
+      <span class="model-label">{{ selection.inheriting?.value ? conversationDefaults ? t('Default · ') : t('Project · ') : '' }}{{ modelDisplayName(selection.current.value) || (selection.loading.value ? t('Loading models...') : t('Choose model')) }}</span>
       <span v-if="settings" class="model-effort"><span aria-hidden="true">·</span> {{ effortLabel }}</span>
       <span class="model-chevron i-lucide-chevron-down" aria-hidden="true" />
     </template>
@@ -26,7 +26,7 @@
       <input ref="search" v-model="query" class="model-search" type="search" :placeholder="t('Search models...')" :aria-label="t('Search models')" />
       <div class="model-options" role="group" :aria-label="t('Available models')">
         <button v-if="selection.inherited && !query.trim()" class="model-option" :aria-pressed="selection.inheriting?.value" @click="choose('', close)">
-          <span class="model-option-copy"><span>{{ t('Follow project default') }}</span><small>{{ modelDisplayName(selection.inherited.value) }}</small></span>
+          <span class="model-option-copy"><span>{{ conversationDefaults ? t('Follow configured default') : t('Follow project default') }}</span><small>{{ modelDisplayName(selection.inherited.value) }}</small></span>
         </button>
         <button v-for="model in options" :key="model" class="model-option" :aria-pressed="!selection.inheriting?.value && model === selection.current.value" :title="model" @click="choose(model, close)">
           <span class="model-option-copy"><span>{{ modelDisplayName(model) }}</span><small v-if="modelProvider(model)">{{ modelProvider(model) }}</small></span>
@@ -35,7 +35,7 @@
         <p v-if="!options.length" class="model-empty">{{ t('No matching models.') }}</p>
       </div>
       </template>
-      <ReasoningControls v-else-if="settings" :settings="settings" :inherited-settings="selection.defaultReasoning?.value" :model="selection.current.value" :disabled="unavailable || !!settingsDisabled" :busy="pending" @change="chooseEffort($event, close)" />
+      <ReasoningControls v-else-if="settings" :settings="settings" :inherited-settings="selection.defaultReasoning?.value" :conversation-defaults="conversationDefaults" :model="selection.current.value" :disabled="unavailable || !!settingsDisabled" :busy="pending" @change="chooseEffort($event, close)" />
       </template>
       <p v-if="selection.error.value" class="model-error" role="alert">{{ selection.error.value }}</p>
       </div>
@@ -51,7 +51,7 @@ import ReasoningControls from './ReasoningControls.vue'
 import { filterModelOptions, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
 import { currentEffort, effortOptions, type ReasoningSettings } from '../session-settings.ts'
 
-const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean }>()
+const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean; conversationDefaults?: boolean }>()
 const emit = defineEmits<{ 'change-settings': [patch: ReasoningSettings] }>()
 const selection = useModelSelection()
 const query = ref('')

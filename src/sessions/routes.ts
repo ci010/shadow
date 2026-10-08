@@ -1,4 +1,5 @@
 import type { Hono } from 'hono'
+import { channelAddressFromSessionId } from '../bus/events.ts'
 import { delegationOwner } from './execution-scope.ts'
 import { parseSessionName, SessionNameError } from './session-name.ts'
 import type { SessionManager } from './session-manager.ts'
@@ -277,6 +278,16 @@ export function sessionsApiPlugin(
             ? 'waiting' : state?.executionStatus ?? (state?.lastActivityAt ? 'completed' : 'pending'),
         }
         const firstMsg = await sessions.getFirstUserMessage(session.sessionId)
+        let inferenceDefaults: ReturnType<SessionManager['getSessionInferenceDefaults']> | null
+        if (state && execution.mode === 'session' && ['qq', 'discord', 'feishu'].includes(
+          channelAddressFromSessionId(session.sessionId)?.platform ?? session.sessionId.split(':', 1)[0])) {
+          try {
+            inferenceDefaults = sessions.getSessionInferenceDefaults(session.sessionId)
+          } catch (error) {
+            console.error(`[sessions] Cannot resolve inference defaults for ${session.sessionId}:`, error)
+            inferenceDefaults = null
+          }
+        }
         enrichedSessions.push({
           ...session,
           ...execution,
@@ -284,6 +295,7 @@ export function sessionsApiPlugin(
           title: state?.name ?? state?.topic?.title ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,
+          inferenceDefaults,
           lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??
             null,
         })

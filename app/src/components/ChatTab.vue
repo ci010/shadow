@@ -101,7 +101,7 @@
           <div class="chat-message-list">
           <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
             :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
-          <div v-else-if="!loadingHistory && messages.length === 0 && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : t('No messages yet. Send one below.') }}</div>
+          <div v-else-if="!loadingHistory && messages.length === 0 && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : channelConversation ? t('Messages from this channel will appear here.') : t('No messages yet. Send one below.') }}</div>
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
           <p v-if="readonlyContextError" class="composer-error" role="alert">{{ readonlyContextError }}</p>
@@ -291,6 +291,18 @@
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
+
+        <div v-if="channelConversation && !viewingPhysicalId" class="channel-conversation-settings" :aria-label="t('This conversation')">
+          <div class="channel-settings-row">
+            <ModelSelector :key="activeSessionId" :settings="reasoningSettings" conversation-defaults
+              :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
+            <span class="channel-settings-scope">{{ t('This conversation only · Applies to new turns') }}</span>
+          </div>
+          <p v-if="savingSettings" class="channel-settings-note" role="status">{{ t('Saving conversation settings...') }}</p>
+          <p v-if="!activeSession?.inferenceDefaults" class="composer-error" role="alert">{{ t('Conversation defaults are unavailable. Refresh or check the published Agent configuration.') }}</p>
+          <p v-if="settingsError" class="composer-error" role="alert">{{ settingsError }}</p>
+          <p v-if="modelSelection?.error.value" class="composer-error" role="alert">{{ modelSelection.error.value }}</p>
+        </div>
 
         <!-- Input (direct-chat only) -->
         <div v-if="(!activeSessionId || isDirectChat) && !viewingPhysicalId" class="chat-composer">
@@ -538,7 +550,7 @@ import { groupSenderNames, parseSessionMessage, sessionMessageTitle, type Sessio
 import SessionHeading from './SessionHeading.vue'
 import IoRequestCard from './io/IoRequestCard.vue'
 import { useIoConversation } from '../io/conversation.ts'
-import { updateSessionSettings, type ReasoningSettings, type ConversationSettings } from '../session-settings.ts'
+import { isChannelConversation, updateSessionSettings, type ReasoningSettings, type ConversationSettings } from '../session-settings.ts'
 import { draftSettingsKey as createDraftSettingsKey, loadDraftSettings, saveDraftSettings } from '../draft-settings.ts'
 import { useConversationNavigation } from '../composables/useConversationNavigation.ts'
 import ToolActivityGroup from './ToolActivityGroup.vue'
@@ -649,12 +661,18 @@ const installation = useInstallationContext()
 const modelSelection = useModelSelection()
 const modelOverride = ref<string>()
 const explicitModel = computed(() => modelOverride.value ?? activeSession.value?.config?.model ?? '')
-const conversationModel = computed(() => explicitModel.value || modelSelection?.current.value || '')
+const channelConversation = computed(() => isChannelConversation(activeSession.value))
+const inheritedModel = computed(() => channelConversation.value ? activeSession.value?.inferenceDefaults?.model ?? '' : modelSelection?.current.value ?? '')
+const inheritedReasoning = computed(() => channelConversation.value ? activeSession.value?.inferenceDefaults ?? {} : modelSelection?.defaultReasoning?.value ?? {})
+const conversationModel = computed(() => explicitModel.value || inheritedModel.value)
 if (modelSelection) provideModelSelection({
   ...modelSelection, current: conversationModel,
-  inherited: modelSelection.current,
+  inherited: inheritedModel,
+  defaultReasoning: inheritedReasoning,
   inheriting: computed(() => !explicitModel.value),
-  disabled: computed(() => modelSelection.disabled.value || pickingContext.value || isExecution.value || awaitingCall.value),
+  disabled: computed(() => modelSelection.disabled.value || !installation.value.uiScopes.includes('chat:write') ||
+    pickingContext.value || isExecution.value || awaitingCall.value || !!viewingPhysicalId.value ||
+    channelConversation.value && !activeSession.value?.inferenceDefaults),
   select: model => changeConversationSettings({ model: model.trim() || null }),
 })
 const foldersClient = createFoldersClient(props.apiBase)
@@ -861,7 +879,8 @@ async function changeReasoningSettings(patch: ReasoningSettings): Promise<void> 
 }
 
 async function changeConversationSettings(patch: ConversationSettings): Promise<void> {
-  if (isExecution.value || awaitingCall.value) return
+  if (isExecution.value || awaitingCall.value || viewingPhysicalId.value || !installation.value.uiScopes.includes('chat:write') ||
+    channelConversation.value && !activeSession.value?.inferenceDefaults) return
   const modelOnly = Object.keys(patch).length === 1 && 'model' in patch
   if (savingSettings.value || (!modelOnly && requestBusy.value) || pickingContext.value) return
   if ((!('model' in patch) || (patch.model ?? null) === (explicitModel.value || null))
@@ -2873,6 +2892,12 @@ function resendLastMessage() {
 .conversation-dock > * { pointer-events: auto; }
 .conversation-dock > .session-status-row:last-child { margin-bottom: 16px; }
 .conversation-dock.in-flow { position: static; flex: 0 0 auto; }
+.channel-conversation-settings { box-sizing: border-box; width: calc(100% - 40px); max-width: 860px; margin: 8px auto 16px; padding: 8px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); }
+.channel-settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+.channel-settings-scope, .channel-settings-note { color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
+.channel-settings-note { margin: 4px 9px; }
+.channel-conversation-settings :deep(.composer-control) { min-height: 44px; }
+.mobile-chat .channel-conversation-settings { width: calc(100% - 24px); }
 .chat-workspace.is-embedded { display: flex; width: 100%; }
 .chat-workspace.is-managed { grid-template-columns: minmax(0, 1fr); }
 .is-embedded :deep(.session-heading) { padding: 4px 8px; }

@@ -34,7 +34,7 @@ test('rendered composer distinguishes queue actions and routes custom question a
             <script setup>defineExpose({showConversation(){},openLinkedFile(){}})</script>`
         }
         if (id.replaceAll('\\', '/').includes('/components/') && id.endsWith('.vue')
-          && !['ChatTab', 'YieldQuestion', 'ComposerPopover', 'SlashCommandMenu', 'MessageAttachments'].some(name => id.endsWith(`/${name}.vue`))) {
+          && !['ChatTab', 'YieldQuestion', 'ComposerPopover', 'SlashCommandMenu', 'MessageAttachments', 'ModelSelector', 'ReasoningControls', 'MobileSheet'].some(name => id.endsWith(`/${name}.vue`))) {
           return '<template><span/></template><script setup>defineExpose({dismiss(){},show(){},rename(){},showDetails(){}})</script>'
         }
         if (id !== '\0composer-fixture') return
@@ -42,14 +42,22 @@ test('rendered composer distinguishes queue actions and routes custom question a
           import { createApp, h, ref } from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import { provideMobileChrome } from '/src/composables/useMobileChrome.ts';
+          import { provideModelSelection } from '/src/model-selection.ts';
           import ChatTab from '/src/components/ChatTab.vue';
           import YieldQuestion from '/src/components/YieldQuestion.vue';
           const sessionId = 'web:chat-composer-fixture';
+          const qqId = 'bot:fixture:bot:qq:group%3Afixture';
+          const channelIds = [qqId, 'bot:fixture:bot:discord:fixture', 'bot:fixture:bot:feishu:fixture', 'discord:legacy', 'feishu:legacy'];
+          const selectedSession = ref(sessionId);
           const view = ref();
           const dedicated = ref(false);
-          const fixture = {sent:[], answers:[], uploads:[], question:null, reject:false, sequence:0,
+          const fixture = {sent:[], answers:[], uploads:[], patches:[], configs:{}, question:null, reject:false, rejectSettings:false, sequence:0,
+            get config() {return this.configs[selectedSession.value] ??= {};},
             state:() => view.value.$.setupState,
             showDedicated:() => {dedicated.value=true;},
+            showQQ:() => {fixture.question=null; selectedSession.value=qqId;},
+            showChannel:id => {fixture.question=null; selectedSession.value=id;},
+            showWeb:() => {selectedSession.value=sessionId;},
             reset() {const state=this.state(); state.requestControls.clear(); state.streaming=false; state.sessionStages={[sessionId]:'idle'}; state.currentWorkdir={kind:'local',displayPath:'C:\\\\fixture',available:true};},
             ask(kind='decision') {
               this.reset();
@@ -64,7 +72,19 @@ test('rendered composer distinguishes queue actions and routes custom question a
             const url=new URL(String(input),location.origin);
             if (!url.pathname.includes('/api/')) return nativeFetch(input,init);
             const json=(data,status=200) => Promise.resolve(Response.json(data,{status}));
-            if (url.pathname.endsWith('/graph')) return json({nodes:[],sessions:[{sessionId,mode:'session',segmentIndex:0,label:'Composer fixture'}]});
+            if (url.pathname.endsWith('/graph')) return json({nodes:[],sessions:[
+              {sessionId,mode:'session',segmentIndex:0,label:'Composer fixture'},
+              ...channelIds.map(id=>({sessionId:id,mode:'session',segmentIndex:0,label:'Channel fixture',config:fixture.configs[id] ?? {},
+                inferenceDefaults:{model:'gpt-agent@fixture',thinking:{type:'enabled'},reasoningEffort:'low'}})),
+            ]});
+            if (url.pathname.endsWith('/config') && init.method === 'PATCH') {
+              const key=decodeURIComponent(url.pathname.split('/').at(-2));
+              const patch=JSON.parse(init.body);fixture.patches.push({key,patch});
+              if (fixture.rejectSettings) return json({error:'Synthetic settings conflict'},409);
+              const config=fixture.configs[key] ??= {};
+              for (const [name,value] of Object.entries(patch)) {if(value===null) delete config[name];else config[name]=value;}
+              return json({key,config});
+            }
             if (url.pathname.endsWith('/stages')) return json({stages:{[sessionId]:fixture.question?'waiting':'idle'}});
             if (url.pathname.endsWith('/ask')) {
               if (init.method === 'POST') {
@@ -93,9 +113,12 @@ test('rendered composer distinguishes queue actions and routes custom question a
           await router.push('/chat/fixture/' + sessionId);
           const app=createApp({setup() {
             provideMobileChrome();
+            provideModelSelection({current:ref('gpt-project@fixture'),defaultReasoning:ref({reasoningEffort:'medium'}),
+              options:ref(['gpt-agent@fixture','gpt-override@fixture']),disabled:ref(false),loading:ref(false),error:ref(''),
+              select:async()=>{throw new Error('Conversation controls must not change project defaults');}});
             return () => dedicated.value
               ? h(YieldQuestion,{sessionId,apiBase:location.origin + '/projects/fixture',active:true,stage:'waiting',canAnswer:true})
-              : h(ChatTab,{ref:view,managed:true,projectId:'fixture',sessionId,apiBase:location.origin + '/projects/fixture'});
+              : h(ChatTab,{key:selectedSession.value,ref:view,managed:true,projectId:'fixture',sessionId:selectedSession.value,apiBase:location.origin + '/projects/fixture'});
           }});
           app.provide(Symbol.for('shadow.live-client-pool'),{client:() => ({subscribe:() => ({ready:async()=>{},close(){}})}),dispose(){}});
           app.use(router).mount('#app');

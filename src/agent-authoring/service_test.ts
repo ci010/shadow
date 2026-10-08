@@ -17,6 +17,7 @@ import { EventService } from '../events/service.ts'
 import { McpManager } from '../mcp/manager.ts'
 import { SkillsManager } from '../skills/loader.ts'
 import { SessionManager } from '../sessions/session-manager.ts'
+import { sessionsApiPlugin } from '../sessions/routes.ts'
 import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
 import type { SessionStore } from '../sessions/session-store.ts'
@@ -251,17 +252,32 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(options.maxTokens, 321)
       assert.deepEqual(options.thinking, { type: 'enabled' })
       assert.equal(f.sessions.getSessionState(id)?.config?.model, undefined)
-      await f.sessions.setSessionConfig(id, { model: 'session-model', reasoningEffort: 'high' })
+      const http = new Hono()
+      sessionsApiPlugin(f.sessions)(http)
+      const patch = (body: unknown) => http.request(`/api/sessions/${encodeURIComponent(id)}/config`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      const defaults = { model: 'configured-agent-model', reasoningEffort: 'low', thinking: { type: 'enabled' } }
+      assert.deepEqual(f.sessions.getSessionInferenceDefaults(id), defaults)
+      const graph = await (await http.request('/api/sessions/graph')).json()
+      assert.deepEqual(graph.sessions.find((session: { sessionId: string }) => session.sessionId === id).inferenceDefaults, defaults)
+      const published = structuredClone(f.resources.snapshot())
+      assert.equal((await patch({ model: 'session-model', reasoningEffort: 'high' })).status, 200)
+      assert.deepEqual(f.sessions.getSessionInferenceDefaults(id), defaults, 'Session overrides never replace inherited defaults')
+      assert.deepEqual(f.resources.snapshot(), published, 'Session controls do not edit the published Agent')
       await f.app.receiveChannelMessage(message())
       await f.idle()
       options = f.promptCaptures.list(id)[0].options
       assert.equal(options.model, 'session-model')
       assert.equal(options.reasoningEffort, 'high')
-      await f.sessions.unsetSessionConfig(id, 'model')
-      await f.sessions.unsetSessionConfig(id, 'reasoningEffort')
       await f.app.receiveChannelMessage(message({ channelAddress: otherAddress, chatId: otherAddress.conversationId }))
       await f.idle(channelSessionId(otherAddress))
       assert.equal(f.promptCaptures.list(channelSessionId(otherAddress)).at(-1)!.options.model, 'fixture')
+      assert.equal((await patch({ model: null, thinking: null, reasoningEffort: null })).status, 200)
+      await f.app.receiveChannelMessage(message())
+      await f.idle()
+      assert.equal(f.promptCaptures.list(id)[0].options.model, 'configured-agent-model')
+      assert.equal(f.promptCaptures.list(id)[0].options.reasoningEffort, 'low')
       await f.stage()
       await f.publish()
       await f.app.receiveChannelMessage(message())
