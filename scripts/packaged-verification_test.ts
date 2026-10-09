@@ -223,7 +223,7 @@ function runningStub(): ManagedProcess {
   }
 }
 
-test('readiness accepts ready, fails auth and malformed bodies, and has a deadline', async () => {
+test('readiness accepts ready, fails auth and malformed bodies, and has a deadline', async t => {
   await httpFixture((_request, response) => response.end('{"status":"ready"}'), async (origin) => {
     await waitReady(origin, {}, runningStub(), 1_000)
   })
@@ -233,8 +233,12 @@ test('readiness accepts ready, fails auth and malformed bodies, and has a deadli
   await httpFixture((_request, response) => response.end('not json'), async (origin) => {
     await assert.rejects(waitReady(origin, {}, runningStub(), 1_000), SyntaxError)
   })
-  await httpFixture((_request, response) => { response.statusCode = 503; response.end() }, async (origin) => {
-    await assert.rejects(waitReady(origin, {}, runningStub(), 30), /readiness timed out.*HTTP 503[\s\S]*diagnostics/)
+  const unavailable = t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 503 }))
+  try {
+    await assert.rejects(waitReady('http://127.0.0.1', {}, runningStub(), 30), /readiness timed out.*HTTP 503[\s\S]*diagnostics/)
+  } finally { unavailable.mock.restore() }
+  await httpFixture(() => {}, async origin => {
+    await assert.rejects(waitReady(origin, {}, runningStub(), 30), /readiness timed out[\s\S]*diagnostics/)
   })
   const exited = runningStub()
   exited.result = () => ({ code: 3, signal: null })
