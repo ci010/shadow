@@ -1,7 +1,7 @@
 import { readonly, ref, watch } from 'vue'
 import { createI18n } from 'vue-i18n'
-import en from './locales/en.json'
-import zhCN from './locales/zh-CN.json'
+import en from './locales/en.json' with { type: 'json' }
+import zhCN from './locales/zh-CN.json' with { type: 'json' }
 
 export type Locale = 'en' | 'zh-CN'
 export type LocalePreference = Locale | 'system'
