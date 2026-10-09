@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import childProcess, { type ForkOptions } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
@@ -13,6 +15,15 @@ import { runAcceptance, writeAcceptanceArtifact } from './microapp-a2a.ts'
 
 test('isolated Node-only fixture reaches separate review and timed author confirmation without real model calls', { timeout: 150_000 }, async t =>
   withTempWorkspace(async home => {
+    const forkRuntime = childProcess.fork
+    const runtimeFork = t.mock.method(childProcess, 'fork', (modulePath: string | URL, args: readonly string[], options: ForkOptions) =>
+      forkRuntime(modulePath, args, {
+        ...options,
+        // The synthetic runtime only uses loopback, never the host's proxy/PAC settings.
+        env: { ...options.env, HTTP_PROXY: '', HTTPS_PROXY: '', NO_PROXY: '*' },
+      }))
+    syncBuiltinESMExports()
+    t.after(() => { runtimeFork.mock.restore(); syncBuiltinESMExports() })
     const model = 'acceptance-timeline-fixture'
     t.mock.method(CopilotProvider.prototype, 'listModels', async () => [model])
     t.mock.method(CopilotProvider.prototype, 'listModelInfos', async () => [{ id: model, name: model, contextWindow: 128000 }])
