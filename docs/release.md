@@ -161,8 +161,10 @@ The ignored `release-prepared.json` binds outputs to their source fingerprint.
 Consumers download from the **same workflow run**, never from a previous run's
 build-output cache, and reject changed, extra or missing output files. Checkout
 disables automatic CRLF conversion so source bytes match on Windows and Unix.
-Tar preserves output permissions during artifact transfer. This receipt is a
-consistency check, not a signing/provenance attestation.
+Tar preserves output permissions during artifact transfer. Extraction reads the
+archive through stdin so Windows drive-letter paths are not interpreted as
+remote hosts by Git Bash's tar. This receipt is a consistency check, not a
+signing/provenance attestation.
 
 Caches cover pnpm's dependency store; Electron and electron-builder downloads
 keyed by OS/architecture and dependency inputs; Gradle user home/local build

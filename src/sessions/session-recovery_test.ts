@@ -381,7 +381,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
           await waitFor(() => f.calls.length === attempt + 2)
           assert.deepEqual(f.calls[attempt + 1].messages, f.calls[0].messages)
-          assert.deepEqual(await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!))), before)
+          const records = await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!)))
+          assert.deepEqual(records.filter(record => record.type !== 'model_usage'), before)
+          const usage = records.filter(record => record.type === 'model_usage')
+          assert.equal(usage.length, attempt + 1, 'Each failed call records its unknown usage without adding a message')
+          assert.equal(new Set(usage.map(record => record.id)).size, usage.length)
+          for (const record of usage) {
+            assert.equal(record.sessionId, id)
+            assert.equal(record.usage, null)
+          }
         }
         f.calls[3].resolve(done())
         await waitFor(() => f.facts.length === 4)

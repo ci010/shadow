@@ -16,5 +16,5 @@ runs:
       env:
         BUILD_TARGET: ${{ inputs.target }}
       run: |
-        tar -xf "$RUNNER_TEMP/prepared/prepared-build.tar"
+        tar -xf - < "$RUNNER_TEMP/prepared/prepared-build.tar"
         pnpm release:verify-prepared "$BUILD_TARGET"

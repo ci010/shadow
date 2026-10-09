@@ -60,6 +60,9 @@ test('caches separate native downloads by OS/arch and do not retain signing mate
   assert.equal(builder.if, "inputs.packaging == 'true'")
   assert.notEqual(builder.with.key, native.with.key, 'Mobile must not save an incomplete desktop packaging cache')
   assert(restore.runs.steps.some((step: { run?: string }) => step.run?.includes('pnpm release:verify-prepared')))
+  const extraction = restore.runs.steps.find((step: { run?: string }) => step.run?.includes('tar -xf'))
+  assert.match(extraction.run, /tar -xf - < "\$RUNNER_TEMP\/prepared\/prepared-build\.tar"/,
+    'Read the archive through stdin so tar never interprets a Windows drive letter as a remote host')
   const mobile = await yaml('../.github/workflows/mobile-release.yml')
   const signingGradle = mobile.jobs['android-signed'].steps.find((step: { uses?: string }) => step.uses === 'gradle/actions/setup-gradle@v4')
   assert.equal(signingGradle.with['cache-read-only'], true)
