@@ -141,6 +141,9 @@ The workflow does not publish GitHub Releases or install/register applications.
 Synthetic acceptance and packaged smoke processes use explicit direct-network
 settings rather than inheriting the host's proxy or PAC configuration. These
 loopback checks do not validate production proxy connectivity.
+The release gate separately exercises proxy routing and cancellation. Windows
+also evaluates a synthetic PAC served over loopback through native WinHTTP,
+without reading or changing the runner's system proxy configuration.
 
 Run `pnpm desktop` on the matching operating system and architecture; target
 selection follows the native Node host and rejects unsupported combinations.

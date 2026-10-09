@@ -6,7 +6,7 @@ import { dirname, extname, isAbsolute, join, parse, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { z } from 'zod'
-import { localProxyConfiguration, proxyForUrl } from '../execution/network/proxy.ts'
+import { localProxyConfiguration, resolveProxyForUrl } from '../execution/network/proxy.ts'
 
 export const ARIA2_VERSION = '1.37.0'
 const sha256 = z.string().regex(/^[a-fA-F0-9]{64}$/)
@@ -145,7 +145,7 @@ export class Aria2Downloader {
         timeout: 10_000, maxBuffer: 4096, windowsHide: true,
       })).stdout,
     private readonly proxy: (url: string, signal?: AbortSignal) => Promise<string | undefined> = async (url, signal) =>
-      proxyForUrl(await localProxyConfiguration(signal), url),
+      resolveProxyForUrl(await localProxyConfiguration(signal), url, signal),
   ) {}
 
   async binary(): Promise<string> {

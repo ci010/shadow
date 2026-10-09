@@ -200,12 +200,22 @@ attachment URLs without sending Bot authorization to the CDN.
 
 Main backend startup initializes a process-wide proxy for native Node `fetch`
 and Undici requests; Discord Gateway WebSocket uses the same dispatcher.
-`HTTP_PROXY`/`HTTPS_PROXY` and `NO_PROXY` take precedence over Windows static
-system proxy settings. Loopback traffic always stays direct, and a failed proxy
+`HTTP_PROXY`/`HTTPS_PROXY` and `NO_PROXY` take precedence over Windows system
+proxy settings. Static routes retain Windows bypass rules; automatic/PAC routes
+are resolved per destination by native WinHTTP, without changing OS settings or
+executing PAC JavaScript in Node. Loopback traffic always stays direct, and a failed proxy
 does not silently fall back to direct access. Restart the backend after changing
 proxy settings (including the Electron backend, not just the renderer page).
-PAC, SOCKS and credential-bearing proxy URLs are currently unsupported and
-produce an explicit startup error. This is not a proxy guarantee for SDKs using
+PAC resolution is deferred until an outbound request, so it does not prevent
+local Main readiness. A configured PAC failure rejects that request; an explicit
+PAC `DIRECT` result is honored. WPAD with no discovered configuration uses the
+system's static/direct route. Resolver subprocesses are bounded and cancellable;
+proxy credentials and automatic credential logon for PAC downloads are not used.
+If the Windows PAC address points to localhost, its proxy/PAC application must
+be running for outbound requests; Main can be locally ready while that service
+is unavailable.
+SOCKS and credential-bearing proxy URLs remain unsupported and fail explicitly.
+This is not a proxy guarantee for SDKs using
 their own HTTP agents or for arbitrary subprocesses.
 
 Discord startup distinguishes an unreachable API from HTTP 401 (rejected Bot

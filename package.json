@@ -26,7 +26,7 @@
     "test:update": "node --import tsx --test --test-update-snapshots \"src/**/*_test.ts\" \"scripts/*_test.ts\" \"app/src/*_test.ts\"",
     "test:desktop": "pnpm --filter @shadow/desktop test",
     "test:packaged": "node --import tsx scripts/verify-desktop.ts",
-    "test:release": "node --import tsx --test --test-concurrency=1 scripts/*_test.ts src/runtime/service-mode_test.ts src/runtime/runtime-cli_test.ts && node --import tsx --test app/src/vite_test.ts && pnpm test:desktop",
+    "test:release": "node --import tsx --test --test-concurrency=1 scripts/*_test.ts src/runtime/service-mode_test.ts src/runtime/runtime-cli_test.ts src/execution/network/*_test.ts && node --import tsx --test app/src/vite_test.ts && pnpm test:desktop",
     "typecheck": "tsc --noEmit && pnpm --filter @shadow/a2a-bridge typecheck && pnpm --filter @shadow/desktop typecheck && pnpm --filter @shadow/app typecheck",
     "desktop": "node --import tsx scripts/desktop.ts build",
     "release": "node --import tsx scripts/release-mac.ts",

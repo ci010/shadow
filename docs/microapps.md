@@ -285,11 +285,14 @@ Test metadata and binary uploads through the SDK and host, not only by calling
 backend functions directly.
 
 Node backend startup installs a host-owned `fetch` dispatcher. It uses standard
-HTTP(S) proxy environment configuration, otherwise the Windows static system
-proxy, preserving Windows wildcard and `<local>` bypasses. Loopback traffic is
-always direct. Configuration is captured at startup without modifying system
-settings, copying proxy credentials or weakening TLS validation. Unsupported
-PAC/SOCKS configuration and credential-bearing proxy URLs fail explicitly.
+HTTP(S) proxy environment configuration, otherwise the Windows system proxy,
+preserving static wildcard and `<local>` bypasses. Automatic/PAC routes use native
+WinHTTP per destination, with bounded, cancellable resolution. Loopback traffic
+is always direct. The proxy mode is selected at startup; automatic mode reads
+the current Windows configuration for each resolution. No system settings are
+modified, proxy credentials copied, or TLS checks weakened. A configured PAC
+failure rejects the request rather than silently bypassing it. SOCKS and
+credential-bearing proxy URLs remain unsupported and fail explicitly.
 This is not a universal networking shim: other HTTP clients and subprocesses
 retain their own proxy behavior. Python's Windows-aware clients may therefore
 differ from a bare Node process run outside the Micro App host.

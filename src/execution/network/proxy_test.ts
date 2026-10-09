@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import { fetch } from 'undici'
 import { WebSocketServer } from 'ws'
 import { LocalProxyDispatcher } from './proxy-client.ts'
-import { localProxyConfiguration, proxyForUrl, windowsProxyConfiguration } from './proxy.ts'
+import { localProxyConfiguration, proxyForUrl, resolveProxyForUrl, windowsProxyConfiguration, type ProxyConfiguration } from './proxy.ts'
 
 test('Windows static routes preserve protocol choices, wildcard bypasses and local-host exclusions', () => {
   const proxy = windowsProxyConfiguration({
@@ -57,11 +57,145 @@ test('credentials and unsupported proxy modes fail explicitly without echoing se
       return true
     })
   }
-  assert.throws(() => windowsProxyConfiguration({ enabled: true, server: 'proxy.example', bypass: '', automatic: true }), /PAC/)
+  assert.deepEqual(windowsProxyConfiguration({ enabled: true, server: 'proxy.example', bypass: '', automatic: true }),
+    { source: 'windows-auto', bypass: [] })
   assert.throws(() => windowsProxyConfiguration({ enabled: true, server: 'socks=proxy.example', bypass: '', automatic: false }), /SOCKS/)
   const controller = new AbortController()
   controller.abort()
   await assert.rejects(localProxyConfiguration(controller.signal), { name: 'AbortError' })
+})
+
+test('automatic Windows policy resolves each full URL, preserves explicit DIRECT and never falls back on errors', async () => {
+  const configuration: ProxyConfiguration = { source: 'windows-auto', bypass: [] }
+  const urls: string[] = []
+  const resolve = async (url: URL) => {
+    urls.push(url.href)
+    if (url.pathname === '/failed') throw new Error('Synthetic PAC failure')
+    const direct = url.pathname === '/direct'
+    return { accessType: direct ? 1 : 3, direct, server: direct ? '' : 'proxy.example:8080;backup.example:8081', bypass: '' }
+  }
+  assert.equal(await resolveProxyForUrl(configuration, 'https://public.example/a?x=1', undefined, resolve), 'http://proxy.example:8080/')
+  assert.equal(await resolveProxyForUrl(configuration, 'wss://public.example/direct', undefined, resolve), undefined)
+  for (const url of ['http://localhost:8000', 'http://127.0.0.2', 'http://[::1]', 'http://[::ffff:127.0.0.1]']) {
+    assert.equal(await resolveProxyForUrl(configuration, url, undefined, resolve), undefined)
+  }
+  assert.deepEqual(urls, ['https://public.example/a?x=1', 'https://public.example/direct'])
+  await assert.rejects(resolveProxyForUrl(configuration, 'https://public.example/failed', undefined, resolve), /Synthetic PAC failure/)
+  const staticRoute = async () => ({
+    accessType: 3, direct: false, server: 'http=proxy.example:8080;https=proxy.example:8081', bypass: '',
+  })
+  assert.equal(await resolveProxyForUrl(configuration, 'https://public.example', undefined, staticRoute), 'http://proxy.example:8081/')
+  assert.equal(await resolveProxyForUrl(configuration, 'http://public.example', undefined, staticRoute), 'http://proxy.example:8080/')
+  assert.throws(() => proxyForUrl(configuration, 'https://public.example'), /asynchronous/)
+  const abort = new AbortController()
+  abort.abort()
+  await assert.rejects(resolveProxyForUrl(configuration, 'https://public.example', abort.signal, resolve), { name: 'AbortError' })
+})
+
+test('automatic dispatch supports real fetch, request, WebSocket, explicit direct routes and graceful close', async () => {
+  const upstream = createServer((_request, response) => response.end('automatic route'))
+  const gateway = new WebSocketServer({ server: upstream })
+  gateway.on('connection', socket => socket.send('automatic websocket'))
+  const proxy = createServer()
+  const sockets = new Set<Socket>()
+  for (const server of [upstream, proxy]) server.on('connection', socket => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+  })
+  upstream.listen(0, '127.0.0.1')
+  await once(upstream, 'listening')
+  const target = upstream.address()
+  assert.ok(target && typeof target !== 'string')
+  proxy.on('connect', (_request, socket, head) => {
+    const remote = connect(target.port, '127.0.0.1', () => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+      if (head.length) remote.write(head)
+      socket.pipe(remote).pipe(socket)
+    })
+    remote.on('error', () => socket.destroy())
+    socket.on('error', () => remote.destroy())
+    socket.on('close', () => remote.destroy())
+  })
+  proxy.listen(0, '127.0.0.1')
+  await once(proxy, 'listening')
+  const address = proxy.address()
+  assert.ok(address && typeof address !== 'string')
+  const urls: string[] = []
+  const dispatcher = new LocalProxyDispatcher({ source: 'windows-auto', bypass: [] }, async (_configuration, value) => {
+    const url = new URL(value)
+    urls.push(url.href)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    return url.hostname === '127.0.0.1' ? undefined : `http://127.0.0.1:${address.port}`
+  })
+  try {
+    assert.equal(await (await fetch('http://resource.invalid/full/path?query=yes', { dispatcher })).text(), 'automatic route')
+    assert.equal(await (await dispatcher.request({ origin: 'http://resource.invalid', path: '/request', method: 'GET' })).body.text(), 'automatic route')
+    const { WebSocket } = await import('undici')
+    await new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket('ws://gateway.invalid/socket', { dispatcher })
+      socket.onmessage = event => { assert.equal(event.data, 'automatic websocket'); socket.close() }
+      socket.onclose = () => resolve()
+      socket.onerror = () => reject(new Error('Automatic WebSocket route failed'))
+    })
+    const pending = fetch(`http://127.0.0.1:${target.port}/direct`, { dispatcher })
+    const closed = dispatcher.close()
+    assert.equal(await (await pending).text(), 'automatic route')
+    await closed
+    assert.deepEqual(urls, ['http://resource.invalid/full/path?query=yes', 'http://resource.invalid/request',
+      'http://gateway.invalid/socket', `http://127.0.0.1:${target.port}/direct`])
+  } finally {
+    await dispatcher.destroy()
+    for (const client of gateway.clients) client.terminate()
+    await new Promise<void>(resolve => gateway.close(() => resolve()))
+    for (const socket of sockets) socket.destroy()
+    await Promise.all([upstream, proxy].map(server => new Promise<void>(resolve => server.close(() => resolve()))))
+  }
+})
+
+test('automatic dispatch cancels pending resolution and reports resolver errors without sending a request', async () => {
+  for (const action of ['abort', 'destroy', 'failure'] as const) {
+    const started = Promise.withResolvers<AbortSignal>()
+    const dispatcher = new LocalProxyDispatcher({ source: 'windows-auto', bypass: [] }, async (_configuration, _url, signal) => {
+      assert.ok(signal)
+      started.resolve(signal)
+      if (action === 'failure') throw new Error('Synthetic resolver failure')
+      await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+      return undefined
+    })
+
+    const abort = new AbortController()
+    const response = fetch('https://never-contact.invalid', { dispatcher, signal: abort.signal })
+    const rejected = assert.rejects(response)
+    const signal = await started.promise
+    if (action === 'abort') abort.abort()
+    if (action === 'destroy') await dispatcher.destroy()
+    await rejected
+    if (action !== 'failure') assert.equal(signal.aborted, true)
+    if (action !== 'destroy') await dispatcher.close()
+  }
+})
+
+test('modern handlers can abort or destroy automatic dispatch before resolution starts', async () => {
+  for (const destroy of [false, true]) {
+    let resolved = false
+    const dispatcher = new LocalProxyDispatcher({ source: 'windows-auto', bypass: [] }, async () => {
+      resolved = true
+      return undefined
+    })
+    const failed = Promise.withResolvers<Error>()
+    let destroyed: Promise<void> | undefined
+    dispatcher.dispatch({ origin: 'https://never-contact.invalid', path: '/', method: 'GET' }, {
+      onRequestStart(controller) {
+        if (destroy) destroyed = dispatcher.destroy(new Error('Destroyed before resolution'))
+        else controller.abort(new Error('Cancelled before resolution'))
+      },
+      onResponseError(_controller, error) { failed.resolve(error) },
+    })
+    assert.match((await failed.promise).message, /before resolution/)
+    assert.equal(resolved, false)
+    if (destroyed) await destroyed
+    else await dispatcher.close()
+  }
 })
 
 test('real CONNECT transport and native Node preload use the configured proxy while loopback stays direct', async () => {

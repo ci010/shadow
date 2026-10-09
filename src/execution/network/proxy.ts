@@ -1,18 +1,15 @@
-import { execFile } from 'node:child_process'
 import { isIP } from 'node:net'
-import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { z } from 'zod'
+import { readWindowsProxy, resolveWindowsProxy, type WindowsProxySettings } from './windows-proxy.ts'
+export type { WindowsProxySettings } from './windows-proxy.ts'
 
-const execFileAsync = promisify(execFile)
 export const proxyConfigurationSchema = z.object({
-  source: z.enum(['direct', 'environment', 'windows-static']),
+  source: z.enum(['direct', 'environment', 'windows-static', 'windows-auto']),
   http: z.string().optional(),
   https: z.string().optional(),
   bypass: z.array(z.string()),
 }).strict()
 export type ProxyConfiguration = z.infer<typeof proxyConfigurationSchema>
-export interface WindowsProxySettings { enabled: boolean; server: string; bypass: string; automatic: boolean }
 const direct = (): ProxyConfiguration => ({ source: 'direct', bypass: [] })
 
 function proxyUrl(value: string): string {
@@ -27,7 +24,7 @@ function proxyUrl(value: string): string {
 }
 
 export function windowsProxyConfiguration(settings: WindowsProxySettings): ProxyConfiguration {
-  if (settings.automatic) throw new Error('Automatic/PAC proxy configuration is not supported by local Node downloads; use an explicitly configured HTTP(S) proxy or a Windows-aware client.')
+  if (settings.automatic) return { source: 'windows-auto', bypass: [] }
   if (!settings.enabled || !settings.server.trim()) return direct()
   const configuration: ProxyConfiguration = {
     source: 'windows-static', bypass: settings.bypass.split(';').map(value => value.trim()).filter(Boolean),
@@ -44,24 +41,6 @@ export function windowsProxyConfiguration(settings: WindowsProxySettings): Proxy
     if (!configuration.http && !configuration.https) throw new Error('The Windows proxy configuration has no supported HTTP(S) route.')
   }
   return configuration
-}
-
-async function readWindowsProxy(signal?: AbortSignal): Promise<WindowsProxySettings> {
-  const windows = process.env.SystemRoot ?? process.env.WINDIR
-  if (!windows) throw new Error('Windows directory is unavailable for reading the configured system proxy.')
-  const command = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false); $p=Get-ItemProperty -LiteralPath 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'; @{enabled=($p.ProxyEnable -eq 1);server=[string]$p.ProxyServer;bypass=[string]$p.ProxyOverride;automatic=[bool]$p.AutoConfigURL}|ConvertTo-Json -Compress"
-  let stdout: string
-  try {
-    const result = await execFileAsync(join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
-      { signal, timeout: 5000, maxBuffer: 16_384, windowsHide: true, encoding: 'utf8' })
-    stdout = result.stdout
-  } catch {
-    signal?.throwIfAborted()
-    throw new Error('Unable to read the Windows proxy configuration; no settings or credentials were logged.')
-  }
-  return z.object({ enabled: z.boolean(), server: z.string(), bypass: z.string(), automatic: z.boolean() })
-    .parse(JSON.parse(stdout))
 }
 
 export async function localProxyConfiguration(signal?: AbortSignal, options: {
@@ -90,14 +69,25 @@ function windowsBypass(pattern: string, url: URL): boolean {
   return expression.test(hostname) || expression.test(url.host) || expression.test(url.origin)
 }
 
-export function proxyForUrl(configuration: ProxyConfiguration, value: string | URL): string | undefined {
+function networkUrl(value: string | URL): URL {
   const url = new URL(value)
   if (url.protocol === 'wss:') url.protocol = 'https:'
   if (url.protocol === 'ws:') url.protocol = 'http:'
+  return url
+}
+
+function isLoopback(url: URL): boolean {
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+  return hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '::1' ||
+    /^127\./.test(hostname) || /^::ffff:7f[0-9a-f]{2}:/.test(hostname)
+}
+
+export function proxyForUrl(configuration: ProxyConfiguration, value: string | URL): string | undefined {
+  const url = networkUrl(value)
   // Never send local app credentials or loopback service traffic through an upstream proxy.
-  if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '::1' ||
-    /^127\./.test(hostname) || /^::ffff:7f[0-9a-f]{2}:/.test(hostname)) return undefined
+  if (isLoopback(url)) return undefined
+  if (configuration.source === 'windows-auto') throw new Error('Automatic Windows proxy routes require asynchronous resolution.')
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
   if (configuration.source === 'windows-static') {
     if (configuration.bypass.some(pattern => windowsBypass(pattern, url))) return undefined
   } else if (configuration.bypass.some(entry => {
@@ -109,4 +99,22 @@ export function proxyForUrl(configuration: ProxyConfiguration, value: string | U
   })) return undefined
   return url.protocol === 'https:' ? configuration.https ?? (configuration.source === 'environment' ? configuration.http : undefined)
     : url.protocol === 'http:' ? configuration.http : undefined
+}
+
+export async function resolveProxyForUrl(
+  configuration: ProxyConfiguration, value: string | URL, signal?: AbortSignal,
+  resolveWindows: typeof resolveWindowsProxy = resolveWindowsProxy,
+): Promise<string | undefined> {
+  signal?.throwIfAborted()
+  const url = networkUrl(value)
+  if (isLoopback(url)) return undefined
+  if (configuration.source !== 'windows-auto') return proxyForUrl(configuration, url)
+  const route = await resolveWindows(url, signal)
+  signal?.throwIfAborted()
+  if (route.direct) return undefined
+  // WinHTTP may return a failover list. Use its first route; never silently fail over to DIRECT.
+  const server = route.server.includes('=') ? route.server : route.server.split(';')[0].trim()
+  return proxyForUrl(windowsProxyConfiguration({
+    enabled: true, server, bypass: route.bypass, automatic: false,
+  }), url)
 }
