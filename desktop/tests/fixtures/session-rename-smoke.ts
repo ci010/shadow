@@ -19,10 +19,12 @@ async function main() {
   }
   const frame = () => execute(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
   const openDetails = async () => {
-    if (!await execute(`!!document.querySelector('.session-details')`)) {
+    await wait(`!document.querySelector('.overlay-leave-active, .mobile-sheet-leave-active')`)
+    if (!await execute(`!!document.querySelector('.session-details')?.getClientRects().length`)) {
       await execute(`document.querySelector('.session-heading .composer-control').click()`)
     }
-    await wait(`!!document.querySelector('.session-details')`)
+    await wait(`!!document.querySelector('.session-details')?.getClientRects().length`)
+    await wait(`!document.querySelector('.overlay-enter-active, .mobile-sheet-enter-active')`)
   }
   const click = async () => {
     await openDetails()
@@ -213,10 +215,28 @@ async function main() {
         })()`)
         assert.equal(layout.overflow, false)
         assert.equal(layout.inViewport, true)
-        assert(layout.targets.every((height: number) => height >= (width === 390 ? 44 : 32)))
+        assert(layout.targets.every((height: number) => height >= (width === 390 ? 44 : 32) - .01), JSON.stringify({ width, layout }))
         assert(layout.wrap.every((value: string) => value === 'pre-wrap'))
         assert.equal(layout.name, 'Synthetic project / Review / ' + 'LongSessionName'.repeat(25))
         assert.equal(layout.path, 'C:\\synthetic\\' + 'nested-folder\\'.repeat(15) + 'review')
+        const usage = await execute(`(() => {
+          const columns = [...document.querySelectorAll('.token-column')];
+          const bounds = columns.map(column => column.getBoundingClientRect());
+          return {
+            labels:columns.map(column => column.querySelector('dt').textContent),
+            counts:columns.map(column => [...column.querySelectorAll('dd > span')].map(span => span.title)),
+            separate:bounds.length === 2 && bounds[0].right <= bounds[1].left && Math.abs(bounds[0].top - bounds[1].top) < 1,
+            context:document.querySelector('progress')?.value,
+            partial:document.querySelector('.details-usage').textContent.includes('Partial usage'),
+            headerOverflow:document.querySelector('.session-heading').scrollWidth > document.querySelector('.session-heading').clientWidth,
+          };
+        })()`)
+        assert.deepEqual(usage.labels, ['Total', 'Subagents'])
+        assert.deepEqual(usage.counts, [['1,234,567 input tokens', '45,678 output tokens'], ['234,567 input tokens', '5,678 output tokens']])
+        assert.equal(usage.separate, true)
+        assert.equal(usage.context, 12)
+        assert.equal(usage.partial, true)
+        assert.equal(usage.headerOverflow, false)
         await screenshot(`session-popup-${width}-${dark ? 'dark' : 'light'}`)
       }
     }

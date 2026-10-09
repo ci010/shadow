@@ -1,6 +1,6 @@
 <template>
   <SessionMessageDisclosure class="message-action" :data-recipient-session="message.sessionId" :aria-label="t('Outgoing session message')"
-    :title="t('Message to')" :recipient="message.recipient" :session-id="message.sessionId" outgoing
+    :title="t('Send to session')" :recipient="message.recipient" :session-id="message.sessionId" outgoing
     @inspect="emit('inspect', $event)" @interact="emit('interact')">
     <template #status>
       <span class="message-action-status" :class="{ failed: message.status === 'failed' }" role="status">{{ status }}</span>

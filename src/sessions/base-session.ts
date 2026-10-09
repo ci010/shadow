@@ -43,6 +43,7 @@ import { pendingToolCalls } from './recovery.ts'
 import type { PromptCaptureStore } from './prompt-capture.ts'
 import { saveToolImages } from './tool-images.ts'
 import { modelMessages } from '../providers/message-content.ts'
+import { usageProvider } from './usage.ts'
 
 /**
  * Shared base for all session types.
@@ -69,6 +70,11 @@ export abstract class BaseSession {
     protected readonly evalBridge?: ToolBridgeFactory,
     protected readonly promptCaptures?: PromptCaptureStore,
   ) {
+    this.provider = usageProvider(provider, store, () => this.usageDestination)
+  }
+
+  protected get usageDestination(): { sessionId: string; physicalId: string } {
+    return { sessionId: this.id, physicalId: this.physicalSessionId }
   }
 
   // ── Public API ──────────────────────────────────────────────────────────

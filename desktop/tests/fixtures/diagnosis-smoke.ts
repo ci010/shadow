@@ -911,7 +911,7 @@ async function main(): Promise<void> {
       }
       await evaluate(`document.querySelector('.chat-session').scrollIntoView({ block: 'center' })`)
       assert.equal(await evaluate(`document.querySelector('.resend-btn')`), null, 'A handoff cannot be resent as human input')
-      assert.match(await evaluate<string>(`document.querySelector('.chat-session').getAttribute('aria-label')`), /Session handoff from web:orchestrator/)
+      assert.match(await evaluate<string>(`document.querySelector('.chat-session').getAttribute('aria-label')`), /Received handoff from web:orchestrator/)
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.chat-session')).alignSelf`), 'flex-start')
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.chat-session')).borderTopStyle`), 'dashed')
       assert.doesNotMatch(await evaluate<string>(`document.querySelector('.chat-session .chat-content').textContent`), /<sender/)
@@ -923,7 +923,7 @@ async function main(): Promise<void> {
       await waitFor(`document.querySelectorAll('.trace-event').length === 1`)
       await evaluate(`(() => { const header = document.querySelector('.trace-event-header'); if (header.getAttribute('aria-expanded') !== 'true') header.click(); header.scrollIntoView({ block: 'start' }); })()`)
       await waitFor(`!!document.querySelector('.message-source')`)
-      assert.match(await evaluate<string>(`document.querySelector('.trace-event-header').textContent`), /SESSION.*Session handoff.*web:orchestrator/s)
+      assert.match(await evaluate<string>(`document.querySelector('.trace-event-header').textContent`), /SESSION.*Received handoff.*web:orchestrator/s)
       assert.equal(await evaluate(`document.querySelector('.event-preview').textContent`), 'Delegated inspection from coordinator. Use the published revision.')
       assert.match(await evaluate<string>(`document.querySelector('.trace-event-detail').textContent`), /protocol role, not a human author/)
       assert.match(await evaluate<string>(`document.querySelector('.trace-event-detail details pre').textContent`), /source="session"/)

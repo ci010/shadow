@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createSessionSoundTracker, startSessionSoundMonitor } from './session-sound-monitor.ts'
+import { createSessionSoundTracker, startSessionSoundMonitor, type SessionCompletion } from './session-sound-monitor.ts'
 import { parseSessionGraph } from './folders-sidebar.ts'
 import type { LiveClient, LiveObserver } from './live-client.ts'
 import { createProjectLiveState } from './project-live-state.ts'
@@ -52,12 +52,16 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
   let invalid = false
   let liveReady = true
   const emitted: NotificationSound[] = []
+  const completions: SessionCompletion[] = []
   let error = ''
   const request: typeof fetch = async input => {
     const path = new URL(String(input)).pathname
     if (path === '/api/projects') return Response.json({ projects: ['a', 'b'].map(id => ({ id, name: id, createdAt: '' })) })
     const id = path.split('/')[2]!
-    if (path.endsWith('/graph')) return Response.json({ sessions: [{ sessionId: 'web:root', mode: 'session' }], nodes: [] })
+    if (path.endsWith('/graph')) return Response.json({ sessions: [
+      { sessionId: 'web:root', mode: 'session', name: 'Review release' },
+      { sessionId: 'sub:task', mode: 'task', parentSessionId: 'web:root', name: 'Internal check' },
+    ], nodes: [] })
     if (path.endsWith('/stages')) return Response.json(invalid ? { stages: { 'web:root': 123 } } : { stages: { 'web:root': stages[id] } })
     if (path.endsWith('/ask')) return Response.json({ request: {
       id: questionIds[id], sessionId: 'web:root', question: 'Continue?', options: ['Yes', 'No'], defaultOption: 'No',
@@ -79,6 +83,7 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
   const stop = startSessionSoundMonitor({
     base: 'http://fixture', request, state, live,
     notify: kind => emitted.push(kind), error: message => { error = message },
+    completed: completion => { completions.push(completion) },
   })
   t.after(stop)
   const update = async (project: string, stage: string) => {
@@ -101,6 +106,7 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
   parent = true
   await update('a', 'waiting')
   assert.equal(emitted.length, 3)
+  assert.deepEqual(completions, [], 'Idle/yield transitions alone do not claim successful completion')
   parent = false
   questionIds.b = 'b3'
   observers.get('b')!.reset('epoch')
@@ -109,7 +115,7 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
   assert.equal(emitted.length, 3, 'A reconnect seeds existing questions silently')
   invalid = true
   await update('a', 'idle')
-  assert.match(error, /sounds are unavailable/)
+  assert.match(error, /notifications are unavailable/)
   invalid = false
   await update('a', 'idle')
   assert.equal(error, '')
@@ -121,15 +127,27 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
   }
   await finish('fast-turn')
   assert.equal(emitted.length, 4, 'A successful turn between snapshots still produces an idle cue')
+  assert.deepEqual(completions, [{
+    projectId: 'a', projectName: 'a', sessionId: 'web:root', name: 'Review release', turnId: 'fast-turn',
+  }])
   await finish('fast-turn')
   assert.equal(emitted.length, 4, 'Duplicate completed turn identities do not sound twice')
+  assert.equal(completions.length, 1)
   liveReady = false
   await finish('replayed-turn')
   liveReady = true
   await update('a', 'idle')
   assert.equal(emitted.length, 4, 'Replayed completions never produce a backlog')
+  assert.equal(completions.length, 1)
   await finish('new-turn')
   assert.equal(emitted.length, 5)
+  assert.equal(completions.length, 2)
+  observers.get('a')!.event({ type: 'event', cursor: 'epoch:3', topic: { kind: 'sessions', projectId: 'a' },
+    payload: { event: 'invalidate', sessionId: 'sub:task', completedTurnId: 'internal-turn' } })
+  observers.get('a')!.event({ type: 'event', cursor: 'epoch:4', topic: { kind: 'sessions', projectId: 'a' },
+    payload: { event: 'invalidate', sessionId: 'web:root' } })
+  await settle()
+  assert.equal(completions.length, 2, 'Child executions and non-success invalidations never notify completion')
   stop()
   assert.equal(observers.size, 0)
 })

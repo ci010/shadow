@@ -10,6 +10,14 @@ import type { ProjectLiveState } from './project-live-state.ts'
 import type { NotificationSound } from './notification-sounds.ts'
 import { isRecord } from './folders-sidebar.ts'
 
+export interface SessionCompletion {
+  projectId: string
+  projectName: string
+  sessionId: string
+  name: string
+  turnId: string
+}
+
 export function createSessionSoundTracker() {
   let previous: Map<string, string> | undefined
   const questions = new Map<string, string>()
@@ -52,6 +60,7 @@ export function startSessionSoundMonitor(options: {
   live: Partial<Pick<LiveClient, 'isLive'>>
   state: ProjectLiveState
   notify: (kind: NotificationSound) => void
+  completed?: (completion: SessionCompletion) => void
   error: (message: string) => void
   request?: typeof fetch
 }) {
@@ -93,7 +102,13 @@ export function startSessionSoundMonitor(options: {
         for (const [sessionId, turnId] of finished) {
           const session = snapshot.sessions.find(session => session.sessionId === sessionId)
           if (session && !isOneShot(session) && snapshot.stages[sessionId] === 'idle') {
-            if (tracker.completion(sessionId, turnId) && !changes.baseline) idle = true
+            if (tracker.completion(sessionId, turnId) && !changes.baseline) {
+              idle = true
+              options.completed?.({
+                projectId, projectName: catalog.state.value?.find(project => project.id === projectId)?.name || projectId,
+                sessionId, name: session.label, turnId,
+              })
+            }
             finished.delete(sessionId)
           } else if ((session && isOneShot(session)) || (!session && !dirty)) finished.delete(sessionId)
         }
@@ -112,7 +127,7 @@ export function startSessionSoundMonitor(options: {
         if (!signal.aborted && ownGeneration === generation) {
           tracker.reset()
           finished.clear()
-          report(`project:${projectId}`, t('Some session sounds are unavailable. {value1}', { value1: cause instanceof Error ? cause.message : t('Could not read session activity.') }))
+          report(`project:${projectId}`, t('Some conversation notifications are unavailable. {value1}', { value1: cause instanceof Error ? cause.message : t('Could not read session activity.') }))
         }
       } finally {
         if (controller === current) {
@@ -149,7 +164,7 @@ export function startSessionSoundMonitor(options: {
   }
   const catalog = options.state.acquireCatalog(options.base)
   const stopCatalog = watch(() => [catalog.state.revision, catalog.state.error], () => {
-    if (catalog.state.error) { report('catalog', t('Session sounds are unavailable. {error}', { error: catalog.state.error })); return }
+    if (catalog.state.error) { report('catalog', t('Conversation notifications are unavailable. {error}', { error: catalog.state.error })); return }
     if (!catalog.state.value) return
     const ids = new Set(catalog.state.value.map(project => project.id))
     for (const [id, project] of projects) if (!ids.has(id)) { project.close(); projects.delete(id) }

@@ -22,8 +22,10 @@
       @toggle="$emit('toggle', session.sessionId)"
       @select="$emit('select', session.sessionId)"
     >
-      <template #icon><span :class="session.isDirectChat ? 'i-lucide-message-square' : 'i-lucide-bot'" /></template>
-      <template #meta><SessionActivity :stage="activityStage(session)" :subagents="delegatedActivity(session)" compact :icon-only="rail" :title="undefined" /></template>
+      <template #icon>
+        <SessionActivity v-if="activityStage(session) || delegatedLabel(session)" :stage="activityStage(session)" :subagents="delegatedActivity(session)" compact icon-only status-icons />
+        <span v-else :class="session.isDirectChat ? 'i-lucide-message-square' : 'i-lucide-bot'" />
+      </template>
       <template #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
       <template v-if="showInfo" #info="{ close }">
         <div class="session-info">

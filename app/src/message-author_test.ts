@@ -1,6 +1,24 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { i18n, t } from './i18n.ts'
 import { groupSenderNames, messageEnvelope, messageRoleLabel, parseSessionMessage, sessionMessageTitle } from './message-author.ts'
+
+test('received intents and outgoing actions explicitly distinguish direction in both languages', () => {
+  const previousLocale = i18n.global.locale.value
+  const intents = ['request', 'question', 'progress', 'handoff', 'acknowledgement', undefined, 'unknown', 'constructor']
+  try {
+    for (const locale of ['en', 'zh-CN'] as const) {
+      i18n.global.locale.value = locale
+      const titles = intents.map(intent => sessionMessageTitle({ intent }))
+      assert.deepEqual(titles, locale === 'en'
+        ? ['Received request', 'Received question', 'Received progress update', 'Received handoff',
+          'Received acknowledgement', 'Received message', 'Received message', 'Received message']
+        : ['收到请求', '收到提问', '收到进展', '收到交接', '收到确认', '收到消息', '收到消息', '收到消息'])
+      assert.equal(t('Send to session'), locale === 'en' ? 'Send to' : '发往')
+      assert.equal(t('From session'), locale === 'en' ? 'from' : '来自')
+    }
+  } finally { i18n.global.locale.value = previousLocale }
+})
 
 test('platform metadata stays hidden in the sender envelope without changing the displayed author or body', () => {
   const message = { role: 'user', name: 'Alice', content: [
@@ -23,8 +41,8 @@ test('session handoffs use recorded origin rather than a human-looking sender na
   assert.deepEqual(parsed.sessionSource, { id: 'web:orchestrator', name: 'Admin & coordinator', intent: 'handoff' })
   assert.equal(parsed.content, message.content[1].text)
   assert.equal(parsed.timestamp, message.timestamp)
-  assert.equal(sessionMessageTitle(parsed.sessionSource), 'Session handoff')
-  assert.equal(messageRoleLabel(message), 'Session handoff')
+  assert.equal(sessionMessageTitle(parsed.sessionSource), 'Received handoff')
+  assert.equal(messageRoleLabel(message), 'Received handoff')
   assert.equal(message.role, 'user', 'Presentation never mutates the model protocol')
   assert.equal(parseSessionMessage({ ...message, content: message.content.map(part => part.text).join('\n') })?.content, parsed.content)
 })
@@ -40,7 +58,7 @@ test('only leading source envelopes classify messages, never names, IDs or body 
     { role: 'user', content: [{ type: 'text', text: 42 }] },
     { role: 'user', content: '<sender source="session">Malformed envelope' },
   ]) assert.equal(parseSessionMessage(message), undefined)
-  assert.equal(sessionMessageTitle({ intent: 'constructor' }), 'Session message')
+  assert.equal(sessionMessageTitle({ intent: 'constructor' }), 'Received message')
   assert.equal(messageRoleLabel({ role: 'user', content: '<event type="cron" />Scheduled' }), 'System event')
   assert.equal(messageRoleLabel({ role: 'user', name: '__compaction_summary__', content: 'Summary' }), 'Context summary')
 })

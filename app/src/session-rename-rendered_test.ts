@@ -66,7 +66,9 @@ test('rendered session details supports inline identity actions, copying and key
                 ? { kind: 'remote', displayPath: sessionId === 'web:remote-missing' ? null : 'Z:\\remote\\review',
                   nodeName: 'Synthetic device', displayName: 'Review workspace' }
                 : { kind: 'local', displayPath: sessionId === 'web:missing' ? null : sessionId === 'web:long' ? longPath : 'C:\\synthetic' },
-              usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
+              usage: { promptTokens: 1234567, completionTokens: 45678, totalTokens: 1280245 },
+              subagentUsage: { promptTokens: 234567, completionTokens: 5678, totalTokens: 240245 },
+              usageIncomplete: true, usageScope: 'session', context: { usedTokens: 12000, windowTokens: 100000 } })
           } else if (path === '/api/sessions/web%3Afixture/name' && request.method === 'PATCH') {
             writes++
             let body = ''

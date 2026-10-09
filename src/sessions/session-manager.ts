@@ -61,6 +61,7 @@ import { YieldDiscussions, DECISION_REVIEW_PROMPT } from './yield-discussions.ts
 import { parseYieldPolicy, type YieldPolicy, type YieldRequest, type YieldReview } from './yield-contract.ts'
 import { allowedSubagentModes, isExecutionMode, type ExecutionMode } from './execution-mode.ts'
 import { delegationOwner, MAX_CALL_TIMEOUT_MS } from './execution-scope.ts'
+import { addTokenUsage, parseTokenUsage, readTokenUsage } from './usage.ts'
 import { CallTools } from './call-tools.ts'
 import { prepareSessionRecovery, SessionResumeError } from './recovery.ts'
 import type { ExecutionContext } from '../tools/context.ts'
@@ -2048,21 +2049,36 @@ ${JSON.stringify(request)}`,
       physicalSessionId(state, index))
     if (physicalId !== undefined && !segments.includes(physicalId)) return null
     const selected = physicalId ?? segments[segments.length - 1]!
-    let usage: LLMResponseUsage | null = null
     let usedTokens: number | null = null
-    // Legacy assistant records can repeat the last response's usage. They cannot
-    // support reliable cumulative accounting, so expose only the latest known call.
-    for (const segment of physicalId === undefined ? segments : [selected]) {
-      for await (const record of this.store.readSessionLog(segment)) {
-        if (record.role !== 'assistant') continue
-        const value = record.usage
-        if (!isConfigObject(value)) continue
-        const { promptTokens, completionTokens, totalTokens } = value
-        if (typeof promptTokens !== 'number' || typeof completionTokens !== 'number' || typeof totalTokens !== 'number' ||
-          ![promptTokens, completionTokens, totalTokens].every(token => Number.isSafeInteger(token) && token >= 0)) continue
-        usage = { promptTokens, completionTokens, totalTokens }
-        if (segment === selected) usedTokens = usage.promptTokens
+    // Context describes only the selected conversation segment, not delegates.
+    for await (const record of this.store.readSessionLog(selected)) {
+      if (record.role !== 'assistant') continue
+      const value = parseTokenUsage(record.usage)
+      if (value) usedTokens = value.promptTokens
+    }
+    const included = new Set([sessionId])
+    const children = new Map<string, SessionState[]>()
+    for (const candidate of Object.values(this.sessionStates)) {
+      const owner = delegationOwner(candidate)
+      if (owner && candidate.projectId === state.projectId) {
+        const siblings = children.get(owner) ?? []
+        siblings.push(candidate)
+        children.set(owner, siblings)
       }
+    }
+    const queue = [state]
+    for (let index = 0; index < queue.length; index++) {
+      for (const child of children.get(queue[index]!.sessionId) ?? []) {
+        if (!included.has(child.sessionId)) { included.add(child.sessionId); queue.push(child) }
+      }
+    }
+    const own = await readTokenUsage(this.store, state)
+    let subagentUsage: LLMResponseUsage | null = queue.length > 1 ? null : { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+    let usageIncomplete = own.incomplete
+    for (const child of queue.slice(1)) {
+      const result = await readTokenUsage(this.store, child)
+      subagentUsage = addTokenUsage(subagentUsage, result.usage)
+      usageIncomplete ||= result.incomplete
     }
     let workdir = resolveSessionLocations(
       this.workspace, state, undefined, this.workdirCapabilityLookup,
@@ -2094,8 +2110,10 @@ ${JSON.stringify(request)}`,
         available: workdir.available,
         availability: workdir.available ? 'available' as const : workdir.reason,
       },
-      usage,
-      usageScope: 'latest-call' as const,
+      usage: own.usage === null && queue.length === 1 ? null : addTokenUsage(own.usage, subagentUsage),
+      subagentUsage,
+      usageIncomplete,
+      usageScope: 'session' as const,
       context: {
         usedTokens,
         windowTokens: typeof window === 'number' && Number.isSafeInteger(window) && window > 0 ? window : null,

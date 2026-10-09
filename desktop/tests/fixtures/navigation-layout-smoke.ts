@@ -73,7 +73,7 @@ async function main() {
       await execute(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
       const labels = await execute(`Array.from(document.querySelectorAll('.history-marker'), el => el.getAttribute('aria-label'))`)
       assert.match(labels[0], /User message from Alice/)
-      assert.match(labels[1], /Session progress from Reviewer \(web:reviewer\)/)
+      assert.match(labels[1], /Received progress update from Reviewer \(web:reviewer\)/)
       assert.match(labels[2], /Agent completed from Worker \(task:worker\)/)
       // Hidden Chromium windows update activeElement without delivering native focus events.
       await execute(`{ const marker = document.querySelectorAll('.history-marker')[1]; marker.focus(); marker.dispatchEvent(new FocusEvent('focus')); }`)

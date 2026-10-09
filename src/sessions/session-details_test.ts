@@ -286,7 +286,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: details are read-only, segment-owned and expose latest-call usage`, async () => {
+  test(`${Store.name}: details are read-only, preserve selected context and flag incomplete legacy usage`, async () => {
     await withTempWorkspace(async (workspace) => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -320,11 +320,49 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         deepEqual(await (await app.request('/api/sessions/web:one/details')).json(), {
           sessionId: 'web:one', name: 'Actual question',
           workdir: { kind: 'local', displayPath: sessionWorkspacePath(workspace, 'web:owner'), nodeId: 'local', available: true, availability: 'available' },
-          usage, usageScope: 'latest-call',
+          usage, usageScope: 'session', subagentUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, usageIncomplete: true,
           context: { usedTokens: 120, windowTokens: 8000 },
         })
+
+        test(`${Store.name}: total usage includes nested task/call ownership but excludes forks, peers and other projects`, async () => {
+          await withTempWorkspace(async workspace => {
+            const store: SessionStore = new Store(join(workspace, 'sessions'))
+            await store.init()
+            const states = [
+              { sessionId: 'web:owner', mode: 'session' as const, segmentIndex: 1 },
+              { sessionId: 'task', mode: 'task' as const, parentSessionId: 'web:owner', segmentIndex: 0 },
+              { sessionId: 'call', mode: 'call' as const, parentSessionId: 'task', segmentIndex: 0 },
+              { sessionId: 'fork', mode: 'session' as const, parentSessionId: 'web:owner', segmentIndex: 0 },
+              { sessionId: 'peer', mode: 'task' as const, parentSessionId: null, segmentIndex: 0 },
+              { sessionId: 'foreign', mode: 'call' as const, parentSessionId: 'web:owner', segmentIndex: 0, projectId: 'elsewhere' },
+            ]
+            const sessions = makeManager(workspace, store)
+            try {
+              for (const state of states) {
+                await store.saveState(state.sessionId, state)
+                for (let segment = 0; segment <= state.segmentIndex; segment++) {
+                  await store.createSessionLog(newPhysicalSessionId(state.sessionId, segment, 1), [
+                    { type: 'model_usage', sessionId: state.sessionId, id: `${state.sessionId}-${segment}`, usage },
+                    { role: 'assistant', usage },
+                  ])
+                }
+              }
+              await sessions.start()
+              const details = await sessions.getSessionDetails('web:owner', newPhysicalSessionId('web:owner', 0, 1))
+              deepEqual(details?.usage, { promptTokens: 480, completionTokens: 120, totalTokens: 600 })
+              deepEqual(details?.subagentUsage, { promptTokens: 240, completionTokens: 60, totalTokens: 300 })
+              equal(details?.usageIncomplete, false)
+              equal(details?.context.usedTokens, 120)
+              await sessions.stop()
+              const restarted = makeManager(workspace, store)
+              await restarted.start()
+              try { deepEqual((await restarted.getSessionDetails('web:owner'))?.usage, details?.usage) }
+              finally { await restarted.stop() }
+            } finally { await sessions.stop(); store.close?.() }
+          })
+        })
         const segment = await sessions.getSessionDetails('web:one', newPhysicalSessionId('web:one', 0, 1))
-        deepEqual(segment?.usage, earlier)
+        deepEqual(segment?.usage, usage)
         equal(segment?.context.usedTokens, 40)
         for (const [id, workdir, expected] of [
           ['folder', localFolderWorkdirRef('p'), { kind: 'local', displayPath: join(workspace, 'folder'), nodeId: 'local', available: true, availability: 'available' }],

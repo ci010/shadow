@@ -1,4 +1,4 @@
-import { t, formatNumber } from './i18n.ts'
+import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { parseTopicMetadata, type TopicMetadata } from './project-coordination.ts'
 
@@ -11,6 +11,8 @@ export interface SessionDetails {
   description?: string
   workdir: { kind: 'local' | 'remote'; displayPath: string | null; nodeId?: string; nodeName?: string; displayName?: string; available?: boolean }
   usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null
+  subagentUsage?: SessionDetails['usage']
+  usageIncomplete?: boolean
   usageScope: 'session' | 'segment' | 'latest-call'
   context: { usedTokens: number | null; windowTokens: number | null }
 }
@@ -48,6 +50,7 @@ export function parseSessionDetails(value: unknown, sessionId: string): SessionD
   if (value.sessionKind !== undefined && value.sessionKind !== 'topic' && value.sessionKind !== 'orchestrator') throw invalid()
   if (value.createdBySessionId !== undefined && typeof value.createdBySessionId !== 'string') throw invalid()
   if (value.description !== undefined && typeof value.description !== 'string') throw invalid()
+  if (value.usageIncomplete !== undefined && typeof value.usageIncomplete !== 'boolean') throw invalid()
   return {
     sessionId,
     ...(value.sessionKind !== undefined ? { sessionKind: value.sessionKind as SessionDetails['sessionKind'] } : {}),
@@ -61,13 +64,17 @@ export function parseSessionDetails(value: unknown, sessionId: string): SessionD
       ...(typeof value.workdir.displayName === 'string' ? { displayName: value.workdir.displayName } : {}),
       ...(typeof value.workdir.available === 'boolean' ? { available: value.workdir.available } : {}) },
     usage: parseUsage(value.usage),
+    ...(value.subagentUsage !== undefined ? { subagentUsage: parseUsage(value.subagentUsage) } : {}),
+    ...(value.usageIncomplete !== undefined ? { usageIncomplete: value.usageIncomplete } : {}),
     usageScope: value.usageScope === 'session' ? 'session' : value.usageScope === 'segment' ? 'segment' : 'latest-call',
     context: { usedTokens, windowTokens },
   }
 }
 
+const tokenFormatter = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
+
 export function formatTokenCount(value: number): string {
-  return formatNumber(value, { notation: 'compact', maximumFractionDigits: 1 })
+  return tokenFormatter.format(value)
 }
 
 export function contextPercent(context: SessionDetails['context']): number | null {

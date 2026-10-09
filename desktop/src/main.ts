@@ -11,6 +11,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  Notification,
   session,
   shell,
   Tray,
@@ -79,6 +80,7 @@ import { parseMicroAppArguments, type MicroAppIdentity } from './micro-app-contr
 import { installMicroAppIpc } from './micro-app-ipc.js'
 import { desktopReleaseReadiness } from './release-readiness.js'
 import { readManagedDeploymentProfile, type ManagedDeploymentProfile } from './deployment-profile.js'
+import { installTaskNotifications } from './task-notifications.js'
 import { installClipboardFiles, readClipboardFiles, readClipboardPaths } from './clipboard-files.js'
 
 export { secureWebPreferences } from './window-controls.js'
@@ -389,6 +391,11 @@ async function start(): Promise<void> {
     ...(developmentUrl ? { developmentUrl } : {}),
   })
   mainWindow = createMainWindow(target, !initialApp)
+  installTaskNotifications(ipcMain, mainWindow, target, {
+    supported: () => Notification.isSupported(),
+    create: message => new Notification({ ...message, icon: desktopIconPath(), silent: true }),
+    onError: message => console.error('[desktop] Task notification failed:', message),
+  })
   microApps = new DesktopMicroApps({
     userDataPath, executablePath: process.execPath, appPath: app.getAppPath(), packaged: app.isPackaged,
     defaultIconPath: desktopIconPath(),

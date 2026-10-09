@@ -27,6 +27,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
   const sessions = [
     { sessionId: 'web:chat-one', title: 'Issue investigation', folderId: 'code' },
     { sessionId: 'web:chat-two', title: 'A very long conversation title that must truncate instead of changing the row height', folderId: 'code' },
+    { sessionId: 'task:one', title: 'Nested work', folderId: 'code', mode: 'task', parentSessionId: 'web:chat-one', executionStatus: 'running' },
     { sessionId: botSession, title: 'Bot conversation' },
   ]
   const unexpected: string[] = []
@@ -131,7 +132,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
             path: `C:\\synthetic\\${id}`, createdAt: '',
           })) : [] }
           else if (path === '/api/sessions/graph') data = { sessions: work ? sessions : [], nodes: [] }
-          else if (path === '/api/sessions/stages') data = { stages: {} }
+          else if (path === '/api/sessions/stages') data = { stages: { 'web:chat-one': 'llm', 'web:chat-two': 'waiting', 'task:one': 'llm' } }
           else if (path === '/api/channels') data = { channels: [{
             id: 'bot', projectId: 'work', platform: 'qq', displayName: 'QQ bot', label: 'QQ',
             enabled: true, configured: true, state: 'connected', config: {}, secrets: {},

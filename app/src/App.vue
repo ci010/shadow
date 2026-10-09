@@ -20,6 +20,14 @@
           <DesktopBrowserAccess v-if="isMain && desktopWebPairing" :api="desktopWebPairing" />
           <MobileConnection v-if="mobileSession" :session="mobileSession" connected />
           <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">{{ t('Sign out') }}</button>
+          <button v-if="browserNotifications" class="theme-toggle" :disabled="browserNotifications.requesting.value"
+            :aria-pressed="browserNotifications.active.value"
+            :aria-label="browserNotifications.active.value ? t('Disable system notifications') : t('Enable system notifications')"
+            :title="browserNotifications.error.value || (browserNotifications.active.value ? t('Disable system notifications') : t('Enable system notifications'))"
+            @click="browserNotifications.setEnabled(!browserNotifications.active.value)">
+            <span :class="browserNotifications.active.value ? 'i-lucide-bell' : 'i-lucide-bell-off'" class="w-3.5 h-3.5" aria-hidden="true" />
+            <span v-if="mobile.enabled.value">{{ t('System notifications') }}</span>
+          </button>
           <button class="theme-toggle" :aria-pressed="sounds.preferences.value.enabled"
             :aria-label="sounds.preferences.value.enabled ? t('Mute notification sounds') : t('Enable notification sounds')"
             :title="sounds.error.value || (sounds.preferences.value.enabled ? t('Mute notification sounds') : t('Enable notification sounds'))" @click="toggleSounds">
@@ -107,7 +115,7 @@ watch(() => route.fullPath, (path) => {
 }, { immediate: true })
 const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
-const { sounds, monitoringError, toggle: toggleSounds } = useAppNotificationSounds(() => ({
+const { sounds, monitoringError, toggle: toggleSounds, browserNotifications } = useAppNotificationSounds(() => ({
   base: installationContext.value.apiBase, allowed: installationContext.value.uiScopes.includes('chat:read'),
 }))
 const livePool = useLiveClientPool()

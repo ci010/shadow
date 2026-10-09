@@ -21,13 +21,25 @@
     <p v-else-if="preferences.enabled && !sounds.ready.value" class="sound-help" role="status">{{ t('Use Preview to enable audio in this window. Browser and device mute settings still apply.') }}</p>
     <p class="sound-help">{{ t('No sounds on initial load or reconnect. Temporary tasks and calls are excluded, and simultaneous notifications are grouped. The app must remain open; closed or suspended browsers cannot play sounds.') }}</p>
   </section>
+  <section v-if="browserNotifications" class="sound-settings browser-notification-settings" aria-labelledby="browser-notifications-title">
+    <h2 id="browser-notifications-title">{{ t('System notifications') }}</h2>
+    <p class="sound-help">{{ t('Notify you with the conversation name when a task completes while this page is not focused. Separate from notification sounds.') }}</p>
+    <button type="button" class="btn" :disabled="browserNotifications.requesting.value"
+      :aria-pressed="browserNotifications.active.value" @click="browserNotifications.setEnabled(!browserNotifications.active.value)">
+      {{ browserNotifications.requesting.value ? t('Requesting notification permission...') : browserNotifications.active.value ? t('Disable system notifications') : t('Enable system notifications') }}
+    </button>
+    <p v-if="browserNotifications.error.value" class="sound-error" role="alert">{{ browserNotifications.error.value }}</p>
+    <p class="sound-help">{{ t('Requires browser permission and HTTPS or localhost. Keep this app open; closed or suspended pages cannot report completion. Browser and system notification settings still apply.') }}</p>
+  </section>
 </template>
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import { computed, useId } from 'vue'
 import { useNotificationSounds, type NotificationSound } from '../notification-sounds.ts'
+import { useBrowserTaskNotifications } from '../browser-task-notifications.ts'
 const sounds = useNotificationSounds()
+const browserNotifications = useBrowserTaskNotifications()
 const volumeId = `sound-volume-${useId()}`
 const preferences = computed(() => sounds?.preferences.value ?? { enabled: false, yield: false, idle: false, volume: 0 })
 const events: { kind: NotificationSound; label: string; description: string }[] = [
@@ -45,6 +57,7 @@ function setVolume(event: Event) {
 
 <style scoped>
 .sound-settings { max-width: 680px; }
+.browser-notification-settings { margin-top: 32px; }
 h2 { margin: 0 0 16px; font-size: 20px; }
 .sound-help { color: var(--c-text-secondary); font-size: 14px; line-height: 1.6; }
 fieldset { min-width: 0; padding: 0; margin: 20px 0; border: 0; }
@@ -60,6 +73,6 @@ fieldset { min-width: 0; padding: 0; margin: 20px 0; border: 0; }
 fieldset:disabled { opacity: .6; }
 fieldset:disabled .sound-toggle, .btn:disabled { cursor: default; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.sound-error { color: var(--c-error); font-size: 13px; line-height: 1.5; }
+.sound-error { color: var(--c-error); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 @media (max-width: 420px) { .sound-event { flex-wrap: wrap; gap: 4px; } .sound-event .btn { margin-left: 25px; } }
 </style>

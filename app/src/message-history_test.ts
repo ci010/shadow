@@ -39,7 +39,7 @@ test('session messages appear alongside human turns with distinct attribution', 
     { role: 'user', content: 'Human follow-up', senderName: 'Alice' },
   ], [{ sessionId: 'web:orchestrator', label: 'Coordinator' }]).map(({ index, kind, source, sourceId, label }) => ({ index, kind, source, sourceId, label })), [
     { index: 0, kind: 'user', source: 'User', sourceId: undefined, label: 'User message' },
-    { index: 1, kind: 'session', source: 'Coordinator', sourceId: 'web:orchestrator', label: 'Session handoff' },
+    { index: 1, kind: 'session', source: 'Coordinator', sourceId: 'web:orchestrator', label: 'Received handoff' },
     { index: 2, kind: 'user', source: 'Alice', sourceId: undefined, label: 'User message' },
   ])
 })
@@ -81,7 +81,7 @@ test('session events and live sender envelopes are navigable without becoming re
   const markers = messageHistoryMarkers(messages)
   assert.deepEqual(markers.map(marker => marker.index), [0, 1, 2, 3])
   assert.deepEqual(markers.map(marker => marker.source), ['Reviewer', 'Worker', 'Reviewer', 'Legacy worker'])
-  assert.deepEqual(markers.map(marker => marker.label), ['Session progress', 'Agent completed', 'message', 'Agent failed'])
+  assert.deepEqual(markers.map(marker => marker.label), ['Received progress update', 'Agent completed', 'message', 'Agent failed'])
   assert.equal(markers[1].preview, 'Finished review')
   assert.equal(markers[3].preview, 'Agent failed')
   assert.equal(markers[1].sourceId, 'task:worker')

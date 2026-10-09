@@ -206,7 +206,7 @@ async function main() {
       await execute(`window.__showConversation(); window.__conversationFixture.embedded = true;
         window.__conversationFixture.enableChildPane = true;
         window.__conversationFixture.messages[1].sessionSource.intent = 'progress'`)
-      await wait(`!!document.querySelector('.message-action .session-message-link') && document.querySelector('.chat-session strong').textContent === 'Session progress'`)
+      await wait(`!!document.querySelector('.message-action .session-message-link') && document.querySelector('.chat-session strong').textContent === 'Received progress update'`)
       for (const width of [1100, 390]) {
         window.setContentSize(width, 844)
         await frame()
@@ -271,6 +271,42 @@ async function main() {
         + parseFloat(body.marginTop) + 5 * parseFloat(body.lineHeight)
         + ['paddingTop','paddingBottom','borderTopWidth','borderBottomWidth'].reduce((total, key) => total + parseFloat(style[key]), 0);
     })()`)
+    if (process.env.CONVERSATION_DIRECTION_ONLY) {
+      for (const width of [1100, 390]) {
+        window.setContentSize(width, 844)
+        for (const locale of ['en', 'zh-CN']) {
+          await execute(`window.__setConversationLocale('${locale}')`)
+          await frame()
+          const headings = await execute(`(() => {
+            const incoming = document.querySelector('.chat-session');
+            const outgoing = document.querySelector('.message-action');
+            return {
+              received: incoming.querySelector('strong').textContent,
+              from: incoming.querySelector('.session-message-origin').textContent,
+              sendTo: outgoing.querySelector('strong').textContent,
+              status: outgoing.querySelector('[role="status"]').textContent,
+              incomingDirection: incoming.dataset.direction,
+              outgoingDirection: outgoing.dataset.direction,
+              overflow: [incoming, outgoing].some(card => card.scrollWidth > card.clientWidth),
+              receivedIcon: !!incoming.querySelector('.i-lucide-inbox'),
+              sendIcon: !!outgoing.querySelector('.i-lucide-send'),
+            };
+          })()`)
+          assert.equal(headings.received, locale === 'en' ? 'Received acknowledgement' : '收到确认')
+          assert.equal(headings.from, locale === 'en' ? 'from' : '来自')
+          assert.equal(headings.sendTo, locale === 'en' ? 'Send to' : '发往')
+          assert.equal(headings.status, locale === 'en' ? 'Queued' : '已排队')
+          assert.equal(headings.incomingDirection, 'incoming')
+          assert.equal(headings.outgoingDirection, 'outgoing')
+          assert.equal(headings.overflow, false)
+          assert.equal(headings.receivedIcon, true)
+          assert.equal(headings.sendIcon, true)
+        }
+      }
+      assert.deepEqual(errors, [])
+      console.log('CONVERSATION_SMOKE_OK')
+      return
+    }
     if (process.env.CONVERSATION_EXCHANGES_ONLY) {
       const selectors = ['.chat-session', '.message-action']
       for (const selector of selectors) {

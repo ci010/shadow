@@ -91,6 +91,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(parentRequests.length, 4)
         assert.equal(tools.has('infer'), false)
         assert.equal(parentRequests.at(-1)!.filter(m => m.role === 'tool').length, 2)
+        const details = await sessions.getSessionDetails('web:infer')
+        assert.deepEqual(details?.usage, { promptTokens: 20, completionTokens: 10, totalTokens: 30 })
+        assert.equal(details?.usageIncomplete, true, 'Parent calls without provider usage remain explicitly incomplete')
       } finally {
         await sessions.stop()
         await backgroundTasks.stop()

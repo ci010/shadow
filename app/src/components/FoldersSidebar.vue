@@ -30,14 +30,13 @@
       <HoverInfo v-if="error && isRail" :text="error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" :aria-label="t('Folders unavailable. Retry folders')" @click="loadFolders"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
       <section v-for="group in groups.folders" :key="group.folder.id" class="folder-group">
         <TreeRow class="folder-folder-row" :selected="!activeSessionId && selectedFolderId === group.folder.id"
-          :class="{ working: !!folderWorkingStage(group.sessions) || folderSubagents(group.sessions).running > 0 }" :icon-only="isRail"
+          :icon-only="isRail"
           :label="group.folder.name" :title="group.folder.kind === 'remote' ? `${group.folder.workdir.nodeId}: ${group.folder.path}` : group.folder.path" :expanded="expandedFolders.has(group.folder.id)" separate-toggle
           button-class="folder-folder" toggle-class="folder-toggle"
           :toggle-label="`${expandedFolders.has(group.folder.id) ? 'Collapse' : 'Expand'} folder ${group.folder.name}`"
           @toggle="toggleFolder(group.folder.id)" @select="selectFolder(group.folder.id)"
           @contextmenu.prevent="grouped && openFolderActions(group.folder, $event)">
           <template #icon><span v-if="loading" class="i-lucide-loader-circle folder-loading-icon" /><span v-else-if="isRail" class="folder-initial">{{ railInitial(group.folder.name) }}</span><span v-else :class="group.folder.kind === 'remote' ? 'i-lucide-monitor' : expandedFolders.has(group.folder.id) ? 'i-lucide-folder-open' : 'i-lucide-folder'" /></template>
-          <template #meta><SessionActivity v-if="folderWorkingStage(group.sessions) || folderHasSubagents(group.sessions)" :stage="folderWorkingStage(group.sessions)" :subagents="folderSubagents(group.sessions)" compact :icon-only="isRail" :title="undefined" /></template>
           <template #actions>
             <HoverInfo :text="t('New conversation in {name}', { name: group.folder.name })"><template #default="{ triggerProps }"><button class="folder-action-button folder-add" v-bind="triggerProps" :aria-label="t('New conversation in {name}', { name: group.folder.name })" @click="startFolderDraft(group.folder)"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
             <button v-if="grouped" class="folder-action-button folder-add folder-actions" :aria-label="t('Folder actions for {name}', { name: group.folder.name })"

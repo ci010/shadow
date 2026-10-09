@@ -253,7 +253,7 @@ async function main() {
     await execute(`[...document.querySelectorAll('.event-filters button')].find(b => b.textContent.trim() === 'session').click()`)
     await wait(`document.querySelectorAll('.trace-event').length === 1`)
     assert.equal(await execute(`document.querySelector('.event-kind.SESSION').textContent`), 'SESSION')
-    assert.match(await execute(`document.querySelector('.trace-event-header').textContent`), /Session handoff.*web:orchestrator.*Delegated inspection/s)
+    assert.match(await execute(`document.querySelector('.trace-event-header').textContent`), /Received handoff.*web:orchestrator.*Delegated inspection/s)
     assert.doesNotMatch(await execute(`document.querySelector('.event-preview').textContent`), /<sender/)
     await click('.trace-event-header')
     assert.match(await execute(`document.querySelector('.trace-event-detail').textContent`), /protocol role, not a human author/)

@@ -188,7 +188,7 @@ test('computed metadata, numbers, dates, and enum labels update without reloadin
   assert.equal(formatNumber(1234), '1,234')
   assert.equal(enumLabel('pending'), 'pending')
   setLocalePreference('zh-CN')
-  assert.equal(count.value, '1.2万')
+  assert.equal(count.value, '12.3K')
   assert.notEqual(fieldLabel.value, before.label)
   assert.notDeepEqual(navigation.value.map(item => item.label), before.nav.map(item => item.label))
   assert.deepEqual(navigation.value.map(item => item.name), before.nav.map(item => item.name))

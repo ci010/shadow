@@ -54,10 +54,10 @@ export function parseSessionMessage(message: unknown) {
 
 export function sessionMessageTitle(source: SessionMessageSource): string {
   const labels: Record<string, string> = {
-    request: t('Session request'), question: t('Session question'), progress: t('Session progress'),
-    handoff: t('Session handoff'), acknowledgement: t('Session acknowledgement'),
+    request: t('Received request'), question: t('Received question'), progress: t('Received progress update'),
+    handoff: t('Received handoff'), acknowledgement: t('Received acknowledgement'),
   }
-  return source.intent && Object.hasOwn(labels, source.intent) ? labels[source.intent] : t('Session message')
+  return source.intent && Object.hasOwn(labels, source.intent) ? labels[source.intent] : t('Received message')
 }
 
 export function messageRoleLabel(message: unknown): string {

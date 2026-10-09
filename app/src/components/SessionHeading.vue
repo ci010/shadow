@@ -47,15 +47,19 @@
             <dt>{{ t('Session ID') }}</dt><dd class="detail-id"><CopyableId class="detail-copy" :value="sessionId" :label="t('Session ID')" wrap /></dd>
           </dl>
           <div class="details-usage">
-            <dl>
-              <dt>{{ t('Tokens') }}</dt>
-              <dd v-if="details?.usage" class="token-counts">
-                <span :title="t('{value1} input tokens', { value1: formatNumber(details.usage.promptTokens) })"><span class="i-lucide-arrow-up" aria-hidden="true" />{{ formatTokenCount(details.usage.promptTokens) }} <small>{{ t('input') }}</small></span>
-                <span :title="t('{value1} output tokens', { value1: formatNumber(details.usage.completionTokens) })"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ formatTokenCount(details.usage.completionTokens) }} <small>{{ t('output') }}</small></span>
-                <small>{{ details.usageScope === 'session' ? t('This conversation') : details.usageScope === 'segment' ? t('This segment') : t('Last model call') }}</small>
-              </dd>
-              <dd v-else>{{ t('Not reported') }}</dd>
+            <h3 class="token-heading">{{ t('Tokens') }}</h3>
+            <dl class="token-columns">
+              <div v-for="column in tokenColumns" :key="column.label" class="token-column">
+                <dt>{{ column.label }}</dt>
+                <dd v-if="column.usage" class="token-counts">
+                  <span :title="t('{value1} input tokens', { value1: formatNumber(column.usage.promptTokens) })"><span class="i-lucide-arrow-up" aria-hidden="true" />{{ formatTokenCount(column.usage.promptTokens) }} <small>{{ t('input') }}</small></span>
+                  <span :title="t('{value1} output tokens', { value1: formatNumber(column.usage.completionTokens) })"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ formatTokenCount(column.usage.completionTokens) }} <small>{{ t('output') }}</small></span>
+                </dd>
+                <dd v-else>{{ t('Not reported') }}</dd>
+              </div>
             </dl>
+            <p class="details-note">{{ t('Total includes this conversation and all nested task/call agents. Subagents are part of the total.') }}</p>
+            <p v-if="details?.usageIncomplete" class="details-note">{{ t('Partial usage: older history or some model calls lack distinct token records.') }}</p>
             <div class="context-heading"><span>{{ t('Context') }}</span><span v-if="percent !== null">{{ percent }}%</span></div>
             <div class="context-counts">
               <span>{{ details?.context.usedTokens != null ? formatTokenCount(details.context.usedTokens) : t('Not reported') }}</span>
@@ -164,6 +168,10 @@ const folder = computed(() => coordinator.value ? t('Project-wide · No folder')
   ? chatContextName(details.value.workdir.displayPath)
   : loading.value ? t('Loading folder...') : t('Folder unavailable'))
 const percent = computed(() => details.value ? contextPercent(details.value.context) : null)
+const tokenColumns = computed(() => [
+  { label: t('Total'), usage: details.value?.usage },
+  { label: t('Subagents'), usage: details.value?.subagentUsage },
+])
 let request: AbortController | undefined
 
 async function loadDetails() {
@@ -223,12 +231,12 @@ onUnmounted(() => { cancel(); stopRename() })
 .rename-button:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .rename-button:focus-visible, .rename-input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .rename-button:disabled { opacity: .5; cursor: not-allowed; }
-.session-heading :deep(.composer-control) { min-height: 36px; gap: 10px; max-width: 100%; padding: 7px 8px; text-align: left; }
-.heading-name { min-width: 0; max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text); font-size: 14px; font-weight: 600; }
-.heading-folder { min-width: min(80px, 25vw); max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 13px; }
+.session-heading :deep(.composer-control) { flex: 1 1 0; width: 0; min-height: 36px; gap: 10px; max-width: 100%; padding: 7px 8px; text-align: left; }
+.heading-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text); font-size: 14px; font-weight: 600; }
+.heading-folder { flex: 0 1 30ch; min-width: 0; max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 13px; }
 .heading-separator { flex-shrink: 0; color: var(--c-text-secondary); }
 .heading-chevron { width: 14px; height: 14px; flex-shrink: 0; }
-.session-details { padding: 9px 10px 4px; font-size: 13px; line-height: 1.6; }
+.session-details { min-width: 0; max-width: 100%; box-sizing: border-box; padding: 9px 10px 4px; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .session-details dl { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px 10px; margin: 0; }
 .session-details dt, .context-heading { color: var(--c-text-secondary); }
 .session-details dd { margin: 0; min-width: 0; color: var(--c-text); overflow-wrap: anywhere; user-select: text; cursor: text; }
@@ -242,8 +250,13 @@ onUnmounted(() => { cancel(); stopRename() })
 .details-topic dd { white-space: pre-wrap; }
 .detail-id { font-size: 12px; }
 .details-usage { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--c-border); }
+.token-heading { margin: 0 0 12px; font-size: 13px; font-weight: 600; }
+.session-details .token-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.token-column { min-width: 0; }
+.token-column dt { margin-bottom: 6px; }
 .token-counts { display: flex; flex-direction: column; gap: 3px; font-variant-numeric: tabular-nums; }
-.token-counts > span { display: flex; align-items: center; gap: 6px; }
+.token-counts > span { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.token-counts > span > span { flex: 0 0 14px; width: 14px; height: 14px; }
 .token-counts small, .details-note { color: var(--c-text-secondary); font-size: 12px; }
 .context-heading, .context-counts { display: flex; justify-content: space-between; gap: 12px; }
 .context-heading { margin-top: 18px; }
@@ -261,6 +274,7 @@ progress::-moz-progress-bar { background: var(--c-blue); border-radius: var(--ra
 @media (max-width: 700px) {
   .session-heading { padding: 4px 8px; }
   .session-heading :deep(.composer-control) { gap: 7px; }
+  .session-details dl { grid-template-columns: minmax(0, 72px) minmax(0, 1fr); gap: 10px 8px; }
   .heading-name { font-size: 13px; }
   .heading-folder { max-width: 38%; font-size: 12px; }
 }

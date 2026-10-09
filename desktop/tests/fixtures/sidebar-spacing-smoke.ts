@@ -24,6 +24,13 @@ async function main() {
     assert.equal(await execute(`!!document.querySelector('.project-delete, [title="Delete project"]')`), false, 'Project deletion is not a sidebar action')
     await execute(`document.querySelector('.folder-toggle').click()`)
     await wait(`document.querySelectorAll('.folder-conversations .session-select').length === 2`)
+    await wait(`!!document.querySelector('.session-select .tree-icon .i-lucide-brain')`)
+    assert.equal(await execute(`!!document.querySelector('.folder-folder-row .session-activity')`), false,
+      'Folder rows do not repeat conversation or subagent status')
+    assert.equal(await execute(`!!document.querySelector('.folder-session-row .tree-meta')`), false,
+      'Conversation status occupies its leading icon, not a trailing label')
+    assert.equal(await execute(`document.querySelector('.session-select .session-activity').title.includes('1 subagent')`), true,
+      'Delegated work stays discoverable without a folder badge or trailing count')
     for (const width of [1100, 390]) {
       window.setContentSize(width, 844)
       await wait(`Math.abs(innerWidth - ${width}) <= 2`)
@@ -106,6 +113,9 @@ async function main() {
         assert.equal(layout.titleTruncated, true)
         assert(layout.borders.every((border: string) => border === '0px'))
         assert.equal(layout.overflow, false, JSON.stringify({ width, layout }))
+        assert.equal(await execute(`[...document.querySelectorAll('.folder-conversations .session-activity')].every(icon =>
+          icon.getBoundingClientRect().width <= 16.01 && !icon.querySelector('.activity-label'))`), true,
+          'Thinking and needs-reply states stay inside the leading icon column')
         if (process.env.SIDEBAR_SCREENSHOT_DIR) {
           const image = await window.webContents.capturePage({ x: 0, y: 0, width: width === 390 ? 340 : 300, height: 680 })
           await writeFile(join(process.env.SIDEBAR_SCREENSHOT_DIR, `sidebar-${width}-${theme}.png`), image.toPNG())

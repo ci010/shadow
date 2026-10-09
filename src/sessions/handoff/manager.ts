@@ -129,6 +129,7 @@ export class HandoffManager {
       signal,
       boundary,
       sourceState,
+      sourceSessionId,
     )
 
     const snapshot: HandoffOptions = {
@@ -180,6 +181,7 @@ export class HandoffManager {
     signal: AbortSignal,
     boundary?: RuntimeBoundary,
     sourceState?: SessionState,
+    sourcePhysicalId?: string,
   ): Promise<HandoffContext> {
     const fallback = this.synthesizeContext(messages)
     const transcript = this.buildTranscript(messages)
@@ -237,7 +239,7 @@ export class HandoffManager {
       projectId: sourceState.projectId, mode: 'call', parentSessionId: sessionId,
       channelBoundary: { ...structuredClone(sourceState.channelBoundary), ownerSessionId: sessionId, startSegment: 0 },
     } : { sessionId, segmentIndex: 0, ...(this.scope ? { projectId: this.scope.projectId } : {}) }
-    await new HandoffSession(
+    const session = new HandoffSession(
       workspace,
       internalState.sessionId,
       internalState,
@@ -246,7 +248,9 @@ export class HandoffManager {
       sessionTools,
       new Bus(),
       this.store,
-    ).run(executionContext, {
+    )
+    if (sourcePhysicalId) session.usageOwner = { sessionId, physicalId: sourcePhysicalId }
+    await session.run(executionContext, {
       model,
       temperature: 0,
       contextWindow: this.contextWindow,

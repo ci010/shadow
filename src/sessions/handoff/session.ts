@@ -11,6 +11,11 @@ import { BaseSession } from '../base-session.ts'
  *  - Messages are persisted to the {@link SessionStore} via BaseSession.
  */
 export class HandoffSession extends BaseSession {
+  usageOwner?: { sessionId: string; physicalId: string }
+
+  protected override get usageDestination() {
+    return this.usageOwner ?? super.usageDestination
+  }
   /** Run the LLM ↔ tool loop with the given execution context. */
   async run(ctx: ExecutionContext, llm: LlmRuntimeConfig): Promise<void> {
     await this.runLlmLoop(ctx, llm, ctx.signal)

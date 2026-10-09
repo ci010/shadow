@@ -26,6 +26,34 @@ saved but still applies it to the current window. UI language does not alter
 agent responses, prompts, conversation history, filenames, or original
 provider/tool output.
 
+Messages between conversations identify their direction explicitly: **Received
+message** (or its request, progress, handoff or acknowledgement intent) names the
+source conversation; **Send to** names the target. An outgoing message retains
+its delivery status: **Queued** is not completed work, and **Recorded silently**
+does not wake the recipient.
+
+## Completion notifications
+
+In Electron, a successfully completed conversation turn produces a native system
+notification when the Shadow window is not focused (including when minimized).
+It names the conversation and Project; clicking it restores the window and opens
+that conversation. Focused windows, failed/cancelled turns, internal task/call
+agents and replayed history do not produce completion notifications. System
+notifications work even when app sounds are muted or have not been unlocked.
+Notification sounds remain governed by the app's sound settings; the system toast
+itself is silent. Windows notification settings and Do Not Disturb may suppress
+the toast. Restart Electron after upgrading to load its native notification bridge.
+
+The web app uses the browser's system notification API. Use the **bell** button
+in the app header (also available in mobile navigation), or **App settings >
+Sounds > System notifications**, to enable it and grant permission. This choice
+is saved for this browser/site, independently of sounds, and no permission prompt
+appears automatically. Notifications use the same named completion and click
+navigation as Electron, but require a supported browser and HTTPS or localhost.
+If permission was denied, allow notifications in the browser's site settings
+before enabling them again. The page must remain open and running; this is not
+background Web Push for closed or suspended pages.
+
 ## Projects, folders, and conversations
 
 The sidebar displays multiple Projects at once; there is no global project
@@ -363,6 +391,18 @@ Remote-workdir and call-mode sessions retain their existing virtual-write
 restrictions. These are entry-point checks, not an OS sandbox for host commands.
 
 ## Requests for input
+
+Session details show cumulative reported token usage in two columns: **Total**
+includes the conversation and all nested task/call agents; **Subagents** is the
+delegated portion already included in that total. Compact token counts use
+K/M/B units in both English and Chinese (for example, `12.3K` and `1.3M`).
+All physical segments count,
+even when viewing an older segment. Context usage remains the last reported
+prompt size for the selected segment, not the cumulative total. Calls made by
+Node `infer` and compaction also count. New model calls have independent durable
+usage records in both JSONL and SQLite. Legacy calls with response IDs are
+deduplicated; older snapshots without call identity retain one known call and
+are labeled incomplete, as are calls whose provider did not report tokens.
 
 The message box accepts pasted files as attachments, not just images. In the
 Electron desktop app on Windows, copy one or more files in File Explorer and

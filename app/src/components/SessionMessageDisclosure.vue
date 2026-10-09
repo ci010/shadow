@@ -1,8 +1,9 @@
 <template>
-  <MessagePreviewCard class="session-message" :label="title" @interact="emit('interact')">
+  <MessagePreviewCard class="session-message" :data-direction="outgoing ? 'outgoing' : 'incoming'" :label="title" @interact="emit('interact')">
     <template #heading>
-      <span class="session-message-icon" :class="outgoing ? 'i-lucide-send' : 'i-lucide-messages-square'" aria-hidden="true" />
+      <span class="session-message-icon" :class="outgoing ? 'i-lucide-send' : 'i-lucide-inbox'" aria-hidden="true" />
       <strong :title="title">{{ title }}</strong>
+      <span v-if="!outgoing" class="session-message-origin">{{ t('From session') }}</span>
       <button v-if="sessionId" type="button" class="session-message-link" :title="sessionId"
         :aria-label="t('Open conversation {id}', { id: sessionId })"
         @click.stop.prevent="emit('interact'); emit('inspect', sessionId)">
@@ -30,6 +31,7 @@ const emit = defineEmits<{ inspect: [id: string]; interact: [] }>()
 <style scoped>
 .session-message :deep(.message-preview-header > strong) { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; font-weight: 500; }
 .session-message-icon { flex: 0 0 14px; width: 14px; height: 14px; }
+.session-message-origin { flex: 0 0 auto; white-space: nowrap; }
 .session-message-link { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; max-width: 100%; min-height: 28px; padding: 4px 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .session-message-link > span:first-child, .session-message-recipient { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-message-recipient { flex: 1 1 0; }

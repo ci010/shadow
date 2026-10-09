@@ -1,14 +1,14 @@
 <template>
-  <span class="session-activity" :class="[activity.kind, { working: activity.working, compact, 'status-icons': statusIcons }]" :title="label" :aria-label="compact ? label : undefined" :role="compact ? 'img' : undefined">
-    <span v-if="stage || !delegatedLabel" class="activity-symbol" aria-hidden="true">
+  <span class="session-activity" :class="[activity.kind, { working: activity.working, compact, 'icon-only': iconOnly, 'status-icons': statusIcons }]" :title="label" :aria-label="compact ? label : undefined" :role="compact ? 'img' : undefined">
+    <span v-if="iconOnly || stage || !delegatedLabel" class="activity-symbol" aria-hidden="true">
       <span v-if="compact || statusIcons" :class="statusIcon" class="status-icon" />
       <span v-else-if="activity.kind === 'waiting'" class="i-lucide-message-circle-question attention-icon" />
       <span v-else-if="activity.kind === 'running'" class="activity-wave"><i /><i /><i /></span>
       <span v-else-if="activity.working && !isWaitingStage(activity.kind)" class="activity-spinner" />
       <span v-else class="activity-dot" />
     </span>
-    <span v-if="(stage || !delegatedLabel) && (!compact || activity.kind === 'waiting' && !iconOnly)" class="activity-label">{{ compact ? t('Needs reply') : activity.label }}</span>
-    <span v-if="delegatedLabel" class="subagent-activity" :class="subagents?.running ? 'subagent-running' : subagents?.waiting ? 'subagent-waiting' : 'subagent-pending'" :title="delegatedLabel">
+    <span v-if="!iconOnly && (stage || !delegatedLabel) && (!compact || activity.kind === 'waiting')" class="activity-label">{{ compact ? t('Needs reply') : activity.label }}</span>
+    <span v-if="delegatedLabel && !iconOnly" class="subagent-activity" :class="subagents?.running ? 'subagent-running' : subagents?.waiting ? 'subagent-waiting' : 'subagent-pending'" :title="delegatedLabel">
       <span class="subagent-symbol" aria-hidden="true">
         <span v-if="subagents?.running" class="activity-wave subagent-wave"><i /><i /><i /></span>
         <span v-else class="i-lucide-git-branch subagent-icon" />
@@ -21,11 +21,13 @@
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import { computed } from 'vue'
-import { isWaitingStage, sessionActivity } from '../session-activity.ts'
+import { isWaitingStage, isWorkingStage, sessionActivity } from '../session-activity.ts'
 import { subagentActivityLabel, type SubagentActivity } from '../subagent-executions.ts'
 
 const props = defineProps<{ stage?: string | null; compact?: boolean; iconOnly?: boolean; statusIcons?: boolean; subagents?: SubagentActivity }>()
-const activity = computed(() => sessionActivity(props.stage))
+const activity = computed(() => sessionActivity(props.iconOnly && !isWorkingStage(props.stage)
+  ? props.subagents?.waiting ? 'waiting' : props.subagents?.running ? 'running' : props.subagents?.pending ? 'pending' : props.stage
+  : props.stage))
 const icons: Record<string, string> = {
   llm: 'i-lucide-brain', tool: 'i-lucide-wrench', waiting: 'i-lucide-message-circle-question',
   'waiting-for-call': 'i-lucide-git-branch', idle: 'i-lucide-circle-check', inactive: 'i-lucide-moon',
@@ -56,6 +58,7 @@ const label = computed(() => [props.stage || !delegatedLabel.value ? activity.va
 .working:not(.status-icons):not(.waiting):not(.waiting-for-call):not(.running) .activity-symbol::after { content: ''; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .7; }
 .activity-label { font-weight: 500; white-space: nowrap; }
 .compact { padding: 3px; }
+.session-activity.compact.icon-only { width: 16px; height: 16px; gap: 0; padding: 0; border: 0; background: transparent; }
 .subagent-activity { display: inline-flex; align-items: center; gap: 4px; color: var(--c-primary); }
 .subagent-waiting { color: var(--c-warn); }
 .subagent-pending { color: var(--c-text-muted); }

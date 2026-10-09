@@ -21,7 +21,7 @@ test('trace distinguishes delegated input from humans without losing raw evidenc
       { type: 'image_url', image_url: { url: 'data:image/png;base64,fixture' } }] },
   ] })
   assert.deepEqual(events.map(event => [event.kind, event.turn]), [['USER', 1], ['SESSION', 2], ['ASSISTANT', 2], ['CONTEXT', 2], ['USER', 3]])
-  assert.equal(events[1].title, 'Session handoff')
+  assert.equal(events[1].title, 'Received handoff')
   assert.equal(events[1].content, 'Delegated work')
   assert.equal(events[1].rawContent, `${tag}\nDelegated work`)
   assert.equal(events[1].sessionSource?.id, 'web:orchestrator')

@@ -4,6 +4,7 @@ import { parseRuntimeFailure, type RuntimeFailure } from './runtime-recovery.ts'
 import type { DesktopWebPairingApi } from '../../desktop/src/web-pairing-contract.ts'
 import type { ChildPairInput, ChildSetupInfo } from '../../desktop/src/bootstrap/child.ts'
 import type { DesktopMicroAppsApi } from '../../desktop/src/micro-app-contract.ts'
+import type { DesktopTaskNotificationsApi } from '../../desktop/src/task-notifications-contract.ts'
 
 export type InstallationMode = 'main' | 'child'
 
@@ -62,6 +63,7 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+	readonly taskNotifications?: DesktopTaskNotificationsApi
 	readonly clipboardFiles?: {
 		readFiles(): Promise<Array<{ name: string; bytes: Uint8Array; lastModified: number }>>
 	}

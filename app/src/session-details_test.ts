@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { i18n } from './i18n.ts'
 import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from './session-details.ts'
 
 const details: SessionDetails = {
@@ -10,6 +11,20 @@ const details: SessionDetails = {
   usageScope: 'session',
   context: { usedTokens: 20_000, windowTokens: 100_000 },
 }
+
+test('compact token counts use the same K/M/B units in English and Chinese', () => {
+  const previousLocale = i18n.global.locale.value
+  try {
+    for (const locale of ['en', 'zh-CN'] as const) {
+      i18n.global.locale.value = locale
+      for (const [count, expected] of [
+        [0, '0'], [999, '999'], [1000, '1K'], [12345, '12.3K'],
+        [40000, '40K'], [999950, '1M'], [1250000, '1.3M'],
+        [100000000, '100M'], [1000000000, '1B'],
+      ] as const) assert.equal(formatTokenCount(count), expected, `${locale}: ${count}`)
+    }
+  } finally { i18n.global.locale.value = previousLocale }
+})
 
 test('session details preserve actual paths and distinguish context from lifetime tokens', () => {
   const parsed = parseSessionDetails(details, details.sessionId)
@@ -29,6 +44,15 @@ test('unreported usage and remote paths remain unknown rather than fabricated', 
   assert.equal(contextPercent(parsed.context), null)
   assert.equal(contextPercent({ usedTokens: 0, windowTokens: 100_000 }), 0)
   assert.equal(contextPercent({ usedTokens: 120_000, windowTokens: 100_000 }), 120)
+})
+
+test('total and delegated usage are validated independently, with explicit incomplete accounting', () => {
+  const value = { ...details, subagentUsage: { promptTokens: 123, completionTokens: 7, totalTokens: 130 }, usageIncomplete: true }
+  assert.deepEqual(parseSessionDetails(value, details.sessionId), value)
+  for (const subagentUsage of [{ promptTokens: -1, completionTokens: 0, totalTokens: 0 }, {}, '130']) {
+    assert.throws(() => parseSessionDetails({ ...value, subagentUsage }, details.sessionId), /session details/)
+  }
+  assert.throws(() => parseSessionDetails({ ...value, usageIncomplete: 'yes' }, details.sessionId), /session details/)
 })
 
 test('remote details retain display-only device identity and current availability', () => {
