@@ -208,6 +208,75 @@ test('Git compares HEAD to current workdir, combining staged and unstaged edits 
   assert.equal((await git('rev-parse', 'HEAD')).stdout, head)
 })
 
+test('large tracked repositories support small changes without a total-file ceiling', async t => {
+  const { folders, write, commit } = await fixture(t)
+  for (let start = 0; start < 6000; start += 100) {
+    await Promise.all(Array.from({ length: 100 }, (_, i) => write(`file-${start + i}.txt`, 'base\n')))
+  }
+  await commit()
+  assert.deepEqual(await localGitStatus(folders), { available: true, entries: [] })
+  await write('file-5999.txt', 'changed\n')
+  assert.deepEqual(await localGitStatus(folders), {
+    available: true, entries: [{ path: 'file-5999.txt', status: 'modified' }],
+  })
+  assert.equal((await localGitDiff(folders, 'file-5999.txt')).newContent, 'changed\n')
+  for (let start = 0; start < 5100; start += 100) {
+    await Promise.all(Array.from({ length: 100 }, (_, i) => write(`file-${start + i}.txt`, 'changed\n')))
+  }
+  const partial = await localGitStatus(folders)
+  assert.equal(partial.truncated, true)
+  assert.equal(partial.entries.length, 5000)
+  const shown = new Set(partial.entries.map(entry => entry.path))
+  const omitted = Array.from({ length: 5100 }, (_, i) => `file-${i}.txt`).find(path => !shown.has(path))!
+  await assert.rejects(localGitDiff(folders, omitted), (error: unknown) =>
+    error instanceof GitReadError && error.code === 'git_output_limit')
+})
+
+test('tracked parent validation still rejects linked directories before Git status', async t => {
+  const { folders, root, write, commit } = await fixture(t)
+  await mkdir(join(folders, 'tracked'))
+  await write('tracked/file.txt', 'base\n')
+  await commit()
+  await rename(join(folders, 'tracked'), join(root, 'outside'))
+  await symlink(join(root, 'outside'), join(folders, 'tracked'), process.platform === 'win32' ? 'junction' : 'dir')
+  await assert.rejects(localGitStatus(folders), (error: unknown) =>
+    error instanceof GitReadError && error.code === 'invalid_path')
+})
+
+test('index records stream across chunks beyond the ordinary command output limit', async t => {
+  const { folders, write, commit } = await fixture(t)
+  await write('file.txt', 'base\n')
+  await commit()
+  await write('file.txt', 'changed\n')
+  const spawn = childProcess.spawn
+  t.mock.method(childProcess, 'spawn', (command: string, args: string[], options: SpawnOptions) => {
+    if (!args.includes('ls-files')) return spawn(command, args, options)
+    return spawn(process.execPath, ['-e', `
+      const prefix = '100644 ' + '0'.repeat(40) + ' 0\\t';
+      process.stdout.write(prefix + 'file.txt\\0');
+      for (let i = 0; i < 12000; i++)
+        process.stdout.write(prefix + 'x'.repeat(160) + i + '\\0');
+    `], options)
+  })
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+  assert((51 + 160) * 12000 > 2 * 1024 * 1024)
+  assert.deepEqual(await localGitStatus(folders), {
+    available: true, entries: [{ path: 'file.txt', status: 'modified' }],
+  })
+})
+
+test('excess untracked files return a bounded incomplete result instead of failing', async t => {
+  const { folders, write } = await fixture(t)
+  for (let start = 0; start < 5100; start += 100) {
+    await Promise.all(Array.from({ length: 100 }, (_, i) => write(`file-${start + i}.txt`, 'new\n')))
+  }
+  const status = await localGitStatus(folders)
+  assert.equal(status.available, true)
+  assert.equal(status.truncated, true)
+  assert.equal(status.entries.length, 5000)
+})
+
 test('status and diffs cover staged additions, deletion, rename, literal untracked names and index-only changes', async t => {
   const { folders, write, commit, git } = await fixture(t)
   for (const name of ['deleted.txt', 'old.txt', 'index-only.txt']) await write(name, 'base\n')

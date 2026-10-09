@@ -2131,6 +2131,7 @@
   "Retire this execution and prepare an idle successor? This does not transfer Initiative assignments.": "Retire this execution and prepare an idle successor? This does not transfer Initiative assignments.",
   "Retry": "Retry",
   "Retry Git": "Retry Git",
+  "Git changes are incomplete. Use a smaller workdir to see all changes.": "Git changes are incomplete. Use a smaller workdir to see all changes.",
   "Retry GitHub Copilot login": "Retry GitHub Copilot login",
   "Retry after": "Retry after",
   "Retry approved change": "Retry approved change",

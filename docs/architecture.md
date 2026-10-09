@@ -2282,6 +2282,16 @@ workdir, honors ripgrep ignore rules, and returns at most 200 matching paths.
 It does not search file contents or fall back to Main's filesystem when a remote
 executor is unavailable. The Changes view still filters its loaded Git entries.
 Missing ripgrep and remote failures are displayed as errors, not empty results.
+Git inspection errors and their retry action belong to Changes, not Files.
+Changes remains accessible during Git loading or failure, including when the
+first inspection fails; ordinary file browsing does not depend on Git success.
+Local Git inspection streams index records with a 64 MiB byte budget rather
+than rejecting repositories with more than 5,000 tracked files. It validates
+distinct tracked parent paths before running status and retains the 2 MiB
+ordinary command-output, timeout and concurrency guards. Returned changes and
+untracked traversal candidates are bounded to 5,000; reaching either budget
+returns an explicit incomplete status, never a false clean state. A smaller
+workdir can reveal omitted changes. Git LFS does not reduce index path counts.
 
 Knowledge shares the explorer position on desktop: category filters, search,
 and entry navigation replace the file tree while Knowledge is selected. The

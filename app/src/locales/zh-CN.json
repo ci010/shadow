@@ -2131,6 +2131,7 @@
   "Retire this execution and prepare an idle successor? This does not transfer Initiative assignments.": "结束此执行并准备空闲的接替者？此操作不会转移计划中的分配。",
   "Retry": "重试",
   "Retry Git": "重试 Git",
+  "Git changes are incomplete. Use a smaller workdir to see all changes.": "Git 变更列表不完整。请选择更小的工作目录以查看全部变更。",
   "Retry GitHub Copilot login": "重试 GitHub Copilot 登录",
   "Retry after": "重试时间",
   "Retry approved change": "重试已批准的变更",

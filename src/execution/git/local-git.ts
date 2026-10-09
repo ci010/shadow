@@ -11,6 +11,7 @@ import type { GitChangeKind as GitFileStatus, GitChange as GitStatusEntry, GitSt
 
 
 const MAX_OUTPUT = 2 * 1024 * 1024
+const MAX_INDEX_OUTPUT = 64 * 1024 * 1024
 export const MAX_GIT_FILE_BYTES = 256 * 1024
 const MAX_FILES = 5000
 const MAX_PROCESSES = 4
@@ -35,7 +36,7 @@ export class GitReadError extends Error {
     ].filter(Boolean).join('; ')}]` : message)
   }
 }
-interface GitReadContext { root: string; base: string; prefix: string; signal: AbortSignal; config: string[] }
+interface GitReadContext { root: string; base: string; prefix: string; signal: AbortSignal; config: string[]; truncated?: true }
 interface GitOutput { operation: GitOperation; code: number | null; stdout: Buffer; stderr: string }
 
 function systemErrorCode(error: unknown): string {
@@ -103,7 +104,7 @@ async function stopTree(pid: number): Promise<void> {
     })
   })
 }
-async function git(cwd: string, args: [GitOperation, ...string[]], signal: AbortSignal, config: string[] = [], maxOutput = MAX_OUTPUT, input?: Buffer): Promise<GitOutput> {
+async function git(cwd: string, args: [GitOperation, ...string[]], signal: AbortSignal, config: string[] = [], maxOutput = MAX_OUTPUT, input?: Buffer, consume?: (chunk: Buffer) => void): Promise<GitOutput> {
   cancelled(signal)
   if (processes >= MAX_PROCESSES) failure('git_busy', 'Too many Git inspections are running. Retry shortly.', 503)
   const operation = args[0]
@@ -145,6 +146,11 @@ async function git(cwd: string, args: [GitOperation, ...string[]], signal: Abort
         if (total > maxOutput) {
           error = new GitReadError('git_output_limit', 'Git inspection exceeded its output limit. Choose a smaller workdir.', 413, { operation, stage: 'execute' })
           stop()
+        } else if (list === stdout && consume) {
+          try { consume(chunk) } catch (cause) {
+            error = cause instanceof Error ? cause : new Error(String(cause))
+            stop()
+          }
         } else list.push(chunk)
       }
       child.stdout!.on('data', (chunk: Buffer) => collect(stdout, chunk))
@@ -225,13 +231,36 @@ function scoped(ctx: GitReadContext, path: string): string | undefined {
   return relativeFile(result) ? result : undefined
 }
 async function statusEntries(ctx: GitReadContext, submodules = { remaining: 16 }): Promise<GitStatusEntry[]> {
-  const index = text(checked(await git(ctx.root, ['ls-files', '--stage', '-z', '--', ctx.prefix || '.'], ctx.signal, ctx.config)))
-  const tracked = new Set(index.split('\0').filter(Boolean)
-    .map(record => scoped(ctx, record.slice(record.indexOf('\t') + 1))).filter((path): path is string => !!path))
-  const links = new Set(index.split('\0').filter(record => record.startsWith('160000 '))
-    .map(record => scoped(ctx, record.slice(record.indexOf('\t') + 1))).filter((path): path is string => !!path))
-  if (tracked.size > MAX_FILES) failure('git_output_limit', 'Git inspection exceeds the 5,000-file limit. Choose a smaller workdir.', 413)
-  for (const path of tracked) await safeWorktreePath(ctx, path)
+  const tracked = new Set<string>()
+  const links = new Set<string>()
+  let pending = Buffer.alloc(0)
+  checked(await git(ctx.root, ['ls-files', '--stage', '-z', '--', ctx.prefix || '.'], ctx.signal, ctx.config,
+    MAX_INDEX_OUTPUT, undefined, chunk => {
+      const bytes = Buffer.concat([pending, chunk])
+      let start = 0
+      for (let end = bytes.indexOf(0); end >= 0; end = bytes.indexOf(0, start)) {
+        const record = text(bytes.subarray(start, end))
+        const path = scoped(ctx, record.slice(record.indexOf('\t') + 1))
+        if (path) {
+          tracked.add(path)
+          if (record.startsWith('160000 ')) links.add(path)
+        }
+        start = end + 1
+      }
+      pending = Buffer.from(bytes.subarray(start))
+      if (pending.length > MAX_OUTPUT) failure('git_invalid_output', 'Git returned an oversized index record.')
+    }))
+  if (pending.length) failure('git_invalid_output', 'Git returned an incomplete index record.')
+  // Git must not inspect tracked files through a replaced (linked) parent.
+  // Validate each distinct parent once, rather than stat every tracked leaf.
+  const parents = new Set<string>()
+  for (const path of tracked) {
+    cancelled(ctx.signal)
+    const parent = path.slice(0, Math.max(0, path.lastIndexOf('/')))
+    if (parents.has(parent)) continue
+    await safeWorktreePath(ctx, path)
+    parents.add(parent)
+  }
   const output = await git(ctx.root, ['status', '--porcelain=v1', '-z', '--untracked-files=no',
     '--ignore-submodules=dirty', '--renames', '--', ctx.prefix || '.'], ctx.signal, ctx.config)
   const records = text(checked(output)).split('\0')
@@ -249,7 +278,8 @@ async function statusEntries(ctx: GitReadContext, submodules = { remaining: 16 }
       if (!original) failure('git_invalid_output', 'Git returned an incomplete rename record.')
       originalPath = scoped(ctx, original)
       if (!path && originalPath) {
-        entries.set(originalPath, { path: originalPath, status: 'deleted' })
+        if (entries.has(originalPath) || entries.size < MAX_FILES) entries.set(originalPath, { path: originalPath, status: 'deleted' })
+        else ctx.truncated = true
         continue
       }
     }
@@ -261,15 +291,15 @@ async function statusEntries(ctx: GitReadContext, submodules = { remaining: 16 }
       : xy.includes('A') ? 'added'
       : xy.includes('D') ? 'deleted'
       : xy.includes('T') ? 'typechanged' : 'modified'
+    if (!entries.has(path) && entries.size >= MAX_FILES) { ctx.truncated = true; continue }
     const previous = entries.get(path)
     entries.set(path, previous && status === 'untracked' ? { path, status: 'modified' }
       : { path, status, ...(originalPath ? { originalPath } : {}) })
-    if (entries.size > MAX_FILES) failure('git_output_limit', 'Git status exceeds the 5,000-file limit. Choose a smaller workdir.', 413)
   }
   for (const path of await untrackedFiles(ctx, tracked)) {
+    if (!entries.has(path) && entries.size >= MAX_FILES) { ctx.truncated = true; break }
     entries.set(path, { path, status: entries.has(path) ? 'modified' : 'untracked' })
   }
-  if (entries.size > MAX_FILES) failure('git_output_limit', 'Git status exceeds the 5,000-file limit. Choose a smaller workdir.', 413)
   // Inspect each submodule with its own disabled filter drivers instead of allowing
   // `git status` to recursively run commands configured by another repository.
   for (const path of links) {
@@ -278,7 +308,11 @@ async function statusEntries(ctx: GitReadContext, submodules = { remaining: 16 }
     if (!info?.isDirectory() || info.isSymbolicLink()) continue
     const child = await context(target, ctx.signal)
     if (!child || child.root !== target) continue
-    if ((await statusEntries(child, submodules)).length && !entries.has(path)) entries.set(path, { path, status: 'modified' })
+    if ((await statusEntries(child, submodules)).length && !entries.has(path)) {
+      if (entries.size >= MAX_FILES) ctx.truncated = true
+      else entries.set(path, { path, status: 'modified' })
+    }
+    if (child.truncated) ctx.truncated = true
   }
 
   async function untrackedFiles(ctx: GitReadContext, tracked: Set<string>): Promise<string[]> {
@@ -296,12 +330,13 @@ async function statusEntries(ctx: GitReadContext, submodules = { remaining: 16 }
         const handle = await opendir(resolve(ctx.base, directory))
         for await (const entry of handle) {
           if (entry.name.toLowerCase() === '.git') continue
-          if (++inspected > MAX_FILES) failure('git_output_limit', 'Git inspection exceeds the 5,000-entry workdir limit. Choose a smaller workdir.', 413)
           const path = directory ? `${directory}/${entry.name}` : entry.name
           if (!relativeFile(path)) failure('invalid_path', 'The workdir contains a filename unsupported by Git inspection.', 400)
           if (tracked.has(path) && (!entry.isDirectory() || links.has(path))) continue
+          if (++inspected > MAX_FILES) { ctx.truncated = true; break }
           candidates.push({ path, directory: entry.isDirectory() && !entry.isSymbolicLink() })
         }
+        if (inspected > MAX_FILES) break
       }
       directories = []
       if (!candidates.length) continue
@@ -315,6 +350,7 @@ async function statusEntries(ctx: GitReadContext, submodules = { remaining: 16 }
         if (entry.directory) directories.push(entry.path)
         else files.push(entry.path)
       })
+      if (inspected > MAX_FILES) break
     }
     return files
   }
@@ -324,7 +360,9 @@ async function statusEntries(ctx: GitReadContext, submodules = { remaining: 16 }
 export async function localGitStatus(base: string, signal?: AbortSignal): Promise<GitStatusResult> {
   try {
     const ctx = await context(base, signal)
-    return ctx ? { available: true, entries: await statusEntries(ctx) } : { available: false, reason: 'not_repository', entries: [] }
+    if (!ctx) return { available: false, reason: 'not_repository', entries: [] }
+    const entries = await statusEntries(ctx)
+    return { available: true, entries, ...(ctx.truncated ? { truncated: true } : {}) }
   } catch (error) {
     if (error instanceof GitReadError && error.code === 'git_unavailable') return { available: false, reason: 'git_unavailable', entries: [] }
     throw error
@@ -401,6 +439,7 @@ export async function localGitDiff(base: string, path: string, signal?: AbortSig
   const ctx = await context(base, signal)
   if (!ctx) failure('not_repository', 'This workdir is not a Git working tree.', 409)
   const entry = (await statusEntries(ctx)).find(entry => entry.path === path)
+  if (!entry && ctx.truncated) failure('git_output_limit', 'Git changes are incomplete. Choose a smaller workdir to inspect this file.', 413)
   if (!entry) failure('git_change_not_found', 'This file no longer has a Git change. Refresh Changes.', 404)
   const current = await worktreeFile(ctx, path)
   const before = await headFile(ctx, entry.originalPath ?? path)

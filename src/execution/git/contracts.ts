@@ -4,6 +4,7 @@ export interface GitStatus {
   available: boolean
   reason?: 'not_repository' | 'remote_unsupported' | 'git_unavailable'
   entries: GitChange[]
+  truncated?: boolean
 }
 export interface GitHunk {
   oldStart: number
@@ -54,9 +55,11 @@ function copyChange(value: GitChange): GitChange {
 }
 export function parseGitStatus(value: unknown): GitStatus {
   if (!record(value) || typeof value.available !== 'boolean' || !Array.isArray(value.entries) || value.entries.length > 5000 || !value.entries.every(change)
+    || (value.truncated !== undefined && typeof value.truncated !== 'boolean')
     || (value.reason !== undefined && !reasons.includes(String(value.reason)))) throw new Error('Invalid Git status received. Refresh to retry.')
   if (!value.available && value.entries.length) throw new Error('Unavailable Git status included file changes. Refresh to retry.')
-  return { available: value.available, entries: value.entries.map(copyChange), ...(value.reason ? { reason: value.reason as GitStatus['reason'] } : {}) }
+  return { available: value.available, entries: value.entries.map(copyChange), ...(value.reason ? { reason: value.reason as GitStatus['reason'] } : {}),
+    ...(value.truncated !== undefined ? { truncated: value.truncated } : {}) }
 }
 export function parseGitDiff(value: unknown, expectedPath: string): GitDiff {
   if (!change(value) || value.path !== expectedPath || !record(value) || !['HEAD', 'empty'].includes(String(value.base))

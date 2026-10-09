@@ -5,7 +5,7 @@
         <div v-if="treeOnly" class="file-tree-modes" role="tablist" :aria-label="t('Explorer view')">
           <button :id="`${id}-files-tab`" role="tab" :aria-selected="!changesOnly" :aria-controls="`${id}-body`" :tabindex="changesOnly ? -1 : 0" @click="changesOnly = false" @keydown="viewKey">{{ t('Files') }}</button>
           <HoverInfo :text="offline ? t('Node offline') : gitError || (gitStatus?.available ? t('All uncommitted changes from HEAD') : gitLoading ? t('Checking Git status...') : gitUnavailableLabel(gitStatus?.reason))" v-slot="{ triggerProps }">
-          <button v-bind="triggerProps" :id="`${id}-changes-tab`" role="tab" :aria-selected="changesOnly" :aria-controls="`${id}-body`" :tabindex="changesOnly ? 0 : -1" :disabled="offline || !gitStatus?.available" @click="changesOnly = true" @keydown="viewKey">{{ t('Changes') }}</button>
+          <button v-bind="triggerProps" :id="`${id}-changes-tab`" role="tab" :aria-selected="changesOnly" :aria-controls="`${id}-body`" :tabindex="changesOnly ? 0 : -1" :disabled="!changesAvailable" @click="changesOnly = true" @keydown="viewKey">{{ t('Changes') }}</button>
           </HoverInfo>
         </div>
         <span v-else>{{ t('Current workdir') }}</span>
@@ -31,16 +31,16 @@
         </HoverInfo>
         <NodeOfflineState v-if="offline" :checking="loading || gitLoading" @retry="reload(); $emit('refresh-git')" />
         <template v-else>
-        <div v-if="gitError" class="file-tree-note error" role="alert">{{ gitError }} <button class="file-tree-retry" @click="$emit('refresh-git')">{{ t('Retry Git') }}</button></div>
-        <p v-if="!changesOnly && !gitStatus?.available && gitStatus?.reason && gitStatus.reason !== 'not_repository'" class="file-tree-note" role="status">{{ gitUnavailableLabel(gitStatus.reason) }}</p>
+        <div v-if="changesOnly && gitError" class="file-tree-note error" role="alert">{{ gitError }} <button class="file-tree-retry" :disabled="gitLoading" @click="$emit('refresh-git')">{{ t('Retry Git') }}</button></div>
         <p v-if="!hasSource" class="file-tree-note">{{ t('Open a folder or select a conversation to browse files.') }}</p>
         <p v-else-if="changesOnly && gitLoading" class="file-tree-note" role="status">{{ t('Loading changes...') }}</p>
-        <p v-else-if="changesOnly && !gitStatus?.available" class="file-tree-note">{{ gitUnavailableLabel(gitStatus?.reason) }}</p>
+        <p v-else-if="changesOnly && !gitStatus?.available && !gitError" class="file-tree-note">{{ gitUnavailableLabel(gitStatus?.reason) }}</p>
         <p v-else-if="!changesOnly && loading && !loaded" class="file-tree-note" role="status">{{ remote ? t('Loading remote files...') : t('Loading files...') }}</p>
         <div v-if="!changesOnly && error" class="file-tree-note error" role="alert">
           <p>{{ error }}</p><button class="file-tree-retry" @click="reload()">{{ t('Retry') }}</button>
         </div>
-        <p v-if="hasSource && changesOnly && gitStatus?.available && !gitLoading && displayEntries.length === 0 && !gitError" class="file-tree-note">{{ t('Working tree clean.') }}</p>
+        <p v-if="changesOnly && gitStatus?.truncated" class="file-tree-note" role="status">{{ t('Git changes are incomplete. Use a smaller workdir to see all changes.') }}</p>
+        <p v-if="hasSource && changesOnly && gitStatus?.available && !gitStatus.truncated && !gitLoading && displayEntries.length === 0 && !gitError" class="file-tree-note">{{ t('Working tree clean.') }}</p>
         <template v-if="normalizedFilter && !changesOnly && hasSource">
           <p v-if="searching" class="file-tree-note" role="status">{{ t('Searching file paths...') }}</p>
           <p v-if="searchError" class="file-tree-note error" role="alert">{{ searchError }}</p>
@@ -58,7 +58,7 @@
           </button>
           </template>
         </template>
-        <p v-if="filterQuery && changesOnly && !filteredEntries.length && gitStatus?.available" class="file-tree-note">{{ t('No matching changes.') }}</p>
+        <p v-if="filterQuery && changesOnly && !filteredEntries.length && gitStatus?.available && !gitStatus.truncated && !gitLoading && !gitError" class="file-tree-note">{{ t('No matching changes.') }}</p>
         <template v-if="!normalizedFilter || changesOnly">
         <template v-if="hasSource && (changesOnly ? gitStatus?.available : loaded)">
           <FileTreeNode v-for="entry in filteredEntries" :key="`${workspaceKey}:${changesOnly}:${fileEntryKey(entry)}`" :api-base="displaySource.apiBase"
@@ -134,13 +134,14 @@ const workspaceInfo = computed(() => [
 const error = ref('')
 const fileOffline = ref(false)
 const offline = computed(() => fileOffline.value || props.gitOffline)
+const changesAvailable = computed(() => hasSource.value && !offline.value && !!(props.gitStatus?.available || props.gitError || props.gitLoading))
 const revision = ref(0)
 const previewEntry = ref<FileEntry | null>(null)
 const previewDir = ref('')
 const previewPath = ref('')
 let request: AbortController | undefined
 function viewKey(event: KeyboardEvent) {
-  if (offline.value || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || !props.gitStatus?.available) return
+  if (!changesAvailable.value || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
   changesOnly.value = event.key === 'Home' ? false : event.key === 'End' ? true : !changesOnly.value
   void nextTick(() => document.getElementById(`${id}-${changesOnly.value ? 'changes' : 'files'}-tab`)?.focus())
@@ -282,8 +283,8 @@ watch(() => props.revealVersion, () => {
 })
 watch([homeState, () => props.active, changesOnly], restoreScroll, { flush: 'post', immediate: true })
 watch(workspaceKey, () => { previewEntry.value = null })
-watch(() => props.gitStatus, status => {
-  if (status && !status.available) changesOnly.value = false
+watch([() => props.gitStatus, () => props.gitError, () => props.gitLoading], ([status, error, loading]) => {
+  if (status && !status.available && !error && !loading) changesOnly.value = false
 })
 watch(() => props.gitOffline, (offline, previous) => {
   if (previous && !offline && !props.gitError && fileOffline.value && props.active) void reload()

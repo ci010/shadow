@@ -32,6 +32,9 @@ test('files and ancestors receive deterministic status without mistaking prefix 
 
 test('Git wire data rejects unsafe paths and malformed diff line counts', () => {
   assert.deepEqual(parseGitStatus({ available: true, entries: changes }).entries, changes)
+  assert.deepEqual(parseGitStatus({ available: true, entries: changes, truncated: true }),
+    { available: true, entries: changes, truncated: true })
+  assert.throws(() => parseGitStatus({ available: true, entries: [], truncated: 'true' }), /Invalid Git/)
   assert.deepEqual(parseGitStatus({ available: false, reason: 'not_repository', entries: [] }), { available: false, reason: 'not_repository', entries: [] })
   for (const path of ['../outside', '/absolute', 'a//b', 'a\\b', '\0diff:a']) {
     assert.throws(() => parseGitStatus({ available: true, entries: [{ path, status: 'modified' }] }), /Invalid Git/)

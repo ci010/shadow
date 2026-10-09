@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import test, { type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { createRenderer, createSSRApp, defineComponent, getCurrentInstance, h, nextTick, reactive, ref, type Component } from 'vue'
+import { createRenderer, createSSRApp, defineComponent, getCurrentInstance, h, nextTick, reactive, ref, type Component, type VNode } from 'vue'
 import type { PreviewOptions } from '@open-file-viewer/core'
 import { renderToString } from 'vue/server-renderer'
 import { compileScript, compileTemplate, parse } from 'vue/compiler-sfc'
@@ -70,6 +70,28 @@ function requests(t: TestContext) {
 async function settle() {
   await new Promise(resolve => setImmediate(resolve))
   await nextTick()
+}
+
+function fileTreeTemplate() {
+  const url = new URL('./components/files/FileTree.vue', import.meta.url)
+  const filename = fileURLToPath(url)
+  const { descriptor } = parse(readFileSync(url, 'utf8'), { filename })
+  const template = compileTemplate({ source: descriptor.template!.content, filename, id: 'FileTree' })
+  assert.deepEqual(template.errors, [])
+  const { outputText } = ts.transpileModule(template.code, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  })
+  const module = { exports: {} as { render: (context: Record<string, unknown>, cache: unknown[]) => VNode } }
+  new Function('require', 'module', 'exports', outputText)(createRequire(url), module, module.exports)
+  return (context: Record<string, unknown>) => renderToString(createSSRApp(defineComponent({
+    components: {
+      HoverInfo: defineComponent({ props: ['text'], setup: (_, { slots }) => () => slots.default?.({ triggerProps: {} }) }),
+      FileTreeNode: defineComponent({ props: ['entry'], setup: props => () => h('span', props.entry.name) }),
+      FilePreviewModal: defineComponent({ setup: () => () => null }),
+      NodeOfflineState: defineComponent({ setup: () => () => null }),
+    },
+    setup: () => () => module.exports.render({ $slots: {}, ...context }, []),
+  })))
 }
 
 const entry = { name: '.node-version', ext: '', type: 'file', size: 8, mtime: null }
@@ -261,7 +283,7 @@ test('file explorer combines offline Git/files into one calm state and recovers 
   assert.deepEqual(state().displayEntries, [entry])
   const source = readFileSync(new URL('./components/files/FileTree.vue', import.meta.url), 'utf8')
   assert.match(source, /<NodeOfflineState v-if="offline"/)
-  assert.match(source, /<template v-else>\s*<div v-if="gitError"/)
+  assert.match(source, /<template v-else>\s*<div v-if="changesOnly && gitError"/)
   const notice = readFileSync(new URL('./components/files/NodeOfflineState.vue', import.meta.url), 'utf8')
   assert.match(notice, /role="status"/)
   assert.match(notice, /Check again/)
@@ -641,6 +663,101 @@ test('a workdir losing Git returns from Changes to its normal file tree', async 
   assert.equal(state().loaded, true)
   assert.equal(state().error, '')
   assert.equal(pending.length, 1, 'Git availability must not reset the loaded files')
+})
+
+test('Git errors render only in Changes, which stays accessible through failure and retry', async t => {
+  const pending = requests(t)
+  const gitError = 'Git inspection exceeded its output limit. Choose a smaller workdir. [Git ls-files; stage=execute]'
+  const { props, state } = mount(t, 'FileTree', { ...base, treeOnly: true, gitError })
+  pending[0]!.finish({ path: '', entries: [entry] })
+  await settle()
+  const render = fileTreeTemplate()
+  const html = () => render({ ...props, ...state() })
+  assert.equal(state().changesAvailable, true, 'An initial failure must not disable Changes')
+  let output = await html()
+  assert.match(output, /\.node-version/)
+  assert.doesNotMatch(output, /role="alert"|Retry Git/)
+  assert.doesNotMatch(output, /role="tab"[^>]*disabled/)
+
+  state().changesOnly = true
+  await nextTick()
+  output = await html()
+  assert.match(output, /role="alert">Git inspection exceeded/)
+  assert.match(output, /Retry Git/)
+  assert.doesNotMatch(output, /Git status is not available|Working tree clean|No matching changes/)
+
+  props.gitLoading = true
+  await nextTick()
+  assert.equal(state().changesOnly, true)
+  output = await html()
+  assert.match(output, /Loading changes/)
+  assert.match(output, /class="file-tree-retry" disabled/)
+
+  props.gitLoading = false
+  props.gitError = ''
+  props.gitStatus = { available: true, entries: [] }
+  await nextTick()
+  assert.equal(state().changesOnly, true)
+  output = await html()
+  assert.doesNotMatch(output, /role="alert"|Retry Git/)
+  assert.match(output, /Working tree clean/)
+
+  props.gitStatus = { available: true, entries: [], truncated: true }
+  await nextTick()
+  output = await html()
+  assert.match(output, /Git changes are incomplete/)
+  assert.doesNotMatch(output, /Working tree clean/)
+  state().filterQuery = 'missing'
+  await nextTick()
+  assert.doesNotMatch(await html(), /No matching changes/)
+
+  props.gitError = gitError
+  state().filterQuery = 'missing'
+  await nextTick()
+  output = await html()
+  assert.match(output, /role="alert">Git inspection exceeded/)
+  assert.doesNotMatch(output, /Working tree clean|No matching changes/)
+  state().changesOnly = false
+  state().filterQuery = ''
+  await nextTick()
+  output = await html()
+  assert.match(output, /\.node-version/)
+  assert.doesNotMatch(output, /role="alert"|Retry Git/)
+  assert.equal(pending.length, 1, 'Git errors and retries must not reload the file tree')
+})
+
+test('Changes keyboard navigation works during initial Git loading and failure', async t => {
+  requests(t)
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  const focused: string[] = []
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: {
+    getElementById: (id: string) => ({ focus: () => focused.push(id) }),
+  } })
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, 'document', original)
+    else Reflect.deleteProperty(globalThis, 'document')
+  })
+  const { props, state } = mount(t, 'FileTree', { ...base, treeOnly: true, gitLoading: true })
+  let prevented = 0
+  state().viewKey({ key: 'End', preventDefault: () => prevented++ })
+  await nextTick()
+  assert.equal(state().changesOnly, true)
+  assert.match(focused.at(-1)!, /changes-tab$/)
+  props.gitLoading = false
+  props.gitError = 'Git inspection failed'
+  await nextTick()
+  assert.equal(state().changesOnly, true)
+  state().viewKey({ key: 'Home', preventDefault: () => prevented++ })
+  await nextTick()
+  assert.equal(state().changesOnly, false)
+  assert.match(focused.at(-1)!, /files-tab$/)
+  state().viewKey({ key: 'ArrowRight', preventDefault: () => prevented++ })
+  await nextTick()
+  assert.equal(state().changesOnly, true)
+  assert.equal(prevented, 3)
+  props.gitOffline = true
+  await nextTick()
+  assert.equal(state().changesAvailable, false)
 })
 
 test('refresh retains loaded root entries and preview while reconciling unchanged data', async t => {
