@@ -138,6 +138,9 @@ native jobs upload their installer/archive as Actions artifacts, retained for
 14 days; failed verification does not upload a package. The intermediate shared
 artifact is retained for 3 days and is **not an installable release**.
 The workflow does not publish GitHub Releases or install/register applications.
+Synthetic acceptance and packaged smoke processes use explicit direct-network
+settings rather than inheriting the host's proxy or PAC configuration. These
+loopback checks do not validate production proxy connectivity.
 
 Run `pnpm desktop` on the matching operating system and architecture; target
 selection follows the native Node host and rejects unsupported combinations.

@@ -17,6 +17,7 @@ import {
   type ManagedProcess, type ProcessIdentity,
 } from './packaged-verification.ts'
 import { desktopTarget } from './desktop-target.ts'
+import { localProxyConfiguration, proxyForUrl } from '../src/execution/network/proxy.ts'
 
 const windows = desktopTarget('win32', 'x64')
 
@@ -115,6 +116,18 @@ test('isolated environment does not inherit Node injection, credentials or user 
     if (original === undefined) delete process.env.NODE_OPTIONS
     else process.env.NODE_OPTIONS = original
   }
+})
+
+test('packaged smoke uses direct networking without consulting host proxy or PAC settings', async () => {
+  const env = serviceEnvironment('isolated', resolve('isolated', 'credential'), 4567)
+  const configuration = await localProxyConfiguration(undefined, {
+    env, platform: 'win32',
+    readWindows: async () => { throw new Error('Packaged smoke must not read the host proxy settings') },
+  })
+  assert.equal(configuration.source, 'environment')
+  assert.equal(configuration.http, undefined)
+  assert.equal(configuration.https, undefined)
+  assert.equal(proxyForUrl(configuration, 'http://127.0.0.1:4567'), undefined)
 })
 
 test('relocation guard rejects repository and descendants, permits sibling with shared prefix', () => {

@@ -50,6 +50,9 @@ export function isolatedEnvironment(scratch: string, token: string, port: number
     WINDOWS_USE_LAUNCH_TOKEN: token,
     GATEWAY_PORT: String(port),
     GATEWAY_HOST: '127.0.0.1',
+    HTTP_PROXY: '',
+    HTTPS_PROXY: '',
+    NO_PROXY: '*',
   }
 }
 
