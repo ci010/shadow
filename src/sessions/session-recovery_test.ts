@@ -19,6 +19,8 @@ import type { SessionMessageInput, SessionTurnFact } from './input.ts'
 import type { SessionState, SessionStore, StoredMessage } from './session-store.ts'
 import { isBackgroundResponse } from './response-context.ts'
 import { ProviderTransportError } from '../providers/provider.ts'
+import { CopilotAuthError } from '../providers/copilot.ts'
+import { parseSessionRecovery } from './session-store.ts'
 import { ToolOutcomeUnknownError } from '../tools/tool.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
@@ -83,6 +85,32 @@ async function seed(store: SessionStore, id: string, state: Partial<SessionState
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: provider failure remains actionable after restart without persisting private errors`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const id = 'web:chat-provider-failure'
+      let restarted: ReturnType<typeof fixture> | undefined
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver(id, input('original'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0].reject(new CopilotAuthError('proxy'))
+        await waitFor(() => !!f.sessions.getSessionRecovery(id))
+        assert.equal(f.sessions.getSessionRecovery(id)?.providerFailure, 'proxy')
+        await f.sessions.stop()
+        restarted = fixture(workspace, store)
+        await restarted.sessions.start()
+        const recovery = restarted.sessions.getSessionRecovery(id)
+        assert.equal(recovery?.providerFailure, 'proxy')
+        assert.equal(parseSessionRecovery(recovery)?.providerFailure, 'proxy')
+        assert.throws(() => parseSessionRecovery({ ...recovery, providerFailure: 'private-upstream-body' }))
+        assert.equal(restarted.calls.length, 0)
+      } finally { await f.sessions.stop(); await restarted?.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: unknown tool effects pause inference and Continue only reconciles the saved call`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -147,6 +175,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await waitFor(() => !!f.sessions.getSessionRecovery(id))
         const recovery = f.sessions.getSessionRecovery(id)!
         assert.equal(recovery.reason, 'failed')
+        assert.equal(recovery.providerFailure, 'network')
         assert.equal(f.calls.length, 2)
         assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
         await waitFor(() => f.calls.length === 3)

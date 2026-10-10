@@ -300,10 +300,13 @@
 
         <!-- Input (direct-chat only) -->
         <div v-if="(!activeSessionId || isDirectChat) && !viewingPhysicalId" class="chat-composer">
-          <div v-if="currentRecovery && !requestBusy" class="resume-bar" role="status">
+          <div v-if="currentRecovery && !requestBusy" class="resume-bar" :class="{ 'provider-failure': currentRecovery.providerFailure }" :role="currentRecovery.providerFailure ? 'alert' : 'status'">
             <div>
-              <strong>{{ currentRecovery.reason === 'stopped' ? t('Request stopped') : currentRecovery.reason === 'failed' ? t('Request failed') : t('Request interrupted') }}</strong>
-              <p>{{ t('Continue without adding a message. Remote shell calls only check the Child\'s saved execution record; a missing result stays unknown.') }}</p>
+              <strong>{{ currentRecovery.providerFailure ? t('Model provider failed') : currentRecovery.reason === 'stopped' ? t('Request stopped') : currentRecovery.reason === 'failed' ? t('Request failed') : t('Request interrupted') }}</strong>
+              <p v-if="currentRecovery.providerFailure">{{ providerFailureMessage(currentRecovery.providerFailure) }}</p>
+              <p>{{ t('Continue without adding a message.') }}</p>
+              <p v-if="currentRecovery.pendingToolCalls">{{ t('Remote shell calls only check the Child\'s saved execution record; a missing result stays unknown.') }}</p>
+              <button v-if="currentRecovery.providerFailure" class="provider-settings-button" @click="router.push({ name: 'settings', params: { section: 'providers' } })">{{ t('Open provider settings') }}</button>
               <label v-if="currentRecovery.pendingToolCalls" class="resume-confirm">
                 <input type="checkbox" :checked="acknowledgedRecoveryId === currentRecovery.id"
                   @change="acknowledgeRecovery($event, currentRecovery.id)" />
@@ -459,6 +462,7 @@
 import { t, formatNumber } from '../i18n.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { providerFailureMessage } from '../provider-setup.ts'
 import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
@@ -2968,6 +2972,11 @@ function resendLastMessage() {
 .composer-stop:disabled { opacity: .65; cursor: not-allowed; }
 .resume-bar { display: flex; align-items: center; gap: 16px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--c-border-hover); border-radius: var(--radius-surface); background: var(--c-bg); color: var(--c-text); }
 .resume-bar p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; }
+.resume-bar { flex-wrap: wrap; }
+.resume-bar > div { flex: 1; min-width: min(100%, 240px); overflow-wrap: anywhere; }
+.resume-bar.provider-failure { border-color: var(--c-error); }
+.provider-settings-button { margin-top: 8px; padding: 6px 10px; min-height: 36px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-soft); color: var(--c-text); cursor: pointer; }
+.provider-settings-button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .resume-confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; font-size: 12px; line-height: 1.5; }
 .resume-confirm input { flex-shrink: 0; margin-top: 3px; accent-color: var(--c-primary-bg); }
 .resume-button { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; min-height: 36px; padding: 8px 12px; border: 0; border-radius: var(--radius-control); background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }

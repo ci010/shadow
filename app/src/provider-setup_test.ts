@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   COPILOT_VERIFICATION_URL, createDeviceLoginController, createProviderSetupClient,
   parseConfiguredProviders, parseDeviceLogin, parseProviderSetup, type DeviceLogin, type LoginView,
+  copilotFailureMessage, providerFailureMessage,
 } from './provider-setup.ts'
 
 const pending: DeviceLogin = {
@@ -10,6 +11,35 @@ const pending: DeviceLogin = {
   verificationUri: COPILOT_VERIFICATION_URL, expiresAt: 4_000_000_000_000, intervalMs: 5000,
 }
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+test('safe login error codes survive parsing and reach the UI without upstream secrets', async () => {
+  const views: LoginView[] = []
+  const failed = parseDeviceLogin({
+    loginId: pending.loginId, state: 'error', errorCode: 'proxy', message: 'private-upstream-secret',
+  })
+  const controller = createDeviceLoginController({
+    start: async () => failed, poll: async () => failed, cancel: async () => {},
+  }, view => views.push(view), undefined, () => pending.loginId)
+  await controller.start()
+  assert.equal(views.at(-1)?.error, copilotFailureMessage('proxy'))
+  assert.match(views.at(-1)!.error!, /PAC/)
+  assert.doesNotMatch(JSON.stringify(views), /private-upstream-secret/)
+  assert.match(providerFailureMessage('authentication'), /sign in/i)
+  assert.match(providerFailureMessage('rate-limit'), /quota/)
+})
+
+test('explicit login requests reauthentication and sign-out validates local removal', async () => {
+  const client = createProviderSetupClient('http://fixture.invalid', async (url, init) => {
+    assert.equal(init?.method, 'POST')
+    if (String(url).endsWith('/logout')) return Response.json({ authenticated: false })
+    assert.equal(JSON.parse(String(init?.body)).reauthenticate, true)
+    return Response.json(pending)
+  })
+  await client.start()
+  await client.signOut()
+  const invalid = createProviderSetupClient('http://fixture.invalid', async () => Response.json({ authenticated: true }))
+  await assert.rejects(invalid.signOut(), /could not be confirmed/)
+})
 
 test('configured inventory validates records, drops extra secrets, and forwards cancellation', async () => {
   const provider = { provider: 'local', authMode: 'none', hasApiKey: false, selected: true, model: 'qwen@local', baseUrl: 'http://127.0.0.1:11434/v1' }

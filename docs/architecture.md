@@ -544,7 +544,11 @@ tasks or roll back completed side effects.
 The composer also exposes an explicit Continue action from
 `/api/sessions/stages`'s `recoveries`. `SessionState.recovery` stores a recovery ID
 and stopped/interrupted/failed reason through JSONL and SQLite, including their
-migration path. `POST /api/sessions/:key/resume` accepts only `{recoveryId}` and
+migration path. Provider failures also retain a validated, credential-free
+category (authentication, proxy, network, rate limit, availability, storage, or
+request) so the composer can explain the failure after a reload and link to
+provider settings. Raw upstream error bodies are not stored in this metadata.
+`POST /api/sessions/:key/resume` accepts only `{recoveryId}` and
 returns a 202 admission receipt with a new request ID. Serialized admission
 rejects stale, duplicate, wrong-session or busy/queued resumes with 409. The
 normal session loop handles a distinct resume control, continuing saved history
@@ -1089,6 +1093,14 @@ selection when ambiguity matters.
 provider**; it does not redetect every per-session model override. An
 `@provider` suffix chooses another instantiated provider or fails if absent.
 Aggregation is routing and model discovery, not automatic failover.
+
+Explicit Copilot sign-in requests a fresh GitHub device code rather than silently
+reusing cached authentication. Failed attempts expose safe error codes, including
+system-proxy/PAC failures, without deleting the existing credentials. The
+authenticated `POST /api/auth/logout` endpoint cancels pending sign-in and removes
+the installation's local Copilot access token, API token, and model cache. It does
+not revoke GitHub authorization or sign out the browser. A refresh that was
+already in flight cannot restore credentials after their removal.
 
 Context windows come from `model-registry.ts` plus provider-specific overrides.
 `quickModel` is used for lightweight steering classification; it does not create

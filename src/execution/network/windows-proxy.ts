@@ -138,7 +138,8 @@ async function invoke(input: { operation: 'settings' | 'resolve'; url?: string; 
             : code === '12166' ? 'Windows could not evaluate the configured PAC script.'
             : code === '12002' ? 'Windows proxy resolution timed out.'
             : `Windows proxy ${input.operation} failed.`
-          reject(new Error(`${detail}${code ? ` (WinHTTP ${code})` : ''} No settings or destination were logged.`))
+          reject(Object.assign(new Error(`${detail}${code ? ` (WinHTTP ${code})` : ''} No settings or destination were logged.`),
+            { code: 'SYSTEM_PROXY_UNAVAILABLE' }))
         } else resolve(stdout)
       })
     child.stdin!.on('error', () => { child.kill() })

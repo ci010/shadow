@@ -44,6 +44,7 @@ import type { PromptCaptureStore } from './prompt-capture.ts'
 import { saveToolImages } from './tool-images.ts'
 import { modelMessages } from '../providers/message-content.ts'
 import { usageProvider } from './usage.ts'
+import { providerFailureKind, type ProviderFailureKind } from '../providers/provider.ts'
 
 /**
  * Shared base for all session types.
@@ -55,6 +56,7 @@ import { usageProvider } from './usage.ts'
 export abstract class BaseSession {
   protected usage: LLMResponseUsage | undefined
   protected responseContext: ResponseContext | undefined
+  private providerFailure?: ProviderFailureKind
 
   constructor(
     protected readonly workspace: string,
@@ -181,7 +183,8 @@ export abstract class BaseSession {
     if (this.state.mode === 'session' && fact.status !== 'completed'
       && this.messages.some(message => message.role !== 'system')) {
       this.state.recovery = { id: fact.turnId, reason: fact.status === 'cancelled' ? 'stopped' : 'failed',
-        userInvolved: this.responseContext?.userInvolved ?? false, pendingToolCalls: pendingToolCalls(this.messages).length }
+        userInvolved: this.responseContext?.userInvolved ?? false, pendingToolCalls: pendingToolCalls(this.messages).length,
+        ...(fact.status === 'failed' && this.providerFailure ? { providerFailure: this.providerFailure } : {}) }
     } else delete this.state.recovery
     await this.store.saveState(this.id, this.state)
     if (this.state.mode && this.state.mode !== 'session') {
@@ -289,6 +292,7 @@ export abstract class BaseSession {
           budget.take()
           const response = await this.provider.chat(inferenceMessages, toolDefs, {
             model,
+          this.providerFailure = undefined
             maxTokens,
             temperature,
             signal,
@@ -296,6 +300,9 @@ export abstract class BaseSession {
             reasoningEffort,
           })
           signal.throwIfAborted()
+          }).catch(error => {
+            this.providerFailure = providerFailureKind(error)
+            throw error
           this.tools.boundary?.assertCurrent()
           // Keep the returned message with its call, including across compaction.
           // Provider continuity (including encrypted state) is not display content.
@@ -560,6 +567,7 @@ export abstract class BaseSession {
     }
     const attempted = !silent
     try {
+    this.providerFailure = undefined
       if (this.tools.boundary) {
         signal = AbortSignal.any([signal, this.tools.boundary.signal])
         await this.tools.boundary.begin(input, signal)

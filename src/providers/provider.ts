@@ -234,6 +234,32 @@ export class ProviderHttpError extends Error {
     super(message)
     this.name = 'ProviderHttpError'
   }
+
+}
+
+export const providerFailureKinds = ['authentication', 'network', 'proxy', 'rate-limit', 'unavailable', 'storage', 'request'] as const
+export type ProviderFailureKind = typeof providerFailureKinds[number]
+
+/** Public failure categories never carry response bodies, credentials or proxy addresses. */
+export function providerFailureKind(error: unknown): ProviderFailureKind {
+  let cause = error
+  for (let depth = 0; depth < 6 && cause instanceof Error; depth++) {
+    const code = 'code' in cause ? cause.code : undefined
+    if (code === 'SYSTEM_PROXY_UNAVAILABLE') return 'proxy'
+    if (cause.name === 'CopilotAuthError') {
+      if (code === 'proxy' || code === 'network' || code === 'storage') return code
+      if (code === 'missing' || code === 'denied' || code === 'expired') return 'authentication'
+    }
+    if (cause instanceof ProviderHttpError) {
+      if (cause.status === 401 || cause.status === 403) return 'authentication'
+      if (cause.status === 429) return 'rate-limit'
+      if (cause.status >= 500) return 'unavailable'
+    }
+    cause = cause.cause
+  }
+  if (error instanceof ProviderTransportError || error instanceof Error
+    && (error.name === 'TimeoutError' || error instanceof TypeError && error.message === 'fetch failed')) return 'network'
+  return 'request'
 }
 
 const transportCodes = new Set([

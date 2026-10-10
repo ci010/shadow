@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../providers/provider.ts'
+import { providerFailureKinds, type ProviderFailureKind } from '../providers/provider.ts'
 import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ExecShell } from '../tools/shell.ts'
 import type { WorkdirRefV1 } from './locality.ts'
@@ -37,6 +38,7 @@ export interface SessionRecovery {
   userInvolved?: boolean
   /** Unfinished persisted calls; continuing may replay tools without durable reconciliation. */
   pendingToolCalls?: number
+  providerFailure?: ProviderFailureKind
 }
 
 export function parseSessionRecovery(value: unknown): SessionRecovery | undefined {
@@ -52,7 +54,12 @@ export function parseSessionRecovery(value: unknown): SessionRecovery | undefine
   const pendingToolCalls = 'pendingToolCalls' in value ? value.pendingToolCalls : undefined
   if (pendingToolCalls !== undefined && (typeof pendingToolCalls !== 'number'
     || !Number.isSafeInteger(pendingToolCalls) || pendingToolCalls < 0)) throw new TypeError('Invalid session recovery metadata')
+  const providerFailure = 'providerFailure' in value ? value.providerFailure : undefined
+  if (providerFailure !== undefined && !providerFailureKinds.some(kind => kind === providerFailure)) {
+    throw new TypeError('Invalid session recovery provider failure')
+  }
   return { id: value.id, reason: value.reason,
+    ...(providerFailure !== undefined ? { providerFailure: providerFailure as ProviderFailureKind } : {}),
     ...(typeof userInvolved === 'boolean' ? { userInvolved } : {}),
     ...(typeof pendingToolCalls === 'number' ? { pendingToolCalls } : {}) }
 }

@@ -6,7 +6,8 @@
     </h2>
     <p class="lead">{{ lead }}</p>
     <p v-if="error || message" class="notice error" role="alert">{{ error || message }}</p>
-    <p v-if="status?.reason && !status.ready && mode !== 'add'" class="notice">{{ providerDisplayName(status.provider) }} {{ t('is not ready.') }} {{ readinessMessage }}</p>
+    <p v-if="signedOut" class="notice" role="status">{{ t('Signed out of GitHub Copilot on this installation. Sign in to get a new device code.') }}</p>
+    <p v-else-if="status?.reason && !status.ready && mode !== 'add' && !busy && !failedLogin && login.state !== 'succeeded'" class="notice error" role="alert">{{ providerDisplayName(status.provider) }} {{ t('is not ready.') }} {{ readinessMessage }}</p>
     <div v-if="mode !== 'edit' && !excludedProviders.includes('copilot')" class="method-tabs" :aria-label="t('Authentication method')">
       <button :aria-pressed="method === 'copilot'" :disabled="busy || saving" @click="method = 'copilot'">GitHub Copilot</button>
       <button :aria-pressed="method === 'key'" :disabled="busy || saving" @click="method = 'key'">{{ t('API key / local provider') }}</button>
@@ -22,7 +23,7 @@
         <span>{{ login.login.verificationUri }}</span>
         <span>{{ t('Waiting for your authorization. Code expires at') }} {{ expiryTime }}.</span>
       </div>
-      <p v-else-if="login.state !== 'idle'" role="status" aria-live="polite" class="notice" :class="{ error: failedLogin }">{{ loginMessage }}</p>
+      <p v-else-if="login.state !== 'idle'" :role="failedLogin ? 'alert' : 'status'" aria-live="polite" class="notice" :class="{ error: failedLogin }">{{ loginMessage }}</p>
       <div class="actions">
         <button v-if="busy" :disabled="login.state === 'cancelling'" @click="cancelLogin">
           {{ login.state === 'cancelling' ? t('Cancelling...') : t('Cancel login') }}
@@ -30,6 +31,14 @@
         <button v-else class="primary" :disabled="saving" @click="startLogin">
           {{ login.state === 'idle' ? t('Sign in with GitHub Copilot') : t('Retry GitHub Copilot login') }}
         </button>
+        <button v-if="mode === 'edit' && !confirmSignOut && !signedOut" :disabled="saving" @click="confirmSignOut = true">{{ t('Sign out of GitHub Copilot') }}</button>
+      </div>
+      <div v-if="confirmSignOut" class="notice" role="group" :aria-label="t('Confirm Copilot sign-out')">
+        <p>{{ t('Remove the saved Copilot sign-in from this Shadow installation? This affects all projects. It does not sign you out of GitHub in your browser or revoke the GitHub authorization.') }}</p>
+        <div class="actions">
+          <button :disabled="saving" @click="confirmSignOut = false">{{ t('Cancel') }}</button>
+          <button :disabled="saving" @click="signOut">{{ saving ? t('Signing out...') : t('Sign out of GitHub Copilot') }}</button>
+        </div>
       </div>
     </div>
 
@@ -66,6 +75,8 @@ import {
   COPILOT_VERIFICATION_URL, createDeviceLoginController, createProviderSetupClient,
   providerDisplayName, providerPresets,
   type LoginView, type ProviderSetupStatus,
+  copilotFailureMessage,
+  providerFailureMessage,
 } from './provider-setup.ts'
 
 const props = withDefaults(defineProps<{
@@ -97,6 +108,8 @@ const saving = ref(false)
 watch(saving, value => emit('saving', value), { flush: 'sync' })
 const copied = ref(false)
 const login = ref<LoginView>({ state: 'idle' })
+const confirmSignOut = ref(false)
+const signedOut = ref(false)
 let mounted = true
 const client = createProviderSetupClient(props.apiBase)
 const controller = createDeviceLoginController(client, (value) => {
@@ -110,7 +123,9 @@ const hasSavedKey = computed(() => props.status?.provider === (provider.value ==
 const readinessMessages: Record<string, string> = {
   get missing_credentials() { return t('Add credentials or choose another provider.') },
   get invalid_credentials() { return t('Credentials were rejected. Update them or sign in again.') },
-  get network_error() { return t('Check the connection, then recheck configuration.') },
+  get network_error() { return providerFailureMessage('network') },
+  get proxy_error() { return copilotFailureMessage('proxy') },
+  get storage_error() { return copilotFailureMessage('storage') },
 }
 const readinessMessage = computed(() => readinessMessages[props.status?.reason ?? ''] ?? t('Complete the configuration below.'))
 const expiryTime = computed(() => formatDateTime(new Date(login.value.login?.expiresAt ?? 0), { hour: 'numeric', minute: '2-digit', second: '2-digit' }))
@@ -156,7 +171,23 @@ async function saveProvider() {
     apiKey.value = ''
   }
 }
-function startLogin() { message.value = ''; copied.value = false; void controller.start() }
+function startLogin() { message.value = ''; copied.value = false; confirmSignOut.value = false; signedOut.value = false; void controller.start() }
+async function signOut() {
+  saving.value = true
+  message.value = ''
+  try {
+    await controller.cancel()
+    await client.signOut()
+    login.value = { state: 'idle' }
+    signedOut.value = true
+    confirmSignOut.value = false
+    emit('retry')
+  } catch {
+    message.value = t('Copilot sign-out failed. Check Main and access to the application data directory, then retry.')
+  } finally {
+    saving.value = false
+  }
+}
 async function cancelLogin() { await controller.cancel() }
 async function close() { await controller.cancel(); emit('close') }
 async function copyCode() {

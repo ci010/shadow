@@ -7,7 +7,7 @@ import { DEFAULT_COPILOT_MODEL } from '../config/defaults.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { openaiChat } from './openai-compatible.ts'
 import { openaiResponses } from './openai-responses.ts'
-import { ProviderHttpError } from './provider.ts'
+import { ProviderHttpError, providerFailureKind } from './provider.ts'
 import type {
   ChatMessage,
   ContentPart,
@@ -111,13 +111,14 @@ interface ApiKeyInfo {
   endpoints?: { api?: string }
 }
 
-export type CopilotAuthFailure = 'missing' | 'denied' | 'expired' | 'cancelled' | 'network' | 'invalid' | 'storage'
+export type CopilotAuthFailure = 'missing' | 'denied' | 'expired' | 'cancelled' | 'network' | 'proxy' | 'invalid' | 'storage'
 const AUTH_MESSAGES: Record<CopilotAuthFailure, string> = {
   missing: 'Sign in to GitHub Copilot to continue.',
   denied: 'GitHub authorization was denied or Copilot access is unavailable. Sign in again.',
   expired: 'The GitHub code expired. Start a new sign-in.',
   cancelled: 'Sign-in was cancelled.',
   network: 'GitHub could not be reached. Check your connection and try again.',
+  proxy: 'The system proxy could not connect to GitHub. Check the proxy or PAC service, then retry. Signing in again will not fix this connection problem.',
   invalid: 'GitHub returned an invalid authentication response. Try again.',
   storage: 'Credentials could not be saved. Check access to the application data directory.',
 }
@@ -240,6 +241,13 @@ export class CopilotAuthenticator {
     return !!this.storage.read(this.accessTokenFile)?.trim()
   }
 
+  /** Clear this installation's credentials, not the user's GitHub authorization. */
+  signOut(): void {
+    this.storage.remove(this.accessTokenFile)
+    this.clearApiKey()
+    this.storage.remove(this.modelsCacheFile)
+  }
+
   /** True when a cached API key exists and is not yet expired. */
   hasValidApiKey(): boolean {
     const cached = this.readApiKeyFile()
@@ -351,6 +359,7 @@ export class CopilotAuthenticator {
       if (!accessToken) throw new CopilotAuthError('missing')
       const apiKeyInfo = await this.refreshApiKey(accessToken, signal)
       signal?.throwIfAborted()
+      if (this.storage.read(this.accessTokenFile)?.trim() !== accessToken) throw new CopilotAuthError('cancelled')
       this.writeApiKeyFile(apiKeyInfo)
       return apiKeyInfo.token
     })()
@@ -406,7 +415,7 @@ export class CopilotAuthenticator {
     } catch (error) {
       if (signal?.aborted) throw new CopilotAuthError('cancelled')
       if (error instanceof CopilotAuthError) throw error
-      throw new CopilotAuthError('network')
+      throw new CopilotAuthError(providerFailureKind(error) === 'proxy' ? 'proxy' : 'network')
     }
   }
 

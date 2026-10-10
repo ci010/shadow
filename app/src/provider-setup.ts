@@ -41,6 +41,31 @@ export function providerDisplayName(provider: string): string {
   return provider === 'copilot' ? 'GitHub Copilot' : providerPresets.find(item => item.id === provider)?.name ?? provider
 }
 
+export function providerFailureMessage(kind: string): string {
+  switch (kind) {
+    case 'authentication': return t('The model provider rejected authentication. Open provider settings to sign in again or update the API key.')
+    case 'proxy': return t('The system proxy is unavailable. Check the proxy or PAC service, then continue. Signing in again will not fix this connection problem.')
+    case 'network': return t('The model provider could not be reached. Check your connection and proxy, then continue.')
+    case 'rate-limit': return t('The model provider rate limit was reached. Wait before continuing, or check your quota.')
+    case 'unavailable': return t('The model provider is temporarily unavailable. Try again later or choose another provider.')
+    case 'storage': return t('Provider credentials could not be read or saved. Check access to the application data directory.')
+    default: return t('The model provider could not complete this request. Check the selected model and provider settings before continuing.')
+  }
+}
+
+export function copilotFailureMessage(code: string): string {
+  switch (code) {
+    case 'proxy': return providerFailureMessage('proxy')
+    case 'network': return t('GitHub could not be reached. Check your connection and proxy, then retry. Your saved sign-in has not been removed.')
+    case 'storage': return providerFailureMessage('storage')
+    case 'missing': return t('Sign in to GitHub Copilot to continue.')
+    case 'denied': return t('GitHub authorization was denied or this account has no Copilot access. Sign in with an eligible account.')
+    case 'expired': return t('The device code expired. Start a new login to get another code.')
+    case 'cancelled': return t('Login cancelled. You can try again.')
+    default: return t('GitHub returned an invalid authentication response. Retry signing in.')
+  }
+}
+
 export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
   if (!isRecord(value) || !Array.isArray(value.providers)) {
     throw new Error(t('The backend returned an invalid provider list. Restart Main and retry.'))
@@ -77,6 +102,7 @@ export interface DeviceLogin {
   verificationUri?: string
   expiresAt?: number
   intervalMs?: number
+  errorCode?: string
 }
 
 export const COPILOT_VERIFICATION_URL = 'https://github.com/login/device'
@@ -120,6 +146,8 @@ export function parseDeviceLogin(value: unknown): DeviceLogin {
   return {
     loginId: value.loginId,
     state: value.state as LoginState,
+    ...(typeof value.errorCode === 'string' && ['missing', 'denied', 'expired', 'cancelled', 'network', 'proxy', 'invalid', 'storage'].includes(value.errorCode)
+      ? { errorCode: value.errorCode } : {}),
     ...(value.state === 'pending' ? {
       userCode: value.userCode as string,
       verificationUri: value.verificationUri as string,
@@ -170,7 +198,7 @@ export function createProviderSetupClient(apiBase: string, request: typeof fetch
     },
     async start(model?: string, attemptId?: string, signal?: AbortSignal) {
       const login = parseDeviceLogin(await json('/api/auth/login', {
-        method: 'POST', body: JSON.stringify({ model, attemptId }), signal,
+        method: 'POST', body: JSON.stringify({ model, attemptId, reauthenticate: true }), signal,
       }))
       if (attemptId && login.loginId !== attemptId) throw new Error(t('The login attempt changed. Please retry.'))
       return login
@@ -182,6 +210,12 @@ export function createProviderSetupClient(apiBase: string, request: typeof fetch
     },
     async cancel(loginId: string) {
       await json(`/api/auth/login/${encodeURIComponent(loginId)}`, { method: 'DELETE', keepalive: true })
+    },
+    async signOut() {
+      const result = await json('/api/auth/logout', { method: 'POST' })
+      if (!isRecord(result) || result.authenticated !== false) {
+        throw new Error(t('Sign-out could not be confirmed. Retry before leaving this device.'))
+      }
     },
   }
 }
@@ -227,7 +261,8 @@ export function createDeviceLoginController(
     }
   }
   function accept(login: DeviceLogin, current: number) {
-    update({ state: login.state, login })
+    update({ state: login.state, login,
+      ...(login.errorCode ? { error: copilotFailureMessage(login.errorCode) } : {}) })
     if (login.state !== 'pending') activeId = undefined
     if (login.state === 'pending') {
       // GitHub polling is owned by Main; this timer only refreshes its safe status.

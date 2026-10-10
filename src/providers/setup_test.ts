@@ -109,6 +109,35 @@ async function settle(setup: ProviderSetup, id: string): Promise<void> {
   assert.notEqual(setup.get(id)?.state, 'pending', 'Flow did not settle')
 }
 
+test('explicit sign-in requests a new device code even when cached credentials exist', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o@copilot' } }, authHarness({ existing: true }))
+  const response = await f.app.request('/api/auth/login', {
+    method: 'POST', body: JSON.stringify({ reauthenticate: true }),
+  })
+  const login = await response.json()
+  assert.equal(login.state, 'pending')
+  assert.equal(login.userCode, device.user_code)
+  assert(f.auth.files.has('api-key.json'), 'Existing credentials remain until the new flow succeeds or explicit sign-out')
+  assert.deepEqual(f.auth.calls, ['https://github.com/login/device/code'])
+})
+
+test('local sign-out cancels login, clears credentials and allows a fresh device code', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o@copilot' } }, authHarness({ existing: true }))
+  f.auth.files.set('access-token', 'synthetic-access')
+  const login = await f.setup.start(undefined, undefined, undefined, true)
+  const before = f.auth.calls.length
+  const response = await f.app.request('/api/auth/logout', { method: 'POST' })
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), { authenticated: false })
+  assert.equal(f.auth.calls.length, before, 'Sign-out does not revoke authorization remotely')
+  assert.equal(f.auth.files.size, 0)
+  assert.equal(f.setup.get(login.loginId)?.state, 'cancelled')
+  assert.equal((await f.setup.status()).reason, 'missing_credentials')
+  const next = await f.setup.start(undefined, undefined, undefined, true)
+  assert.equal(next.state, 'pending')
+  assert.equal(next.userCode, device.user_code)
+})
+
 test('Copilot sign-in defaults to Astra without replacing an explicit Copilot choice', async t => {
   for (const [raw, expected] of [
     [{}, 'gpt-6-astra@copilot'],

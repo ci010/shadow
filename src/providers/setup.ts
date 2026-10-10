@@ -11,6 +11,7 @@ import {
   CopilotAuthError,
   type CopilotGrant,
   type DeviceAuthorization,
+  type CopilotAuthFailure,
 } from './copilot.ts'
 
 export interface ProviderSetupStatus {
@@ -37,6 +38,7 @@ export interface LoginStatus {
   loginId: string
   state: LoginState
   message?: string
+  errorCode?: CopilotAuthFailure
   userCode?: string
   verificationUri?: string
   expiresAt?: number
@@ -61,7 +63,7 @@ const SetupInput = z.object({
   const spec = parseModelSpec(model)
   return !spec.provider || spec.provider === provider
 })
-const LoginInput = z.object({ model: Model.optional(), attemptId: AttemptId.optional() }).strict()
+const LoginInput = z.object({ model: Model.optional(), attemptId: AttemptId.optional(), reauthenticate: z.boolean().optional() }).strict()
 type SetupInput = z.infer<typeof SetupInput>
 
 interface Flow {
@@ -73,6 +75,7 @@ interface Flow {
   controller: AbortController
   started: Promise<LoginStatus & Partial<ProviderSetupStatus>>
   done?: Promise<void>
+  reauthenticate?: boolean
 }
 
 interface SetupOptions {
@@ -233,7 +236,13 @@ export class ProviderSetup {
     return status
   }
 
-  start(model?: string, attemptId: string = randomUUID(), requestSignal?: AbortSignal): Promise<LoginStatus & Partial<ProviderSetupStatus>> {
+  signOut(): void {
+    this.cancelActive()
+    this.invalidate()
+    this.auth.signOut()
+  }
+
+  start(model?: string, attemptId: string = randomUUID(), requestSignal?: AbortSignal, reauthenticate = false): Promise<LoginStatus & Partial<ProviderSetupStatus>> {
     this.prune()
     const known = this.flows.get(attemptId)
     if (known) return known.status.state === 'pending' ? known.started : Promise.resolve({ ...known.status })
@@ -248,6 +257,7 @@ export class ProviderSetup {
     const requested = model ? parseModelSpec(model) : undefined
     if (requested?.provider && requested.provider !== 'copilot') return Promise.reject(new Error('Select a Copilot model.'))
     const flow: Flow = {
+      reauthenticate,
       status: { loginId: attemptId, state: 'pending' },
       model: `${requested?.model ?? ((current.provider ?? detectProvider(current.model)) === 'copilot' ? current.model : DEFAULT_COPILOT_MODEL)}@copilot`,
       controller: new AbortController(),
@@ -269,13 +279,15 @@ export class ProviderSetup {
     const signal = flow.controller.signal
     try {
       signal.throwIfAborted()
-      try {
-        await this.auth.getApiKey(signal, true)
-        const status = await this.commit(flow)
-        this.finish(flow, { loginId: flow.status.loginId, state: 'succeeded' })
-        return { ...flow.status, ...status }
-      } catch (error) {
-        if (!(error instanceof CopilotAuthError) || !['missing', 'denied'].includes(error.code)) throw error
+      if (!flow.reauthenticate) {
+        try {
+          await this.auth.getApiKey(signal, true)
+          const status = await this.commit(flow)
+          this.finish(flow, { loginId: flow.status.loginId, state: 'succeeded' })
+          return { ...flow.status, ...status }
+        } catch (error) {
+          if (!(error instanceof CopilotAuthError) || !['missing', 'denied'].includes(error.code)) throw error
+        }
       }
       const device = await this.auth.startDeviceLogin(signal)
       signal.throwIfAborted()
@@ -326,6 +338,7 @@ export class ProviderSetup {
       : code === 'denied' || code === 'expired' ? code : 'error'
     this.finish(flow, {
       loginId: flow.status.loginId, state,
+      ...(code ? { errorCode: code } : {}),
       message: error instanceof CopilotAuthError ? error.message : state === 'cancelled' ? 'Sign-in was cancelled.' : 'Sign-in could not be completed or saved. Try again.',
     })
     this.invalidate()
@@ -412,8 +425,16 @@ export class ProviderSetup {
       app.post('/api/auth/login', async (c) => {
         const input = LoginInput.safeParse(await c.req.json().catch(() => null))
         if (!input.success) return c.json({ error: 'Invalid sign-in request.' }, 400)
-        try { return c.json(await this.start(input.data.model, input.data.attemptId, c.req.raw.signal)) } catch {
+        try { return c.json(await this.start(input.data.model, input.data.attemptId, c.req.raw.signal, input.data.reauthenticate)) } catch {
           return c.json({ error: 'Sign-in could not be started. Cancel the current attempt and try again.' }, 409)
+        }
+      })
+      app.post('/api/auth/logout', (c) => {
+        try {
+          this.signOut()
+          return c.json({ authenticated: false })
+        } catch {
+          return c.json({ error: 'Copilot credentials could not be removed. Check access to the application data directory and retry.' }, 500)
         }
       })
       app.get('/api/auth/login/:loginId', (c) => {

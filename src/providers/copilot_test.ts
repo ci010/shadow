@@ -45,6 +45,46 @@ function harness(responses: Array<unknown | Error>, initial: Record<string, stri
   return { auth, calls, waits, files, storage }
 }
 
+test('sign-out removes local credentials and the model cache without contacting GitHub', async () => {
+  const h = harness([], { 'access-token': 'saved-access', 'api-key.json': JSON.stringify(keyResponse), 'models.json': '{}' })
+  h.auth.signOut()
+  assert.equal(h.files.size, 0)
+  assert.equal(h.calls.length, 0)
+  await assert.rejects(h.auth.getApiKey(), (error: unknown) => error instanceof CopilotAuthError && error.code === 'missing')
+})
+
+test('a refresh cannot recreate credentials removed by sign-out', async () => {
+  const files = new Map([['access-token', 'saved-access']])
+  const pending = Promise.withResolvers<Response>()
+  const auth = new CopilotAuthenticator('synthetic-auth', {
+    now: () => epoch,
+    storage: {
+      read: path => files.get(basename(path)),
+      write: (path, value) => { files.set(basename(path), value) },
+      remove: path => { files.delete(basename(path)) },
+    },
+    fetch: async () => pending.promise,
+  })
+  const refreshing = auth.getApiKey()
+  auth.signOut()
+  pending.resolve(Response.json(keyResponse))
+  await assert.rejects(refreshing, (error: unknown) => error instanceof CopilotAuthError && error.code === 'cancelled')
+  assert.equal(files.size, 0)
+})
+
+test('proxy failures expose a safe actionable category rather than private network details', async () => {
+  const h = harness([new TypeError('fetch failed', {
+    cause: Object.assign(new Error('private-proxy-address'), { code: 'SYSTEM_PROXY_UNAVAILABLE' }),
+  })])
+  await assert.rejects(h.auth.startDeviceLogin(), (error: unknown) => {
+    assert(error instanceof CopilotAuthError)
+    assert.equal(error.code, 'proxy')
+    assert.match(error.message, /PAC/)
+    assert.doesNotMatch(error.message, /private-proxy-address/)
+    return true
+  })
+})
+
 test('device flow honors interval and persistent slow_down, verifies exchange before explicit persistence', async () => {
   const h = harness([
     deviceResponse, { error: 'authorization_pending' }, { error: 'slow_down' },
