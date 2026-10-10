@@ -63,6 +63,7 @@ import { desktopIconPath, framelessWindowOptions, installWindowControls, removeN
 import { installTrayMenu } from './tray.js'
 import { installChildBackgroundWindow } from './child-background.js'
 import { installFolderDirectoryPicker } from './folder-directories.js'
+import { installFileExplorer } from './file-explorer.js'
 import { installChatContextPickers } from './chat-context.js'
 import { installDocumentTabShortcuts } from './document-tabs.js'
 import { installMediaPermissions } from './media-permissions.js'
@@ -210,6 +211,7 @@ export function createMainWindow(target: RendererTarget, showOnReady = true): Br
   })
   removeNativeMenus(Menu, window)
   installWindowControls(ipcMain, window)
+  installFileExplorer(ipcMain, window, target, path => shell.showItemInFolder(path))
   installStartupDiagnostics(ipcMain, window, () => {
     const path = startupLogPath(app.getPath('userData'))
     if (!existsSync(path)) throw new Error('Startup log is not available')

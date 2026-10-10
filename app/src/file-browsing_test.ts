@@ -88,6 +88,7 @@ function fileTreeTemplate() {
       HoverInfo: defineComponent({ props: ['text'], setup: (_, { slots }) => () => slots.default?.({ triggerProps: {} }) }),
       FileTreeNode: defineComponent({ props: ['entry'], setup: props => () => h('span', props.entry.name) }),
       FilePreviewModal: defineComponent({ setup: () => () => null }),
+      FileTreeContextMenu: defineComponent({ setup: () => () => null }),
       NodeOfflineState: defineComponent({ setup: () => () => null }),
     },
     setup: () => () => module.exports.render({ $slots: {}, ...context }, []),
@@ -98,6 +99,52 @@ const entry = { name: '.node-version', ext: '', type: 'file', size: 8, mtime: nu
 const base = { apiBase: 'http://localhost', sessionId: '', folderId: 'folder-a', active: true }
 
 const offlineResponse = { error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder' }
+
+test('file row context menus preserve preview and expansion and support keyboard invocation', async t => {
+  const menus: unknown[] = []
+  const opened: unknown[] = []
+  const { props, state } = mount(t, 'FileTreeNode', {
+    ...base, dir: 'src', depth: 1, entry,
+    onContextMenu: (value: unknown) => menus.push(value),
+    onOpen: (value: unknown) => opened.push(value),
+  })
+  let prevented = 0
+  const event = { preventDefault() { prevented++ }, stopPropagation() {} }
+  state().openContextMenu(event)
+  assert.deepEqual(menus, [{ event, path: 'src/.node-version', entry }])
+  assert.equal(opened.length, 0)
+  assert.equal(state().expanded, false)
+  state().menuKey({ ...event, key: 'F10', shiftKey: true })
+  assert.equal(menus.length, 2)
+  assert.equal(prevented, 2)
+  state().onRowClick()
+  assert.equal(opened.length, 1)
+  props.active = false
+  await nextTick()
+  state().openContextMenu(event)
+  assert.equal(menus.length, 2)
+})
+
+test('file tree closes context menus when the source changes or becomes inactive', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileTree', base)
+  pending[0]!.finish({ path: '', entries: [entry], workdir: { kind: 'local', displayPath: '/project' } })
+  await settle()
+  const request = { event: {}, path: 'src/a.ts' }
+  state().openContextMenu(request)
+  assert.equal(state().contextMenu, request)
+  props.active = false
+  await nextTick()
+  assert.equal(state().contextMenu, undefined)
+  state().openContextMenu(request)
+  assert.equal(state().contextMenu, undefined)
+  props.active = true
+  await nextTick()
+  state().openContextMenu(request)
+  props.folderId = 'folder-b'
+  await nextTick()
+  assert.equal(state().contextMenu, undefined)
+})
 
 test('archive rows load only when expanded, cancel on collapse, retry, and discard stale sources', async t => {
   const pending: { archive: ArchiveReference; signal: AbortSignal; resolve: (entries: ArchiveMember[]) => void; reject: (error: Error) => void }[] = []

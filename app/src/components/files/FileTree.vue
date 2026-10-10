@@ -24,7 +24,8 @@
       </div>
       <div ref="body" :id="`${id}-body`" class="file-tree-body" :role="treeOnly ? 'tabpanel' : undefined" :aria-labelledby="treeOnly ? `${id}-${changesOnly ? 'changes' : 'files'}-tab` : undefined" @scroll="saveScroll">
         <HoverInfo v-if="loaded" :text="workspaceInfo" v-slot="{ triggerProps }">
-          <div v-bind="triggerProps" class="file-tree-root" tabindex="0" :aria-label="workspaceInfo">
+          <div v-bind="triggerProps" class="file-tree-root" tabindex="0" :aria-label="workspaceInfo"
+            @contextmenu.prevent.stop="openContextMenu({ event: $event, path: '' })" @keydown="menuKey($event, '')">
             <span :class="workdir?.kind === 'remote' ? 'i-lucide-cloud' : folderIcon(workspaceLabel, true)" aria-hidden="true" />
             <span class="file-tree-root-label">{{ workspaceLabel }}</span>
           </div>
@@ -51,9 +52,10 @@
             :folder-id="displaySource.folderId" :dir="path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''"
             :entry="searchEntry(path)" :depth="0" :active="active && !sourcePending" :workspace-key="workspaceKey"
             :selected-path="selectedPath" :reveal-version="revealVersion" :refresh-version="revision"
-            @open="onOpen" @node-offline="fileOffline = true" />
+            @open="onOpen" @node-offline="fileOffline = true" @context-menu="openContextMenu" />
           <button v-else type="button" class="file-search-result"
-            :aria-current="selectedPath === path ? 'page' : undefined" :title="path" @click="openSearchResult(path)">
+            :aria-current="selectedPath === path ? 'page' : undefined" :title="path" @click="openSearchResult(path)"
+            @contextmenu.prevent.stop="openContextMenu({ event: $event, path })" @keydown="menuKey($event, path)">
             <span class="i-lucide-file w-4 h-4" aria-hidden="true" /><span>{{ path }}</span>
           </button>
           </template>
@@ -67,7 +69,7 @@
             :workspace-key="workspaceKey"
             :selected-path="selectedPath" :reveal-version="revealVersion"
             :refresh-version="homeState?.revision ?? revision" :home-state="changesOnly ? undefined : homeState"
-            :changes-only="changesOnly" :changes="gitStatus?.available ? gitStatus.entries : []" @open="onOpen" @node-offline="fileOffline = true" />
+            :changes-only="changesOnly" :changes="gitStatus?.available ? gitStatus.entries : []" @open="onOpen" @node-offline="fileOffline = true" @context-menu="openContextMenu" />
         </template>
         </template>
         </template>
@@ -77,6 +79,7 @@
       :remote="workdir?.kind === 'remote'"
       :folder-id="folderId" :dir="previewDir" :entry="previewEntry" @close="closePreview" />
     <div v-else-if="previewOnOpen" class="file-preview-empty">{{ t('Select a file to preview its current contents.') }}</div>
+    <FileTreeContextMenu v-if="contextMenu" :request="contextMenu" :workdir="workdir" @close="contextMenu = undefined" />
   </div>
 </template>
 
@@ -84,6 +87,8 @@
 import { t } from '../../i18n.ts'
 import { computed, inject, nextTick, onUnmounted, ref, shallowRef, useId, watch } from 'vue'
 import FileTreeNode from './FileTreeNode.vue'
+import FileTreeContextMenu from './FileTreeContextMenu.vue'
+import type { FileTreeMenuRequest } from '../../file-tree-menu.ts'
 import FilePreviewModal from './FilePreviewModal.vue'
 import HoverInfo from '../HoverInfo.vue'
 import NodeOfflineState from './NodeOfflineState.vue'
@@ -123,6 +128,18 @@ const expectedHome = computed(() => homeCache?.expectsHome({ apiBase: props.apiB
 const currentSource = (): FileTreeSource => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folderId, home: expectedHome.value })
 const displaySource = ref(currentSource())
 const sourcePending = ref(false)
+const contextMenu = shallowRef<FileTreeMenuRequest>()
+function openContextMenu(request: FileTreeMenuRequest) {
+  if (props.active && !sourcePending.value && !offline.value) contextMenu.value = request
+}
+function menuKey(event: KeyboardEvent, path: string) {
+  if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+  event.preventDefault()
+  event.stopPropagation()
+  openContextMenu({ event, path })
+}
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.active, workdir.value, sourcePending.value, filterQuery.value, changesOnly.value],
+  () => { contextMenu.value = undefined })
 const workspaceKey = computed(() => fileWorkspaceKey(displaySource.value, workdir.value))
 const workspaceLabel = computed(() => workdir.value?.scope === 'home' ? t('Home')
   : workdir.value?.displayPath?.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1)

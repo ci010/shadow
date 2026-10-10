@@ -291,6 +291,12 @@ drawings and GIS), Email, and Assets/Data. Image/media and text/code SDK
 plugins and the XMind plugin are not registered; standalone files keep Shadow's
 existing image, media, text, Markdown and HTML views.
 
+Right-click a file, folder, or search result (or press Shift+F10 on a focused
+row) to copy its full path or its path relative to the displayed workspace.
+Electron also offers **Show in file explorer** for local files and folders;
+this option is hidden in the web app, for remote workdirs, and for entries
+inside archives. Clicking a file still opens its preview.
+
 ZIP, 7z, RAR, TAR, GZIP, BZIP2 and XZ files expand in the file tree, including
 compressed TAR containers (`.tar.gz`/`.tgz`, `.tar.bz2`, `.tar.xz`) and nested
 archives. No archive is read until expanded. The first expansion fetches the

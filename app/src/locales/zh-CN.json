@@ -1,4 +1,9 @@
 {
+  "File actions": "文件操作",
+  "Copy full path": "复制完整路径",
+  "Copy relative path": "复制相对路径",
+  "Show in file explorer": "在文件资源管理器中显示",
+  "Could not show this path in file explorer. It may have moved or been deleted.": "无法在文件资源管理器中显示此路径，文件可能已移动或删除。",
   "Project goal map": "项目目标图",
   "Follow a branch for context, notes and decisions.": "展开分支，查看前因后果、笔记与待决事项。",
   "There is no goal map yet. Conversations and questions still appear below; tracking is optional.": "尚未建立目标图。下方仍会显示对话与提问，无需为了可见性而创建任务。",

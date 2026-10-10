@@ -1,9 +1,10 @@
 <template>
-  <div ref="node" class="tree-node" :class="decoration ? `git-${decoration}` : undefined">
+  <div ref="node" class="tree-node" :class="decoration ? `git-${decoration}` : undefined" @keydown="menuKey">
     <TreeRow button-class="tree-row" :button-attrs="{ 'data-path': fullPath, 'aria-busy': loading, 'aria-disabled': !active }" :label="entry.name" :depth="depth"
       :selected="selectedPath === fullPath" :current="selectedPath === fullPath ? 'page' : undefined"
       :title="decoration ? `${fullPath}\n${entry.type === 'dir' ? t('Contains changes: ') : ''}${gitChangeLabel(decoration)}` : fullPath"
-      :expanded="expandable ? expanded : undefined" @select="onRowClick">
+      :expanded="expandable ? expanded : undefined" @select="onRowClick"
+      @contextmenu="openContextMenu">
       <template #icon><span :class="loading ? 'i-lucide-loader-circle animate-spin' : entry.type === 'dir' ? folderIcon(entry.name, expanded) : fileIcon(entry.name)" /></template>
       <template v-if="entry.type === 'file'" #meta>
         <span v-if="decoration" class="git-status" :aria-label="gitChangeLabel(decoration)">{{ gitChangeBadge(decoration) }}</span>
@@ -40,6 +41,7 @@
         :reveal-version="revealVersion"
         @open="$emit('open', $event)"
         @node-offline="$emit('node-offline')"
+        @context-menu="$emit('context-menu', $event)"
       />
     </div>
   </div>
@@ -47,6 +49,7 @@
 
 <script setup lang="ts">
 import { t } from '../../i18n.ts'
+import type { FileTreeMenuRequest } from '../../file-tree-menu.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, toRefs, watch } from 'vue'
 import FileTreeNode from './FileTreeNode.vue'
 import TreeRow from '../TreeRow.vue'
@@ -83,7 +86,16 @@ const props = withDefaults(defineProps<{
   archiveIndex?: ArchiveMember[]
 }>(), { active: true, changes: () => [], changesOnly: false, refreshVersion: 0 })
 
-const emit = defineEmits<{ open: [payload: { path: string; entry: FileEntry }]; 'node-offline': [] }>()
+const emit = defineEmits<{ open: [payload: { path: string; entry: FileEntry }]; 'node-offline': []; 'context-menu': [request: FileTreeMenuRequest] }>()
+
+function openContextMenu(event: MouseEvent | KeyboardEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (props.active) emit('context-menu', { event, path: fullPath.value, entry: props.entry })
+}
+function menuKey(event: KeyboardEvent) {
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openContextMenu(event)
+}
 
 const files = computed(() => useSessionFiles(props.apiBase, props.folderId))
 

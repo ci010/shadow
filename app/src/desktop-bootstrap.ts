@@ -63,6 +63,7 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+	readonly fileExplorer?: import('../../desktop/src/file-explorer-contract.ts').DesktopFileExplorerApi
 	readonly taskNotifications?: DesktopTaskNotificationsApi
 	readonly clipboardFiles?: {
 		readFiles(): Promise<Array<{ name: string; bytes: Uint8Array; lastModified: number }>>

@@ -17,6 +17,7 @@ import type { ChildPairInput } from './bootstrap/child.js'
 import { MICRO_APP_CHANNELS, parseMicroAppIdentity, type MicroAppIdentity } from './micro-app-contract.js'
 import { createPasteClipboardFilesApi } from './clipboard-files-contract.js'
 import { createTaskNotificationsApi } from './task-notifications-contract.js'
+import { createFileExplorerApi } from './file-explorer-contract.js'
 
 const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction) => {
   window.dispatchEvent(new CustomEvent(DOCUMENT_TAB_CHANNEL, { detail: direction }))
@@ -24,6 +25,7 @@ const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction)
 window.addEventListener('unload', disposeDocumentTabs, { once: true })
 
 const api: ShadowDesktopApi = Object.freeze({
+  fileExplorer: createFileExplorerApi(ipcRenderer),
   taskNotifications: createTaskNotificationsApi(ipcRenderer),
   clipboardFiles: createPasteClipboardFilesApi(ipcRenderer, window),
   microApps: Object.freeze({

@@ -1,4 +1,9 @@
 {
+  "File actions": "File actions",
+  "Copy full path": "Copy full path",
+  "Copy relative path": "Copy relative path",
+  "Show in file explorer": "Show in file explorer",
+  "Could not show this path in file explorer. It may have moved or been deleted.": "Could not show this path in file explorer. It may have moved or been deleted.",
   "Project goal map": "Project goal map",
   "Follow a branch for context, notes and decisions.": "Follow a branch for context, notes and decisions.",
   "There is no goal map yet. Conversations and questions still appear below; tracking is optional.": "There is no goal map yet. Conversations and questions still appear below; tracking is optional.",

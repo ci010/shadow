@@ -9,6 +9,7 @@ import { parseChildPairInput } from './bootstrap/child.js'
 import type { DesktopMicroAppsApi } from './micro-app-contract.js'
 import type { DesktopClipboardFilesApi } from './clipboard-files-contract.js'
 import type { DesktopTaskNotificationsApi } from './task-notifications-contract.js'
+import type { DesktopFileExplorerApi } from './file-explorer-contract.js'
 
 export const IPC_CHANNELS = {
   loadWizard: 'shadow:bootstrap:load',
@@ -61,6 +62,7 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+  readonly fileExplorer: DesktopFileExplorerApi
   readonly taskNotifications: DesktopTaskNotificationsApi
   readonly clipboardFiles: DesktopClipboardFilesApi
   readonly microApps: DesktopMicroAppsApi
