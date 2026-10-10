@@ -21,10 +21,10 @@
         </div>
         <form class="work-filters" :aria-label="t('Filter work')" @submit.prevent>
           <label class="work-search">{{ t('Search') }}<input v-model="filter.query" type="search" :placeholder="t('Find work…')" /></label>
-          <label>{{ t('Initiative') }}<select v-model="filter.root"><option value="">{{ t('All work') }}</option><option v-for="item in initiatives" :key="item.key" :value="item.key">{{ item.title }}</option></select></label>
-          <label>{{ t('Assigned to') }}<select v-model="filter.assignee"><option value="">{{ t('Any session') }}</option><option value="unassigned">{{ t('Unassigned') }}</option>
+          <label>{{ t('Initiative') }}<UiSelect v-model="filter.root"><option value="">{{ t('All work') }}</option><option v-for="item in initiatives" :key="item.key" :value="item.key">{{ item.title }}</option></UiSelect></label>
+          <label>{{ t('Assigned to') }}<UiSelect v-model="filter.assignee"><option value="">{{ t('Any session') }}</option><option value="unassigned">{{ t('Unassigned') }}</option>
             <option v-for="session in assignedSessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option>
-          </select></label>
+          </UiSelect></label>
           <label class="completed-filter"><input v-model="filter.terminal" type="checkbox" />{{ t('Include completed') }}</label>
         </form>
         <p v-if="error" class="workbench-error" role="alert">{{ error }} {{ t('Showing the last loaded state, if available.') }} <button @click="refresh">{{ t('Retry') }}</button></p>
@@ -105,6 +105,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -245,31 +246,31 @@ onUnmounted(() => { lease.value?.release(); observer?.disconnect(); removeGuard(
 h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 30px; }
 .workbench-heading p { margin: 3px 0 0; font-size: 12px; color: var(--c-text-secondary); }
 .workbench-heading > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-button, input, select { font: inherit; font-size: 12px; }
-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 5px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-card); cursor: pointer; }
-button:hover:not(:disabled) { background: var(--c-bg-muted); }
-button:disabled { opacity: .6; cursor: default; }
-button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-button > span[class^=i-], h2 > span[class^=i-] { width: 15px; height: 15px; flex-shrink: 0; }
+button:where(:not(.ui-select)), input, .ui-select { font: inherit; font-size: 12px; }
+button:where(:not(.ui-select)) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 5px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-card); cursor: pointer; }
+button:where(:not(.ui-select)):hover:not(:disabled) { background: var(--c-bg-muted); }
+button:where(:not(.ui-select)):disabled { opacity: .6; cursor: default; }
+button:where(:not(.ui-select)):focus-visible, input:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)), summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:where(:not(.ui-select)) > span[class^=i-], h2 > span[class^=i-] { width: 15px; height: 15px; flex-shrink: 0; }
 .workbench-body { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-height: 0; }
 .has-panel:not(.compact) .workbench-body { grid-template-columns: minmax(0, 1fr) var(--coordination-panel-width); }
 .workbench-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .workbench-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 14px 16px 8px; }
 .work-view-switch { display: flex; }
-.work-view-switch button + button { margin-left: -1px; }
+.work-view-switch button:where(:not(.ui-select)) + button:where(:not(.ui-select)) { margin-left: -1px; }
 [aria-pressed=true] { background: var(--c-selection-bg); border-color: var(--c-selection-border); color: var(--c-primary); }
 .work-count { flex: 1; min-width: 80px; font-size: 12px; color: var(--c-text-secondary); }
 .new-work { color: var(--c-primary); }
 .work-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; padding: 4px 16px 14px; border-bottom: 1px solid var(--c-border-soft); }
 .work-filters label { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 100px; font-size: 12px; color: var(--c-text-secondary); }
-.work-filters input:not([type=checkbox]), .work-filters select { width: 100%; min-width: 0; min-height: 34px; padding: 5px 7px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); }
+.work-filters input:not([type=checkbox]), .work-filters .ui-select { width: 100%; min-width: 0; min-height: 34px; padding: 5px 7px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); }
 .work-filters .completed-filter { flex: none; flex-direction: row; align-items: center; min-height: 34px; }
 .workbench-error { padding: 10px 16px; margin: 0; color: var(--c-error); font-size: 12px; }
 .work-attention { flex-shrink: 0; max-height: 200px; overflow-y: auto; padding: 10px 16px; border-bottom: 1px solid var(--c-border); background: var(--c-warn-bg); }
 .work-attention summary { font-size: 13px; font-weight: 600; cursor: pointer; color: var(--c-warn); }
-.work-attention button { display: flex; width: 100%; justify-content: start; text-align: left; flex-wrap: wrap; border: 0; border-top: 1px solid var(--c-border-soft); background: transparent; margin-top: 6px; padding: 7px 0; }
+.work-attention button:where(:not(.ui-select)) { display: flex; width: 100%; justify-content: start; text-align: left; flex-wrap: wrap; border: 0; border-top: 1px solid var(--c-border-soft); background: transparent; margin-top: 6px; padding: 7px 0; }
 .work-attention strong { flex: 1; min-width: 120px; font-weight: 500; overflow-wrap: anywhere; }
-.work-attention button > span { color: var(--c-text-secondary); }
+.work-attention button:where(:not(.ui-select)) > span { color: var(--c-text-secondary); }
 .work-board { flex: 1; overflow: auto; min-height: 0; padding: 14px 16px 24px; background: var(--c-bg-soft); }
 .work-board:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .initiative-group + .initiative-group { margin-top: 24px; }
@@ -296,7 +297,7 @@ button > span[class^=i-], h2 > span[class^=i-] { width: 15px; height: 15px; flex
 .work-key { margin: 0 0 12px; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
 .open-executor { margin-bottom: 10px; }
 .detail-links { font-size: 12px; }
-.detail-links button { border: 0; color: var(--c-primary); text-align: left; }
+.detail-links button:where(:not(.ui-select)) { border: 0; color: var(--c-primary); text-align: left; }
 .reporting-settings { margin-top: 20px; font-size: 12px; color: var(--c-text-secondary); }
 .reporting-settings summary { cursor: pointer; }
 .compact .workbench-heading { padding: 12px; }
@@ -310,5 +311,5 @@ button > span[class^=i-], h2 > span[class^=i-] { width: 15px; height: 15px; flex
   .workbench-heading > div { flex-basis: 100%; }
   .work-count { display: none; }
 }
-@media (pointer: coarse), (max-width: 700px) { button, .work-filters input:not([type=checkbox]), .work-filters select { min-height: 44px; } }
+@media (pointer: coarse), (max-width: 700px) { button:where(:not(.ui-select)), .work-filters input:not([type=checkbox]), .work-filters .ui-select { min-height: 44px; } }
 </style>

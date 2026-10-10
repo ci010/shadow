@@ -10,7 +10,7 @@
     <p v-if="notice" class="channel-notice" role="status">{{ notice }}</p>
     <p v-if="reviewLinkError" class="channel-error" role="alert">{{ reviewLinkError }}</p>
     <form v-if="available" class="bot-create" @submit.prevent="addBot">
-      <label>{{ t('Platform') }}<select v-model="newPlatform" :disabled="!!saving"><option v-for="item in channelDefinitions" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
+      <label>{{ t('Platform') }}<UiSelect v-model="newPlatform" :disabled="!!saving"><option v-for="item in channelDefinitions" :key="item.id" :value="item.id">{{ item.label }}</option></UiSelect></label>
       <label>{{ t('Bot name') }}<input v-model="newName" maxlength="100" required :disabled="!!saving" :placeholder="t('Name this connection')" /></label>
       <button :disabled="!!saving || !newName.trim()">{{ t('Add bot') }}</button>
     </form>
@@ -47,7 +47,7 @@
                   <template v-if="field.kind === 'checkbox'"><input v-model="drafts[channel.id]![field.key]" type="checkbox" :name="field.key" /><span>{{ field.label }}<small v-if="field.hint" class="checkbox-hint">{{ field.hint }}</small></span></template>
                   <template v-else>
                     <span>{{ field.label }}<span v-if="field.required"> *</span></span>
-                    <select v-if="field.kind === 'select'" v-model="drafts[channel.id]![field.key]" :name="field.key"><option v-for="option in field.options" :key="option" :value="option">{{ option === 'mention' ? t('Mentions and direct messages') : option === 'all' ? t('All messages') : option }}</option></select>
+                    <UiSelect v-if="field.kind === 'select'" v-model="drafts[channel.id]![field.key]" :name="field.key"><option v-for="option in field.options" :key="option" :value="option">{{ option === 'mention' ? t('Mentions and direct messages') : option === 'all' ? t('All messages') : option }}</option></UiSelect>
                     <input v-else v-model="drafts[channel.id]![field.key]" :type="field.kind" :name="field.key" :autocomplete="field.kind === 'password' ? 'new-password' : 'off'" :spellcheck="false"
                       :placeholder="field.kind === 'password' && channel.secrets[field.key] ? t('Saved — leave blank to keep') : undefined" />
                     <small v-if="field.hint">{{ field.hint }}</small>
@@ -84,6 +84,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { t } from '../i18n.ts'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import type { ChannelId } from '../../../src/channels/setup-contract.ts'
@@ -269,18 +270,18 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .channel-field small { color: var(--c-text-secondary); font-size: 12px; line-height: 1.6; }
 .channel-checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .checkbox-hint { display: block; margin-top: 6px; color: var(--c-text-secondary); line-height: 1.6; }
-input:not([type="checkbox"]), textarea, select { width: 100%; min-width: 0; border: 1px solid var(--c-border); border-radius: var(--radius-control); padding: 10px; color: var(--c-text); background: var(--c-bg-input); font: inherit; }
+input:not([type="checkbox"]), textarea, .ui-select { width: 100%; min-width: 0; border: 1px solid var(--c-border); border-radius: var(--radius-control); padding: 10px; color: var(--c-text); background: var(--c-bg-input); font: inherit; }
 textarea { resize: vertical; }
 input::placeholder { color: var(--c-text-secondary); opacity: 1; }
 .channel-advanced { margin: 28px 0; font-size: 13px; }
 .channel-advanced summary { cursor: pointer; padding: 6px 0; }
 .channel-advanced .channel-fields { margin-top: 20px; }
-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 8px 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-soft); font: inherit; font-size: 13px; cursor: pointer; }
-button span { width: 14px; height: 14px; }
-button:hover:not(:disabled) { background: var(--c-bg-muted); }
-button:disabled, fieldset:disabled { opacity: .6; }
-button:disabled { cursor: not-allowed; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:where(:not(.ui-select)) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 8px 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-soft); font: inherit; font-size: 13px; cursor: pointer; }
+button:where(:not(.ui-select)) span { width: 14px; height: 14px; }
+button:where(:not(.ui-select)):hover:not(:disabled) { background: var(--c-bg-muted); }
+button:where(:not(.ui-select)):disabled, fieldset:disabled { opacity: .6; }
+button:where(:not(.ui-select)):disabled { cursor: not-allowed; }
+button:where(:not(.ui-select)):focus-visible, input:focus-visible, textarea:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)), summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .channel-primary { background: var(--c-primary-bg); color: var(--c-text-on-primary); }
 .channel-primary:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
 .portal-link { padding: 6px 0; min-height: 30px; border: 0; background: transparent; color: var(--c-text); }
@@ -288,7 +289,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .channel-fields { grid-template-columns: minmax(0, 1fr); }
   .channel-copy { flex-basis: calc(100% - 40px); }
   .channel-state { flex: 1; }
-  button { min-height: 44px; }
+  button:where(:not(.ui-select)) { min-height: 44px; }
   .channel-row { padding: 20px 0; }
 }
 </style>

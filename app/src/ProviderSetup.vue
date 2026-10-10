@@ -44,11 +44,11 @@
 
     <form v-else class="method-panel" @submit.prevent="saveProvider">
       <label>{{ t('Provider') }}
-        <select v-model="provider" :disabled="saving || mode === 'edit'" @change="changeProvider">
+        <UiSelect v-model="provider" :disabled="saving || mode === 'edit'" @change="changeProvider">
           <option v-for="preset in availablePresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
           <option value="custom">{{ t('Local / OpenAI-compatible') }}</option>
           <option v-if="!knownProviders.includes(provider)" :value="provider">{{ provider }}</option>
-        </select>
+        </UiSelect>
       </label>
       <label v-if="provider === 'custom'">{{ t('Provider name') }}
         <input v-model="customProvider" required pattern="[a-z][a-z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'">
@@ -69,14 +69,15 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './components/UiSelect.vue'
 import { t, formatDateTime } from './i18n.ts'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   COPILOT_VERIFICATION_URL, createDeviceLoginController, createProviderSetupClient,
   providerDisplayName, providerPresets,
-  type LoginView, type ProviderSetupStatus,
   copilotFailureMessage,
   providerFailureMessage,
+  type LoginView, type ProviderSetupStatus,
 } from './provider-setup.ts'
 
 const props = withDefaults(defineProps<{
@@ -107,9 +108,9 @@ const message = ref('')
 const saving = ref(false)
 watch(saving, value => emit('saving', value), { flush: 'sync' })
 const copied = ref(false)
-const login = ref<LoginView>({ state: 'idle' })
 const confirmSignOut = ref(false)
 const signedOut = ref(false)
+const login = ref<LoginView>({ state: 'idle' })
 let mounted = true
 const client = createProviderSetupClient(props.apiBase)
 const controller = createDeviceLoginController(client, (value) => {
@@ -226,11 +227,11 @@ h2 { font-size: 17px; }
 .lead { margin: 0 0 24px; max-width: 70ch; }
 .method-tabs, .actions, .footer-actions, .device-code { display: flex; flex-wrap: wrap; gap: 10px; }
 .method-tabs { margin: 22px 0; }.method-tabs [aria-pressed="true"] { border-color: var(--c-success); color: var(--c-success); }
-button { padding: 9px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-soft); font: inherit; cursor: pointer; }
-button:disabled { opacity: .55; cursor: not-allowed; } button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--c-success); outline-offset: 2px; }
+button:where(:not(.ui-select)) { padding: 9px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-soft); font: inherit; cursor: pointer; }
+button:where(:not(.ui-select)):disabled { opacity: .55; cursor: not-allowed; } button:where(:not(.ui-select)):focus-visible, input:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-success); outline-offset: 2px; }
 .primary { background: #147a57; border-color: #147a57; color: white; }.actions { justify-content: flex-end; margin-top: 20px; }
 .method-panel { display: grid; gap: 12px; } label { display: grid; gap: 6px; font-size: 13px; }
-input, select { min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
+input, .ui-select { min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
 .help { font-size: 12px; }.notice { padding: 12px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); line-height: 1.5; }.error { border-color: var(--c-error); color: var(--c-error); }
 .device-panel { display: grid; gap: 14px; padding: 20px; background: var(--c-bg-soft); border: 1px solid var(--c-border); border-radius: var(--radius-surface); }.device-panel span { font-size: 13px; color: var(--c-text-secondary); }
 .device-code { align-items: center; justify-content: space-between; }.device-code code { -webkit-user-select: text; user-select: text; font: 700 26px monospace; letter-spacing: .08em; }

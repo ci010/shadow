@@ -13,9 +13,9 @@
     </label>
     <label v-else-if="node.type === 'select'" class="io-field">
       <span>{{ node.text || node.id }}</span>
-      <select :value="node.value" :disabled="disabled" @change="send(node, ($event.target as HTMLSelectElement).value)">
+      <UiSelect :value="node.value" :disabled="disabled" @change="send(node, ($event.target as HTMLSelectElement).value)">
         <option v-for="option in node.options || []" :key="option" :value="option">{{ option }}</option>
-      </select>
+      </UiSelect>
     </label>
     <div v-else-if="node.type === 'table'" class="io-table selectable-text" role="region" :aria-label="node.text || node.id" tabindex="0">
       <table><caption v-if="node.text">{{ node.text }}</caption><tbody><tr v-for="(row, index) in node.rows || []" :key="index"><td v-for="(cell, column) in row" :key="column">{{ cell }}</td></tr></tbody></table>
@@ -26,6 +26,7 @@
   </template>
 </template>
 <script setup lang="ts">
+import UiSelect from '../UiSelect.vue'
 import { t } from '../../i18n.ts'
 import { reactive, watch } from 'vue'
 import type { IoPacket, IoUiNode } from '../../../../src/io/contracts.ts'
@@ -82,11 +83,11 @@ function input(node: IoUiNode, event: Event) {
 .io-layout { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .io-row { flex-direction: row; flex-wrap: wrap; align-items: start; }
 .io-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.io-field input, .io-field select { max-width: 100%; min-height: 36px; border: 1px solid var(--c-border); background: var(--c-bg-input); color: var(--c-text); padding: 6px 8px; }
+.io-field input, .io-field .ui-select { max-width: 100%; min-height: 36px; border: 1px solid var(--c-border); background: var(--c-bg-input); color: var(--c-text); padding: 6px 8px; }
 .io-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 .io-table { overflow: auto; max-height: 320px; }
 table { width: 100%; border-collapse: collapse; }
 td { padding: 8px; border-bottom: 1px solid var(--c-border); overflow-wrap: anywhere; }
 caption { text-align: left; font-weight: 600; padding-bottom: 8px; }
-:is(button, input, select, [tabindex]):focus-visible { outline: 2px solid var(--c-info); outline-offset: 3px; }
+:is(button:where(:not(.ui-select)), input, .ui-select, [tabindex]):is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-info); outline-offset: 3px; }
 </style>

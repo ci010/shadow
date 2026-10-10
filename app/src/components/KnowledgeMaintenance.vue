@@ -19,12 +19,12 @@
       <p v-if="!status.report.findings.length" class="muted">{{ t('No unresolved local references were found in this snapshot.') }}</p>
       <template v-if="expanded && status.report.findings.length">
         <label>{{ t('Show') }}
-          <select v-model="filter" :aria-label="t('Filter link findings')">
+          <UiSelect v-model="filter" :aria-label="t('Filter link findings')">
             <option value="all">{{ t('All findings') }}</option>
             <option value="missing">{{ t('Confirmed missing') }}</option>
             <option value="unavailable">{{ t('Unavailable / unsafe to inspect') }}</option>
             <option value="outside-catalog">{{ t('Exists outside catalog') }}</option>
-          </select>
+          </UiSelect>
         </label>
         <div class="findings">
           <article v-for="group in groups" :key="group.sourceId">
@@ -56,6 +56,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { createKnowledgeMaintenanceClient, type KnowledgeMaintenanceFinding, type KnowledgeMaintenanceStatus, type KnowledgeRepairPreview } from '../knowledge-maintenance.ts'
@@ -165,9 +166,9 @@ onUnmounted(() => request?.abort())
 header, .actions, .report-summary, .source-heading, .pagination { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 h2 { margin: 0; font-size: 15px; }
 p, .report-summary, label, .muted { font-size: 12px; color: var(--c-text-secondary); line-height: 1.6; }
-button, select { font: inherit; font-size: 12px; padding: 7px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
-button:disabled { opacity: .5; cursor: not-allowed; }
-button:focus-visible, select:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:where(:not(.ui-select)), .ui-select { font: inherit; font-size: 12px; padding: 7px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
+button:where(:not(.ui-select)):disabled { opacity: .5; cursor: not-allowed; }
+button:where(:not(.ui-select)):focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .report-summary { border-top: 1px solid var(--c-border); padding-top: 10px; margin-top: 10px; }
 .findings { max-height: 440px; overflow: auto; margin-top: 12px; }
 article { border-top: 1px solid var(--c-border); padding: 12px 0; }

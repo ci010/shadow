@@ -21,16 +21,16 @@
       <form v-if="canWrite" class="github-section" @submit.prevent="loadLink">
         <h3>{{ t('Link an Issue or PR') }}</h3>
         <label>{{ t('GitHub URL') }}<input v-model="url" type="url" placeholder="https://github.com/owner/repo/issues/123" required /></label>
-        <label>{{ t('Work') }}<select v-model="workKey"><option value="">{{ t('Load without linking') }}</option>
+        <label>{{ t('Work') }}<UiSelect v-model="workKey"><option value="">{{ t('Load without linking') }}</option>
           <option v-for="work in works" :key="work.key" :value="work.key">{{ work.title }}</option>
-        </select></label>
+        </UiSelect></label>
         <button :disabled="busy || !url">{{ t('Load / link resource') }}</button>
       </form>
       <p v-if="!state.resources.length" class="github-empty">{{ t('No linked GitHub resources. Enable a repository, then load an Issue or PR.') }}</p>
-      <label v-else class="github-section">{{ t('Resource') }}<select v-model="resourceId">
+      <label v-else class="github-section">{{ t('Resource') }}<UiSelect v-model="resourceId">
         <option value="">{{ t('Choose an Issue or PR') }}</option>
         <option v-for="item in state.resources" :key="item.id" :value="item.id">{{ item.repository }}#{{ item.number }} · {{ item.title }}</option>
-      </select></label>
+      </UiSelect></label>
       <article v-if="resource" class="github-resource">
         <h3><a :href="resource.url" target="_blank" rel="noopener noreferrer">{{ resource.repository }}#{{ resource.number }} · {{ resource.title }}</a></h3>
         <p class="github-facts">{{ resource.kind === 'pr' ? t('PR') : t('Issue') }} · {{ enumLabel(resource.state) }}<template v-if="resource.draft"> {{ t('· Draft') }}</template>
@@ -71,21 +71,21 @@
         <summary>{{ t('Prepare a GitHub write') }}</summary>
         <form @submit.prevent="prepare">
           <p>{{ t('Only the text you enter is published. No chat history is attached. PR branches must already exist on GitHub; this does not push or merge code.') }}</p>
-          <label>{{ t('Work') }}<select v-model="workKey" required><option value="">{{ t('Choose Work') }}</option><option v-for="work in works" :key="work.key" :value="work.key">{{ work.title }}</option></select></label>
-          <label>{{ t('Action') }}<select v-model="kind"><option value="comment">{{ t('Publish a progress comment') }}</option><option value="reply">{{ t('Reply to an inline review') }}</option><option value="close_issue">{{ t('Close Issue') }}</option><option value="create_pr">{{ t('Create PR') }}</option></select></label>
+          <label>{{ t('Work') }}<UiSelect v-model="workKey" required><option value="">{{ t('Choose Work') }}</option><option v-for="work in works" :key="work.key" :value="work.key">{{ work.title }}</option></UiSelect></label>
+          <label>{{ t('Action') }}<UiSelect v-model="kind"><option value="comment">{{ t('Publish a progress comment') }}</option><option value="reply">{{ t('Reply to an inline review') }}</option><option value="close_issue">{{ t('Close Issue') }}</option><option value="create_pr">{{ t('Create PR') }}</option></UiSelect></label>
           <template v-if="kind === 'create_pr'">
-            <label>{{ t('Target repository') }}<select v-model="repositoryId" required><option value="">{{ t('Choose repository') }}</option>
+            <label>{{ t('Target repository') }}<UiSelect v-model="repositoryId" required><option value="">{{ t('Choose repository') }}</option>
               <option v-for="repo in state.repositories.filter(repo => repo.read && repo.write)" :key="repo.id" :value="repo.id">{{ repo.name }}</option>
-            </select></label>
+            </UiSelect></label>
             <label>{{ t('Head branch') }}<input v-model="head" required /></label><label>{{ t('Base branch') }}<input v-model="base" required /></label>
             <label>{{ t('PR title') }}<input v-model="title" required maxlength="160" /></label>
             <label class="check"><input v-model="draft" type="checkbox" />{{ t('Create as draft') }}</label>
           </template>
           <p v-else>{{ t('Target:') }} {{ resource ? `${resource.repository}#${resource.number}` : t('Choose a resource above') }}</p>
-          <label v-if="kind === 'reply'">{{ t('Inline review comment') }}<select v-model.number="commentId" required>
+          <label v-if="kind === 'reply'">{{ t('Inline review comment') }}<UiSelect v-model.number="commentId" required>
             <option :value="0">{{ t('Choose a comment') }}</option><option v-for="comment in resource?.comments.filter(item => item.inline && !item.inReplyTo)" :key="comment.id" :value="comment.id">{{ comment.id }} · {{ comment.author }} · {{ comment.body.slice(0, 80) }}</option>
-          </select></label>
-          <label v-if="kind === 'close_issue'">{{ t('Closure reason') }}<select v-model="closeReason"><option value="completed">{{ t('Completed (all linked Work must be done)') }}</option><option value="not_planned">{{ t('Not planned (does not cancel local Work)') }}</option></select></label>
+          </UiSelect></label>
+          <label v-if="kind === 'close_issue'">{{ t('Closure reason') }}<UiSelect v-model="closeReason"><option value="completed">{{ t('Completed (all linked Work must be done)') }}</option><option value="not_planned">{{ t('Not planned (does not cancel local Work)') }}</option></UiSelect></label>
           <label v-else>{{ t('Exact text to publish') }}<textarea v-model="body" required maxlength="65000" /></label>
           <button :disabled="busy || !workKey || kind !== 'create_pr' && !resource">{{ t('Prepare preview') }}</button>
         </form>
@@ -114,10 +114,10 @@
         <summary>{{ t('Automatic follow-up') }}</summary>
         <p>{{ t('Explicitly subscribe this resource and Work. Review/CI changes never approve an action or mark Work complete.') }}</p>
         <form @submit.prevent="subscribe(true)">
-          <label>{{ t('Recipient') }}<select v-model="target" required><option value="">{{ t('Choose session') }}</option>
+          <label>{{ t('Recipient') }}<UiSelect v-model="target" required><option value="">{{ t('Choose session') }}</option>
             <option v-for="session in targets" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option>
-          </select></label>
-          <label>{{ t('Delivery') }}<select v-model="mode"><option value="silent">{{ t('Record only · no model turn') }}</option><option value="queue">{{ t('Queue a follow-up turn · uses model credits') }}</option></select></label>
+          </UiSelect></label>
+          <label>{{ t('Delivery') }}<UiSelect v-model="mode"><option value="silent">{{ t('Record only · no model turn') }}</option><option value="queue">{{ t('Queue a follow-up turn · uses model credits') }}</option></UiSelect></label>
           <fieldset><legend>{{ t('Changes to follow') }}</legend><label v-for="event in eventKinds" :key="event" class="check">
             <input v-model="events" :value="event" type="checkbox" />{{ event }}
           </label></fieldset>
@@ -160,6 +160,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
@@ -264,16 +265,16 @@ onUnmounted(() => { write?.abort(); snapshot.dispose(); lease?.release() })
 p { margin: 8px 0; }
 .github-intro, .github-facts { color: var(--c-text-secondary); }
 .github-section, .github-resource, .github-preview { display: block; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--c-border); }
-summary, button { cursor: pointer; }
+summary, button:where(:not(.ui-select)) { cursor: pointer; }
 summary, h3 { font-size: 13px; font-weight: 600; }
 h3 { margin: 0 0 8px; }
 label { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
-input:not([type=checkbox]), textarea, select { box-sizing: border-box; width: 100%; min-width: 0; background: var(--c-bg-input); color: var(--c-text); }
-button, input:not([type=checkbox]), textarea, select { min-height: 36px; border: 1px solid var(--c-border); border-radius: var(--radius-control); padding: 6px 8px; font: inherit; font-size: 12px; }
-button { margin: 3px 6px 3px 0; background: var(--c-bg-card); color: var(--c-text); }
-button:hover:not(:disabled) { background: var(--c-bg-muted); }
-button:disabled { opacity: .55; cursor: default; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+input:not([type=checkbox]), textarea, .ui-select { box-sizing: border-box; width: 100%; min-width: 0; background: var(--c-bg-input); color: var(--c-text); }
+button:where(:not(.ui-select)), input:not([type=checkbox]), textarea, .ui-select { min-height: 36px; border: 1px solid var(--c-border); border-radius: var(--radius-control); padding: 6px 8px; font: inherit; font-size: 12px; }
+button:where(:not(.ui-select)) { margin: 3px 6px 3px 0; background: var(--c-bg-card); color: var(--c-text); }
+button:where(:not(.ui-select)):hover:not(:disabled) { background: var(--c-bg-muted); }
+button:where(:not(.ui-select)):disabled { opacity: .55; cursor: default; }
+button:where(:not(.ui-select)):focus-visible, input:focus-visible, textarea:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)), summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 textarea { min-height: 84px; resize: vertical; }
 .check { flex-direction: row; align-items: center; gap: 8px; }
 .check input { flex-shrink: 0; }
@@ -286,5 +287,5 @@ a { color: var(--c-primary); }
 [role=alert] { color: var(--c-error); }
 .github-warning { color: var(--c-warn); display: block; }
 .github-empty { padding: 16px 0; color: var(--c-text-secondary); }
-@media (max-width: 700px), (pointer: coarse) { button, input:not([type=checkbox]), select { min-height: 44px; } }
+@media (max-width: 700px), (pointer: coarse) { button:where(:not(.ui-select)), input:not([type=checkbox]), .ui-select { min-height: 44px; } }
 </style>

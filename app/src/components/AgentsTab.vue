@@ -79,7 +79,7 @@
 
             <template v-if="activeTab !== 'overview'">
               <div class="preview-toolbar">
-                <label class="preview-channel">{{ t('Preview channel') }}<select v-model="channel" :aria-label="t('Preview channel')"><option v-for="ch in channels" :key="ch" :value="ch">{{ ch }}</option></select></label>
+                <label class="preview-channel">{{ t('Preview channel') }}<UiSelect v-model="channel" :aria-label="t('Preview channel')"><option v-for="ch in channels" :key="ch" :value="ch">{{ ch }}</option></UiSelect></label>
                 <div v-if="activeTab === 'prompt'" class="prompt-format" role="group" :aria-label="t('System prompt format')">
                   <button type="button" :aria-pressed="!rawPrompt" @click="rawPrompt = false">{{ t('Read') }}</button><button type="button" :aria-pressed="rawPrompt" @click="rawPrompt = true">{{ t('Raw') }}</button>
                 </div>
@@ -115,6 +115,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
 import { t, formatNumber } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
@@ -286,8 +287,8 @@ onUnmounted(() => { listRequest?.abort(); contextRequest?.abort() })
 .agent-heading p { max-width: 72ch; margin: 12px 0 0; font-size: 14px; line-height: 1.6; color: var(--c-text-secondary); overflow-wrap: anywhere; }
 .agent-back.text-action { display: none; margin-bottom: 20px; }
 .agent-tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: 20px; margin: 0 28px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); }
-.agent-tabs > button { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
-.agent-tabs > button[aria-selected="true"] { border-bottom-color: var(--c-blue); color: var(--c-text); }
+.agent-tabs > button:where(:not(.ui-select)) { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
+.agent-tabs > button:where(:not(.ui-select))[aria-selected="true"] { border-bottom-color: var(--c-blue); color: var(--c-text); }
 .agent-content { min-width: 0; padding: 24px 28px 32px; }
 .overview-section { max-width: 72ch; }
 .overview-section + .overview-section { margin-top: 32px; }
@@ -305,13 +306,13 @@ code { font: 12px/1.6 'IBM Plex Mono', ui-monospace, monospace; }
 .text-action > span, .preview-copy > span { width: 14px; height: 14px; flex-shrink: 0; }
 .preview-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 16px; margin-bottom: 24px; }
 .preview-channel { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--c-text-secondary); }
-.preview-channel select { min-width: 110px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--c-control-border); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; }
-.preview-copy, .prompt-format button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--c-border); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; cursor: pointer; }
+.preview-channel .ui-select { min-width: 110px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--c-control-border); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; }
+.preview-copy, .prompt-format button:where(:not(.ui-select)) { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--c-border); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; cursor: pointer; }
 .preview-copy { margin-inline-start: auto; }
 .preview-copy:disabled { opacity: .5; cursor: default; }
 .prompt-format { display: flex; }
-.prompt-format button + button { border-inline-start: 0; }
-.prompt-format button[aria-pressed="true"] { background: var(--c-bg-muted); }
+.prompt-format button:where(:not(.ui-select)) + button:where(:not(.ui-select)) { border-inline-start: 0; }
+.prompt-format button:where(:not(.ui-select))[aria-pressed="true"] { background: var(--c-bg-muted); }
 .tool-search { max-width: 360px; margin-bottom: 24px; }
 .previous-context { padding: 12px; background: var(--c-bg-soft); font-size: 12px; line-height: 1.6; color: var(--c-text-secondary); overflow-wrap: anywhere; }
 .agent-error { font-size: 13px; line-height: 1.6; color: var(--c-error); overflow-wrap: anywhere; }
@@ -319,7 +320,7 @@ code { font: 12px/1.6 'IBM Plex Mono', ui-monospace, monospace; }
 .copy-feedback { font-size: 12px; color: var(--c-success); }
 .preview-scope { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--c-border-soft); }
 .agent-empty { margin: 24px 28px; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
-button:focus-visible, select:focus-visible, [role="tabpanel"]:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:where(:not(.ui-select)):focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)), [role="tabpanel"]:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .agent-item:focus-visible { outline-offset: -2px; }
 @container agent-browser (max-width: 700px) {
   .agent-navigation { flex-basis: 100%; border-right: 0; }
@@ -330,11 +331,11 @@ button:focus-visible, select:focus-visible, [role="tabpanel"]:focus-visible { ou
   .agent-content { padding: 20px 16px 28px; }
   .agent-facts { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .preview-channel { flex-basis: 100%; justify-content: space-between; }
-  .agent-tabs > button, .text-action, .preview-copy, .prompt-format button, .preview-channel select { min-height: 44px; }
+  .agent-tabs > button:where(:not(.ui-select)), .text-action, .preview-copy, .prompt-format button:where(:not(.ui-select)), .preview-channel .ui-select { min-height: 44px; }
   .agent-search input { min-height: 44px; font-size: 16px; }
 }
 @media (pointer: coarse) {
-  .agent-tabs > button, .text-action, .preview-copy, .prompt-format button, .preview-channel select { min-height: 44px; }
+  .agent-tabs > button:where(:not(.ui-select)), .text-action, .preview-copy, .prompt-format button:where(:not(.ui-select)), .preview-channel .ui-select { min-height: 44px; }
   .agent-search input { min-height: 44px; font-size: 16px; }
 }
 </style>

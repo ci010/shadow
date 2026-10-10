@@ -2,9 +2,9 @@
   <section v-if="enabled && (request || error || notice)" class="publication-request" :aria-label="t('Agent publication approval')">
     <template v-if="request">
       <label v-if="requests.length > 1" class="publication-picker">{{ t('Review (') }}{{ requests.length }})
-        <select v-model="selectedId" :disabled="busy">
+        <UiSelect v-model="selectedId" :disabled="busy">
           <option v-for="item in requests" :key="item.id" :value="item.id">{{ item.change?.title || t('Agent configuration') }} · {{ item.id }}</option>
-        </select>
+        </UiSelect>
       </label>
       <h3>{{ request.change?.title || t('Publish agent configuration?') }}</h3>
       <p>{{ t('Publish these changes together for the affected conversations. Nothing is published until you approve.') }}</p>
@@ -53,6 +53,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
 import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -86,19 +87,19 @@ h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
 p { margin: 8px 0; }
 .publication-summary { color: var(--c-text-secondary); }
 .publication-picker { display: block; margin-bottom: 12px; color: var(--c-text-secondary); }
-select { display: block; box-sizing: border-box; width: 100%; min-height: 34px; margin-top: 4px; padding: 6px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
+.ui-select { display: flex; box-sizing: border-box; width: 100%; min-height: 34px; margin-top: 4px; padding: 6px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
 .publication-review { max-height: 22dvh; overflow-y: auto; overscroll-behavior: contain; }
 details { padding-block: 5px; }
 summary { cursor: pointer; }
 h4 { margin: 10px 0 4px; font-size: 12px; color: var(--c-text-secondary); }
 pre { margin: 0; padding: 8px; background: var(--c-bg-muted); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .publication-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-button { min-height: 34px; padding: 6px 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; font-size: 12px; cursor: pointer; }
-button:hover:not(:disabled) { background: var(--c-bg-muted); }
-button:disabled { opacity: .5; cursor: not-allowed; }
+button:where(:not(.ui-select)) { min-height: 34px; padding: 6px 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; font-size: 12px; cursor: pointer; }
+button:where(:not(.ui-select)):hover:not(:disabled) { background: var(--c-bg-muted); }
+button:where(:not(.ui-select)):disabled { opacity: .5; cursor: not-allowed; }
 .publication-confirm { margin-inline-start: auto; background: var(--c-primary-bg); color: var(--c-text-on-primary); }
 .publication-confirm:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
-button:focus-visible, summary:focus-visible, select:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:where(:not(.ui-select)):focus-visible, summary:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .publication-error { color: var(--c-error); }
 .publication-notice { margin: 0; }
 @media (max-width: 600px) { .publication-request { width: calc(100% - 24px); padding: 12px; } }

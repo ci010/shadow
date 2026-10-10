@@ -2,9 +2,9 @@
   <section v-if="enabled && (request || error || notice)" class="probe-request" :aria-label="t('Connection test approval')">
     <template v-if="request">
       <label v-if="requests.length > 1" class="probe-picker">{{ t('Connection test (') }}{{ requests.length }})
-        <select v-model="selectedId" :disabled="busy">
+        <UiSelect v-model="selectedId" :disabled="busy">
           <option v-for="item in requests" :key="item.id" :value="item.id">{{ item.title }} · {{ enumLabel(item.status) }} · {{ item.id }}</option>
-        </select>
+        </UiSelect>
       </label>
       <h3>{{ request.title }}</h3>
       <p v-if="request.status === 'pending'">{{ t('Approve one controlled connection test of') }} <strong>{{ request.toolName }}</strong>{{ t(', including before publication.') }}</p>
@@ -51,6 +51,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -75,19 +76,19 @@ h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
 p { margin: 8px 0; }
 .probe-summary, .probe-picker { color: var(--c-text-secondary); }
 .probe-picker { display: block; margin-bottom: 12px; }
-select { display: block; box-sizing: border-box; width: 100%; min-height: 34px; margin-top: 4px; padding: 6px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
+.ui-select { display: flex; box-sizing: border-box; width: 100%; min-height: 34px; margin-top: 4px; padding: 6px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
 .probe-review { max-height: 22dvh; overflow-y: auto; overscroll-behavior: contain; }
 .probe-grants { margin: 8px 0; padding-inline-start: 20px; }
 details { padding-block: 5px; }
 summary { cursor: pointer; }
 pre { margin: 8px 0 0; padding: 8px; background: var(--c-bg-muted); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .probe-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-button { min-height: 34px; padding: 6px 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; font-size: 12px; cursor: pointer; }
-button:hover:not(:disabled) { background: var(--c-bg-muted); }
-button:disabled { opacity: .5; cursor: not-allowed; }
+button:where(:not(.ui-select)) { min-height: 34px; padding: 6px 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; font-size: 12px; cursor: pointer; }
+button:where(:not(.ui-select)):hover:not(:disabled) { background: var(--c-bg-muted); }
+button:where(:not(.ui-select)):disabled { opacity: .5; cursor: not-allowed; }
 .probe-confirm { margin-inline-start: auto; background: var(--c-primary-bg); color: var(--c-text-on-primary); }
 .probe-confirm:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
-button:focus-visible, summary:focus-visible, select:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:where(:not(.ui-select)):focus-visible, summary:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .probe-error { color: var(--c-error); }
 @media (max-width: 600px) { .probe-request { width: calc(100% - 24px); padding: 12px; } }
 </style>

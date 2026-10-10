@@ -5,9 +5,9 @@
     <p v-if="error" role="alert">{{ error }}</p>
     <button type="button" :disabled="busy" @click="load">{{ busy ? t('Loading...') : t('Refresh work state') }}</button>
     <label v-if="view.records.length > 1">{{ t('Work item') }}
-      <select v-model="selected" :disabled="busy || editing">
+      <UiSelect v-model="selected" :disabled="busy || editing">
         <option v-for="item in view.records" :key="item.key" :value="item.key">{{ item.workflow?.title || item.key }}</option>
-      </select>
+      </UiSelect>
     </label>
     <template v-if="current">
       <h3>{{ current.definition.objective }}</h3>
@@ -21,10 +21,10 @@
       <p v-if="current.workflow">{{ t('Progress:') }} {{ enumLabel(current.workflow.status) }}<template v-if="current.workflow.blockedReason"> - {{ current.workflow.blockedReason }}</template></p>
       <p class="provenance">{{ t('Managed by:') }} {{ sessionTitle(current.authority.manager) }}</p>
       <label v-if="canWrite && current.workflow">{{ t('Assigned to') }}
-        <select v-if="sessions" :value="current.workflow.assignee ?? ''" :disabled="busy || editing" @change="assign(($event.target as HTMLSelectElement).value)">
+        <UiSelect v-if="sessions" :value="current.workflow.assignee ?? ''" :disabled="busy || editing" @change="assign(($event.target as HTMLSelectElement).value)">
           <option value="">{{ t('Unassigned') }}</option>
           <option v-for="session in sessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option>
-        </select>
+        </UiSelect>
         <span v-else>{{ sessionTitle(current.authority.executor) }}</span>
       </label>
       <p v-else>{{ t('Assigned to') }}: {{ sessionTitle(current.authority.executor) }}</p>
@@ -56,15 +56,15 @@
       </p>
       <label>{{ t('Work title') }}<input v-model="draft.title" required maxlength="160" /></label>
       <label>{{ t('Outcome') }}<textarea v-model="draft.objective" required maxlength="4000" /></label>
-      <label>{{ t('Kind') }}<select v-model="draft.kind"><option v-for="kind in kinds" :key="kind" :value="kind">{{ workKind(kind) }}</option></select></label>
+      <label>{{ t('Kind') }}<UiSelect v-model="draft.kind"><option v-for="kind in kinds" :key="kind" :value="kind">{{ workKind(kind) }}</option></UiSelect></label>
       <template v-if="parentKey">
-        <label>{{ t('Reasoning link') }}<select v-model="draft.relationKind"><option v-for="kind in relations" :key="kind" :value="kind">{{ relationLabel(kind) }}</option></select></label>
+        <label>{{ t('Reasoning link') }}<UiSelect v-model="draft.relationKind"><option v-for="kind in relations" :key="kind" :value="kind">{{ relationLabel(kind) }}</option></UiSelect></label>
         <label>{{ t('Why this branch follows') }}<textarea v-model="draft.relationReason" required maxlength="2000" /></label>
       </template>
       <label>{{ t('Current conclusion') }}<textarea v-model="draft.summary" maxlength="2000" /></label>
       <label>{{ t('Working plan (one step per line)') }}<textarea v-model="draft.plan" /></label>
       <label>{{ t('Next action') }}<textarea v-model="draft.next" maxlength="2000" /></label>
-      <label v-if="edited">{{ t('Progress') }}<select v-model="draft.status"><option v-for="column in columns" :key="column.status" :value="column.status">{{ column.label }}</option></select></label>
+      <label v-if="edited">{{ t('Progress') }}<UiSelect v-model="draft.status"><option v-for="column in columns" :key="column.status" :value="column.status">{{ column.label }}</option></UiSelect></label>
       <label v-if="edited && draft.status === 'blocked'">{{ t('Blocker') }}<textarea v-model="draft.blocker" required maxlength="2000" /></label>
       <details>
         <summary>{{ t('Evidence and presentation') }}</summary>
@@ -86,6 +86,7 @@
   </component>
 </template>
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { enumLabel } from '../display-labels.ts'
 import { t } from '../i18n.ts'
@@ -227,17 +228,18 @@ p { margin: 8px 0; white-space: pre-wrap; }
 .pending-impact { color: var(--c-warn); background: var(--c-warn-bg); padding: 10px; }
 .pending-impact strong { font-weight: 500; }
 label { display: block; margin: 12px 0; }
-textarea, select, input { display: block; width: 100%; box-sizing: border-box; color: var(--c-text); background: var(--c-bg-input); font: inherit; }
+textarea, input { display: block; }
+textarea, .ui-select, input { width: 100%; box-sizing: border-box; color: var(--c-text); background: var(--c-bg-input); font: inherit; }
 textarea { min-height: 74px; resize: vertical; }
-button, select, textarea, input { min-height: 36px; border: 1px solid var(--c-control-border); padding: 6px 8px; border-radius: var(--radius-control); }
-button { font: inherit; background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
-button:hover:not(:disabled) { background: var(--c-bg-muted); }
-button:disabled { opacity: .5; cursor: not-allowed; }
-button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:where(:not(.ui-select)), .ui-select, textarea, input { min-height: 36px; border: 1px solid var(--c-control-border); padding: 6px 8px; border-radius: var(--radius-control); }
+button:where(:not(.ui-select)) { font: inherit; background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
+button:where(:not(.ui-select)):hover:not(:disabled) { background: var(--c-bg-muted); }
+button:where(:not(.ui-select)):disabled { opacity: .5; cursor: not-allowed; }
+button:where(:not(.ui-select)):focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)), textarea:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .work-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
 form { margin-block: 20px; padding-block: 12px; border-block: 1px solid var(--c-border); }
 fieldset { min-width: 0; margin: 10px 0; padding: 0 10px 10px; border: 1px solid var(--c-border); }
 .html-source { min-height: 120px; font-family: var(--font-mono); font-size: 12px; }
 [role=alert] { color: var(--c-error); }
-@media (max-width: 700px), (pointer: coarse) { button, select { min-height: 44px; } input, textarea { font-size: 16px; } }
+@media (max-width: 700px), (pointer: coarse) { button:where(:not(.ui-select)), .ui-select { min-height: 44px; } input, textarea { font-size: 16px; } }
 </style>

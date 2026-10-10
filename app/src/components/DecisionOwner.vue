@@ -4,9 +4,9 @@
     <p>{{ t('Choose who checks premises and explains this session\'s decisions to you. This does not change answer authority, parenthood or Initiative assignments.') }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <template v-if="candidates.length">
-      <label>{{ t('Reporting session') }} <select v-model="selected" :disabled="busy">
+      <label>{{ t('Reporting session') }} <UiSelect v-model="selected" :disabled="busy">
         <option v-for="item in candidates" :key="item.sessionId" :value="item.sessionId">{{ item.label }}</option>
-      </select></label>
+      </UiSelect></label>
       <button type="button" :disabled="busy || selected === saved" @click="save">{{ t('Save responsibility') }}</button>
       <p v-if="saved">{{ t('Assigned to:') }} {{ saved }}</p>
     </template>
@@ -14,6 +14,7 @@
   </component>
 </template>
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { t } from '../i18n.ts'
 import { onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from '../api-url.ts'
@@ -65,14 +66,14 @@ onUnmounted(() => controller?.abort())
 .decision-owner.is-embedded { margin: 0; }
 summary { cursor: pointer; color: var(--c-text-secondary); }
 p { margin: 6px 0; }
-select { max-width: 100%; color: var(--c-text); background: var(--c-bg-input); }
-button, select { min-height: 36px; border: 1px solid var(--c-border); padding: 4px 8px; border-radius: var(--radius-control); }
-button { background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
-button:hover:not(:disabled) { background: var(--c-bg-muted); }
-button:disabled { opacity: .5; cursor: not-allowed; }
-button:focus-visible, select:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.ui-select { max-width: 100%; color: var(--c-text); background: var(--c-bg-input); }
+button:where(:not(.ui-select)), .ui-select { min-height: 36px; border: 1px solid var(--c-border); padding: 4px 8px; border-radius: var(--radius-control); }
+button:where(:not(.ui-select)) { background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
+button:where(:not(.ui-select)):hover:not(:disabled) { background: var(--c-bg-muted); }
+button:where(:not(.ui-select)):disabled { opacity: .5; cursor: not-allowed; }
+button:where(:not(.ui-select)):focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .is-embedded > :first-child { margin-top: 0; }
 .is-embedded > :last-child { margin-bottom: 0; }
-@media (max-width: 700px), (pointer: coarse) { button, select { min-height: 44px; } }
+@media (max-width: 700px), (pointer: coarse) { button:where(:not(.ui-select)), .ui-select { min-height: 44px; } }
 [role=alert] { color: var(--c-error); }
 </style>

@@ -5,9 +5,9 @@
         <HoverInfo :text="path" v-slot="{ triggerProps }"><span v-bind="triggerProps" class="file-modal-title" tabindex="0">{{ inline ? path : entry.name }}</span></HoverInfo>
         <div class="file-modal-actions">
           <label v-if="textMode" class="file-encoding-control">{{ t('Encoding') }}
-            <select v-model="encoding" :aria-label="t('Text encoding')" @change="loadText">
+            <UiSelect v-model="encoding" :aria-label="t('Text encoding')" @change="loadText">
               <option v-for="option in textEncodings" :key="option.value" :value="option.value">{{ option.label }}</option>
-            </select>
+            </UiSelect>
           </label>
           <button v-if="isMarkdown || isMemoryEvents || (kind === 'html' && !resources.native && !entry.archive)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? t('Preview') : t('Source') }}</button>
           <HoverInfo v-if="kind === 'html' && !sourceView && !resources.native && !entry.archive" :text="t('Reload preview')" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" :aria-label="t('Reload preview')" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
@@ -87,6 +87,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from '../UiSelect.vue'
 import { t } from '../../i18n.ts'
 import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useFileDownload } from '../../composables/useFileDownload.ts'
@@ -387,8 +388,8 @@ onUnmounted(() => { request?.abort(); releaseArchive() })
   flex-shrink: 0;
 }
 .file-encoding-control { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--c-text-secondary); }
-.file-encoding-control select { max-width: 180px; min-height: 32px; padding: 4px 6px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); font: inherit; }
-.file-encoding-control select:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.file-encoding-control .ui-select { max-width: 180px; min-height: 32px; padding: 4px 6px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); font: inherit; }
+.file-encoding-control .ui-select:is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .file-encoding-warning { margin: 0 0 12px; color: var(--c-warn); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .file-modal-backdrop.inline { position: relative; inset: auto; z-index: auto; flex: 1; min-width: 0; min-height: 0; padding: 0; background: transparent; backdrop-filter: none; }
 .file-modal.inline { max-width: none; max-height: none; height: 100%; border: 0; border-radius: 0; box-shadow: none; background: var(--c-bg); }

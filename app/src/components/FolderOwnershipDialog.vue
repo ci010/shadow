@@ -8,10 +8,10 @@
         <form @submit.prevent="submit">
           <label v-if="action === 'move'" class="ownership-field">
             {{ t('Destination project') }}
-            <select v-model="targetId" :disabled="busy" required>
+            <UiSelect v-model="targetId" :disabled="busy" required>
               <option value="" disabled>{{ t('Choose a project') }}</option>
               <option v-for="target in targets" :key="target.id" :value="target.id">{{ target.name }}{{ duplicateName(target.name) ? ` (${target.id.slice(0, 8)})` : '' }}</option>
-            </select>
+            </UiSelect>
           </label>
           <p v-if="action === 'move' && !targets.length" class="ownership-note">{{ t('Create another project before moving this folder.') }}</p>
           <p class="ownership-note">{{ t('Stop active work in this project before continuing. Unconfirmed remote jobs or overlapping folders may also prevent this change.') }}</p>
@@ -30,6 +30,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
 import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
@@ -95,7 +96,7 @@ onUnmounted(() => {
 .ownership-folder { display: grid; gap: 4px; margin: 20px 0; overflow-wrap: anywhere; }
 .ownership-folder span, .ownership-note { color: var(--c-text-secondary); }
 .ownership-field { display: grid; gap: 8px; margin-top: 20px; font-size: 13px; }
-.ownership-field select { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); font: inherit; background: var(--c-bg-input); color: var(--c-text); }
+.ownership-field .ui-select { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); font: inherit; background: var(--c-bg-input); color: var(--c-text); }
 .ownership-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
 .btn { min-height: 36px; padding: 7px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
 .btn:hover:not(:disabled) { background: var(--c-bg-muted); }
@@ -103,6 +104,6 @@ onUnmounted(() => {
 .ownership-confirm { background: var(--c-primary-bg); color: var(--c-text-on-primary); }
 .ownership-confirm:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
 .ownership-error { color: var(--c-error); overflow-wrap: anywhere; }
-.ownership-dialog :is(button, select):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.ownership-dialog :is(button:where(:not(.ui-select)), .ui-select):is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 @media (max-width: 480px) { .ownership-backdrop { padding: 12px; } .ownership-dialog { padding: 20px 16px; } }
 </style>

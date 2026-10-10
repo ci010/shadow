@@ -18,7 +18,7 @@
         <div class="boundary-note"><strong>{{ t('Closed until assigned.') }}</strong> {{ t('Unassigned channels and DMs do not enter an Agent. Legacy admin-chat settings and Discord administrator roles do not grant Shadow access.') }}</div>
         <details v-if="legacy?.legacySessionId || legacy?.adminChats.length"><summary>{{ t('Review previous Discord settings') }}</summary><p>{{ legacy.notice }}</p><p class="muted">{{ t('Choose the server below to resolve saved channel names. Migration copies no administrative permission automatically.') }}</p><div class="choices"><button v-for="id in legacy.adminChats" :key="id" :disabled="!!busy || !directory?.channels.some(channel => channel.id === id && channel.supported && channel.canSend)" @click="prepareLegacy(id)">{{ t('Review') }} {{ directory?.channels.find(channel => channel.id === id)?.name ?? t('saved channel {value1}', { value1: id.slice(-6) }) }}</button></div></details>
         <div class="directory-toolbar">
-          <label>{{ t('Server') }}<select v-model="guildId" :disabled="!!busy" @change="loadDirectory()"><option value="">{{ t('Choose a server') }}</option><option v-for="guild in guilds" :key="guild.id" :value="guild.id">{{ guild.name }} · {{ guild.id.slice(-6) }}</option></select></label>
+          <label>{{ t('Server') }}<UiSelect v-model="guildId" :disabled="!!busy" @change="loadDirectory()"><option value="">{{ t('Choose a server') }}</option><option v-for="guild in guilds" :key="guild.id" :value="guild.id">{{ guild.name }} · {{ guild.id.slice(-6) }}</option></UiSelect></label>
           <button :disabled="!!busy || !connected" @click="loadDirectory()">{{ t('Sync Discord directory') }}</button>
           <button v-if="guildCursor" :disabled="!!busy" @click="loadDirectory(guildCursor)">{{ t('More servers') }}</button>
         </div>
@@ -28,12 +28,12 @@
           <fieldset :disabled="!!busy">
             <legend>{{ t('Channel assignment') }}</legend>
             <div class="form-grid">
-              <label>{{ t('Location type') }}<select v-model="locationType" @change="selectedChannels = []; roleIds = []; userIds = ''"><option value="channel">{{ t('Server channels') }}</option><option value="dm">{{ t('One person\'s direct messages') }}</option></select></label>
-              <label>{{ t('Published Agent') }}<select v-model="assignedAgentId" required @change="selectAgentPermissions"><option value="" disabled>{{ t('Select an Agent') }}</option><option v-for="agent in overview.agents" :key="agent.id" :value="agent.id">{{ agent.displayName }}</option></select></label>
+              <label>{{ t('Location type') }}<UiSelect v-model="locationType" @change="selectedChannels = []; roleIds = []; userIds = ''"><option value="channel">{{ t('Server channels') }}</option><option value="dm">{{ t('One person\'s direct messages') }}</option></UiSelect></label>
+              <label>{{ t('Published Agent') }}<UiSelect v-model="assignedAgentId" required @change="selectAgentPermissions"><option value="" disabled>{{ t('Select an Agent') }}</option><option v-for="agent in overview.agents" :key="agent.id" :value="agent.id">{{ agent.displayName }}</option></UiSelect></label>
             </div>
             <p v-if="!overview.agents.length">{{ t('Publish an Agent in') }} <button type="button" class="text-button" @click="tab = 'agents'">{{ t('Agents') }}</button> {{ t('before assigning a channel.') }}</p>
             <template v-if="locationType === 'channel'">
-              <div class="form-grid search-field"><label>{{ t('Find channels') }}<input v-model="channelSearch" type="search" :placeholder="t('Channel or parent name')" /></label><label>{{ t('Show') }}<select v-model="channelFilter"><option value="all">{{ t('All visible channels') }}</option><option value="assigned">{{ t('Assigned') }}</option><option value="unassigned">{{ t('Not assigned') }}</option><option value="blocked">{{ t('Cannot use') }}</option></select></label></div>
+              <div class="form-grid search-field"><label>{{ t('Find channels') }}<input v-model="channelSearch" type="search" :placeholder="t('Channel or parent name')" /></label><label>{{ t('Show') }}<UiSelect v-model="channelFilter"><option value="all">{{ t('All visible channels') }}</option><option value="assigned">{{ t('Assigned') }}</option><option value="unassigned">{{ t('Not assigned') }}</option><option value="blocked">{{ t('Cannot use') }}</option></UiSelect></label></div>
               <div v-if="visibleChannels.length" class="channel-picker" :aria-label="t('Channels to assign')">
                 <label v-for="channel in visibleChannels" :key="channel.id" class="picker-row">
                   <input v-model="selectedChannels" type="checkbox" :value="channel.id" :disabled="!channel.supported || !channel.canSend" />
@@ -61,7 +61,7 @@
               <details><summary>{{ t('Exact user IDs and users outside this server') }}</summary><label>{{ t('Allowed user IDs') }}<textarea v-model="userIds" rows="2" :placeholder="t('One ID per line')" /></label><p class="muted">{{ t('Discord cannot search all users by name. For a DM recipient outside a mutual server, copy their user ID in Discord. DMs never inherit roles.') }}</p></details>
             </section>
             <div class="form-grid">
-              <label>{{ t('Respond to') }}<select v-model="trigger"><option value="mention">{{ t('Mentions and replies to the Bot') }}</option><option value="all">{{ t('Every authorized message') }}</option></select></label>
+              <label>{{ t('Respond to') }}<UiSelect v-model="trigger"><option value="mention">{{ t('Mentions and replies to the Bot') }}</option><option value="all">{{ t('Every authorized message') }}</option></UiSelect></label>
               <label v-if="locationType === 'channel'" class="check-label"><input v-model="inheritThreads" type="checkbox" />{{ t('New public threads inherit this assignment, not its history') }}</label>
             </div>
             <p v-if="locationType === 'channel' && directory?.channels.some(channel => channel.type === 15 && selectedChannels.includes(channel.id))" class="access-notice">{{ t('Forum assignments apply inside public posts when thread inheritance is enabled. Each post has separate history; the forum parent is not a chat.') }}</p>
@@ -88,8 +88,8 @@
           <summary>{{ t('Preview applied access for a person') }}</summary>
           <p class="muted">{{ t('Checks current membership and permissions, then shows exactly this Agent\'s prompt and tools. It does not call a model or execute tools.') }}</p>
           <form class="form-grid" @submit.prevent="previewAccess">
-            <label>{{ t('Assigned conversation') }}<select v-model="previewChatId" required><option value="">{{ t('Select a conversation') }}</option><option v-for="binding in botBindings.filter(item => item.enabled && item.target.kind === 'channel')" :key="binding.id" :value="binding.target.kind === 'channel' ? binding.target.channelId : ''">{{ locationLabel(binding) }}</option><option v-for="scope in dmScopes" :key="scope.sessionId" :value="scope.conversationId">{{ scope.location.name ?? t('Direct message') }}</option></select></label>
-            <label>{{ t('Person') }}<select v-if="members.length" v-model="previewSender" required><option value="">{{ t('Select a person') }}</option><option v-for="member in members" :key="member.id" :value="member.id">{{ member.name }}</option></select><input v-else v-model="previewSender" required :placeholder="t('Find a person above, or enter a user ID')" /></label>
+            <label>{{ t('Assigned conversation') }}<UiSelect v-model="previewChatId" required><option value="">{{ t('Select a conversation') }}</option><option v-for="binding in botBindings.filter(item => item.enabled && item.target.kind === 'channel')" :key="binding.id" :value="binding.target.kind === 'channel' ? binding.target.channelId : ''">{{ locationLabel(binding) }}</option><option v-for="scope in dmScopes" :key="scope.sessionId" :value="scope.conversationId">{{ scope.location.name ?? t('Direct message') }}</option></UiSelect></label>
+            <label>{{ t('Person') }}<UiSelect v-if="members.length" v-model="previewSender" required><option value="">{{ t('Select a person') }}</option><option v-for="member in members" :key="member.id" :value="member.id">{{ member.name }}</option></UiSelect><input v-else v-model="previewSender" required :placeholder="t('Find a person above, or enter a user ID')" /></label>
             <button :disabled="!!busy || !connected">{{ t('Preview access') }}</button>
           </form>
           <div v-if="preview" class="preview-result"><strong>{{ preview.agent }} · {{ preview.execution }}</strong><p>{{ preview.notice }}</p><p v-if="preview.newContextRequired">{{ t('The next message starts a new context; earlier history is not reused.') }}</p><p>{{ t('Tools:') }} {{ preview.tools.map(tool => toolLabel(tool.name)).join(', ') || t('None') }}</p><pre>{{ preview.systemPrompt }}</pre></div>
@@ -98,14 +98,14 @@
 
       <div v-else-if="tab === 'agents'">
         <p class="boundary-note">{{ t('Agent instructions and skills are approved snapshots. The tool and knowledge selections below are the maximum a channel can receive; Markdown cannot grant more.') }}</p>
-        <div class="directory-toolbar"><label>{{ t('Edit a published Agent') }}<select :value="editingAgentId" @change="editAgent(($event.target as HTMLSelectElement).value)"><option value="">{{ t('New Agent') }}</option><option v-for="agent in overview.agents" :key="agent.id" :value="agent.id">{{ agent.displayName }}</option></select></label><button :disabled="!!busy" @click="editAgent('')">{{ t('New Agent') }}</button></div>
+        <div class="directory-toolbar"><label>{{ t('Edit a published Agent') }}<UiSelect :value="editingAgentId" @change="editAgent(($event.target as HTMLSelectElement).value)"><option value="">{{ t('New Agent') }}</option><option v-for="agent in overview.agents" :key="agent.id" :value="agent.id">{{ agent.displayName }}</option></UiSelect></label><button :disabled="!!busy" @click="editAgent('')">{{ t('New Agent') }}</button></div>
         <form @submit.prevent="proposeAgent">
           <fieldset :disabled="!!busy"><legend>{{ t('Agent definition') }}</legend>
             <div class="form-grid">
               <label>{{ t('Display name') }}<input v-model="agentDraft.displayName" required maxlength="100" :placeholder="t('Customer support')" /></label>
               <label>{{ t('Stable name') }}<input v-model="agentDraft.name" required pattern="[a-z][a-z0-9_-]{0,63}" :disabled="!!editingAgentId" placeholder="discord-support" /></label>
-              <label>{{ t('Execution') }}<select v-model="agentDraft.execution" @change="restrictAgent"><option value="restricted">{{ t('Restricted tools') }}</option><option value="trusted">{{ t('Trusted host execution') }}</option></select></label>
-              <label>{{ t('Start instructions from') }}<select @change="copyTemplate(($event.target as HTMLSelectElement).value)"><option value="">{{ t('Choose an existing role') }}</option><option v-for="template in overview.templates" :key="template.name" :value="template.name">{{ template.name }}</option></select></label>
+              <label>{{ t('Execution') }}<UiSelect v-model="agentDraft.execution" @change="restrictAgent"><option value="restricted">{{ t('Restricted tools') }}</option><option value="trusted">{{ t('Trusted host execution') }}</option></UiSelect></label>
+              <label>{{ t('Start instructions from') }}<UiSelect @change="copyTemplate(($event.target as HTMLSelectElement).value)"><option value="">{{ t('Choose an existing role') }}</option><option v-for="template in overview.templates" :key="template.name" :value="template.name">{{ template.name }}</option></UiSelect></label>
             </div>
             <p v-if="agentDraft.execution === 'trusted'" class="access-error">{{ t('Trusted execution is not a sandbox. Shell code can access host files and credentials beyond memory-domain controls. Use a private management audience and consider a separate Bot.') }}</p>
             <label>AGENT.md<textarea v-model="agentDraft.markdown" required class="code-input" rows="12" spellcheck="false" /></label>
@@ -135,7 +135,7 @@
         </details>
         <form class="form-grid" @submit.prevent="propose({ kind: 'domain.create', name: domainName, domainKind })">
           <label>{{ t('New domain name') }}<input v-model="domainName" required maxlength="160" :placeholder="t('Customer help articles')" /></label>
-          <label>{{ t('Purpose') }}<select v-model="domainKind"><option value="shared">{{ t('Shared knowledge') }}</option><option value="agent-private">{{ t('Explicit Agent-private knowledge') }}</option></select></label>
+          <label>{{ t('Purpose') }}<UiSelect v-model="domainKind"><option value="shared">{{ t('Shared knowledge') }}</option><option value="agent-private">{{ t('Explicit Agent-private knowledge') }}</option></UiSelect></label>
           <button :disabled="!!busy">{{ t('Review new domain') }}</button>
         </form>
         <p class="muted">{{ t('Neither kind is public by default. Each Agent and channel needs an explicit read grant. Agent-private does not mean every conversation with the same Agent can read it.') }}</p>
@@ -143,11 +143,11 @@
         <form class="publication-form" @submit.prevent="proposePublication">
           <fieldset :disabled="!!busy"><legend>{{ t('Publish an approved copy') }}</legend>
             <div class="form-grid">
-              <label>{{ t('Destination domain') }}<select v-model="publicationDomain" required><option value="">{{ t('Choose a domain') }}</option><option v-for="domain in availableDomains" :key="domain.id" :value="domain.id">{{ domain.name }}</option></select></label>
-              <label>{{ t('Start from a saved resource') }}<select v-model="sourceResource" @change="loadSource"><option value="">{{ t('Write a new copy') }}</option><option v-for="resource in overview.resources.filter(item => !item.revoked)" :key="resource.id" :value="resource.id">{{ resource.title }} · {{ domainNameFor(resource.domainId) }}</option></select></label>
+              <label>{{ t('Destination domain') }}<UiSelect v-model="publicationDomain" required><option value="">{{ t('Choose a domain') }}</option><option v-for="domain in availableDomains" :key="domain.id" :value="domain.id">{{ domain.name }}</option></UiSelect></label>
+              <label>{{ t('Start from a saved resource') }}<UiSelect v-model="sourceResource" @change="loadSource"><option value="">{{ t('Write a new copy') }}</option><option v-for="resource in overview.resources.filter(item => !item.revoked)" :key="resource.id" :value="resource.id">{{ resource.title }} · {{ domainNameFor(resource.domainId) }}</option></UiSelect></label>
             </div>
             <label>{{ t('Title') }}<input v-model="publicationTitle" required maxlength="200" /></label>
-            <label>{{ t('Resource type') }}<select v-model="publicationKind"><option value="note">{{ t('Knowledge note') }}</option><option value="skill">{{ t('Approved skill instructions') }}</option></select></label>
+            <label>{{ t('Resource type') }}<UiSelect v-model="publicationKind"><option value="note">{{ t('Knowledge note') }}</option><option value="skill">{{ t('Approved skill instructions') }}</option></UiSelect></label>
             <label>{{ t('Exact text to share') }}<textarea v-model="publicationContent" required rows="10" /></label>
             <p class="muted">{{ t('Read by channels you explicitly grant this domain to. Conversation notes and private source metadata are not automatically exposed.') }}</p>
             <button class="primary" :disabled="!publicationDomain">{{ t('Review knowledge publication') }}</button>
@@ -182,6 +182,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
@@ -472,8 +473,8 @@ h5, legend { font-size: 14px; font-weight: 600; margin: 24px 0 10px; }
 p { margin: 8px 0 14px; max-width: 74ch; overflow-wrap: anywhere; }
 .access-heading p, .muted, small { color: var(--c-text-secondary); }
 .access-nav { display: flex; flex-wrap: wrap; gap: 4px; margin: 24px 0; border-bottom: 1px solid var(--c-border); }
-.access-nav button { border: 0; border-bottom: 2px solid transparent; background: transparent; }
-.access-nav button[aria-current="page"] { border-bottom-color: var(--c-primary); color: var(--c-primary); }
+.access-nav button:where(:not(.ui-select)) { border: 0; border-bottom: 2px solid transparent; background: transparent; }
+.access-nav button:where(:not(.ui-select))[aria-current="page"] { border-bottom-color: var(--c-primary); color: var(--c-primary); }
 .boundary-note { padding: 16px; background: var(--c-bg-soft); border: 1px solid var(--c-border); margin: 0 0 24px; max-width: 86ch; }
 .access-error { color: var(--c-error); }
 .access-notice { color: var(--c-text-secondary); }
@@ -483,7 +484,7 @@ p { margin: 8px 0 14px; max-width: 74ch; overflow-wrap: anywhere; }
 label:not(.check-label):not(.picker-row) { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 legend { padding: 0; margin-bottom: 14px; }
-input:not([type="checkbox"]), select, textarea { width: 100%; box-sizing: border-box; min-width: 0; font: inherit; color: var(--c-text); background: var(--c-bg-input); border: 1px solid var(--c-border); border-radius: var(--radius-control); padding: 9px 10px; }
+input:not([type="checkbox"]), .ui-select, textarea { width: 100%; box-sizing: border-box; min-width: 0; font: inherit; color: var(--c-text); background: var(--c-bg-input); border: 1px solid var(--c-border); border-radius: var(--radius-control); padding: 9px 10px; }
 input::placeholder, textarea::placeholder { color: var(--c-text-secondary); opacity: 1; }
 textarea { resize: vertical; }
 input[type="checkbox"] { flex-shrink: 0; width: 16px; height: 16px; margin: 0; accent-color: var(--c-primary-bg); }
@@ -497,13 +498,13 @@ input[type="checkbox"] { flex-shrink: 0; width: 16px; height: 16px; margin: 0; a
 .picker-row:has(input:checked) { background: var(--c-selection-bg); }
 .row-status { color: var(--c-text-secondary); font-size: 12px; max-width: 35%; text-align: right; }
 .form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
-button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-soft); color: var(--c-text); font: inherit; font-weight: 500; cursor: pointer; }
-button:hover:not(:disabled) { background: var(--c-bg-muted); }
-button.primary { background: var(--c-primary-bg); color: var(--c-text-on-primary); }
-button.primary:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
-button:disabled { opacity: .55; cursor: not-allowed; }
+button:where(:not(.ui-select)) { min-height: 36px; padding: 8px 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-soft); color: var(--c-text); font: inherit; font-weight: 500; cursor: pointer; }
+button:where(:not(.ui-select)):hover:not(:disabled) { background: var(--c-bg-muted); }
+button:where(:not(.ui-select)).primary { background: var(--c-primary-bg); color: var(--c-text-on-primary); }
+button:where(:not(.ui-select)).primary:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
+button:where(:not(.ui-select)):disabled { opacity: .55; cursor: not-allowed; }
 .text-button { padding: 0; min-height: 0; border: 0; background: transparent; color: var(--c-primary); text-decoration: underline; }
-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button:where(:not(.ui-select)):focus-visible, input:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)), textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .saved-section, .preview-section, .publication-form { margin-top: 32px; }
 .saved-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; border-top: 1px solid var(--c-border); padding: 14px 0; }
 .saved-row > div { flex: 1 1 220px; min-width: 0; }
@@ -514,7 +515,7 @@ details label { margin-top: 12px; }
 .code-input, pre { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
 pre { padding: 14px; background: var(--c-bg-soft); border: 1px solid var(--c-border); overflow: auto; max-height: 440px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
 .skill-editor { display: grid; gap: 12px; margin-bottom: 20px; }
-.skill-editor button { justify-self: start; }
+.skill-editor button:where(:not(.ui-select)) { justify-self: start; }
 .review-row { border-top: 1px solid var(--c-border); padding: 18px 0; }
 .review-row h5 { margin: 0; }
 .review-row header p { margin: 4px 0 0; color: var(--c-text-secondary); }
@@ -525,8 +526,8 @@ pre { padding: 14px; background: var(--c-bg-soft); border: 1px solid var(--c-bor
 @media (max-width: 700px) {
   .form-grid { grid-template-columns: minmax(0, 1fr); }
   .access-heading { flex-direction: column; }
-  button, .check-label { min-height: 44px; }
-  input:not([type="checkbox"]), select, textarea { font-size: 16px; }
+  button:where(:not(.ui-select)), .check-label { min-height: 44px; }
+  input:not([type="checkbox"]), .ui-select, textarea { font-size: 16px; }
   .picker-row { gap: 8px; }
   .row-status { max-width: 30%; }
 }

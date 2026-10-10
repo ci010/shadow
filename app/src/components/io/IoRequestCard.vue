@@ -14,13 +14,13 @@
     <div v-if="!terminal && microphones.length && !unsupportedCapture" class="input-devices">
       <label v-for="source in microphones" :key="source.id" class="input-device">
         <span>{{ microphones.length > 1 ? t('Microphone · {id}', { id: source.id }) : t('Microphone') }}</span>
-        <select :value="selectedDevice(source.id)" :aria-label="t('Audio input · {id}', { id: source.id })"
+        <UiSelect :value="selectedDevice(source.id)" :aria-label="t('Audio input · {id}', { id: source.id })"
           :disabled="switching[source.id] || !['ready', 'awaiting_consent', 'recording'].includes(phase) || (phase === 'recording' && !live?.execution.captures?.audioInputs?.has(source.id))"
           @change="selectDevice(source.id, $event)">
           <option value="">{{ t('System default') }}</option>
           <option v-for="device in devices" :key="device.deviceId" :value="device.deviceId">{{ device.label }}</option>
           <option v-if="selectedDevice(source.id) && !devices.some(device => device.deviceId === selectedDevice(source.id))" :value="selectedDevice(source.id)">{{ t('Selected microphone') }}</option>
-        </select>
+        </UiSelect>
         <span v-if="switching[source.id]" role="status">{{ t('Switching microphone…') }}</span>
       </label>
       <p v-if="deviceError || enumerationError" class="request-error" role="alert">{{ deviceError || enumerationError }}</p>
@@ -93,6 +93,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from '../UiSelect.vue'
 import { t } from '../../i18n.ts'
 import { computed, inject, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { IO_MAX_BUFFER_BYTES, IO_TERMINAL, type IoArtifact, type IoRun } from '../../../../src/io/contracts.ts'
@@ -236,7 +237,7 @@ onBeforeUnmount(() => {
 .request-button:disabled { opacity: 0.5; cursor: not-allowed; }
 .input-devices { margin-top: 14px; }
 .input-device { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--c-text-secondary); }
-.input-device select { max-width: 100%; min-width: 0; flex: 1; padding: 7px 28px 7px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; }
+.input-device .ui-select { max-width: 100%; min-width: 0; flex: 1; padding: 7px 28px 7px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; }
 .capture-preview { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
 .audio-level { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--c-text-secondary); }
 .audio-level meter { flex: 1; min-width: 0; height: 12px; accent-color: var(--c-blue); }
@@ -245,7 +246,7 @@ onBeforeUnmount(() => {
 .backend-message { margin: 10px 0; }
 .input-form { display: grid; gap: 8px; margin: 12px 0; }
 .input-form textarea { width: 100%; padding: 8px; background: var(--c-bg-input); color: var(--c-text); border: 1px solid var(--c-border); border-radius: var(--radius-control); resize: vertical; font: inherit; }
-.input-form button { justify-self: start; }
+.input-form button:where(:not(.ui-select)) { justify-self: start; }
 .capture-artifact { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .capture-artifact > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .capture-artifact strong { font-size: 13px; font-weight: 500; }
@@ -255,9 +256,9 @@ onBeforeUnmount(() => {
 .capture-details dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 10px 0; }
 .capture-details dd { margin: 0; overflow-wrap: anywhere; }
 .capture-details p { margin: 10px 0; }
-.io-request :is(button, a, select, textarea, summary):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
+.io-request :is(button:where(:not(.ui-select)), a, .ui-select, textarea, summary):is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-blue); outline-offset: 3px; }
 .loading-icon { display: inline-block; width: 14px; height: 14px; animation: input-spin 1s linear infinite; }
 @keyframes input-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .loading-icon { animation: none; } }
-@media (max-width: 480px) { .io-request { padding: 14px 12px; } .request-heading { align-items: flex-start; flex-wrap: wrap; } .request-heading h3 { flex-basis: calc(100% - 30px); } .request-state { margin-left: 28px; } .request-button { min-height: 40px; } .input-device select { font-size: 16px; } .capture-artifact { flex-wrap: wrap; } }
+@media (max-width: 480px) { .io-request { padding: 14px 12px; } .request-heading { align-items: flex-start; flex-wrap: wrap; } .request-heading h3 { flex-basis: calc(100% - 30px); } .request-state { margin-left: 28px; } .request-button { min-height: 40px; } .input-device .ui-select { font-size: 16px; } .capture-artifact { flex-wrap: wrap; } }
 </style>

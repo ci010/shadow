@@ -41,6 +41,7 @@
 </template>
 
 <script setup lang="ts">
+import { isSelectPopupEventInside } from '../select-control.ts'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onDeactivated, ref, useId, watch } from 'vue'
 import BackgroundTasks from './BackgroundTasks.vue'
@@ -110,6 +111,7 @@ watch(expanded, async (panel, _previous, onCleanup) => {
     }
   }
   const dismissOutside = (event: Event) => {
+    if (popup.value && isSelectPopupEventInside(event, popup.value)) return
     if (event.target instanceof Node && !root.value?.contains(event.target) && !popup.value?.contains(event.target)) expanded.value = null
   }
   const observer = new ResizeObserver(place)

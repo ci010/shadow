@@ -6,14 +6,13 @@
     <p v-if="error" class="settings-error" role="alert">{{ error }} <button type="button" class="btn btn-sm" :disabled="loading || saving" @click="load">{{ t('Reload defaults') }}</button></p>
     <fieldset :disabled="loading || saving || !state">
       <label class="settings-field">{{ t('Default model') }}
-        <input v-model="model" :list="`${id}-models`" :placeholder="t('Follow {parentLabel}: {value2}', { parentLabel: parentLabel, value2: state?.inherited.model ?? '' })" />
+        <UiCombobox v-model="model" :options="models" :placeholder="t('Follow {parentLabel}: {value2}', { parentLabel: parentLabel, value2: state?.inherited.model ?? '' })" />
       </label>
-      <datalist :id="`${id}-models`"><option v-for="option in models" :key="option" :value="option" /></datalist>
       <p v-if="modelsError" class="settings-error" role="alert">{{ modelsError }}</p>
       <label class="settings-field">{{ t('Default effort') }}
-        <select v-model="effort">
+        <UiSelect v-model="effort">
           <option v-for="option in effortOptionsForModel(model || state?.inherited.model || '')" :key="option.value" :value="option.value">{{ option.value === 'default' ? t('Follow {parentLabel} · {inheritedEffort}', { parentLabel: parentLabel, inheritedEffort: inheritedEffort }) : option.label }}</option>
-        </select>
+        </UiSelect>
       </label>
       <label class="settings-field">{{ t('Temperature') }}
         <input v-model="temperature" type="number" step="0.1" :placeholder="t('Follow {parentLabel}: {value2}', { parentLabel: parentLabel, value2: state?.inherited.temperature ?? '' })" />
@@ -29,14 +28,16 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
+import UiCombobox from './UiCombobox.vue'
 import { t } from '../i18n.ts'
-import { computed, onMounted, onUnmounted, ref, useId } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { createModelDefaultsClient, type ModelDefaultsState } from '../model-defaults.ts'
 import { createProjectSettingsClient } from '../project-settings.ts'
 import { currentEffort, effortOptionsForModel, reasoningSettingsForEffort, type EffortChoice } from '../session-settings.ts'
 
 const props = defineProps<{ apiBase: string; scope: 'app' | 'project'; projectId?: string }>()
-const id = useId()
+
 const parentLabel = computed(() => props.scope === 'app' ? t('built-in defaults') : t('App defaults'))
 const state = ref<ModelDefaultsState>()
 const model = ref('')
@@ -97,7 +98,7 @@ onUnmounted(() => request?.abort())
 h2 { margin: 0 0 16px; font-size: 20px; }
 fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
 .settings-field { display: grid; gap: 8px; max-width: 600px; margin: 20px 0; font-size: 13px; }
-input, select { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; }
+input, .ui-select { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; }
 .settings-help { color: var(--c-text-secondary); font-size: 14px; line-height: 1.6; max-width: 70ch; overflow-wrap: anywhere; }
 .settings-error { color: var(--c-error); font-size: 13px; overflow-wrap: anywhere; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 16px; }
@@ -107,5 +108,5 @@ input, select { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px
 .save-defaults { background: var(--c-primary-bg); color: var(--c-text-on-primary); }
 .save-defaults:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
 input::placeholder { color: var(--c-text-secondary); opacity: 1; }
-input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+input:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)), button:where(:not(.ui-select)):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 </style>

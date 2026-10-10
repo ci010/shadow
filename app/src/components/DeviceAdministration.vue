@@ -25,10 +25,10 @@
         <p>{{ t('Enable a device-only connection on your trusted LAN or VPN. Main’s app gateway stays on loopback.') }}</p>
         <div class="network-fields">
           <label for="device-host">{{ t('Main’s network address') }}
-            <select id="device-host" v-model="host" :disabled="!!action || !!loadError">
+            <UiSelect id="device-host" v-model="host" :disabled="!!action || !!loadError">
               <option v-if="!choices.length" value="">{{ t('No private IPv4 address available') }}</option>
               <option v-for="address in choices" :key="address.address" :value="address.address">{{ address.address }} — {{ address.name }}{{ address.address.startsWith('127.') ? t(' (this machine only)') : '' }}</option>
-            </select>
+            </UiSelect>
           </label>
           <details>
             <summary>{{ t('Port settings') }}</summary>
@@ -91,6 +91,7 @@
 </template>
 
 <script setup lang="ts">
+import UiSelect from './UiSelect.vue'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { NodeInventoryEntry } from '../node-inventory.ts'
@@ -327,3 +328,15 @@ onUnmounted(() => {
 </script>
 
 <style scoped src="./device-administration.css"></style>
+
+<style scoped>
+.network-fields .ui-select {
+  max-width: 100%; min-width: 0; min-height: 36px; padding: 0.35rem 0.5rem;
+  border: 1px solid var(--c-control-border); border-radius: var(--radius-control);
+  background: var(--c-bg-input); color: var(--c-text); font: inherit;
+}
+.network-fields .ui-select:is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-blue); outline-offset: 3px; }
+@media (max-width: 600px) {
+  .network-fields .ui-select { min-height: 44px; font-size: 16px; }
+}
+</style>
