@@ -88,6 +88,7 @@ function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapO
 		failure: outcome.failure,
 		revealLog: api.diagnostics ? () => api.diagnostics!.revealStartupLog() : undefined,
 		retry: async () => {
+			await api.bootstrap.retryRuntime?.()
 			const next = await resolveDesktopBootstrap(api)
 			recovery.unmount()
 			renderDesktopOutcome(api, next)

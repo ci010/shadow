@@ -1246,7 +1246,7 @@ export async function createProjectRuntime(
   // ── Start everything ──────────────────────────────────────────────
   console.info('[main] Starting all services...')
 
-  const startAgent = startup.measure('agent', () => agent.start())
+  const startAgent = startup.measure('agent', () => agent.start(startup))
   const startCron = startup.measure('cron', () => cronService.start())
   cleanup.push(() => cronService.stop())
   cleanup.push(() => agent.shutdown())

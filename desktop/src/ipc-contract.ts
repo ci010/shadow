@@ -19,6 +19,7 @@ export const IPC_CHANNELS = {
   initializeMain: 'shadow:bootstrap:initialize-main',
   launchMain: 'shadow:bootstrap:launch-main',
   ensureRuntime: 'shadow:bootstrap:ensure-runtime',
+  retryRuntime: 'shadow:bootstrap:retry-runtime',
   childSetup: 'shadow:bootstrap:child-setup',
   pairChild: 'shadow:bootstrap:pair-child',
   selectDirectory: 'shadow:native:select-directory',
@@ -87,6 +88,7 @@ export interface ShadowDesktopApi {
     initializeMain(): Promise<BootstrapCommandResult>
     launchMain(options: LaunchMainOptions): Promise<BootstrapCommandResult>
     ensureRuntime(): Promise<EnsureRuntimeResult>
+    retryRuntime(): Promise<EnsureRuntimeResult>
     childSetup(): Promise<ChildSetupInfo>
     pairChild(input: ChildPairInput): Promise<BootstrapCommandResult>
   }

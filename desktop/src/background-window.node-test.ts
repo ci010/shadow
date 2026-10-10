@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
-import { installChildBackgroundWindow } from './child-background.js'
+import { installBackgroundWindow } from './background-window.js'
 import { registerRuntimeHostQuitLifecycle } from './sidecar/runtime-host.js'
 
 function fixture() {
-  let child = false
   const calls: string[] = []
   const app = Object.assign(new EventEmitter(), {
     quit() {
@@ -24,33 +23,25 @@ function fixture() {
     show() { calls.push('show') },
     focus() { calls.push('focus') },
   })
-  const dispose = installChildBackgroundWindow(app, window, () => child)
+  const dispose = installBackgroundWindow(app, window)
   const close = () => {
     let prevented = false
     window.emit('close', { preventDefault: () => { prevented = true } })
     return prevented
   }
-  return { app, window, calls, close, dispose, setChild: (value: boolean) => { child = value } }
+  return { app, window, calls, close, dispose }
 }
 
-test('closing an active Child hides only the window; Main and unstarted setup retain normal close', () => {
+test('closing Main, Child or setup hides only the window without stopping the app', () => {
   const f = fixture()
-  assert.equal(f.close(), false)
-  assert.deepEqual(f.calls, [])
-  f.setChild(true)
   assert.equal(f.close(), true)
   assert.equal(f.close(), true)
   assert.deepEqual(f.calls, ['hide', 'hide'])
   assert.equal(f.window.isDestroyed(), false)
-  f.setChild(false)
-  assert.equal(f.close(), false)
 })
 
-test('macOS activation restores the hidden Child without starting another runtime', () => {
+test('macOS activation restores the hidden window without starting another runtime', () => {
   const f = fixture()
-  f.app.emit('activate')
-  assert.deepEqual(f.calls, [])
-  f.setChild(true)
   f.window.minimized = true
   f.app.emit('activate')
   assert.deepEqual(f.calls, ['restore', 'show', 'focus'])
@@ -62,7 +53,6 @@ test('macOS activation restores the hidden Child without starting another runtim
 
 test('explicit Quit stops the owned runtime exactly once and is not intercepted as hide', async () => {
   const f = fixture()
-  f.setChild(true)
   let resolveStopped!: () => void
   const stopped = new Promise<void>(resolve => { resolveStopped = resolve })
   let stops = 0
@@ -81,7 +71,6 @@ test('explicit Quit stops the owned runtime exactly once and is not intercepted 
 test('destroyed windows and disposed lifecycle release all handlers', () => {
   for (const closed of [false, true]) {
     const f = fixture()
-    f.setChild(true)
     f.window.destroyed = true
     assert.equal(f.close(), false)
     f.app.emit('activate')

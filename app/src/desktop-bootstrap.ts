@@ -89,6 +89,7 @@ export interface ShadowDesktopApi {
 		initializeMain(): Promise<BootstrapCommandResult>
 		launchMain(options: { readonly localExecutor: boolean; readonly port: number }): Promise<BootstrapCommandResult>
 		ensureRuntime(): Promise<EnsureRuntimeResult>
+		retryRuntime?(): Promise<EnsureRuntimeResult>
 		childSetup?(): Promise<ChildSetupInfo>
 		pairChild?(input: ChildPairInput): Promise<BootstrapCommandResult>
 	}

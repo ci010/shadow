@@ -22,7 +22,6 @@ interface NativeAppOptions {
   appPath: string
   packaged: boolean
   defaultIconPath: string
-  serviceConnectionPath?: string
   platform?: NodeJS.Platform
   fetch?: typeof globalThis.fetch
   createWindow(input: MicroAppWindowInput): Promise<MicroAppWindowHandle>
@@ -264,7 +263,6 @@ export class DesktopMicroApps {
         const args = [
           ...(this.options.packaged ? [] : [this.options.appPath]),
           `--user-data-dir=${this.options.userDataPath}`,
-          ...(this.options.serviceConnectionPath ? [`--service-connection=${this.options.serviceConnectionPath}`] : []),
           microAppArgument(identity),
         ]
         tasks.push({ program: this.options.executablePath, arguments: args.map(quoteWindowsArgument).join(' '),

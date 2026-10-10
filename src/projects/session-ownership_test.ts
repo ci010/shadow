@@ -47,6 +47,29 @@ test('remote reservations reject a foreign persistence format before committing 
       sessionId: 'web:owned', segmentIndex: 0, projectId: 'default',
       workdir: { version: 1, nodeId: 'child', capabilityId: 'grant' },
     })
+
+    test('remote reservations validate and collect each persistence snapshot only once', async t => {
+      await withTempWorkspace(async root => {
+        const home = join(root, 'home')
+        const directory = join(home, '.sessions')
+        const catalog = new ProjectCatalog(join(root, 'host.projects'))
+        await catalog.init()
+        const jsonl = new JsonlSessionStore(directory)
+        await jsonl.init()
+        await jsonl.saveState('owned-jsonl', {
+          sessionId: 'owned-jsonl', segmentIndex: 0, projectId: 'default',
+        })
+        const sqlite = new SqliteSessionStore(directory)
+        try {
+          await sqlite.saveState('owned-sqlite', { sessionId: 'owned-sqlite', segmentIndex: 0, projectId: 'default' })
+        } finally { sqlite.close() }
+        const jsonlReads = t.mock.method(JsonlSessionStore.prototype, 'listAllStates')
+        const sqliteReads = t.mock.method(SqliteSessionStore.prototype, 'listAllStates')
+        await reserveRemoteSessionWorkdirs(home, catalog, 'default')
+        assert.equal(jsonlReads.mock.callCount(), 1)
+        assert.equal(sqliteReads.mock.callCount(), 1)
+      })
+    })
     const sqlite = new SqliteSessionStore(directory)
     try {
       await sqlite.saveState('web:foreign', { sessionId: 'web:foreign', segmentIndex: 0, projectId: 'foreign' })

@@ -1,6 +1,8 @@
 export const BACKEND_STARTUP_PHASES = [
   'catalog', 'ownership', 'cluster', 'gateway', 'projects', 'config', 'events',
   'folders', 'sessions', 'io', 'channels', 'agent', 'cron', 'recovery', 'ready',
+  'agent-mcp', 'agent-skills', 'agent-types', 'agent-watchers', 'agent-sessions',
+  'session-load', 'session-migrate', 'session-lineage', 'session-task-history', 'session-reports', 'session-recovery',
 ] as const
 
 export interface BackendStartupTiming {

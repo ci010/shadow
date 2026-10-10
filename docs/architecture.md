@@ -2671,6 +2671,15 @@ hosts. Explicit Quit requests authenticated backend shutdown before exiting.
 The supervisor still checks authenticated loopback readiness with the existing
 15-second deadline. The short-lived Child pairing command remains a Node-mode
 helper with private stdin; it is not the persistent Child runtime.
+Startup diagnostics break Agent initialization into MCP catalog, skills, agent
+types, watchers and sessions. Session timings further separate state loading,
+migration, lineage cleanup, legacy task history, completion reports and recovery.
+These fixed-name timing records reach the desktop startup log without transcript
+content or project identities. Startup infers one-shot execution status from
+history only for legacy records without a status; known closed executions remain
+closed without rereading their logs. Completion-report scans require a recipient,
+and unchanged session metadata is not rewritten. Interrupted managed sessions
+and deliverable completion reports still follow the existing recovery path.
 The launch credential remains in Electron
 main; request authorization is attached only to the current renderer's requests
 to the expected literal-loopback backend origin.

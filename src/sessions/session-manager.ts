@@ -1,4 +1,5 @@
 import { trace } from '@opentelemetry/api'
+import { StartupTimings } from '../runtime/startup-timings.ts'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from './session-name.ts'
 import { parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
 import { readSessionFileChanges } from './file-changes.ts'
@@ -990,7 +991,7 @@ ${JSON.stringify(request)}`,
 
   // ── Lifecycle (start / stop / dispatch / recovery) ──────────────────
 
-  async start(): Promise<void> {
+  async start(startup = new StartupTimings('project', this.deps.projectId)): Promise<void> {
     if (this.stopPromise) await this.stopPromise
     this.stopPromise = undefined
     this.stopped = false
@@ -998,92 +999,106 @@ ${JSON.stringify(request)}`,
     this.inputs.start()
     this.yieldDiscussions.startRuntime()
     // Load all session states into memory cache
-    this.sessionStates = await this.store.listAllStates()
+    this.sessionStates = await startup.measure('session-load', () => this.store.listAllStates())
     for (const state of Object.values(this.sessionStates)) {
       if (this.historyConflict(state.sessionId)) {
         console.error(`[session-manager] Session ${state.sessionId} has potentially shared legacy history; automatic continuation is blocked pending explicit repair.`)
       }
     }
-    for (const state of Object.values(this.sessionStates)) {
-      state.automation ??= resolveAutomationSession(state)
-      state.automationVersion = 1
-      if (this.deps.projectId) {
-        const address = channelAddressFromSessionId(state.sessionId)
-        if (address && address.projectId !== this.deps.projectId) throw new Error('Bot session project mismatch')
-        if (state.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
-        state.projectId = this.deps.projectId
-      }
-      if (!isExecutionMode(state.mode)) {
-        // Built-in historical lifetimes are fixed, even when the current role was edited.
-        const historical = ['verify', 'reflector', 'soul-reflector', 'encapsulator'].includes(state.agentType ?? '')
-          ? 'task' : ['general', 'sub', 'explore', 'plan'].includes(state.agentType ?? 'general')
-          ? 'session' : this.deps.agentTypes.resolve(state.agentType ?? 'general')?.defaultMode ?? 'session'
-        state.mode = historical
-      }
-      if (state.mode === 'session') {
-        const formerOwner = state.parentSessionId ?? (state.parent?.index === undefined
-          && (state.workspaceRoot || state.reportTo || state.description || state.parent?.physicalId) ? state.parent?.id : undefined)
-        if (formerOwner || state.workspaceRoot) {
-          // Keep workspaceRoot as a data-location compatibility key, not an owner:
-          // managed-session capabilities and sessionDataDir must not change.
-          state.workdir = normalizeSessionLocality(state).workdir
+    await startup.measure('session-migrate', async () => {
+      for (const state of Object.values(this.sessionStates)) {
+        const persisted = JSON.stringify(state)
+        state.automation ??= resolveAutomationSession(state)
+        state.automationVersion = 1
+        if (this.deps.projectId) {
+          const address = channelAddressFromSessionId(state.sessionId)
+          if (address && address.projectId !== this.deps.projectId) throw new Error('Bot session project mismatch')
+          if (state.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
+          state.projectId = this.deps.projectId
         }
-        if (formerOwner && formerOwner !== state.sessionId) state.createdBySessionId ??= formerOwner
-        state.parentSessionId = null
-        delete state.reportTo
-        state.sessionKind ??= state.sessionId === 'web:orchestrator' && state.agentType === 'orchestrator'
-          ? 'orchestrator' : undefined
+        if (!isExecutionMode(state.mode)) {
+          // Built-in historical lifetimes are fixed, even when the current role was edited.
+          const historical = ['verify', 'reflector', 'soul-reflector', 'encapsulator'].includes(state.agentType ?? '')
+            ? 'task' : ['general', 'sub', 'explore', 'plan'].includes(state.agentType ?? 'general')
+            ? 'session' : this.deps.agentTypes.resolve(state.agentType ?? 'general')?.defaultMode ?? 'session'
+          state.mode = historical
+        }
+        if (state.mode === 'session') {
+          const formerOwner = state.parentSessionId ?? (state.parent?.index === undefined
+            && (state.workspaceRoot || state.reportTo || state.description || state.parent?.physicalId) ? state.parent?.id : undefined)
+          if (formerOwner || state.workspaceRoot) {
+            // Keep workspaceRoot as a data-location compatibility key, not an owner:
+            // managed-session capabilities and sessionDataDir must not change.
+            state.workdir = normalizeSessionLocality(state).workdir
+          }
+          if (formerOwner && formerOwner !== state.sessionId) state.createdBySessionId ??= formerOwner
+          state.parentSessionId = null
+          delete state.reportTo
+          state.sessionKind ??= state.sessionId === 'web:orchestrator' && state.agentType === 'orchestrator'
+            ? 'orchestrator' : undefined
+        }
+        if (state.mode !== 'session' && ['running', 'waiting', 'pending'].includes(state.executionStatus ?? '')) {
+          state.executionStatus = 'cancelled'
+        }
+        if (state.mode !== 'session') state.executionId ??= state.sessionId
+        if (JSON.stringify(state) !== persisted) await this.store.saveState(state.sessionId, state)
       }
-      if (state.mode !== 'session' && ['running', 'waiting', 'pending'].includes(state.executionStatus ?? '')) {
-        state.executionStatus = 'cancelled'
+    })
+    await startup.measure('session-lineage', async () => {
+      for (const state of Object.values(this.sessionStates)) {
+        if (!state.children) continue
+        const children = state.children.filter(id => delegationOwner(this.sessionStates[id]) === state.sessionId)
+        if (children.length !== state.children.length) {
+          state.children = children
+          await this.store.saveState(state.sessionId, state)
+        }
       }
-      if (state.mode !== 'session') state.executionId ??= state.sessionId
-      await this.store.saveState(state.sessionId, state)
-    }
-    for (const state of Object.values(this.sessionStates)) {
-      if (!state.children) continue
-      state.children = state.children.filter(id => delegationOwner(this.sessionStates[id]) === state.sessionId)
-      await this.store.saveState(state.sessionId, state)
-    }
+    })
     // Legacy one-shot records remain closed even when they predate lifecycle status.
-    for (const state of Object.values(this.sessionStates)) {
-      if (!this.isEphemeralSession(state.sessionId)) continue
-      if (this.historyConflict(state.sessionId)) continue
-      if (state.lastActivityAt || state.segmentIndex > 0) this.acceptedInputs.add(state.sessionId)
-      let finalResponse = false
-      for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
-        if ((typeof record.role === 'string' && record.role !== 'system') || record.session_recovered) {
-          this.acceptedInputs.add(state.sessionId)
-          finalResponse = record.role === 'assistant' && !(Array.isArray(record.tool_calls) && record.tool_calls.length)
+    await startup.measure('session-task-history', async () => {
+      for (const state of Object.values(this.sessionStates)) {
+        if (!this.isEphemeralSession(state.sessionId)) continue
+        if (this.historyConflict(state.sessionId)) continue
+        // Persisted execution status already closes one-shot admission; only legacy records need inference.
+        if (state.executionStatus) continue
+        if (state.lastActivityAt || state.segmentIndex > 0) this.acceptedInputs.add(state.sessionId)
+        let finalResponse = false
+        for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
+          if ((typeof record.role === 'string' && record.role !== 'system') || record.session_recovered) {
+            this.acceptedInputs.add(state.sessionId)
+            finalResponse = record.role === 'assistant' && !(Array.isArray(record.tool_calls) && record.tool_calls.length)
+          }
+        }
+        if (!state.executionStatus) {
+          state.executionStatus = this.acceptedInputs.has(state.sessionId) ? finalResponse ? 'completed' : 'cancelled' : 'pending'
+          await this.store.saveState(state.sessionId, state)
         }
       }
-      if (!state.executionStatus) {
-        state.executionStatus = this.acceptedInputs.has(state.sessionId) ? finalResponse ? 'completed' : 'cancelled' : 'pending'
-        await this.store.saveState(state.sessionId, state)
-      }
-    }
+    })
 
     if (this.reportSubscription) this.deps.bus.off(this.reportSubscription)
     const report = (fact: SessionTurnFact) => this.reportCompletion(fact)
     this.reportSubscription = this.deps.bus.on('session.turn.finished', this.deps.scope?.bind(report) ?? report)
-    for (const state of Object.values(this.sessionStates)) {
-      if (state.mode !== 'task' || state.completionReported || !state.lastActivityAt) continue
-      if (this.historyConflict(state.sessionId)) continue
-      let fact: SessionTurnFact | undefined
-      for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
-        if (record.execution_receipt) fact = record.execution_receipt as SessionTurnFact
-      }
-      if (!fact && state.executionStatus === 'cancelled') {
-        fact = {
-          sessionId: state.sessionId, turnId: state.executionId ?? state.sessionId,
-          inputId: state.executionKey ?? state.sessionId,
-          source: { kind: 'session', sessionId: state.parentSessionId ?? state.parent?.id ?? state.sessionId },
-          status: 'cancelled', content: '', error: 'Execution interrupted by process restart.',
+    await startup.measure('session-reports', async () => {
+      for (const state of Object.values(this.sessionStates)) {
+        if (state.mode !== 'task' || state.completionReported || !state.lastActivityAt || !state.reportTo) continue
+        if (this.historyConflict(state.sessionId)) continue
+        let fact: SessionTurnFact | undefined
+        for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
+          if (record.execution_receipt) fact = record.execution_receipt as SessionTurnFact
         }
+        if (!fact && state.executionStatus === 'cancelled') {
+          fact = {
+            sessionId: state.sessionId, turnId: state.executionId ?? state.sessionId,
+            inputId: state.executionKey ?? state.sessionId,
+            source: { kind: 'session', sessionId: state.parentSessionId ?? state.parent?.id ?? state.sessionId },
+            status: 'cancelled', content: '', error: 'Execution interrupted by process restart.',
+          }
+        }
+        if (fact) await this.reportCompletion(fact)
       }
-      if (fact) await this.reportCompletion(fact)
-    }
-    await this.recoverIncompleteSessions()
+    })
+    await startup.measure('session-recovery', () => this.recoverIncompleteSessions())
   }
 
   private reportCompletion(fact: SessionTurnFact): Promise<void> {

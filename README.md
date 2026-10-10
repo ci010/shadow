@@ -3,6 +3,9 @@
 Shadow is a personal, local-first LLM agent with persistent conversations,
 tools, memory, skills, subagents, messaging integrations, and a Vue web UI.
 One Node.js backend runs the agent; Electron can host it as a desktop app.
+The desktop owns its Main or Child backend in an Electron utility process.
+Closing its main window keeps Shadow running in the tray; use the tray's Quit
+action to stop it. Reopening the same desktop profile restores the existing app.
 The Capacitor iOS/Android app is a client of an existing backend, not a
 backend or execution node.
 

@@ -143,6 +143,67 @@ function sourceContext(workspace: string, f: ReturnType<typeof fixture>): Execut
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: startup does not read terminal one-shot histories or rewrite unchanged state`, async t => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        for (const [index, status] of (['completed', 'cancelled', 'failed'] as const).entries()) {
+          const sessionId = `terminal-${index}`
+          await store.saveState(sessionId, {
+            sessionId, segmentIndex: 0, mode: 'task', executionId: sessionId,
+            executionStatus: status,
+            automationVersion: 1, completionReported: index === 0 ? true : undefined,
+            lastActivityAt: '2026-01-01T00:00:00Z',
+          })
+          await store.appendMessages(physicalSessionId({ sessionId, segmentIndex: 0 }), [{
+            role: 'assistant', content: 'Large archived output must not be scanned', timestamp: '2026-01-01T00:00:00Z',
+          }])
+        }
+        const reads = t.mock.method(store, 'readSessionLog')
+        const writes = t.mock.method(store, 'saveState')
+        await f.sessions.start()
+        assert.equal(reads.mock.callCount(), 0)
+        assert.equal(writes.mock.callCount(), 0)
+        for (let index = 0; index < 3; index++) {
+          await assert.rejects(f.sessions.deliver(`terminal-${index}`, input('Do not restart')), /closed|accept|one|terminal|completed/i)
+        }
+        assert.equal(f.requests.length, 0)
+        await f.sessions.stop()
+        await f.sessions.start()
+        assert.equal(reads.mock.callCount(), 0)
+        assert.equal(writes.mock.callCount(), 0)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: startup still infers legacy task status and persists it only once`, async t => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await store.saveState('legacy', {
+          sessionId: 'legacy', segmentIndex: 0, agentType: 'verify', completionReported: true,
+        })
+        await store.appendMessages(physicalSessionId({ sessionId: 'legacy', segmentIndex: 0 }), [
+          { role: 'user', content: 'Old task', timestamp: '2026-01-01T00:00:00Z' },
+          { role: 'assistant', content: 'Old result', timestamp: '2026-01-01T00:00:01Z' },
+        ])
+        await f.sessions.start()
+        assert.equal((await store.getState('legacy'))?.executionStatus, 'completed')
+        await f.sessions.stop()
+        const reads = t.mock.method(store, 'readSessionLog')
+        const writes = t.mock.method(store, 'saveState')
+        await f.sessions.start()
+        assert.equal(reads.mock.callCount(), 0)
+        assert.equal(writes.mock.callCount(), 0)
+        await assert.rejects(f.sessions.deliver('legacy', input('Do not restart')), /closed|accept|one|terminal|completed/i)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: QQ and Discord hide ask in live and inactive sessions and reject stale calls without waiting`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

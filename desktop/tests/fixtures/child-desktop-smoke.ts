@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { app, BrowserWindow, session } from 'electron'
-import { installChildBackgroundWindow } from '../../src/child-background.js'
+import { installBackgroundWindow } from '../../src/background-window.js'
 
 app.setPath('userData', join(process.cwd(), 'profile'))
 app.commandLine.appendSwitch('disable-background-networking')
@@ -72,7 +72,7 @@ async function main() {
     }
     await run(`fixture.connection='connected';document.querySelector('.child-status button').click();new Promise(r=>setTimeout(r,100))`)
     assert.match(await run('document.body.innerText'), /Connected to Main/)
-    const disposeBackground = installChildBackgroundWindow(app, window, () => true)
+    const disposeBackground = installBackgroundWindow(app, window)
     window.show()
     window.close()
     assert.equal(window.isDestroyed(), false, 'Closing Child must not destroy its window or quit the owner')

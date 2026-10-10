@@ -1,5 +1,7 @@
 export type StartupPhase = 'catalog' | 'ownership' | 'cluster' | 'gateway' | 'projects'
   | 'config' | 'events' | 'folders' | 'sessions' | 'io' | 'channels' | 'agent' | 'cron' | 'recovery' | 'ready'
+  | 'agent-mcp' | 'agent-skills' | 'agent-types' | 'agent-watchers' | 'agent-sessions'
+  | 'session-load' | 'session-migrate' | 'session-lineage' | 'session-task-history' | 'session-reports' | 'session-recovery'
 
 /** Fixed-shape startup diagnostics contain no configuration, paths, or error payloads. */
 export class StartupTimings {

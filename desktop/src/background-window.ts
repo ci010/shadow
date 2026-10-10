@@ -20,21 +20,20 @@ interface BackgroundWindow {
   focus(): void
 }
 
-export function installChildBackgroundWindow(
+export function installBackgroundWindow(
   app: BackgroundApp,
   window: BackgroundWindow,
-  keepRunning: () => boolean,
 ): () => void {
   let quitting = false
   let disposed = false
   const beforeQuit = () => { quitting = true }
   const close = (event: CloseEvent) => {
-    if (disposed || quitting || window.isDestroyed() || !keepRunning()) return
+    if (disposed || quitting || window.isDestroyed()) return
     event.preventDefault()
     window.hide()
   }
   const activate = () => {
-    if (disposed || quitting || window.isDestroyed() || !keepRunning()) return
+    if (disposed || quitting || window.isDestroyed()) return
     if (window.isMinimized()) window.restore()
     window.show()
     window.focus()

@@ -85,7 +85,6 @@ export interface PublicationOptions {
   onPublished(path: string): void
   onError(): void
   onUnavailable(): void
-  serviceConnectionPath?: string
   refreshMs?: number
 }
 
@@ -106,17 +105,13 @@ export class RuntimeConnectionPublication {
     this.pending = this.pending.then(async () => {
       await this.remove()
       if (!authorization || generation !== this.generation || !this.options.isReady(authorization)) return
-      if (this.options.serviceConnectionPath) {
-        this.options.onPublished(this.options.serviceConnectionPath)
-      } else {
-        const published = await this.options.store.publish(authorization)
-        this.published = published
-        if (generation !== this.generation || !this.options.isReady(authorization)) {
-          await this.remove()
-          return
-        }
-        this.options.onPublished(published.path)
+      const published = await this.options.store.publish(authorization)
+      this.published = published
+      if (generation !== this.generation || !this.options.isReady(authorization)) {
+        await this.remove()
+        return
       }
+      this.options.onPublished(published.path)
       this.schedule(authorization, generation)
     }).catch(() => { this.options.onError() })
     return this.pending

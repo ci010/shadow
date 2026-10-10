@@ -7,6 +7,19 @@ const marker = (fields: Record<string, unknown> = {}) => '[startup] ' + JSON.str
   phase: 'sessions', status: 'completed', elapsedMs: 900, durationMs: 350, ...fields,
 }) + '\n'
 
+test('agent and session startup substages retain timings without exposing project identity', () => {
+  const phases = [
+    'agent-mcp', 'agent-skills', 'agent-types', 'agent-watchers', 'agent-sessions',
+    'session-load', 'session-migrate', 'session-lineage', 'session-task-history', 'session-reports', 'session-recovery',
+  ]
+  const entries: BackendStartupTiming[] = []
+  const parser = new BackendStartupDiagnostics(entry => entries.push(entry))
+  for (const phase of phases) parser.push('stdout', marker({ phase }))
+  assert.deepEqual(entries.map(entry => entry.phase), phases)
+  assert.ok(entries.every(entry => entry.durationMs === 350 && entry.projectOrdinal === 1))
+  assert.doesNotMatch(JSON.stringify(entries), /private|projectId/)
+})
+
 test('backend timing markers survive chunk boundaries and redact project identities with stable ordinals', () => {
   const entries: BackendStartupTiming[] = []
   const parser = new BackendStartupDiagnostics(entry => entries.push(entry))

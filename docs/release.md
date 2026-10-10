@@ -206,7 +206,7 @@ desktop user, keeping the adjacent resources/libraries intact. The archive needs
 no FUSE or distribution package installer, but still requires compatible system
 GTK/NSS/ALSA/GBM libraries, a graphical session and working Chromium sandbox
 support. It does not register desktop shortcuts, autostart or a system service.
-macOS/Linux use the ordinary owned backend sidecar, not WinSW.
+macOS/Linux use the ordinary owned backend utility process, not WinSW.
 
 Native CI smoke tests are not broad clean-machine certification, an OS-install
 test, or proof that every platform-specific tool is available. The macOS/Linux
@@ -302,11 +302,13 @@ for sessions, providers, tools or the WinSW supervisor.
 
 ## Opt-in headless Windows service
 
-The normal desktop remains a UI with an owned sidecar. Service mode is explicit:
+The normal desktop owns an Electron backend utility process and remains in the
+tray after its main window closes. Explicit Quit stops that backend.
+Independent service mode is explicit:
 WinSW supervises `Shadow.exe` with `ELECTRON_RUN_AS_NODE=1` and the backend JS
-entrypoint, not Electron's application entrypoint. The desktop connects to that
-independent backend; closing it only detaches. A missing, invalid or unavailable
-service connection fails explicitly instead of starting a second backend.
+entrypoint, not Electron's application entrypoint. Access this independent
+backend through its paired browser UI. Desktop attachment to an independent
+service is no longer supported; desktop Main and Child own their local runtime.
 
 Service mode rejects an Electron browser/renderer process, missing credentials,
 an invalid control port, or a non-loopback `GATEWAY_HOST`. It supports an
@@ -355,17 +357,11 @@ application installation:
   logs\
 ```
 
-Launch the desktop as the selected user:
-
-```powershell
-& 'C:\Program Files\Shadow\Shadow.exe' `
-  --service-connection='C:\ProgramData\ShadowService\control\connection.v1.json'
-```
-
-Alternatively set `SHADOW_SERVICE_CONNECTION` for that desktop process.
-Conflicting command-line and environment paths are rejected. The descriptor is
-strictly validated and supplies the authoritative service configuration, port
-and credential file; setup in attached mode is read-only.
+The former desktop `--service-connection` argument and
+`SHADOW_SERVICE_CONNECTION` environment variable are rejected explicitly.
+Remove them from desktop shortcuts/environment before using Main or Child setup.
+The service connection descriptor remains available to service management and
+browser-pairing commands; do not delete its credentials or existing service data.
 
 The desktop is not required for browser access to this service. From a source
 checkout, run the pairing CLI as the selected local user who can read the

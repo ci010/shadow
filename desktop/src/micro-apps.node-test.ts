@@ -14,7 +14,7 @@ const identity = { projectId: 'p', appId: id }
 const revision = 'a'.repeat(64)
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQiT74HwAEJwJAst2PdAAAAABJRU5ErkJggg==', 'base64')
 
-async function fixture(t: TestContext, hasIcon = false, launch: { packaged?: boolean; serviceConnectionPath?: string } = {}) {
+async function fixture(t: TestContext, hasIcon = false, launch: { packaged?: boolean } = {}) {
   const directory = resolve(import.meta.dirname, '..', '..', '.test-artifacts', `native-app-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   const app: { id: string; revision: string; manifest: { name: string; icon?: string }; approval?: { revision: string }; status: string } = {
@@ -163,13 +163,12 @@ test('transient catalog failures do not remove valid tasks; shutdown retains col
   assert.equal(f.tasks.length, published)
 })
 
-test('packaged task launches preserve the service descriptor and use the executable directory, not app.asar', async t => {
-  const descriptor = resolve('.test-artifacts', 'service profile', 'connection.json')
-  const f = await fixture(t, false, { packaged: true, serviceConnectionPath: descriptor })
+test('packaged task launches preserve the profile and use the executable directory, not app.asar', async t => {
+  const f = await fixture(t, false, { packaged: true })
   const task = f.tasks.at(-1)![0]!
   assert.equal(task.workingDirectory, f.directory)
   assert.ok(!task.arguments!.includes('app folder'))
-  assert.ok(task.arguments!.includes(quoteWindowsArgument(`--service-connection=${descriptor}`)))
+  assert.ok(!task.arguments!.includes('--service-connection'))
   assert.ok(task.arguments!.includes(quoteWindowsArgument(`--user-data-dir=${f.directory}`)))
 })
 

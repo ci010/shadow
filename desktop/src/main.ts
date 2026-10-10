@@ -15,6 +15,7 @@ import {
   session,
   shell,
   Tray,
+  utilityProcess,
   type WebContents,
 } from 'electron'
 import {
@@ -33,6 +34,8 @@ import {
 } from './bootstrap/launch-profile.js'
 import { AtomicMainAgentConfigInitializer } from './bootstrap/main-agent-config.js'
 import { BootstrapCoordinator } from './bootstrap/coordinator.js'
+import { RuntimeStartup } from './bootstrap/runtime-startup.js'
+import { createUtilityProcessSpawn } from './sidecar/utility-process.js'
 import { createBackendPairingCommand, FileChildBootstrap } from './bootstrap/child.js'
 import {
   handleEnsureRuntime,
@@ -61,14 +64,12 @@ import { type WizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { desktopIconPath, framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
 import { installTrayMenu } from './tray.js'
-import { installChildBackgroundWindow } from './child-background.js'
+import { installBackgroundWindow } from './background-window.js'
 import { installFolderDirectoryPicker } from './folder-directories.js'
 import { installFileExplorer } from './file-explorer.js'
 import { installChatContextPickers } from './chat-context.js'
 import { installDocumentTabShortcuts } from './document-tabs.js'
 import { installMediaPermissions } from './media-permissions.js'
-import { loadServiceConnection, selectServiceConnectionPath } from './service/connection.js'
-import { createServiceBootstrapCoordinator } from './service/bootstrap.js'
 import { installStartupDiagnostics } from './startup-diagnostics-ipc.js'
 import { startupLogPath } from './sidecar/startup-diagnostics.js'
 import { TaskbarActivity } from './taskbar-activity.js'
@@ -119,7 +120,7 @@ export function enforceNavigationPolicy(
   })
 }
 
-export function registerIpcHandlers(coordinator: BootstrapCoordinator): void {
+export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: RuntimeStartup): void {
   const assertBootstrapSender = (event: Electron.IpcMainInvokeEvent): void => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
       throw new Error('Bootstrap commands require the desktop main frame')
@@ -130,9 +131,11 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator): void {
     parseNoArguments(args)
     return coordinator.childSetup()
   })
-  ipcMain.handle(IPC_CHANNELS.pairChild, (event, ...args: unknown[]) => {
+  ipcMain.handle(IPC_CHANNELS.pairChild, async (event, ...args: unknown[]) => {
     assertBootstrapSender(event)
-    return handlePairChild(coordinator, args)
+    const result = await handlePairChild(coordinator, args)
+    if (result.ok) void startup.start()
+    return result
   })
   ipcMain.handle(IPC_CHANNELS.loadWizard, () => coordinator.load())
   ipcMain.handle(
@@ -155,14 +158,25 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator): void {
   )
   ipcMain.handle(
     IPC_CHANNELS.launchMain,
-    (_event, rawOptions: unknown) =>
-      coordinator.launchMain(parseLaunchMainOptions(rawOptions)),
+    async (event, rawOptions: unknown) => {
+      assertBootstrapSender(event)
+      const result = await coordinator.launchMain(parseLaunchMainOptions(rawOptions))
+      if (result.ok) await startup.start()
+      return result
+    },
   )
   ipcMain.handle(
     IPC_CHANNELS.ensureRuntime,
-    (_event, ...rawArguments: unknown[]) =>
-      handleEnsureRuntime(coordinator, rawArguments),
+    (event, ...rawArguments: unknown[]) => {
+      assertBootstrapSender(event)
+      return handleEnsureRuntime({ ensureRuntime: () => startup.current() }, rawArguments)
+    },
   )
+  ipcMain.handle(IPC_CHANNELS.retryRuntime, (event, ...args: unknown[]) => {
+    assertBootstrapSender(event)
+    parseNoArguments(args)
+    return startup.start()
+  })
   ipcMain.handle(
     IPC_CHANNELS.getMainDirectorySelection,
     (_event, ...rawArguments: unknown[]) =>
@@ -288,15 +302,9 @@ function parseWizardEvent(value: unknown): WizardEvent {
 async function start(): Promise<void> {
   const initialApp = parseMicroAppArguments(process.argv)
   const userDataPath = app.getPath('userData')
-  const serviceConnectionPath = selectServiceConnectionPath(
-    app.commandLine.hasSwitch('service-connection')
-      ? app.commandLine.getSwitchValue('service-connection')
-      : undefined,
-    process.env.SHADOW_SERVICE_CONNECTION,
-  )
-  const serviceConnection = serviceConnectionPath === undefined
-    ? undefined
-    : await loadServiceConnection(serviceConnectionPath)
+  if (app.commandLine.hasSwitch('service-connection') || process.env.SHADOW_SERVICE_CONNECTION !== undefined) {
+    throw new Error('Desktop service attachment is no longer supported. Use browser pairing for independent services, or configure this desktop as Main or Child.')
+  }
   const configPath = runtimeConfigPath(userDataPath)
   const storage = new AtomicFileBootstrapStateStorage(
     bootstrapStatePath(userDataPath),
@@ -326,7 +334,6 @@ async function start(): Promise<void> {
     },
     onError: () => console.error('[desktop] Web pairing connection publication failed; desktop runtime status is unchanged.'),
     onUnavailable: () => sendRuntimeEndpoint({ type: 'shadow:runtime-stopped' }),
-    ...(serviceConnectionPath ? { serviceConnectionPath } : {}),
   })
   const runtimeHost = createProductionRuntimeHost({
     executablePath: process.execPath,
@@ -344,14 +351,12 @@ async function start(): Promise<void> {
       ? { type: 'shadow:runtime-ready', apiBase: activityAuthorization.apiBase }
       : { type: 'shadow:runtime-stopped' })
     void publication.setAuthorization(activityAuthorization)
-  }, serviceConnection)
+  }, createUtilityProcessSpawn((entry, args, options) => utilityProcess.fork(entry, args, options)))
   const childPairingCommand = createBackendPairingCommand({
     executablePath: process.execPath, appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath, userDataPath, packaged: app.isPackaged,
   })
-  const coordinator = serviceConnection
-    ? createServiceBootstrapCoordinator(serviceConnection.descriptor, runtimeHost)
-    : new BootstrapCoordinator(
+  const coordinator = new BootstrapCoordinator(
     storage,
     new AtomicRuntimeConfigWriter(configPath),
     new AtomicMainAgentConfigInitializer(configPath),
@@ -378,13 +383,9 @@ async function start(): Promise<void> {
       } finally { await publication.close() }
     },
   })
-  if (serviceConnection) {
-    const result = await coordinator.ensureRuntime()
-    if (!result.ok) {
-      throw new Error('Service attachment failed; start the installed service or correct its connection descriptor. No sidecar was launched.')
-    }
-  }
-  registerIpcHandlers(coordinator)
+  const startup = new RuntimeStartup(() => coordinator.ensureRuntime(), () => runtimeHost.status)
+  if ((await coordinator.load()).step === 'complete') void startup.start()
+  registerIpcHandlers(coordinator, startup)
   const developmentUrl = process.env.VITE_DEV_URL?.trim()
   const target = resolveRendererTarget({
     rendererDistPath: app.isPackaged
@@ -401,7 +402,6 @@ async function start(): Promise<void> {
   microApps = new DesktopMicroApps({
     userDataPath, executablePath: process.execPath, appPath: app.getAppPath(), packaged: app.isPackaged,
     defaultIconPath: desktopIconPath(),
-    ...(serviceConnectionPath ? { serviceConnectionPath } : {}),
     createWindow: input => createMicroAppWindow(options => new BrowserWindow(options), input),
     decodeIcon: bytes => {
       const image = nativeImage.createFromBuffer(bytes)
@@ -418,16 +418,13 @@ async function start(): Promise<void> {
   microApps.setAuthorization(activityAuthorization)
   const disposeAppIpc = installMicroAppIpc(ipcMain, () => mainWindow, microApps)
   openTaskApp = async identity => {
-    const runtime = await coordinator.ensureRuntime()
+    const runtime = await startup.current()
     if (!runtime.ok || !activityAuthorization) throw new Error('Local Main is unavailable')
     await microApps!.open(identity)
   }
   mainTray = new Tray(desktopIconPath())
   const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit())
-  const disposeBackground = installChildBackgroundWindow(app, mainWindow, () => {
-    const status = runtimeHost.status
-    return ('role' in status && status.role === 'child') || !!microApps?.hasOpenWindows
-  })
+  const disposeBackground = installBackgroundWindow(app, mainWindow)
   app.once('will-quit', () => {
     disposeBackground()
     disposeTray()
@@ -450,7 +447,7 @@ async function start(): Promise<void> {
   if (app.isPackaged && process.env.SHADOW_DESKTOP_RELEASE_IPC === '1' && process.connected) {
     const manifest: unknown = JSON.parse(await readFile(join(process.resourcesPath, 'release-manifest.v1.json'), 'utf8'))
     const readiness = await desktopReleaseReadiness(manifest,
-      { pid: process.pid, executablePath: process.execPath }, await coordinator.load(), () => coordinator.ensureRuntime())
+      { pid: process.pid, executablePath: process.execPath }, await coordinator.load(), () => startup.current())
     process.send?.(readiness)
   }
 }
@@ -485,12 +482,10 @@ if (!process.env.SHADOW_DESKTOP_DISABLE_AUTO_START) {
     })
     app.whenReady().then(start).catch((error: unknown) => {
       console.error('[desktop] Failed to start', error)
-      if (app.commandLine.hasSwitch('service-connection') || process.env.SHADOW_SERVICE_CONNECTION !== undefined) {
-        dialog.showErrorBox(
-          'Shadow service connection failed',
-          'The explicitly selected service could not be attached. Check its descriptor, credential permissions, and authenticated readiness with manage.ps1 -Action Start. No local sidecar was launched.',
-        )
-      }
+      dialog.showErrorBox('Shadow startup failed',
+        app.commandLine.hasSwitch('service-connection') || process.env.SHADOW_SERVICE_CONNECTION !== undefined
+          ? 'Desktop service attachment is no longer supported. Remove --service-connection and SHADOW_SERVICE_CONNECTION; use browser pairing for independent services or configure this desktop as Main or Child.'
+          : 'Desktop initialization failed. Check the startup diagnostics before retrying.')
       app.quit()
     })
     app.on('window-all-closed', () => app.quit())

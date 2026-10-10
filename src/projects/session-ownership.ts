@@ -1,4 +1,4 @@
-import type { SessionStore } from '../sessions/session-store.ts'
+import type { SessionState, SessionStore } from '../sessions/session-store.ts'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
@@ -9,7 +9,10 @@ import { isManagedWorkdir } from '../execution/managed-workdir.ts'
 
 /** Loading a Project never adopts an unowned or foreign session. */
 export async function assertSessionProjectOwnership(store: SessionStore, projectId: string): Promise<void> {
-  const states = await store.listAllStates()
+  assertStatesOwnership(await store.listAllStates(), projectId)
+}
+
+function assertStatesOwnership(states: Record<string, SessionState>, projectId: string): void {
   for (const state of Object.values(states)) {
     if (state.projectId !== projectId) {
       throw new Error(`Session ${state.sessionId} does not belong to project ${projectId}`)
@@ -26,8 +29,9 @@ export async function reserveRemoteSessionWorkdirs(home: string, catalog: Projec
   }
   const refs: WorkdirRefV1[] = []
   const collect = async (store: SessionStore) => {
-    await assertSessionProjectOwnership(store, projectId)
-    for (const state of Object.values(await store.listAllStates())) {
+    const states = await store.listAllStates()
+    assertStatesOwnership(states, projectId)
+    for (const state of Object.values(states)) {
       if (state.workdir && state.workdir.nodeId !== 'local' && !isManagedWorkdir(state.workdir.capabilityId)) refs.push(state.workdir)
     }
   }

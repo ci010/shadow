@@ -1,7 +1,5 @@
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import type { ServiceConnection } from '../service/connection.js'
-import { ServiceAttachmentSupervisor } from '../service/supervisor.js'
 import { StartupDiagnosticsLog, startupLogPath } from './startup-diagnostics.js'
 import {
   createAuthenticatedShutdownRequest,
@@ -13,6 +11,7 @@ import {
   type SidecarStartRequest,
   type SidecarStatus,
   type SidecarSupervisor,
+  type SidecarSpawn,
 } from './supervisor.js'
 import {
   normalizeLoopbackOrigin,
@@ -189,30 +188,16 @@ export class RuntimeHost {
 
 export function createProductionRuntimeHost(
   paths: RuntimePathsInput,
-  onAuthorizationChanged?: RuntimeAuthorizationChanged,
-  serviceConnection?: ServiceConnection,
+  onAuthorizationChanged: RuntimeAuthorizationChanged,
+  spawn: SidecarSpawn,
 ): RuntimeHost {
-  if (serviceConnection) {
-    return new RuntimeHost({
-      paths,
-      revalidateOnStart: true,
-      tokenFactory: () => serviceConnection.launchToken,
-      supervisorFactory: () => new ServiceAttachmentSupervisor(
-        serviceConnection,
-        createSidecarReadinessProbe({
-          expectedRole: serviceConnection.descriptor.role,
-          fetch: (input, init) => globalThis.fetch(input, { ...init, redirect: 'error' }),
-        }),
-      ),
-      ...(onAuthorizationChanged ? { onAuthorizationChanged } : {}),
-    })
-  }
   const authenticatedShutdownRequest = createAuthenticatedShutdownRequest()
   const diagnostics = new StartupDiagnosticsLog(startupLogPath(paths.userDataPath))
   return new RuntimeHost({
     paths,
     supervisorFactory: (role) =>
       new NodeSidecarSupervisor({
+        spawn,
         readinessProbe: createSidecarReadinessProbe({ expectedRole: role }),
         diagnosticSink: (entry) => diagnostics.write(entry),
         authenticatedShutdownRequest,
@@ -224,7 +209,7 @@ export function createProductionRuntimeHost(
           GITHUB_COPILOT_MODELS_CACHE_FILE: 'models.json',
         },
       }),
-    ...(onAuthorizationChanged ? { onAuthorizationChanged } : {}),
+    onAuthorizationChanged,
   })
 }
 

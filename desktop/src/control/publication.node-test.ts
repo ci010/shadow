@@ -61,19 +61,6 @@ test('publication failures are explicit and do not report success', async () => 
   assert.deepEqual(calls, ['error'])
 })
 
-test('attached service advertises existing protected descriptor without duplicating credentials', async () => {
-  const calls: string[] = []
-  const publication = new RuntimeConnectionPublication({
-    serviceConnectionPath: 'existing-service-descriptor',
-    store: { publish: async () => { throw new Error('must not copy credential') } },
-    isReady: () => true, onPublished: (path) => calls.push(path),
-    onError: () => calls.push('error'), onUnavailable: () => {},
-  })
-  await publication.setAuthorization(authorization)
-  await publication.close()
-  assert.deepEqual(calls, ['existing-service-descriptor'])
-})
-
 test('lease renews only while ready and cleans up when runtime becomes unavailable', async (t) => {
   const calls: string[] = []
   let ready = true

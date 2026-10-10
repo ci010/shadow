@@ -12,6 +12,7 @@ import type { SkillsManager } from '../skills/loader.ts'
 import type { EventService } from '../events/service.ts'
 import type { IdentityManager } from './identity.ts'
 import { channelMessageInput, type DeliveryReceipt } from '../sessions/input.ts'
+import { StartupTimings } from '../runtime/startup-timings.ts'
 
 export interface AgentOptions {
   identity?: IdentityManager
@@ -57,13 +58,15 @@ export class AgentApp {
     this.events = opts.events
   }
 
-  async start(): Promise<void> {
-    await this.mcpManager.ensureLoaded()
-    await this.skills.load()
-    await this.agentTypes.load()
-    this.skills.startWatching()
-    this.agentTypes.startWatching()
-    await this.sessions.start()
+  async start(startup = new StartupTimings('project')): Promise<void> {
+    await startup.measure('agent-mcp', () => this.mcpManager.ensureLoaded())
+    await startup.measure('agent-skills', () => this.skills.load())
+    await startup.measure('agent-types', () => this.agentTypes.load())
+    await startup.measure('agent-watchers', () => {
+      this.skills.startWatching()
+      this.agentTypes.startWatching()
+    })
+    await startup.measure('agent-sessions', () => this.sessions.start(startup))
     this.running = true
 
     console.log('Agent loop started')
