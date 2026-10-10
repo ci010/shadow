@@ -25,11 +25,12 @@ const coordinationSchema = z.object({
 export class MessageTool implements Tool {
   readonly name = 'message'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Send to a peer session in this Project when it needs to act differently. Requests queue without interrupting active work. Prefer one shared work note for findings and progress; do not also message the same status. Routine progress/acknowledgements archive by default. attention marks changes needing a response. Goal/rationale changes belong in work, not prose-only redirection. A receipt is admission, not completion, permission or assignment transfer.'
+  readonly description = 'Send concise actionable context to an agent in this Project: sessionId + content normally suffice. Relevant context enters its next safe step, without interrupting tools. Your running task accepts corrections to its existing assignment, not another task. Use delivery=queue for subsequent work. Routine progress/acknowledgements archive. Admission is not application or ownership transfer; wait for completion or confirmed cancellation before taking over its files.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
       content: { type: 'string', description: 'Message text to send.' },
+      delivery: { type: 'string', enum: ['next-step', 'queue', 'silent'], description: 'Default next-step: context for current work. queue: a later request after the turn. silent: FYI archive only. Running tasks only accept next-step from their actual parent.' },
       sessionId: {
         type: 'string',
         description:
@@ -50,7 +51,7 @@ export class MessageTool implements Tool {
 
   constructor(
     private bus: Bus,
-    private canReceiveSessionMessage: (sessionId: string) => boolean,
+    private canReceiveSessionMessage: (sessionId: string, sourceId?: string) => boolean,
     private getSessionParent: (sessionId: string) => SessionParent | undefined,
     private getChildSessions: (parentSessionId: string) => string[] | undefined,
     private deliver: DeliverInput,
@@ -101,7 +102,7 @@ export class MessageTool implements Tool {
       return 'Error: cannot send a message to the current session.'
     }
     if (this.canSendSessionMessage && !this.canSendSessionMessage(currentSessionId, targetSessionId)) {
-      return 'Error: task executions do not admit messages; create a new execution.'
+      return 'Error: target does not admit this message. Only the actual parent may correct its running task. A failed send does not stop it or transfer its files.'
     }
 
     // Validate target is accessible: must be a child of this session or a common session
@@ -118,8 +119,8 @@ export class MessageTool implements Tool {
       }
     }
 
-    if (!this.canReceiveSessionMessage(targetSessionId)) {
-      return `Error: task execution "${targetSessionId}" does not accept messages; create a new execution.`
+    if (!this.canReceiveSessionMessage(targetSessionId, currentSessionId)) {
+      return `Error: execution "${targetSessionId}" cannot accept this message. Inspect its state; do not take over its files until completion or confirmed cancellation.`
     }
 
     let coordination: SessionInputSource['coordination']
@@ -133,10 +134,13 @@ export class MessageTool implements Tool {
     const { text, media } = parseMediaFromContent(rawContent)
     const attention = args.attention === undefined ? undefined
       : z.enum(['routine', 'milestone', 'blocker', 'decision', 'correction']).parse(args.attention)
-    if (attention && attention !== 'routine' && args.silent === true) throw new Error('Important work updates cannot be silently archived.')
+    const requestedDelivery = args.delivery === undefined ? undefined : z.enum(['next-step', 'queue', 'silent']).parse(args.delivery)
+    if (requestedDelivery && args.silent !== undefined) throw new Error('Use delivery or silent, not both.')
+    if (attention && attention !== 'routine' && (args.silent === true || requestedDelivery === 'silent')) throw new Error('Important work updates cannot be silently archived.')
     const routine = attention === 'routine' || (!attention && ['progress', 'acknowledgement'].includes(coordination?.intent ?? ''))
     const stale = !!context.workStamps?.length && this.workIsCurrent?.(context.workStamps) === false
-    const silent = stale || args.silent === true || (routine && args.silent !== false)
+    const silent = stale || requestedDelivery === 'silent' || args.silent === true
+      || (routine && args.silent !== false && requestedDelivery === undefined)
 
     const input: SessionMessageInput = {
       kind: 'message',
@@ -150,11 +154,11 @@ export class MessageTool implements Tool {
         ...(coordination ? { coordination } : {}),
         ...(context.workStamps?.length ? { workStamps: context.workStamps } : {}),
       },
-      policy: silent ? 'silent' : 'queue',
+      policy: silent ? 'silent' : requestedDelivery ?? (args.silent === false && (!attention || attention === 'routine') ? 'queue' : 'next-step'),
       content: stale ? `[Historical update from an obsolete work revision; not a new instruction or completion.]\n${text}` : text,
       media,
     }
-    await this.deliver(targetSessionId, input)
+    const receipt = await this.deliver(targetSessionId, input)
 
     const outbound: OutboundMessage = {
       event: 'response',
@@ -172,9 +176,7 @@ export class MessageTool implements Tool {
     }
     this.bus.emit('message.outbound', outbound)
 
-    const scheduling = silent
-      ? 'Recorded only: not injected into the active turn and will not wake the recipient. A later non-silent message is required for processing; send a non-silent request if this needs action.'
-      : 'Queued for a response after any active turn, without interrupting it.'
-    return `Message sent to ${targetSessionId}${silent ? ' (silent)' : ''}. ${scheduling} ${stale ? 'Obsolete work version: evidence only.' : ''} Receipt confirms admission only; work ownership is unchanged.`
+    const scheduling = receipt.delivery ?? input.policy
+    return `Message sent to ${targetSessionId}; inputId=${input.id}; delivery=${scheduling}. Receipt confirms admission only, not yet applied; ownership is unchanged.${stale ? ' Obsolete work version: evidence only.' : ''}`
   }
 }

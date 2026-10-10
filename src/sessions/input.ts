@@ -80,6 +80,7 @@ export interface DeliveryReceipt {
   status: 'accepted'
   sessionId: string
   inputId: string
+  delivery?: DeliveryPolicy
   commandReceipt?: CommandReceipt
 }
 

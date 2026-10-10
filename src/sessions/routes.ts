@@ -234,7 +234,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const list = await sessions.listSessions()
+      const list = (await sessions.listSessions()).filter(session => session.agentType !== 'work-observer')
       return c.json({ sessions: list })
     })
 
@@ -242,7 +242,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const list = await sessions.listSessions()
+      const list = (await sessions.listSessions()).filter(session => session.agentType !== 'work-observer')
 
       const nodes: Array<{
         projectId?: string

@@ -48,6 +48,7 @@ import type { Config } from '../../config/schema.ts'
 import { HandoffManager } from '../../sessions/handoff/manager.ts'
 import { McpManager } from '../../mcp/manager.ts'
 import { ConversationContextsBusyError, SessionManager } from '../../sessions/session-manager.ts'
+import { WorkObserver } from '../../projects/work-observer.ts'
 import { JsonlSessionStore } from '../../sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from '../../sessions/session-store-sqlite.ts'
 import type { SessionStore } from '../../sessions/session-store.ts'
@@ -722,6 +723,22 @@ export async function createProjectRuntime(
     },
   })
   sessions.alignment = alignment
+  const workObserver = new WorkObserver(initiatives, {
+    bus, scope, state: id => sessions.getSessionState(id),
+    changed: () => realtime.invalidateSessions(),
+    summarize: async (task, signal) => {
+      const id = await sessions.startSession({
+        agentType: 'work-observer', mode: 'task', channel: 'work-observer', task,
+        model: activeConfig.workObserver.model ?? activeConfig.agent.quickModel ?? activeConfig.agent.model,
+        signal, waitForCompletion: true,
+      })
+      if (!id) throw new Error('Work observer agent is unavailable.')
+      const result = await sessions.getExecutionResult(id)
+      if (result?.status !== 'completed') throw new Error(result?.error ?? 'Work observation did not complete.')
+      return result.content
+    },
+  }, config.workObserver.enabled)
+  cleanup.push(() => workObserver.stop())
   const github = new GitHubService(new GitHubStore(workspace), new GitHubClient(), {
     alignment,
     durableSession: id => {
@@ -994,7 +1011,7 @@ export async function createProjectRuntime(
   tools.register(
     new MessageTool(
       bus,
-      (id) => sessions.canReceiveSessionMessage(id),
+      (id, source) => sessions.canReceiveSessionMessage(id, source),
       (id) => {
         const owner = sessions.getDelegationOwner(id)
         return owner ? { id: owner } : undefined
@@ -1065,7 +1082,7 @@ export async function createProjectRuntime(
     reflector: runLearning('reflector'), encapsulator: runLearning('encapsulator'), soulReflector: runLearning('soulReflector'),
   }, config.learning, cronService, sessionId => {
     const state = sessions.getSessionState(sessionId)
-    return !!state && (!!state.channelBoundary?.learning || resolveAutomationSession(state)?.config?.source === 'learning')
+    return !!state && (state.agentType === 'work-observer' || !!state.channelBoundary?.learning || resolveAutomationSession(state)?.config?.source === 'learning')
   }, learningRuntime.ledger, { deferStart: true, changed: () => realtime.invalidateSessions(),
     pending: pipeline => discordLearning.hasPending(pipeline) })
   commandDispatcher.register(createLearnCommand(sessions, pipeline => learning.trigger(pipeline)))
@@ -1088,6 +1105,7 @@ export async function createProjectRuntime(
         throw cause
       }
       learning.update(newConfig.learning)
+      workObserver.update(newConfig.workObserver.enabled)
       sessions.updateProvider(newProvider, newQuickModel)
       provider = newProvider
       llm = newLlm
@@ -1166,7 +1184,7 @@ export async function createProjectRuntime(
     }),
     topicsPlugin(topics, dependencies.authorize),
     sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
-    projectWorkPlugin(sessions, dependencies.authorize, () => github.references()),
+    projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => workObserver.status()),
     githubPlugin(github, dependencies.authorize),
     backgroundTasksPlugin(backgroundTasks, id => !!sessions.getSessionState(id)),
     remoteSessionPlugin({
@@ -1263,6 +1281,7 @@ export async function createProjectRuntime(
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
     await learningRuntime.recover()
     learning.start()
+    workObserver.start()
   })
   await ready
   pollingSources.start()

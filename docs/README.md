@@ -77,6 +77,11 @@ proposal: that would invent a historical implementation that did not exist.
 
 ## Designs and implementation checkpoints
 
+- [Project causal alignment: goals and future work](project-causal-alignment-plan.md):
+  the intent behind optional shared Work notes, abstraction-aware questions and
+  the Project canvas; parent/worker responsibilities, lessons from evaluation,
+  and future real-model experiments. Separates implemented foundations from
+  unverified product goals; it is not a completed-feature or acceptance claim.
 - [Discord integration and memory-domain authorization](discord-agent-integration-plan.md):
   original end-to-end plan for channel-specific Agents, UI/chat configuration,
   enforced memory domains, learning provenance, migration, and acceptance.

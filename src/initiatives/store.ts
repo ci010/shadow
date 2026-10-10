@@ -4,8 +4,8 @@ import { join, resolve } from 'node:path'
 import { constants, DatabaseSync } from 'node:sqlite'
 import { HANDOFF_VIEW, ITEM_ACTIVITY_VIEW, SCHEMA, TABLE_COLUMNS } from './schema.ts'
 import { parseSql, type Statement, type Value } from './sql.ts'
-import { WORK_SCHEMA, WorkConflict, workKey, workRecordSchema, workSubjectSchema,
-  type WorkSubject, type WorkAuthority, type WorkRecord } from './work-contract.ts'
+import { WORK_SCHEMA, WorkConflict, workKey, workRecordSchema, workSubjectSchema, workObservationSchema,
+  type WorkSubject, type WorkAuthority, type WorkRecord, type WorkObservation } from './work-contract.ts'
 
 export type InitiativeRow = Record<string, string | number | null>
 export interface InitiativeQueryResult {
@@ -71,6 +71,7 @@ export class InitiativeStore {
       if (version.user_version < 5) {
         this.#db.exec(`BEGIN IMMEDIATE; ${WORK_SCHEMA} PRAGMA user_version=5; COMMIT;`)
       }
+      this.#db.exec('CREATE TABLE IF NOT EXISTS work_observations (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;')
       const integrity = this.#db.prepare('PRAGMA quick_check').all()
       if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || this.#db.prepare('PRAGMA foreign_key_check').all().length) {
         throw new Error('Corrupt initiative database')
@@ -121,6 +122,27 @@ export class InitiativeStore {
   workRecords(): WorkRecord[] {
     return this.#transaction('', () => this.#all('SELECT data FROM work_contracts ORDER BY id')
       .map(row => workRecordSchema.parse(JSON.parse(String(row.data)))), undefined, true)
+  }
+
+  workObservations(): WorkObservation[] {
+    return this.#transaction('', () => this.#all('SELECT data FROM work_observations ORDER BY id')
+      .map(row => workObservationSchema.parse(JSON.parse(String(row.data)))), undefined, true)
+  }
+
+  saveWorkObservation(value: WorkObservation): void {
+    const record = workObservationSchema.parse(value)
+    this.#transaction('work-observer', () => {
+      if (!this.#one('work_observations', record.sessionId) && this.#all('SELECT id FROM work_observations').length >= 200) {
+        const oldest = this.#all('SELECT id,data FROM work_observations')
+          .map(row => ({ id: String(row.id), record: workObservationSchema.parse(JSON.parse(String(row.data))) }))
+          .filter(entry => entry.record.processed === entry.record.version)
+          .sort((a, b) => a.record.events.at(-1)!.at.localeCompare(b.record.events.at(-1)!.at))[0]
+        if (!oldest) throw new WorkConflict('Work observation limit reached (200 pending conversations).')
+        this.#write('DELETE FROM work_observations WHERE id=?', [oldest.id])
+      }
+      this.#write('INSERT INTO work_observations (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
+        [record.sessionId, JSON.stringify(record)])
+    })
   }
 
   saveWork(record: WorkRecord, expectedSequence: number, actor: string, kind: string, eventDetails?: unknown): void {
@@ -509,7 +531,7 @@ export class InitiativeStore {
     const db = this.#db as DatabaseSync & { setAuthorizer?: (callback: (action: number, arg1: string | null, arg2: string | null, database: string | null) => number) => void }
     if (!db.setAuthorizer) throw new Error('InitiativeStore requires node:sqlite setAuthorizer (use Node 24.15+)')
     const codes = constants as unknown as Record<string, number>
-    const workTables = ['work_contracts', 'work_contract_events', 'work_effects', 'work_focus']
+    const workTables = ['work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_observations']
     const readable = new Set([...Object.keys(TABLE_COLUMNS), 'initiative_legacy_imports', ...workTables])
     db.setAuthorizer((action, arg1, arg2, database) => {
       if (database && database !== 'main') return codes.SQLITE_DENY!

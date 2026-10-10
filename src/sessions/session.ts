@@ -430,6 +430,8 @@ export class Session extends BaseSession {
     await this.store.saveState(this.id, this.state)
   }
 
+  protected override hasPendingContext(): boolean { return !!this.turn?.steerQueue.some(input => input.source.kind === 'session') }
+
   protected override async drainPendingMessages(
     llm: LlmRuntimeConfig,
   ): Promise<void> {

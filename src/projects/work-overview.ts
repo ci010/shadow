@@ -19,6 +19,7 @@ export const projectWorkItemSchema = z.object({
   notes: workNotesSchema.optional(),
   contextChanged: z.boolean().optional(),
   github: z.array(githubWorkReferenceSchema).optional(),
+  observation: z.object({ sessionId: id, observedAt: z.string(), sources: z.array(z.object({ id, physicalId: id })) }).optional(),
 })
 export const projectWorkOverviewSchema = z.object({
   items: z.array(projectWorkItemSchema),
@@ -36,6 +37,10 @@ export const projectWorkOverviewSchema = z.object({
   effects: z.array(z.object({
     id, sessionId: id, tool: id, status: z.enum(['running', 'unknown']), workKeys: z.array(id),
   })),
+  observer: z.object({
+    enabled: z.boolean(), running: z.boolean(), pending: z.number().int().nonnegative(),
+    errors: z.array(z.object({ sessionId: id, error: z.string() })), error: z.string().optional(),
+  }).optional(),
 }).superRefine((value, ctx) => {
   const lookup = new Map(value.items.map(item => [item.key, item]))
   if (lookup.size !== value.items.length) ctx.addIssue({ code: 'custom', path: ['items'], message: 'Duplicate work keys.' })

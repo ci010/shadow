@@ -55,11 +55,11 @@ function fixture(workspace: string, store: SessionStore, settings: {
   callTimeoutMs?: number; ignoreAbort?: boolean; hasInitiative?: (id: string) => boolean
 } = {}) {
   const requests: Array<{
-    sessionId: string; messages: ChatMessage[]; names: string[]; signal: AbortSignal; model?: string; settled: boolean
+    sessionId: string; messages: ChatMessage[]; names: string[]; signal: AbortSignal; model?: string; effort?: string; settled: boolean
     resolve: (response: LLMResponse) => void; reject: (error: Error) => void
   }> = []
   const provider: LLMProvider = {
-    name: 'fixture', listModels: () => ['fixture'],
+    name: 'fixture', listModels: () => ['fixture', 'override'],
     async chat(messages, definitions, options) {
       const pending = Promise.withResolvers<LLMResponse>()
       const signal = options!.signal!
@@ -67,7 +67,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
         // Fixture identity precedes any per-inference runtime guidance.
         sessionId: JSON.parse(String(messages[0]!.content).split('\n', 1)[0]).sessionId as string,
         messages: structuredClone(messages), names: definitions.map(def => def.function.name),
-        signal, model: options?.model, settled: false,
+        signal, model: options?.model, effort: options?.reasoningEffort, settled: false,
         resolve: (response: LLMResponse) => { request.settled = true; pending.resolve(response) },
         reject: (error: Error) => { request.settled = true; pending.reject(error) },
       }
@@ -143,6 +143,41 @@ function sourceContext(workspace: string, f: ReturnType<typeof fixture>): Execut
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: explicit task and call inference reaches the provider; observer stays tool-free and off the dashboard`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:root')
+        for (const mode of ['task', 'call'] as const) {
+          const pending = f.subagent.execute({ description: 'Override inference', task: 'Bounded work', mode, model: 'override', effort: 'high' }, sourceContext(workspace, f))
+          await waitFor(() => f.requests.some(request => !request.settled && request.sessionId !== 'web:root'))
+          const request = f.requests.find(request => !request.settled && request.sessionId !== 'web:root')!
+          assert.equal(request.model, 'override')
+          assert.equal(request.effort, 'high')
+          assert.equal((await store.getState(request.sessionId))?.config?.reasoningEffort, 'high')
+          request.resolve(done())
+          await pending
+          await waitFor(() => f.sessions.getSessionState(request.sessionId)?.executionStatus === 'completed')
+        }
+        const id = await f.sessions.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', task: 'Summarize evidence' })
+        assert(id)
+        const observer = await f.next(id)
+        assert.deepEqual(observer.names, [])
+        const app = new Hono()
+        sessionsApiPlugin(f.sessions)(app)
+        for (const path of ['/api/sessions', '/api/sessions/graph']) {
+          const body = await (await app.request(path)).json()
+          assert(!body.sessions.some((session: { sessionId: string }) => session.sessionId === id))
+        }
+        assert(f.sessions.getSessionState(id))
+        observer.resolve(done('{"track":false}'))
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: startup does not read terminal one-shot histories or rewrite unchanged state`, async t => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

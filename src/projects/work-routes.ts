@@ -29,12 +29,14 @@ export async function applyHumanWorkAction(sessions: SessionManager, body: z.inf
   }
 }
 
-export function projectWorkOverview(sessions: SessionManager, github: Record<string, ProjectWorkItem['github']> = {}): ProjectWorkOverview {
+export function projectWorkOverview(sessions: SessionManager, github: Record<string, ProjectWorkItem['github']> = {}, observer?: ProjectWorkOverview['observer']): ProjectWorkOverview {
   const alignment = sessions.alignment
   if (!alignment) throw new WorkConflict('Work is unavailable.')
-  const states = sessions.listSessions()
+  const states = sessions.listSessions().filter(state => state.agentType !== 'work-observer')
+  const records = alignment.store.workRecords()
   return projectWorkOverviewSchema.parse({
-    items: alignment.store.workRecords().map(record => {
+    observer,
+    items: records.map(record => {
       const authority = alignment.store.workAuthority(record.subject)
       return {
         key: record.key, title: record.workflow?.title ?? record.definition.objective,
@@ -49,14 +51,16 @@ export function projectWorkOverview(sessions: SessionManager, github: Record<str
         objective: record.definition.objective, origin: record.origin, userQuote: record.requestSource?.quote,
         notes: record.notes, contextChanged: alignment.contextChanged(record),
         github: github[record.key],
+        observation: record.observation,
       }
     }),
     sessions: states.map(state => {
       const full = sessions.getSessionState(state.sessionId)
       const temporary = state.mode === 'task' || state.mode === 'call'
-      return { sessionId: state.sessionId, title: state.name || state.sessionId,
+      const observed = records.find(record => record.observation?.sessionId === state.sessionId)
+      return { sessionId: state.sessionId, title: state.name || state.description || observed?.workflow?.title || state.sessionId,
         assignable: !temporary, parentSessionId: full?.parentSessionId ?? null, lastActivityAt: state.lastActivityAt,
-        workKey: alignment.decisionContext(state.sessionId)?.originKey,
+        workKey: alignment.decisionContext(state.sessionId)?.originKey ?? observed?.key,
         activity: sessions.inputs.get(state.sessionId) || sessions.yields.get(state.sessionId) ? 'waiting'
           : sessions.isWaitingForCall(state.sessionId) ? 'waiting-for-call'
           : temporary && full?.executionStatus && full.executionStatus !== 'running' ? full.executionStatus
@@ -82,7 +86,8 @@ export function projectWorkOverview(sessions: SessionManager, github: Record<str
 }
 
 export function projectWorkPlugin(sessions: SessionManager, authorize: (request: Request) => boolean | Promise<boolean>,
-  github: () => Record<string, ProjectWorkItem['github']> = () => ({})): GatewayPlugin {
+  github: () => Record<string, ProjectWorkItem['github']> = () => ({}),
+  observer?: () => ProjectWorkOverview['observer']): GatewayPlugin {
   return app => {
     app.use('/api/work', async (c, next) => {
       c.header('Cache-Control', 'no-store')
@@ -96,7 +101,7 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
       if (!sessions.alignment) return c.json({ error: 'work_unavailable' }, 501)
       return next()
     })
-    app.get('/api/work', c => c.json(projectWorkOverview(sessions, github())))
+    app.get('/api/work', c => c.json(projectWorkOverview(sessions, github(), observer?.())))
     app.get('/api/work/:key', c => {
       const key = c.req.param('key')
       if (!sessions.alignment!.store.workRecords().some(record => record.key === key)) return c.json({ error: 'work_not_found' }, 404)

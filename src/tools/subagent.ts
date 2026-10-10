@@ -10,6 +10,8 @@ import { channelAddressFromSessionId } from '../bus/events.ts'
 import { parseInitiativeId } from '../sessions/initiative-metadata.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
 import { workBindingSchema } from '../sessions/work-policy.ts'
+import { REASONING_EFFORTS, type InferenceSettings } from '../agent/llm-config.ts'
+import { z } from 'zod'
 
 /** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
@@ -23,6 +25,8 @@ export class SubagentTool implements Tool {
         description: 'Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Omission defaults to task in a long-lived session; tasks must explicitly choose call.',
       },
       task: { type: 'string', description: 'Initial work. Required for task/call.' },
+      model: { type: 'string', description: 'Optional exact model ID from v:models. Omission preserves role defaults for tasks and caller settings for calls.' },
+      effort: { type: 'string', enum: [...REASONING_EFFORTS], description: 'Optional reasoning effort supported by the selected model. Omission inherits existing defaults.' },
       description: {
         type: 'string',
         description: 'Short description of the sub-agent session\'s purpose.',
@@ -116,6 +120,19 @@ export class SubagentTool implements Tool {
       return `Error: unknown agent type "${typeName}". Available: ${this.agentTypes.allNames().join(', ')}`
     }
     const mode = args.mode ?? 'task'
+    const overrides: InferenceSettings = {
+      ...(args.model === undefined ? {} : { model: z.string().trim().min(1).max(512).parse(args.model) }),
+      ...(args.effort === undefined ? {} : { reasoningEffort: z.enum(REASONING_EFFORTS).parse(args.effort) }),
+    }
+    const inference = mode === 'call' ? {
+      ...structuredClone(parentState?.config ?? {}),
+      ...(ctx.model !== undefined ? { model: ctx.model } : {}),
+      ...(ctx.temperature !== undefined ? { temperature: ctx.temperature } : {}),
+      ...(ctx.maxTokens !== undefined ? { maxTokens: ctx.maxTokens } : {}),
+      ...(ctx.thinking !== undefined ? { thinking: structuredClone(ctx.thinking) } : {}),
+      ...(ctx.reasoningEffort !== undefined ? { reasoningEffort: ctx.reasoningEffort } : {}),
+      ...overrides,
+    } : { ...overrides }
     if (mode === 'call' && reportTo !== undefined) return 'Error: call mode cannot use report_to.'
     const task = typeof args.task === 'string' ? args.task.trim() : ''
     if (!task) return `Error: task is required for mode="${mode}".`
@@ -124,6 +141,13 @@ export class SubagentTool implements Tool {
       ? `${ctx.physicalSessionId}:${ctx.messageId}:${ctx.toolCallId}` : crypto.randomUUID()
     return this.sessions.executeOnce(executionKey, async () => {
     this.sessions.assertCanCreateChild(ctx.sessionId, mode)
+    if (args.model !== undefined || args.effort !== undefined) {
+      await this.sessions.validateExecutionInference({
+        ...(agentType.model ? { model: agentType.model } : {}),
+        ...(agentType.reasoningEffort ? { reasoningEffort: agentType.reasoningEffort } : {}),
+        ...inference,
+      })
+    }
     if (mode === 'call' && ctx.toolCallName && ctx.toolCallName !== 'subagent') {
       throw new Error('Blocking calls require native subagent invocation; a script bridge cannot guarantee the caller remains attached.')
     }
@@ -159,14 +183,7 @@ export class SubagentTool implements Tool {
         parentToolCallId: ctx.toolCallName === 'subagent' ? ctx.toolCallId : undefined,
         parentSessionId,
         reportTo: mode === 'call' ? undefined : reportTo ?? parentSessionId,
-        config: mode === 'call' ? {
-          ...structuredClone(parentState?.config ?? {}),
-          ...(ctx.model !== undefined ? { model: ctx.model } : {}),
-          ...(ctx.temperature !== undefined ? { temperature: ctx.temperature } : {}),
-          ...(ctx.maxTokens !== undefined ? { maxTokens: ctx.maxTokens } : {}),
-          ...(ctx.thinking !== undefined ? { thinking: structuredClone(ctx.thinking) } : {}),
-          ...(ctx.reasoningEffort !== undefined ? { reasoningEffort: ctx.reasoningEffort } : {}),
-        } : undefined,
+        config: inference,
         originUser: ctx.senderName,
         description,
         preloadTools,
@@ -191,7 +208,7 @@ export class SubagentTool implements Tool {
     return JSON.stringify({
       sessionId, executionId: mode === 'task' ? sessionId : undefined, mode, agentType: typeName,
       status: task ? 'running' : 'pending',
-      message: 'Task started. The final result will be reported asynchronously.',
+      message: 'Task started. Correct this assignment with message(sessionId, content); it applies at the next safe step. Do not take over its files until completion or confirmed cancellation. Final result is automatic.',
     })
     })
   }

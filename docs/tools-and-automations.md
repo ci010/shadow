@@ -379,6 +379,52 @@ is not a delivery retry command.
 
 ## Shared work notes and the Project canvas
 
+### Automatic observation (MVP)
+
+`workObserver.enabled` defaults to `true`; set it to `false` to disable the extra
+inference. Optional `workObserver.model` overrides `agent.quickModel`, falling
+back to `agent.model`. The tool-free observer runs through SessionManager, not
+a separate tool loop. It coalesces new evidence for 20 seconds and has a 90-second
+deadline per inference; unchanged evidence does not trigger repeated calls.
+
+It observes new authenticated inputs, actual-parent delegations and final turn
+reports in Project-local web chats and their descendants. It does not backfill
+existing histories, inspect tool dumps, or observe managed external channels,
+automation, coordinators or itself. At most 12 bounded evidence entries per
+conversation are retained in the Project Initiative database. The 200-entry
+ledger evicts processed evidence before accepting new conversations, never
+pending evidence or the resulting Work notes.
+
+Generated notes are labelled as interpretations with source IDs and session
+links. They remain unassigned: no forced worker bookkeeping, focus injection,
+notifications or implicit authorization. Parent links reflect recorded delegation,
+not a proven causal explanation. Manual/worker edits pause automatic replacement;
+stale model results cannot overwrite newer evidence or edits. Invalid output and
+inference failures remain visible, rather than manufacturing progress. This is
+not semantic proof of intent, acceptance, or automatic contextual question routing.
+
+### Current-task steering and inference overrides
+
+`message({sessionId, content})` defaults to `next-step` for actionable agent
+messages. A running task accepts corrections only from its actual parent, not
+another assignment or a peer. Corrections apply at the next inference boundary;
+already executing tools are not interrupted, and obsolete tool calls returned
+after a correction arrived are not executed. Pending/applied/unapplied correction
+records are persisted. Admission is not application, completion or file ownership
+transfer. Before taking over files, await completion or confirmed cancellation
+and inspect the actual changes.
+
+Routine progress is archived without waking agents. Explicit `delivery` selects
+`next-step`, `queue` or `silent`; legacy `silent:false` retains queue behavior.
+Channel audience restrictions can still force queue delivery. Calls and terminal
+tasks reject further input. Prefer concise, action-first messages; do not request
+acknowledgments or repeat reports that require no action.
+
+`subagent` accepts optional `model` and `effort` (`low`, `medium`, `high`, `xhigh`,
+`max`). Explicit overrides are validated against the provider catalog before
+admission. Omitted values retain task-role defaults or call inheritance. These
+parameters do not change execution mode, permissions or workspace ownership.
+
 Work is optional scaffolding, not tool admission. Untracked sessions execute
 normally and remain visible in the Project overview, including pending questions.
 Previously saved required-policy metadata does not re-enable enforcement.

@@ -101,6 +101,13 @@ export const workRecordSchema = z.object({
   workflow: workWorkflowSchema.optional(),
   proposals: z.array(workProposalSchema).max(100).optional(),
   notes: workNotesSchema.optional(),
+  observation: z.object({
+    sessionId: z.string().min(1).max(512),
+    sources: z.array(z.object({
+      id: z.string().min(1).max(512), physicalId: z.string().min(1).max(1024),
+    }).strict()).max(12),
+    observedAt: z.string().datetime(),
+  }).strict().optional(),
 }).strict()
 export type WorkRecord = z.infer<typeof workRecordSchema>
 export interface WorkStamp { key: string; revision: number; adoptionId?: string; assignmentRevision?: number }
@@ -129,3 +136,17 @@ CREATE TABLE IF NOT EXISTS work_focus (
 ) STRICT;
 `
 export class WorkConflict extends Error {}
+
+export const workObservationSchema = z.object({
+  sessionId: z.string().min(1).max(512),
+  parentSessionId: z.string().max(512).optional(),
+  version: z.number().int().positive(),
+  processed: z.number().int().nonnegative(),
+  events: z.array(z.object({
+    id: z.string().min(1).max(512), physicalId: z.string().min(1).max(1024),
+    kind: z.enum(['request', 'delegation', 'result']),
+    text: z.string().max(6000), at: z.string().datetime(),
+  }).strict()).max(12),
+  error: z.string().max(2000).optional(),
+}).strict()
+export type WorkObservation = z.infer<typeof workObservationSchema>

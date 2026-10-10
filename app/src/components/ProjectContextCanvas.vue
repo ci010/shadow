@@ -4,6 +4,14 @@
       <h2>{{ t('Project goal map') }}</h2>
       <p>{{ t('Follow a branch for context, notes and decisions.') }}</p>
     </header>
+    <p v-if="data.observer?.running || data.observer?.pending" class="observer-status" role="status">{{ t('Organizing observed work…') }}</p>
+    <p v-if="data.observer && !data.observer.enabled" class="observer-status">{{ t('Automatic work observation is disabled. Execution activity remains available.') }}</p>
+    <div v-if="data.observer?.error || data.observer?.errors.length" class="impact-pending" role="status">
+      <strong>{{ t('Automatic work observation needs attention') }}</strong>
+      <p>{{ t('Existing notes are retained. New evidence or re-enabling observation retries the update.') }}</p>
+      <p v-if="data.observer.error">{{ data.observer.error }}</p>
+      <p v-for="failure in data.observer.errors" :key="failure.sessionId"><button @click="emit('session', failure.sessionId)">{{ sessionTitle(failure.sessionId) }}</button>: {{ failure.error }}</p>
+    </div>
     <p v-if="!data.items.length" class="canvas-empty">{{ t('There is no goal map yet. Conversations and questions still appear below; tracking is optional.') }}</p>
     <p v-else-if="!rows.length" class="canvas-empty">{{ t('No matching work') }}</p>
     <article v-for="row in rows" :key="row.item.key" :data-work-key="row.item.key"
@@ -21,7 +29,13 @@
       </header>
       <div class="node-body">
         <p v-if="row.item.objective" class="node-objective">{{ row.item.objective }}</p>
-        <p class="node-provenance">{{ row.item.origin === 'human' ? t('User-defined goal') : t('Working interpretation') }}</p>
+        <p class="node-provenance">{{ row.item.observation ? t('Automatically observed · not user acceptance') : row.item.origin === 'human' ? t('User-defined goal') : t('Working interpretation') }}</p>
+        <details v-if="row.item.observation" class="observation-source">
+          <summary>{{ t('Observation sources') }}</summary>
+          <button @click="emit('session', row.item.observation.sessionId)">{{ sessionTitle(row.item.observation.sessionId) }}</button>
+          <time :datetime="row.item.observation.observedAt">{{ new Date(row.item.observation.observedAt).toLocaleString() }}</time>
+          <ul><li v-for="source in row.item.observation.sources" :key="source.id"><code>{{ source.id }}</code></li></ul>
+        </details>
         <p v-if="row.item.contextChanged" class="impact-pending" role="status">{{ t('An ancestor changed. This branch has not been reassessed yet.') }}</p>
         <p v-if="row.item.notes?.attention && !row.item.notes.attention.reviewed" class="impact-pending">
           <strong>{{ t('Impact not yet reviewed') }}</strong> {{ row.item.notes.attention.summary }}
@@ -58,8 +72,9 @@
       <h2>{{ t('Activity outside the map') }}</h2>
       <p>{{ t('Live execution activity is not work acceptance. Sessions remain visible without creating notes.') }}</p>
       <p v-if="!unlinkedSessions.length">{{ t('All visible sessions are linked to work.') }}</p>
-      <ul><li v-for="session in unlinkedSessions.slice(0, showAll ? undefined : 6)" :key="session.sessionId">
+      <ul><li v-for="session in activityRows.slice(0, showAll ? undefined : 6)" :key="session.sessionId" :class="{ 'child-activity': session.parentSessionId }">
         <button type="button" @click="emit('session', session.sessionId)">{{ session.title }}</button>
+        <small v-if="session.parentSessionId">{{ t('Delegated by') }} <button @click="emit('session', session.parentSessionId)">{{ sessionTitle(session.parentSessionId) }}</button></small>
         <span>{{ sessionActivity(session.activity).label }}</span>
       </li></ul>
       <button v-if="unlinkedSessions.length > 6" type="button" :aria-expanded="showAll" @click="showAll = !showAll">{{ showAll ? t('Less detail') : t('Show all sessions') }}</button>
@@ -99,6 +114,21 @@ const unanchored = computed(() => props.data.requests.filter(request => !request
 const unlinkedSessions = computed(() => props.data.sessions.filter(session =>
   !props.data.items.some(item => item.assignee === session.sessionId || item.key === session.workKey))
   .sort((a, b) => Number(isWorkingStage(b.activity)) - Number(isWorkingStage(a.activity))))
+const sessionTitle = (id: string) => props.data.sessions.find(session => session.sessionId === id)?.title ?? id
+const activityRows = computed(() => {
+  const sessions = unlinkedSessions.value
+  const result: typeof sessions = []
+  const seen = new Set<string>()
+  function add(session: typeof sessions[number]) {
+    if (seen.has(session.sessionId)) return
+    seen.add(session.sessionId)
+    result.push(session)
+    for (const child of sessions.filter(child => child.parentSessionId === session.sessionId)) add(child)
+  }
+  for (const session of sessions.filter(session => !sessions.some(parent => parent.sessionId === session.parentSessionId))) add(session)
+  for (const session of sessions) add(session)
+  return result
+})
 const linkedSessions = (item: ProjectWorkItem) => props.data.sessions.filter(session => session.sessionId === item.assignee || session.workKey === item.key)
 function toggle(key: string) { const next = new Set(expanded.value); next.has(key) ? next.delete(key) : next.add(key); expanded.value = next }
 function toggleDetails(key: string) { const next = new Set(details.value); next.has(key) ? next.delete(key) : next.add(key); details.value = next }
@@ -182,6 +212,14 @@ button:hover { background: var(--c-bg-muted); }
 button:focus-visible, .context-canvas:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .context-canvas:focus-visible { outline-offset: -2px; }
 .canvas-empty { padding-block: 20px; color: var(--c-text-secondary); }
+.observer-status, .observation-source { color: var(--c-text-secondary); font-size: 12px; }
+.observation-source summary { cursor: pointer; padding-block: 6px; }
+.observation-source time { margin-inline-start: 8px; }
+.observation-source code { overflow-wrap: anywhere; }
+.project-activity li { flex-wrap: wrap; }
+.project-activity li.child-activity { padding-inline-start: 16px; }
+.project-activity small { color: var(--c-text-secondary); }
+.project-activity small button { font-size: inherit; }
 @media (max-width: 700px) { .context-canvas { padding: 18px 12px 28px; } .context-node { margin-left: calc(var(--node-depth) * 8px); padding-left: 10px; } .node-kind { display: none; } }
 @media (max-width: 700px), (pointer: coarse) { button { min-height: 44px; } }
 </style>

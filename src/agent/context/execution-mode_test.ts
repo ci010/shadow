@@ -179,7 +179,7 @@ test('coordinator guidance cannot advertise worker tools even with broad role me
   assert.doesNotMatch(prompt, /### Shell|### Delegation|### Environment|Configure MCP|Activate skill tools|Skill Tools and External MCP Tools/)
   assert.doesNotMatch(prompt, /invoke_tool\(\{|shell: "node"|vm\.SourceTextModule/)
   assert.match(prompt, /initialMessageStatus.*accepted.*not_requested.*not_replayed/)
-  assert.match(prompt, /receipt confirms admission, not acceptance, completion, or ownership transfer/)
+  assert.match(prompt, /receipt confirms admission, not application, acceptance, completion, or ownership transfer/)
   assert.doesNotMatch(normalized, /coordinator does not start an LLM turn automatically/)
   for (const mode of ['task', 'call'] as const) {
     const oneShot = (await guidelineProvider().getPromptSection({ ...context, mode }))!

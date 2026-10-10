@@ -1366,6 +1366,42 @@ test('task executions reject message-tool admissions and subsequent direct event
   } finally { await f.close() }
 })
 
+for (const storage of ['jsonl', 'sqlite'] as const) {
+  for (const responseKind of ['final', 'tool']) test(`${storage}: parent correction during ${responseKind} task inference is applied without restarting or admitting a second assignment`, async () => {
+    const f = await fixture({ manager: true, ephemeral: true, storage,
+      state: { agentType: 'fixture', parentSessionId: 'test:parent' } })
+    try {
+      await f.manager.buildSession('test:parent', undefined, { mode: 'session', agentType: 'fixture' })
+      await f.manager.deliver(f.state.sessionId, input('initial-task'))
+      await waitFor(() => f.calls.length === 1)
+      const correction: SessionMessageInput = { ...input('correction', 'next-step'),
+        source: { kind: 'session', sessionId: 'test:parent' }, content: 'Use the corrected API contract.' }
+      assert.equal(f.manager.canReceiveSessionMessage(f.state.sessionId, 'test:parent'), true)
+      assert.equal(f.manager.canReceiveSessionMessage(f.state.sessionId, 'test:other'), false)
+      await assert.rejects(f.manager.deliver(f.state.sessionId, { ...correction, source: { kind: 'session', sessionId: 'test:other' } }), /does not accept/)
+      await assert.rejects(f.manager.deliver(f.state.sessionId, { ...correction, policy: 'queue' }), /does not accept/)
+      const receipt = await f.manager.deliver(f.state.sessionId, correction)
+      assert.equal(receipt.delivery, 'next-step')
+      assert.equal(f.calls[0].signal.aborted, false)
+      f.calls[0].resolve(responseKind === 'final' ? done('Obsolete draft') : {
+        content: '', toolCalls: [{ id: 'obsolete-tool', name: 'obsolete-write', arguments: {} }],
+      })
+      await waitFor(() => f.calls.length === 2)
+      assert.equal(f.facts.length, 0)
+      assert.match(JSON.stringify(f.calls[1].messages), /corrected API contract/)
+      if (responseKind === 'tool') assert.match(String(f.calls[1].messages.find(message => message.tool_call_id === 'obsolete-tool')?.content), /Not executed/)
+      f.calls[1].resolve(done('Corrected result'))
+      await waitFor(() => f.facts.length === 1)
+      assert.equal(f.facts[0].content, 'Corrected result')
+      await assert.rejects(f.manager.deliver(f.state.sessionId, correction), /does not accept/)
+      const records = []
+      for await (const record of f.store.readSessionLog(SessionManager.currentPhysicalId(f.manager.getSessionState(f.state.sessionId)!))) records.push(record)
+      assert(records.some(record => (record.execution_correction as { status?: string } | undefined)?.status === 'pending'))
+      assert(records.some(record => (record.execution_correction as { status?: string } | undefined)?.status === 'applied'))
+    } finally { await f.close() }
+  })
+}
+
 test('failed ephemeral preparation releases the initial-task reservation', async () => {
   const f = await fixture({ manager: true, ephemeral: true, state: { agentType: 'fixture' } })
   try {

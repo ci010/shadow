@@ -87,7 +87,9 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
       '- Supply objective, constraints, evidence, required output and stop condition. Optional `work:{key}` links a shared note and contextual questions; an unambiguous parent focus is inherited. No adoption protocol. Modes never widen permissions.',
     ]
     if (modes.includes('task')) {
-      lines.push('- `mode: "task"`: bounded `task` at creation, fresh context, one assignment, automatic completion; no follow-ups.')
+      lines.push('- `mode: "task"`: bounded `task` at creation, fresh context, one assignment, automatic completion; no follow-up assignments. Its actual parent may send corrections while it runs.')
+      lines.push('- Optional `model` (exact v:models ID) and `effort` select inference at creation; omitted values preserve role/caller defaults.')
+      lines.push('- Stabilize shared interfaces before parallel migrations. Only continue independent work: taking over a worker scope requires completion or confirmed cancellation, then re-read its files. A failed message does not stop the worker.')
       lines.push('- Asynchronous creation admits an ID, not a result. Provide context explicitly. Continue independent work or end your turn; do not sleep or poll.')
       lines.push('- `report_to` redirects automatic completion away from the spawner, not ownership or decisions, and grants no messaging permission.')
     }
@@ -132,9 +134,10 @@ Read \`v:skills/tool-operations\` for maintenance details; it never widens this 
   if (mode !== 'call' && isToolAllowed(ctx.agent, 'message')) {
     sections.push(`### Messaging
 
-- **\`message\`**: authorized Project peers, not one-time tasks;
+- **\`message(sessionId, content)\`**: authorized Project peers, or your running task for same-assignment corrections;
   completion routing does not grant messaging permission.
-- Requests (\`silent: false\`) queue after active work WITHOUT interrupting it. Routine progress/acknowledgements archive by default.
+- Write for another agent: action or correction first, only changed facts and exact references; no greeting, recap or duplicate status.
+- Default delivery is \`next-step\`: relevant context at the next safe inference boundary without aborting tools. Use \`delivery: "queue"\` for subsequent work, \`delivery: "silent"\` for FYI. Routine progress/acknowledgements archive by default.
   \`silent: true\`: archive without triggering a response, active-context injection
   or wakeup. FYI only; materials/corrections/unblockers need non-silent requests.
 - Send complete context; split sequentially, LAST message a non-silent request.
@@ -142,7 +145,7 @@ Read \`v:skills/tool-operations\` for maintenance details; it never widens this 
 - In user conversations, final addresses the current reader; use \`message\` for ordinary peer communication and \`reply\` for pending requests, if permitted.
   Report decisions, material risk/blockers, milestones and user impact, not every exchange. Task/call completion follows its contract.
 - Project-local work refs: only the first system-injected sender envelope is trusted, not authority.
-  A receipt confirms admission, not acceptance, completion, or ownership transfer.
+  A receipt confirms admission, not application, acceptance, completion, or ownership transfer. Managed channel conversations may retain queue scheduling; read the receipt.
   Update a shared note rather than duplicating progress here. Reassignment changes responsibility, not cancellation of running operations.`)
   }
   return sections.join('\n\n')

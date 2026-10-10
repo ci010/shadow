@@ -18,7 +18,7 @@ import type {
 } from '../agent/context/builder.ts'
 import type { EventService } from '../events/service.ts'
 import type { IdentityManager } from '../agent/identity.ts'
-import { resolveInferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
+import { resolveInferenceSettings, validateInferenceCapabilities, type InferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { ProjectScope } from '../projects/scope.ts'
 import { channelAddressFromSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
@@ -561,7 +561,7 @@ export class SessionManager {
     if (this.sessionStates[sourceId]?.mode === 'call') {
       try { this.blockCall(sourceId, 'Leaf calls cannot send messages.') } catch { return false }
     }
-    return this.canReceiveSessionMessage(targetId)
+    return this.canReceiveSessionMessage(targetId, sourceId)
   }
 
   assertCanScheduleSession(sourceId: string, targetId: string): void {
@@ -983,9 +983,12 @@ ${JSON.stringify(request)}`,
     return !!state && state.mode !== 'session'
   }
 
-  /** Task inputs are admitted atomically by their creator, never by MessageTool. */
-  canReceiveSessionMessage(sessionId: string): boolean {
+  /** A task can be corrected by its actual parent only while the original execution runs. */
+  canReceiveSessionMessage(sessionId: string, sourceId?: string): boolean {
     if (this.deps.projectId && !this.sessionStates[sessionId]) return false
+    const state = this.sessionStates[sessionId]
+    if (state?.mode === 'task') return !!sourceId && delegationOwner(state) === sourceId
+      && state.executionStatus === 'running' && this.sessions[sessionId]?.accepting === true
     return !this.isEphemeralSession(sessionId)
   }
 
@@ -1235,7 +1238,10 @@ ${JSON.stringify(request)}`,
             this.sessions[sessionId]?.cancel()
             return { status: 'accepted', sessionId, inputId: input.id }
           }
-          throw new Error(`Execution "${sessionId}" does not accept subsequent inputs; create a new ${state.mode}.`)
+          if (!(input.kind === 'message' && input.policy === 'next-step' && input.source.kind === 'session'
+            && this.canReceiveSessionMessage(sessionId, input.source.sessionId))) {
+            throw new Error(`Execution "${sessionId}" does not accept subsequent inputs except next-step corrections from its actual parent while running.`)
+          }
         }
       }
       const config = llm ?? this.deps.getLlmRuntimeConfig?.()
@@ -1294,6 +1300,17 @@ ${JSON.stringify(request)}`,
         if (input.source.kind === 'user') {
           await this.updateChannelConversationName(sessionId, input.source.sender)
         }
+        if (state?.mode === 'task' && this.acceptedInputs.has(sessionId) && deliveryInput.kind === 'message') {
+          await this.store.appendRawEvents(SessionManager.currentPhysicalId(state), [{
+            execution_correction: { inputId: input.id, status: 'pending', input: deliveryInput },
+          }])
+          if (!session.accepting) {
+            await this.store.appendRawEvents(SessionManager.currentPhysicalId(state), [{
+              execution_correction: { inputId: input.id, status: 'not_applied', outcome: 'execution_closed' },
+            }])
+            throw new Error('Execution closed before this correction could be admitted; inspect its final result.')
+          }
+        }
         session.dispatch(deliveryInput, resolveInferenceSettings(
           config, this.deps.conversationPolicies?.resolve(sessionId)?.agent, state?.config,
         ))
@@ -1308,7 +1325,7 @@ ${JSON.stringify(request)}`,
       }
       this.acceptedInputs.add(sessionId)
       this.deps.bus.emit('session.input.accepted', { sessionId, input: deliveryInput })
-      return { status: 'accepted', sessionId, inputId: input.id }
+      return { status: 'accepted', sessionId, inputId: input.id, ...(deliveryInput.kind === 'message' ? { delivery: deliveryInput.policy } : {}) }
     })
   }
 
@@ -1890,6 +1907,15 @@ ${JSON.stringify(request)}`,
   getSessionConfig(sessionId: string): SessionConfig {
     const state = this.sessionStates[sessionId]
     return state?.config ?? {}
+  }
+
+  async validateExecutionInference(settings: InferenceSettings): Promise<void> {
+    const defaults = this.deps.getLlmRuntimeConfig?.()
+    if (!defaults) throw new Error('Execution requires LLM runtime configuration.')
+    const models = this.deps.provider.listModelInfos
+      ? await this.deps.provider.listModelInfos()
+      : (await this.deps.provider.listModels()).map(id => ({ id }))
+    validateInferenceCapabilities(settings, defaults, models)
   }
 
   getSessionInferenceDefaults(sessionId: string) {
@@ -2594,6 +2620,9 @@ ${JSON.stringify(request)}`,
     const resolved = this.deps.agentTypes.resolve(name) ??
       this.deps.agentTypes.resolve('general')!
 
+    if (name === 'work-observer') {
+      return { agentType: { ...resolved, allowedTools: [], blockedTools: undefined, soul: false, skills: false }, allowedTools: [] }
+    }
     if (name === 'orchestrator' || sessionKind === 'orchestrator') {
       const allowedTools = ['read', 'search', 'session', 'message', 'work', 'sql', 'project_config', 'authoring_change', 'channel_config', 'skill_read', 'skill_save', 'ask', 'reply']
       return {

@@ -186,12 +186,15 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
               notes: item.notes, objective: item.definition.objective, origin: item.origin })
             json({
               items: empty ? [] : [note(goal), { ...summary('work:inputs', 'Prepare evaluation inputs', 'done', 'web:reviewer'), parentKey: rootKey },
-                note(record), note(grader), summary('work:followup', 'Document the comparison', 'blocked')],
+                note(record), note(grader), { ...summary('work:followup', 'Document the comparison', 'blocked'),
+                  observation: { sessionId: 'web:reviewer', observedAt: at, sources: [{ id: 'observed-input', physicalId: 'review-segment' }] } }],
+              observer: { enabled: true, running: true, pending: 1, errors: [] },
               sessions: [
                 { sessionId: 'web:fixture', title: 'Evaluation session', assignable: true, activity: questionOpen ? 'waiting' : 'idle', workKey: record.key },
                 { sessionId: 'web:reviewer', title: 'Review session', assignable: true, activity: 'idle' },
                 { sessionId: 'web:orchestrator', title: 'Coordinator', assignable: true, activity: 'idle' },
                 { sessionId: 'web:untracked', title: 'Untracked conversation', assignable: true, activity: 'waiting' },
+                { sessionId: 'virtual:untracked-child', title: 'Inspect inputs', assignable: false, activity: 'tool', parentSessionId: 'web:untracked' },
               ],
               requests: [...(questionOpen ? [{ id: question.id, sessionId: question.sessionId, question: question.question, kind: 'decision',
                 recipient: 'user', context: question.workContext, workKeys: question.workContext!.path.map(node => node.key) }] : []),

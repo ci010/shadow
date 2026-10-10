@@ -1,7 +1,9 @@
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
-import type { SessionInput, SessionTurnFact } from './input.ts'
+import type { SessionInput, SessionMessageInput, SessionTurnFact } from './input.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { BaseSession } from './base-session.ts'
+import { buildUserChatMessage } from '../agent/message-builder.ts'
+import { resolveSessionLocations } from './locality.ts'
 
 /** One admitted task or bounded leaf call, using the ordinary provider/tool loop. */
 export class EphemeralSession extends BaseSession {
@@ -12,11 +14,13 @@ export class EphemeralSession extends BaseSession {
   private closed = false
   private ended = false
   private cancelled = false
+  private corrections: SessionMessageInput[] = []
+  private finishing = false
   private readonly stopped = Promise.withResolvers<void>()
   result?: SessionTurnFact
   onStopped?: (sessionId: string) => void
 
-  get accepting(): boolean { return !this.closed }
+  get accepting(): boolean { return !this.closed && !this.cancelled && !this.result && !this.finishing }
   get completion(): Promise<void> { return this.stopped.promise }
   get phase(): 'idle' | 'llm' | 'tool' {
     return !this.active ? 'idle' : this.executingTools ? 'tool' : 'llm'
@@ -25,7 +29,30 @@ export class EphemeralSession extends BaseSession {
   protected override onToolPhaseEnd(): void { this.executingTools = false; this.activityChanged() }
   protected override async finishTurn(fact: SessionTurnFact): Promise<void> {
     this.result = fact
+    for (const input of this.corrections.splice(0)) {
+      await this.store.appendRawEvents(this.physicalSessionId, [{
+        execution_correction: { inputId: input.id, status: 'not_applied', outcome: fact.status, at: new Date().toISOString() },
+      }])
+    }
     await super.finishTurn(fact)
+  }
+  protected override hasPendingContext(): boolean { return this.corrections.length > 0 }
+  protected override acceptFinalResponse(): boolean {
+    if (this.hasPendingContext()) return false
+    this.finishing = true
+    return true
+  }
+  protected override async drainPendingMessages(llm: LlmRuntimeConfig): Promise<void> {
+    const locations = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup)
+    const cwd = locations.workdir.available && locations.workdir.locality === 'local'
+      ? locations.workdir.path : locations.sessionDataDir
+    while (this.corrections.length) {
+      const input = this.corrections.shift()!
+      await this.appendMessages(llm, await buildUserChatMessage(input, this.workspace, cwd))
+      await this.store.appendRawEvents(this.physicalSessionId, [{
+        execution_correction: { inputId: input.id, status: 'applied', at: new Date().toISOString() },
+      }])
+    }
   }
 
   dispatch(input: SessionInput, llm: LlmRuntimeConfig): void {
@@ -34,6 +61,14 @@ export class EphemeralSession extends BaseSession {
       if (input.command.type === 'compact') this.requestCompact(llm)
       if (input.command.type === 'cancel') this.cancel()
       if (!this.running) this.end()
+      return
+    }
+    if (this.running) {
+      if (this.state.mode !== 'task' || input.kind !== 'message' || input.policy !== 'next-step'
+        || input.source.kind !== 'session' || input.source.sessionId !== this.state.parentSessionId) {
+        throw new Error('An active task only accepts a next-step correction from its parent.')
+      }
+      this.corrections.push(input)
       return
     }
     this.inbox.push({ input, llm })

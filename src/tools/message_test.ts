@@ -60,13 +60,13 @@ test('message tool awaits acceptance before displaying one session-origin messag
   await new Promise<void>((resolve) => setImmediate(resolve))
   assert.equal(displayed.length, 0)
   assert(delivered?.kind === 'message')
-  assert.equal(delivered.policy, 'queue')
+  assert.equal(delivered.policy, 'next-step')
   assert.deepEqual(delivered.source, {
     kind: 'session', sessionId: 'web:source', inputId: 'causal-input', senderName: 'Agent',
   })
   accepted.resolve({ status: 'accepted', sessionId: 'web:target', inputId: delivered.id })
   assert.match(await result, /Message sent to web:target/)
-  assert.match(await result, /Queued for a response after any active turn, without interrupting it/)
+  assert.match(await result, /delivery=next-step.*not yet applied/)
   assert.equal(displayed.length, 1)
   assert.equal(displayed[0].chatId, 'target')
   assert.equal(displayed[0].content, 'task')
@@ -149,8 +149,8 @@ test('message tool preserves silent policy and refuses self or another parent ch
   const receipt = await tool.execute({ sessionId: 'web:target', content: 'record', silent: true }, context())
   assert(inputs[0].kind === 'message')
   assert.equal(inputs[0].policy, 'silent')
-  assert.match(receipt, /Recorded only: not injected into the active turn and will not wake the recipient/)
-  assert.match(receipt, /later non-silent message is required for processing/)
+  assert.match(receipt, /delivery=silent/)
+  assert.match(receipt, /admission only/)
 })
 
 test('routine progress defaults to archival while explicit delivery remains available', async () => {
@@ -165,9 +165,9 @@ test('routine progress defaults to archival while explicit delivery remains avai
       const input = inputs.at(-1)!
       assert(input.kind === 'message' && input.source.kind === 'session')
       const archived = silent === true || silent === undefined && ['progress', 'acknowledgement'].includes(intent)
-      assert.equal(input.policy, archived ? 'silent' : 'queue')
+      assert.equal(input.policy, archived ? 'silent' : silent === false ? 'queue' : 'next-step')
       assert.equal(input.source.coordination?.intent, intent)
-      assert.match(receipt, archived ? /will not wake/ : /Queued for a response/)
+      assert.match(receipt, new RegExp(`delivery=${input.policy}`))
     }
   }
 })
@@ -180,7 +180,7 @@ test('important reports cannot be hidden and stale work messages are archived wi
   }, undefined, undefined, () => false)
   await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'Failure', intent: 'progress', attention: 'blocker', silent: true }, context()), /cannot be silently/)
   await tool.execute({ sessionId: 'web:target', content: 'Failure', intent: 'progress', attention: 'blocker' }, context())
-  assert.equal(inputs[0].kind === 'message' && inputs[0].policy, 'queue')
+  assert.equal(inputs[0].kind === 'message' && inputs[0].policy, 'next-step')
   await tool.execute({ sessionId: 'web:target', content: 'Old completion', intent: 'request' },
     { ...context(), workStamps: [{ key: 'item:old', revision: 1 }] })
   assert.equal(inputs[1].kind === 'message' && inputs[1].policy, 'silent')
@@ -211,7 +211,7 @@ test('task target admission guard blocks delivery and outbound projection', asyn
   const tool = new MessageTool(bus, () => true, () => undefined, () => [], async () => {
     throw new Error('Should not deliver')
   }, () => false)
-  assert.match(await tool.execute({ sessionId: 'web:parent', content: 'Follow-up work' }, context()), /task executions do not admit messages/)
+  assert.match(await tool.execute({ sessionId: 'web:parent', content: 'Follow-up work' }, context()), /failed send does not stop it/)
   assert.equal(projections, 0)
 })
 

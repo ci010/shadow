@@ -175,6 +175,8 @@ export abstract class BaseSession {
 
   /** Drain any pending messages (e.g. steer queue) before each LLM call. No-op by default. */
   protected async drainPendingMessages(_llm: LlmRuntimeConfig): Promise<void> {}
+  protected hasPendingContext(): boolean { return false }
+  protected acceptFinalResponse(): boolean { return !this.hasPendingContext() }
   protected activityChanged(): void {
     this.bus.emit('session.activity.changed', { sessionId: this.id })
   }
@@ -290,19 +292,19 @@ export abstract class BaseSession {
           }, inferenceMessages, toolDefs, { model, maxTokens, temperature, thinking, reasoningEffort })
           if (captureId) chatSpan.setAttribute('prompt.capture.request_id', captureId)
           budget.take()
+          this.providerFailure = undefined
           const response = await this.provider.chat(inferenceMessages, toolDefs, {
             model,
-          this.providerFailure = undefined
             maxTokens,
             temperature,
             signal,
             thinking,
             reasoningEffort,
-          })
-          signal.throwIfAborted()
           }).catch(error => {
             this.providerFailure = providerFailureKind(error)
             throw error
+          })
+          signal.throwIfAborted()
           this.tools.boundary?.assertCurrent()
           // Keep the returned message with its call, including across compaction.
           // Provider continuity (including encrypted state) is not display content.
@@ -367,6 +369,13 @@ export abstract class BaseSession {
       })
 
       const done = response.toolCalls.length === 0
+      if (!done && this.hasPendingContext()) {
+        for (const call of response.toolCalls) await this.appendMessages(llm, {
+          role: 'tool', name: call.name, tool_call_id: call.id,
+          content: 'Not executed: corrective context arrived during inference. Reassess before issuing tools.',
+        })
+        continue
+      }
       if (done && (staleInference || workChanged())) {
         if (this.state.mode && this.state.mode !== 'session') {
           throw new Error('The bounded task work agreement changed during execution. Its partial results are historical, not completion of the new assignment.')
@@ -375,6 +384,7 @@ export abstract class BaseSession {
           content: 'The referenced goal changed during the previous inference. Re-evaluate the affected plan against its current context. The previous response is not evidence of completing the revised goal.' })
         continue
       }
+      if (done && !this.acceptFinalResponse()) continue
       if (response.content || done) {
         await this.tools.boundary?.beforeOutput(signal)
         const { text, media } = parseMediaFromContent(response.content ?? '')
@@ -557,6 +567,7 @@ export abstract class BaseSession {
       platformMessageId: msg.platformMessageId,
       queryId,
     }
+    this.providerFailure = undefined
     const fact: SessionTurnFact = {
       sessionId: this.id,
       turnId: queryId,
@@ -567,7 +578,6 @@ export abstract class BaseSession {
     }
     const attempted = !silent
     try {
-    this.providerFailure = undefined
       if (this.tools.boundary) {
         signal = AbortSignal.any([signal, this.tools.boundary.signal])
         await this.tools.boundary.begin(input, signal)

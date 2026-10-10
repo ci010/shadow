@@ -7,6 +7,7 @@ import type { ChannelManager } from '../channels/manager.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 import { SubagentTool } from './subagent.ts'
+import type { InferenceSettings } from '../agent/llm-config.ts'
 
 test('subagent only creates temporary work, preserving explicit workdir and ignoring reusable role defaults', async () => {
   const workdir = { version: 1 as const, nodeId: 'node-a', capabilityId: 'folder-a' }
@@ -39,7 +40,7 @@ test('subagent only creates temporary work, preserving explicit workdir and igno
   } as ExecutionContext
   assert.deepEqual(tool.parameters.properties.mode.enum, ['task', 'call'])
   assert.deepEqual(tool.parameters.required, ['description', 'task'])
-  assert.match(await tool.execute({ mode: 'session', description: 'Legacy' }, context), /topic creation/)
+  assert.match(await tool.execute({ mode: 'session', description: 'Legacy' }, context), /session creation/)
   assert.equal(createdId, '')
   assert.match(await tool.execute({ description: 'No task' }, context), /task is required/)
   const receipt = JSON.parse(await tool.execute({ description: 'Work', task: 'Do work' }, context))
@@ -57,4 +58,32 @@ test('subagent only creates temporary work, preserving explicit workdir and igno
   assert.equal(fields?.agentType, 'general')
   assert.equal(fields?.reportTo, undefined)
   assert.match(await tool.execute({ mode: 'task', agent_type: 'orchestrator', description: 'Alias', task: 'Work' }, context), /cannot be used/)
+})
+
+test('subagent validates and persists explicit model/effort before task or call creation', async () => {
+  const parent: SessionState = { sessionId: 'web:parent', mode: 'session', segmentIndex: 0, config: { model: 'parent', reasoningEffort: 'high' } }
+  const fields: Array<Parameters<SessionManager['buildSession']>[2]> = []
+  const validated: InferenceSettings[] = []
+  const sessions = {
+    getSessionState: () => parent, getAllowedSubagentModes: () => ['task', 'call'], assertCanCreateChild() {},
+    executeOnce: (_key: string, run: () => Promise<string>) => run(),
+    validateExecutionInference: async (settings: InferenceSettings) => {
+      if (settings.model === 'unsupported') throw new Error('Model is not selectable')
+      validated.push(settings)
+    },
+    buildSession: async (_id: string, _parent: unknown, value: Parameters<SessionManager['buildSession']>[2]) => { fields.push(value) },
+    startChild: async () => {}, startCall: async () => 'result',
+  } as unknown as SessionManager
+  const types = { resolve: () => ({ name: 'general', model: 'role', reasoningEffort: 'low' }), allNames: () => ['general'] } as unknown as AgentTypesManager
+  const tool = new SubagentTool({} as Bus, sessions, types, {} as ChannelManager)
+  const context = { sessionId: parent.sessionId, physicalSessionId: 'physical', messageId: 'input' } as ExecutionContext
+  await tool.execute({ description: 'Task', task: 'Work', model: 'chosen', effort: 'medium' }, context)
+  assert.deepEqual(fields[0]?.config, { model: 'chosen', reasoningEffort: 'medium' })
+  await tool.execute({ mode: 'call', description: 'Call', task: 'Inspect', effort: 'low' }, context)
+  assert.equal(fields[1]?.config?.model, 'parent')
+  assert.equal(fields[1]?.config?.reasoningEffort, 'low')
+  assert.equal(validated[0]?.model, 'chosen')
+  await assert.rejects(tool.execute({ description: 'Bad', task: 'Work', effort: 'invalid' }, context))
+  await assert.rejects(tool.execute({ description: 'Bad', task: 'Work', model: 'unsupported' }, context), /not selectable/)
+  assert.equal(fields.length, 2)
 })
