@@ -6,29 +6,27 @@ import { FolderError } from '../folders/registry.ts'
 import { projectWorkOverviewSchema, type ProjectWorkOverview, type ProjectWorkItem } from './work-overview.ts'
 
 export const humanWorkActionSchema = z.object({
-  action: z.enum(['create', 'update', 'apply_proposal', 'assign', 'manage', 'progress', 'dependencies', 'transition', 'settle', 'request_checkpoint', 'policy']),
-  key: z.string().optional(), revision: z.number().int().positive().optional(), data: z.unknown().optional(),
+  action: z.enum(['create', 'update', 'assign', 'review']),
+  key: z.string().optional(), version: z.number().int().positive().optional(), data: z.unknown().optional(),
 }).strict()
 
 export async function applyHumanWorkAction(sessions: SessionManager, body: z.infer<typeof humanWorkActionSchema>, signal: AbortSignal) {
   const alignment = sessions.alignment
   if (!alignment) throw new WorkConflict('Work is unavailable.')
   signal.throwIfAborted()
-  if (body.action !== 'request_checkpoint') {
-    await alignment.execute({ kind: 'user' }, body.action, body.key, body.revision, body.data, signal)
+  if (body.action === 'create') {
+    await alignment.execute({ kind: 'user' }, 'create', undefined, undefined, body.data, signal)
     return
   }
-  if (!body.key) throw new WorkConflict('A work key is required.')
-  const record = alignment.get(body.key)
-  if (body.revision !== record.revision) throw new WorkConflict('Work revision changed.')
-  const target = alignment.store.workAuthority(record.subject).executor
-  if (!target) throw new WorkConflict('No executor is assigned.')
-  sessions.assertFolderAccess(target)
-  await sessions.deliver(target, {
-    kind: 'message', id: crypto.randomUUID(), timestamp: new Date().toISOString(), policy: 'steering',
-    source: { kind: 'event', eventId: record.key, type: 'work-checkpoint-request', source: 'human-work-review' },
-    content: `The human requests a factual checkpoint for ${record.key} revision ${record.revision}. At a safe boundary record completed work, artifacts, inFlight, unknown and retired premises with work action=checkpoint, then end the turn. Do not start new external work, claim cancellation, or change assignments.`,
-  })
+  if (!body.key || body.version === undefined) throw new WorkConflict('Provide the current note key and version.')
+  if (body.action === 'update') await alignment.editNote({ kind: 'user' }, body.key, body.version, body.data, signal)
+  else if (body.action === 'assign') {
+    const data = z.object({ assignee: z.string().min(1).max(512).nullable() }).strict().parse(body.data)
+    await alignment.assignNote({ kind: 'user' }, body.key, body.version, data.assignee, signal)
+  } else {
+    const data = z.object({ conclusion: z.string().trim().min(1).max(2000) }).strict().parse(body.data)
+    await alignment.reviewNote({ kind: 'user' }, body.key, body.version, data.conclusion, signal)
+  }
 }
 
 export function projectWorkOverview(sessions: SessionManager, github: Record<string, ProjectWorkItem['github']> = {}): ProjectWorkOverview {
@@ -48,18 +46,32 @@ export function projectWorkOverview(sessions: SessionManager, github: Record<str
         proposals: record.proposals?.filter(proposal => proposal.status === 'pending' && proposal.baseRevision === record.revision
           && proposal.assignmentRevision === record.workflow?.assignmentRevision).length ?? 0,
         interpretationReview: !!record.answerReview, changedAt: record.changedAt,
+        objective: record.definition.objective, origin: record.origin, userQuote: record.requestSource?.quote,
+        notes: record.notes, contextChanged: alignment.contextChanged(record),
         github: github[record.key],
       }
     }),
-    sessions: states.map(state => ({ sessionId: state.sessionId, title: state.name || state.sessionId,
-      assignable: (state.mode ?? 'session') === 'session' })),
+    sessions: states.map(state => {
+      const full = sessions.getSessionState(state.sessionId)
+      const temporary = state.mode === 'task' || state.mode === 'call'
+      return { sessionId: state.sessionId, title: state.name || state.sessionId,
+        assignable: !temporary, parentSessionId: full?.parentSessionId ?? null, lastActivityAt: state.lastActivityAt,
+        workKey: alignment.decisionContext(state.sessionId)?.originKey,
+        activity: sessions.inputs.get(state.sessionId) || sessions.yields.get(state.sessionId) ? 'waiting'
+          : sessions.isWaitingForCall(state.sessionId) ? 'waiting-for-call'
+          : temporary && full?.executionStatus && full.executionStatus !== 'running' ? full.executionStatus
+          : sessions.getActiveSession(state.sessionId)?.phase ?? (temporary ? full?.executionStatus : undefined) ?? 'inactive',
+      }
+    }),
     requests: states.flatMap(state => {
       const input = sessions.inputs.get(state.sessionId)
       const decision = sessions.yields.get(state.sessionId)
       const request = input ?? decision
-      return request?.recipient.kind === 'user' ? [{
+      return request ? [{
         id: request.id, sessionId: state.sessionId, kind: input ? 'input' as const : 'decision' as const,
-        question: request.question, workKeys: decision?.workStamps?.map(stamp => stamp.key) ?? [],
+        question: request.question, recipient: request.recipient.kind,
+        context: request.workContext,
+        workKeys: request.workContext ? request.workContext.path.map(node => node.key) : decision?.workStamps?.map(stamp => stamp.key) ?? [],
       }] : []
     }),
     effects: alignment.store.workEffects().map(effect => ({
@@ -88,7 +100,7 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
     app.get('/api/work/:key', c => {
       const key = c.req.param('key')
       if (!sessions.alignment!.store.workRecords().some(record => record.key === key)) return c.json({ error: 'work_not_found' }, 404)
-      return c.json(sessions.alignment!.inspect(key))
+      return c.json(sessions.alignment!.inspect(key, c.req.query('history') === '1'))
     })
     app.post('/api/work/:key', async c => {
       const key = c.req.param('key')

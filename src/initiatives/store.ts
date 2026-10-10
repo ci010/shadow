@@ -136,7 +136,15 @@ export class InitiativeStore {
       this.#validateWorkGraph(records)
       if (prior) this.#write('UPDATE work_contracts SET sequence=?, data=? WHERE id=?', [parsed.sequence, JSON.stringify(parsed), parsed.key])
       else this.#insert('work_contracts', { id: parsed.key, sequence: parsed.sequence, data: JSON.stringify(parsed) })
-      this.#workEvent(parsed.key, actor, kind, eventDetails === undefined ? parsed : { ...parsed, eventDetails })
+      const notebookEvent = parsed.notes && ['note', 'created', 'assignment', 'impact_review'].includes(kind)
+      const previous = prior ? workRecordSchema.parse(JSON.parse(String(prior.data))) : undefined
+      this.#workEvent(parsed.key, actor, kind, notebookEvent ? {
+        key: parsed.key, sequence: parsed.sequence, revision: parsed.revision,
+        ...(previous?.revision !== parsed.revision ? { definition: parsed.definition, origin: parsed.origin, requestSource: parsed.requestSource } : {}),
+        workflow: parsed.workflow,
+        ...(kind === 'impact_review' ? { assessment: parsed.notes?.attention?.reviewed } : {}),
+        ...(eventDetails === undefined ? {} : { eventDetails }),
+      } : eventDetails === undefined ? parsed : { ...parsed, eventDetails })
     })
   }
 

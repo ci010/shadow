@@ -44,9 +44,9 @@ app. These are prompt/skill guidelines, not runtime guarantees about model
 behavior; verify them in multi-turn scenarios as well as checking final output.
 Do not mistake an agent-chosen implementation prerequisite for a user requirement.
 When correcting that assumption leaves the recorded goal, acceptance and
-authorization unchanged, the executor can update its approach through adoption
-without inventing a new goal-review gate. Actual goal/permission changes still
-follow the guarded review path.
+authorization unchanged, the executor can update its optional local note/plan
+without inventing a new goal-review gate. Coordinators maintain goal changes;
+protected actions still require their dedicated approval path.
 
 ## Author runtime acceptance
 
@@ -62,7 +62,8 @@ confirmation does not cancel unrelated conversation work.
 Continuing queues a runtime event to the original author through SessionManager.
 `micro_app test` opens the approved app in a fresh, session-owned managed browser,
 returning an instance handle rather than a launch ticket. Normal browser tools,
-role checks and Work admission remain in force. An owner-opened runtime is not
+role and exact-version owner checks remain in force. Work notes are not an
+execution prerequisite. An owner-opened runtime is not
 taken over or stopped by the author: the owner stops it first. Tests consume agent calls and any app calls they make
 count against the existing allowance. Device permissions and the backend's normal
 host access are unchanged; this is not a sandbox.
@@ -99,8 +100,10 @@ fail explicitly; they never become a fabricated reference or passing assessment.
 Complete references remain supported and are independently verified at report
 submission. Lookup does not write a report or consume app model allowance.
 
-Publication captures the active, adopted Work acceptance criteria with their
-Work keys and revisions. This is a version-bound audit snapshot, not a second
+Publication captures acceptance criteria from the focused or unambiguous linked
+goal path, including ancestors, with Work keys and semantic/assignment revisions.
+It validates that explicit basis independently of ordinary tool execution,
+without adoption or mandatory tracking. This is a version-bound audit snapshot, not a second
 task store; later Work edits do not rewrite the published baseline. The report's
 `requirements` must account for every captured criterion exactly once using
 `workKey`, `workRevision`, and a zero-based `criterion`, plus the same assessment,
@@ -501,7 +504,7 @@ TTS/WAV, and forbids drivers/default-device changes/VRChat playback. These
 resource limits are instructions to the agent, not filesystem quotas.
 
 Inspect `progress.json`, `task.json`, `apps.json` and `work.json` in the artifact
-directory. Progress includes blocked Work and pending proposal counts: a completed
+directory. Progress includes blocked notes and pending impact/ancestry reviews: a completed
 A2A turn does not imply that the requested refinement has been implemented or
 accepted. `creation-stop.json` records a timed creation cutoff, including any
 actual cancellation outcome. The author may still be in its separate testing
@@ -517,8 +520,7 @@ new command `id`. Supported controls:
 | `message` | `text`; during creation, continues the same A2A context, including input-required tasks |
 | `snapshot` | None; exports current immutable published bundles without changing phase or granting access |
 | `review` | `appId`, exact `revision`; after the creation task ends, begins review early and saves source in `review.json` and `bundles/` |
-| `review-work` | `workKey`; saves the exact current contract/proposals in `work-review.json` |
-| `approve-work` | `workKey`, `workRevision`, `proposalId`; applies only that current pending proposal via the dedicated owner API |
+| `review-work` | `workKey`; saves the current note and its context in `work-review.json` |
 | `approve` | `appId`, exact reviewed `revision`; invokes the real owner API and starts the first testing window; can enter review implicitly from completed creation |
 | `open` | `appId`; writes a one-use URL to `launch.private.json`, never to logs |
 | `restart` | None; restarts only this test's Shadow runtime, preserving this round's app |
@@ -535,17 +537,16 @@ not an assertion that audio acceptance passed: inspect the actual app UI,
 translation, WAV bytes, repeat runs and restart result. Artifacts preserve
 sanitized task/trace/source evidence; the private launch handoff is removed.
 Each subsequent round must use a new artifact directory.
-Work approval is separate from app-version approval. Inspect `work-review.json`
-before selecting a proposal; stale revisions or assignment generations are
-rejected. `work-approval.json` preserves the exact owner request and result.
-Invalid/stale Work review or approval fields and explicit owner API rejections write
+`approve-work` is retired and returns an explicit error without changing the
+note. Correct a goal in the Project canvas; use `approve` only for exact reviewed
+app-version execution. Invalid Work review fields and explicit owner API rejections write
 `control-result.json` with `done:false` and an error, without destroying the
 isolated runtime and its draft. Inspect it and submit a new command ID; the
 rejected command is never retried automatically. Network failures, malformed
 server responses and uncertain outcomes still fail the round rather than
 pretending approval succeeded or replaying a request.
-Neither an A2A message nor an operator Work approval grants app execution/model
-access, changes adoption or progress automatically, or approves future proposals.
+Neither an A2A message nor a note/impact review grants app execution/model
+access, changes progress automatically, or approves future app versions.
 `bundles/<app-id>.json` preserves the final immutable source bundle before
 test cleanup; it is not an installed app or an execution authorization.
 

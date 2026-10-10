@@ -2,7 +2,7 @@
   <section ref="rootElement" class="project-workbench" :class="{ compact: !wide, 'has-panel': !!panel }"
     :style="{ '--coordination-panel-width': `${panelWidth}px` }" :aria-label="t('Project workbench')">
     <header class="workbench-heading">
-      <div><h1>{{ projectName }}</h1><p>{{ t('Work, assignments and decisions') }}</p></div>
+      <div><h1>{{ projectName }}</h1><p>{{ t('Goals, current work and decisions in context') }}</p></div>
       <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? t('Back to work') : t('Apps') }}</button>
       <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; panel = panel === 'github' ? '' : 'github'">GitHub</button>
     </header>
@@ -11,6 +11,7 @@
       <main v-show="wide || !panel" class="workbench-main">
         <div class="workbench-toolbar">
           <div class="work-view-switch" role="group" :aria-label="t('Work view')">
+            <button type="button" :aria-pressed="view === 'canvas'" @click="view = 'canvas'">{{ t('Overview') }}</button>
             <button type="button" :aria-pressed="view === 'board'" @click="view = 'board'">{{ t('Board') }}</button>
             <button type="button" :aria-pressed="view === 'graph'" @click="view = 'graph'">{{ t('Graph') }}</button>
           </div>
@@ -29,20 +30,24 @@
         <p v-if="error" class="workbench-error" role="alert">{{ error }} {{ t('Showing the last loaded state, if available.') }} <button @click="refresh">{{ t('Retry') }}</button></p>
         <div v-if="!data && loading" class="workbench-empty" role="status">{{ t('Loading Project work…') }}</div>
         <template v-if="data">
-          <details v-if="data.requests.length || reviews.length || unknownEffects.length" class="work-attention" open>
-            <summary>{{ t('Needs your attention') }}</summary>
-            <button v-for="request in data.requests" :key="request.id" type="button" @click="openSession(request.sessionId)">
+          <details v-if="data.requests.some(request => request.recipient !== 'parent' && request.recipient !== 'caller') || reviews.length || unknownEffects.length" class="work-attention" :open="view !== 'canvas'">
+            <summary>{{ t('Needs your attention') }} · {{ data.requests.filter(request => request.recipient !== 'parent' && request.recipient !== 'caller').length + reviews.length + unknownEffects.length }}</summary>
+            <button v-for="request in data.requests.filter(request => request.recipient !== 'parent' && request.recipient !== 'caller')" :key="request.id" type="button" @click="focusRequest(request)">
               <span>{{ request.kind === 'decision' ? t('Decision') : t('Question') }} · {{ sessionTitle(request.sessionId) }}</span>
               <strong>{{ request.question }}</strong><span>{{ t('Open request →') }}</span>
             </button>
             <button v-for="item in reviews" :key="item.key" type="button" @click="selectWork(item.key)">
-              <span>{{ item.proposals ? t('Proposed change') : t('Clarification') }}</span><strong>{{ item.title }}</strong><span>{{ t('Review →') }}</span>
+              <span>{{ t('Impact not yet reviewed') }}</span><strong>{{ item.title }}</strong><span>{{ t('Review →') }}</span>
             </button>
             <button v-for="effect in unknownEffects" :key="effect.id" type="button" @click="effect.workKeys[0] ? selectWork(effect.workKeys[0]) : openSession(effect.sessionId)">
               <span>{{ t('Outcome unknown') }}</span><strong>{{ effect.tool }} · {{ sessionTitle(effect.sessionId) }}</strong><span>{{ t('Reconcile →') }}</span>
             </button>
           </details>
-          <div v-if="!data.items.length" class="workbench-empty">
+          <ProjectContextCanvas v-if="view === 'canvas'" :data="data" :matches="filtered" :api-base="apiBase" :selected="selected"
+            :filtering="!!(filter.query.trim() || filter.root || filter.assignee)"
+            :can-write="canWrite" :active="visible && !appsVisible" :focus-request="requestedFocus"
+            @select="selectWork" @session="openSession" @discuss="discussNode" @updated="refresh" />
+          <div v-else-if="!data.items.length" class="workbench-empty">
             <span class="i-lucide-workflow empty-work-icon" aria-hidden="true" />
             <h2>{{ t('No work items yet') }}</h2><p>{{ t('Conversations can stay conversations. Ask the coordinator to organize work when there is an outcome to track.') }}</p>
             <button @click="canWrite ? newWork() : emit('coordinator')">{{ canWrite ? t('Talk to coordinator') : t('View coordinator conversation') }}</button>
@@ -110,6 +115,8 @@ import { ORCHESTRATOR_SESSION_ID as coordinatorId } from '../project-coordinatio
 import { filterWork, groupWork, workAttention, workColumns, workRoots } from '../project-work.ts'
 import WorkItemCard from './WorkItemCard.vue'
 import WorkGraph from './WorkGraph.vue'
+import ProjectContextCanvas from './ProjectContextCanvas.vue'
+import type { ProjectWorkOverview } from '../../../src/projects/work-overview.ts'
 import WorkAlignment from './WorkAlignment.vue'
 import DecisionOwner from './DecisionOwner.vue'
 import ProjectGitHub from './ProjectGitHub.vue'
@@ -121,12 +128,14 @@ const props = defineProps<{ apiBase: string; projectId: string; projectName: str
 const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string]; coordinator: [] }>()
 const live = useProjectLiveState(), installation = useInstallationContext(), route = useRoute(), router = useRouter()
 const lease = shallowRef<ProjectLiveLease>()
-const data = computed(() => lease.value?.work.state.value)
+const lastSnapshot = shallowRef<ProjectWorkOverview>()
+const data = computed(() => lease.value?.work.state.value ?? lastSnapshot.value)
 const error = computed(() => lease.value?.work.state.error)
 const loading = computed(() => lease.value?.work.state.loading)
 const canWrite = computed(() => installation.value.uiScopes.includes('chat:write'))
-const view = ref<'board' | 'graph'>('board'), panel = ref<'work' | 'github' | ''>('')
+const view = ref<'canvas' | 'board' | 'graph'>('canvas'), panel = ref<'work' | 'github' | ''>('')
 const selected = ref(''), editing = ref(false), wide = ref(false)
+const requestedFocus = ref<{ id: string }>()
 const appsVisible = ref(false)
 function toggleApps() {
   appsVisible.value = !appsVisible.value
@@ -141,7 +150,7 @@ const panelId = `coordination-${useId()}`
 const containerWidth = ref(0), preferredPanelWidth = ref(400)
 const resizeBounds = computed(() => sidebarWidthBounds(containerWidth.value, 320, containerWidth.value))
 const panelWidth = computed(() => clampSidebarWidth(preferredPanelWidth.value, resizeBounds.value))
-const filter = reactive({ query: '', root: '', assignee: '', terminal: true })
+const filter = reactive({ query: '', root: '', assignee: '', terminal: false })
 const filtered = computed(() => filterWork(data.value?.items ?? [], filter))
 const groups = computed(() => groupWork(filtered.value, data.value?.items ?? []))
 const columns = computed(() => workColumns.filter(column => column.status !== 'cancelled' && column.status !== null
@@ -165,8 +174,8 @@ const rootElement = ref<HTMLElement>(), panelHeading = ref<HTMLElement>()
 let observer: ResizeObserver | undefined
 const sessionTitle = (id: string | null) => data.value?.sessions.find(session => session.sessionId === id)?.title ?? id ?? t('Unassigned')
 const sessionExists = (id: string | null) => !!id && !!data.value?.sessions.some(session => session.sessionId === id)
-function refresh() { void lease.value?.work.refresh() }
-function clearFilters() { Object.assign(filter, { query: '', root: '', assignee: '', terminal: true }) }
+function refresh() { if (props.visible) void lease.value?.work.refresh() }
+function clearFilters() { Object.assign(filter, { query: '', root: '', assignee: '', terminal: false }) }
 async function selectWork(key: string) {
   await router.replace({ query: { ...route.query, work: key } })
   if (route.query.work !== key) return
@@ -189,14 +198,26 @@ async function discussSelected() {
   await nextTick()
   emit('compose', `About work ${selected.value}${selectedItem.value ? ` (${selectedItem.value.title})` : ''}:\n`)
 }
+async function discussNode(key: string) {
+  const item = data.value?.items.find(item => item.key === key)
+  await nextTick()
+  emit('compose', t('Discuss the premise of {title} ({key}):', { title: item?.title ?? key, key }) + '\n')
+}
+async function focusRequest(request: ProjectWorkOverview['requests'][number]) {
+  view.value = 'canvas'
+  clearFilters()
+  panel.value = ''
+  requestedFocus.value = { id: request.id }
+}
 async function newWork() {
   panel.value = ''
   await nextTick()
   emit('compose', 'Help me organize a new work item:\n')
 }
-watch(() => [props.apiBase, props.projectId, props.visible] as const, () => {
+watch(() => [props.apiBase, props.projectId, props.visible] as const, ([apiBase, projectId, visible], previous) => {
+  lastSnapshot.value = apiBase === previous?.[0] && projectId === previous?.[1] ? data.value : undefined
   lease.value?.release(); lease.value = undefined
-  if (props.visible) lease.value = live.acquireProject(props.apiBase, props.projectId, undefined, true)
+  if (visible) lease.value = live.acquireProject(apiBase, projectId, undefined, true)
 }, { immediate: true })
 watch(() => route.query.work, key => {
   if (props.visible && typeof key === 'string' && key !== selected.value) {
@@ -287,6 +308,7 @@ button > span[class^=i-], h2 > span[class^=i-] { width: 15px; height: 15px; flex
 @media (max-width: 700px) {
   .workbench-heading { flex-wrap: wrap; }
   .workbench-heading > div { flex-basis: 100%; }
+  .work-count { display: none; }
 }
 @media (pointer: coarse), (max-width: 700px) { button, .work-filters input:not([type=checkbox]), .work-filters select { min-height: 44px; } }
 </style>

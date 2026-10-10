@@ -1,156 +1,117 @@
 <template>
   <component :is="embedded ? 'section' : 'details'" v-show="!embedded || expanded" class="work-alignment" :class="{ 'is-embedded': embedded }" @toggle="toggle">
-    <summary v-if="!embedded">{{ t('Work') }} <span v-if="needsAttention">{{ t('— review needed') }}</span></summary>
-    <p class="work-note">{{ t('A revision changes the agreement, not permissions or external operations.') }}</p>
+    <summary v-if="!embedded">{{ t('Shared work notes') }} <span v-if="needsAttention">{{ t('— review needed') }}</span></summary>
+    <p class="work-note">{{ t('A shared notebook, not an execution gate. Routine updates do not wake other agents.') }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <button type="button" :disabled="busy" @click="load">{{ busy ? t('Loading...') : t('Refresh work state') }}</button>
     <label v-if="view.records.length > 1">{{ t('Work item') }}
       <select v-model="selected" :disabled="busy || editing">
-        <option v-for="item in view.records" :key="item.key" :value="item.key">{{ item.workflow?.title || item.key }} {{ t('· v') }}{{ item.revision }}</option>
+        <option v-for="item in view.records" :key="item.key" :value="item.key">{{ item.workflow?.title || item.key }}</option>
       </select>
     </label>
     <template v-if="current">
-      <p><strong>{{ current.definition.objective }}</strong></p>
-      <p>{{ current.origin === 'human' ? t('Human-confirmed agreement') : t('Agent interpretation — not a quoted user requirement') }}</p>
-      <p>{{ t('Managed by:') }} {{ sessionTitle(current.authority.manager) }} {{ t('· Assigned to:') }} {{ sessionTitle(current.authority.executor) }}</p>
-      <p v-if="current.workflow">{{ t('Progress:') }} {{ enumLabel(current.workflow.status) }}<template v-if="current.workflow.blockedReason"> — {{ current.workflow.blockedReason }}</template></p>
-      <p v-if="current.workflow?.parentKey">{{ t('Parent work:') }} {{ current.workflow.parentKey }}</p>
-      <p v-if="current.workflow?.dependencies.length">{{ t('Dependencies:') }} {{ current.workflow.dependencies.join(', ') }}</p>
-      <details v-if="view.records.some(item => item.workflow?.parentKey === current?.key)">
-        <summary>{{ t('Initiative · child work') }}</summary>
-        <ul><li v-for="item in view.records.filter(item => item.workflow?.parentKey === current?.key)" :key="item.key">
-          {{ item.workflow?.title }} — {{ enumLabel(item.workflow?.status) }} · {{ item.authority.executor || t('unassigned') }}
-        </li></ul>
-        <p>{{ t('Child completion does not replace this item\'s acceptance review.') }}</p>
-      </details>
-      <p>{{ t('Acceptance:') }} {{ current.definition.acceptance.join('; ') }}</p>
-      <p>{{ t('Existing boundaries:') }} {{ current.definition.boundaries.join('; ') || t('Not recorded — do not infer permission') }}</p>
-      <p>{{ t('Status:') }} {{ current.paused ? t('Paused') : current.adoption?.revision === current.revision ? t('Adopted by executor') : t('Awaiting executor adoption') }} · {{ current.reason }}</p>
-      <p v-if="current.answerReview">{{ t('Custom answer needs interpretation review:') }} {{ current.answerReview.text }}</p>
-      <section v-for="proposal in current.proposals?.filter(item => item.status === 'pending' && item.baseRevision === current?.revision && item.assignmentRevision === current?.workflow?.assignmentRevision)" :key="proposal.id" :aria-label="t('Pending work proposal')">
-        <h3>{{ t('Proposed change') }}</h3>
-        <p>{{ t('Change type:') }} {{ proposal.change }} {{ t('· New execution:') }} {{ proposal.paused ? t('paused') : t('not paused') }}</p>
-        <p>{{ proposal.definition.objective }}</p>
-        <p>{{ t('Acceptance:') }} {{ proposal.definition.acceptance.join('; ') }}</p>
-        <p>{{ t('Boundaries:') }} {{ proposal.definition.boundaries.join('; ') || t('Not recorded — no new permission') }}</p>
-        <p>{{ proposal.reason }}</p>
-        <button v-if="canWrite" type="button" :disabled="busy" @click="perform('apply_proposal', { proposalId: proposal.id })">{{ t('Approve this exact change') }}</button>
-        <p>{{ t('Uses the same proposal as Ask. Approval is recorded once.') }}</p>
-      </section>
-      <dl v-if="current.adoption">
-        <dt>{{ t('Executor understanding') }}</dt><dd>{{ current.adoption.understanding }}</dd>
-        <dt>{{ t('Stop / retain') }}</dt><dd>{{ current.adoption.stop.join('; ') || t('None') }} / {{ current.adoption.retain.join('; ') || t('None') }}</dd>
-        <dt>{{ t('Agent-chosen next phase (not user scope)') }}</dt><dd>{{ current.adoption.next.join('; ') }}</dd>
-      </dl>
-      <p v-if="current.transition">{{ t('Context transition:') }} {{ enumLabel(current.transition.strategy) }} — {{ enumLabel(current.transition.status) }}.
-        <span v-if="current.transition.successorId">{{ t('Successor:') }} {{ current.transition.successorId }}{{ t('. Initiative assignment is unchanged until explicitly released and reassigned.') }}</span>
+      <h3>{{ current.definition.objective }}</h3>
+      <p class="provenance">{{ current.origin === 'human' ? t('User-defined goal') : t('Working interpretation') }}</p>
+      <p v-if="current.notes?.relation">{{ relationLabel(current.notes.relation.kind) }}: {{ current.notes.relation.reason }}</p>
+      <p v-if="current.contextChanged" class="pending-impact">{{ t('An ancestor changed. This branch has not been reassessed yet.') }}</p>
+      <p v-if="current.notes?.attention && !current.notes.attention.reviewed" class="pending-impact">
+        <strong>{{ t('Impact not yet reviewed') }}</strong> {{ current.notes.attention.summary }}
       </p>
-      <details v-if="current.history.length">
-        <summary>{{ t('Revision history and proposals') }}</summary>
-        <article v-for="(event, index) in current.history" :key="index">
-          <p>{{ event.kind }} · {{ event.actor }} · {{ event.at }}</p>
-          <pre>{{ JSON.stringify(event.data, null, 2) }}</pre>
-        </article>
+      <WorkNoteContent v-if="current.notes" :notes="current.notes" :api-base="apiBase" />
+      <p v-if="current.workflow">{{ t('Progress:') }} {{ enumLabel(current.workflow.status) }}<template v-if="current.workflow.blockedReason"> - {{ current.workflow.blockedReason }}</template></p>
+      <p class="provenance">{{ t('Managed by:') }} {{ sessionTitle(current.authority.manager) }}</p>
+      <label v-if="canWrite && current.workflow">{{ t('Assigned to') }}
+        <select v-if="sessions" :value="current.workflow.assignee ?? ''" :disabled="busy || editing" @change="assign(($event.target as HTMLSelectElement).value)">
+          <option value="">{{ t('Unassigned') }}</option>
+          <option v-for="session in sessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option>
+        </select>
+        <span v-else>{{ sessionTitle(current.authority.executor) }}</span>
+      </label>
+      <p v-else>{{ t('Assigned to') }}: {{ sessionTitle(current.authority.executor) }}</p>
+      <details v-if="current.definition.acceptance.length || current.definition.boundaries.length">
+        <summary>{{ t('Acceptance and boundaries') }}</summary>
+        <p v-if="current.definition.acceptance.length">{{ current.definition.acceptance.join('\n') }}</p>
+        <p v-if="current.definition.boundaries.length">{{ current.definition.boundaries.join('\n') }}</p>
       </details>
-      <div v-if="canWrite" class="work-actions">
-        <button type="button" :disabled="busy || editing || !current.authority.active" @click="edit()">{{ t('Revise work') }}</button>
-        <button v-if="!project" type="button" :disabled="busy || editing" @click="edit(false, true)">{{ t('New work item') }}</button>
-        <button v-if="!project" type="button" :disabled="busy || editing" @click="edit(true)">{{ t('Add child work') }}</button>
+      <form v-if="canWrite && (current.contextChanged || current.notes?.attention && !current.notes.attention.reviewed)" @submit.prevent="review">
+        <label>{{ t('Impact assessment') }}<textarea v-model="conclusion" required maxlength="2000"
+          :placeholder="t('What changes for the parent goal, and what can continue?')" @focus="reviewVersion ??= current.sequence" /></label>
+        <p v-if="reviewVersion !== undefined && reviewVersion !== current.sequence" class="pending-impact">
+          {{ t('The branch changed. Read its latest note before assessing the impact.') }}
+          <button type="button" :disabled="busy" @click="reviewVersion = current.sequence">{{ t('Assess this version') }}</button>
+        </p>
+        <button type="submit" :disabled="busy || !conclusion.trim()">{{ t('Record assessment') }}</button>
+      </form>
+    </template>
+    <p v-else-if="!busy">{{ t('No shared work notes here. Execution does not require a note.') }}</p>
+    <div v-if="canWrite && !editing" class="work-actions">
+      <button v-if="current" type="button" :disabled="busy" @click="edit()">{{ t('Edit note') }}</button>
+      <button v-if="!project" type="button" :disabled="busy" @click="edit('root')">{{ t('New work item') }}</button>
+      <button v-if="!project && current" type="button" :disabled="busy" @click="edit('child')">{{ t('Add child work') }}</button>
+    </div>
+    <form v-if="editing && canWrite" class="note-editor" @submit.prevent="save">
+      <p v-if="edited && current?.sequence !== edited.sequence" class="pending-impact">
+        {{ t('This note changed while you were editing. Your draft is retained; reload it before applying a new version.') }}
+        <button type="button" :disabled="busy" @click="edit()">{{ t('Discard draft and load latest') }}</button>
+      </p>
+      <label>{{ t('Work title') }}<input v-model="draft.title" required maxlength="160" /></label>
+      <label>{{ t('Outcome') }}<textarea v-model="draft.objective" required maxlength="4000" /></label>
+      <label>{{ t('Kind') }}<select v-model="draft.kind"><option v-for="kind in kinds" :key="kind" :value="kind">{{ workKind(kind) }}</option></select></label>
+      <template v-if="parentKey">
+        <label>{{ t('Reasoning link') }}<select v-model="draft.relationKind"><option v-for="kind in relations" :key="kind" :value="kind">{{ relationLabel(kind) }}</option></select></label>
+        <label>{{ t('Why this branch follows') }}<textarea v-model="draft.relationReason" required maxlength="2000" /></label>
+      </template>
+      <label>{{ t('Current conclusion') }}<textarea v-model="draft.summary" maxlength="2000" /></label>
+      <label>{{ t('Working plan (one step per line)') }}<textarea v-model="draft.plan" /></label>
+      <label>{{ t('Next action') }}<textarea v-model="draft.next" maxlength="2000" /></label>
+      <label v-if="edited">{{ t('Progress') }}<select v-model="draft.status"><option v-for="column in columns" :key="column.status" :value="column.status">{{ column.label }}</option></select></label>
+      <label v-if="edited && draft.status === 'blocked'">{{ t('Blocker') }}<textarea v-model="draft.blocker" required maxlength="2000" /></label>
+      <details>
+        <summary>{{ t('Evidence and presentation') }}</summary>
+        <label>{{ t('Acceptance (one per line)') }}<textarea v-model="draft.acceptance" /></label>
+        <label>{{ t('Existing boundaries (one per line; not new permission)') }}<textarea v-model="draft.boundaries" /></label>
+        <fieldset v-for="(artifact, index) in draft.artifacts" :key="index">
+          <label>{{ t('Artifact label') }}<input v-model="artifact.label" required maxlength="160" /></label>
+          <label>{{ t('Artifact URL') }}<input v-model="artifact.href" required maxlength="2000" /></label>
+          <button type="button" @click="draft.artifacts.splice(index, 1)">{{ t('Remove link') }}</button>
+        </fieldset>
+        <button type="button" :disabled="draft.artifacts.length >= 20" @click="draft.artifacts.push({ label: '', href: '' })">{{ t('Add artifact link') }}</button>
+        <label>{{ t('Read-only exhibit HTML') }}<textarea v-model="draft.html" class="html-source" maxlength="48000" spellcheck="false" /></label>
+      </details>
+      <div class="work-actions">
+        <button type="submit" :disabled="busy">{{ t('Save note') }}</button>
+        <button type="button" :disabled="busy" @click="editing = false">{{ t('Cancel edit') }}</button>
       </div>
-      <details v-if="canWrite && current.workflow && current.sequence">
-        <summary>{{ t('Assignment and progress') }}</summary>
-        <label v-if="!current.workflow.assignee">{{ t('Assign to session') }}
-          <select v-if="sessions" v-model="assignee"><option value="">{{ t('Choose a session') }}</option><option v-for="session in sessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option></select>
-          <input v-else v-model="assignee" :placeholder="t('Session ID')">
-        </label>
-        <button v-if="!current.workflow.assignee" type="button" :disabled="busy || !assignee.trim()" @click="manage('assign', { assignee: assignee.trim() })">{{ t('Assign work') }}</button>
-        <template v-else>
-          <label>{{ t('Release reason') }} <input v-model="releaseReason" :placeholder="t('Verified handoff context')"></label>
-          <button type="button" :disabled="busy || !releaseReason.trim()" @click="manage('assign', { assignee: null, reason: releaseReason })">{{ t('Release assignment') }}</button>
-          <p>{{ t('An executor checkpoint and settled effects are required after execution has started.') }}</p>
-        </template>
-        <label>{{ t('Progress') }} <select v-model="progress"><option value="pending">{{ t('Pending') }}</option><option value="in_progress">{{ t('In progress') }}</option><option value="blocked">{{ t('Blocked') }}</option><option value="done">{{ t('Done') }}</option><option value="cancelled">{{ t('Cancelled') }}</option></select></label>
-        <label v-if="progress === 'blocked'">{{ t('Blocker') }} <textarea v-model="blocker" required /></label>
-        <label v-if="progress === 'done'">{{ t('Verified acceptance and result') }} <textarea v-model="result" required /></label>
-        <button type="button" :disabled="busy || progress === 'done' && !result.trim() || progress === 'blocked' && !blocker.trim()" @click="saveProgress">{{ t('Record progress') }}</button>
-      </details>
-      <details class="advanced-work">
-        <summary>{{ t('Advanced recovery') }}</summary>
-        <details v-if="current.checkpoint">
-          <summary>{{ t('Executor checkpoint · v') }}{{ current.checkpoint.revision }}</summary>
-          <p v-for="field in inventoryFields" :key="field">{{ field }}: {{ current.checkpoint[field].join('; ') || t('None reported') }}</p>
-        </details>
-        <div v-if="canWrite" class="work-actions">
-          <button type="button" :disabled="busy || !current.authority.executor" @click="perform('request_checkpoint')">{{ t('Request executor checkpoint') }}</button>
-          <button type="button" :disabled="busy || !canTransition" @click="transition = 'fresh'">{{ t('Fresh context') }}</button>
-          <button type="button" :disabled="busy || !canTransition" @click="transition = 'successor'">{{ t('Prepare successor') }}</button>
-        </div>
-        <p v-if="!canTransition">{{ t('A current executor checkpoint with no unresolved effects is required before context replacement.') }}</p>
-      </details>
-    </template>
-    <template v-else-if="!busy">
-      <p>{{ t('No work is assigned here. Conversation needs no work item; create one when execution or tracking is needed.') }}</p>
-      <button v-if="canWrite && !project" type="button" @click="edit()">{{ t('Create work item') }}</button>
-    </template>
-    <form v-if="editing && canWrite" @submit.prevent="save">
-      <label v-if="creating">{{ t('Work title') }} <input v-model="title" required maxlength="160"></label>
-      <label>{{ t('Outcome') }} <textarea v-model="objective" required maxlength="4000" /></label>
-      <label>{{ t('Acceptance (one per line)') }} <textarea v-model="acceptance" required /></label>
-      <label>{{ t('Existing boundaries (one per line; not new permission)') }} <textarea v-model="boundaries" /></label>
-      <label v-if="!creating">{{ t('Change type') }} <select v-model="change"><option value="understanding">{{ t('Correct interpretation') }}</option><option value="goal">{{ t('Change goal / acceptance') }}</option><option value="authorization">{{ t('Review authorization boundary') }}</option><option value="pause">{{ t('Pause / resume work') }}</option></select></label>
-      <label>{{ t('Why this revision is needed') }} <textarea v-model="reason" required maxlength="2000" /></label>
-      <label v-if="!creating"><input v-model="paused" type="checkbox"> {{ t('Pause new execution') }}</label>
-      <button type="submit" :disabled="busy">{{ creating ? t('Create work (executor must adopt)') : t('Apply revision (executor must adopt)') }}</button>
-      <button type="button" :disabled="busy" @click="editing = false">{{ t('Cancel edit') }}</button>
     </form>
-    <div v-if="transition && canWrite" role="alert">
-      <p>{{ transition === 'fresh' ? t('Replace reasoning context at the next safe boundary, retaining history, files and queued input?') : t('Retire this execution and prepare an idle successor? This does not transfer Initiative assignments.') }}</p>
-      <button type="button" :disabled="busy" @click="perform('transition', { strategy: transition })">{{ t('Confirm') }} {{ transition }}</button>
-      <button type="button" :disabled="busy" @click="transition = ''">{{ t('Cancel') }}</button>
-    </div>
-    <article v-for="effect in view.effects" :key="effect.id">
-      <p>{{ t('Unresolved operation:') }} {{ effect.tool }} — {{ enumLabel(effect.status) }} · {{ effect.sessionId }}</p>
-      <button v-if="canWrite && effect.status === 'unknown'" type="button" :disabled="busy" @click="settleId = effect.id">{{ t('Review external outcome') }}</button>
-    </article>
-    <div v-if="settleId && canWrite" role="alert">
-      <p>{{ t('Only confirm after independently checking the external outcome. This records your reconciliation, not cancellation or rollback.') }}</p>
-      <button type="button" :disabled="busy" @click="perform('settle', { effectId: settleId })">{{ t('I verified the outcome') }}</button>
-      <button type="button" :disabled="busy" @click="settleId = ''">{{ t('Cancel') }}</button>
-    </div>
   </component>
 </template>
 <script setup lang="ts">
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { enumLabel } from '../display-labels.ts'
 import { t } from '../i18n.ts'
-import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from '../api-url.ts'
-import { parseWorkView, type WorkView } from '../work-alignment.ts'
+import { parseWorkView, type WorkView, type WorkAgreement } from '../work-alignment.ts'
+import { workNotesSchema, type WorkNotes } from '../../../src/initiatives/work-notes.ts'
+import { relationLabel, workColumns, workKind } from '../project-work.ts'
+import WorkNoteContent from './WorkNoteContent.vue'
 const props = defineProps<{ sessionId: string; apiBase: string; canWrite: boolean; embedded?: boolean; expanded?: boolean; revision?: number;
   project?: boolean; workKey?: string; sessions?: { sessionId: string; title: string }[] }>()
 const emit = defineEmits<{ attention: [needed: boolean]; updated: []; editing: [value: boolean] }>()
 const sessionTitle = (id: string | null) => id ? props.sessions?.find(session => session.sessionId === id)?.title ?? id : t('Unassigned')
-const view = ref<WorkView>({ records: [], effects: [] })
-const selected = ref('')
+const view = ref<WorkView>({ records: [], effects: [] }), selected = ref('')
 const current = computed(() => view.value.records.find(record => record.key === selected.value))
-const needsAttention = computed(() => view.value.records.some(record =>
-  (!record.workflow || !['done', 'cancelled'].includes(record.workflow.status))
-  && (record.paused || record.adoption?.revision !== record.revision || record.answerReview
-    || record.proposals?.some(proposal => proposal.status === 'pending' && proposal.baseRevision === record.revision
-      && proposal.assignmentRevision === record.workflow?.assignmentRevision))))
-const canTransition = computed(() => current.value?.checkpoint?.revision === current.value?.revision
-  && !!current.value?.checkpoint && !current.value.checkpoint.inFlight.length && !current.value.checkpoint.unknown.length && !view.value.effects.length)
-const inventoryFields = ['completed', 'artifacts', 'inFlight', 'unknown', 'retired'] as const
-const busy = ref(false), readError = ref(''), actionError = ref(''), editing = ref(false)
+const needsAttention = computed(() => view.value.records.some(record => record.contextChanged || record.notes?.attention && !record.notes.attention.reviewed))
+const busy = ref(false), readError = ref(''), actionError = ref(''), editing = ref(false), conclusion = ref('')
 const error = computed(() => actionError.value || readError.value)
-const objective = ref(''), acceptance = ref(''), boundaries = ref(''), reason = ref('')
-const title = ref(''), creating = ref(false), parentKey = ref<string>()
-const assignee = ref(''), releaseReason = ref(''), progress = ref('in_progress'), blocker = ref(''), result = ref('')
-const change = ref('understanding'), paused = ref(false), transition = ref(''), settleId = ref('')
-let expectedRevision = 0
-let edited: WorkView['records'][number] | undefined
-let opened = false
+const kinds = ['goal', 'approach', 'task', 'finding'] as const, relations = ['supports', 'requires', 'assumption'] as const
+const columns = workColumns.filter(column => column.status !== null)
+const draft = reactive({ title: '', objective: '', kind: 'task' as WorkNotes['kind'],
+  relationKind: 'supports' as typeof relations[number], relationReason: '', summary: '', plan: '', next: '',
+  html: '', artifacts: [] as WorkNotes['artifacts'], acceptance: '', boundaries: '', status: 'pending', blocker: '' })
+const parentKey = ref<string>(), edited = ref<WorkAgreement>()
+const reviewVersion = ref<number>()
+let opened = false, refreshPending = false
 let controller: AbortController | undefined
-let refreshPending = false
 async function request(body?: object) {
   controller?.abort()
   const pending = new AbortController()
@@ -178,8 +139,7 @@ async function request(body?: object) {
       else readError.value = message
     }
     return false
-  }
-  finally {
+  } finally {
     if (controller === pending) {
       busy.value = false
       if (refreshPending && opened) { refreshPending = false; void load() }
@@ -201,66 +161,83 @@ watch(() => props.expanded, expanded => {
   if (opened) void load()
   else controller?.abort()
 }, { immediate: true })
-function edit(child = false, root = false) {
+function edit(create?: 'child' | 'root') {
   actionError.value = ''
-  creating.value = root || child || !current.value
-  parentKey.value = child ? current.value?.key : undefined
-  const record = creating.value ? undefined : current.value
-  edited = record
-  title.value = ''
-  expectedRevision = record?.revision ?? 0
-  objective.value = record?.definition.objective ?? ''
-  acceptance.value = record?.definition.acceptance.join('\n') ?? ''
-  boundaries.value = record?.definition.boundaries.join('\n') ?? ''
-  paused.value = record?.paused ?? false; reason.value = ''; change.value = 'understanding'; editing.value = true
+  const record = create ? undefined : current.value
+  const notes = record?.notes ?? workNotesSchema.parse({})
+  edited.value = record
+  parentKey.value = create === 'child' ? current.value?.key : record?.workflow?.parentKey
+  Object.assign(draft, { title: record?.workflow?.title ?? '', objective: record?.definition.objective ?? '',
+    kind: notes.kind, relationKind: notes.relation?.kind ?? 'supports', relationReason: notes.relation?.reason ?? '',
+    summary: notes.summary, plan: notes.plan.join('\n'), next: notes.next, html: notes.html,
+    artifacts: notes.artifacts.map(artifact => ({ ...artifact })), acceptance: record?.definition.acceptance.join('\n') ?? '',
+    boundaries: record?.definition.boundaries.join('\n') ?? '', status: record?.workflow?.status ?? 'pending',
+    blocker: record?.workflow?.blockedReason ?? '' })
+  editing.value = true
 }
 async function save() {
   if (!props.canWrite) return
   const lines = (text: string) => text.split('\n').map(line => line.trim()).filter(Boolean)
-  const definition = { objective: objective.value, acceptance: lines(acceptance.value), boundaries: lines(boundaries.value),
-    evidence: edited?.definition.evidence ?? [] }
-  const body = creating.value ? { action: 'create', data: { title: title.value, parentKey: parentKey.value, reason: reason.value, definition } }
-    : { action: 'update', key: edited?.key, revision: expectedRevision,
-      data: { change: change.value, reason: reason.value, paused: paused.value, definition } }
+  const definition = { objective: draft.objective, acceptance: lines(draft.acceptance), boundaries: lines(draft.boundaries),
+    evidence: edited.value?.definition.evidence ?? [] }
+  const notes = { kind: draft.kind, summary: draft.summary, plan: lines(draft.plan), next: draft.next, html: draft.html,
+    artifacts: draft.artifacts, ...(parentKey.value ? { relation: { kind: draft.relationKind, reason: draft.relationReason } } : {}) }
+  let body: object
+  if (!edited.value) body = { action: 'create', data: { title: draft.title, parentKey: parentKey.value, definition, notes } }
+  else {
+    const prior = edited.value
+    const changed = (a: unknown, b: unknown) => JSON.stringify(a) !== JSON.stringify(b)
+    const changedNotes = Object.fromEntries(Object.entries(notes).filter(([key, value]) =>
+      changed(value, (prior.notes ?? workNotesSchema.parse({}))[key as keyof WorkNotes])))
+    const data = {
+      ...(changed(definition, prior.definition) ? { definition } : {}),
+      ...(draft.title !== prior.workflow?.title ? { title: draft.title } : {}),
+      ...(Object.keys(changedNotes).length ? { notes: changedNotes } : {}),
+      ...(draft.status !== prior.workflow?.status ? { status: draft.status } : {}),
+      ...(draft.status === 'blocked' && draft.blocker !== prior.workflow?.blockedReason ? { blockedReason: draft.blocker } : {}),
+    }
+    if (!Object.keys(data).length) { actionError.value = t('No changes to save.'); return }
+    body = { action: 'update', key: prior.key, version: prior.sequence, data }
+  }
   if (await request(body)) editing.value = false
 }
-async function manage(action: string, data: object) {
-  if (current.value?.sequence) await perform(action, { ...data, expectedSequence: current.value.sequence })
-}
-async function saveProgress() {
-  await manage('progress', { status: progress.value,
-    ...(progress.value === 'blocked' ? { blockedReason: blocker.value } : {}),
-    ...(progress.value === 'done' ? { result: { summary: result.value, evidence: [] } } : {}),
-  })
-}
-async function perform(action: string, data?: object) {
+async function assign(assignee: string) {
   if (!props.canWrite || !current.value) return
-  if (await request({ action, key: current.value.key, revision: current.value.revision, data })) { transition.value = ''; settleId.value = '' }
+  await request({ action: 'assign', key: current.value.key, version: current.value.sequence, data: { assignee: assignee || null } })
+}
+async function review() {
+  if (!props.canWrite || !current.value) return
+  if (await request({ action: 'review', key: current.value.key, version: reviewVersion.value ?? current.value.sequence,
+    data: { conclusion: conclusion.value } })) { conclusion.value = ''; reviewVersion.value = undefined }
 }
 watch(() => [props.apiBase, props.sessionId, props.canWrite, props.workKey], () => {
-  controller?.abort(); view.value = { records: [], effects: [] }; selected.value = readError.value = actionError.value = transition.value = settleId.value = ''
-  editing.value = false; if (opened) void load()
+  controller?.abort(); view.value = { records: [], effects: [] }; selected.value = readError.value = actionError.value = ''
+  editing.value = false; conclusion.value = ''; reviewVersion.value = undefined
+  if (opened) void load()
 })
 onUnmounted(() => controller?.abort())
 </script>
 <style scoped>
-.work-alignment { margin: 4px 16px; font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.work-alignment { margin: 4px 16px; font-size: 13px; line-height: 1.6; min-width: 0; overflow-wrap: anywhere; }
 .work-alignment.is-embedded { margin: 0; }
 summary { cursor: pointer; color: var(--c-text-secondary); }
-p, dl { margin: 6px 0; }
-dd { margin: 0 0 8px 12px; }
-label { display: block; margin: 8px 0; }
-textarea, select, input:not([type=checkbox]) { display: block; width: 100%; box-sizing: border-box; color: var(--c-text); background: var(--c-bg-input); }
-textarea { min-height: 64px; resize: vertical; }
-button, select, textarea, input:not([type=checkbox]) { min-height: 36px; border: 1px solid var(--c-border); padding: 4px 8px; border-radius: var(--radius-control); }
-button { background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
+h3 { font-size: 16px; line-height: 1.5; margin: 18px 0 6px; }
+p { margin: 8px 0; white-space: pre-wrap; }
+.work-note, .provenance { color: var(--c-text-secondary); font-size: 12px; }
+.pending-impact { color: var(--c-warn); background: var(--c-warn-bg); padding: 10px; }
+.pending-impact strong { font-weight: 500; }
+label { display: block; margin: 12px 0; }
+textarea, select, input { display: block; width: 100%; box-sizing: border-box; color: var(--c-text); background: var(--c-bg-input); font: inherit; }
+textarea { min-height: 74px; resize: vertical; }
+button, select, textarea, input { min-height: 36px; border: 1px solid var(--c-control-border); padding: 6px 8px; border-radius: var(--radius-control); }
+button { font: inherit; background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
 button:hover:not(:disabled) { background: var(--c-bg-muted); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.is-embedded > :first-child { margin-top: 0; }
-.is-embedded > :last-child { margin-bottom: 0; }
-.work-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-pre { white-space: pre-wrap; max-height: 260px; overflow: auto; }
+.work-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+form { margin-block: 20px; padding-block: 12px; border-block: 1px solid var(--c-border); }
+fieldset { min-width: 0; margin: 10px 0; padding: 0 10px 10px; border: 1px solid var(--c-border); }
+.html-source { min-height: 120px; font-family: var(--font-mono); font-size: 12px; }
 [role=alert] { color: var(--c-error); }
-@media (max-width: 700px), (pointer: coarse) { button, select { min-height: 44px; } }
+@media (max-width: 700px), (pointer: coarse) { button, select { min-height: 44px; } input, textarea { font-size: 16px; } }
 </style>

@@ -2,6 +2,7 @@ import { parseDecisionBrief, type DecisionBrief } from './decision-brief.ts'
 import { z } from 'zod'
 import { answerMediaSchema } from './answer-media.ts'
 import { workDecisionSchema, type WorkDecision } from '../initiatives/work-contract.ts'
+import { workDecisionContextSchema, type WorkDecisionContext } from '../initiatives/work-notes.ts'
 export const workStampsSchema = z.array(z.object({
   key: z.string().min(1).max(600), revision: z.number().int().positive(), adoptionId: z.string().uuid().optional(),
   assignmentRevision: z.number().int().positive().optional(),
@@ -15,6 +16,7 @@ export interface YieldPolicy {
 }
 
 export interface YieldQuestion {
+  workContext?: WorkDecisionContext
   workProposal?: WorkDecision
   question: string
   options: [string, string] | [string, string, string]
@@ -186,6 +188,7 @@ export function parseYieldQuestion(value: unknown): YieldQuestion {
     ? [value.options[0], value.options[1]] : [value.options[0], value.options[1], value.options[2]], defaultOption: value.defaultOption,
     ...(sources ? { sources } : {}),
     ...(value.workProposal === undefined ? {} : { workProposal: workDecisionSchema.parse(value.workProposal) }),
+    ...(value.workContext === undefined ? {} : { workContext: workDecisionContextSchema.parse(value.workContext) }),
     ...(value.brief !== undefined ? { brief: parseDecisionBrief(value.brief) } : {}),
     ...(value.reconsiders !== undefined ? { reconsiders: parseYieldReference(value.reconsiders) } : {}) }
 }

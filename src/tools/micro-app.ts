@@ -9,6 +9,7 @@ import type { ImportTool } from './load-tool.ts'
 import { localAppDirectory } from '../microapps/store.ts'
 import { AppReportValidationError } from '../microapps/acceptance.ts'
 import { toolEvidenceQuerySchema } from '../sessions/decision-brief.ts'
+import type { WorkStamp } from '../initiatives/work-contract.ts'
 
 const inputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('capabilities') }).strict(),
@@ -55,7 +56,8 @@ export class MicroAppTool implements Tool {
       report: { type: 'object', description: 'report only: {checks:[{category:startup|state|recovery|reopen|business|device,result:passed|failed|blocked|not_tested,basis:runtime|fixture|not_tested,summary,observations:[IDs from get.acceptance],evidence:[canonical references from action:evidence]}],requirements:[{workKey,workRevision,criterion,result,basis,summary,observations,evidence}]}. First four categories required; cover each published Work criterion exactly once (zero-based). Passes need recorded tool excerpts. ANY runtime basis needs nonempty observations, including blocked/failed. Runtime state: state_saved then same-version state_read on another run; reopen: stopped then sdk_connected on another run, not full Shadow restart; recovery: model/backend failed/cancelled then same-kind completed. Repair cited fields, preserving unrelated results/evidence. Candidates never prove business success.' },
     }, required: ['action'], additionalProperties: false,
   }
-  constructor(private service: MicroApps, private assertSession: (id: string) => void, private browser?: Pick<ImportTool, 'openApp'>) {}
+  constructor(private service: MicroApps, private assertSession: (id: string) => void, private browser?: Pick<ImportTool, 'openApp'>,
+    private workBasis?: (sessionId: string) => WorkStamp[]) {}
   workAdmission(args: Record<string, unknown>): 'cleanup' | undefined {
     const input = inputSchema.safeParse(args)
     return input.success && input.data.action === 'stop' ? 'cleanup' : undefined
@@ -71,6 +73,7 @@ export class MicroAppTool implements Tool {
     if (input.action === 'list') return JSON.stringify({ apps: this.service.list() })
     if (input.action === 'get') return JSON.stringify(this.service.get(input.id))
     if (input.action === 'publish' || input.action === 'check') {
+      const work = input.action === 'publish' ? this.workBasis?.(context.sessionId) ?? context.workStamps : undefined
       let directory: string, manifest: AppManifest
       try {
         if (!context.cwd) throw new MicroAppError('workdir_required', 'A local workdir is required')
@@ -90,7 +93,7 @@ export class MicroAppTool implements Tool {
         return JSON.stringify({ ...microAppReceipt(result), publicationCheck: result.publicationCheck })
       }
       return JSON.stringify(microAppReceipt(
-        await this.service.publish(directory, manifest, context.sessionId, context.signal, input.id, input.revision, context.workStamps)))
+        await this.service.publish(directory, manifest, context.sessionId, context.signal, input.id, input.revision, work)))
     }
     try {
       const record = this.service.get(input.id)

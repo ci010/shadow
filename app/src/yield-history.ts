@@ -17,6 +17,7 @@ export interface YieldDecision {
   origin?: YieldRequest['origin']
   reference?: YieldReference
   brief?: YieldRequest['brief']
+  workContext?: YieldRequest['workContext']
   reportingSessionId?: string
   invalidated?: YieldDecisionRecord['invalidated']
 }
@@ -66,7 +67,7 @@ export function recordedDecision(record: YieldDecisionRecord): YieldDecision {
   const { request, answer, closed } = record
   return { action: 'ask', question: request.question, options: request.options, defaultOption: request.defaultOption,
     requestId: request.id, timestamp: request.createdAt, sources: request.sources, origin: request.origin,
-    brief: request.brief, reportingSessionId: request.reportingSessionId, invalidated: record.invalidated,
+    brief: request.brief, workContext: request.workContext, reportingSessionId: request.reportingSessionId, invalidated: record.invalidated,
     reference: request.origin ? { sessionId: request.sessionId, physicalId: request.origin.physicalId, requestId: request.id } : undefined,
     answer, status: record.invalidated ? 'invalidated' : answer?.answeredBy ?? closed?.reason ?? 'unknown', result: closed?.message }
 }
@@ -179,7 +180,7 @@ export function inlineYieldDecisions(
       action: 'ask', question: pending.question, options: pending.options, defaultOption: pending.defaultOption,
       requestId: pending.id, timestamp: pending.createdAt,
       sources: pending.sources, origin: pending.origin,
-      brief: pending.brief, reportingSessionId: pending.reportingSessionId,
+      brief: pending.brief, workContext: pending.workContext, reportingSessionId: pending.reportingSessionId,
       reference: pending.origin ? { sessionId: pending.sessionId, physicalId: pending.origin.physicalId, requestId: pending.id } : undefined,
       status: pending.recipient.kind === 'user' ? 'waiting-user' : 'waiting-parent',
     })

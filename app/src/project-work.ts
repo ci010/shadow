@@ -1,5 +1,49 @@
 import { t } from './i18n.ts'
 import type { ProjectWorkItem, ProjectWorkOverview } from '../../src/projects/work-overview.ts'
+import type { WorkNotes } from '../../src/initiatives/work-notes.ts'
+
+export function relationLabel(kind: 'supports' | 'requires' | 'assumption') {
+  return { supports: t('Chosen approach'), requires: t('Required dependency'), assumption: t('Unverified assumption') }[kind]
+}
+export function workKind(kind: WorkNotes['kind']) {
+  return { goal: t('Goal'), approach: t('Approach'), task: t('Task'), finding: t('Finding') }[kind]
+}
+export function workPath(items: readonly ProjectWorkItem[], key: string): ProjectWorkItem[] {
+  const lookup = new Map(items.map(item => [item.key, item])), path: ProjectWorkItem[] = [], seen = new Set<string>()
+  let current = lookup.get(key)
+  while (current) {
+    if (seen.has(current.key)) throw new Error(t('Work hierarchy contains a cycle.'))
+    seen.add(current.key); path.unshift(current)
+    current = current.parentKey ? lookup.get(current.parentKey) : undefined
+  }
+  return path
+}
+export function workCanvasRows(items: readonly ProjectWorkItem[], matches: ReadonlySet<string>, expanded: ReadonlySet<string>) {
+  const lookup = new Map(items.map(item => [item.key, item]))
+  const included = new Set<string>()
+  for (const key of matches) {
+    let current = lookup.get(key)
+    const seen = new Set<string>()
+    while (current) {
+      if (seen.has(current.key)) throw new Error(t('Work hierarchy contains a cycle.'))
+      seen.add(current.key); included.add(current.key)
+      current = current.parentKey ? lookup.get(current.parentKey) : undefined
+    }
+  }
+  const children = new Map<string, ProjectWorkItem[]>()
+  for (const item of items) if (included.has(item.key)) {
+    const parent = item.parentKey && lookup.has(item.parentKey) ? item.parentKey : ''
+    children.set(parent, [...children.get(parent) ?? [], item])
+  }
+  const result: { item: ProjectWorkItem; depth: number; children: number; contextOnly: boolean }[] = []
+  const stack = (children.get('') ?? []).map(item => ({ item, depth: 0 })).reverse()
+  while (stack.length) {
+    const row = stack.pop()!, descendants = children.get(row.item.key) ?? []
+    result.push({ ...row, children: descendants.length, contextOnly: !matches.has(row.item.key) })
+    if (expanded.has(row.item.key)) stack.push(...descendants.map(item => ({ item, depth: row.depth + 1 })).reverse())
+  }
+  return result
+}
 
 export const workColumns = [
   { status: 'pending', get label() { return t('Pending') } }, { status: 'in_progress', get label() { return t('In progress') } },
@@ -30,7 +74,7 @@ export function filterWork(items: ProjectWorkItem[], filter: { query: string; ro
   return items.filter(item => (filter.terminal || !['done', 'cancelled'].includes(item.status ?? ''))
     && (!filter.root || roots.get(item.key) === filter.root)
     && (!filter.assignee || (filter.assignee === 'unassigned' ? item.assignee === null : item.assignee === filter.assignee))
-    && (!query || `${item.title} ${item.key}`.toLowerCase().includes(query)))
+    && (!query || `${item.title} ${item.key} ${item.objective ?? ''} ${item.notes?.summary ?? ''}`.toLowerCase().includes(query)))
 }
 export function groupWork(items: ProjectWorkItem[], all: ProjectWorkItem[]) {
   const roots = workRoots(all)
@@ -49,7 +93,7 @@ export function groupWork(items: ProjectWorkItem[], all: ProjectWorkItem[]) {
   }))
 }
 export function workAttention(data: ProjectWorkOverview) {
-  return data.items.filter(item => item.proposals > 0 || item.interpretationReview)
+  return data.items.filter(item => item.contextChanged || item.notes?.attention && !item.notes.attention.reviewed)
 }
 
 export function workGraph(items: ProjectWorkItem[]) {

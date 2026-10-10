@@ -142,14 +142,15 @@ Main paths. Append, edit and virtual writes reject the encoding option; edits
 already retain a file's existing BOM.
 Nonzero OS command exits always include an `Error:` header and exit code, even
 after successful-looking output. Failed inline Node scripts retain their JSON
-envelope and report failure to Work tracking. Background process/script failures
+envelope and remain failures. Background process/script failures
 have failed status and preserve their output; a successful launch receipt is not
 proof that the eventual command succeeded. Failed commands can still have made
 partial changes and must not be blindly replayed.
 Native execution can distinguish a normally completed error from a lost outcome.
 Normal local process exits, acknowledged remote `process-exit` failures, and
-inline Node error replies without tool-bridge calls record `returned_error`
-instead of freezing the Work. This preserves the failure and any partial changes.
+inline Node error replies without tool-bridge calls carry native `returned_error`
+metadata. This preserves the failure and any partial changes without adding a
+notebook reconciliation gate.
 An acknowledged infer-only script error also follows this completed-error path,
 without claiming its model request was free or safe to retry.
 It does not attest no effects or authorize retry. Cancellation, signal exits,
@@ -376,148 +377,95 @@ reports no change and never replays the callback, including while delivery is
 pending. Callback failures remain visible in the execution output; continuation
 is not a delivery retry command.
 
-## Optional tracking and managed Work
+## Shared work notes and the Project canvas
 
-New ordinary sessions default to `workPolicy.mode: "optional"`. They execute
-requests directly, without mandatory `context/create/adopt/progress` calls.
-Work remains available for explicit tracking and coordination; having the tool
-does not enable enforcement. A coordinator can remain optional while managing
-required peers. Mode does not grant filesystem, device or publication access.
+Work is optional scaffolding, not tool admission. Untracked sessions execute
+normally and remain visible in the Project overview, including pending questions.
+Previously saved required-policy metadata does not re-enable enforcement.
+Role, capability, channel, filesystem and dedicated owner approvals still apply.
+Historical adoption, proposal and effect records remain readable; the public
+`policy/adopt/progress/checkpoint/settle/propose` protocol is retired.
 
-For a managed durable peer, first create unassigned Work (`assignee: null`),
-then call `session` with `action: "create"` and
-`work: {key, revision}` alongside the usual title and optional initialMessage.
-The creator must control that exact unassigned Work. The host persists required
-bindings, assigns the Work, and only then admits the kickoff. These are ordered,
-fail-closed operations, not a cross-store transaction: an interrupted creation
-may leave an idle bound session awaiting assignment, never an unbound executor.
-Retries do not replay initial messages; incomplete assignments are explicit errors.
-The child adopts the supplied definition, not a new task of its own choosing.
+The public `work` actions are `context`, `list`, `tree`, `create`, `update`,
+`assign`, `review` and `select`. `context` returns current notes and their host-built
+goal paths; schemas are opt-in with `data: {includeSchema: true}`, even for a new
+session. `list/tree` are compact paginated indexes. Writes return a small receipt,
+not a repeated definition, HTML exhibit, history or instruction manual.
 
-Temporary `subagent` task/call executions inherit required owner bindings.
-An optional owner can supply `work: {key, revision}` to constrain just that
-execution, using Work already assigned to and adopted by the durable owner.
-Temporary executions do not become independent Work assignees. Nested calls
-cannot remove inherited constraints.
+Create a note with `data: {title, definition: {objective}, notes: {kind}}`.
+Kinds are `goal`, `approach`, `task` and `finding`. Children also supply parentKey
+and notes.relation with a kind (`supports`, `requires` or `assumption`) and reason.
+Distinguish a chosen approach from a real prerequisite or unverified premise.
+An Initiative derives from a root and descendants; it has no second editable
+goal/status store. Parent/completion-dependency cycles are rejected.
 
-Required sessions may create managed peers only with descendant Work. Bound
-items and their ancestor constraints remain in the execution snapshot regardless
-of `select`; ancestor pause, dependencies and unknown effects still apply.
-Actionable messages may go to the controller or a recipient with compatible
-bindings, not an unconstrained peer. Remote A2A delegation and fresh automation
-do not yet preserve these bindings and are rejected in required mode; use local
-managed executions or schedule an existing managed session. This is a Work
-protocol boundary, not an OS sandbox or semantic proof that every action fits
-the natural-language task.
+Parents maintain causal structure; assigned workers maintain current
+`summary`, `plan`, `next` and `artifacts`. `update` takes key, the current note
+`version`, and only changed fields in data. Versions reject stale writes;
+semantic goal revisions change separately from routine progress.
+Agent changes to human-set/source-backed goals need a genuine quote from the
+current authenticated user input. Metadata, peer messages and old quotes are not
+user authority. Boundary descriptions never grant protected-action access.
 
-Explicit self opt-in uses `work action=policy`, the assigned `key` and `revision`,
-and `data: {mode: "required"}`. The Work manager becomes the policy controller.
-Only that controller or an authenticated human can change externally imposed
-policy. `data: {mode: "optional", sessionId?}` removes enforcement only after
-bound Work is done/cancelled, effects are settled and owned executions have
-finished. A fresh inference is required after policy changes. Tracking records
-and evidence are never deleted by disabling enforcement.
+Routine notes refresh the UI through the existing Project live-state channel,
+without waking agents. Use notes.attention only for a material premise, scope,
+dependency, decision or blocker requiring the coordinator to act. Pending impact
+notifications coalesce until reviewed. The coordinator reads the current branch,
+updates affected reasoning and records `review` with a conclusion. Do not echo
+the same report by message or ask for periodic acknowledgements.
+Changed ancestors leave descendants explicitly **not yet reassessed**. Local note
+edits do not silently acknowledge that change. Review is not approval for tools.
+A notification failure reports that the note was saved but delivery failed.
 
-Policy is validated and persisted in both JSONL and SQLite session state.
-Old sessions without policy retain enforcement for their existing assigned Work;
-untracked old sessions are optional. Explicit optional state is distinguishable
-from legacy absence. Compaction and restart retain policy; context forks and
-successors cannot silently drop required bindings. Invalid policy fails closed.
+Optional `session create` work:{key} links an unassigned note before kickoff;
+the creator must control it. Stable keys survive ordinary note edits, and retries
+do not replay the initial message. Optional task/call links select an owner note
+without transferring assignment; an unambiguous parent focus can be inherited.
+`select` changes context, not permissions. `assign` changes durable responsibility,
+not running-process cancellation. Respect actual side effects during handoff.
 
-## Work evidence and uncertain effects
+Set data.status to pending, in_progress, blocked, done or cancelled. Blocked
+needs a reason; done needs a current summary, not compulsory per-step evidence.
+Work progress, actual execution state and human acceptance are distinct. A blocked
+note does not freeze independent tools; a completed child does not prove the
+root outcome. Cancellation of an execution remains a separate native operation.
 
-`adopt` requires `understanding` and a nonempty `next` list. Omitted `stop` and
-`retain` inventories default to empty arrays; explicit malformed values still
-fail. These defaults do not adopt an old revision, change an assignee, resolve
-unknown effects, or grant permission.
+### Questions at the right abstraction level
 
-Progress is not a permission grant. New `work progress` reports with
-`status: "blocked"` default to `blockedScope: "step"`: the named step is
-waiting, while independent work within the existing agreement may continue.
-Use `blockedScope: "work"` for a whole-work blocker, or `update` with
-`change: "pause", paused: true` for an explicit stop. Existing blocked records
-without a scope retain the whole-work fence; editing their reason does not
-weaken it. Resuming progress or choosing a step scope cannot clear a pause,
-unfinished dependency, missing adoption, stale assignment or unknown effect.
-Step scope does not classify arbitrary shell/MCP actions as independent:
-the executor must respect the stated blocker, and capability/publication
-approval remains enforced by the owning service.
+`ask` accepts an originating `workKey` and an ancestor `decisionKey` for both
+input and decision questions. The host resolves and persists their causal path;
+agents do not supply a fabricated tree. With one unambiguous assignment/focus,
+the local path can be attached automatically. A work item and a large decision
+brief are both optional.
 
-For a controller executing its own agent-interpreted Work, `adopt` may include
-`data.acceptance` with missing in-scope criteria. The runtime appends distinct
-criteria and commits the revised definition and adoption together, retaining
-the objective, boundaries, evidence, assignments, dependencies and progress.
-Old inference stamps remain stale; unresolved effects remain unresolved.
-Repeated criteria do not increment the semantic revision. This shortcut cannot
-revise human-confirmed or owner-sourced requirements, delegated agreements,
-pending proposals or transitioning work. Use the guarded update/review path for
-those changes. Adoption prose alone never updates the acceptance definition,
-and no acceptance refinement authorizes device access or publication.
+The canvas puts native question controls at the affected ancestor, with the
+lower technical origin available on demand. Explain consequences for the user's
+outcome, not just a worker's implementation A/B choice. The user can correct a
+premise through the ancestor editor, discuss it with the coordinator, or answer
+in their own words. Changed goals/assignments invalidate related pending questions,
+including requests still being persisted. An invalidation is not an approval.
+Historical decisions retain their original path and exact ask identity in both
+JSONL and SQLite history. Routine progress does not invalidate an answer.
+A new question records which path nodes still need reassessment after an
+ancestor changed. The warning is visible even when technical details are
+collapsed. Current impact conclusions accompany reviewed nodes; an additional
+ancestor change marks them unassessed again. This exposes stale reasoning,
+not a semantic proof or another admission gate.
 
-A fresh, authenticated owner's direct message can extend the current
-agreement without a second confirmation. Use `update` with `requestQuote`
-quoting that message and append acceptance criteria, keeping the objective,
-boundaries, prior criteria and evidence. This is available only to the durable
-session that both manages and executes the work. The runtime records the exact
-input reference as `requestSource`, retains `agent_interpretation` provenance,
-increments the revision and requires fresh adoption. It does not approve an
-app, an outstanding proposal or a paused/terminal work item. Changing the
-objective, removing requirements or changing boundaries still requires review.
-A2A callers, peers, events, group messages, old quotes and Retry/Continue cannot
-supply this owner authority. Later revisions cannot discard the added
-requirements by relabeling the change as an `understanding`.
-Inference-time Work facts and `work context` (`currentInput.ownerFollowup`)
-state whether the current input carries that authority, rather than asking the
-model to infer it from message wording. When an executor has Work access but
-no contract, runtime facts say so before its first effectful invocation.
+Temporarily hiding the mounted overview, including opening the coordinator on a
+narrow screen, preserves local answer drafts. Reopening first reloads the pending
+question; a draft is restored only for the same Project, session and request.
+This does not persist an answer draft across a page reload.
 
-Decision cards are placed at their original `ask` using recorded request and
-tool-call identities, including proposal-based asks whose question and options
-are generated by the backend. Historical revisions and invalidated decisions
-remain beside that ask; placement never restores answer authority. If the
-original ask is missing or cannot be uniquely located in the loaded history, its decision is shown in a
-separate section before the conversation rather than appended as a new event.
+HTML in notes.html is a read-only exhibit: sanitized and rendered in an opaque,
+empty-sandbox iframe with a restrictive CSP. No scripts, network requests, forms,
+navigation or privileged bridge; native controls outside it retain answer and
+authorization authority. Use a Micro App for an actual executable reusable app.
 
-`work context` returns full records and unresolved effects. It includes action
-schemas automatically when no Work exists; use `data: {includeSchema: true}` to
-request them later (`schemaRequest` supplies the exact call). Repeated state
-reads omit the unchanged schemas, not requirements or evidence. Mutation
-receipts retain keys, semantic/assignment revisions, sequence, authority,
-adoption identity, waits, transitions and unresolved effects. They omit repeated
-definitions and adoption prose; `detail` reads the complete persisted record.
-This changes only tool presentation, not the stored record or execution fences.
-
-The context's requested schema includes `evidenceSchema`. Evidence entries are references
-`{sessionId, physicalId, kind: "user" | "tool", id, quote}`, not strings or a
-Decision brief. Use real recorded input/tool-call IDs and exact excerpts;
-definitions may omit evidence, but completion and agent settlement still enforce
-their required evidence checks.
-
-For `work progress`, prefer `data.result: {summary, sources: [{id, quote}]}`
-when citing your own recorded tool results. `id` is the tool-call ID and `quote`
-is an exact excerpt, not a paraphrase. The host resolves the canonical session
-and physical segment, including earlier segments of the same session; no
-history search or guessed `physicalId` is needed. Runtime Work context displays
-up to eight recent non-Work tool receipt IDs for copying; tool names such as
-`functions.read` are not IDs. This inference-only index does not rewrite native
-tool output, persisted history or script-facing return values. Missing, foreign-session or
-ambiguous tool IDs and mismatched excerpts are rejected without changing Work.
-Full `result.evidence` references remain supported, including alongside
-`sources`, with at most eight entries combined. Short sources require a session
-actor; human API callers use full references. Persistence and receipts retain
-only canonical evidence, not the lookup inputs. This convenience does not
-replace acceptance checks, adoption, assignment, dependency or effect fences.
-
-A trusted native tool can explicitly attest to a failed operation with no
-effect. For example, audio.cpp rejects malformed loader catalogs before saving
-configuration, records `not_applied`, and does not leave an unknown Work effect.
-`exec` also uses this outcome for a missing script or unsupported shell rejected
-before dispatch, command interception or process creation, on Main or a Child.
-Unattested errors, failed probes, interrupted writes and arbitrary error text do
-not make that guarantee: they retain the existing unknown-effect fence and
-require reconciliation. This is not rollback or a blanket exemption for
-validation-looking errors. The separate native `returned_error` outcome described
-above acknowledges completed execution, not absence of effects.
+Unknown operation outcomes still require inspection before retry, through the
+owning service's recovery controls, not a general Work gate. Native no-effect
+and returned-error metadata distinguish rejected inputs from completed errors;
+neither means rollback or permission to replay an external effect.
 
 ## Publish reusable apps
 
@@ -573,20 +521,20 @@ outcome: inspect pending effects before any retry. A long browser evaluation
 can exceed the request deadline even on a healthy connection. For idle checks,
 record state/time and inspect later with a short call, rather than sleeping
 inside one RPC. MCP-declared text errors retain their JSON envelope and explicit
-failure status for Work tracking.
+failure status.
 The project browser tries its configured preferred port range first, then uses
 bounded OS-assigned candidates if that whole range is occupied or OS-reserved.
 An explicitly requested port never silently changes. Existing listeners are not
 reused or terminated; browser profiles and process ownership stay project-scoped.
 
-### MCP read-only policy and Work admission
+### MCP read-only policy and execution ordering
 
 MCP tools are **unknown by default**, even when named `get_*` or when the server
 advertises `annotations.readOnlyHint: true`. Shadow uses this precedence:
 
 1. A matching locally reviewed `readOnlyOverrides` rule, including explicit `false`.
 2. The server's hint only when that server has `trustReadOnlyHints: true`.
-3. Unknown otherwise; normal Work execution checks apply.
+3. Unknown otherwise; normal tool and capability checks apply.
 
 Read an indexed tool's `v:tools/<server>/<tool-id>` metadata to inspect
 `readOnlyPolicy`: `readOnly` is `true`, `false`, or `null` (unknown), `source`
@@ -608,7 +556,7 @@ For example, these optional fields belong inside one approved server entry:
 Override keys are exact, **unprefixed** MCP tool names. Copying a fingerprint
 does not verify behavior: review the implementation and its permissions first.
 A successful trial call, tool name, description, or server claim is not proof.
-Never enable trust or create positive overrides merely to clear a Work error.
+Never enable trust or create positive overrides merely to suppress an error.
 
 Review fingerprints bind the configured server name, tool metadata/schema/hint,
 and advertised server name/version when available. Metadata changes invalidate
@@ -622,26 +570,22 @@ Old indexes without hints or server versions remain readable; live discovery
 refreshes metadata before lazy invocation. Config changes and tool-list change
 notifications invalidate active adapters and borrowed snapshots.
 
-Confirmed reads remain available when Work is paused, completed, or waiting for
-a context transition, without creating Work effect receipts. Writes and unknown
-tools remain gated, including the inner MCP call through `invoke_tool`.
+Read-only classification controls execution grouping, not a Work prerequisite.
+Work status does not gate reads, writes or unknown tools, including inner calls
+through `invoke_tool`. Actual tool permissions and capability checks still apply.
 The built-in `browser_setup list` only inspects session-owned instance metadata.
 Its validated `close` action is a separate cleanup control, not a read-only
-browser command: it remains available after Work becomes blocked, paused,
-terminal, stale or uncertain. Closing cannot resume or accept Work, reconcile
+browser command. Closing cannot resume or accept Work, reconcile
 earlier effects, launch a browser or acquire another session's instance. Attached
 targets are only disconnected; owned browsers are terminated. Project, tool-role,
 leaf-call and cancellation checks still apply. No other MCP/browser operation
-inherits this cleanup exception.
-Native cleanup implementations declare `workAdmission` instead of adding tool
-names or browser classes to Work's allowlist. Execution cancellation uses the
-same policy. External MCP annotations and tool arguments cannot opt into it.
+inherits ownership or cancellation permission.
+Native cleanup metadata cannot be supplied by external MCP annotations or model
+arguments.
 Within a model tool batch, only confirmed reads share a parallel group;
-mutations and unclassified calls execute in order so goal changes cannot race
-subsequent operations.
+mutations and unclassified calls execute in order.
 
-Errors distinguish paused Work, terminal status, and context transitions; unknown
-tools also report that they are not confirmed read-only. Read-only classification
+Unknown tools are not assumed safe from their names. Read-only classification
 does not bypass tool allowlists, cancellation, remote-workdir restrictions, or
 data-access permissions and is not a sandbox.
 

@@ -20,6 +20,20 @@ const pending: YieldRequest = {
   recipient: { kind: 'user', sessionId: 'web:owner' }, createdAt: '2026-09-21T09:59:00Z', deadline: null,
 }
 
+test('live and saved decision cards retain the host goal path at the original abstraction level', () => {
+  const workContext: NonNullable<YieldRequest['workContext']> = {
+    originKey: 'task', decisionKey: 'goal', path: [
+      { key: 'goal', revision: 1, title: 'Release impact', objective: 'Report token usage', kind: 'goal', origin: 'human' },
+      { key: 'task', revision: 1, title: 'Grader', objective: 'Prepare scoring', kind: 'task', origin: 'agent_interpretation',
+        relation: { kind: 'assumption', reason: 'Scoring was assumed to be necessary' } },
+    ],
+  }
+  const request = { ...pending, workContext, origin: { physicalId: 'segment', toolCallId: 'ask' } }
+  assert.deepEqual(inlineYieldDecisions([call()], request).entries.get(0)?.workContext, workContext)
+  const records = parseDecisionRecords(JSON.parse(JSON.stringify([{ request, answer: receipt() }])))
+  assert.deepEqual(inlineYieldDecisions([call()], null, records).entries.get(0)?.workContext, workContext)
+})
+
 test('a revised answer receipt displays the question actually answered, even before journal history loads', () => {
   const revisedQuestion = { question: 'Cap retries instead?', options: ['Cap', 'Stop'], defaultOption: 'Stop' }
   const entry = inlineYieldDecisions([call(), result(receipt({ requestId: 'revised', option: 'Cap', revisedQuestion }))]).entries.get(0)!

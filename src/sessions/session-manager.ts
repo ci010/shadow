@@ -637,15 +637,16 @@ export class SessionManager {
     }
     this.sleepInactivityMs = deps.sleep?.inactivityMs ?? 15 * 60 * 1_000
     const decisionRecords = new YieldRecords(this.store, id => this.getSessionState(id), request => {
-      if (!this.alignment || !request.workStamps?.length) return
+      if (!this.alignment || !request.workContext && !request.workStamps?.length) return
       if (!this.alignment.currentDecision(request)) {
-        return 'The task agreement changed. This historical question/answer is not approval for the current revision.'
+        return 'The goal or reasoning path changed. Re-evaluate this question in its current context before using an earlier answer.'
       }
     }, record => {
       if (record.answer) this.alignment?.reviewAnswer(record.request.sessionId, record.answer.option, record.request.id, record.request.workStamps ?? [])
     })
     this.decisionRecords = decisionRecords
     this.yields = new YieldManager({
+      current: request => !request.workContext || this.alignment?.currentDecision(request) === true,
       changed: sessionId => this.deps.bus.emit('session.activity.changed', { sessionId }),
       assertCanYield: id => {
         if (this.sessionStates[id]?.mode === 'call') this.blockCall(id, 'Leaf calls cannot ask; the caller must decide and issue a new call.')
@@ -673,6 +674,7 @@ export class SessionManager {
       notifyReporter: request => this.notifyDecisionReporter(request),
     })
     this.inputs = new InputRequests({
+      currentContext: context => this.alignment?.currentContext(context) === true,
       getState: id => this.getSessionState(id),
       assertAccess: id => {
         if (this.stopped || this.deleting.has(id)) throw new YieldError('unavailable', 'Input session is unavailable.')
@@ -699,7 +701,7 @@ export class SessionManager {
     const reportingSessionId = state.decisionOwnerSessionId ?? sessionId
     const context = await this.decisionRecords.context(sessionId)
     const reporter = reportingSessionId === sessionId ? undefined : await this.decisionRecords.context(reportingSessionId)
-    return { ...context, ...(this.alignment ? { work: this.alignment.context(sessionId) } : {}),
+    return { ...context, ...(this.alignment ? { workContext: this.alignment.decisionContext(sessionId) } : {}),
       userInputs: [...context.userInputs, ...(reporter?.userInputs ?? [])], reportingSessionId,
       notice: `${context.notice} Reporting responsibility does not change who answers or assign Initiative work.` }
   }
@@ -2154,12 +2156,46 @@ ${JSON.stringify(request)}`,
       }
     }
     for (const sessionId of Object.keys(this.sessionStates)) {
+      const input = this.inputs.get(sessionId, true)
+      if (input?.workContext && !this.alignment.currentContext(input.workContext)) {
+        await this.inputs.invalidatePending(sessionId, input.id, `The goal path changed at ${record.workflow?.title ?? record.key}. Re-evaluate the missing information in its new context.`)
+      }
       const pending = this.yields.get(sessionId)
-      if (pending?.origin && pending.workStamps?.length && !this.alignment.current(pending.workStamps)) {
+      if (pending?.origin && (pending.workContext || pending.workStamps?.length) && !this.alignment.currentDecision(pending)) {
         await this.yields.invalidatePending({
           sessionId, physicalId: pending.origin.physicalId, requestId: pending.id,
-        }, `Work ${record.key} changed; revalidate its definition and assignment.`)
+        }, `The goal path changed at ${record.workflow?.title ?? record.key}. Re-evaluate the choice rather than answering the old premise.`)
       }
+    }
+    if (record.notes) {
+      const recipients = new Map<string, string>()
+      const authority = this.alignment.store.workAuthority(record.subject)
+      if (previous && (previous.revision !== record.revision || previous.workflow?.assignee !== record.workflow?.assignee)) {
+        const descendants = this.alignment.store.initiativeView(record.key).items
+        for (const item of descendants) {
+          if (item.workflow?.assignee) recipients.set(item.workflow.assignee, 'The goal or approach changed. Re-evaluate only affected plans; ordinary tools do not require adoption.')
+        }
+        if (previous.workflow?.assignee && previous.workflow.assignee !== record.workflow?.assignee) {
+          recipients.set(previous.workflow.assignee, 'The work assignment changed. Do not continue obsolete instructions; this does not cancel an already-running operation.')
+        }
+      }
+      const attention = record.notes.attention
+      if (attention && !attention.reviewed && (!previous?.notes?.attention || previous.notes.attention.reviewed) && authority.manager) {
+        recipients.set(authority.manager, `A branch needs an impact assessment (${attention.kind}): ${attention.summary}\nResolve within existing authority or ask at the affected ancestor; do not forward raw implementation questions.`)
+      }
+      for (const [target, reason] of recipients) {
+        const state = this.getSessionState(target)
+        if (target === record.changedBy || !state) continue
+        if (!previous?.workflow?.assignee && state.topicRequestHash && state.executionStatus === 'pending' && !state.lastActivityAt) continue
+        this.assertFolderAccess(target)
+        await this.deliver(target, {
+          kind: 'message', id: `work-note:${record.key}:${record.sequence}:${target}`, timestamp: new Date().toISOString(),
+          policy: 'steering',
+          source: { kind: 'event', eventId: record.key, type: 'work-note-changed', source: 'work-notebook' },
+          content: `${reason}\nRead work context for ${record.key} (version ${record.sequence}). Update the relevant note once; no acknowledgement or duplicate status message is needed. Notes do not grant permission.`,
+        })
+      }
+      return
     }
     if (previous && previous.revision === record.revision
       && previous.workflow?.assignmentRevision === record.workflow?.assignmentRevision
@@ -2177,7 +2213,7 @@ ${JSON.stringify(request)}`,
       await this.deliver(executor, {
         kind: 'message', id: `work:${record.key}:${record.sequence}`, timestamp: new Date().toISOString(), policy: 'steering',
         source: { kind: 'event', eventId: record.key, type: 'work-realignment', source: 'work-contract' },
-        content: `Work ${record.key} changed. Read its current context and assignment; stop obsolete actions. Only its current executor may adopt and resume. No permission or acceptance is implied.\n` +
+        content: `Work ${record.key} changed. Read its current context and assignment; reconsider obsolete plans. No permission or acceptance is implied.\n` +
           JSON.stringify({ key: record.key, revision: record.revision, assignee: authority.executor }),
       })
     }
@@ -2204,7 +2240,7 @@ ${JSON.stringify(request)}`,
       await this.deliver(sessionId, {
         kind: 'message', id: `work-adopt:${current.transition.id}`, timestamp: new Date().toISOString(), policy: 'queue',
         source: { kind: 'event', eventId: current.transition.id, type: 'work-context-ready', source: 'work-contract' },
-        content: 'Fresh work context is ready. Read work context and explicitly adopt the current agreement before resuming. Old summaries and memory conclusions need revalidation.',
+        content: 'Fresh work context is ready. Read the current goal and reassess old summaries and memory conclusions. Notes do not grant permission.',
       })
     })
   }

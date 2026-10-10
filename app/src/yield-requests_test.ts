@@ -182,6 +182,42 @@ test('direct presets can still be selected after opening custom entry', async t 
   assert.equal(state.customText.value, '')
 })
 
+test('temporary hiding retains a draft only after the same pending question is revalidated', async t => {
+  const { state, source, requests } = harness(t)
+  requests[0].finish(Response.json({ request: question() }))
+  await settle()
+  state.selected.value = 'Full refactor'
+  state.customMode.value = true
+  state.customText.value = 'Reconsider the original premise'
+  source.active = false
+  assert.equal(state.request.value, null)
+  assert.equal(await state.submit(), false)
+  assert.equal(requests.length, 1)
+  source.active = true
+  assert.equal(state.answerable.value, false, 'A retained draft cannot answer before the current question is reloaded')
+  assert.equal(await state.submit(), false)
+  requests[1].finish(Response.json({ request: question() }))
+  await settle()
+  assert.equal(state.answerable.value, true)
+  assert.equal(state.selected.value, 'Full refactor')
+  assert.equal(state.customMode.value, true)
+  assert.equal(state.customText.value, 'Reconsider the original premise')
+  source.active = false
+  source.active = true
+  requests[2].finish(Response.json({ request: question('web:root', 'replacement') }))
+  await settle()
+  assert.equal(state.customText.value, '')
+  assert.equal(state.customMode.value, false)
+  assert.equal(state.selected.value, 'Minimal change')
+  state.customMode.value = true
+  state.customText.value = 'This Project only'
+  source.apiBase = 'http://another-project'
+  assert.equal(state.customText.value, '')
+  requests[3].finish(Response.json({ request: question('web:root', 'replacement') }))
+  await settle()
+  assert.equal(state.customMode.value, false)
+})
+
 test('composer answers target the exact request and require matching attachment receipts', async t => {
   const { state, requests } = harness(t)
   requests[0]!.finish(Response.json({ request: question() }))

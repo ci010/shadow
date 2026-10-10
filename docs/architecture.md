@@ -90,8 +90,8 @@ WIP extension:
 
 The backend runs directly on **Node.js 24.15+**. TypeScript development uses
 `tsx`; backend production output is Node ESM. The Vue package uses Vite.
-Electron launches that Node backend module using Electron's Node runtime in a
-separate process. There is no Deno compatibility layer or parallel Deno runtime
+Electron launches that Node backend module in an Electron `utilityProcess`,
+owned by the desktop main process rather than the renderer. There is no Deno compatibility layer or parallel Deno runtime
 to maintain. Package scripts and `build.ts` own compilation/assets; do not infer
 current packaging from the older compiled-sidecar proposals.
 
@@ -105,8 +105,9 @@ The release command gates packaging on backend/Electron/Vue typechecks and
 focused release tests, then verifies source-bound hashes of the fresh package's
 resources and ASAR. See [release verification](release.md) for its exact limits.
 Opt-in Windows service mode uses a pinned WinSW host to run Electron in Node
-mode independently of the UI. Attached desktop shutdown only disconnects; normal
-sidecar mode retains the existing owned-process shutdown behavior. Installation
+mode independently of the UI. Desktop service attachment has been removed;
+independent services retain browser access and CLI management. Desktop
+utility processes stop on explicit application quit, not window close. Installation
 and SCM lifecycle acceptance remain distinct from a passing packaged smoke.
 The eval child is the separate Node runner used by inline script execution, not
 another long-lived agent authority.
@@ -595,32 +596,37 @@ controls, owner-only Discord `channel_config`, and ask/reply, excluding invoke_t
 It routes to reusable sessions and lets users continue there, rather than owning
 their session hierarchy. Ensuring its existence never automatically runs an LLM.
 
-Opening Coord shows a **Project workbench**, not a second kind of session:
-an Initiative-grouped work board, a switchable parent/dependency graph, and the
-existing coordinator conversation in a collapsible side panel.
+Opening Coord shows a **Project workbench**, not a second kind of session.
+Its default canvas is an expandable causal outline of goals, approaches, tasks
+and findings, with current notes, optional read-only HTML exhibits and native
+questions anchored at the affected goal. The lower technical origin stays
+available on demand. An Initiative-grouped board and parent/dependency graph
+remain alternate views. The existing coordinator conversation is a collapsible
+side panel; discussing a premise appends a draft, not an automatic message.
 On wide containers the side panel's left separator supports
 dragging and keyboard resizing (arrows, Home/End), retaining the preferred width
 across panel switches and temporary container shrinkage. It reserves at least
 360px for the workbench; narrow containers keep the single-panel layout without
 a resize handle. The graph is a
-read-only layout, not a freeform canvas or a drag-to-reassign interface. Work
+read-only layout, not a drag-to-reassign interface. Work
 progress comes from Work records; a session's running/idle stage never implies
 that its work is in progress or complete. Unassigned and historical work remain
-visible, and filters do not change assignments.
+visible, and filters do not change assignments. Untracked conversations and
+questions also remain visible, including when the goal map is empty.
 
 The authorized Project-scoped `GET /api/work` exposes a thin overview of all
 Work records in the bound Project, known sessions, live human requests and
-unresolved effects. `GET /api/work/:key` loads agreement details and history;
-`POST /api/work/:key` reuses the existing human WorkAlignment operations, exact
-revision/proposal checks and handoff/acceptance gates. Viewing or selecting work
-does not create a session, adopt work or confer authority. Discuss/New work
+unresolved operation effects. `GET /api/work/:key` loads current notes;
+history is opt-in with `?history=1`. `POST /api/work/:key` uses the human note
+update/assignment/impact-review operations and exact current note version.
+Viewing or selecting work does not create a session or confer authority. Discuss/New work
 append an editable coordinator draft; they do not send it automatically.
-Request links open their original conversation, where the existing Ask,
-credential and publication controls retain their scope.
+Request links reveal the native question in its goal context. Credential and
+publication controls retain their separate scope.
 
 Ordinary chat no longer has permanent Decision reporting / Work alignment
 buttons. Relevant work appears as a compact task link (loaded without history);
-advanced recovery and assigned-session reporting settings remain in work
+note editing and assigned-session reporting settings remain in work
 details. Background-task and subagent disclosures are unchanged.
 
 The workbench's **GitHub** panel binds explicitly allowed repositories to this
@@ -630,7 +636,8 @@ Owner-confirmed Issue imports create unassigned Work, not sessions. Cards show
 linked resources and last-read CI/review facts. Publishing requires a saved
 preview and a separate confirmation, with Work revision/sequence, repository
 identity and remote snapshot/head checks. Write receipts and uncertain outcomes
-are durable; uncertain writes also fence Work through its existing effect store.
+are durable; uncertain writes remain in the existing effect store for the
+integration's recovery controls, not a general notebook execution fence.
 Explicit subscriptions poll one linked resource per minute, round-robin, and
 deliver through EventService to the bound durable session, either silently or
 as an explicitly enabled queued turn. Neither GitHub state nor review approval
@@ -1127,7 +1134,7 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | `session` | Durable peer creation/naming and Main-local folder registration; no work definition |
 | `message`, `subagent` | Authorized session messaging and temporary task/call execution |
 | `ask`, `reply` | Ordinary text input or structured decisions, authenticated recipient routing, correlated answers and configurable waiting |
-| `work` | Work definitions, assignments, dependencies, progress, proposals, adoption and context transitions |
+| `work` | Optional current notes, causal goal paths, assignments, reported progress and impact reviews |
 | `plan_write`, `sql`, `log` | Planning documents, guarded Project conventions/read-only current Work queries, structured knowledge logging |
 | `event_subscribe`, `event_source` (lazy) | Subscribe to normalized events or manage restricted Project polling producers; discover via `v:tools/events` and invoke through `invoke_tool` |
 | Lazy tools | Events, cron, search/MCP/tool factories |
@@ -1147,9 +1154,9 @@ Project work; `work tree` derives membership and aggregate progress. Both return
 compact paginated indexes (default 5, maximum 20); read `context` with an exact
 key for the definition. Parent/completion dependency cycles are rejected. A completed
 child does not automatically satisfy the root's acceptance. `work create`,
-`assign`, `manage`, `dependencies` and `progress` provide one bounded, validated
-mutation interface. Assignment and management use an exact current record
-sequence. Definitions have a separate semantic revision; ordinary progress does
+`update`, `assign` and `review` provide one bounded, validated mutation interface.
+Updates use the current record sequence as `version`. Definitions have a
+separate semantic revision; ordinary progress does
 not change the goal. No second editable todo/goal store is maintained.
 
 An explicit `initiativeId` survives delegation, compaction, and storage reload.
@@ -1158,7 +1165,7 @@ this link selects a derived view, not an assignment.
 Absent that link, prompt summaries show only work the session created, owns, or
 is assigned. Runtime activity is separate from recorded task status; an
 inactive owner or assignee retains responsibility across sleep/recovery and needs
-explicit guarded release/handoff/claim, not automatic completion, stealing, or
+explicit reassignment, not automatic completion, stealing, or
 reassignment. Session creation and message admission do not transfer work.
 Inactive or unknown ownership is never claimable merely because its session
 is unavailable. Schema version 3 adds `needs_attention`; deprecated
@@ -1166,10 +1173,10 @@ is unavailable. Schema version 3 adds `needs_attention`; deprecated
 authorization. Ownership belonging to an already-deleted session remains recorded
 as needing attention; it never becomes automatically claimable.
 Deleting a session does not release its work.
-An authenticated human may explicitly release a deleted executor's orphaned
-assignment with an audited reason, but only after all effects are settled.
-Otherwise, once adoption has started, release requires the executor's current
-checkpoint even if a later definition revision cleared the old adoption.
+The note's controller or an authenticated human may explicitly reassign it.
+That operation does not cancel the prior executor or settle its side effects.
+Actual operation recovery belongs to the owning service, not an adoption or
+checkpoint requirement on the note.
 Session todos are a query view of shared items. `plan_write`
 remains a planning-document tool, not another authoritative task list.
 Here active means a live, accepting session without pending recovery, not proof
@@ -1345,154 +1352,98 @@ means no confirmed answer, not a live wait. Normal interrupted-tool history
 recovery still applies and may produce a new request; an old answer is not
 automatically replayed against that new request.
 
-### Versioned work alignment
+### Causal notes, questions and execution facts
 
-`src/initiatives/work-contract.ts`, `InitiativeStore`, and
-`src/sessions/work-alignment.ts` separate the outcome/acceptance, existing boundary
-descriptions, source evidence and the executor's chosen next phase. Contracts
-are the versioned definition inside each work item, not another business object
-or assignment queue. They live in `initiatives.sqlite` (schema version 6),
-independently of whether session history uses JSONL or SQLite. Migration retains
-old assignments and does not invent historical goals, contracts or human approval.
-Creating or renaming a session never creates a work definition. Ordinary work-enabled sessions must explicitly register
-untracked work before side-effecting tools; historical scope is not reconstructed
-or assumed unrestricted. Read-only investigation (including explicitly reading/activating a Skill),
-questions, coordination and
-existing permission-checked cancellation remain available during realignment.
-Agent-authored interpretation is labeled separately from authenticated human edits.
-Boundary text is not an access grant or an OS sandbox.
-Custom roles used for durable, tracked work must allow `work` so their executor
-can adopt agreements; role restrictions are not bypassed. Bounded task/call
-executions cannot manage contracts themselves, but inherit their durable
-owner's fence. Standalone bounded tasks retain their existing capability limits.
+`src/initiatives/work-notes.ts`, `work-contract.ts`, `InitiativeStore`, and
+`src/sessions/work-alignment.ts` keep a current shared notebook in the existing
+`initiatives.sqlite`, independently of the JSONL/SQLite session backend. There
+is no separate canvas/task database. Legacy records remain readable; adoption,
+policy, checkpoint, settlement and proposal fields are historical/internal
+compatibility data, not the current public tool protocol.
 
-`work action=context` returns the current records, proposal/revision history,
-in-flight/unknown tool invocations and action schemas. `update` uses an exact
-semantic revision with the work key; ordinary progress does not increment this
-revision. Each item has its own manager and assigned durable Session.
-Reporting responsibility and session creation provenance grant no
-control rights. Peers can `propose`; material goal/authorization changes and
-agent changes to human-confirmed agreements normally require human review.
-A fresh authenticated owner's direct input can instead append acceptance through
-`update` with an exact `requestQuote`. This path requires the same durable
-manager/executor and preserves the objective, boundaries, prior acceptance and
-evidence. It stores a verified `requestSource`, marks the changed definition as
-an agent interpretation rather than human-approved wording, and requires fresh
-adoption. A2A, peers, events, group messages, old quotations and Retry/Continue
-cannot use this path. Pending decisions, pause/resume and terminal work cannot
-be bypassed; subsequent agent revisions cannot discard these user-directed
-requirements by labeling them an understanding change. Dedicated capability and
-app approvals remain separate.
-An executor
-may always pause its unchanged agreement. Only the actual executor can `adopt`,
-recording understanding, stopped actions, retained evidence and chosen next steps.
-For its own controller-owned agent interpretation, `adopt` can also append
-distinct in-scope criteria through `data.acceptance`, atomically incrementing the
-definition revision and adopting it. This preserves existing requirements and
-boundaries, invalidates old inference stamps/checkpoints, and retains unresolved
-effects and progress. Human-confirmed/owner-sourced, delegated, transitioning or
-pending-proposal agreements cannot use this shortcut. Repeating existing
-criteria does not increment the semantic revision; prose alone changes none.
-Session metadata and archived SQL cannot silently replace current work goals.
-Adoption does not clear a blocked progress state. New blocked progress defaults
-to `blockedScope: "step"`: it reports a waiting step without fencing independent
-authorized work. Explicit `"work"` scope and legacy blocked records with no
-scope retain a whole-work fence; updating their reason preserves that scope.
-Pause, unfinished dependencies, stale/unadopted revisions and unknown effects
-remain execution fences regardless of progress scope. Only resolve a blocker
-when it is actually resolved; neither adoption nor progress grants approval.
-Step scope is not automatic dependency analysis or a claim that arbitrary
-shell/MCP operations are safe. Tool/service authorization still applies.
-Failed tool results also journal their exact session/segment/call identity when
-available. Work context exposes this as `effects[].resultSource`, so an executor
-can cite the recorded result without guessing a physical segment. The quote and
-its source still undergo normal evidence validation; references never settle an
-effect automatically. Old/interrupted calls without a recorded reference remain
-unknown, and only references still present in the bounded Work history are shown.
-The runtime refreshes unresolved-effect hints before each inference, not only
-after a rejected retry. It shows at most three effect identities and caps expanded
-references, while the Work tool provides the complete scoped list. The hints
-disappear after reconciliation; the existing execution fence remains enforced.
-Progress completion evidence uses the same structured source references, not
-filenames or prose summaries; the Work discovery example mirrors that wire shape.
-Proposals are persisted on the work item and notify the UI. `ask` can bind to an
-exact proposal, displaying its definition and base revision. Only a human preset
-approval applies it; timeout, parent replies and custom text do not. The Work
-panel approves the same proposal through the same idempotent application path.
-Panel approval also settles its pending Ask; it does not ask the user again.
-Bound work questions cannot be rewritten independently of their saved proposal.
-Both surfaces show the exact pause/resume state as well as the proposed definition.
-Persisted answers interrupted before application are recovered without issuing a
-second approval. Changed versions/assignments reject stale proposals.
+Work never gates ordinary execution, even for sessions with old required-policy
+metadata. Creating or renaming a session does not create notes; untracked sessions
+are visible. Existing role, capability, channel and owner approvals remain the
+actual authorization boundaries. Notebook status and boundary prose are not an
+access grant, OS sandbox, cancellation operation or outcome attestation.
 
-The normal LLM loop injects current agreement facts before each inference and
-captures runtime work stamps. The registry rechecks them immediately before
-managed non-read-only tool execution, including nested script/dynamic calls and
-borrowed call snapshots. Adopting/changing a contract cannot authorize other
-actions already generated in the same tool round. Restored pending tool calls
-without a captured basis fail closed and require fresh inference. A session
-with several assignments can explicitly `select` an unaffected work key; without
-a selection, the fence conservatively covers all assigned agreements. Selection
-does not isolate files or prove that arbitrary shell code implements that task.
-Only consecutive confirmed read-only calls execute in parallel. Mutating or
-unclassified calls are ordered barriers, so an asynchronous Work revision or
-adoption finishes before a following call is checked against its captured basis.
-Native tools can declare an argument-specific `workAdmission` cleanup policy.
-This bypasses only Work admission, not resource ownership, tool roles or aborts;
-it is never inferred from a tool name, model arguments or MCP annotations.
-Browser close and execution cancellation use this policy without being marked
-read-only or settling earlier unknown effects.
+Nodes have a kind (goal/approach/task/finding), a current summary, editable plan,
+next action, artifact links and optional read-only HTML. Child links describe
+chosen support, an actual requirement, or an assumption, with a reason.
+Parents/controllers maintain structure; assigned workers maintain local facts.
+Temporary workers may update the branch linked to their execution, not an
+unrelated owner assignment. Only durable sessions receive assignments.
 
-Tool admissions with tracked effects persist before invocation. Late results
-are retained with their original revision and marked stale, not treated as new
-completion. A final model response generated against a superseded agreement is
-historical too: durable sessions re-evaluate, while bounded executions fail rather
-than report successful completion of the changed assignment.
-Interrupted invocations become unknown on restart and require
-explicit evidence/human `settle`; startup never replays them as confirmed work.
-Native tools may explicitly signal `ToolNoEffectError` for a verified
-pre-commit rejection; the registry preserves the error and records `not_applied`
-without retaining an unknown effect. Audio.cpp uses this only for malformed
-loader catalogs before configuration writes, not for process/probe failures.
-Unmarked exceptions, cancellation and interrupted writes remain conservative.
-Native execution also distinguishes an acknowledged error from lost execution:
-normally exited local commands, correlated remote normal-exit failures and
-closed inline Node error replies without tool-bridge calls record `returned_error`.
-They preserve failed output and possible partial changes without an unknown-effect
-fence. This is not `not_applied`, rollback, or permission to replay external
-effects. A private result identity carries the attestation; serialized hints
-cannot grant it. Aborts, signal exits and cleanup failures override completion.
-A returned background-process receipt is not proof that the external process
-finished: the executor must include ongoing jobs and uncertainties in its
-checkpoint. Already-running external effects are not rolled back or cancelled.
+The note `version` is its sequence for optimistic concurrency. Semantic revisions
+track changes to goals, dependencies, kinds and causal relations, separately from
+routine progress. Assignment has its own revision. Human-authored goals and
+agent interpretations are distinct; an agent revision of a human/source-backed
+goal needs a verified quote from the current authenticated user input. Ordinary
+peer messages, metadata and stale quotations cannot establish that provenance.
 
-`checkpoint` separates completed facts/artifacts from in-flight work, unknown
-outcomes and retired premises. `transition` requires a current executor-authored
-inventory and no unresolved invocations. Fresh-context replacement runs between
-turns, preserves admitted inputs and logical identity, and publishes a new
-physical segment linked to its prior history. Its `work_transition_id` makes
-recovery after pointer publication idempotent. A pending transition on an inactive
-session waits for an explicit admission; startup alone does not wake work.
-The new context contains the current agreement and factual inventory, not an
-old continuity narrative, and requires executor adoption again. Transition
-failures remain visible/pending rather than pretending the context was replaced.
+Current notes replace repeated status narratives. Audit entries record changed
+fields and semantic definitions, not copies of large HTML/current plans in every
+event. `context` reads current notes and host-built paths without history or
+schemas by default. Mutations return compact receipts. Inference gets a bounded
+goal-path/current-state index, not full notes, HTML, schema dumps or every event.
+Full detail is an explicit read. `list/tree` derive indexes and Initiative progress.
 
-A successor transition prepares a distinct **idle** session without copying the
-work item, and retires old execution. It does not transfer assignment. The old
-assignee releases with `work assign` (assignee null), then the manager assigns
-the same work key to the prepared successor. The successor's execution stays
-blocked until that assignment is real. Files, external jobs and long-term memory
-are not erased. Both intentional realignment and ordinary compaction explicitly
-treat old summaries/memory conclusions as evidence to revalidate, not authority.
+Ordinary changes invalidate the Project live-state UI, without sending messages
+to agents. Material notes.attention wakes the controller once while impact review
+is pending. Goal/assignment changes notify affected durable assignees and retire
+stale questions. A newly created peer receives its linked note before kickoff
+without an extra assignment-triggered turn. These are post-save notifications,
+not an atomic distributed transaction: failure explicitly reports saved data and
+failed delivery, and no durable notification retry queue is provided.
 
-Yield records pin their work revisions. Changed agreements invalidate historical
-decision applicability without deleting answers; live wait invalidation returns
-a non-approval continuation. Custom human answers are also preserved as genuine
-input evidence and require renewed interpretation/adoption only for their bound
-work stamps, not every item owned by a session. They never approve the old framing.
+Host-owned ancestor revision snapshots leave a descendant **not yet reassessed**
+when an upstream premise changes. Local edits do not erase this marker. An
+explicit version-checked `review` records the controller/human conclusion and
+the current ancestry. This is an impact assessment, never operation approval.
+No parent polling loop or required worker reporting cadence was introduced.
 
-Conversation work controls share a wrapping chip row: **Decision reporting**,
-**Work alignment**, **Background tasks**, and **Subagents**. The latter two appear
+`ask` can carry an originating workKey and ancestor decisionKey; the host resolves
+their root-to-origin path, titles, objectives, relation types and provenance.
+One unambiguous assignment/focus can supply a default path, but notes are not
+required to ask. The canvas positions native questions at decisionKey, exposing
+lower technical detail on demand. A user can change the ancestor rather than
+accept an incorrect implementation prerequisite. Large evidence briefs are
+optional. Real stored lineage still decides who may answer; reporting ownership
+and canvas placement confer no authority.
+
+Input and decision persistence retain the original context in both session stores.
+Goal/assignment changes invalidate pending questions, including a request still
+being persisted, and prevent settlement against a stale basis. Routine note
+progress leaves it valid. Invalidation and plain input replies do not approve
+operations. Historical decisions keep their old paths and exact ask identities;
+they are not rewritten to look current. Waiters remain process-local.
+New questions also retain host-owned per-node reassessment warnings and current
+impact conclusions, so a new request ID cannot hide an unassessed descendant
+behind a current ancestor revision. Warnings remain visible outside collapsed
+technical details. They do not enforce semantic agreement or gate execution.
+The bounded inference index reports its active/shown/omitted counts and directs
+agents to discover other assignments rather than silently hiding their existence.
+
+`ProjectContextCanvas.vue` reuses Project SSE invalidations and coalesced HTTP
+refreshes, keeping expansion and native answer drafts stable across note updates.
+The mounted overview retains its last snapshot while hidden, without keeping its
+live subscription. Visibility changes preserve same-question drafts; reopening
+must fetch the current question before an answer is enabled. A changed Project,
+session or question identity clears the old draft.
+The note editor pins its write version and retains a draft on conflict; reloading
+the latest note or review basis is explicit. HTML is sanitized and rendered in
+an opaque empty-sandbox iframe with CSP blocking scripts, network, forms and
+navigation, with no privileged bridge. It is a read-only exhibit, not a Micro App
+or another authorization surface.
+
+Micro App publication separately captures the selected/unambiguous goal path's
+version-bound acceptance criteria; removal of general inference Work stamps
+does not drop that report baseline. Exact-version app owner approval and the
+owning integration's uncertain-operation recovery remain separate.
+Native failures retain their no-effect/returned-error/unknown distinctions, but
+ordinary failed tools do not add mandatory notebook settlement paperwork.
+
+Conversation controls retain **Background tasks** and **Subagents**, which appear
 when active work exists (or task inventory is unavailable) and open the same
 keyboard-accessible popup rather than a separate full-width task bar.
 Background tasks retain their scoped inventory, retry, and live refresh;
@@ -1509,14 +1460,12 @@ deduplicate nested executions in group summaries, and honor durable terminal
 states over stale activity. They do not change the parent's runtime stage or
 enable its Stop action while only a child is working.
 
-The lazy conversation **Work alignment** panel uses
-`GET/POST /api/sessions/:key/work` for review, proposals, exact-revision edits,
-checkpoint requests, explicit context-transition confirmation and unknown-effect
-reconciliation. It shows human-confirmed versus agent-interpreted goals separately
-from the executor's plan, preserves editing drafts on conflicts, and never sends
-an ordinary user chat message to impersonate adoption.
+The shared note editor uses `GET/POST /api/sessions/:key/work` and the corresponding
+Project Work routes for current notes, version-checked edits, assignment and
+impact review. It shows user-defined versus interpreted goals separately from
+the local plan and never sends an ordinary chat message to impersonate an edit.
 
-These controls enforce provenance, version boundaries and explicit adoption,
+These controls enforce provenance, version boundaries and answer authority,
 not semantic understanding. The regression provider is deterministic; passing
 tests does not establish live-model alignment reliability or autonomous remote
 job cancellation. Routine reports archive by default, while important attention
@@ -2711,9 +2660,18 @@ and uses OS-protected identity storage. Local runtime readiness and connectivity
 to Main are separate states. The renderer can show first-run setup, pending
 approval or recovery rather than pretending the device is connected.
 
-The runtime host/supervisor launches the backend module in a separate process
-using `ELECTRON_RUN_AS_NODE=1`, checks authenticated loopback readiness, and
-requests shutdown during app quit. The launch credential remains in Electron
+After saved setup is complete, Electron main starts the Main or Child backend
+with `utilityProcess.fork` without waiting for a renderer request. First-run
+setup starts it after role configuration. Renderer bootstrap observes the
+current attempt; failed startup requires an explicit retry rather than retrying
+on page reload. Closing the main window hides it while the tray and backend
+remain active; tray click, OS activation and a second same-profile launch restore
+it. The existing Electron single-instance lock prevents duplicate same-profile
+hosts. Explicit Quit requests authenticated backend shutdown before exiting.
+The supervisor still checks authenticated loopback readiness with the existing
+15-second deadline. The short-lived Child pairing command remains a Node-mode
+helper with private stdin; it is not the persistent Child runtime.
+The launch credential remains in Electron
 main; request authorization is attached only to the current renderer's requests
 to the expected literal-loopback backend origin.
 

@@ -7,8 +7,10 @@ import { physicalSessionId } from './session-identity.ts'
 import { YieldError } from './yield.ts'
 import { inputTextSchema, type InputAnswer, type InputRecord, type InputRequest } from './input-request.ts'
 import { answerMediaSchema } from './answer-media.ts'
+import { workDecisionContextSchema, type WorkDecisionContext } from '../initiatives/work-notes.ts'
 
 interface Dependencies {
+  currentContext?(context: WorkDecisionContext): boolean
   getState(id: string): SessionState | null | undefined
   assertAccess(id: string): void
   hasDecision(id: string): boolean
@@ -55,7 +57,7 @@ export class InputRequests {
     }
   }
 
-  async ask(question: string, context: ExecutionContext): Promise<InputAnswer> {
+  async ask(question: string, context: ExecutionContext, workContext?: WorkDecisionContext): Promise<InputAnswer> {
     context.signal.throwIfAborted()
     const sessionId = context.sessionId
     this.deps.assertAccess(sessionId)
@@ -80,6 +82,7 @@ export class InputRequests {
       recipient: { kind: caller ? 'caller' : parent ? 'parent' : 'user', sessionId: parent && !caller ? parent : sessionId },
       origin: { physicalId: physicalSessionId(state), ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}) },
       createdAt: new Date().toISOString(), deadline: timeout === null ? null : new Date(Date.now() + timeout).toISOString(),
+      ...(workContext ? { workContext: workDecisionContextSchema.parse(workContext) } : {}),
     }
     const result = Promise.withResolvers<InputAnswer>()
     // The ask awaits this promise after publication; cancellation may arrive during persistence.
@@ -95,6 +98,10 @@ export class InputRequests {
     try {
       await pending.saved
       if (pending.phase === 'preparing') {
+        if (request.workContext && this.deps.currentContext?.(request.workContext) === false) {
+          await this.close(pending, new YieldError('conflict', 'The goal path changed while opening this input request. Re-evaluate its premise.'))
+          return result.promise
+        }
         pending.phase = 'waiting'
         pending.published = true
         this.deps.changed(sessionId)
@@ -157,6 +164,10 @@ export class InputRequests {
   cancelUser(sessionId: string, requestId: string, channel?: string, senderId?: string): Promise<void> {
     return this.close(this.user(sessionId, requestId, channel, senderId), new DOMException('Input cancelled by user.', 'AbortError'))
   }
+  async invalidatePending(sessionId: string, requestId: string, reason: string): Promise<void> {
+    const pending = this.pending.get(requestId)
+    if (pending?.request.sessionId === sessionId) await this.close(pending, new YieldError('conflict', reason))
+  }
   cancelSession(sessionId: string): void {
     for (const pending of this.pending.values()) if (pending.request.sessionId === sessionId
       || pending.request.recipient.kind === 'parent' && pending.request.recipient.sessionId === sessionId) {
@@ -175,6 +186,9 @@ export class InputRequests {
     if (!pending) throw new YieldError('not_found', 'Input request is no longer pending.')
     if (pending.phase !== 'waiting') throw new YieldError('conflict', 'Input request is being recorded or answered.')
     pending.context.signal.throwIfAborted()
+    if (pending.request.workContext && this.deps.currentContext?.(pending.request.workContext) === false) {
+      throw new YieldError('conflict', 'The goal path changed. This input request is no longer current.')
+    }
     if (pending.request.deadline && Date.now() >= Date.parse(pending.request.deadline)) {
       throw new YieldError('unavailable', 'Input deadline expired without an answer.')
     }

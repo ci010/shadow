@@ -5,7 +5,6 @@ import { parseYieldQuestion, parseYieldReference, type YieldOutcome } from '../s
 import type { InputAnswer } from '../sessions/input-request.ts'
 import type { Tool, ToolParameters, ToolResult } from './tool.ts'
 import { buildMediaParts } from '../agent/message-builder.ts'
-import { WORK_APPROVE, WORK_REJECT } from '../initiatives/work-contract.ts'
 import type { WorkAlignment } from '../sessions/work-alignment.ts'
 import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from './ask-policy.ts'
 
@@ -14,9 +13,9 @@ const parameters = {
   properties: {
     action: { type: 'string', enum: ['ask', 'context', 'invalidate'], default: 'ask', description: 'Ask for input, read the decision schema, or invalidate your own recorded premise.' },
     kind: { type: 'string', enum: ['decision', 'input'], description: 'Required for ask: decision preserves decision/authority constraints; input requests plain text without granting permission.' },
-    proposal: { type: 'object', description: 'Decision only: {key,id} from work propose. The exact saved change is displayed for one human approval; do not supply question/options/default_option for this form.',
-      properties: { key: { type: 'string' }, id: { type: 'string' } }, required: ['key', 'id'], additionalProperties: false },
-    brief: { type: 'object', description: 'Decision only: required structured brief. Call action=context for the compact schema and genuine user-input references.' },
+    workKey: { type: 'string', description: 'Optional originating work node. Defaults to your focused or only active assignment; never create a work item merely to ask.' },
+    decisionKey: { type: 'string', description: 'Optional ancestor of workKey whose goal or approach this choice changes. The host attaches the complete goal path; explain the choice at this level, not as a raw implementation failure.' },
+    brief: { type: 'object', description: 'Optional detailed evidence brief, only when useful. The goal path is attached automatically; do not repeat it here. action=context provides the schema.' },
     reconsiders: { type: 'object', description: 'Decision only: earlier reference {sessionId, physicalId, requestId} being revisited after investigation, deferral or invalidation. Historical link only; do not put invalidated premises in sources.' },
     reference: { type: 'object', description: 'For invalidate: own decision reference {sessionId, physicalId, requestId}.' },
     reason: { type: 'string', description: 'For invalidate: which premise changed and why dependent decisions need revalidation.' },
@@ -35,7 +34,7 @@ export class AskTool implements Tool<ToolResult> {
   readonly name = 'ask'
   readonly readonly = false
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Ask and wait for required input. kind=input takes only question and returns text, never permission; an inbound A2A input goes to its authenticated caller. kind=decision requires a brief, options and default_option: read action=context for the schema and genuine source identities. Roots ask humans; children ask their stored parent. approved:false is not an answer: investigate or continue only authorized unaffected work. action=invalidate marks your obsolete decision premise. Use reply to answer a pending request; message/final text does not answer it.'
+  readonly description = 'Ask in the context of the goal, then wait. kind=input returns text, never permission. kind=decision needs question, two options and default_option; brief is optional. Set workKey for where the issue arose and decisionKey for the ancestor it changes; the host attaches the goal path automatically. Phrase the question as an outcome-level choice. Resolve local implementation choices yourself; a blocked approach may be replaced instead of escalated. Roots ask humans, children ask their stored parent. approved:false permits only investigation or authorized unaffected work. Use reply for pending requests; messages do not answer them.'
   readonly parameters: ToolParameters = parameters
 
   constructor(private readonly yields: YieldManager, private readonly inputs: Pick<InputRequests, 'get' | 'ask'>,
@@ -54,41 +53,36 @@ export class AskTool implements Tool<ToolResult> {
       if (typeof args.reason !== 'string') throw new YieldError('invalid_request', 'Explain which premise changed.')
       return JSON.stringify(await this.yields.invalidateOwn(ctx.sessionId, parseYieldReference(args.reference), args.reason))
     }
-    if (action === 'ask' && args.kind === 'input' && Object.keys(args).every(key => ['action', 'kind', 'question'].includes(key))) {
+    for (const field of ['workKey', 'decisionKey']) {
+      const key = args[field]
+      if (key !== undefined && (typeof key !== 'string' || !key.trim() || key.length > 600)) {
+        throw new YieldError('invalid_request', 'Work and decision keys must contain 1 to 600 characters.')
+      }
+    }
+    const workContext = action === 'ask' ? this.work?.()?.decisionContext(ctx.sessionId,
+      typeof args.workKey === 'string' ? args.workKey : undefined,
+      typeof args.decisionKey === 'string' ? args.decisionKey : undefined) : undefined
+    if ((args.workKey || args.decisionKey) && !workContext) throw new YieldError('unavailable', 'Project work context is unavailable.')
+    if (action === 'ask' && args.kind === 'input' && Object.keys(args).every(key => ['action', 'kind', 'question', 'workKey', 'decisionKey'].includes(key))) {
       if (typeof args.question !== 'string') throw new YieldError('invalid_request', 'Input requires a question.')
-      return this.answerResult(await this.inputs.ask(args.question, ctx), ctx)
+      return this.answerResult(await this.inputs.ask(args.question, ctx, workContext), ctx)
     }
     if (action !== 'ask' || args.kind !== 'decision'
-      || Object.keys(args).some(key => !['action', 'kind', 'question', 'options', 'default_option', 'sources', 'brief', 'reconsiders', 'proposal'].includes(key))) {
-      throw new YieldError('invalid_request', 'Use ask(kind=input, question), ask(kind=decision, brief, question, options, default_option), context or invalidate. Answer requests with reply.')
+      || Object.keys(args).some(key => !['action', 'kind', 'question', 'options', 'default_option', 'sources', 'brief', 'reconsiders', 'workKey', 'decisionKey'].includes(key))) {
+      throw new YieldError('invalid_request', 'Use ask(kind=input, question), ask(kind=decision, question, options, default_option), context or invalidate. Brief is optional. Answer requests with reply.')
     }
     if (ctx.channel === 'a2a') throw new YieldError('forbidden', 'An A2A caller is not a local human decision authority. Ask for ordinary input or report the authorization blocker.')
     if (this.inputs.get(ctx.sessionId, true)) throw new YieldError('conflict', 'This session already has a pending input request.')
     let question
     try {
-      if (args.brief === undefined) throw new TypeError('A decision brief is required. Use action=context for its schema; label unverified premises as assumptions.')
-      if (args.proposal !== undefined) {
-        const proposal = args.proposal
-        if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)
-          || Object.keys(proposal).some(key => !['key', 'id'].includes(key))
-          || !('key' in proposal) || typeof proposal.key !== 'string' || !('id' in proposal) || typeof proposal.id !== 'string'
-          || ['question', 'options', 'default_option', 'reconsiders'].some(key => key in args)) throw new TypeError('A work decision takes proposal={key,id} and brief, not an independently editable question.')
-        const work = this.work?.()
-        if (!work) throw new TypeError('Work proposal decisions are unavailable.')
-        const binding = work.decision(proposal.key, proposal.id)
-        question = parseYieldQuestion({ question: `Apply the proposed change to ${proposal.key} (revision ${binding.baseRevision})?`,
-          options: [WORK_APPROVE, WORK_REJECT], defaultOption: WORK_REJECT,
-          brief: args.brief, sources: args.sources, workProposal: binding })
-      } else question = parseYieldQuestion({ question: args.question, options: args.options, defaultOption: args.default_option, sources: args.sources, brief: args.brief, reconsiders: args.reconsiders })
+      question = parseYieldQuestion({ question: args.question, options: args.options, defaultOption: args.default_option,
+        sources: args.sources, brief: args.brief, reconsiders: args.reconsiders, workContext })
     } catch (error) {
       throw new YieldError('invalid_request', error instanceof Error ? error.message : String(error))
     }
-    const stamps = question.workProposal
-      ? [{ key: question.workProposal.key, revision: question.workProposal.baseRevision, assignmentRevision: question.workProposal.assignmentRevision }]
-      : ctx.workStamps
     return this.answerResult(await this.yields.ask(ctx.sessionId, question, ctx.signal,
       ctx.inputSource === 'user' ? { channel: ctx.channel, senderId: ctx.senderId } : undefined,
-      ctx.inputSource === 'user' ? ctx.platformMessageId : undefined, ctx.toolCallId, stamps), ctx)
+      ctx.inputSource === 'user' ? ctx.platformMessageId : undefined, ctx.toolCallId, ctx.workStamps), ctx)
   }
 
   private async answerResult(answer: InputAnswer | YieldOutcome, ctx: ExecutionContext): Promise<ToolResult> {

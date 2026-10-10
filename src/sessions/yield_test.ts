@@ -11,6 +11,31 @@ const question = (): YieldQuestion => ({
 const code = (expected: YieldError['code']) => (error: unknown) => error instanceof YieldError && error.code === expected
 const signal = () => new AbortController().signal
 
+test('a goal change during journal persistence prevents publication of the now-stale question', async () => {
+  const saved = Promise.withResolvers<void>()
+  let current = true, delivered = 0
+  const closed: string[] = []
+  const manager = new YieldManager({
+    getState: sessionId => ({ sessionId, segmentIndex: 0 }), getPolicy: () => ({ timeoutMs: null }),
+    current: () => current,
+    notifyUser: async () => { delivered++ }, notifyParent: async () => { delivered++ },
+    journal: {
+      open: async request => { await saved.promise; return { ...request, origin: { physicalId: 'segment' } } },
+      write: async record => { if (record.closed) closed.push(record.closed.reason) },
+    },
+  })
+  const waiting = manager.ask('root', { ...question(), workContext: { originKey: 'goal', decisionKey: 'goal', path: [
+    { key: 'goal', revision: 1, title: 'Release impact', objective: 'Measure token usage', kind: 'goal', origin: 'human' },
+  ] } }, signal())
+  const rejected = assert.rejects(waiting, /goal path changed while opening/)
+  assert.equal(manager.get('root'), null)
+  current = false; saved.resolve()
+  await rejected
+  assert.equal(delivered, 0)
+  assert.equal(manager.get('root'), null)
+  assert.deepEqual(closed, ['failed'])
+})
+
 test('host owner confirmations resolve stored lineage, never ask A2A callers or channel participants', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const states: Record<string, SessionState> = {

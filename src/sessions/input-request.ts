@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { workDecisionContextSchema } from '../initiatives/work-notes.ts'
 
 const id = z.string().min(1).max(1024)
 export const inputTextSchema = z.string().trim().min(1).max(4000)
@@ -7,6 +8,7 @@ export const inputRequestSchema = z.object({
   recipient: z.object({ kind: z.enum(['user', 'parent', 'caller']), sessionId: id }).strict(),
   origin: z.object({ physicalId: id, toolCallId: id.optional() }).strict(),
   createdAt: z.string().datetime(), deadline: z.string().datetime().nullable(),
+  workContext: workDecisionContextSchema.optional(),
 }).strict()
 export type InputRequest = z.infer<typeof inputRequestSchema>
 export interface InputAnswer {

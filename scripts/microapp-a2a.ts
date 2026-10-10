@@ -21,7 +21,6 @@ import { terminateProcessTree, type ManagedProcessStatus } from '../src/executio
 import { reserveAppPort } from '../src/microapps/ports.ts'
 import { appId, appRecordSchema, revisionId, type AppRecord } from '../src/microapps/contracts.ts'
 import { MicroAppStore } from '../src/microapps/store.ts'
-import { workRecordSchema } from '../src/initiatives/work-contract.ts'
 import { projectWorkOverviewSchema } from '../src/projects/work-overview.ts'
 import { exportAcceptanceRecovery } from './microapp-acceptance-recovery.ts'
 import { AcceptanceTimeline, acceptanceTaskTerminal, stopAcceptanceCreation } from './microapp-acceptance-timeline.ts'
@@ -102,24 +101,6 @@ export async function acceptanceOperatorAttempt(id: string, action: string, exec
     if (!(error instanceof AcceptanceControlError)) throw error
     return { id, action, done: false as const, error: error.message }
   }
-}
-
-export function acceptanceWorkApproval(input: unknown, detail: unknown) {
-  const parsed = z.object({
-    key: z.string().min(1).max(600), proposalId: z.string().uuid(), revision: z.number().int().positive(),
-  }).strict().safeParse(input)
-  if (!parsed.success) throw new AcceptanceControlError('Operator Work approval requires an exact key, proposalId and positive revision')
-  const target = parsed.data
-  const { records: [record] } = z.object({
-    records: z.array(workRecordSchema.extend({ authority: z.object({ active: z.boolean() }).passthrough() }).passthrough()).length(1),
-  }).parse(detail)
-  const proposal = record.proposals?.find(item => item.id === target.proposalId)
-  if (record.key !== target.key || record.revision !== target.revision || !record.authority.active
-    || !proposal || proposal.status !== 'pending' || proposal.baseRevision !== target.revision
-    || proposal.assignmentRevision !== record.workflow?.assignmentRevision) {
-    throw new AcceptanceControlError('Operator Work review is stale or unavailable; inspect the exact current proposal before approving')
-  }
-  return { action: 'apply_proposal' as const, key: target.key, revision: target.revision, data: { proposalId: target.proposalId } }
 }
 
 const acceptanceTaskSchema = z.object({
@@ -406,10 +387,10 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
       await artifact('progress.json', { state, taskId: task!.id, contextId: task!.contextId, status: task!.status, calls, maxCalls,
         deadlineAt: timeline.snapshot().deadlineAt, timeline: timeline.snapshot(), apps: apps.length,
         blockedWork: work.items.filter(item => item.status === 'blocked').length,
-        pendingWorkProposals: work.items.reduce((total, item) => total + item.proposals, 0) })
+        pendingWorkReviews: work.items.filter(item => item.contextChanged || item.notes?.attention && !item.notes.attention.reviewed).length })
       const controlPath = join(output, 'control.json')
       let control: { id: string; action: string; appId?: string; revision?: string; text?: string;
-        workKey?: string; workRevision?: number; proposalId?: string } | undefined
+        workKey?: string } | undefined
       try { control = JSON.parse(await readFile(controlPath, 'utf8')) }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       if (control && !commands.has(control.id)) {
@@ -448,17 +429,14 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
             }
           } else if (control.action === 'snapshot') {
             await exportAcceptanceBundles(project.home, output)
-          } else if (control.action === 'review-work' || control.action === 'approve-work') {
+          } else if (control.action === 'review-work') {
             if (!control.workKey || control.workKey.length > 600) throw new AcceptanceControlError('Operator Work review requires an exact workKey')
             const key = control.workKey
             const path = `/work/${encodeURIComponent(key)}`
             const detail = await ownerRequest(path)
             await artifact('work-review.json', detail)
-            if (control.action === 'approve-work') {
-              const request = acceptanceWorkApproval({ key, revision: control.workRevision, proposalId: control.proposalId }, detail)
-              const applied = await ownerRequest(path, request)
-              await artifact('work-approval.json', { controlId: control.id, request, result: applied, approvedAt: new Date().toISOString() })
-            }
+          } else if (control.action === 'approve-work') {
+            throw new AcceptanceControlError('Work notes no longer require approval. Correct goals in the Project canvas; app authorization still requires approve with the exact app ID and revision.')
           } else if (control.action === 'open') {
             const opened = await owner(`/${control.appId}/open`, {})
             // A launch ticket is intentionally kept out of logs/reports; only this private operator handoff contains it.

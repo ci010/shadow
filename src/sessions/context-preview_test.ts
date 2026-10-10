@@ -109,7 +109,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             assert.equal(ctx.workRequired, false)
             if (role === 'a2a-text') assert.deepEqual(body.tools, [])
             if (role === 'general') {
-              assert.match(body.systemPrompt, /### Optional Work/)
+              assert.match(body.systemPrompt, /### Shared work notes/)
               assert(body.tools.some((tool: { name: string }) => tool.name === 'work'))
             }
             if (role === 'reflector') assert.equal(ctx.mode, 'task')
@@ -137,8 +137,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           workPolicy: { mode: 'required', controllerSessionId: sessionId, keys: [`topic:${sessionId}`] },
         })
         const real = await f.sessions.getContext({ sessionId, preview: true })
-        assert.match(real.systemPrompt, /### Work alignment/)
-        assert.equal(f.contexts.at(-1)?.workRequired, true)
+        assert.match(real.systemPrompt, /### Shared work notes/)
+        assert.equal(f.contexts.at(-1)?.workRequired, false)
         assert.equal(f.contexts.at(-1)?.defaultExecShell, 'powershell')
         assert(real.tools.some(tool => tool.name === 'work'))
         const states = await store.listAllStates()
@@ -157,14 +157,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal(ctx.workRequired, false)
           assert.equal(ctx.defaultExecShell, undefined)
           if (role === 'a2a-text') assert.deepEqual(body.tools, [])
-          else assert.match(body.systemPrompt, /### Optional Work/)
+          else assert.match(body.systemPrompt, /### Shared work notes/)
         }
         activeLookup.mock.restore()
         assert.deepEqual(f.policyLookups, [])
         assert.deepEqual(await store.listAllStates(), states)
-        assert.equal(f.alignment.required(sessionId), true)
+        assert.equal(f.alignment.required(sessionId), false)
         const stillReal = await f.sessions.getContext({ sessionId, preview: true })
-        assert.match(stillReal.systemPrompt, /### Work alignment/)
+        assert.match(stillReal.systemPrompt, /### Shared work notes/)
         assert.equal(f.contexts.at(-1)?.sessionId, sessionId)
       } finally { await f.close() }
     })

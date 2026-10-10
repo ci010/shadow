@@ -7,8 +7,8 @@
     </header>
     <p class="decision-question selectable-text">{{ decision.question }}</p>
     <p v-if="decision.reportingSessionId" class="decision-note">{{ t('Reporting responsibility:') }} {{ decision.reportingSessionId }} {{ t('· not answer authority') }}</p>
+    <WorkContextPath v-if="decision.workContext" :context="decision.workContext" />
     <DecisionBrief v-if="decision.brief" :brief="decision.brief" @inspect="emit('inspect', $event)" />
-    <p v-else class="decision-note">{{ t('This older record has no structured brief. Do not infer missing evidence or user constraints.') }}</p>
     <p v-if="decision.invalidated" class="decision-warning" role="alert">{{ t('Basis changed:') }} {{ decision.invalidated.reason }}{{ t('. Any saved answer is historical, not approval for a changed scope.') }}</p>
     <ol v-if="decision.options.length" class="decision-options selectable-text">
       <li v-for="option in decision.options" :key="option" :class="{ chosen: decision.answer?.option === option && !decision.answer.custom }">
@@ -59,6 +59,7 @@ import YieldSource from './YieldSource.vue'
 import DecisionGraph from './DecisionGraph.vue'
 import DecisionDiscussion from './DecisionDiscussion.vue'
 import DecisionBrief from './DecisionBrief.vue'
+import WorkContextPath from './WorkContextPath.vue'
 import MessageAttachments from './MessageAttachments.vue'
 import type { SessionDetails } from '../session-details.ts'
 import type { ImagePreview } from '../image-viewer.ts'
@@ -68,7 +69,7 @@ const emit = defineEmits<{ interact: []; inspect: [sessionId: string]; updated: 
 </script>
 
 <style scoped>
-.yield-decision { width: min(100%, 760px); min-width: 0; padding: 12px 16px; border: 1px solid var(--c-border); border-left: 3px solid var(--c-purple); background: var(--c-bg-card); color: var(--c-text); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.yield-decision { width: min(100%, 760px); min-width: 0; padding: 12px 16px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .yield-decision.waiting-user { border-color: var(--c-warn); background: var(--c-warn-bg); }
 .yield-decision.waiting-parent { border-left-color: var(--c-warn); }
 header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--c-purple); }

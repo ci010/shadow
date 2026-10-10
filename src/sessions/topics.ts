@@ -242,12 +242,6 @@ export class TopicService {
     const state = this.options.sessions.getSessionState(sessionId)
     if (!state || state.topicRequestHash !== hash) throw new TopicError('requestId is already used by another session creation request.', 409)
     this.options.sessions.assertFolderAccess(sessionId)
-    if (state.workPolicy?.mode === 'required') {
-      const alignment = this.options.sessions.alignment
-      if (!alignment || state.workPolicy.keys.some(key => alignment.store.workAuthority(alignment.get(key).subject).executor !== sessionId)) {
-        throw new TopicError('Managed session creation is incomplete: inspect and finish its Work assignment before sending a kickoff. Initial messages are not replayed.', 409)
-      }
-    }
     return { ...topicSummary(this.options.projectId, state), initialMessageStatus: hasInitialMessage ? 'not_replayed' as const : 'not_requested' as const }
   }
 }

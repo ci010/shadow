@@ -2,7 +2,6 @@ import { z } from 'zod'
 
 export const workBindingSchema = z.object({
   key: z.string().trim().min(1).max(600),
-  revision: z.number().int().positive(),
 }).strict()
 
 const policySchema = z.discriminatedUnion('mode', [

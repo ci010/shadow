@@ -160,16 +160,18 @@ test('general root direct guideline stays within its character budget', async ()
   assert(prompt.length <= 12500, `guideline grew to ${prompt.length} characters`)
 })
 
-test('ordinary and managed sessions receive different Work instructions without losing coordination tools', async () => {
+test('ordinary and formerly managed sessions receive the same optional notebook guidance', async () => {
   const general = (await getBuiltinAgentTypes()).find(agent => agent.name === 'general')!
   const provider = guidelineProvider()
   const ordinary = (await provider.getPromptSection({ ...makeContext(general, false), workRequired: false }))!
   assert.match(ordinary, /Ordinary requests execute directly/)
   assert.doesNotMatch(ordinary, /### Work alignment|Adopt bound Work before effects/)
-  assert.match(ordinary, /coordinate constrained peers without constraining yourself/)
+  assert.match(ordinary, /### Shared work notes/)
+  assert.match(ordinary, /No adopt\/checkpoint\/settle protocol/)
+  assert.match(ordinary, /decisionKey.*ancestor this choice changes/)
+  assert.match(ordinary, /not every request or tool call|not every action/)
   const managed = (await provider.getPromptSection({ ...makeContext(general, false), workRequired: true }))!
-  assert.match(managed, /Adopt bound Work before effects/)
-  assert.doesNotMatch(managed, /### Optional Work/)
+  assert.equal(managed, ordinary)
   const length = managed.replace(/\r\n/g, '\n').length
   assert(length <= 12500, `managed guideline grew to ${length} characters`)
 })

@@ -62,16 +62,16 @@ devices/translation quality unverified
 unless actually exercised. Do not extract browser access tokens. Stop the app
 and close its browser when done. A reported/stale event is not a new test request;
 fixed code needs republication and another owner review.
-While awaiting review, keep the relevant Work step blocked rather than declaring
-the entire delivery done. A testing event does not unpause Work or settle unknown
-effects; resolve those through the existing Work controls.
+While awaiting owner review, do not declare the entire delivery done. If using
+shared notes, record what is waiting there once. A testing event is not permission
+to repeat uncertain effects; inspect them through the owning operation's controls.
 
 ## From a short goal to a working app
 
 The user supplies an outcome, not an engineering specification. Identify the
 inputs, useful outputs and repeat-use workflow from their request; retain every
 requested direction or action. Briefly explain the proposed user experience in
-ordinary language. Use the existing Work contract to distinguish user constraints,
+ordinary language. Use an optional shared note to distinguish user constraints,
 observed facts and your implementation assumptions; do not invent human approval.
 Do not require the user to write a manifest, choose libraries or enumerate tests.
 
@@ -123,17 +123,16 @@ On feedback, retain earlier answers, constraints and verified behavior. Turn
 comments such as "make it simpler" into user-facing improvements; investigate
 bugs yourself instead of demanding implementation instructions. Update the
 existing app/revision through the normal review path, not a new app identity.
-Read the current Work definition before claiming feedback changes the goal.
+Read any linked goal before claiming feedback changes the outcome.
 Your earlier implementation assumption is not a user requirement. If the goal,
 acceptance and authorization stay unchanged, retire that assumption and update
-your approach through executor adoption at the existing revision; do not create
-an unnecessary goal-review gate. If feedback adds in-scope acceptance to your own
-agent interpretation, include missing criteria in `adopt` data.acceptance; this
-versions the definition as well as your understanding. Adoption prose alone does
-not update the published acceptance baseline. A current authenticated owner request may append
-acceptance through `work update` with `requestQuote`, preserving existing scope
-and boundaries. Other goal changes and all permission changes retain their normal
-review; never relabel them to bypass it.
+your local plan through `work update`; do not create an unnecessary review gate.
+The coordinator maintains goal/acceptance changes with the current note version;
+agent revisions of a human goal need a genuine current requestQuote.
+Publication separately snapshots the focused goal path's acceptance criteria.
+Later note edits do not rewrite that published baseline or grant permission.
+Material unresolved choices use contextual ask; app execution and permission
+changes retain their dedicated owner review.
 Reconsider only choices whose premises changed. This is guided construction,
 not repeated requests for the user to repair your engineering specification.
 

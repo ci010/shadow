@@ -631,7 +631,11 @@ export async function createProjectRuntime(
   const appAuthorFinished = bus.on('session.turn.finished', fact => microApps.acceptance.authorTurn(fact, fact.status))
   cleanup.push(() => { bus.off(appAuthorStarted); bus.off(appAuthorFinished) })
   cleanup.push(() => microApps.shutdown())
-  importTool.registerBuiltin('micro_app', new MicroAppTool(microApps, sessionId => { ioLocations(sessionId) }, importTool))
+  importTool.registerBuiltin('micro_app', new MicroAppTool(microApps, sessionId => { ioLocations(sessionId) }, importTool,
+    sessionId => {
+      if (!sessions.alignment) throw new Error('Work alignment is unavailable')
+      return sessions.alignment.operationBasis(sessionId)
+    }))
   microAppsPlugin(microApps, dependencies.authorize)(app)
   importTool.registerBuiltin('audio_cpp', new AudioCppTool(new AudioCppService(workspace), project.id, workspace))
   importTool.registerBuiltin('diffusion_cpp', new DiffusionCppTool(

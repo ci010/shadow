@@ -146,7 +146,7 @@ console.log(`Found ${n} TODOs`)
 
 - All calls share the single `exec` timeout
 - A normal outer exec exit does not prove its internal tools succeeded: check returned Error strings and `isError`, and propagate failures.
-- Direct-only tools (including blocking subagent calls and decisions) remain direct-only. Composition cannot cross required Work adoption/fresh-inference or approval boundaries.
+- Direct-only tools (including blocking subagent calls and decisions) remain direct-only. Composition cannot bypass tool roles, capability checks or dedicated approval boundaries. Work notes are optional context, not execution admission.
 - For very long-running parallel tasks, consider `subagent` instead
 - Env vars from workspace `.env` are auto-injected into the subprocess
 - Use Node.js built-ins (`node:fs/promises`, `node:path`, etc.) for runtime APIs.

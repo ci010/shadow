@@ -8,7 +8,7 @@ import { YieldError } from './yield.ts'
 import { answerMediaSchema } from './answer-media.ts'
 import { validateAnswerUploads } from './answer-attachments.ts'
 import { z } from 'zod'
-import { WorkConflict, workChangeSchema, workKey } from '../initiatives/work-contract.ts'
+import { WorkConflict } from '../initiatives/work-contract.ts'
 import { applyHumanWorkAction, humanWorkActionSchema } from '../projects/work-routes.ts'
 import { parseYieldReference } from './yield-contract.ts'
 import { SessionResumeError } from './recovery.ts'
@@ -397,7 +397,7 @@ export function sessionsApiPlugin(
       const id = c.req.param('key')
       if (!sessions.getSessionState(id)) return c.json({ error: 'session_not_found' }, 404)
       sessions.assertFolderAccess(id)
-      return c.json(sessions.alignment.context(id, undefined, c.req.query('history') !== '0'))
+      return c.json(sessions.alignment.context(id, undefined, c.req.query('history') === '1'))
     })
 
     app.post('/api/sessions/:key/work', async c => {
@@ -408,22 +408,11 @@ export function sessionsApiPlugin(
       try {
         const body = humanWorkActionSchema.parse(await c.req.json())
         const visible = sessions.alignment.records(id)
-        if (body.action === 'policy') {
-          const data = z.object({ mode: z.enum(['optional', 'required']), sessionId: z.string().optional() }).strict().parse(body.data)
-          if (data.sessionId !== undefined && data.sessionId !== id) return c.json({ error: 'forbidden' }, 403)
-          if (data.mode === 'required' && !visible.some(record => record.key === body.key)) return c.json({ error: 'forbidden' }, 403)
-          body.data = { ...data, sessionId: id }
-        } else if (body.action === 'create') {
-          const data = z.object({ title: z.string(), parentKey: z.string().optional(), definition: z.unknown(), reason: z.string() }).strict().parse(body.data)
+        if (body.action === 'create') {
+          const data = z.object({ title: z.string(), parentKey: z.string().optional(), definition: z.unknown(),
+            notes: z.unknown().optional(), reason: z.string().optional() }).strict().parse(body.data)
           if (data.parentKey && !visible.some(record => record.key === data.parentKey)) return c.json({ error: 'forbidden' }, 403)
           body.data = { ...data, assignee: id }
-        } else if (body.action === 'update' && !body.key && !sessions.alignment.store.unifiedWork) {
-          const change = workChangeSchema.parse(body.data)
-          const key = workKey(change.subject)
-          const authority = sessions.alignment.store.workAuthority(change.subject)
-          if (!visible.some(record => record.key === key) && authority.manager !== id && authority.executor !== id) {
-            return c.json({ error: 'forbidden' }, 403)
-          }
         } else if (!visible.some(record => record.key === body.key)) return c.json({ error: 'forbidden' }, 403)
         await applyHumanWorkAction(sessions, body, c.req.raw.signal)
         return c.json(sessions.alignment.context(id))

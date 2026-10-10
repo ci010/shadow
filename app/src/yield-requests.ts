@@ -69,6 +69,7 @@ export function useYieldRequest(source: () => YieldSource) {
   let write: AbortController | undefined
   let interval: ReturnType<typeof setInterval> | undefined
   let generation = 0
+  let draftRequestId: string | undefined
   let answeredId: string | undefined
   let answerError = false
 
@@ -98,13 +99,14 @@ export function useYieldRequest(source: () => YieldSource) {
       const next = source().expectedRequestId && received?.id !== source().expectedRequestId ? null : received
       if (current !== generation || controller.signal.aborted) return
       if (next && next.id === answeredId) return
-      const changed = next?.id !== request.value?.id
+      const changed = next?.id !== draftRequestId
       if (changed) {
         selected.value = next && !isInputRequest(next) ? next.defaultOption : ''
         customMode.value = !!next && isInputRequest(next)
         customText.value = ''
         answerError = false
       }
+      draftRequestId = next?.id
       request.value = next
       if (!answerError) error.value = ''
     } catch (cause) {
@@ -167,6 +169,7 @@ export function useYieldRequest(source: () => YieldSource) {
         throw new Error(t('The server did not confirm your answer. Reload the question before trying again.'))
       }
       answeredId = question.id
+      draftRequestId = undefined
       request.value = null
       selected.value = ''
       customMode.value = false
@@ -187,15 +190,19 @@ export function useYieldRequest(source: () => YieldSource) {
     }
   }
 
-  watch([() => source().apiBase, () => source().sessionId, () => source().active, () => source().stage === 'waiting', () => source().expectedRequestId], () => {
+  watch([() => source().apiBase, () => source().sessionId, () => source().active, () => source().stage === 'waiting', () => source().expectedRequestId], ([apiBase, sessionId, active, waiting, expectedId], previous) => {
+    const preserveDraft = waiting && previous?.[3] && apiBase === previous?.[0]
+      && sessionId === previous?.[1] && expectedId === previous?.[4]
     stopRequests()
     request.value = null
-    selected.value = error.value = ''
-    customMode.value = false
-    customText.value = ''
-    answeredId = undefined
-    answerError = false
-    if (!source().active || !source().sessionId || source().stage !== 'waiting') return
+    if (!preserveDraft) {
+      selected.value = error.value = ''
+      customMode.value = false
+      customText.value = ''
+      draftRequestId = answeredId = undefined
+      answerError = false
+    }
+    if (!active || !sessionId || !waiting) return
     now.value = Date.now()
     void refresh()
     interval = setInterval(() => { now.value = Date.now(); void refresh() }, 1500)

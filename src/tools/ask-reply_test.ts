@@ -149,6 +149,19 @@ test('binary decisions wait for an explicit authorized answer without an artific
   assert.equal(JSON.parse(requireToolText(await waiting)).option, 'No')
 })
 
+test('invalid goal keys cannot silently open an unlinked question', async () => {
+  const { tool, yields, inputs } = fixture()
+  for (const field of ['workKey', 'decisionKey']) {
+    for (const value of ['', ' \n ', 1, null, 'x'.repeat(601)]) {
+      for (const args of [question, { kind: 'input', question: 'Which path?' }]) {
+        await assert.rejects(tool.execute({ ...args, [field]: value }, context('root')), invalid)
+      }
+    }
+  }
+  assert.equal(yields.get('root'), null)
+  assert.equal(inputs.get('root'), null)
+})
+
 test('abort propagates for ask and prevents an aborted parent from answering', async () => {
   const { tool, reply, yields } = fixture()
   const controller = new AbortController()

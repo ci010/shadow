@@ -3,54 +3,25 @@ import { test } from 'node:test'
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { AUDIO_ACCEPTANCE_PROMPT, AcceptanceControlError, acceptanceOperatorAttempt, acceptanceBudgetError, acceptanceCallBudget, acceptanceMessage, acceptanceProviderFailure, acceptanceRuntimeDirectory, acceptanceRuntimeEnv, acceptanceWorkApproval, exportAcceptanceBundles, loadAcceptancePrompt, runAcceptance, writeAcceptanceArtifact } from './microapp-a2a.ts'
+import { AUDIO_ACCEPTANCE_PROMPT, AcceptanceControlError, acceptanceOperatorAttempt, acceptanceBudgetError, acceptanceCallBudget, acceptanceMessage, acceptanceProviderFailure, acceptanceRuntimeDirectory, acceptanceRuntimeEnv, exportAcceptanceBundles, loadAcceptancePrompt, runAcceptance, writeAcceptanceArtifact } from './microapp-a2a.ts'
 import { CopilotProvider } from '../src/providers/copilot.ts'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
 import { MicroAppStore, bundleRevision } from '../src/microapps/store.ts'
 
 test('operator rejections are explicit recoverable results, without retrying or swallowing uncertain failures', async () => {
   let calls = 0
-  const result = await acceptanceOperatorAttempt('review-1', 'approve-work', async () => {
+  const result = await acceptanceOperatorAttempt('review-1', 'approve', async () => {
     calls++
-    throw new AcceptanceControlError('Stale proposal; inspect again')
+    throw new AcceptanceControlError('Stale app revision; inspect again')
   })
-  assert.deepEqual(result, { id: 'review-1', action: 'approve-work', done: false, error: 'Stale proposal; inspect again' })
+  assert.deepEqual(result, { id: 'review-1', action: 'approve', done: false, error: 'Stale app revision; inspect again' })
   assert.equal(calls, 1)
   assert.deepEqual(await acceptanceOperatorAttempt('review-2', 'review-work', async () => { calls++ }),
     { id: 'review-2', action: 'review-work', done: true })
   for (const error of [new TypeError('fetch failed'), new Error('Invalid response'), new DOMException('Cancelled', 'AbortError')]) {
-    await assert.rejects(acceptanceOperatorAttempt('uncertain', 'approve-work', async () => { calls++; throw error }), actual => actual === error)
+    await assert.rejects(acceptanceOperatorAttempt('uncertain', 'approve', async () => { calls++; throw error }), actual => actual === error)
   }
   assert.equal(calls, 5)
-})
-
-test('operator Work approval binds an exact pending revision and assignment, not A2A text or a broad approval', () => {
-  const id = randomUUID(), key = `work:${id}`, proposalId = randomUUID()
-  const definition = { objective: 'Add a confirmation button', acceptance: ['Cancel preserves the original note'], boundaries: ['No new access'], evidence: [] }
-  const record = {
-    key, subject: { kind: 'work', id }, revision: 1, sequence: 3, definition, origin: 'agent_interpretation',
-    changedBy: 'a2a:fixture', changedAt: new Date().toISOString(), change: 'understanding', reason: 'Synthetic goal', paused: false,
-    workflow: { title: 'Note app', manager: 'a2a:fixture', assignee: 'a2a:fixture', assignmentRevision: 1, status: 'pending', dependencies: [] },
-    proposals: [{ id: proposalId, baseRevision: 1, assignmentRevision: 1, change: 'goal', reason: 'Explicit requested refinement', definition, paused: false, status: 'pending' }],
-    authority: { active: true, manager: 'a2a:fixture', executor: 'a2a:fixture' }, history: [],
-  }
-  const target = { key, proposalId, revision: 1 }, detail = { records: [record] }
-  assert.deepEqual(acceptanceWorkApproval(target, detail), { action: 'apply_proposal', key, revision: 1, data: { proposalId } })
-  for (const wrong of [{ ...target, key: `work:${randomUUID()}` }, { ...target, proposalId: randomUUID() }, { ...target, revision: 2 }]) {
-    assert.throws(() => acceptanceWorkApproval(wrong, detail), /stale or unavailable/)
-  }
-  for (const changed of [
-    { ...record, authority: { ...record.authority, active: false } },
-    { ...record, workflow: { ...record.workflow, assignmentRevision: 2 } },
-    { ...record, proposals: record.proposals.map(proposal => ({ ...proposal, baseRevision: 2 })) },
-    { ...record, proposals: record.proposals.map(proposal => ({ ...proposal, status: 'applied', appliedRevision: 2 })) },
-    { ...record, proposals: record.proposals.map(proposal => ({ ...proposal, status: 'rejected' })) },
-  ]) assert.throws(() => acceptanceWorkApproval(target, { records: [changed] }), /stale or unavailable/)
-  for (const invalid of ['yes', { key }, { key, proposalId }, { ...target, action: 'update' }]) {
-    assert.throws(() => acceptanceWorkApproval(invalid, detail))
-  }
-  assert.throws(() => acceptanceWorkApproval(target, { records: [record, record] }))
-  assert.deepEqual(record.proposals[0].status, 'pending', 'Validation never applies approval itself')
 })
 
 test('focused acceptance budgets can lower but never disable or raise the live call ceiling', () => {

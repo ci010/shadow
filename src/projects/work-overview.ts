@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { workProgressSchema } from '../initiatives/work-contract.ts'
 import { githubSnapshotSchema } from './github/contracts.ts'
+import { workNotesSchema, workDecisionContextSchema } from '../initiatives/work-notes.ts'
 
 const id = z.string().min(1)
 export const githubWorkReferenceSchema = githubSnapshotSchema.pick({
@@ -12,13 +13,25 @@ export const projectWorkItemSchema = z.object({
   blockedReason: id.nullable(),
   manager: id.nullable(), assignee: id.nullable(), paused: z.boolean(), adopted: z.boolean(),
   proposals: z.number().int().nonnegative(), interpretationReview: z.boolean(), changedAt: id,
+  objective: z.string().optional(),
+  origin: z.enum(['human', 'agent_interpretation']).optional(),
+  userQuote: z.string().optional(),
+  notes: workNotesSchema.optional(),
+  contextChanged: z.boolean().optional(),
   github: z.array(githubWorkReferenceSchema).optional(),
 })
 export const projectWorkOverviewSchema = z.object({
   items: z.array(projectWorkItemSchema),
-  sessions: z.array(z.object({ sessionId: id, title: id, assignable: z.boolean() })),
+  sessions: z.array(z.object({
+    sessionId: id, title: id, assignable: z.boolean(),
+    parentSessionId: id.nullable().optional(), lastActivityAt: id.optional(),
+    activity: z.string().optional(),
+    workKey: id.optional(),
+  })),
   requests: z.array(z.object({
     id, sessionId: id, kind: z.enum(['input', 'decision']), question: id, workKeys: z.array(id),
+    recipient: z.enum(['user', 'parent', 'caller']).optional(),
+    context: workDecisionContextSchema.optional(),
   })),
   effects: z.array(z.object({
     id, sessionId: id, tool: id, status: z.enum(['running', 'unknown']), workKeys: z.array(id),

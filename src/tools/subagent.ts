@@ -50,7 +50,7 @@ export class SubagentTool implements Tool {
           'Map of tool name → extra args array. Example: { "chrome-devtools": ["--remote-debugging-port=9223"] }. ' +
           'Use empty array for no extra args: { "cron": [] }.',
       },
-      work: { type: 'object', description: 'Optional {key:string,revision:integer}: exact Work assigned to and adopted by the durable owner. Constrains this execution, not the owner; required parent constraints always inherit.' },
+      work: { type: 'object', description: 'Optional {key:string}: shared note assigned to the durable owner. Links this execution and its questions to that goal; does not require adoption or constrain tools. Omission inherits an unambiguous parent focus.' },
     },
     required: ['description', 'task'],
   }
@@ -177,6 +177,7 @@ export class SubagentTool implements Tool {
       },
     )
 
+    this.sessions.alignment?.linkExecution(sessionId, parentSessionId, work)
     if (mode === 'call') return this.sessions.startCall(sessionId, task, ctx)
     if (task) {
       try {

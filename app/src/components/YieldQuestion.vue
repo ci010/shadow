@@ -1,11 +1,13 @@
 <template>
-  <section v-if="enabled && (request || error)" class="yield-question" :class="{ 'yield-question-custom': customMode }" :aria-label="t('Pending question')">
+  <section v-if="enabled && (request || error)" class="yield-question" :data-request-id="expectedRequestId ?? request?.id"
+    :class="{ 'yield-question-custom': customMode, 'is-embedded': embedded }" :aria-label="t('Pending question')">
     <form v-if="request" @submit.prevent="submit" @keydown="handleKeydown">
       <header class="yield-heading">
         <span>{{ inputQuestion ? t('Input') : t('Decision') }} · {{ request.recipient.kind === 'user' ? t('Needs your reply') : request.recipient.kind === 'parent' ? t('Waiting for parent') : t('Waiting for caller') }}</span>
         <span class="i-lucide-signpost" aria-hidden="true" />
       </header>
       <div class="yield-body">
+        <WorkContextPath v-if="request.workContext" :context="request.workContext" :navigable="workNavigable" @select="emit('work', $event)" />
         <DecisionBrief v-if="decisionRequest?.brief" :brief="decisionRequest.brief" @inspect="emit('inspect', $event)" />
         <section v-if="decisionRequest?.workProposal" class="work-proposal selectable-text" :aria-label="t('Exact proposed work change')">
           <h3>{{ t('Proposed work · v') }}{{ decisionRequest.workProposal.baseRevision }}</h3>
@@ -14,7 +16,7 @@
           <p><strong>{{ t('Acceptance:') }}</strong> {{ decisionRequest.workProposal.definition.acceptance.join('; ') }}</p>
           <p><strong>{{ t('Boundaries:') }}</strong> {{ decisionRequest.workProposal.definition.boundaries.join('; ') || t('Not recorded; no new permission') }}</p>
           <p>{{ decisionRequest.workProposal.reason }}</p>
-          <p class="yield-status">{{ t('One approval applies this exact change. The executor must adopt the new version. A custom answer or timeout does not approve it.') }}</p>
+          <p class="yield-status">{{ t('One approval applies this exact saved change. A custom answer or timeout does not approve it.') }}</p>
         </section>
         <p v-if="decisionRequest?.reportingSessionId" class="yield-status">{{ t('Reporting responsibility:') }} {{ decisionRequest.reportingSessionId }}{{ t('. Answer authority is unchanged.') }}</p>
         <fieldset :disabled="!answerable || busy" :aria-describedby="`${id}-status${request.deadline ? ` ${id}-deadline` : ''}`">
@@ -71,9 +73,10 @@ import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'v
 import { MAX_YIELD_CUSTOM_TEXT_LENGTH, useYieldRequest, yieldDeadlineText, isInputRequest, type AskRequest } from '../yield-requests.ts'
 import DecisionDiscussion from './DecisionDiscussion.vue'
 import DecisionBrief from './DecisionBrief.vue'
+import WorkContextPath from './WorkContextPath.vue'
 
-const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; stage?: string | null; canAnswer: boolean; expectedRequestId?: string; useComposer?: boolean; composerId?: string; composerBusy?: boolean }>()
-const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: AskRequest | null]; inspect: [sessionId: string]; custom: [] }>()
+const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; stage?: string | null; canAnswer: boolean; expectedRequestId?: string; useComposer?: boolean; composerId?: string; composerBusy?: boolean; embedded?: boolean; workNavigable?: boolean }>()
+const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: AskRequest | null]; inspect: [sessionId: string]; custom: []; work: [key: string] }>()
 const id = `yield-${useId()}`
 const documentVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
 const enabled = computed(() => props.active && documentVisible.value)
@@ -142,9 +145,11 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.yield-question { box-sizing: border-box; display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; width: calc(100% - 40px); max-width: 860px; max-height: min(50dvh, 420px); overflow: hidden; margin: 8px auto 0; padding: 16px; border: 1px solid var(--c-border); border-left: 3px solid var(--c-warn); border-radius: 0; background: var(--c-bg-card); color: var(--c-text); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.yield-question { box-sizing: border-box; display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; width: calc(100% - 40px); max-width: 860px; max-height: min(50dvh, 420px); overflow: hidden; margin: 8px auto 0; padding: 16px; border: 1px solid var(--c-border); border-radius: 0; background: var(--c-bg-card); color: var(--c-text); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .yield-question:last-child { margin-bottom: 16px; }
 .yield-question-custom { max-height: min(60dvh, 540px); }
+.yield-question.is-embedded { width: 100%; max-width: none; max-height: none; margin: 18px 0 0; border-left-width: 1px; border-color: var(--c-warn); }
+.yield-question.is-embedded .yield-body { overflow: visible; }
 .yield-question form { display: flex; flex-direction: column; min-height: 0; }
 .yield-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; padding: 0 4px; margin-bottom: 8px; color: var(--c-text-secondary); font-size: 12px; font-weight: 600; }
 .yield-heading > span:last-child { width: 18px; height: 18px; }

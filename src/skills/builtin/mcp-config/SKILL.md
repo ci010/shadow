@@ -88,8 +88,8 @@ all configured entries; use it only when that complete removal is intended.
 Servers default to untrusted hints. A matching `readOnlyOverrides` rule wins,
 including `false`; otherwise `trustReadOnlyHints: true` allows that server's
 `annotations.readOnlyHint` to classify a tool. Missing/untrusted hints remain
-unknown and subject to Work execution checks. Do not enable trust just to bypass
-a paused or completed Work item.
+unknown. Do not enable trust merely to suppress an error or make calls parallel.
+Work notes do not gate execution.
 
 Read the exact indexed `v:tools/<server>/<tool-id>` path for `readOnlyPolicy`
 (`readOnly`, `source`, `fingerprint`). After reviewing behavior and obtaining
@@ -109,8 +109,9 @@ or implementation even if metadata/version is unchanged. Copying metadata or
 trial-running a tool is not verification. Never probe possible writes to establish
 read-only status. Credentials are excluded from public fingerprints.
 
-Confirmed reads bypass only Work admission, not permissions, allowlists,
-cancellation, or remote-workdir restrictions. Unknown or write tools remain gated.
+Confirmed reads may share an execution group; unknown or write tools run in
+order. Classification never bypasses permissions, allowlists, cancellation or
+remote-workdir restrictions.
 
 ### Atomic writes
 

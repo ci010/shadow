@@ -6,7 +6,7 @@ import type { InputRecord } from './input-request.ts'
 import type { SessionState } from './session-store.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 
-function fixture(write?: (record: InputRecord) => Promise<void>) {
+function fixture(write?: (record: InputRecord) => Promise<void>, currentContext?: () => boolean) {
   const states: Record<string, SessionState> = {
     'web:root': { sessionId: 'web:root', segmentIndex: 0, mode: 'session' },
     child: { sessionId: 'child', segmentIndex: 0, mode: 'task', parentSessionId: 'web:root' },
@@ -20,6 +20,7 @@ function fixture(write?: (record: InputRecord) => Promise<void>) {
   let decision = false
   let failDelivery = false
   const inputs = new InputRequests({
+    currentContext,
     getState: id => states[id], assertAccess: () => {}, hasDecision: () => decision,
     timeout: () => timeout, changed: () => {},
     write: async record => { await write?.(record); records.push(structuredClone(record)) },
@@ -31,6 +32,22 @@ function fixture(write?: (record: InputRecord) => Promise<void>) {
   return { inputs, states, records, context, deadline: () => { timeout = 5 }, decision: () => { decision = true },
     failDelivery: () => { failDelivery = true } }
 }
+
+test('input context is revalidated after persistence before any question is delivered', async () => {
+  const saved = Promise.withResolvers<void>()
+  let current = true
+  const f = fixture(async record => { if (!record.answer && !record.closed) await saved.promise }, () => current)
+  const pending = f.inputs.ask('Which release report?', f.context(), { originKey: 'goal', decisionKey: 'goal', path: [
+    { key: 'goal', revision: 1, title: 'Release impact', objective: 'Measure token usage', kind: 'goal', origin: 'human' },
+  ] })
+  const rejected = assert.rejects(pending, /goal path changed while opening/)
+  assert.equal(f.inputs.get('web:root'), null)
+  current = false; saved.resolve()
+  await rejected
+  await f.inputs.settled()
+  assert.equal(f.inputs.get('web:root'), null)
+  assert.equal(f.records.at(-1)?.closed?.status, 'failed')
+})
 
 test('plain input waits, preserves request identity and never produces an approval', async () => {
   const f = fixture()

@@ -25,7 +25,7 @@ const coordinationSchema = z.object({
 export class MessageTool implements Tool {
   readonly name = 'message'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Send to a peer session in this Project. Requests queue without interrupting active work. Routine progress/acknowledgements are archived by default to avoid report loops; attention marks milestones, blockers, decisions or corrections that need a response. Use work for versioned goal changes, not prose-only redirection. A receipt is admission, not adoption/completion/assignment transfer.'
+  readonly description = 'Send to a peer session in this Project when it needs to act differently. Requests queue without interrupting active work. Prefer one shared work note for findings and progress; do not also message the same status. Routine progress/acknowledgements archive by default. attention marks changes needing a response. Goal/rationale changes belong in work, not prose-only redirection. A receipt is admission, not completion, permission or assignment transfer.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {

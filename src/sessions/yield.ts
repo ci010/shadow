@@ -20,6 +20,7 @@ export class YieldError extends Error {
 }
 
 interface YieldManagerDeps {
+  current?: (request: YieldRequest) => boolean
   changed?: (sessionId: string) => void
   assertCanYield?: (id: string) => void
   getState: (id: string) => SessionState | null | undefined
@@ -161,7 +162,10 @@ export class YieldManager {
       const publish = () => {
         if (pending.prepareError) { void this.fail(pending, pending.prepareError); return }
         if (pending.phase === 'closing') return
-        try { ownerOpened?.(snapshot(pending.request)) }
+        try {
+          if (this.deps.current?.(pending.request) === false) throw new YieldError('conflict', 'The goal path changed while opening this question. Re-evaluate its premise.')
+          ownerOpened?.(snapshot(pending.request))
+        }
         catch (error) { void this.fail(pending, error); return }
         pending.phase = 'waiting'
         this.deps.changed?.(sessionId)
@@ -263,6 +267,7 @@ export class YieldManager {
     if (!previous.origin || !this.deps.journal?.replace) throw new YieldError('unavailable', 'Decision revisions require a journal.')
     const next = snapshot({
       ...parseYieldQuestion(question), sources: previous.sources,
+      workContext: previous.workContext, workStamps: previous.workStamps,
       ...(previous.ownerOnly ? { ownerOnly: true as const } : {}),
       brief: question.brief ?? previous.brief, reportingSessionId: previous.reportingSessionId,
       id: randomUUID(), decisionId: previous.decisionId ?? previous.id, sessionId,

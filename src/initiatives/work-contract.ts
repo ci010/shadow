@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { decisionEvidenceSchema, parseDecisionEvidence } from '../sessions/decision-brief.ts'
+import { workNotesSchema } from './work-notes.ts'
 
 const text = z.string().trim().min(1).max(2000)
 const longText = z.string().trim().min(1).max(4000)
@@ -15,7 +16,7 @@ export type WorkSubject = z.infer<typeof workSubjectSchema>
 export type WorkActor = { kind: 'user' } | { kind: 'session'; sessionId: string }
 export const workDefinitionSchema = z.object({
   objective: longText,
-  acceptance: z.array(longText).min(1).max(12), boundaries: z.array(longText).max(12),
+  acceptance: z.array(longText).max(12).default([]), boundaries: z.array(longText).max(12).default([]),
   evidence: z.array(z.unknown().transform((value, ctx) => {
     try { return parseDecisionEvidence(value, ctx.path.join('.')) }
     catch (error) {
@@ -99,6 +100,7 @@ export const workRecordSchema = z.object({
   successors: z.array(z.object({ sessionId: z.string().min(1), fromSessionId: z.string().min(1) }).strict()).max(100).optional(),
   workflow: workWorkflowSchema.optional(),
   proposals: z.array(workProposalSchema).max(100).optional(),
+  notes: workNotesSchema.optional(),
 }).strict()
 export type WorkRecord = z.infer<typeof workRecordSchema>
 export interface WorkStamp { key: string; revision: number; adoptionId?: string; assignmentRevision?: number }

@@ -365,7 +365,7 @@ export abstract class BaseSession {
           throw new Error('The bounded task work agreement changed during execution. Its partial results are historical, not completion of the new assignment.')
         }
         await this.appendMessages(llm, { role: 'user', name: '__work_realignment__',
-          content: 'The work agreement changed during the previous inference. Re-evaluate against current work context; adopt it or ask for clarification before further execution. The previous response did not complete current work.' })
+          content: 'The referenced goal changed during the previous inference. Re-evaluate the affected plan against its current context. The previous response is not evidence of completing the revised goal.' })
         continue
       }
       if (response.content || done) {

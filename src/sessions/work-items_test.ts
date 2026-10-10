@@ -12,6 +12,7 @@ const definition = { objective: 'Deliver both protocols', acceptance: ['Inbound 
 const adopt = { understanding: 'Both directions', stop: [], retain: [], next: ['Implement and verify'] }
 const checkpoint = { completed: [], artifacts: [], inFlight: [], unknown: [], retired: [] }
 const actor = (sessionId: string) => ({ kind: 'session' as const, sessionId })
+const reference = (record: WorkRecord) => [{ key: record.key, revision: record.revision, assignmentRevision: record.workflow?.assignmentRevision }]
 
 test('adoption defaults only empty inventories, never understanding, next steps or malformed values', () => {
   assert.deepEqual(workAdoptionSchema.parse({ understanding: 'Current scope', next: ['Verify'] }),
@@ -32,7 +33,8 @@ function setup(home: string) {
   const alignment = new WorkAlignment(store, { state: id => states.get(id), evidence: async () => {},
     changed: async () => { changed++ }, fresh: async () => {}, successor: async () => 'peer' })
   const create = async (title: string, assignee: string | null = 'owner', parentKey?: string) =>
-    await alignment.execute(actor('owner'), 'create', undefined, undefined, { title, assignee, parentKey, definition, reason: 'User requested both protocols' }) as WorkRecord
+    await alignment.execute(actor('owner'), 'create', undefined, undefined, { title, assignee, parentKey, definition, reason: 'User requested both protocols',
+      notes: { kind: 'task', ...(parentKey ? { relation: { kind: 'supports', reason: 'Part of the shared outcome' } } : {}) } }) as WorkRecord
   const manage = async (id: string, key: string, action: string, data: object) => {
     const record = alignment.get(key)
     return alignment.execute(actor(id), action, key, record.revision, { expectedSequence: record.sequence, ...data })
@@ -109,7 +111,7 @@ test('one work item survives release and reassignment; stale generations and tak
   try {
     const work = await f.create('Protocol')
     await f.alignment.execute(actor('owner'), 'adopt', work.key, 1, adopt)
-    const old = f.alignment.snapshot('owner')
+    const old = reference(f.alignment.get(work.key))
     await assert.rejects(f.manage('peer', work.key, 'assign', { assignee: null, reason: 'Take over' }), /cannot be stolen/)
     await assert.rejects(f.manage('owner', work.key, 'assign', { assignee: null, reason: 'Hand off' }), /checkpoint/)
     await f.alignment.execute(actor('owner'), 'checkpoint', work.key, 1, checkpoint)
@@ -134,7 +136,7 @@ test('adoption atomically versions additive acceptance without duplicating crite
   try {
     const original = await f.create('Reusable translator')
     await f.alignment.execute(actor('owner'), 'adopt', original.key, 1, adopt)
-    const stale = f.alignment.snapshot('owner')
+    const stale = reference(f.alignment.get(original.key))
     await f.alignment.execute(actor('owner'), 'checkpoint', original.key, 1, checkpoint)
     const before = f.alignment.get(original.key)
     const updated = await f.alignment.execute(actor('owner'), 'adopt', original.key, 1, {
@@ -150,7 +152,7 @@ test('adoption atomically versions additive acceptance without duplicating crite
     assert.equal(updated.adoption!.revision, 2)
     assert.equal(updated.checkpoint, undefined)
     assert.equal(f.changed(), 2, 'Semantic revision notifies observers')
-    assert.throws(() => f.alignment.assertCurrent(stale, 'owner'), /basis changed/)
+    assert.throws(() => f.alignment.assertCurrent(stale, 'owner'), /goal or assignment changed/)
     f.alignment.assertCurrent(f.alignment.snapshot('owner'), 'owner')
     const same = await f.alignment.execute(actor('owner'), 'adopt', original.key, 2,
       { ...adopt, acceptance: updated.definition.acceptance }) as WorkRecord
@@ -194,7 +196,7 @@ test('Initiative progress is derived; dependencies and parent cycles cannot bypa
     await assert.rejects(f.manage('owner', first.key, 'dependencies', { keys: [second.key] }), /cycle/)
     await assert.rejects(f.manage('owner', first.key, 'dependencies', { keys: [root.key] }), /cycle/)
     await f.alignment.execute(actor('peer'), 'adopt', second.key, 1, adopt)
-    assert.throws(() => f.alignment.assertCurrent(f.alignment.snapshot('peer'), 'peer'), /unfinished dependencies/)
+    assert.doesNotThrow(() => f.alignment.assertCurrent(f.alignment.snapshot('peer'), 'peer'), 'Dependency notes do not fence ordinary execution')
     await assert.rejects(f.manage('owner', root.key, 'progress', { status: 'done', result: { summary: 'Not verified', evidence: [] } }), /Adopt/)
     await f.alignment.execute(actor('owner'), 'adopt', root.key, 1, adopt)
     await assert.rejects(f.alignment.execute({ kind: 'user' }, 'progress', root.key, 1,
@@ -297,7 +299,7 @@ test('custom answers affect only their bound work, including a different assigne
     const a = await f.create('A', 'worker'), b = await f.create('B', 'worker')
     for (const item of [a, b]) await f.alignment.execute(actor('worker'), 'adopt', item.key, 1, adopt)
     await f.alignment.execute(actor('worker'), 'select', a.key, 1, {})
-    const stamps = f.alignment.snapshot('worker')
+    const stamps = reference(f.alignment.get(a.key))
     f.alignment.reviewAnswer('owner', 'Correct only A', 'question', stamps)
     assert.equal(f.alignment.get(a.key).adoption, undefined)
     assert(f.alignment.get(b.key).adoption)
@@ -309,7 +311,7 @@ test('owner-directed additions preserve constraints, attribution and revision fe
   try {
     const work = await f.create('Additive follow-up')
     await f.alignment.execute(actor('owner'), 'adopt', work.key, 1, adopt)
-    const stamps = f.alignment.snapshot('owner')
+    const stamps = reference(f.alignment.get(work.key))
     const userInput = { text: 'Also test cancellation.', source: {
       sessionId: 'owner', physicalId: 'owner.0', kind: 'user' as const, id: 'current-request',
     } }
@@ -374,7 +376,7 @@ test('an additive follow-up cannot apply a pending proposal or relabel a boundar
   } finally { f.store.close() }
 }))
 
-test('legacy whole-work blockers and new step waits retain their meaning after reload', async () => withTempWorkspace(async home => {
+test('historical blocker metadata remains readable after reload without reintroducing execution gates', async () => withTempWorkspace(async home => {
   const f = setup(home)
   try {
     const legacy = await f.create('Legacy blocker'), step = await f.create('Step wait')
@@ -391,7 +393,8 @@ test('legacy whole-work blockers and new step waits retain their meaning after r
       const alignment = new WorkAlignment(reopened, { state: id => f.states.get(id), evidence: async () => {},
         changed: async () => {}, fresh: async () => {}, successor: async () => undefined })
       await alignment.execute(actor('owner'), 'select', legacy.key, 1, {})
-      assert.throws(() => alignment.assertCurrent(alignment.snapshot('owner'), 'owner'), /is blocked/)
+      assert.doesNotThrow(() => alignment.assertCurrent(alignment.snapshot('owner'), 'owner'))
+      assert.equal(alignment.get(legacy.key).workflow?.status, 'blocked')
       await alignment.execute(actor('owner'), 'select', step.key, 1, {})
       alignment.assertCurrent(alignment.snapshot('owner'), 'owner')
       assert.equal(alignment.get(step.key).workflow?.status, 'blocked')

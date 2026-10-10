@@ -124,7 +124,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "exec",
-      "description": "Run a command or script. Use \`shell: \\"node\\"\` for inline TypeScript with tool access.",
+      "description": "Run a command or script. Use \`shell: \\"node\\"\` for inline TypeScript with tool access and infer() for bounded semantic computation; see node-scripting.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -162,7 +162,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "work",
-      "description": "Manage work definitions, assignments, dependencies and progress. context returns full state; data.includeSchema=true adds action schemas (automatic when no work exists). Mutations return compact receipts; use context with key for full definitions. Create only for execution/tracking, not ordinary conversation. Blocked progress defaults to a step wait, not a whole-work stop; use pause for a stop. Record missing in-scope requirements with adopt data.acceptance for your own agent interpretation; this appends acceptance and adopts the new revision without changing boundaries. Human-confirmed changes need update + owner requestQuote or reviewed proposals. Only the assigned executor adopts and reports progress; completion is not acceptance.",
+      "description": "Shared work notes and Project goal map, never a prerequisite for tools. create needs data={title,definition:{objective},notes:{kind}}; child notes need relation={kind:supports|requires|assumption,reason}. update needs key, version and only changed fields: data.notes={summary,plan,next,artifacts,html,attention?}, data.status/blockedReason. Workers update their branch; coordinators maintain goals and causal links. Report meaningful findings once here, not again by message. Only attention wakes a coordinator; routine notes update the dashboard silently. context returns current notes and ancestor paths; data.includeSchema=true adds help. No adopt, policy, checkpoint or per-step bookkeeping. Completion is a reported result, not user acceptance. Ask consequential questions at the affected goal with ask workKey/decisionKey.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -174,29 +174,22 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
               "tree",
               "create",
               "update",
-              "propose",
               "assign",
-              "manage",
-              "progress",
-              "dependencies",
-              "adopt",
-              "checkpoint",
-              "transition",
-              "settle",
+              "review",
               "select"
             ]
           },
           "key": {
             "type": "string",
-            "description": "Work key returned by context."
+            "description": "Stable work key."
           },
-          "revision": {
+          "version": {
             "type": "integer",
-            "description": "Exact current semantic revision for mutations and selection."
+            "description": "Current note version for update, assign or review; returned by reads and writes."
           },
           "data": {
             "type": "object",
-            "description": "Action-specific bounded payload; context data.includeSchema=true returns schemas."
+            "description": "Only action-specific fields. context data.includeSchema=true returns help."
           }
         },
         "required": [
@@ -310,7 +303,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
         "properties": {
           "who": {
             "type": "string",
-            "description": "Entity name — the actor (person, agent, system). Should match a wiki item name."
+            "description": "Actor (person, agent, system). A separate wiki page is not required."
           },
           "what": {
             "type": "string",
@@ -334,6 +327,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           "session": {
             "type": "string",
             "description": "The session this event belongs to (origin/provenance). Defaults to the current session."
+          },
+          "key": {
+            "type": "string",
+            "description": "For learning batches: stable event key, reused on retries (e.g. source message index plus decision name)."
           }
         },
         "required": [
@@ -348,7 +345,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "session",
-      "description": "Create or name durable peer conversations and register local folders. Metadata is for discovery, not a work definition. Creation never creates work or transfers assignments; put requests in initialMessage and manage work with work.",
+      "description": "Create or name durable peer conversations and register folders. Optionally supply work:{key} for an existing unassigned note you coordinate; the host links and assigns it before initialMessage. Work is a shared notebook, not an execution requirement. Keep goals and rationale in the note, and give the peer only the local objective, constraints and stop condition.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -392,6 +389,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "string",
             "description": "Create only: optional kickoff request, with the necessary context and source references."
           },
+          "work": {
+            "type": "object",
+            "description": "Create only: {key:string}, an unassigned note coordinated by this session. Link responsibility and contextual questions before kickoff; no adoption protocol."
+          },
           "path": {
             "type": "string",
             "description": "register_folder only: absolute existing directory on Main. This does not move data or change this chat workdir."
@@ -408,7 +409,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "message",
-      "description": "Send to a peer session in this Project. Requests queue without interrupting active work. Routine progress/acknowledgements are archived by default to avoid report loops; attention marks milestones, blockers, decisions or corrections that need a response. Use work for versioned goal changes, not prose-only redirection. A receipt is admission, not adoption/completion/assignment transfer.",
+      "description": "Send to a peer session in this Project when it needs to act differently. Requests queue without interrupting active work. Prefer one shared work note for findings and progress; do not also message the same status. Routine progress/acknowledgements archive by default. attention marks changes needing a response. Goal/rationale changes belong in work, not prose-only redirection. A receipt is admission, not completion, permission or assignment transfer.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -466,7 +467,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "ask",
-      "description": "Ask and wait for required input. kind=input takes only question and returns text, never permission; an inbound A2A input goes to its authenticated caller. kind=decision requires a brief, options and default_option: read action=context for the schema and genuine source identities. Roots ask humans; children ask their stored parent. approved:false is not an answer: investigate or continue only authorized unaffected work. action=invalidate marks your obsolete decision premise. Use reply to answer a pending request; message/final text does not answer it.",
+      "description": "Ask in the context of the goal, then wait. kind=input returns text, never permission. kind=decision needs question, two options and default_option; brief is optional. Set workKey for where the issue arose and decisionKey for the ancestor it changes; the host attaches the goal path automatically. Phrase the question as an outcome-level choice. Resolve local implementation choices yourself; a blocked approach may be replaced instead of escalated. Roots ask humans, children ask their stored parent. approved:false permits only investigation or authorized unaffected work. Use reply for pending requests; messages do not answer them.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -488,26 +489,17 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             ],
             "description": "Required for ask: decision preserves decision/authority constraints; input requests plain text without granting permission."
           },
-          "proposal": {
-            "type": "object",
-            "description": "Decision only: {key,id} from work propose. The exact saved change is displayed for one human approval; do not supply question/options/default_option for this form.",
-            "properties": {
-              "key": {
-                "type": "string"
-              },
-              "id": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "key",
-              "id"
-            ],
-            "additionalProperties": false
+          "workKey": {
+            "type": "string",
+            "description": "Optional originating work node. Defaults to your focused or only active assignment; never create a work item merely to ask."
+          },
+          "decisionKey": {
+            "type": "string",
+            "description": "Optional ancestor of workKey whose goal or approach this choice changes. The host attaches the complete goal path; explain the choice at this level, not as a raw implementation failure."
           },
           "brief": {
             "type": "object",
-            "description": "Decision only: required structured brief. Call action=context for the compact schema and genuine user-input references."
+            "description": "Optional detailed evidence brief, only when useful. The goal path is attached automatically; do not repeat it here. action=context provides the schema."
           },
           "reconsiders": {
             "type": "object",
@@ -654,6 +646,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           "preload_tools": {
             "type": "object",
             "description": "Tools to preload before the subagent starts. Map of tool name → extra args array. Example: { \\"chrome-devtools\\": [\\"--remote-debugging-port=9223\\"] }. Use empty array for no extra args: { \\"cron\\": [] }."
+          },
+          "work": {
+            "type": "object",
+            "description": "Optional {key:string}: shared note assigned to the durable owner. Links this execution and its questions to that goal; does not require adoption or constrain tools. Omission inherits an unambiguous parent focus."
           }
         },
         "required": [
@@ -773,15 +769,7 @@ log
 
 exports[`tools — tool surface per agent type > soul-reflector 1`] = `
 read
-write
-exec
-work
 search
-continuation
-session
-ask
-reply
-sql
 `;
 
 exports[`tools — tool surface per agent type > sub 1`] = `
