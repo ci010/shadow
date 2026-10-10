@@ -2,9 +2,15 @@
   <Teleport to="body">
     <div class="file-menu-backdrop" @pointerdown.self="close" @contextmenu.prevent.self="close">
       <div ref="menu" class="file-menu" role="menu" :aria-label="t('File actions')" :style="position" @keydown="keydown">
-        <button role="menuitem" :disabled="!paths.full || busy" @click="copyPath(paths.full)">{{ t('Copy full path') }}</button>
-        <button role="menuitem" :disabled="busy" @click="copyPath(paths.relative)">{{ t('Copy relative path') }}</button>
-        <button v-if="canReveal" role="menuitem" :disabled="busy" @click="reveal">{{ t('Show in file explorer') }}</button>
+        <button role="menuitem" aria-keyshortcuts="Control+C" :disabled="!paths.full || busy" @click="copyPath(paths.full)">
+          <span class="i-lucide-copy" aria-hidden="true" /><span>{{ t('Copy full path') }}</span><kbd aria-hidden="true">Ctrl+C</kbd>
+        </button>
+        <button role="menuitem" aria-keyshortcuts="Control+Shift+C" :disabled="busy" @click="copyPath(paths.relative)">
+          <span class="i-lucide-files" aria-hidden="true" /><span>{{ t('Copy relative path') }}</span><kbd aria-hidden="true">Ctrl+Shift+C</kbd>
+        </button>
+        <button v-if="canReveal" role="menuitem" aria-keyshortcuts="Alt+Shift+R" :disabled="busy" @click="reveal">
+          <span class="i-lucide-folder-open" aria-hidden="true" /><span>{{ t('Show in file explorer') }}</span><kbd aria-hidden="true">Alt+Shift+R</kbd>
+        </button>
         <p v-if="error" class="file-menu-error" role="alert">{{ error }}</p>
       </div>
     </div>
@@ -35,13 +41,14 @@ const target = props.request.event.target
 const anchor = target instanceof HTMLElement ? target.closest<HTMLElement>('button, [tabindex]') ?? target : undefined
 function close() { emit('close'); anchor?.focus({ preventScroll: true }) }
 async function copyPath(path: string) {
+  if (!path || busy.value) return
   text.value = path
   revealError.value = ''
   await copy()
   if (!copyError.value) close()
 }
 async function reveal() {
-  if (!desktop || !canReveal.value) return
+  if (!desktop || !canReveal.value || busy.value) return
   revealing.value = true
   revealError.value = ''
   try { await desktop.showInFolder(paths.value.full); close() }
@@ -49,6 +56,18 @@ async function reveal() {
   finally { revealing.value = false }
 }
 function keydown(event: KeyboardEvent) {
+  if (event.defaultPrevented || event.isComposing) return
+  const key = event.key.toLowerCase()
+  const copyShortcut = key === 'c' && event.ctrlKey && !event.altKey && !event.metaKey
+  const revealShortcut = key === 'r' && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey
+  if (copyShortcut || revealShortcut) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.repeat || busy.value) return
+    if (copyShortcut) void copyPath(event.shiftKey ? paths.value.relative : paths.value.full)
+    else void reveal()
+    return
+  }
   if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); close(); return }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
@@ -76,8 +95,11 @@ onUnmounted(() => window.removeEventListener('resize', close))
 
 <style scoped>
 .file-menu-backdrop { position: fixed; inset: 0; z-index: 900; }
-.file-menu { position: fixed; display: flex; flex-direction: column; width: 228px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); }
-.file-menu button { border: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: transparent; color: var(--c-text); font-size: 13px; text-align: left; cursor: pointer; }
+.file-menu { position: fixed; display: flex; flex-direction: column; box-sizing: border-box; width: max-content; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); }
+.file-menu button { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: transparent; color: var(--c-text); font-size: 13px; text-align: left; cursor: pointer; }
+.file-menu button > span:first-child { display: block; width: 16px; height: 16px; color: var(--c-text-secondary); }
+.file-menu button > span:nth-child(2) { overflow-wrap: anywhere; }
+.file-menu kbd { margin-left: 14px; color: var(--c-text-secondary); font: inherit; font-size: 12px; white-space: nowrap; }
 .file-menu button:hover:not(:disabled), .file-menu button:focus-visible { background: var(--c-bg-muted); }
 .file-menu button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .file-menu button:disabled { opacity: 0.5; cursor: default; }

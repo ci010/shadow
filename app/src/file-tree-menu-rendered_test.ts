@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import UnoCSS from 'unocss/vite'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -23,18 +24,22 @@ test('rendered file menus copy paths, gate native reveal, report failures and re
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error',
     cacheDir: resolve(directory, 'vite-cache'), optimizeDeps: { noDiscovery: true },
-    plugins: [vue(), {
+    plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app/unocss.config.ts') }), {
       name: 'file-menu-fixture',
       resolveId: id => id === '/file-menu.ts' ? '\0file-menu' : undefined,
       load(id) {
         if (id !== '\0file-menu') return
         return `import '/src/styles.css';
+          import 'virtual:uno.css';
+          import {setLocalePreference} from '/src/i18n.ts';
           import {createApp,h,ref,shallowRef} from 'vue';
           import Node from '/src/components/files/FileTreeNode.vue';
           import Menu from '/src/components/files/FileTreeContextMenu.vue';
           const request=shallowRef(), workdir=ref({kind:'local',displayPath:'C:\\\\project'});
-          window.fixture={workdir,opened:0};
+          window.fixture={workdir,opened:0,setLocalePreference,copyCalls:0};
           Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{
+            window.fixture.copyCalls++;
+            if(window.fixture.holdCopy) await new Promise(resolve=>window.fixture.releaseCopy=resolve);
             if(window.fixture.failCopy) throw new Error('denied'); window.fixture.copied=text;
           }}});
           createApp({setup:()=>()=>[
@@ -75,11 +80,15 @@ test('rendered file menus copy paths, gate native reveal, report failures and re
         };
         const open=()=>run("document.querySelector('.tree-row').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:innerWidth-2,clientY:innerHeight-2}))");
         const escape=()=>run("document.querySelector('.file-menu').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
+        const shortcut=options=>run("document.activeElement.dispatchEvent(new KeyboardEvent('keydown',"+JSON.stringify({bubbles:true,cancelable:true,...options})+"))");
         try {
           await win.loadURL(${JSON.stringify(url)});
           await wait("!!document.querySelector('.tree-row')");
           await open(); await wait("!!document.querySelector('.file-menu')");
-          assert.deepEqual(await run("Array.from(document.querySelectorAll('.file-menu button'),b=>b.textContent)"),['Copy full path','Copy relative path']);
+          assert.deepEqual(await run("Array.from(document.querySelectorAll('.file-menu button > span:nth-child(2)'),b=>b.textContent)"),['Copy full path','Copy relative path']);
+          assert.deepEqual(await run("Array.from(document.querySelectorAll('.file-menu kbd'),b=>b.textContent)"),['Ctrl+C','Ctrl+Shift+C']);
+          assert.deepEqual(await run("Array.from(document.querySelectorAll('.file-menu button'),b=>b.getAttribute('aria-keyshortcuts'))"),['Control+C','Control+Shift+C']);
+          await wait("Array.from(document.querySelectorAll('.file-menu button > span:first-child'),s=>getComputedStyle(s).maskImage!=='none').every(Boolean)");
           assert.equal(await run("(()=>{const r=document.querySelector('.file-menu').getBoundingClientRect();return r.right<=innerWidth&&r.bottom<=innerHeight})()"),true);
           await run("document.querySelector('.file-menu button').click()");
           await wait("!document.querySelector('.file-menu')");
@@ -90,6 +99,29 @@ test('rendered file menus copy paths, gate native reveal, report failures and re
           await run("document.querySelector('.file-menu').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));document.activeElement.click()");
           await wait("!document.querySelector('.file-menu')");
           assert.equal(await run("fixture.copied"),'src/a.ts');
+          // Shortcuts act on the menu target, independently of the focused item.
+          await open(); await wait("!!document.querySelector('.file-menu')");
+          assert.equal(await shortcut({key:'C',ctrlKey:true,shiftKey:true}),false);
+          await wait("!document.querySelector('.file-menu')");
+          assert.equal(await run("fixture.copied"),'src/a.ts');
+          await run("fixture.holdCopy=true");
+          await open(); await wait("!!document.querySelector('.file-menu')");
+          const calls=await run("fixture.copyCalls");
+          assert.equal(await shortcut({key:'c',ctrlKey:true,altKey:true}),true);
+          assert.equal(await shortcut({key:'c',ctrlKey:true,isComposing:true}),true);
+          await shortcut({key:'c',ctrlKey:true,repeat:true});
+          assert.equal(await run("fixture.copyCalls"),calls);
+          await run("document.querySelectorAll('.file-menu button')[1].focus()");
+          assert.equal(await shortcut({key:'c',ctrlKey:true}),false);
+          await wait("!!fixture.releaseCopy");
+          await shortcut({key:'C',ctrlKey:true,shiftKey:true});
+          assert.equal(await run("fixture.copyCalls"),calls+1);
+          await run("fixture.holdCopy=false;fixture.releaseCopy()");
+          await wait("!document.querySelector('.file-menu')");
+          assert.equal(await run("fixture.copied"),${JSON.stringify('C:\\project\\src\\a.ts')});
+          // No menu means normal copy is left untouched.
+          assert.equal(await shortcut({key:'c',ctrlKey:true}),true);
+          assert.equal(await run("fixture.copyCalls"),calls+1);
           await run("fixture.failCopy=true");
           await open(); await wait("!!document.querySelector('.file-menu')");
           await run("document.querySelector('.file-menu button').click()");
@@ -100,15 +132,42 @@ test('rendered file menus copy paths, gate native reveal, report failures and re
           await run("document.querySelectorAll('.file-menu button')[2].click()");
           await wait("!document.querySelector('.file-menu')");
           assert.equal(await run("fixture.revealed"),${JSON.stringify('C:\\project\\src\\a.ts')});
+          await open(); await wait("document.querySelectorAll('.file-menu button').length===3");
+          assert.equal(await run("document.querySelectorAll('.file-menu kbd')[2].textContent"),'Alt+Shift+R');
+          assert.equal(await run("document.querySelectorAll('.file-menu button')[2].getAttribute('aria-keyshortcuts')"),'Alt+Shift+R');
+          await wait("getComputedStyle(document.querySelector('.i-lucide-folder-open')).maskImage!=='none'");
+          await run("fixture.revealed=undefined");
+          assert.equal(await shortcut({key:'R',altKey:true,shiftKey:true}),false);
+          await wait("!document.querySelector('.file-menu')");
+          assert.equal(await run("fixture.revealed"),${JSON.stringify('C:\\project\\src\\a.ts')});
           await run("fixture.failReveal=true");
           await open(); await wait("document.querySelectorAll('.file-menu button').length===3");
           await run("document.querySelectorAll('.file-menu button')[2].click()");
           await wait("!!document.querySelector('.file-menu [role=alert]')");
           await escape(); await wait("!document.querySelector('.file-menu')");
-          await run("fixture.workdir.value.kind='remote'");
+          await run("fixture.workdir.value.kind='remote';fixture.revealed=undefined");
           await open(); await wait("document.querySelectorAll('.file-menu button').length===2");
+          await shortcut({key:'R',altKey:true,shiftKey:true});
+          assert.equal(await run("fixture.revealed"),undefined);
+          assert.equal(await run("!!document.querySelector('.file-menu')"),true);
           await run("document.querySelector('.file-menu-backdrop').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))");
           await wait("!document.querySelector('.file-menu')");
+          // Missing root disables full-path copying, but relative copying still works.
+          await run("fixture.workdir.value.displayPath='';fixture.copied=undefined");
+          await open(); await wait("!!document.querySelector('.file-menu')");
+          await shortcut({key:'c',ctrlKey:true});
+          assert.equal(await run("fixture.copied"),undefined);
+          assert.equal(await run("document.querySelector('.file-menu button').disabled"),true);
+          await shortcut({key:'C',ctrlKey:true,shiftKey:true});
+          await wait("!document.querySelector('.file-menu')");
+          assert.equal(await run("fixture.copied"),'src/a.ts');
+          // Chinese labels and shortcut hints stay within a narrow viewport.
+          await run("fixture.workdir.value={kind:'local',displayPath:'C:/project'};fixture.setLocalePreference('zh-CN')");
+          win.setContentSize(320,400);
+          await open(); await wait("document.querySelectorAll('.file-menu button').length===3");
+          assert.deepEqual(await run("Array.from(document.querySelectorAll('.file-menu button > span:nth-child(2)'),b=>b.textContent)"),['复制完整路径','复制相对路径','在文件资源管理器中显示']);
+          assert.equal(await run("(()=>{const m=document.querySelector('.file-menu'),r=m.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&m.scrollWidth<=m.clientWidth})()"),true);
+          await escape(); await wait("!document.querySelector('.file-menu')");
           assert.equal(await run("fixture.opened"),0);
           await run("document.querySelector('.tree-row').click()");
           assert.equal(await run("fixture.opened"),1);
