@@ -1,3 +1,5 @@
+import { Agent } from 'undici'
+import { localProxyConfiguration, resolveProxyForUrl } from '../execution/network/proxy.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import type { ExecutionContext } from './context.ts'
 
@@ -71,6 +73,34 @@ interface FirecrawlSearchResponse {
   error?: string
 }
 
+interface FirecrawlFallbackDependencies {
+  hasProxy(url: string, signal: AbortSignal): Promise<boolean>
+  directFetch(url: string, init: RequestInit): Promise<Response>
+}
+
+const firecrawlFallback: FirecrawlFallbackDependencies = {
+  async hasProxy(url, signal) {
+    const configuration = await localProxyConfiguration(signal)
+    return Boolean(await resolveProxyForUrl(configuration, url, signal))
+  },
+  async directFetch(url, init) {
+    const dispatcher = new Agent()
+    try {
+      const response = await fetch(url, { ...init, dispatcher } as RequestInit)
+      // Consume the body before closing the per-request direct connection pool.
+      return new Response(await response.arrayBuffer(), {
+        status: response.status, statusText: response.statusText, headers: response.headers,
+      })
+    } finally {
+      await dispatcher.destroy()
+    }
+  },
+}
+
+function isFirecrawlIpBlock(status: number, error: string): boolean {
+  return status === 403 && /\bIP(?: address)?\b.{0,80}\b(?:suspicious|blocked|blocklisted|blacklisted)\b/i.test(error)
+}
+
 /**
  * Web search backed by the Firecrawl Search API (https://www.firecrawl.dev/).
  * Uses the v2 `/search` endpoint with the `web` source.
@@ -95,7 +125,8 @@ export class FirecrawlSearchTool implements Tool {
 
   private baseUrl: string
 
-  constructor(private apiKey?: string, baseUrl = 'https://api.firecrawl.dev') {
+  constructor(private apiKey?: string, baseUrl = 'https://api.firecrawl.dev',
+    private fallback: FirecrawlFallbackDependencies = firecrawlFallback) {
     this.baseUrl = baseUrl.replace(/\/+$/, '')
   }
 
@@ -111,7 +142,11 @@ export class FirecrawlSearchTool implements Tool {
     // Keyless requests omit Authorization; a key only raises the credit limit.
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
 
-    const res = await fetch(`${this.baseUrl}/v2/search`, {
+    const url = `${this.baseUrl}/v2/search`
+    const signal = context
+      ? AbortSignal.any([context.signal, AbortSignal.timeout(60_000)])
+      : AbortSignal.timeout(60_000)
+    const init: RequestInit = {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -119,10 +154,29 @@ export class FirecrawlSearchTool implements Tool {
         limit: count,
         sources: [{ type: 'web' }],
       }),
-      signal: context
-        ? AbortSignal.any([context.signal, AbortSignal.timeout(60_000)])
-        : AbortSignal.timeout(60_000),
-    })
+      signal,
+    }
+    let res = await fetch(url, init)
+    let directRetry = false
+    if (res.status === 403) {
+      const body = await res.clone().json().catch(() => null) as FirecrawlSearchResponse | null
+      signal.throwIfAborted()
+      if (typeof body?.error === 'string' && isFirecrawlIpBlock(res.status, body.error)) {
+        try {
+          if (await this.fallback.hasProxy(url, signal)) {
+            signal.throwIfAborted()
+            await res.body?.cancel()
+            directRetry = true
+            res = await this.fallback.directFetch(url, init)
+          }
+        } catch {
+          signal.throwIfAborted()
+          return directRetry
+            ? 'Error: Firecrawl proxy IP was blocked; the single direct retry failed. Check direct connectivity or configure FIRECRAWL_API_KEY.'
+            : 'Error: Firecrawl IP was blocked; proxy route could not be resolved, so no direct retry was attempted. Check proxy settings or configure FIRECRAWL_API_KEY.'
+        }
+      }
+    }
 
     if (!res.ok) {
       let detail = ''
@@ -132,8 +186,14 @@ export class FirecrawlSearchTool implements Tool {
       } catch {
         // non-JSON error body
       }
+      if (directRetry) {
+        return `Error: Firecrawl direct retry returned ${res.status} after the proxy IP was blocked${detail}. Check direct connectivity or configure FIRECRAWL_API_KEY.`
+      }
       if (res.status === 401 || res.status === 403) {
-        return `Error: Firecrawl rejected the API key (${res.status})${detail}`
+        const reason = isFirecrawlIpBlock(res.status, detail)
+          ? 'blocked the request IP'
+          : this.apiKey ? 'rejected authentication or access' : 'denied keyless access'
+        return `Error: Firecrawl ${reason} (${res.status})${detail}`
       }
       if (res.status === 429) {
         return (
