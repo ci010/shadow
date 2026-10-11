@@ -138,8 +138,8 @@ Read \`v:skills/tool-operations\` for maintenance details; it never widens this 
   completion routing does not grant messaging permission.
 - Write for another agent: action or correction first, only changed facts and exact references; no greeting, recap or duplicate status.
 - Default delivery is \`next-step\`: relevant context at the next safe inference boundary without aborting tools. Use \`delivery: "queue"\` for subsequent work, \`delivery: "silent"\` for FYI. Routine progress/acknowledgements archive by default.
-  \`silent: true\`: archive without triggering a response, active-context injection
-  or wakeup. FYI only; materials/corrections/unblockers need non-silent requests.
+  Use \`delivery: "next-step"\` for a running task's correction; \`queue\` is only for subsequent work in reusable sessions.
+  \`delivery: "silent"\` archives without a response, active-context injection or wakeup; never use it for required materials/corrections/unblockers.
 - Send complete context; split sequentially, LAST message a non-silent request.
   Use \`attention: "blocker" | "decision" | "correction" | "milestone"\` for material changes requiring a response; these cannot be silent.
 - In user conversations, final addresses the current reader; use \`message\` for ordinary peer communication and \`reply\` for pending requests, if permitted.

@@ -188,7 +188,7 @@ provider with no tools or conversation history, then validates the returned
 JSON. Invalid output and provider errors reject without an automatic repair
 call; validation does not establish truth, test coverage or permission.
 
-Parent-loop and nested `infer` requests share the turn's 100-request allowance;
+Parent-loop and nested `infer` requests share the turn's 1000-request allowance;
 infer reserves one remaining request for the parent. Each exec allows 8 attempts,
 2 concurrent, with a 120-second inference deadline and existing cancellation.
 Default output is 2048 tokens (32–4096, also capped by the parent's output
@@ -414,11 +414,23 @@ records are persisted. Admission is not application, completion or file ownershi
 transfer. Before taking over files, await completion or confirmed cancellation
 and inspect the actual changes.
 
-Routine progress is archived without waking agents. Explicit `delivery` selects
-`next-step`, `queue` or `silent`; legacy `silent:false` retains queue behavior.
+Routine progress is archived without waking agents. `delivery` is the single
+model-facing scheduling control: `next-step`, `queue` or `silent`. Use
+`message({sessionId, content, delivery: "next-step"})` to correct your running task;
+use `queue` only for later work in a reusable session. Explicit queue delivery is
+never silently converted into a correction. For older callers/history, the
+unadvertised `silent` alias accepts `true` as `silent` and `false` as `next-step`
+(previously false implied queue); callers needing queue must now request it.
+Do not combine the alias with `delivery`. `attention` does not change an explicit
+delivery; important updates still cannot be archived, and stale work still cannot
+become a new instruction. Rejected task delivery identifies a delivery mismatch,
+non-owner, or closed execution and is not a cancellation or ownership transfer.
 Channel audience restrictions can still force queue delivery. Calls and terminal
 tasks reject further input. Prefer concise, action-first messages; do not request
 acknowledgments or repeat reports that require no action.
+
+The [task-correction trace eval](../src/sessions/fixtures/task-correction-trace.md)
+records the original failure, deterministic runtime replay commands and limits.
 
 `subagent` accepts optional `model` and `effort` (`low`, `medium`, `high`, `xhigh`,
 `max`). Explicit overrides are validated against the provider catalog before

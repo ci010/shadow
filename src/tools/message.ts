@@ -20,7 +20,7 @@ const coordinationSchema = z.object({
  * Tool that lets the agent send a message to another session.
  *
  * Admits a typed session-origin input before projecting it to the channel.
- * Use `silent` to record the message without triggering a response.
+ * Use delivery=silent to record a message without triggering a response.
  */
 export class MessageTool implements Tool {
   readonly name = 'message'
@@ -35,11 +35,6 @@ export class MessageTool implements Tool {
         type: 'string',
         description:
           'Target session ID from discovery or a prior receipt, including remote:<id> for an owned A2A conversation. Must not be the current session.',
-      },
-      silent: {
-        type: 'boolean',
-        description:
-          'False queues a response without interrupting active work; true only archives. Defaults to true for routine progress/acknowledgements, false otherwise. Archival does not update active context or wake a recipient. Never use true for required materials, corrections, questions or instructions.',
       },
       intent: { type: 'string', enum: ['request', 'question', 'progress', 'handoff', 'acknowledgement'], description: 'Progress and acknowledgement default to routine archival; required action/materials use request. handoff does not mutate work ownership.' },
       attention: { type: 'string', enum: ['routine', 'milestone', 'blocker', 'decision', 'correction'], description: 'Routine status is archived by default. Other values require a response and cannot be silent. Do not hide failures or corrections as routine progress.' },
@@ -134,13 +129,16 @@ export class MessageTool implements Tool {
     const { text, media } = parseMediaFromContent(rawContent)
     const attention = args.attention === undefined ? undefined
       : z.enum(['routine', 'milestone', 'blocker', 'decision', 'correction']).parse(args.attention)
+    // Keep old histories/callers readable without advertising two scheduling controls.
+    // Explicit false means non-archival delivery, never an implicit second assignment.
+    const legacySilent = args.silent === undefined ? undefined : z.boolean().parse(args.silent)
     const requestedDelivery = args.delivery === undefined ? undefined : z.enum(['next-step', 'queue', 'silent']).parse(args.delivery)
-    if (requestedDelivery && args.silent !== undefined) throw new Error('Use delivery or silent, not both.')
-    if (attention && attention !== 'routine' && (args.silent === true || requestedDelivery === 'silent')) throw new Error('Important work updates cannot be silently archived.')
+    if (requestedDelivery && legacySilent !== undefined) throw new Error('Use delivery only; do not combine delivery with legacy silent.')
+    const explicitDelivery = requestedDelivery ?? (legacySilent === undefined ? undefined : legacySilent ? 'silent' : 'next-step')
+    if (attention && attention !== 'routine' && explicitDelivery === 'silent') throw new Error('Important work updates cannot be silently archived.')
     const routine = attention === 'routine' || (!attention && ['progress', 'acknowledgement'].includes(coordination?.intent ?? ''))
     const stale = !!context.workStamps?.length && this.workIsCurrent?.(context.workStamps) === false
-    const silent = stale || requestedDelivery === 'silent' || args.silent === true
-      || (routine && args.silent !== false && requestedDelivery === undefined)
+    const delivery = stale ? 'silent' : explicitDelivery ?? (routine ? 'silent' : 'next-step')
 
     const input: SessionMessageInput = {
       kind: 'message',
@@ -154,7 +152,7 @@ export class MessageTool implements Tool {
         ...(coordination ? { coordination } : {}),
         ...(context.workStamps?.length ? { workStamps: context.workStamps } : {}),
       },
-      policy: silent ? 'silent' : requestedDelivery ?? (args.silent === false && (!attention || attention === 'routine') ? 'queue' : 'next-step'),
+      policy: delivery,
       content: stale ? `[Historical update from an obsolete work revision; not a new instruction or completion.]\n${text}` : text,
       media,
     }

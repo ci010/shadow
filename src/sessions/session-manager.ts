@@ -1240,7 +1240,17 @@ ${JSON.stringify(request)}`,
           }
           if (!(input.kind === 'message' && input.policy === 'next-step' && input.source.kind === 'session'
             && this.canReceiveSessionMessage(sessionId, input.source.sessionId))) {
-            throw new Error(`Execution "${sessionId}" does not accept subsequent inputs except next-step corrections from its actual parent while running.`)
+            const prefix = `Execution "${sessionId}" does not accept subsequent inputs; message not delivered.`
+            if (state.mode === 'task' && input.kind === 'message' && input.source.kind === 'session') {
+              if (ownerId !== input.source.sessionId) {
+                throw new Error(`${prefix} [not_owner] Only the actual parent may correct this task. A failed send does not stop it or transfer its files.`)
+              }
+              if (!this.canReceiveSessionMessage(sessionId, input.source.sessionId)) {
+                throw new Error(`${prefix} [execution_closed] This task is no longer accepting corrections (status=${state.executionStatus}). Inspect its result; do not retry the correction or infer cancellation.`)
+              }
+              throw new Error(`${prefix} [delivery_not_supported] Resolved delivery=${input.policy}; the task is running and the sender is its actual parent. For a correction to this assignment, retry with delivery="next-step" and omit legacy silent. A task cannot queue another assignment; use a new task for new work. The original task continues running.`)
+            }
+            throw new Error(`${prefix} Only next-step corrections from its actual parent are accepted while running.`)
           }
         }
       }

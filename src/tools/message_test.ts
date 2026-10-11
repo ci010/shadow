@@ -165,11 +165,44 @@ test('routine progress defaults to archival while explicit delivery remains avai
       const input = inputs.at(-1)!
       assert(input.kind === 'message' && input.source.kind === 'session')
       const archived = silent === true || silent === undefined && ['progress', 'acknowledgement'].includes(intent)
-      assert.equal(input.policy, archived ? 'silent' : silent === false ? 'queue' : 'next-step')
+      assert.equal(input.policy, archived ? 'silent' : 'next-step')
       assert.equal(input.source.coordination?.intent, intent)
       assert.match(receipt, new RegExp(`delivery=${input.policy}`))
     }
   }
+})
+
+test('delivery is the only advertised scheduling control and attention never rewrites explicit delivery', async () => {
+  const inputs: SessionInput[] = []
+  const tool = new MessageTool(new Bus(), () => true, () => undefined, () => [], async (sessionId, input) => {
+    inputs.push(input)
+    return { status: 'accepted', sessionId, inputId: input.id }
+  })
+  assert(!('silent' in tool.parameters.properties))
+  assert.deepEqual(tool.parameters.properties.delivery.enum, ['next-step', 'queue', 'silent'])
+  for (const attention of [undefined, 'routine', 'correction', 'blocker', 'decision', 'milestone']) {
+    for (const delivery of ['next-step', 'queue', 'silent']) {
+      const args = { sessionId: 'web:target', content: 'Context', intent: 'request', attention, delivery }
+      if (delivery === 'silent' && attention && attention !== 'routine') {
+        await assert.rejects(tool.execute(args, context()), /cannot be silently/)
+      } else {
+        await tool.execute(args, context())
+        const input = inputs.at(-1)!
+        assert(input.kind === 'message')
+        assert.equal(input.policy, delivery)
+      }
+    }
+    await tool.execute({ sessionId: 'web:target', content: 'Legacy correction', silent: false, attention }, context())
+    const input = inputs.at(-1)!
+    assert(input.kind === 'message')
+    assert.equal(input.policy, 'next-step')
+  }
+  const count = inputs.length
+  for (const silent of [true, false]) {
+    await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'Mixed', delivery: 'next-step', silent }, context()), /do not combine/)
+  }
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'Invalid', silent: 'false' }, context()))
+  assert.equal(inputs.length, count)
 })
 
 test('important reports cannot be hidden and stale work messages are archived with their basis', async () => {

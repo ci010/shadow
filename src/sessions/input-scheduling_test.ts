@@ -705,7 +705,7 @@ for (const staged of [false, true]) {
       tools: new SessionTools(f.tools, '.'),
     }
     const send = (content: string, silent = false) => tool.execute({
-      sessionId: f.state.sessionId, content, intent: silent ? 'progress' : 'request', silent,
+      sessionId: f.state.sessionId, content, intent: silent ? 'progress' : 'request', delivery: silent ? 'silent' : 'queue',
     }, context)
     try {
       await send('Implement issues')
@@ -1398,6 +1398,104 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       for await (const record of f.store.readSessionLog(SessionManager.currentPhysicalId(f.manager.getSessionState(f.state.sessionId)!))) records.push(record)
       assert(records.some(record => (record.execution_correction as { status?: string } | undefined)?.status === 'pending'))
       assert(records.some(record => (record.execution_correction as { status?: string } | undefined)?.status === 'applied'))
+    } finally { await f.close() }
+  })
+}
+
+const correctionTrace = JSON.parse(await readFile(new URL('./fixtures/task-correction-trace.json', import.meta.url), 'utf8')) as {
+  source: { sessionId: string; inputId: string; toolCallId: string }
+  tool: string
+  args: { sessionId: string; content: string; intent: string; silent: boolean }
+  observed: { result: string; statusAfterFailure: string; ownerSessionId: string }
+}
+
+for (const storage of ['jsonl', 'sqlite'] as const) {
+  for (const responseKind of ['final', 'tool'] as const) test(`${storage}: inspect trace eval applies the original silent:false correction during ${responseKind} inference`, async () => {
+    const { source, args, observed } = correctionTrace
+    assert.match(observed.result, /does not accept subsequent inputs/)
+    assert.equal(observed.statusAfterFailure, 'running')
+    assert.equal(observed.ownerSessionId, source.sessionId)
+    const f = await fixture({ manager: true, ephemeral: true, storage,
+      state: { sessionId: args.sessionId, agentType: 'fixture', parentSessionId: source.sessionId } })
+    try {
+      await f.manager.buildSession(source.sessionId, undefined, { mode: 'session', agentType: 'fixture' })
+      f.tools.register(new MessageTool(f.bus,
+        (id, sender) => f.manager.canReceiveSessionMessage(id, sender),
+        id => f.manager.getSessionState(id)?.parent,
+        () => [args.sessionId], (id, input) => f.manager.deliver(id, input),
+        (sender, id) => f.manager.canSendSessionMessage(sender, id)))
+      let obsoleteEffects = 0
+      f.tools.register({ name: 'obsolete-write', description: 'Must not run after correction',
+        parameters: { type: 'object', properties: {} }, execute: async () => { obsoleteEffects++; return 'unexpected effect' } })
+      await f.manager.deliver(args.sessionId, input('initial-readonly-inspection'))
+      await waitFor(() => f.calls.length === 1)
+      const context: ExecutionContext = {
+        sessionId: source.sessionId, physicalSessionId: 'fixture-parent',
+        channel: 'web', chatId: source.sessionId.slice(4), senderId: 'fixture',
+        messageId: source.inputId, signal: new AbortController().signal,
+        tools: new SessionTools(f.tools, f.workspace),
+      }
+      // Exact captured arguments through the real registry, tool and manager, not
+      // a synthetic successful message receipt or a hand-constructed next-step input.
+      const receipt = await f.tools.execute(correctionTrace.tool, structuredClone(args), context)
+      assert.equal(typeof receipt, 'string')
+      assert.match(receipt as string, /Message sent.*delivery=next-step.*not yet applied/)
+      assert.equal(f.calls[0].signal.aborted, false)
+      assert.equal(f.facts.length, 0)
+      f.calls[0].resolve(responseKind === 'final' ? done('Obsolete broad audit') : {
+        content: '', toolCalls: [{ id: 'obsolete-tool', name: 'obsolete-write', arguments: {} }],
+      })
+      await waitFor(() => f.calls.length === 2)
+      assert.match(JSON.stringify(f.calls[1].messages), /重点返回 Worker对应源码路径和当前dirty计数即可/)
+      assert.equal(obsoleteEffects, 0)
+      assert.equal(f.facts.length, 0)
+      f.calls[1].resolve(done('Focused source paths and dirty counts'))
+      await waitFor(() => f.facts.length === 1)
+      assert.equal(f.facts[0].content, 'Focused source paths and dirty counts')
+      assert.equal(f.facts[0].status, 'completed')
+      const records = []
+      for await (const record of f.store.readSessionLog(SessionManager.currentPhysicalId(f.manager.getSessionState(args.sessionId)!))) records.push(record)
+      const corrections = records.flatMap(record => record.execution_correction ? [record.execution_correction as { inputId: string; status: string }] : [])
+      assert.deepEqual(corrections.map(c => c.status), ['pending', 'applied'])
+      assert.equal(corrections[0].inputId, corrections[1].inputId)
+      assert((receipt as string).includes(`inputId=${corrections[0].inputId}`))
+      const afterCompletion = await f.tools.execute(correctionTrace.tool, structuredClone(args), context)
+      assert.match(afterCompletion as string, /^Error:/)
+      assert.equal(f.calls.length, 2, 'terminal tasks must not restart')
+    } finally { await f.close() }
+  })
+
+  test(`${storage}: inspect trace negative controls preserve ownership, explicit queue and terminal boundaries`, async () => {
+    const { source, args } = correctionTrace
+    const f = await fixture({ manager: true, ephemeral: true, storage,
+      state: { sessionId: args.sessionId, agentType: 'fixture', parentSessionId: source.sessionId } })
+    try {
+      await f.manager.buildSession(source.sessionId, undefined, { mode: 'session', agentType: 'fixture' })
+      await f.manager.deliver(args.sessionId, input('initial-task'))
+      await waitFor(() => f.calls.length === 1)
+      const message = new MessageTool(f.bus,
+        (id, sender) => f.manager.canReceiveSessionMessage(id, sender),
+        () => undefined, () => [args.sessionId], (id, value) => f.manager.deliver(id, value),
+        (sender, id) => f.manager.canSendSessionMessage(sender, id))
+      const context: ExecutionContext = { sessionId: source.sessionId, physicalSessionId: 'fixture-parent',
+        channel: 'web', chatId: 'parent', senderId: 'fixture', messageId: source.inputId,
+        signal: new AbortController().signal, tools: new SessionTools(f.tools, f.workspace) }
+      const { silent: _legacy, ...explicit } = args
+      await assert.rejects(message.execute({ ...explicit, delivery: 'queue' }, context), /\[delivery_not_supported\].*Resolved delivery=queue.*delivery="next-step"/)
+      await assert.rejects(message.execute({ ...explicit, delivery: 'silent' }, context), /\[delivery_not_supported\].*Resolved delivery=silent/)
+      const wrongOwner = await message.execute(args, { ...context, sessionId: 'test:other' })
+      assert.match(wrongOwner, /Only the actual parent/)
+      assert.equal(f.calls[0].signal.aborted, false)
+      assert.deepEqual(f.accepted, ['initial-task'], 'rejections must not admit a second assignment')
+      assert.equal(f.outboundMessages.filter(m => m.sessionMessage).length, 0, 'no sent projection after rejection')
+      const correction: SessionMessageInput = { ...input('control', 'next-step'), content: args.content,
+        source: { kind: 'session', sessionId: 'test:other' } }
+      await assert.rejects(f.manager.deliver(args.sessionId, correction), /\[not_owner\]/)
+      f.calls[0].resolve(done('Original task result'))
+      await waitFor(() => f.facts.length === 1)
+      await assert.rejects(f.manager.deliver(args.sessionId, { ...correction,
+        source: { kind: 'session', sessionId: source.sessionId } }), /\[execution_closed\]/)
+      assert.equal(f.calls.length, 1)
     } finally { await f.close() }
   })
 }
