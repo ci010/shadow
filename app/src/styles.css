@@ -442,3 +442,52 @@ input:not([type]), textarea {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* Markdown tables are reading surfaces, not unseparated columns of prose.
+   Keep the table itself scrollable so chat selection/quoting still finds it. */
+.prose table {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  margin-block: 1.25em;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-surface);
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--c-bg-card);
+  color: var(--c-text-body);
+  font-size: .9em;
+  line-height: 1.65;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.prose table :is(th, td) {
+  padding: 12px 16px;
+  border: 0;
+  vertical-align: top;
+  min-width: 8rem;
+  overflow-wrap: anywhere;
+}
+.prose table th {
+  background: var(--c-bg-muted);
+  color: var(--c-text);
+  font-weight: 600;
+  border-bottom: 1px solid var(--c-border);
+}
+.prose table tbody tr:not(:last-child) > td {
+  border-bottom: 1px solid var(--c-border-soft);
+}
+.prose table tbody tr:nth-child(even) {
+  background: var(--c-bg-soft);
+}
+@media (hover: hover) {
+  .prose table tbody tr:hover { background: var(--c-bg-muted); }
+}
+/* Marked emits align attributes for GFM's :--- / :---: / ---: syntax. */
+.prose table :is(th, td)[align="left"] { text-align: left; }
+.prose table :is(th, td)[align="center"] { text-align: center; }
+.prose table :is(th, td)[align="right"] { text-align: right; }
+@media (max-width: 640px) {
+  .prose table :is(th, td) { padding: 10px 12px; }
+}
