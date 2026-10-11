@@ -1,6 +1,6 @@
 import type { ChatMessage } from '../../providers/provider.ts'
 
-export const SESSION_ITERATION_LIMIT = 100
+export const SESSION_ITERATION_LIMIT = 1000
 
 export class InferenceBudget {
   private used = 0

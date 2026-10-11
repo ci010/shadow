@@ -51,10 +51,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           parentRequests.push(structuredClone(messages))
           if (parentRequests.length % 2 === 0) {
             assert.match(JSON.stringify(messages.at(-1)), /unknown/)
-            assert.match(String(messages[0].content), /98 inference requests including this one/)
+            assert.match(String(messages[0].content), /998 inference requests including this one/)
             return { content: 'Done', toolCalls: [] }
           }
-          assert.match(String(messages[0].content), /100 inference requests including this one/)
+          assert.match(String(messages[0].content), /1000 inference requests including this one/)
           return { content: null, toolCalls: [{ id: `exec-${parentRequests.length}`, name: 'exec', arguments: {
             shell: 'node', timeout_ms: 15000,
             script: `console.log(await infer({instructions:"Classify this fragment, unknown is allowed",

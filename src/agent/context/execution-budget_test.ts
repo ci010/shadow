@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { ChatMessage } from '../../providers/provider.ts'
-import { SESSION_ITERATION_LIMIT, withExecutionBudget } from './execution-budget.ts'
+import { InferenceBudget, SESSION_ITERATION_LIMIT, withExecutionBudget } from './execution-budget.ts'
+
+test('default turn budget allows exactly 1000 inference requests', () => {
+  const budget = new InferenceBudget()
+  assert.equal(budget.remaining, 1000)
+  for (let i = 0; i < 1000; i++) budget.take()
+  assert.equal(budget.remaining, 0)
+  assert.throws(() => budget.take(), /exhausted/)
+})
 
 test('remaining budget is current request metadata, not persisted history or permission', () => {
   const messages: ChatMessage[] = [
@@ -13,7 +21,7 @@ test('remaining budget is current request metadata, not persisted history or per
   const before = structuredClone(messages)
   const first = withExecutionBudget(messages, SESSION_ITERATION_LIMIT, 'turn')
   const last = withExecutionBudget(messages, 1, 'turn')
-  assert.match(String(first[0].content), /100 inference requests including this one/)
+  assert.match(String(first[0].content), /1000 inference requests including this one/)
   assert.match(String(first[0].content), /not a provider quota/)
   assert.doesNotMatch(String(first[0].content), /optional polish/)
   assert.match(String(last[0].content), /1 inference requests including this one/)

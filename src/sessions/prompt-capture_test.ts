@@ -175,7 +175,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const body = await captured.json()
         assert.equal(body.captures.length, 2)
         assert.match(body.captures[0].systemMessages[0].content, /99 inference requests including this one/)
-        assert.match(body.captures[1].systemMessages[0].content, /100 inference requests including this one/)
+        assert.match(body.captures[1].systemMessages[0].content, /1000 inference requests including this one/)
         assert.match(body.captures[0].systemMessages[0].content, /^Updated before next iteration\n/)
         assert.match(body.captures[1].systemMessages[0].content, /^First actual prompt\n/)
         assert.equal(body.captures[0].iteration, 1)

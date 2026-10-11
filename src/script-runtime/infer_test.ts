@@ -58,7 +58,7 @@ test('infer rejects invalid inputs and schemas before spending shared request bu
     { ...request, schema: { $ref: 'https://invalid.example/schema' } },
   ]) await assert.rejects(infer(raw, signal(), origin))
   assert.equal(calls, 0)
-  assert.equal(budget.remaining, 100)
+  assert.equal(budget.remaining, 1000)
 })
 
 test('provider/output failures spend one request, never retry or execute returned tool calls', async () => {
@@ -74,7 +74,7 @@ test('provider/output failures spend one request, never retry or execute returne
     const infer = capability(async () => { calls++; if (output instanceof Error) throw output; return output }, budget)
     await assert.rejects(infer(request, signal(), origin))
     assert.equal(calls, 1)
-    assert.equal(budget.remaining, 99)
+    assert.equal(budget.remaining, 999)
   }
 })
 
@@ -106,7 +106,7 @@ test('aborted inference never starts, and a late provider response is not accept
     return response()
   }, budget)
   await assert.rejects(late(request, pending.signal, origin), /cancelled while running/)
-  assert.equal(budget.remaining, 99)
+  assert.equal(budget.remaining, 999)
 })
 
 test('Node infer uses separate RPC and composes real tools without a registered infer tool', async () => {
