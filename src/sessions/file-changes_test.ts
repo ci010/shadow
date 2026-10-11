@@ -58,13 +58,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           name: 'exec', description: '', parameters: { type: 'object', properties: {} },
           async execute(_args, context) {
             const binding = bindScriptTools(context)
-            try { return String(await binding.call('write', { path: 'memory/notes.md', flag: 'a', content: 'tail\n' }, context.signal)) }
+            try { return String(await binding.call('write', { path: join(root, 'memory', 'notes.md'), flag: 'a', content: 'tail\n' }, context.signal)) }
             finally { await binding.cleanup() }
           },
         })
         const sessionTools = new SessionTools(tools, root)
         const responses: LLMResponse[] = [
-          { content: '', toolCalls: [{ id: 'direct', name: 'write', arguments: { path: 'memory/notes.md', match: '\told', content: 'new' } }] },
+          { content: '', toolCalls: [{ id: 'direct', name: 'write', arguments: { path: join(root, 'memory', 'notes.md'), match: '\told', content: 'new' } }] },
           { content: '', toolCalls: [{ id: 'script', name: 'exec', arguments: {} }] },
         ]
         let requestedDetail = false

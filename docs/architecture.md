@@ -2899,10 +2899,12 @@ derived from a safe logical session ID.
 The locality resolver separates Home, session-data storage, and effective
 workdir, even when the latter two coincide in the local managed case.
 
-`resolveAgentPath` keeps shared prefixes such as `memory`, `skills`, `agents`,
-`projects`, `.sessions`, `.plans`, and `.tmp` at Home. Other relative paths,
-including `uploads`, resolve against cwd. Absolute paths are supported by the
-local helper. A managed folder therefore provides project, **not isolation
+`resolveAgentPath` resolves ordinary relative paths against effective cwd,
+including `AGENTS.md`, `memory`, `skills`, `agents`, `projects`, and `uploads`.
+Only the explicit `v:memory` alias and the documented `.tmp` scratch prefix
+resolve at Project Home; internal resources otherwise use virtual resources or
+explicit absolute paths. With no selected folder, cwd remains the managed
+session directory. Absolute paths are supported by the local helper. A managed folder therefore provides project, **not isolation
 from the host or other sessions**.
 
 ### State inventory

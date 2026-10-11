@@ -22,8 +22,8 @@ export interface ExecutionContext extends MessageContext {
   physicalSessionId: string
   /**
    * Resolved working directory: a managed session folder or registered folder.
-   * Filesystem/shell tools resolve relative paths here. Shared resources such as
-   * memory/ and SOUL.md stay under Main; private uploads use explicit file references.
+   * Filesystem/shell tools resolve ordinary relative paths here. Explicit
+   * v:memory aliases and .tmp use Project Home; private uploads use explicit file references.
    * Falls back to the workspace root when unset.
    */
   cwd?: string

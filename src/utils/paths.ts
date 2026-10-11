@@ -70,43 +70,6 @@ export function sessionWorkspacePath(
 }
 
 /**
- * Top-level workspace-root folders that are SHARED across every session.
- *
- * Agent-provided relative paths whose first segment matches one of these
- * resolve against the workspace root rather than the per-session working
- * directory, so shared resources (memory, skills, etc.) remain reachable by
- * their plain names from any session.
- *
- * Note: `uploads` is deliberately NOT shared — user-uploaded files land in the
- * per-session working directory (`<cwd>/uploads/`) so they live alongside the
- * rest of the session's working files.
- */
-export const SHARED_WORKSPACE_PREFIXES: readonly string[] = [
-  'memory',
-  '.tmp',
-  '.sessions',
-  '.plans',
-  'projects',
-  'skills',
-  'agents',
-  'prompts',
-  'tuning',
-]
-
-/**
- * Workspace-root files that are SHARED across every session and always resolve
- * from the workspace root.
- */
-const SHARED_WORKSPACE_FILES: ReadonlySet<string> = new Set([
-  'SOUL.md',
-  'IDENTITY.md',
-  'USER.md',
-  'AGENTS.md',
-  'MODEL_SETTINGS.json',
-  'HEARTBEAT.pulse',
-])
-
-/**
  * Rewrite a leading `v:memory` virtual-filesystem alias to the real `memory/`
  * path segment, so tools that write/edit through `v:memory/...` land in the
  * shared memory store. Paths without the alias are returned unchanged.
@@ -120,10 +83,10 @@ export function dealiasMemoryPath(p: string): string {
  *
  * - Absolute paths are returned unchanged.
  * - A leading `v:memory` alias is rewritten to the real `memory/` store.
- * - Relative paths under a {@link SHARED_WORKSPACE_PREFIXES} prefix (or matching
- *   a shared root file) resolve against the workspace root.
- * - Everything else resolves against the per-session working directory (`cwd`),
- *   keeping session output out of the shared workspace root.
+ * - Explicit `v:memory` aliases and the special `.tmp` prefix resolve from Home.
+ * - All other relative paths resolve against the effective working directory
+ *   (`cwd`), including repository names such as AGENTS.md, skills and projects.
+ *   With no selected folder, callers supply the managed session directory.
  */
 export function resolveAgentPath(
   workspace: string,
@@ -134,8 +97,7 @@ export function resolveAgentPath(
   const normalized = dealiasMemoryPath(p)
   const firstSegment = normalized.split(/[\\/]/)[0]
   if (
-    SHARED_WORKSPACE_FILES.has(firstSegment) ||
-    SHARED_WORKSPACE_PREFIXES.includes(firstSegment)
+    /^v:memory(?=[\\/]|$)/.test(p) || firstSegment === '.tmp'
   ) {
     return resolve(workspace, normalized)
   }
