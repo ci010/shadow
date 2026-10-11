@@ -53,56 +53,65 @@ async function main() {
     if (process.env.CONVERSATION_READING_LAYOUT_ONLY) {
       await execute(`window.__showReadingLayout()`)
       await wait(`document.querySelectorAll('.message-preview-card').length === 4`)
-      for (const width of [1800, 1100, 760, 390]) {
+      for (const width of [1800, 1700, 1100, 760, 390]) {
         window.setContentSize(width, 844)
         await execute(`window.__conversationFixture.mobileLayout = ${width === 390}`)
         await frame()
-        const before = await execute(`JSON.stringify([...document.querySelectorAll('.message-preview-card .prose')].map(el => el.getBoundingClientRect().width))`)
-        await setCardsOpen(true)
-        assert.equal(await execute(`JSON.stringify([...document.querySelectorAll('.message-preview-card .prose')].map(el => el.getBoundingClientRect().width))`),
-          before, 'Expansion changes height without reflowing the body width')
-        await execute(`document.querySelector('.compaction-summary').open = true`)
-        await wait(`!!document.querySelector('.compaction-summary-body')`)
-        const layout = await execute(`(() => {
-          const list = document.querySelector('.chat-message-list').getBoundingClientRect();
-          const pane = document.querySelector('.chat-history').getBoundingClientRect();
-          const scroll = document.querySelector('.chat-messages');
-          const scrollBounds = scroll.getBoundingClientRect();
-          const composer = document.querySelector('.chat-composer').getBoundingClientRect();
-          const user = document.querySelector('.chat-user').getBoundingClientRect();
-          const prose = document.querySelector('.chat-assistant > .prose');
-          const code = prose.querySelector('pre');
-          const mobile = window.__conversationFixture.mobileLayout;
-          return {list:list.width,expected:Math.min(860, mobile ? scroll.clientWidth - 16 : pane.width - 112),
-            center:mobile ? (list.left + list.right - 2 * scrollBounds.left - scroll.clientWidth) / 2
-              : (list.left + list.right - pane.left - pane.right) / 2,
-            composer:composer.width,user:user.width,userRight:user.right,listRight:list.right,
-            widths:[...document.querySelectorAll('.message-preview-card,.chat-assistant,.tool-activity,.compaction-summary')].map(el => el.getBoundingClientRect().width),
-            markdown:[...document.querySelectorAll('.chat-message-list .prose')].map(el => ({
-              cap:getComputedStyle(el).maxWidth,width:el.getBoundingClientRect().width,
-              parent:el.parentElement.clientWidth,padding:parseFloat(getComputedStyle(el.parentElement).paddingLeft) + parseFloat(getComputedStyle(el.parentElement).paddingRight),
-            })),
-            sourceBreak:!!prose.querySelector('br'),codeScroll:code.scrollWidth > code.clientWidth,
-            codeOverflow:getComputedStyle(code).overflowX,pageOverflow:document.documentElement.scrollWidth > innerWidth,
-            scrollOverflow:document.querySelector('.chat-messages').scrollWidth > document.querySelector('.chat-messages').clientWidth};
-        })()`)
-        assert.ok(Math.abs(layout.list - layout.expected) < 1, `The centered rail owns the desktop cap and mobile gutters: ${JSON.stringify(layout)}`)
-        assert.ok(Math.abs(layout.center) < 1)
-        assert.ok(layout.widths.every((value: number) => Math.abs(value - layout.list) < 1), 'All assistant, tool and response surfaces fill the rail')
-        assert.ok(layout.markdown.every((value: {cap: string}) => value.cap === 'none'), 'Chat Markdown has no independent character-width cap')
-        assert.ok(layout.markdown.slice(0, -1).every((value: {width: number; parent: number; padding: number}) => Math.abs(value.width - value.parent + value.padding) < 1),
-          'Ordinary message and response bodies fill their containers')
-        assert.ok(layout.user < layout.list * .8)
-        assert.ok(Math.abs(layout.userRight - layout.listRight) < 1, 'Short human messages remain right-aligned')
-        if (width >= 1100) assert.ok(Math.abs(layout.composer - layout.list) < 1, 'The wide reading rail matches the composer maximum')
-        assert.equal(layout.sourceBreak, true, 'Source newlines keep their existing rendering')
-        assert.equal(layout.codeScroll, true)
-        assert.equal(layout.codeOverflow, 'auto')
-        assert.equal(layout.pageOverflow || layout.scrollOverflow, false, 'Long code scrolls locally without widening the conversation')
-        await setCardsOpen(false)
         for (const dark of [false, true]) {
-          await execute(`document.documentElement.classList.toggle('dark', ${dark});
-            document.querySelector('.chat-messages').scrollTop = 0`)
+          await execute(`document.documentElement.classList.toggle('dark', ${dark})`)
+          await frame()
+          const before = await execute(`JSON.stringify([...document.querySelectorAll('.message-preview-card .prose')].map(el => el.getBoundingClientRect().width))`)
+          await setCardsOpen(true)
+          assert.equal(await execute(`JSON.stringify([...document.querySelectorAll('.message-preview-card .prose')].map(el => el.getBoundingClientRect().width))`),
+            before, 'Expansion changes height without reflowing the body width')
+          await execute(`document.querySelector('.compaction-summary').open = true`)
+          await wait(`!!document.querySelector('.compaction-summary-body')`)
+          const layout = await execute(`(() => {
+            const list = document.querySelector('.chat-message-list').getBoundingClientRect();
+            const pane = document.querySelector('.chat-history').getBoundingClientRect();
+            const scroll = document.querySelector('.chat-messages');
+            const scrollBounds = scroll.getBoundingClientRect();
+            const composer = document.querySelector('.chat-composer').getBoundingClientRect();
+            const user = document.querySelector('.chat-user').getBoundingClientRect();
+            const prose = document.querySelector('.chat-assistant > .prose');
+            const code = prose.querySelector('pre');
+            const mobile = window.__conversationFixture.mobileLayout;
+            return {list:list.width,expected:scroll.clientWidth - (mobile ? 16 : 48),listLeft:list.left,
+              leftGutter:list.left - scrollBounds.left - scroll.clientLeft,
+              center:mobile ? (list.left + list.right - 2 * scrollBounds.left - scroll.clientWidth) / 2
+                : (list.left + list.right - pane.left - pane.right) / 2,
+              composer:composer.width,user:user.width,userRight:user.right,listRight:list.right,
+              longUser:document.querySelectorAll('.chat-user')[1].getBoundingClientRect().width,
+              longUserRight:document.querySelectorAll('.chat-user')[1].getBoundingClientRect().right,
+              widths:[...document.querySelectorAll('.message-preview-card,.chat-assistant,.tool-activity,.compaction-summary')].map(el => el.getBoundingClientRect().width),
+              lefts:[...document.querySelectorAll('.message-preview-card,.chat-assistant,.tool-activity,.compaction-summary')].map(el => el.getBoundingClientRect().left),
+              markdown:[...document.querySelectorAll('.chat-message-list .prose')].map(el => ({
+                cap:getComputedStyle(el).maxWidth,width:el.getBoundingClientRect().width,
+                parent:el.parentElement.clientWidth,padding:parseFloat(getComputedStyle(el.parentElement).paddingLeft) + parseFloat(getComputedStyle(el.parentElement).paddingRight),
+              })),
+              sourceBreak:!!prose.querySelector('br'),codeScroll:code.scrollWidth > code.clientWidth,
+              codeOverflow:getComputedStyle(code).overflowX,pageOverflow:document.documentElement.scrollWidth > innerWidth,
+              scrollOverflow:document.querySelector('.chat-messages').scrollWidth > document.querySelector('.chat-messages').clientWidth};
+          })()`)
+          assert.ok(Math.abs(layout.list - layout.expected) < 1, `The uncapped rail fills the scrollport with desktop/mobile gutters: ${JSON.stringify(layout)}`)
+          assert.ok(Math.abs(layout.center) < 1)
+          assert.ok(Math.abs(layout.leftGutter - (width === 390 ? 8 : 24)) < 1)
+          assert.ok(layout.lefts.every((value: number) => Math.abs(value - layout.listLeft) < 1), 'AI and session cards stay left-aligned')
+          assert.ok(layout.widths.every((value: number) => Math.abs(value - layout.list * (width >= 800 ? .9 : 1)) < 1), `AI surfaces leave right-side breathing room on wide panes and fill small panes: ${JSON.stringify(layout)}`)
+          assert.ok(layout.markdown.every((value: {cap: string}) => value.cap === 'none'), 'Chat Markdown has no independent character-width cap')
+          assert.ok(layout.markdown.slice(0, -1).every((value: {width: number; parent: number; padding: number}) => Math.abs(value.width - value.parent + value.padding) < 1),
+            'Ordinary message and response bodies fill their containers')
+          assert.ok(layout.user < layout.list * .8)
+          assert.ok(Math.abs(layout.longUser - Math.min(width === 390 ? layout.list * .92 : layout.list * .8, width === 390 ? Infinity : 860)) < 1, 'Long user bubbles keep a readable width cap')
+          assert.ok(Math.abs(layout.longUserRight - layout.listRight) < 1)
+          assert.ok(Math.abs(layout.userRight - layout.listRight) < 1, 'Short human messages remain right-aligned')
+          if (width >= 1100) assert.ok(layout.composer <= 860 && layout.list > layout.composer, 'The wide conversation is independent of the readable composer')
+          assert.equal(layout.sourceBreak, true, 'Source newlines keep their existing rendering')
+          assert.equal(layout.codeScroll, true)
+          assert.equal(layout.codeOverflow, 'auto')
+          assert.equal(layout.pageOverflow || layout.scrollOverflow, false, 'Long code scrolls locally without widening the conversation')
+          await setCardsOpen(false)
+          await execute(`document.querySelector('.chat-messages').scrollTop = 0`)
           await frame()
           await wait(`[...document.querySelectorAll('.message-preview-card')].every(card =>
             card.getAnimations({subtree:true}).every(animation => !(animation instanceof CSSTransition)))`)

@@ -325,11 +325,11 @@
           <div v-if="canResend" class="resend-bar">
             <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> {{ t('Resend last message') }}</button>
           </div>
-          <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget, 'composer-dual-actions': requestBusy && showComposerSend }"
+          <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget, 'composer-dual-actions': requestBusy && showComposerSend, 'composer-answering': answeringQuestion }"
             @dragover="handleAttachmentDragOver" @dragleave="handleAttachmentDragLeave" @drop="handleAttachmentDrop">
           <p v-if="answeringQuestion" :id="domId('reply-context')" class="composer-reply-context">
             <span class="i-lucide-message-circle-reply w-4 h-4" aria-hidden="true" />
-            <span><strong>{{ t('Your answer') }}</strong> · {{ activeAsk?.question }}</span>
+            <span>{{ t('Your answer') }}</span>
           </p>
           <SlashCommandMenu ref="slashMenu" :api-base="apiBase" :session-id="activeSessionId || ''"
             :text="inputText" :input="chatInput" :focused="composerFocused"
@@ -360,7 +360,7 @@
               ref="chatInput"
               :id="domId('message-input')"
               v-model="inputText"
-              :placeholder="answeringQuestion ? mobileLayout ? t('Type your answer...') : t('Type your answer here; images and files are welcome...') : mobileLayout ? t('Message...') : remoteConversation ? t('Ask anything about this remote workspace...') : t('Ask anything, or add files and folders for context...')"
+              :placeholder="answeringQuestion ? t('Type your answer...') : mobileLayout ? t('Message...') : remoteConversation ? t('Ask anything about this remote workspace...') : t('Ask anything, or add files and folders for context...')"
               :aria-label="answeringQuestion ? t('Your answer to the pending question') : t('Message')"
               :aria-describedby="answeringQuestion ? domId('reply-context') : undefined"
               role="combobox"
@@ -2982,9 +2982,10 @@ function resendLastMessage() {
 .composer-send:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
 .composer-queue { background: var(--c-bg-muted); color: var(--c-text); border: 1px solid var(--c-border-hover); }
 .composer-queue:hover:not(:disabled) { background: var(--c-selection-bg); }
-.composer-reply-context { display: flex; align-items: flex-start; gap: 8px; margin: 0 4px 10px; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.composer-reply-context { display: flex; align-items: center; gap: 8px; margin: 0 4px 10px; color: var(--c-text-secondary); font-size: 12px; font-weight: 600; line-height: 1.5; }
 .composer-reply-context > span:first-child { flex-shrink: 0; margin-top: 1px; }
-.composer-reply-context strong { color: var(--c-text); }
+.composer-answering { border-color: var(--c-border-hover); }
+.composer-answering .composer-reply-context > span:first-child { color: var(--c-blue); }
 .composer-stop:disabled { opacity: .65; cursor: not-allowed; }
 .resume-bar { display: flex; align-items: center; gap: 16px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--c-border-hover); border-radius: var(--radius-surface); background: var(--c-bg); color: var(--c-text); }
 .resume-bar p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; }
@@ -3148,10 +3149,16 @@ function resendLastMessage() {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  /* Use the pane's width, not the scrollbar-reduced scrollport, to stay centered with the composer. */
-  width: calc(100cqw - 112px);
-  max-width: var(--conversation-max-width);
-  margin-inline: auto;
+  --ai-surface-width: 100%;
+  /* Fill the scrollport, leaving modest gutters even in a fullscreen pane. */
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  margin-inline: 24px;
+}
+
+@container (min-width: 800px) {
+  .chat-message-list { --ai-surface-width: 90%; }
 }
 
 .chat-message-list :deep(.prose) {
@@ -3184,12 +3191,16 @@ function resendLastMessage() {
 
 .chat-message-list > :deep(:is(.chat-assistant, .system-event, .response-disclosure, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
   min-width: 0;
-  max-width: var(--conversation-item-max-width);
+  width: var(--ai-surface-width);
+  max-width: var(--ai-surface-width);
+  box-sizing: border-box;
   align-self: flex-start;
 }
 .chat-message-entry > :deep(:is(.chat-assistant, .system-event, .response-disclosure, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
   min-width: 0;
-  max-width: var(--conversation-item-max-width);
+  width: var(--ai-surface-width);
+  max-width: var(--ai-surface-width);
+  box-sizing: border-box;
   align-self: flex-start;
 }
 .chat-message-list > :deep(.response-disclosure .chat-assistant) { max-width: 100%; }
@@ -3209,6 +3220,8 @@ function resendLastMessage() {
 }
 
 .chat-user {
+  box-sizing: border-box;
+  max-width: min(860px, 80%);
   align-self: flex-end;
   background: var(--c-chat-user-bg);
   color: var(--c-text);
@@ -3218,13 +3231,13 @@ function resendLastMessage() {
 .chat-assistant {
   box-sizing: border-box;
   width: 100%;
-  max-width: var(--conversation-item-max-width);
+  max-width: 100%;
   align-self: flex-start;
   background: var(--c-chat-assistant-bg);
   color: var(--c-text);
 }
 
-.chat-session { max-width: var(--conversation-item-max-width); align-self: flex-start; }
+.chat-session { width: var(--ai-surface-width); max-width: var(--ai-surface-width); box-sizing: border-box; align-self: flex-start; }
 
 /* ── Segment navigation bar ──────────────────────────────── */
 

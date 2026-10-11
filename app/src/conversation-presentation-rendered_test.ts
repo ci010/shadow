@@ -28,7 +28,7 @@ test('coordinator progress and outgoing message links navigate from the embedded
 test('received and outgoing session messages have explicit English and Chinese direction at desktop and mobile widths', renderedOptions, t => renderConversation(t, 'message-direction'))
 test('session exchanges use fixed-height preview cards with accessible animated expansion', renderedOptions, t => renderConversation(t, 'session-exchanges'))
 test('call and task responses share five-line faded preview cards and the tool rail width', renderedOptions, t => renderConversation(t, 'response-cards'))
-test('conversation reading rail owns width while Markdown fills cards across desktop and mobile', renderedOptions, t => renderConversation(t, 'reading-layout'))
+test('wide asymmetric conversation keeps users right and AI cards full-width across themes and desktop/mobile', renderedOptions, t => renderConversation(t, 'reading-layout'))
 
 async function renderConversation(t: TestContext, scenario: 'presentation' | 'events' | 'coordinator-navigation' | 'message-direction' | 'session-exchanges' | 'response-cards' | 'reading-layout' = 'presentation') {
   const directory = resolve(root, '.test-artifacts', `conversation-${randomUUID()}`)
@@ -168,10 +168,11 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
             const content = '## Review outcome\\n\\n' + 'The response fills the shared reading rail. '.repeat(16) +
               '\\n\\nFirst source line.\\nSecond source line.\\n\\n- Preserve **Markdown** and \`inline code\`.\\n\\n\`\`\`ts\\nconst evidence = "' + '0123456789'.repeat(120) + '"\\n\`\`\`';
             state.readingLayout = true;
-            state.executionFixtures = {4:{mode:'call',label:'Review result',sessionId:'web:peer',stage:'completed',blocked:false,
+            state.executionFixtures = {5:{mode:'call',label:'Review result',sessionId:'web:peer',stage:'completed',blocked:false,
               output:content,arguments:'{"mode":"call"}',receipt:'Completed'}};
             state.messages = [
               {role:'user',content:'Please review.'},
+              {role:'user',content:'Please review this evidence carefully. '.repeat(12)},
               {role:'user',content,sessionSource:{id:'web:peer',intent:'handoff'}},
               {role:'assistant',event:'tool_call',content:'',toolCallId:'send',
                 toolCall:{name:'message',arguments:{sessionId:'web:peer',content}}},

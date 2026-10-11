@@ -7,20 +7,23 @@
         <span class="i-lucide-signpost" aria-hidden="true" />
       </header>
       <div class="yield-body">
-        <WorkContextPath v-if="request.workContext" :context="request.workContext" :navigable="workNavigable" @select="emit('work', $event)" />
-        <DecisionBrief v-if="decisionRequest?.brief" :brief="decisionRequest.brief" @inspect="emit('inspect', $event)" />
-        <section v-if="decisionRequest?.workProposal" class="work-proposal selectable-text" :aria-label="t('Exact proposed work change')">
-          <h3>{{ t('Proposed work · v') }}{{ decisionRequest.workProposal.baseRevision }}</h3>
-          <p>{{ t('Change type:') }} {{ decisionRequest.workProposal.change }} {{ t('· New execution:') }} {{ decisionRequest.workProposal.paused ? t('paused') : t('not paused') }}</p>
-          <p>{{ decisionRequest.workProposal.definition.objective }}</p>
-          <p><strong>{{ t('Acceptance:') }}</strong> {{ decisionRequest.workProposal.definition.acceptance.join('; ') }}</p>
-          <p><strong>{{ t('Boundaries:') }}</strong> {{ decisionRequest.workProposal.definition.boundaries.join('; ') || t('Not recorded; no new permission') }}</p>
-          <p>{{ decisionRequest.workProposal.reason }}</p>
-          <p class="yield-status">{{ t('One approval applies this exact saved change. A custom answer or timeout does not approve it.') }}</p>
-        </section>
-        <p v-if="decisionRequest?.reportingSessionId" class="yield-status">{{ t('Reporting responsibility:') }} {{ decisionRequest.reportingSessionId }}{{ t('. Answer authority is unchanged.') }}</p>
-        <fieldset :disabled="!answerable || busy" :aria-describedby="`${id}-status${request.deadline ? ` ${id}-deadline` : ''}`">
-          <legend class="selectable-text">{{ request.question }}</legend>
+        <h2 :id="`${id}-question`" class="yield-prompt selectable-text">{{ request.question }}</h2>
+        <div v-if="request.workContext || decisionRequest?.brief || decisionRequest?.workProposal || decisionRequest?.reportingSessionId" class="yield-context">
+          <WorkContextPath v-if="request.workContext" :context="request.workContext" :navigable="workNavigable" @select="emit('work', $event)" />
+          <DecisionBrief v-if="decisionRequest?.brief" :brief="decisionRequest.brief" @inspect="emit('inspect', $event)" />
+          <section v-if="decisionRequest?.workProposal" class="work-proposal selectable-text" :aria-label="t('Exact proposed work change')">
+            <h3>{{ t('Proposed work · v') }}{{ decisionRequest.workProposal.baseRevision }}</h3>
+            <p>{{ t('Change type:') }} {{ decisionRequest.workProposal.change }} {{ t('· New execution:') }} {{ decisionRequest.workProposal.paused ? t('paused') : t('not paused') }}</p>
+            <p>{{ decisionRequest.workProposal.definition.objective }}</p>
+            <p><strong>{{ t('Acceptance:') }}</strong> {{ decisionRequest.workProposal.definition.acceptance.join('; ') }}</p>
+            <p><strong>{{ t('Boundaries:') }}</strong> {{ decisionRequest.workProposal.definition.boundaries.join('; ') || t('Not recorded; no new permission') }}</p>
+            <p>{{ decisionRequest.workProposal.reason }}</p>
+            <p class="yield-status">{{ t('One approval applies this exact saved change. A custom answer or timeout does not approve it.') }}</p>
+          </section>
+          <p v-if="decisionRequest?.reportingSessionId" class="yield-status">{{ t('Reporting responsibility:') }} {{ decisionRequest.reportingSessionId }}{{ t('. Answer authority is unchanged.') }}</p>
+        </div>
+        <fieldset :aria-labelledby="`${id}-question`" :disabled="!answerable || busy" :aria-describedby="`${id}-status${request.deadline ? ` ${id}-deadline` : ''}`">
+          <legend class="yield-sr-only">{{ t('Your response') }}</legend>
           <div v-if="decisionRequest" class="yield-options">
             <label v-for="(option, index) in decisionRequest.options" :key="option" class="yield-option" :class="{ selected: !customMode && selected === option }">
               <input class="yield-sr-only" type="radio" :name="id" :value="option" :aria-keyshortcuts="optionLetter(index)"
@@ -31,13 +34,13 @@
               <span class="yield-selected i-lucide-check" :class="{ visible: !customMode && selected === option }" aria-hidden="true" />
             </label>
             <button type="button" class="yield-option yield-custom-toggle" :class="{ selected: customMode }"
-              :aria-expanded="useComposer ? undefined : customMode" :aria-controls="useComposer ? composerId : `${id}-custom`" :aria-keyshortcuts="optionLetter(decisionRequest.options.length)" @click="openCustomResponse">
+              :aria-pressed="customMode" :aria-expanded="useComposer ? undefined : customMode" :aria-controls="useComposer ? composerId : `${id}-custom`" :aria-keyshortcuts="optionLetter(decisionRequest.options.length)" @click="openCustomResponse">
               <span class="yield-index" aria-hidden="true">{{ optionLetter(decisionRequest.options.length) }}</span>
-              <span class="yield-option-text">{{ useComposer ? t('Write your own answer in the message box below') : customMode ? t('Your answer') : t('Or type your own answer...') }}</span>
+              <span class="yield-option-text">{{ customMode || useComposer ? t('Your answer') : t('Or type your own answer...') }}</span>
               <span class="yield-selected i-lucide-check" :class="{ visible: customMode }" aria-hidden="true" />
             </button>
           </div>
-          <p v-if="useComposer && answerable" class="yield-composer-note">{{ t('Type your answer in the message box below and send it to reply to this question. You can attach images and files.') }}</p>
+          <p v-if="useComposer && answerable && (inputQuestion || customMode)" class="yield-composer-note"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ t('Type your answer...') }}</p>
           <div v-if="!useComposer && (customMode || inputQuestion)" :id="`${id}-custom`" class="yield-custom" :class="{ 'input-response': inputQuestion }">
             <label :for="`${id}-response`" class="yield-sr-only">{{ t('Your response') }}</label>
             <textarea :id="`${id}-response`" ref="customInput" v-model="customText" rows="3" required
@@ -148,32 +151,35 @@ onUnmounted(() => {
 .yield-question { box-sizing: border-box; display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; width: calc(100% - 40px); max-width: 860px; max-height: min(50dvh, 420px); overflow: hidden; margin: 8px auto 0; padding: 16px; border: 1px solid var(--c-border); border-radius: 0; background: var(--c-bg-card); color: var(--c-text); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .yield-question:last-child { margin-bottom: 16px; }
 .yield-question-custom { max-height: min(60dvh, 540px); }
-.yield-question.is-embedded { width: 100%; max-width: none; max-height: none; margin: 18px 0 0; border-left-width: 1px; border-color: var(--c-warn); }
+.yield-question.is-embedded { width: 100%; max-width: none; max-height: none; margin: 18px 0 0; border-left: 3px solid var(--c-blue); }
 .yield-question.is-embedded .yield-body { overflow: visible; }
 .yield-question form { display: flex; flex-direction: column; min-height: 0; }
 .yield-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; padding: 0 4px; margin-bottom: 8px; color: var(--c-text-secondary); font-size: 12px; font-weight: 600; }
 .yield-heading > span:last-child { width: 18px; height: 18px; }
 .yield-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
-legend { width: 100%; margin-bottom: 16px; padding: 0; font-size: 14px; font-weight: 500; white-space: pre-wrap; }
-.yield-options { display: grid; gap: 4px; }
-.yield-option { position: relative; display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 40px; box-sizing: border-box; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; color: var(--c-text); font: inherit; text-align: start; cursor: pointer; }
-fieldset:not(:disabled) .yield-option:hover, .yield-option.selected { background: var(--c-bg-muted); }
+.yield-prompt { margin: 0 0 18px; font-size: 20px; line-height: 1.45; font-weight: 600; letter-spacing: -.015em; white-space: pre-wrap; }
+.yield-context { margin: 0 0 16px; padding-top: 12px; border-top: 1px solid var(--c-border); color: var(--c-text-secondary); }
+.yield-options { display: grid; gap: 6px; }
+.yield-option { position: relative; display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 40px; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--c-border); border-radius: 0; background: transparent; color: var(--c-text); font: inherit; text-align: start; cursor: pointer; }
+fieldset:not(:disabled) .yield-option:hover { background: var(--c-bg-muted); border-color: var(--c-border-hover); }
+.yield-option.selected { border-color: var(--c-selection-border); background: var(--c-selection-bg); box-shadow: inset 3px 0 var(--c-blue); }
 .yield-option:has(input:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .yield-index { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; height: 24px; border: 1px solid var(--c-border); border-radius: 0; background: var(--c-bg-soft); color: var(--c-text-secondary); font-size: 12px; line-height: 1; }
-.yield-option.selected .yield-index { border-color: var(--c-border-hover); color: var(--c-text); }
+.yield-option.selected .yield-index { border-color: var(--c-blue); background: var(--c-primary-bg); color: var(--c-text-on-primary); }
 .yield-option-text { flex: 1; min-width: 0; white-space: pre-wrap; }
 .yield-default { flex: 0 0 auto; padding-top: 2px; color: var(--c-text-secondary); font-size: 12px; }
-.yield-selected { visibility: hidden; flex: 0 0 16px; height: 16px; margin-top: 3px; color: var(--c-text-secondary); }
+.yield-selected { visibility: hidden; flex: 0 0 16px; height: 16px; margin-top: 3px; color: var(--c-blue); }
 .yield-selected.visible { visibility: visible; }
 fieldset:disabled .yield-option { cursor: default; }
 fieldset:disabled .yield-index { color: var(--c-text-muted); }
 .yield-status { margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; }
-.yield-composer-note { margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
-.yield-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; flex-shrink: 0; gap: 8px; margin-top: 16px; }
+.yield-composer-note { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
+.yield-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; flex-shrink: 0; gap: 8px; margin-top: 16px; padding: 12px 4px 0; border-top: 1px solid var(--c-border); }
 .yield-actions:empty { display: none; }
 .yield-reload { margin-right: auto; }
-.yield-custom-toggle { color: var(--c-text-muted); }
+.yield-cancel { margin-right: auto; border-color: transparent; background: transparent; color: var(--c-text-secondary); }
+.yield-custom-toggle { color: var(--c-text-secondary); border-color: transparent; }
 .yield-custom-toggle.selected { color: var(--c-text); }
 .yield-custom { margin: 8px 4px 4px 48px; }
 .yield-custom.input-response { margin-inline: 0; }
@@ -189,6 +195,6 @@ fieldset:disabled .yield-index { color: var(--c-text-muted); }
 .yield-enter { width: 16px; height: 16px; }
 .yield-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-@media (max-width: 600px) { .yield-question { width: calc(100% - 24px); padding: 12px; } .yield-option { padding-inline: 8px; gap: 8px; } .yield-custom { margin-left: 40px; } .yield-custom textarea { font-size: 16px; } }
+@media (max-width: 600px) { .yield-question { width: calc(100% - 24px); padding: 12px; } .yield-option { padding-inline: 8px; gap: 8px; } .yield-custom { margin-left: 40px; } .yield-custom textarea { font-size: 16px; } .yield-prompt { font-size: 18px; } }
 @media (max-width: 600px), (pointer: coarse) { .yield-option, .btn { min-height: 44px; } }
 </style>
