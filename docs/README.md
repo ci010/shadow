@@ -21,6 +21,7 @@
 | [Visual design system](../DESIGN.md) | Quiet Workbench light/dark color roles, message hierarchy, components, and implementation guardrails |
 | [Shared live transport](realtime-protocol.md) | Multiplexed SSE, topic ownership, replay/reset, reconnect recovery, and resource limits |
 | [Frontend I/O](io.md) | Browser capture panels, adhoc backend connection protocol, controls, and verification limits |
+| [Project Quick Actions](quick-actions.md) | Chat command buttons, dashboard pins, direct runs, and stable Search overlays |
 | [Project Micro Apps](microapps.md) | Reusable Web tools, reviewed revisions, isolated pages, local backends and scoped model access |
 | [Conversation agent authoring](agent-authoring.md) | Independent Changes, delegated resource edits, saved checks, owner-reviewed probes/publication and legacy drafts |
 | [A2A text integration](a2a.md) | Opt-in A2A server/client, SDK/MCP coding-agent bridges, task continuation, notifications and trust boundaries |

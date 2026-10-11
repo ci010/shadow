@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, rm, readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -114,7 +114,14 @@ test('Ctrl+F searches real conversations across all segments, split panes and li
   t.after(() => server.close())
   const url = server.resolvedUrls?.local[0]
   assert.ok(url)
-  await build({ entryPoints: [resolve(root, 'desktop', 'tests', 'fixtures', 'conversation-search-smoke.ts')],
+  const originalSmoke = await readFile(resolve(root, 'desktop', 'tests', 'fixtures', 'conversation-search-smoke.ts'), 'utf8')
+  const geometryMarker = "    assert.equal(await key('f', 'ctrlKey:true'), false, 'Ctrl+F is handled, not passed to browser find')"
+  assert.ok(originalSmoke.includes(geometryMarker), 'Search fixture must retain the geometry injection point')
+  const smoke = originalSmoke.replace(geometryMarker, `    const beforeSearch = await execute("JSON.stringify([...document.querySelector('.chat-messages').getClientRects()].map(r=>[r.x,r.y,r.width,r.height]))")
+    assert.equal(await key('f', 'ctrlKey:true'), false, 'Ctrl+F is handled, not passed to browser find')
+    await wait("!!document.querySelector('.conversation-search')")
+    assert.equal(await execute("JSON.stringify([...document.querySelector('.chat-messages').getClientRects()].map(r=>[r.x,r.y,r.width,r.height]))"), beforeSearch, 'Real chat message geometry stays stable')`)
+  await build({ stdin: { contents: smoke, loader: 'ts', resolveDir: resolve(root, 'desktop/tests/fixtures') },
     outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs', target: 'node24', external: ['electron'], logLevel: 'silent' })
   const env: NodeJS.ProcessEnv = { CONVERSATION_SEARCH_URL: url, CONVERSATION_SEARCH_SCREENSHOT_DIR: process.env.CONVERSATION_SEARCH_SCREENSHOT_DIR }
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {

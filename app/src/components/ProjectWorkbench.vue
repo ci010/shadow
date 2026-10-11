@@ -6,6 +6,7 @@
       <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? t('Back to work') : t('Apps') }}</button>
       <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; panel = panel === 'github' ? '' : 'github'">GitHub</button>
     </header>
+    <QuickActions :api-base="apiBase" :project-id="projectId" :active="visible" :can-write="installation.uiScopes.includes('main:admin')" pinned-only />
     <ProjectMicroApps v-if="appsVisible" :api-base="apiBase" :active="visible" :can-write="canWrite" @compose="discussApp" />
     <div v-show="!appsVisible" class="workbench-body">
       <main v-show="wide || !panel" class="workbench-main">
@@ -106,6 +107,7 @@
 </template>
 <script setup lang="ts">
 import UiSelect from './UiSelect.vue'
+import QuickActions from './QuickActions.vue'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

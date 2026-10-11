@@ -41,6 +41,7 @@
       @image-context="handleImageContext" @image-busy="handleImageBusy">
     <template #actions><slot name="pane-actions" /></template>
     <template #mobile-actions="{ close }">
+      <button data-actions-trigger @click="close(); nextTick(toggleActions)">{{ t('Actions') }}</button>
       <template v-if="activeSessionId">
         <button v-if="conversationDocumentVisible && activePanel === 'conversation'" @click="close(); nextTick(() => conversationSearch?.show())">{{ t('Search conversation') }}</button>
         <button @click="close(); showMobileSessionDetails()">{{ t('Session details') }}</button>
@@ -83,12 +84,14 @@
           <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="!!previousPhysicalId || !!automationConversation?.hasPrevious.value"
             :historical="!!viewingPhysicalId || !!automationConversation?.historical.value" :busy="loadingHistory || !!automationConversation?.loading.value" @previous="viewPreviousSegment"
             @next="viewNextSegment" @current="goBackToCurrentSegment" />
+          <button ref="actionsTrigger" data-actions-trigger class="conversation-actions" type="button" :aria-expanded="actionsOpen" @click="toggleActions">{{ t('Actions') }}</button>
           <button class="conversation-find" type="button" :aria-label="t('Search conversation')" aria-keyshortcuts="Control+F Meta+F"
             :title="t('Search conversation (Ctrl+F / Cmd+F)')" @click="conversationSearch?.show()">
             <span class="i-lucide-search w-4 h-4" aria-hidden="true" />
           </button>
         </div>
         <AutomationConversationInfo v-if="automationConversation" :conversation="automationConversation" />
+        <QuickActionsOverlay v-if="actionsOpen" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="paneActive" :can-write="installation.uiScopes.includes('main:admin')" @close="closeActions(true)" />
         <ConversationSearch ref="conversationSearch" :container="messagesContainer"
           :active="paneActive && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'"
           :keyboard-active="keyboardActive" :context-key="fileContextKey" :live-entries="liveSearchEntries"
@@ -560,6 +563,7 @@ import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } 
 import { conversationLinkSession, isDirectConversation } from '../project-coordination.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import ConversationSearch from './ConversationSearch.vue'
+import QuickActionsOverlay from './QuickActionsOverlay.vue'
 import { loadConversationSearchHistory, searchRange, searchTextBlocks, setConversationHighlights, textMatches, type ConversationSearchEntry, type ConversationSearchMatch } from '../conversation-search.ts'
 
 const route = useRoute()
@@ -2031,6 +2035,15 @@ async function goBackToCurrentSegment(): Promise<void> {
 
 const conversationSearch = ref<InstanceType<typeof ConversationSearch>>()
 const searchOpen = ref(false)
+const actionsOpen = ref(false), actionsTrigger = ref<HTMLButtonElement>()
+let actionsReturnFocus: HTMLElement | undefined
+function closeActions(restore = false) { actionsOpen.value = false; if (restore) nextTick(() => { const target = actionsReturnFocus?.isConnected ? actionsReturnFocus : actionsTrigger.value; target?.focus({ preventScroll: true }) }) }
+function toggleActions() {
+  if (actionsOpen.value) { closeActions(true); return }
+  actionsReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+  conversationSearch.value?.close(); actionsOpen.value = true
+}
+watch(() => [fileContextKey.value, paneActive.value, conversationDocumentVisible.value, activePanel.value], () => closeActions())
 interface SearchSegment {
   id: string | null
   previousId: string | null
@@ -2046,6 +2059,7 @@ function clearSearchHighlights() {
   setConversationHighlights(paneId)
 }
 function searchVisibilityChanged(value: boolean) {
+  if (value) closeActions()
   searchOpen.value = value
   clearSearchHighlights()
   if (!value) searchSegments = []
@@ -2936,9 +2950,11 @@ function resendLastMessage() {
 .draft-io { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 18px; }
 .chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; container-type: inline-size; }
 .chat-message-entry { display: contents; }
-.conversation-find { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); cursor: pointer; }
-.conversation-find:hover { background: var(--c-bg-muted); color: var(--c-text); }
-.conversation-find:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.conversation-find, .conversation-actions { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); cursor: pointer; }
+.conversation-actions { flex-basis: auto; width: auto; padding: 0 8px; margin-left: auto; font: inherit; font-size: 13px; }
+.conversation-find { margin-left: 0; }
+.conversation-find:hover, .conversation-actions:hover { background: var(--c-bg-muted); color: var(--c-text); }
+.conversation-find:focus-visible, .conversation-actions:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .chat-messages { position: relative; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding-block: 12px calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
 .session-status-row { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0 8px; width: calc(100% - 40px); max-width: var(--conversation-max-width); min-width: 0; margin: 0 auto; }
 .chat-working { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: min(240px, 100%); min-height: 32px; margin: 8px 0 0 auto; padding: 5px 10px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-control); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }

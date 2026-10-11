@@ -1,5 +1,5 @@
 <template>
-  <div v-if="open" class="conversation-search" role="search" :aria-label="t('Search conversation')" :aria-busy="loading || navigating" @keydown="searchKey">
+  <div v-if="open" ref="searchRoot" class="conversation-search" role="search" :aria-label="t('Search conversation')" :aria-busy="loading || navigating" @keydown="searchKey">
     <div class="search-controls">
       <span class="i-lucide-search search-icon" aria-hidden="true" />
       <input ref="input" v-model="query" type="search" :aria-label="t('Search all conversation history')" :placeholder="t('Search all messages')"
@@ -35,6 +35,7 @@ const entries = shallowRef<ConversationSearchEntry[]>([])
 const matches = computed(() => conversationMatches(entries.value, query.value))
 const selected = ref(0)
 const input = ref<HTMLInputElement>()
+const searchRoot = ref<HTMLElement>()
 const loading = ref(false)
 const historyReady = ref(false)
 const navigating = ref(false)
@@ -166,13 +167,14 @@ watch(() => props.liveEntries, value => {
 watch(loading, value => { if (!value && !error.value) schedule() })
 watch(() => props.active, value => { if (!value) close() })
 watch(() => props.contextKey, () => close())
-onMounted(() => document.addEventListener('keydown', documentKey))
-onUnmounted(() => { document.removeEventListener('keydown', documentKey); close() })
-defineExpose({ show })
+function outside(event: PointerEvent) { if (open.value && event.target instanceof Node && !searchRoot.value?.contains(event.target)) close(true) }
+onMounted(() => { document.addEventListener('keydown', documentKey); document.addEventListener('pointerdown', outside) })
+onUnmounted(() => { document.removeEventListener('keydown', documentKey); document.removeEventListener('pointerdown', outside); close() })
+defineExpose({ show, close })
 </script>
 
 <style scoped>
-.conversation-search { flex: 0 0 auto; min-width: 0; padding: 8px 12px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-soft); color: var(--c-text); container-type: inline-size; }
+.conversation-search { position: absolute; top: 44px; left: 8px; right: 8px; z-index: 20; border: 1px solid var(--c-border); border-radius: var(--radius-control); box-shadow: 0 8px 24px #0003; min-width: 0; padding: 8px 12px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-soft); color: var(--c-text); container-type: inline-size; }
 .search-controls { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .search-icon { flex: 0 0 16px; width: 16px; height: 16px; margin-right: 4px; color: var(--c-text-secondary); }
 input { flex: 1; min-width: 0; min-height: 32px; padding: 5px 8px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; }

@@ -121,6 +121,9 @@ import { DiscordIntegration, combineConversationPolicies } from '../../channels/
 import { DiscordLearning } from '../../channels/integration-learning.ts'
 import { discordIntegrationPlugin, ownerChannelConfigurationTool } from '../../channels/integration-routes.ts'
 import { projectConfigPlugin } from '../../projects/config-routes.ts'
+import { ProjectActions } from '../../projects/actions.ts'
+import { projectActionsPlugin } from '../../projects/action-routes.ts'
+import { ProjectActionTool } from '../../tools/project-action.ts'
 import { EventService } from '../../events/service.ts'
 import { PollingSources } from '../../events/polling-sources.ts'
 import { CronService } from '../../cron/service.ts'
@@ -333,6 +336,9 @@ export async function createProjectRuntime(
 
   const commandHandler = new CommandHandlerManager()
   const processManager = new ProcessManager()
+  const userActions = new ProjectActions(workspace, folderRegistry, processManager)
+  await userActions.init()
+  cleanup.push(() => userActions.shutdown())
   commandHandler.register(
     'userlink',
     createUserLinkCommandHandler(workspace, identity, bus),
@@ -926,6 +932,7 @@ export async function createProjectRuntime(
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirCapabilityLookup)
     return locations.workdir.available && locations.workdir.locality === 'local'
   }
+  importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
   const pollingSources = new PollingSources(
     workspace, events, capabilityBroker,
     id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
@@ -1202,6 +1209,7 @@ export async function createProjectRuntime(
     }),
     providerPlugin(() => provider),
     projectConfigPlugin(configStore),
+    projectActionsPlugin(userActions, dependencies.authorize),
   ]) plugin(app)
 
   // Register subagent tool (requires ChannelManager for thread creation)
@@ -1238,6 +1246,7 @@ export async function createProjectRuntime(
       () => github.stop(),
       () => cronService.stop(),
       () => stopLearning,
+      () => userActions.shutdown(),
       () => folders.dispose(),
       () => handoffManager.stop(),
       () => backgroundTasks.stop(),

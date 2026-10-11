@@ -54,6 +54,18 @@ If permission was denied, allow notifications in the browser's site settings
 before enabling them again. The page must remain open and running; this is not
 background Web Push for closed or suspended pages.
 
+## Quick Actions and conversation Search
+
+Open an existing chat and use **Actions** beside Search to create reusable
+command buttons or import selected npm scripts. Each action saves an explicit
+local Folder target; it does not inherit whichever chat is open. Pin the same
+action to the Project Dashboard for quick access. Runs expose status, logs, and
+Stop, and execute directly rather than starting a model conversation.
+
+Search opens as an overlay without pushing the message view down. Escape or
+clicking outside closes it; navigating search matches still scrolls deliberately.
+See [Project Quick Actions](quick-actions.md) for execution risks and limitations.
+
 ## Projects, folders, and conversations
 
 The sidebar displays multiple Projects at once; there is no global project

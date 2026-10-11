@@ -1,0 +1,44 @@
+import { app, BrowserWindow } from 'electron'
+import assert from 'node:assert/strict'
+import { join } from 'node:path'
+app.setPath('userData', join(process.cwd(), 'profile'))
+app.on('window-all-closed', () => {})
+async function main() {
+await app.whenReady()
+const win = new BrowserWindow({ show: false, width: 1000, height: 800, webPreferences: { contextIsolation: true, nodeIntegration: false } })
+win.webContents.on('console-message', (_event, level, message) => { if (level >= 2) console.error(message) })
+try {
+  console.log('LOAD');
+  await win.loadURL(process.env.QUICK_ACTIONS_URL! + '__actions')
+  console.log('LOADED');
+  const result = await win.webContents.executeJavaScript(`(async () => {
+    const wait = async fn => { for (let i=0;i<100;i++) { if(fn()) return; await new Promise(r=>setTimeout(r,30)) } throw Error('Timed out: '+document.body.innerText) };
+    const click = text => { const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text); if(!b) throw Error('Missing '+text); b.click() };
+    await wait(()=>window.fixture);
+    const history=document.querySelector('#history'); const rect=()=>JSON.stringify([history.offsetTop,history.offsetHeight,history.offsetWidth]); const before=rect();
+    document.querySelector('#search-trigger').focus(); click('Search'); await wait(()=>document.querySelector('.conversation-search input'));
+    if(rect()!==before) throw Error('Search changed history geometry');
+    document.querySelector('#outside').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+    await wait(()=>!document.querySelector('.conversation-search')); if(document.activeElement.id!=='search-trigger') throw Error('Search focus not restored');
+    click('Search'); await wait(()=>document.querySelector('.conversation-search')); click('Actions');
+    await wait(()=>document.querySelector('.quick-actions .action-row')); if(document.querySelector('.conversation-search')) throw Error('Search/actions not exclusive');
+    document.querySelector('.action-row details').open=true;
+    click('Build'); await wait(()=>document.querySelector('.run-confirmation'));
+    if(!document.querySelector('.run-confirmation').textContent.includes('synthetic')) throw Error('Target absent');
+    document.querySelector('.run-confirmation button').click(); await wait(()=>document.querySelector('.run-status'));
+    click('Stop'); await wait(()=>document.querySelector('.run-status').textContent.includes('stopped'));
+    click('Pin to Dashboard'); await wait(()=>window.fixture.pinned);
+    click('New action'); await wait(()=>document.querySelector('form'));
+    const set=(selector,value)=>{const e=document.querySelector(selector);e.value=value;e.dispatchEvent(new Event(e.tagName==='SELECT'?'change':'input',{bubbles:true}))};
+    set('form input','Test'); set('form textarea','echo test'); set('form select','folder'); await new Promise(r=>setTimeout(r,50)); click('Save'); await wait(()=>document.querySelectorAll('.action-row').length===2);
+    document.querySelectorAll('.action-row')[1].querySelector('details').open=true; click('Delete'); await new Promise(r=>setTimeout(r,50)); click('Confirm delete'); await wait(()=>document.querySelectorAll('.action-row').length===1);
+    document.querySelector('.discovery').open=true; set('.discovery select','folder'); await new Promise(r=>setTimeout(r,50)); click('Discover scripts'); await wait(()=>document.querySelector('.script')); click('Import'); await wait(()=>document.querySelectorAll('.action-row').length===2);
+    return {geometry:true,crud:true,run:true,import:true};
+  })()`)
+  assert.deepEqual(result, { geometry: true, crud: true, run: true, import: true })
+  console.log('QUICK_ACTIONS_OK')
+  app.exit(0)
+} catch (error) { console.error(error); app.exit(1) }
+
+}
+void main()
