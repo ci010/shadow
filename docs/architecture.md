@@ -706,10 +706,13 @@ Graph parentage comes from delegation ownership, not a historical context parent
   This does not acknowledge reads,
   discard completion payloads, or change the existing `queue`/`steering` semantics.
   Silent inputs only record content after any active turn; they neither inject
-  into its context nor start a later model turn. The `message` tool queues requests
-  without interrupting active work. Routine progress/acknowledgements archive by
-  default; explicit `silent:false` retains queued delivery. `attention` marks
-  blockers, decisions, corrections and milestones; these cannot use `silent:true`.
+  into its context nor start a later model turn. The `message` tool defaults to
+  `next-step` for actionable context without interrupting active tools; explicit
+  `delivery: "queue"` requests later work in reusable sessions. Routine progress/
+  acknowledgements archive by default. The unadvertised legacy `silent` alias maps
+  true to `silent`, false to `next-step`, never implicitly to queue. `attention`
+  marks blockers, decisions, corrections and milestones; these cannot be archived
+  and do not change an explicitly requested delivery.
   Required materials and unblocking instructions need a non-silent request;
   multi-part context must end with one, not with silent follow-ups.
   Retry/cancel/compact are distinct controls;
@@ -2707,7 +2710,7 @@ without suppressing known activity in another Project. Revoked authorization,
 window closure, or a lost Main connection clears stale activity and cancels
 pending observation. Child hosts are not polled for Main session state.
 
-`pnpm desktop:dev` is the local desktop development path; `pnpm desktop` selects
+`pnpm dev` is the local Electron development path; `pnpm desktop` selects
 the native Windows x64 NSIS, macOS x64/arm64 ZIP, or Linux x64 tar.gz pipeline.
 The release workflow runs native jobs and uploads only verified artifacts; WinSW
 resources remain Windows-only. macOS test builds use ad-hoc signing without
@@ -3048,11 +3051,8 @@ automatically replaced. Later turns resolve the latest inherited defaults.
   per-operation approval. Connection authentication, revocation and workdir
   routing validation remain; these do not sandbox the Child user's shell.
 
-The development Docker stack deliberately exposes additional services, including
-inspector/Xpra paths. It is a development environment, not a safe public default.
-The Docker build context excludes the runtime `workspace`, local configuration,
-and environment files; runtime data must be supplied separately rather than
-baked into the image.
+Shadow no longer supports Docker deployment. Use the native Electron package or
+run the Node backend directly; keep development services on trusted networks.
 
 ## Module map and extension points
 
@@ -3138,7 +3138,8 @@ Important differences from older plans:
   instantiated, and `wechatDesktop`/native Windows settings are not a second
   wired channel/tool merely by existing in the schema.
 - `maxToolIterations` exists in config, but the common `BaseSession` loop
-  currently uses a hard-coded 100-iteration bound; do not document that setting
+  currently uses a hard-coded 1000-request inference budget shared with nested
+  `infer` calls; do not document that setting
   as an enforced per-turn limit.
 - In-memory event/task/process state, best-effort persistence paths, limited
   recovery, and external-service failures prevent claims of lossless or

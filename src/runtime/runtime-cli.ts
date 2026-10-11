@@ -181,7 +181,14 @@ export async function dispatchRuntimeCli(
   let lifecycle: RuntimeLifecycleHandle
   try {
     lifecycle = await factory(plan, paths, context)
-  } catch {
+  } catch (cause) {
+    if (cause instanceof Error) {
+      const code = 'code' in cause && typeof cause.code === 'string'
+        && /^(?:SYSTEM_PROXY_UNAVAILABLE|ENOENT|EACCES|EPERM|ERR_MODULE_NOT_FOUND|ERR_INVALID_ARG_TYPE)$/.test(cause.code)
+        ? cause.code : undefined
+      // Preserve a safe diagnostic category without exposing the factory's message or locals.
+      if (code) console.error(`[runtime:factory] ${code}`)
+    }
     throw new RuntimeCliError(
       'factory_failed',
       `Failed to create ${plan.config.mode} runtime`,

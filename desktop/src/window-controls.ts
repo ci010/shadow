@@ -6,6 +6,10 @@ export function desktopIconPath(platform = process.platform): string {
   return join(import.meta.dirname, '..', 'assets', platform === 'win32' ? 'icon.ico' : 'icon.png')
 }
 
+export function desktopTrayIconPath(packaged: boolean, platform = process.platform): string {
+  return packaged ? desktopIconPath(platform) : join(import.meta.dirname, '..', 'assets', 'icon-dev.png')
+}
+
 export function secureWebPreferences(preloadPath: string): WebPreferences {
   return {
     preload: preloadPath,

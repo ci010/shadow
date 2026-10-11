@@ -256,3 +256,53 @@ test('ensureRuntime returns only stable redacted failure codes', async () => {
   assert.equal(JSON.stringify(failure).includes('secret'), false)
   assert.equal(JSON.stringify(failure).includes('private'), false)
 })
+// Both entry points converge on RuntimeHost; profiles are deliberately not migrated.
+test('development overrides wizard and saved production ports without rewriting profiles', async () => {
+  const { RuntimeHost } = await import('../sidecar/runtime-host.js')
+  for (const packaged of [false, true]) {
+    const starts: number[] = []
+    const host = new RuntimeHost({
+      paths: { executablePath: 'node', appPath: '.', resourcesPath: '.', userDataPath: '.', packaged },
+      environment: { SHADOW_DESKTOP_DEV_IPC: '1' },
+      supervisorFactory: () => ({
+        status: { phase: 'stopped' },
+        start: async (request) => {
+          starts.push(request.port)
+          return { phase: 'ready', role: request.role, apiBase: `http://127.0.0.1:${request.port}` }
+        },
+        stop: async () => undefined,
+      }),
+    })
+    const profile = { version: 1, role: 'main', port: 43123, localExecutor: true } as const
+    let saves = 0
+    const profiles: LaunchProfileStore = {
+      load: async () => profile,
+      save: async (saved) => { saves++; assert.deepEqual(saved, profile) },
+    }
+    const coordinator = createCoordinator(new MemoryStorage(mainLaunchState()), host, profiles)
+    assert.equal((await coordinator.launchMain({ port: 43123, localExecutor: true })).ok, true)
+    assert.equal(saves, 1)
+    // A new host exercises the saved-profile resume rather than cached startup.
+    await host.stop()
+    const resumedHost = new RuntimeHost({
+      paths: { executablePath: 'node', appPath: '.', resourcesPath: '.', userDataPath: '.', packaged },
+      environment: { SHADOW_DESKTOP_DEV_IPC: '1' },
+      supervisorFactory: () => ({
+        status: { phase: 'stopped' },
+        start: async (request) => {
+          starts.push(request.port)
+          return { phase: 'ready', role: request.role, apiBase: `http://127.0.0.1:${request.port}` }
+        },
+        stop: async () => undefined,
+      }),
+    })
+    const resumed = createCoordinator(new MemoryStorage(mainLaunchState()), resumedHost, profiles)
+    const result = await resumed.ensureRuntime()
+    assert.equal(result.ok, true)
+    if (result.ok) assert.equal(result.context.apiBase, `http://127.0.0.1:${packaged ? 43123 : 43124}`)
+    assert.deepEqual(starts, packaged ? [43123, 43123] : [43124, 43124])
+    assert.equal(saves, 1)
+    assert.equal(profile.port, 43123)
+    await resumedHost.stop()
+  }
+})

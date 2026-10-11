@@ -19,6 +19,7 @@ desktop/aria2/aria2c.exe
 desktop/aria2/COPYING
 desktop/aria2/LICENSE.OpenSSL
 desktop/aria2/aria2-1.37.0-source.tar.gz
+desktop/aria2/build-aria2-native.sh
 /.aria2-source/
 desktop/release-manifest.v1.json
 /release-prepared.json
@@ -57,6 +58,7 @@ bot.config.json
 /workspace.organizations/
 /.shadow-test-*/
 /.test-data/
+/.test-artifacts/
 /temp_adapter_qq/
 /temp_botpy/
 

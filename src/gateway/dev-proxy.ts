@@ -123,7 +123,7 @@ export function devProxyPlugin(target: string): GatewayPlugin {
       } catch (err) {
         return c.text(
           `Dev proxy unreachable (${targetUrl.host}): ${String(err)}\n` +
-            'Is `pnpm dev:app` running?',
+            'Is `pnpm dev` running?',
           502,
         )
       }

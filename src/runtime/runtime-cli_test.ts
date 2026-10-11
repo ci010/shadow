@@ -72,6 +72,19 @@ function harness(
   }
 }
 
+test('factory failures emit only an allowlisted underlying error code', async t => {
+  const lines: string[] = []
+  t.mock.method(console, 'error', (line: string) => lines.push(line))
+  const fixture = harness({
+    version: 1, mode: 'main', dataDir: './state', localNodeId: 'main-node',
+  }, {
+    mainFactory: () => { throw Object.assign(new Error('private credential'), { code: 'SYSTEM_PROXY_UNAVAILABLE' }) },
+  })
+  await assertRejects(dispatchRuntimeCli(['server', 'start', '--config', 'bootstrap.json'], fixture.dependencies))
+  assertEquals(lines, ['[runtime:factory] SYSTEM_PROXY_UNAVAILABLE'])
+  assert.doesNotMatch(lines.join(''), /private|credential/)
+})
+
 test('server validate plans config without starting or attaching signals', async () => {
   const test = harness({
     version: 1,

@@ -18,7 +18,7 @@ test('file explorer preload exposes only a frozen reveal capability', async () =
 test('file explorer validates sender, document, path and existence and cleans up', async () => {
   const window = Object.assign(new EventEmitter(), {
     isDestroyed: () => false,
-    webContents: { mainFrame: { url: 'http://127.0.0.1:1234/' }, isDestroyed: () => false },
+    webContents: Object.assign(new EventEmitter(), { mainFrame: { url: 'http://127.0.0.1:1234/' }, isDestroyed: () => false }),
   })
   const handlers = new Map<string, Parameters<IpcMain['handle']>[1]>()
   const shown: string[] = []
@@ -39,6 +39,18 @@ test('file explorer validates sender, document, path and existence and cleans up
   await assert.rejects(handler(event, `${path}.missing`), /ENOENT/)
   await assert.rejects(handler({ ...event, senderFrame: null }, path), /trusted Main/)
   await assert.rejects(handler({ ...event, sender: {} } as IpcMainInvokeEvent, path), /trusted Main/)
+  const contents = window.webContents
+  contents.mainFrame.url = 'http://127.0.0.1:1234/projects/example/files?view=tree'
+  contents.emit('did-navigate-in-page', {}, contents.mainFrame.url, true)
+  await handler(event, path)
+  assert.deepEqual(shown, [path, path])
+  // A full navigation to an arbitrary same-origin page is not history routing.
+  contents.emit('did-start-navigation', {}, 'http://127.0.0.1:1234/untrusted', false, true)
+  contents.mainFrame.url = 'http://127.0.0.1:1234/untrusted'
+  contents.emit('did-navigate', {}, contents.mainFrame.url)
+  await assert.rejects(handler(event, path), /trusted Main/)
+  contents.mainFrame.url = 'http://127.0.0.1:1234/'
+  contents.emit('did-navigate', {}, contents.mainFrame.url)
   window.webContents.mainFrame.url = 'https://example.test/'
   await assert.rejects(handler(event, path), /trusted Main/)
   window.webContents.mainFrame.url = 'http://127.0.0.1:1234/'
@@ -47,5 +59,8 @@ test('file explorer validates sender, document, path and existence and cleans up
   await assert.rejects(pending, /no longer available/)
   assert.equal(handlers.size, 0)
   assert.equal(window.listenerCount('closed'), 0)
-  assert.deepEqual(shown, [path])
+  for (const name of ['did-start-navigation', 'did-navigate', 'did-navigate-in-page', 'render-process-gone', 'destroyed']) {
+    assert.equal(contents.listenerCount(name), 0)
+  }
+  assert.deepEqual(shown, [path, path])
 })

@@ -1565,7 +1565,7 @@
   "Main could not complete the knowledge request ({status}). Refresh and retry.": "Main could not complete the knowledge request ({status}). Refresh and retry.",
   "Main could not complete this request (HTTP {status}).": "Main could not complete this request (HTTP {status}).",
   "Main could not complete this request. Check Main and retry.": "Main could not complete this request. Check Main and retry.",
-  "Main could not launch. Check that port 43123 is available, then retry.": "Main could not launch. Check that port 43123 is available, then retry.",
+  "Main could not launch. Check that the runtime port is available, then retry.": "Main could not launch. Check that the runtime port is available, then retry.",
   "Main could not pair this device. Check the connection and try a new code.": "Main could not pair this device. Check the connection and try a new code.",
   "Main device endpoint": "Main device endpoint",
   "Main did not apply the selected text encoding. Restart Main and reopen the file.": "Main did not apply the selected text encoding. Restart Main and reopen the file.",

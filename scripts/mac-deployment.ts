@@ -213,7 +213,10 @@ export async function deployMac(root: string, id: string, sourceHash: string, pn
     for (const name of ['aria2c', 'COPYING', 'LICENSE.OpenSSL', 'aria2-1.37.0-source.tar.gz', 'build-aria2-native.sh']) {
       await cp(join(ariaOutput, name), join(source, 'desktop', 'aria2', name))
     }
+    await buildCommand(pnpm, ['typecheck'], log)
+    await buildCommand(pnpm, ['test:release'], log)
     await buildCommand(pnpm, ['desktop'], log)
+    await buildCommand(pnpm, ['test:packaged'], log)
     await buildCommand(pnpm, ['exec', 'node', '--import', 'tsx', '--test', '--test-concurrency=1',
       'src/execution/processes/*_test.ts', 'src/execution/*_test.ts', 'src/sessions/session-recovery_test.ts'], log)
     await requireStopped(root, application)

@@ -81,3 +81,23 @@ test('persistent log projects backend phase fields through a second allowlist', 
   assert.equal(JSON.parse(text).backend.durationMs, 30)
   assert.doesNotMatch(text + lines.join(''), /private|projectId|message/)
 })
+
+test('failed startup persists only allowlisted backend error metadata', t => {
+  const directory = join(process.cwd(), '.startup-log-fixture-' + randomUUID())
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const path = startupLogPath(directory)
+  const logger = new StartupDiagnosticsLog(path, 1024, () => {})
+  logger.write({
+    ...entry,
+    backendError: {
+      name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE',
+      frames: ['dist/src/runtime/main/start.js:42:7', 'C:\\private\\secret.js:4:2'],
+      message: 'private credential',
+    },
+  } as StartupDiagnosticEntry)
+  const text = readFileSync(path, 'utf8')
+  assert.deepEqual(JSON.parse(text).backendError, {
+    name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE', frames: ['dist/src/runtime/main/start.js:42:7'],
+  })
+  assert.doesNotMatch(text, /private|credential|message|secret/)
+})

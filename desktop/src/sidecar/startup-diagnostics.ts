@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { safeBackendTiming, type BackendStartupTiming } from './backend-startup-diagnostics.js'
+import { safeBackendError, safeBackendTiming, type BackendStartupError, type BackendStartupTiming } from './backend-startup-diagnostics.js'
 
 export const STARTUP_FAILURE_KINDS = [
   'spawn-error', 'configuration-error', 'port-conflict', 'readiness-timeout',
@@ -46,6 +46,7 @@ export interface StartupDiagnosticEntry {
   readonly kind?: StartupFailureKind
   readonly exitCode?: number
   readonly backend?: BackendStartupTiming
+  readonly backendError?: BackendStartupError
 }
 
 export function startupLogPath(userDataPath: string): string {
@@ -55,6 +56,7 @@ export function startupLogPath(userDataPath: string): string {
 /** Persist only known fields, never error messages, environment or child output. */
 function safeEntry(entry: StartupDiagnosticEntry): StartupDiagnosticEntry | undefined {
   const backend = entry.event === 'backend-phase' ? safeBackendTiming(entry.backend) : undefined
+  const backendError = entry.event === 'failed' ? safeBackendError(entry.backendError) : undefined
   if (
     (entry.role !== 'main' && entry.role !== 'child')
     || !EVENTS.includes(entry.event)
@@ -70,6 +72,7 @@ function safeEntry(entry: StartupDiagnosticEntry): StartupDiagnosticEntry | unde
     ...(STARTUP_FAILURE_KINDS.includes(entry.kind!) ? { kind: entry.kind } : {}),
     ...(Number.isSafeInteger(entry.exitCode) ? { exitCode: entry.exitCode } : {}),
     ...(backend ? { backend } : {}),
+    ...(backendError ? { backendError } : {}),
   }
 }
 

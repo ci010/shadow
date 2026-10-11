@@ -67,6 +67,9 @@ test('release verification binds dirty source, renderer, service host and actual
     await verifyReleaseManifest(packaged, root, windows)
     await file(root, 'src/index.ts', 'changed source without a commit')
     await assert.rejects(verifyReleaseManifest(packaged, root, windows), /current source/)
+    await verifyReleaseManifest(packaged, undefined, windows)
+    await file(packaged, 'resources/app-dist/index.html', 'tampered renderer')
+    await assert.rejects(verifyReleaseManifest(packaged, undefined, windows), /differs from validated build/)
   })
 })
 

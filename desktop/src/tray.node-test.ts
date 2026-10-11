@@ -4,7 +4,7 @@ import test from 'node:test'
 import type { Menu, MenuItemConstructorOptions } from 'electron'
 import { installTrayMenu } from './tray.js'
 
-function fixture() {
+function fixture(development = false) {
   const calls: string[] = []
   const window = Object.assign(new EventEmitter(), {
     minimized: false,
@@ -24,14 +24,14 @@ function fixture() {
   const nativeMenu = {} as Menu
   const tray = Object.assign(new EventEmitter(), {
     destroyed: false,
-    setToolTip(text: string) { assert.equal(text, 'Shadow') },
+    setToolTip(text: string) { assert.equal(text, development ? 'Shadow (DEV)' : 'Shadow') },
     setContextMenu(menu: Menu) { assert.equal(menu, nativeMenu) },
     isDestroyed() { return this.destroyed },
     destroy() { this.destroyed = true; calls.push('destroy-tray') },
   })
   const dispose = installTrayMenu(tray, {
     buildFromTemplate(items) { template = items; return nativeMenu },
-  }, window, () => { calls.push('quit') })
+  }, window, () => { calls.push('quit') }, development ? () => { calls.push('restart') } : undefined)
   const click = (index: number) => {
     const item = template[index]!
     assert.ok(item.click)
@@ -89,4 +89,13 @@ test('window close and explicit disposal destroy the tray once and remove listen
     assert.equal(tray.listenerCount('click'), 0)
     assert.equal(window.listenerCount('closed'), 0)
   }
+})
+
+test('development restart calls main callback and is inert after disposal', () => {
+  const { template, click, calls, dispose } = fixture(true)
+  assert.equal(template[2]?.label, '重启 Shadow（开发）')
+  click(2)
+  assert.deepEqual(calls, ['restart'])
+  dispose(); click(2)
+  assert.deepEqual(calls, ['restart', 'destroy-tray'])
 })

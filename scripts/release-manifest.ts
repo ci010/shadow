@@ -164,7 +164,7 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
 }
 
 export async function verifyReleaseManifest(
-  packagedRoot: string, repositoryRoot: string, target: DesktopTarget = desktopTarget(),
+  packagedRoot: string, repositoryRoot: string | undefined, target: DesktopTarget = desktopTarget(),
 ): Promise<void> {
   const resources = join(packagedRoot, target.resourcesRelativePath)
   const saved: unknown = JSON.parse(await readFile(join(resources, 'release-manifest.v1.json'), 'utf8'))
@@ -173,12 +173,14 @@ export async function verifyReleaseManifest(
   if (manifest.platform !== target.platform || manifest.arch !== target.arch) {
     throw new Error(`Packaged application target ${manifest.platform}/${manifest.arch} does not match ${target.platform}/${target.arch}`)
   }
-  if (manifest.sourceHash !== await sourceFingerprint(repositoryRoot)) {
-    throw new Error('Packaged application does not match current source. Run pnpm desktop to create a fresh release.')
-  }
-  const desktopPackage = JSON.parse(await readFile(join(repositoryRoot, 'desktop', 'package.json'), 'utf8'))
-  if (manifest.packageVersion !== desktopPackage.version || manifest.electronVersion !== desktopPackage.devDependencies.electron) {
-    throw new Error('Packaged application version does not match the release configuration')
+  if (repositoryRoot !== undefined) {
+    if (manifest.sourceHash !== await sourceFingerprint(repositoryRoot)) {
+      throw new Error('Packaged application does not match current source. Run pnpm desktop to create a fresh release.')
+    }
+    const desktopPackage = JSON.parse(await readFile(join(repositoryRoot, 'desktop', 'package.json'), 'utf8'))
+    if (manifest.packageVersion !== desktopPackage.version || manifest.electronVersion !== desktopPackage.devDependencies.electron) {
+      throw new Error('Packaged application version does not match the release configuration')
+    }
   }
   const archive = join(resources, 'app.asar')
   const packagedManifest = JSON.parse(extractFile(archive, 'package.json').toString('utf8'))

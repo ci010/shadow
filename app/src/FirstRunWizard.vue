@@ -392,7 +392,7 @@ async function launchMain(): Promise<void> {
 		const result = await props.api.bootstrap.launchMain({ localExecutor: localExecutor.value, port: MAIN_LAUNCH_PORT })
 		if (!result.ok) throw new Error(t('command failed'))
 		return result.state
-	}, t('Main could not launch. Check that port 43123 is available, then retry.'))
+	}, t('Main could not launch. Check that the runtime port is available, then retry.'))
 	if (state.value?.step === 'complete') emit('complete')
 }
 </script>

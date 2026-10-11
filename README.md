@@ -24,22 +24,38 @@ npm install --global pnpm@12.3.1
 pnpm install
 ```
 
-Copy `bot.config.example.json` to `bot.config.json` if you do not already have
-a configuration, choose a provider/model, and set its credentials in `.env` or
-the environment (for example `OPENAI_API_KEY`). The example enables web chat
-and SQLite sessions. **Do not overwrite an existing config or workspace**;
-`bot.config.json`, `.env`, and runtime `workspace/` are private local data.
 The root, `app`, and `desktop` share one lockfile; do not install separately
-inside those packages.
+inside those packages. Electron setup initializes or reuses the Main configuration;
+choose the provider/model in the app. Credentials may also be supplied in `.env`
+or the environment (for example `OPENAI_API_KEY`). **Do not overwrite existing
+configuration or workspace data.**
+
+For the optional headless `pnpm start` path, copy `bot.config.example.json` to
+`bot.config.json` only if no config exists. That example enables web chat and
+SQLite sessions; `bot.config.json`, `.env`, and `workspace/` are private local data.
 
 ```sh
 pnpm dev
 ```
 
-Open `http://localhost:5273`. This starts the backend and Vite; for separate
-processes use `pnpm dev:server` and `pnpm dev:app`. `pnpm start` runs the
-backend without a development watcher; an optional argument selects another
-bot config: `pnpm start path-to-bot-config.json`.
+This builds the backend and desktop shell, starts Vite, and launches Electron.
+Development uses the same Main data directory as production: `~/.shadow`
+(including `workspace/` and the project index). **Development reads and writes
+production data.** Set `SHADOW_DESKTOP_DEV_MAIN_DIRECTORY` to an absolute path
+before first-time setup to use isolated data instead. Existing saved Main directory
+selections are preserved; old development data is not migrated automatically.
+Electron's development UI profile/cache remains worktree-local. The development
+backend uses port `43124` rather than production's `43123`; existing saved dev
+launch ports are overridden at runtime, without rewriting the saved profile.
+Distinct ports do not bypass Main data ownership: stop production before using
+the same Main directory, or select isolated development data.
+Use **重启 Shadow（开发）** in the development tray menu to stop the current Electron
+Main and its backend, rebuild the backend/desktop shell, and launch a new
+Electron process while keeping Vite running. Normal quit still stops the entire
+development process tree; this restart entry is absent in packaged builds.
+
+`pnpm start` runs the backend without Electron or a development watcher; an
+optional argument selects another bot config: `pnpm start path-to-bot-config.json`.
 
 For a production web build:
 
@@ -57,7 +73,7 @@ deploying headlessly.
 
 The optional `download` tool requires **aria2 1.37.0**. It is bundled in desktop
 release packages, but `pnpm install` does not install it. Source development,
-`desktop:dev`, and the built backend in this checkout look for
+`pnpm dev`, and the built backend in this checkout look for
 `desktop/aria2/aria2c.exe` on Windows or `desktop/aria2/aria2c` on macOS/Linux,
 independently of the process working directory. Alternatively, set
 `SHADOW_ARIA2C_PATH` to an absolute path to a trusted copy of that exact version.
@@ -72,6 +88,9 @@ Copy `aria2c.exe`, `COPYING`, and `LICENSE.OpenSSL` into `desktop/aria2`.
 These local assets are Git-ignored. This portable development binary does not
 replace the native-build and corresponding-source requirements for release
 packaging; see [aria2 build instructions](desktop/aria2/BUILD.md).
+For local Windows dogfooding, `pnpm desktop:prepare-aria2` prepares missing source,
+licenses and build instructions automatically, and downloads the checksum-verified
+upstream binary when absent. It still validates the complete aria2 package.
 
 After changing the executable path or rebuilding backend code, restart the
 backend and use `download` with `action: "status"` to verify availability.
@@ -81,12 +100,12 @@ The rest of Shadow can run without aria2; only new downloads require it.
 
 | Client | Start here |
 | --- | --- |
-| Electron desktop | `pnpm desktop:dev` for development; `pnpm desktop` builds and verifies a native package on a supported host. See [release verification](docs/release.md) and [two-device pairing](docs/desktop-pairing.md). |
+| Electron desktop | `pnpm dev` for development; `pnpm desktop` builds a native package on a supported host. Tests run separately. See [release verification](docs/release.md) and [two-device pairing](docs/desktop-pairing.md). |
 | Browser without Electron | Run the backend independently and follow [browser access and installation](docs/browser-access.md) for PIN/pairing login and PWA limitations. |
 | iOS and Android | Use the [mobile client guide](docs/mobile.md) for the separate HTTPS endpoint and [native build instructions](mobile/README.md) for platform builds and signing. |
 
 The gateway defaults to loopback. Do not expose an unauthenticated gateway,
-development Vite, inspector, or Docker/Xpra ports to untrusted networks.
+development Vite or inspector ports to untrusted networks.
 `restrictToWorkspace` is not an OS sandbox; host tools run with the backend
 user's permissions.
 
@@ -104,11 +123,14 @@ folder boundaries, see the
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm dev` / `pnpm start` | Develop with Vite and a watcher / run the backend without watch mode |
+| `pnpm dev` / `pnpm start` | Launch Electron development with Vite / run the headless backend |
 | `pnpm build:all` | Build the backend and web UI |
 | `pnpm typecheck` | Typecheck backend, scripts, integrations, desktop, and Vue app |
 | `pnpm test` / `pnpm test:desktop` | Run backend/frontend-logic tests / desktop tests |
-| `pnpm desktop:dev` / `pnpm desktop` | Develop Electron / build and verify a native package |
+| `pnpm desktop` | Build a native package without tests |
+| `pnpm desktop:prepare-aria2` | Prepare local Windows aria2 binary, source and license materials |
+| `pnpm desktop:build` | Build and package locally without typechecks or test suites |
+| `pnpm desktop:install` | Install the existing package for the current Windows x64 user; quit Shadow first. See [local installation](docs/release.md#install-a-local-windows-build) |
 | `pnpm release` | Build current source natively over SSH and deploy to your Mac; see [internal releases](docs/release.md#internal-mac-dogfood-releases) |
 
 For a focused test, run

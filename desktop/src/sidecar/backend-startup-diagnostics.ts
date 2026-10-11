@@ -46,6 +46,49 @@ const MAX_LINE_LENGTH = 2_048
 const MAX_RECORDS = 512
 const WIRE_FIELDS = ['version', 'component', 'phase', 'status', 'elapsedMs', 'durationMs', 'projectId']
 
+const ERROR_NAMES = ['Error', 'TypeError', 'SyntaxError', 'ReferenceError', 'RangeError', 'AggregateError', 'RuntimeCliError'] as const
+const ERROR_CODES = [
+  'ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ERR_UNKNOWN_FILE_EXTENSION',
+  'ERR_REQUIRE_ESM', 'ERR_DLOPEN_FAILED', 'ERR_INVALID_ARG_TYPE', 'ERR_INVALID_ARG_VALUE',
+  'ERR_SQLITE_ERROR', 'EADDRINUSE', 'EACCES', 'EPERM', 'ENOENT', 'SYSTEM_PROXY_UNAVAILABLE',
+  'config_read_failed', 'config_json_invalid', 'config_invalid', 'factory_failed', 'lifecycle_failed', 'environment_invalid',
+] as const
+
+export interface BackendStartupError {
+  readonly name?: typeof ERROR_NAMES[number]
+  readonly code?: typeof ERROR_CODES[number]
+  readonly frames: readonly string[]
+}
+
+export function safeBackendError(value: unknown): BackendStartupError | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const name = ERROR_NAMES.find(name => name === record.name)
+  const code = ERROR_CODES.find(code => code === record.code)
+  const frames = Array.isArray(record.frames) ? record.frames.filter((frame): frame is string =>
+    typeof frame === 'string' && frame.length <= 180
+    && /^(?:node:internal\/[a-zA-Z0-9_./-]+|dist\/src\/[a-zA-Z0-9_./-]+\.js):\d{1,7}:\d{1,7}$/.test(frame)
+    && !frame.includes('..'),
+  ).slice(0, 8) : []
+  if (!name && !code && frames.length === 0) return undefined
+  return { ...(name ? { name } : {}), ...(code ? { code } : {}), frames }
+}
+
+/** Extract fixed error categories and source locations, never messages, paths or locals. */
+export function backendStartupError(output: string): BackendStartupError | undefined {
+  const text = output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+  const name = text.match(/(?:^|\n)(Error|TypeError|SyntaxError|ReferenceError|RangeError|AggregateError|RuntimeCliError)(?: \[[A-Z_]+\])?:/)?.[1]
+  const code = ERROR_CODES.find(code => new RegExp(`\\b${code}\\b`).test(text))
+  const frames: string[] = []
+  for (const line of text.split('\n')) {
+    if (!/^\s+at /.test(line)) continue
+    const normalized = line.replaceAll('\\', '/')
+    const frame = normalized.match(/(node:internal\/[a-zA-Z0-9_./-]+|dist\/src\/[a-zA-Z0-9_./-]+\.js):(\d+):(\d+)\)?\s*$/)
+    if (frame) frames.push(`${frame[1]}:${frame[2]}:${frame[3]}`)
+  }
+  return safeBackendError({ name, code, frames })
+}
+
 /** Only fixed-shape timing markers are eligible for persistence, never arbitrary child lines. */
 export class BackendStartupDiagnostics {
   private readonly streams = {

@@ -136,6 +136,7 @@ test('development launch uses the repository backend and explicit user data dire
   const supervisor = new DeferredSupervisor()
   const host = new RuntimeHost({
     paths: { ...paths, packaged: false },
+    environment: {},
     supervisorFactory: () => supervisor,
     tokenFactory: () => 'launch-token',
   })
@@ -277,4 +278,20 @@ test('quit waits for one idempotent stop and does not recurse', async () => {
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(app.quitCount, 1)
   assert.equal(stopCount, 1)
+})
+
+test('development port policy is gated, validates overrides, and never uses production port', async () => {
+  const { resolveRuntimeLaunchOptions } = await import('./runtime-host.js')
+  const launch = { role: 'main', port: 43123, localExecutor: true } as const
+  assert.equal(resolveRuntimeLaunchOptions(launch, false, {}), launch)
+  assert.equal(resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '0' }), launch)
+  assert.equal(resolveRuntimeLaunchOptions(launch, true, { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: 'invalid' }), launch)
+  assert.equal(resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '1' }).port, 43124)
+  for (const port of ['1', '65535', '43210']) {
+    assert.equal(resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: port }).port, Number(port))
+  }
+  for (const port of ['', '0', '65536', '-1', '1.5', 'NaN', '1e3', ' 43124', '43123']) {
+    assert.throws(() => resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: port }), /SHADOW_DESKTOP_DEV_PORT/)
+  }
+  assert.equal(resolveRuntimeLaunchOptions({ role: 'child', port: 43123 }, false, { SHADOW_DESKTOP_DEV_IPC: '1' }).port, 43124)
 })

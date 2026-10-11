@@ -1565,7 +1565,7 @@
   "Main could not complete the knowledge request ({status}). Refresh and retry.": "主节点无法完成知识请求（{status}）。请刷新重试。",
   "Main could not complete this request (HTTP {status}).": "主节点无法完成此请求（HTTP {status}）。",
   "Main could not complete this request. Check Main and retry.": "主节点无法完成此请求。请检查主节点后重试。",
-  "Main could not launch. Check that port 43123 is available, then retry.": "无法启动主节点。请检查端口 43123 是否可用，然后重试。",
+  "Main could not launch. Check that the runtime port is available, then retry.": "无法启动主节点。请检查运行时端口是否可用，然后重试。",
   "Main could not pair this device. Check the connection and try a new code.": "主节点无法配对此设备。请检查连接，并使用新配对码重试。",
   "Main device endpoint": "主节点设备端点",
   "Main did not apply the selected text encoding. Restart Main and reopen the file.": "主节点未应用所选文本编码。请重启主节点并重新打开文件。",

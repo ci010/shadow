@@ -1,5 +1,55 @@
 # Desktop release verification
 
+## Install a local Windows build
+
+On Windows x64, run from the repository root:
+
+```sh
+pnpm desktop:prepare-aria2
+pnpm desktop:build
+pnpm desktop:install
+```
+
+These commands have separate responsibilities. `desktop:prepare-aria2` only
+prepares and validates aria2 materials. `desktop:build` compiles the backend,
+Electron host and renderer, deploys production dependencies and creates the
+native installer. It does not run typechecks, test suites or packaged smoke
+tests, and does not install anything. `desktop:install` only installs an existing
+package; it does not prepare dependencies, build, download or run test suites.
+`pnpm desktop` is an alias of the same build-only flow. Typechecking and tests
+are separate commands: `pnpm typecheck`, `pnpm test:release` and
+`pnpm test:packaged` (the last requires an existing package).
+
+The installation command runs the existing NSIS installer silently for the
+current user. Shadow is installed
+at `%LOCALAPPDATA%\Programs\Shadow`, with the installer's normal shortcuts and
+uninstall registration. The command checks the installed release manifest and
+file hashes against the local build before reporting success. It does not push,
+publish, launch the installed app, or reset its configuration and runtime data.
+
+Quit the installed Shadow, including background processes, before running it.
+The script refuses a running installation before package verification and
+immediately before installing; it does not terminate processes itself. Missing
+or inconsistent package contents prevent installation. Source changes after a
+build do not invalidate an existing package for installation.
+Package identity/hash checks remain installation safeguards, not test suites.
+An installation/post-install verification failure
+is reported explicitly and does not automatically roll back binaries or data.
+Dependencies must already be installed with the pinned Node/pnpm toolchain.
+macOS and Linux are not supported by this local installation command.
+
+Windows' `tar.exe` is required for first-time preparation. Missing
+corresponding source and licenses are fetched from the pinned upstream aria2
+commit's checksum-verified source archive; the native build script is copied
+from this repository. Download archives are cached under `.tmp` and their hashes
+are checked again before reuse. If no local
+`aria2c.exe` exists, the official Windows x64 1.37.0 archive is downloaded and
+checked against its pinned SHA-256 before extraction. Existing binaries are not
+overwritten and must pass the native format and version checks. Complete inputs
+are reused offline; incomplete or invalid inputs fail explicitly.
+This local dogfood path can use the upstream Windows binary; CI distribution
+continues to compile aria2 natively with `scripts/build-aria2-native.sh`.
+
 ## Internal Mac dogfood releases
 
 `pnpm release` means **build the current working source and deploy it to your
@@ -35,7 +85,8 @@ login items. Only source/build files cross SSH, never a local provider config.
 **Quit Shadow on the Mac before releasing.** The command refuses a running
 managed app, including its remaining helpers/backend, both before the build and
 before deployment. It never force-quits a process or interrupts running tasks.
-Builds execute natively on the Mac with the existing `pnpm desktop` gates plus
+Builds execute natively on the Mac with explicit typecheck, release-test, build
+and packaged-test commands plus
 the execution/session-recovery regressions. Windows is only the initiating host;
 GitHub is not the deployment controller.
 
@@ -92,17 +143,36 @@ part of this pipeline.
 
 ## Build gate
 
+### Desktop startup diagnostics
+
+Desktop startup failures are written to `logs/startup.jsonl` under Electron's
+user-data directory (normally `%APPDATA%\@shadow\desktop` on Windows).
+The file is bounded and rotated. Failed starts include `backendError` when
+the backend emits a recognizable exception: its allowlisted exception name,
+error code and up to eight backend/Node source locations. Absolute paths,
+exception messages, configuration, credentials and arbitrary stdout/stderr
+are not persisted. The preceding `backend-phase` events show how far startup
+progressed; an `early-exit` before any phase can indicate module/bootstrap failure.
+Windows proxy discovery isolates its PowerShell C# compiler from inherited
+`LIB`, `LIBPATH` and `INCLUDE` variables, so stale Visual Studio paths do not
+prevent desktop startup. These variables are removed only from that resolver
+subprocess, not from the user's environment or tool execution.
+
 Run from the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test:release
 pnpm desktop
+pnpm test:packaged
 ```
 
-The release command runs backend/build-script, Electron and Vue typechecks,
-the focused `test:release` suite, all three production builds, production
-dependency deployment, packaging, and `test:packaged`, in that order. A failure
-stops the pipeline. `test:release` covers build/packaging helpers, service-mode
+Build and validation are independent commands. `pnpm desktop` runs all three
+production builds, production dependency deployment and packaging only.
+It does not run typechecks, test suites or packaged smoke tests.
+Run the commands above in order for the complete release gate; CI and Mac
+deployment invoke their validation steps explicitly. `test:release` covers build/packaging helpers, service-mode
 contracts, Vite integration and the Electron lifecycle suite; it is not a
 replacement for the broader `pnpm test` feature suite.
 Release helper test files run serially because they launch compiler and runtime
@@ -158,12 +228,13 @@ The split commands are intended for CI:
 pnpm release:prepare all                  # typechecks, then selected JS/Web builds
 pnpm release:verify-prepared desktop      # verifies current source and output bytes
 pnpm test:release                        # run on the native desktop host
-pnpm desktop:package                     # verified shared outputs -> native package + smoke
+pnpm desktop:package                     # verified shared outputs -> native package
+pnpm test:packaged                       # test the existing native package
 ```
 
-`desktop:package` refuses missing/stale prepared output but **does not run
-typechecks or `test:release`**; CI runs those gates explicitly. For an ordinary
-local release, keep using `pnpm desktop`, which retains the complete build gate.
+`desktop:package` refuses missing/stale prepared output but does not run
+typechecks or tests; CI runs those gates explicitly. For an ordinary local
+release, run the separate commands listed under Build gate.
 Mobile consumers verify `mobile`, then run `mobile:sync`, mobile tests and native
 compilation. `release:prepare` also accepts `desktop` or `mobile` individually.
 

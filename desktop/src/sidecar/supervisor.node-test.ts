@@ -97,6 +97,26 @@ class ManualClock implements SidecarClock {
   }
 }
 
+test('early exit reports safe backend error metadata assembled across output chunks', async () => {
+  const child = new FakeChild()
+  const entries: StartupDiagnosticEntry[] = []
+  const supervisor = new NodeSidecarSupervisor({
+    spawn: () => child,
+    readinessProbe: () => new Promise(() => {}),
+    diagnosticSink: entry => entries.push(entry),
+  })
+  const starting = supervisor.start(request)
+  child.stderr.write('Type')
+  child.stderr.write(`Error: private configuration\n    at start (C:\\private\\dist\\src\\index.js:12:3)\n  code: 'ERR_INVALID_ARG_TYPE'\n`)
+  child.exit(1)
+  await starting
+  const failed = entries.find(entry => entry.event === 'failed')
+  assert.deepEqual(failed?.backendError, {
+    name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE', frames: ['dist/src/index.js:12:3'],
+  })
+  assert.doesNotMatch(JSON.stringify(entries), /private|configuration/)
+})
+
 function harness(probeResults: SidecarReadinessResult[] = [{ ready: true }]) {
   const child = new FakeChild()
   const calls: Array<{ executablePath: string; args: readonly string[]; options: Parameters<SidecarSpawn>[2] }> = []
@@ -403,7 +423,7 @@ test('diagnostics distinguish timeout from early exit with safe role, duration a
   }
 })
 
-test('raw output only informs bounded category classification and never reaches a log sink', async () => {
+test('raw output is bounded and only its allowlisted error code reaches a log sink', async () => {
   const child = new FakeChild()
   const logs: unknown[] = []
   const supervisor = new NodeSidecarSupervisor({
@@ -415,7 +435,8 @@ test('raw output only informs bounded category classification and never reaches 
   child.stderr.write('INUSE secret-token')
   child.exit(1)
   assert.equal((await starting as { kind: string }).kind, 'port-conflict')
-  assert.doesNotMatch(JSON.stringify(logs), /private-|secret-token|EADDR/)
+  assert.doesNotMatch(JSON.stringify(logs), /private-|secret-token/)
+  assert.match(JSON.stringify(logs), /"code":"EADDRINUSE"/)
 })
 
 test('spawn and readiness exceptions cannot leak credentials in failures or diagnostics', async () => {
@@ -498,3 +519,50 @@ test('supervisor captures whitelisted backend startup phases but not raw output 
   assert.doesNotMatch(JSON.stringify(entries), /private-project|private-key|credential/)
   await supervisor.stop()
 })
+test('occupied port fails before spawning or probing an unrelated runtime', async () => {
+  const entries: StartupDiagnosticEntry[] = []
+  const supervisor = new NodeSidecarSupervisor({
+    isPortOccupied: async port => { assert.equal(port, request.port); return true },
+    spawn: () => { assert.fail('must not spawn on occupied port') },
+    readinessProbe: async () => { assert.fail('must not send launch token to existing listener') },
+    diagnosticSink: entry => entries.push(entry),
+  })
+  assert.partialDeepStrictEqual(await supervisor.start(request), {
+    phase: 'failed', kind: 'port-conflict',
+  })
+  await supervisor.stop()
+  assert.deepEqual(entries.map(entry => entry.event), ['starting', 'failed', 'stopped'])
+})
+
+test('free port preflight preserves backend launch and authenticated readiness', async () => {
+  const child = new FakeChild()
+  let spawned = false
+  const supervisor = new NodeSidecarSupervisor({
+    isPortOccupied: async () => false,
+    spawn: () => { spawned = true; return child },
+    readinessProbe: async (_apiBase, token) => {
+      assert.equal(spawned, true)
+      assert.equal(token, request.launchToken)
+      return { ready: true }
+    },
+  })
+  assert.equal((await supervisor.start(request)).phase, 'ready')
+  await supervisor.stop()
+})
+
+for (const occupied of [false, true]) {
+  test(`stop during pending port preflight prevents spawn (occupied=${occupied})`, async () => {
+    let resolvePreflight!: (occupied: boolean) => void
+    const supervisor = new NodeSidecarSupervisor({
+      isPortOccupied: () => new Promise<boolean>(resolve => { resolvePreflight = resolve }),
+      spawn: () => { assert.fail('must not spawn after stop') },
+      readinessProbe: async () => { assert.fail('must not probe after stop') },
+    })
+    const starting = supervisor.start(request)
+    assert.equal(supervisor.status.phase, 'starting')
+    await supervisor.stop()
+    resolvePreflight(occupied)
+    assert.deepEqual(await starting, { phase: 'stopped' })
+    assert.deepEqual(supervisor.status, { phase: 'stopped' })
+  })
+}

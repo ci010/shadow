@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process'
 import type { StartupDiagnosticEntry } from './startup-diagnostics.js'
-import { BackendStartupDiagnostics, type BackendStartupTiming } from './backend-startup-diagnostics.js'
+import { backendStartupError, BackendStartupDiagnostics, type BackendStartupTiming } from './backend-startup-diagnostics.js'
 
 export type SidecarRole = 'main' | 'child'
 
@@ -78,6 +78,7 @@ export interface SidecarLogEntry {
 
 export interface NodeSidecarSupervisorOptions {
   readonly spawn?: SidecarSpawn
+  readonly isPortOccupied?: (port: number) => Promise<boolean>
   readonly readinessProbe: SidecarReadinessProbe
   readonly authenticatedShutdownRequest?: SidecarShutdownRequest
   readonly clock?: SidecarClock
@@ -160,9 +161,18 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     const validationFailure = this.validate(request)
     if (validationFailure) return this.fail(request.role, 'configuration-error', validationFailure)
 
+    // Probe before spawn: otherwise an unrelated runtime can reject this launch's
+    // credential before our backend has even initialized, masking a port conflict.
     this.status = { phase: 'starting', role: request.role }
     this.stopping = false
     this.recentOutput = ''
+    const occupied = this.options.isPortOccupied && await this.options.isPortOccupied(request.port)
+    // stop() may complete while preflight is pending, before a child exists.
+    // Never reset its cancellation or spawn after shutdown has completed.
+    if (this.stopping) return this.status
+    if (occupied) {
+      return this.fail(request.role, 'port-conflict', 'The local runtime port is already in use; stop the other runtime or select a different port')
+    }
 
     const args = [
       request.entryPath,
@@ -425,6 +435,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
   }
 
   private diagnostic(event: StartupDiagnosticEntry['event'], kind?: SidecarFailureKind, exitCode?: number | null, backend?: BackendStartupTiming): void {
+    const backendError = event === 'failed' ? backendStartupError(this.recentOutput) : undefined
     try {
       this.options.diagnosticSink?.({
         timestamp: new Date(this.clock.now()).toISOString(),
@@ -434,6 +445,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
         ...(kind ? { kind } : {}),
         ...(exitCode !== undefined && exitCode !== null ? { exitCode } : {}),
         ...(backend ? { backend } : {}),
+        ...(backendError ? { backendError } : {}),
       })
     } catch {
       // Diagnostics must never prevent startup or cleanup.

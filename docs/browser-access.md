@@ -40,8 +40,7 @@ or device-enrollment credentials. Keep both PINs and pairing codes private.
 
 Development Vite may listen on a trusted LAN even though the backend and
 inspector remain on loopback. Set `VITE_DEV_HOST=127.0.0.1` before starting
-development to limit Vite to this computer. Do not port-forward Vite or the
-development Docker stack to the Internet: they serve development assets, and
+development to limit Vite to this computer. Do not port-forward Vite to the Internet: it serves development assets, and
 HTTP is unencrypted. Browser login is not multi-user authorization, and host
 tools are not sandboxed. The [mobile client](mobile.md) has a separate HTTPS
 endpoint and pairing flow; do not expose the ordinary gateway as a substitute.

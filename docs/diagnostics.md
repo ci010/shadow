@@ -54,7 +54,7 @@ in-memory capture **before** starting the backend:
 
 ```powershell
 $env:SHADOW_DEBUG_PROMPTS = '1'
-pnpm dev:server
+pnpm dev
 ```
 
 Query the context endpoint with `?view=captured`. Captures are taken before

@@ -2,8 +2,14 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { test } from 'node:test'
-import { resolveWindowsProxy } from './windows-proxy.ts'
+import { resolveWindowsProxy, windowsProxyEnvironment } from './windows-proxy.ts'
 import { resolveProxyForUrl, type ProxyConfiguration } from './proxy.ts'
+
+test('Windows proxy compiler does not inherit unrelated native compiler search paths', () => {
+  const input = { LIB: 'missing-library', libPath: 'missing-path', Include: 'missing-headers', PATH: 'preserved' }
+  assert.deepEqual(windowsProxyEnvironment(input), { PATH: 'preserved' })
+  assert.equal(input.LIB, 'missing-library')
+})
 
 test('native WinHTTP evaluates a local PAC without changing system settings', { skip: process.platform !== 'win32', timeout: 60_000 }, async t => {
   const server = createServer((request, response) => {

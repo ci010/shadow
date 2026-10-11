@@ -13,16 +13,6 @@
       "autoAttachChildProcesses": true
     },
     {
-      "request": "attach",
-      "name": "Attach to Node (Docker)",
-      "type": "node",
-      "port": 9229,
-      "localRoot": "${workspaceFolder}",
-      "remoteRoot": "/app",
-      "attachExistingChildren": true,
-      "autoAttachChildProcesses": true
-    },
-    {
       "request": "launch",
       "name": "Launch Program",
       "type": "node",

@@ -52,7 +52,11 @@ test('pnpm runner executes native and script entrypoints and propagates failures
 
 test('desktop development loads the optional root env file and passes it to child processes', async (t) => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  const args = manifest.scripts['desktop:dev'].split(' ')
+  const args = manifest.scripts.dev.split(' ')
+  assert.deepEqual(args.slice(2), ['--import', 'tsx', 'scripts/desktop.ts', 'dev'])
+  for (const script of ['dev:server', 'dev:app', 'dev:docker', 'dev:docker:compose', 'desktop:dev']) {
+    assert.equal(manifest.scripts[script], undefined, `${script} must not duplicate the dev entrypoint`)
+  }
   assert.equal(args[0], 'node')
   assert.equal(args[1], '--env-file-if-exists=.env')
   await mkdir('.test-data', { recursive: true })

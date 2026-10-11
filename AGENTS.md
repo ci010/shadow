@@ -36,16 +36,14 @@ dependency, JSR import scheme, or a compatibility shim to emulate Deno.
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm dev` | Backend watcher plus Vite |
+| `pnpm dev` | Build and launch Electron with Vite; Main data defaults to production `~/.shadow` |
 | `pnpm start` | Backend without development watcher |
-| `pnpm dev:server` / `pnpm dev:app` | Run the backend / renderer independently |
 | `pnpm build` / `pnpm build:app` | Build backend ESM / production web assets |
 | `pnpm build:all` | Build both |
 | `pnpm test` | Existing backend, script, and frontend-logic tests using Node with `tsx` |
 | `pnpm test:desktop` | Electron lifecycle/bootstrap tests |
 | `pnpm test:release` | Focused build, package, service-mode and Electron release checks |
 | `pnpm typecheck` | Backend/scripts, desktop and Vue application typechecks |
-| `pnpm desktop:dev` | Build and launch the development desktop path |
 | `pnpm desktop` | Validate, build and verify the native Windows x64, macOS x64/arm64 or Linux x64 package |
 
 For a focused test, use, for example:
@@ -137,7 +135,7 @@ Do not sweep `node_modules`, build outputs, or the third-party
 The agent can run host commands, load script modules and MCP subprocesses, and
 send context to configured providers. `restrictToWorkspace` is not an OS sandbox
 or a blanket restriction on every tool. Keep the default gateway on loopback;
-do not expose development inspector, Xpra, or unauthenticated gateway ports to
+do not expose development inspector or unauthenticated gateway ports to
 untrusted networks.
 
 ## Before handing off

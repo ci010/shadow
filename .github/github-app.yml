@@ -1,15 +1,5 @@
 scripts:
-  - name: Electron
-    command: npx --yes pnpm@12.3.1 desktop:dev
   - name: dev
-    command: pnpm dev
+    command: npx --yes pnpm@12.3.1 dev
   - name: start
     command: pnpm start
-  - name: dev:app
-    command: pnpm dev:app
-  - name: dev:docker
-    command: pnpm dev:docker
-  - name: dev:docker:compose
-    command: pnpm dev:docker:compose
-  - name: dev:server
-    command: pnpm dev:server

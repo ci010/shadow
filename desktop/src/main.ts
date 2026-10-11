@@ -62,8 +62,9 @@ import {
 import { installRuntimeRequestAuthorization, type RuntimeAuthorization } from './runtime-authorization.js'
 import { type WizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
-import { desktopIconPath, framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
+import { desktopIconPath, desktopTrayIconPath, framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
 import { installTrayMenu } from './tray.js'
+import { createDevelopmentRestart } from './development-restart.js'
 import { installBackgroundWindow } from './background-window.js'
 import { installFolderDirectoryPicker } from './folder-directories.js'
 import { installFileExplorer } from './file-explorer.js'
@@ -422,8 +423,10 @@ async function start(): Promise<void> {
     if (!runtime.ok || !activityAuthorization) throw new Error('Local Main is unavailable')
     await microApps!.open(identity)
   }
-  mainTray = new Tray(desktopIconPath())
-  const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit())
+  mainTray = new Tray(desktopTrayIconPath(app.isPackaged))
+  const restart = createDevelopmentRestart(app.isPackaged, process, () => app.quit(),
+    error => console.error('[desktop] Development restart request failed:', error))
+  const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit(), restart, !app.isPackaged)
   const disposeBackground = installBackgroundWindow(app, mainWindow)
   app.once('will-quit', () => {
     disposeBackground()

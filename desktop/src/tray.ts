@@ -28,6 +28,8 @@ export function installTrayMenu(
   menu: { buildFromTemplate(template: MenuItemConstructorOptions[]): Menu },
   window: TrayWindow,
   quit: () => void,
+  restart?: () => void,
+  development = !!restart,
 ): () => void {
   let disposed = false
   const available = () => !disposed && !window.isDestroyed() && !window.webContents.isDestroyed()
@@ -37,7 +39,7 @@ export function installTrayMenu(
     window.show()
     window.focus()
   }
-  tray.setToolTip('Shadow')
+  tray.setToolTip(development ? 'Shadow (DEV)' : 'Shadow')
   tray.setContextMenu(menu.buildFromTemplate([
     { label: '显示 Shadow', click: showWindow },
     {
@@ -48,6 +50,7 @@ export function installTrayMenu(
         window.webContents.openDevTools({ mode: 'detach' })
       },
     },
+    ...(restart ? [{ label: '重启 Shadow（开发）', click: () => { if (!disposed) restart() } }] : []),
     { type: 'separator' },
     { label: '退出', click: () => { if (!disposed) quit() } },
   ]))

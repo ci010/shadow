@@ -123,6 +123,8 @@ jobs:
         run: bash scripts/build-aria2-native.sh .aria2-source desktop/aria2
       - name: Package and verify shared application on Windows
         run: pnpm desktop:package
+      - name: Verify packaged application on Windows
+        run: pnpm test:packaged
       - name: Upload verified Windows installer
         uses: actions/upload-artifact@v4
         with:
@@ -210,6 +212,12 @@ jobs:
       - name: Package and verify shared application on Linux
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum pnpm desktop:package
+      - name: Verify packaged application on macOS
+        if: runner.os == 'macOS'
+        run: pnpm test:packaged
+      - name: Verify packaged application on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum pnpm test:packaged
       - name: Upload verified portable application
         uses: actions/upload-artifact@v4
         with:

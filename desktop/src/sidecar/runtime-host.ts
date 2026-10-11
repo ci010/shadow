@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { isLoopbackPortOccupied } from './port-preflight.js'
 import { join } from 'node:path'
 import { StartupDiagnosticsLog, startupLogPath } from './startup-diagnostics.js'
 import {
@@ -47,6 +48,7 @@ export interface RuntimeHostOptions {
   readonly tokenFactory?: RuntimeTokenFactory
   readonly onAuthorizationChanged?: RuntimeAuthorizationChanged
   readonly revalidateOnStart?: boolean
+  readonly environment?: Readonly<Record<string, string | undefined>>
 }
 
 export interface QuitEvent {
@@ -66,6 +68,25 @@ export function resolveRuntimePaths(input: RuntimePathsInput): RuntimePaths {
       : join(input.appPath, '..', 'dist', 'src', 'index.js'),
     configPath: join(input.userDataPath, 'bootstrap', 'runtime-config.v1.json'),
   }
+}
+
+// Apply only at the runtime boundary: saved launch profiles remain portable to
+// packaged production, and wizard-supplied ports cannot override dev isolation.
+export function resolveRuntimeLaunchOptions(
+  options: RuntimeLaunchOptions,
+  packaged: boolean,
+  environment: Readonly<Record<string, string | undefined>>,
+): RuntimeLaunchOptions {
+  if (packaged || environment.SHADOW_DESKTOP_DEV_IPC !== '1') return options
+  const configured = environment.SHADOW_DESKTOP_DEV_PORT
+  const port = configured === undefined ? 43124 : Number(configured)
+  if (
+    (configured !== undefined && !/^\d+$/.test(configured)) ||
+    !Number.isInteger(port) || port < 1 || port > 65535 || port === 43123
+  ) {
+    throw new Error('SHADOW_DESKTOP_DEV_PORT must be an integer from 1 to 65535 other than production port 43123')
+  }
+  return { ...options, port }
 }
 
 export function createRuntimeLaunchToken(): string {
@@ -95,6 +116,9 @@ export class RuntimeHost {
   }
 
   start(options: RuntimeLaunchOptions): Promise<SidecarStatus> {
+    options = resolveRuntimeLaunchOptions(
+      options, this.options.paths.packaged, this.options.environment ?? process.env,
+    )
     if (this.stopping) throw new Error('Runtime host is stopping')
     if (this.launchRequest && this.status.phase === 'failed') {
       this.assertSameLaunch(options)
@@ -198,6 +222,7 @@ export function createProductionRuntimeHost(
     supervisorFactory: (role) =>
       new NodeSidecarSupervisor({
         spawn,
+        isPortOccupied: isLoopbackPortOccupied,
         readinessProbe: createSidecarReadinessProbe({ expectedRole: role }),
         diagnosticSink: (entry) => diagnostics.write(entry),
         authenticatedShutdownRequest,

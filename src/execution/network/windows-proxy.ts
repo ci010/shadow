@@ -125,10 +125,11 @@ async function invoke(input: { operation: 'settings' | 'resolve'; url?: string; 
   if (process.platform !== 'win32') throw new Error('Windows system proxy resolution requires Windows.')
   const windows = process.env.SystemRoot ?? process.env.WINDIR
   if (!windows) throw new Error('Windows directory is unavailable for reading the configured system proxy.')
+  const env = windowsProxyEnvironment(process.env)
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = execFile(join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
-      { signal, timeout: input.operation === 'settings' ? 5000 : 15_000, maxBuffer: 16_384, windowsHide: true, encoding: 'utf8' },
+      { signal, env, timeout: input.operation === 'settings' ? 5000 : 15_000, maxBuffer: 16_384, windowsHide: true, encoding: 'utf8' },
       (error, stdout) => {
         if (signal?.aborted) { reject(signal.reason); return }
         if (error) {
@@ -147,6 +148,15 @@ async function invoke(input: { operation: 'settings' | 'resolve'; url?: string; 
   })
   try { return JSON.parse(stdout) }
   catch { throw new Error('Windows proxy resolution returned an invalid response; no settings or destination were logged.') }
+}
+
+export function windowsProxyEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...environment }
+  // Add-Type invokes C# compilation; stale VC search paths can turn warnings into fatal errors.
+  for (const key of Object.keys(env)) {
+    if (/^(LIB|LIBPATH|INCLUDE)$/i.test(key)) delete env[key]
+  }
+  return env
 }
 
 export async function readWindowsProxy(signal?: AbortSignal): Promise<WindowsProxySettings> {

@@ -1,11 +1,25 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { BackendStartupDiagnostics, type BackendStartupTiming } from './backend-startup-diagnostics.js'
+import { backendStartupError, BackendStartupDiagnostics, type BackendStartupTiming } from './backend-startup-diagnostics.js'
 
 const marker = (fields: Record<string, unknown> = {}) => '[startup] ' + JSON.stringify({
   version: 1, component: 'project', projectId: 'synthetic-private-project',
   phase: 'sessions', status: 'completed', elapsedMs: 900, durationMs: 350, ...fields,
 }) + '\n'
+
+test('startup errors retain diagnostic codes and source frames without sensitive messages or absolute paths', () => {
+  const error = backendStartupError(`Error [ERR_MODULE_NOT_FOUND]: Cannot find private-secret at C:\\Users\\private-user
+    at load (C:\\Users\\private-user\\Shadow\\resources\\backend\\dist\\src\\runtime\\main\\start.js:42:7)
+    at resolve (node:internal/modules/esm/resolve:123:4)
+    at privateFunction (C:\\private\\secret.js:4:2)
+{ token: 'private-token' }`)
+  assert.deepEqual(error, {
+    name: 'Error', code: 'ERR_MODULE_NOT_FOUND',
+    frames: ['dist/src/runtime/main/start.js:42:7', 'node:internal/modules/esm/resolve:123:4'],
+  })
+  assert.doesNotMatch(JSON.stringify(error), /private|secret|token|Users/)
+  assert.equal(backendStartupError('provider-key=secret\n'), undefined)
+})
 
 test('agent and session startup substages retain timings without exposing project identity', () => {
   const phases = [

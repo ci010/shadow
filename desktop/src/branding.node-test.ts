@@ -52,3 +52,16 @@ test('Windows icon includes small and high-DPI sizes and ships with the desktop 
   assert.equal(manifest.build.win.icon, 'assets/icon.ico')
   assert.ok(manifest.build.files.includes('assets/**/*'))
 })
+
+
+test('development tray has a distinct DEV image while production keeps its platform icon', async () => {
+  const { desktopIconPath, desktopTrayIconPath } = await import('./window-controls.js')
+  const dev = await readFile(new URL('../assets/icon-dev.png', import.meta.url))
+  const prod = await readFile(new URL('../assets/icon.png', import.meta.url))
+  assertPng(dev, 512)
+  assert.notDeepEqual(dev, prod)
+  for (const platform of ['win32', 'darwin', 'linux'] as const) {
+    assert.equal(desktopTrayIconPath(true, platform), desktopIconPath(platform))
+    assert.match(desktopTrayIconPath(false, platform), /icon-dev\.png$/)
+  }
+})

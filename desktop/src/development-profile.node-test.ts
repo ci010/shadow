@@ -23,10 +23,11 @@ test('Main production default is expanded from the user home and ignores develop
   assert.equal(resolveDesktopMainDirectory(appPath, true, 'relative-dev-value', home), resolve(home, '.shadow'))
 })
 
-test('Main development data stays in the worktree unless explicitly overridden', () => {
+test('Main development shares the production home by default and permits an explicit override', () => {
   const appPath = resolve('desktop')
   const home = resolve('.tmp', 'synthetic-home')
-  assert.equal(resolveDesktopMainDirectory(appPath, false, undefined, home), resolve('.tmp', 'desktop-dev', 'data'))
+  assert.equal(resolveDesktopMainDirectory(appPath, false, undefined, home), resolve(home, '.shadow'))
+  assert.equal(resolveDesktopMainDirectory(appPath, false, '', home), resolveDesktopMainDirectory(appPath, true, undefined, home))
   const custom = resolve('.tmp', 'smoke-main', '..', 'custom-main')
   assert.equal(resolveDesktopMainDirectory(appPath, false, custom, home), custom)
   for (const invalid of ['relative', '~/.shadow', 'C:drive-relative']) {

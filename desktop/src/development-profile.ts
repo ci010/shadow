@@ -21,8 +21,6 @@ export function resolveDesktopMainDirectory(
   developmentOverride?: string,
   homeDirectory?: string,
 ): string {
-  if (packaged) return defaultMainDirectory(homeDirectory)
-  return normalizeMainDirectoryPath(
-    developmentOverride || resolve(appPath, '..', '.tmp', 'desktop-dev', 'data'),
-  )
+  if (packaged || !developmentOverride) return defaultMainDirectory(homeDirectory)
+  return normalizeMainDirectoryPath(developmentOverride)
 }
