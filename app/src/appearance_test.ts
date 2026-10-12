@@ -85,16 +85,14 @@ test('all shape tokens and existing Uno corner utilities resolve to square corne
   assert.doesNotMatch(styles, /!important/)
 })
 
-test('app-owned Vue and CSS keep square corners except the cursor highlight, send button and loading indicator', async () => {
+test('app-owned Vue and CSS keep square corners except the send button and loading indicator', async () => {
   async function check(directory: URL): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const url = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory)
       if (entry.isDirectory()) { await check(url); continue }
       if (!/\.(vue|css)$/.test(entry.name)) continue
       const original = await readFile(url, 'utf8')
-      const source = url.pathname.endsWith('/App.vue')
-        ? original.replace(/(\.mouse-glow\s*\{[^}]*?)border-radius: 50%;/, '$1')
-        : url.pathname.endsWith('/components/ChatTab.vue')
+      const source = url.pathname.endsWith('/components/ChatTab.vue')
           ? original.replace(/(\.composer-send\s*\{[^}]*?)border-radius: 50%;/, '$1')
           : url.pathname.endsWith('/components/SessionActivity.vue')
             ? original.replace(/(\.activity-spinner\s*\{[^}]*?)border-radius: 50%;/, '$1')
@@ -106,17 +104,6 @@ test('app-owned Vue and CSS keep square corners except the cursor highlight, sen
     }
   }
   await check(new URL('./', import.meta.url))
-})
-
-test('cursor highlight remains circular independently of square interface tokens', async () => {
-  assert.match(chat, /\.composer-send\s*\{[^}]*width: 32px; height: 32px;[^}]*border-radius: 50%;/)
-  const app = await readFile(new URL('./App.vue', import.meta.url), 'utf8')
-  const { descriptor } = parse(app)
-  const sheet = descriptor.styles.map(style => style.content).join('\n')
-  assert.match(sheet, /\.mouse-glow\s*\{[^}]*border-radius: 50%;/)
-  const compiled = compileStyle({ source: sheet, filename: 'App.vue', id: 'data-v-app', scoped: true })
-  assert.deepEqual(compiled.errors, [])
-  assert.match(compiled.code, /\.mouse-glow\[data-v-app\]\s*\{[^}]*border-radius: 50%;/)
 })
 
 test('loading ring and center stay circular independently of square interface tokens', async () => {

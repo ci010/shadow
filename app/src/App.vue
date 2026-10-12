@@ -44,7 +44,6 @@
       </Teleport>
     </template>
     <div class="app-shell" :inert="mobile.enabled.value && mobile.menuOpen.value">
-    <div class="mouse-glow-layer" aria-hidden="true"><div ref="glowEl" class="mouse-glow" /></div>
 
     <main class="app-main">
       <IoHost :bridge="ioBridge" @open-conversation="router.push(projectChatLocation($event))" />
@@ -78,6 +77,7 @@
 
 <script setup lang="ts">
 import { t } from './i18n.ts'
+import { installRevealBorder } from './reveal-border.ts'
 import { computed, ref, onMounted, onUnmounted, watch, provide, inject } from 'vue'
 import { browserSessionKey } from './web-auth.ts'
 import { mobileSessionKey } from './mobile-client.ts'
@@ -228,69 +228,23 @@ const navigationGroups = computed(() => {
   return groups.filter((group) => group.items.length > 0)
 })
 
-// ── Mouse glow follower ──────────────────────────────────────
-const glowEl = ref<HTMLDivElement>()
-let rafId = 0
-let mouseX = 0
-let mouseY = 0
-let curX = 0
-let curY = 0
-
-function onMouseMove(e: MouseEvent) {
-  mouseX = e.clientX
-  mouseY = e.clientY
-}
-
-function tick() {
-  // Smooth lerp towards mouse position
-  curX += (mouseX - curX) * 0.15
-  curY += (mouseY - curY) * 0.15
-  if (glowEl.value) {
-    glowEl.value.style.transform = `translate(${curX}px, ${curY}px)`
-  }
-  rafId = requestAnimationFrame(tick)
-}
-
+let stopRevealBorder: (() => void) | undefined
 onMounted(() => {
-  window.addEventListener('mousemove', onMouseMove)
-  rafId = requestAnimationFrame(tick)
+  stopRevealBorder = installRevealBorder()
   window.addEventListener('shadow:config-changed', onConfigChanged)
   void refreshProvider()
 })
 
 onUnmounted(() => {
+  stopRevealBorder?.()
   stopLiveStatus()
-  window.removeEventListener('mousemove', onMouseMove)
   window.removeEventListener('shadow:config-changed', onConfigChanged)
   ++providerGeneration
   providerRequest?.abort()
-  cancelAnimationFrame(rafId)
 })
 </script>
 
 <style scoped>
-/* ── Mouse glow ───────────────────────────────────────────── */
-
-.mouse-glow-layer {
-  position: fixed;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 9999;
-  mix-blend-mode: difference;
-}
-.mouse-glow {
-  position: absolute;
-  top: -16px;
-  left: -16px;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: #a0a0a0;
-  pointer-events: none;
-  will-change: transform;
-}
-
 /* ── App shell ─────────────────────────────────────────────── */
 
 .app-shell {

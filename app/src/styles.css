@@ -491,3 +491,33 @@ input:not([type]), textarea {
 @media (max-width: 640px) {
   .prose table :is(th, td) { padding: 10px 12px; }
 }
+
+/* Fluent Reveal: deliberately scoped cards and conversation messages. Decoration stays in the
+   target's stacking/scroll context, never a viewport overlay or border replacement.
+   Reserve ::after when opting a new .reveal-border surface in. */
+:root { --c-reveal-border: 58 83 118; }
+.dark { --c-reveal-border: 202 222 248; }
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  :where(.reveal-border, .provider-card, .work-item-card, .composer-box, .chat-working, .context-chip, .session-work-triggers > button, .chat-bubble.chat-user, .chat-bubble.chat-assistant, .message-preview-card) { position: relative; }
+  .reveal-border-target::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    pointer-events: none;
+    background: radial-gradient(100px circle at var(--reveal-x, -200px) var(--reveal-y, -200px), rgb(var(--c-reveal-border) / 0.85), transparent 100%);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    opacity: var(--reveal-opacity, 0);
+    transition: opacity 180ms ease-out;
+  }
+  /* State changes suppress decoration immediately, even without pointer movement. */
+  .reveal-border-target:is(:focus-within, :disabled, [aria-disabled="true"], [aria-invalid="true"], [aria-selected="true"], [aria-current], .selected, .execution-selected, .event-selected, .active, [aria-expanded="true"], .waiting, .error, .is-error, .invalid, .attachment-drop-target, .composer-answering, .composer-working, :has([aria-invalid="true"]), :has(.composer-control[aria-expanded="true"]), [data-reveal-disabled])::after,
+  :is(fieldset:disabled, [aria-disabled="true"], [inert], [aria-hidden="true"]) .reveal-border-target::after { opacity: 0; transition: none; }
+}
+
+/* Conversation chips share the same quiet resting edge; state borders win. */
+.chat-working:not(.waiting), .context-chip, .session-work-triggers > button:not([aria-expanded="true"]) { border-color: var(--c-border); }
