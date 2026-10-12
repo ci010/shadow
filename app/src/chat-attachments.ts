@@ -42,6 +42,25 @@ export function updateImageAttachment(
   return existing.flatMap(attachment => attachment === previous ? next ? [next] : [] : [attachment])
 }
 
+/** Replace in place, preserving draft identity, order and any file-tree provenance. */
+export function replaceDraftImageAttachment(
+  existing: readonly PendingChatAttachment[],
+  key: string,
+  file: File,
+  options: { createObjectUrl?: (file: File) => string; revokeObjectUrl?: (url: string) => void } = {},
+): PendingChatAttachment[] {
+  const previous = existing.find(item => item.key === key)
+  if (!previous || previous.file === file) return [...existing]
+  if (!isImageAttachment(file)) throw new Error(t('Only an image can be added from the image preview.'))
+  const previewUrl = (options.createObjectUrl ?? (image => URL.createObjectURL(image)))(file)
+  const replacement: PendingChatAttachment = {
+    ...previous, file, kind: 'image', previewUrl,
+    ...(previous.source ? { source: { ...previous.source, modified: true } } : {}),
+  }
+  revokeChatAttachmentPreviews([previous], options.revokeObjectUrl)
+  return existing.map(item => item === previous ? replacement : item)
+}
+
 export interface UploadedChatAttachment extends PendingChatAttachment {
   path: string
 }

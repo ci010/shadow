@@ -1,11 +1,11 @@
 <template>
   <Teleport to="body">
     <dialog ref="dialog" class="image-viewer" :aria-labelledby="titleId"
-      @cancel.prevent="close" @close="closed" @keydown.stop
+      @cancel.prevent="close" @close="closed" @keydown="viewerKeydown"
       @pointerdown="backdropStart" @click="backdropEnd">
       <header class="image-viewer-header">
         <h2 :id="titleId" :title="image.name">{{ image.name }}</h2>
-        <button type="button" class="viewer-control" :disabled="status !== 'ready'" :aria-pressed="actualSize"
+        <button v-if="!image.localFile" type="button" class="viewer-control" :disabled="status !== 'ready'" :aria-pressed="actualSize"
           :aria-label="actualSize ? t('Fit image to window') : t('View image at actual size')" @click="toggleSize">
           <span :class="actualSize ? 'i-lucide-minimize' : 'i-lucide-scan'" aria-hidden="true" />
           <span class="viewer-control-label">{{ actualSize ? t('Fit') : '100%' }}</span>
@@ -22,11 +22,15 @@
       <p v-if="downloadUrl && downloads.errors.has(downloadUrl)" class="viewer-download-error" role="alert">{{ downloads.errors.get(downloadUrl) }}</p>
       <div ref="viewport" class="image-viewer-viewport" :class="{ 'actual-size': actualSize }" tabindex="0" role="region"
         :aria-label="t('Image preview')" :aria-busy="status === 'loading'">
-        <div v-if="status !== 'error'" class="image-viewer-canvas">
+        <ImageAnnotationPreview v-if="image.localFile && image.attachmentKey" class="viewer-annotation"
+          :src="image.src" :name="image.name" :local-file="image.localFile"
+          :source-key="image.attachmentKey" :context-key="contextKey ?? ''" :active="true" :editable="!!editable"
+          @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
+        <div v-else-if="status !== 'error'" class="image-viewer-canvas">
           <img :key="attempt" :src="resources.resolve(image.src)" :alt="image.name" :class="{ loading: status === 'loading' }" referrerpolicy="no-referrer"
             @load="status = 'ready'" @error="status = 'error'">
         </div>
-        <p v-if="status === 'loading'" class="image-viewer-status" role="status">{{ t('Loading image...') }}</p>
+        <p v-if="!image.localFile && status === 'loading'" class="image-viewer-status" role="status">{{ t('Loading image...') }}</p>
         <div v-else-if="status === 'error'" class="image-viewer-status" role="alert">
           <p>{{ t('Could not load this image.') }}</p>
           <button type="button" class="btn" @click="retry">{{ t('Retry') }}</button>
@@ -43,11 +47,14 @@ import { useFileDownload } from '../composables/useFileDownload.ts'
 import type { ImagePreview } from '../image-viewer.ts'
 import { useMobileResources } from '../mobile-resources.ts'
 
-const props = defineProps<{ image: ImagePreview }>()
+import ImageAnnotationPreview from './files/ImageAnnotationPreview.vue'
+import type { ImageContextUpdate, ImageContextBusy } from '../image-context.ts'
+
+const props = defineProps<{ image: ImagePreview; contextKey?: string; editable?: boolean }>()
 const resources = useMobileResources()
 const downloads = useFileDownload()
 const downloadUrl = computed(() => resources.resolve(props.image.downloadUrl))
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const dialog = ref<HTMLDialogElement>()
 const closeButton = ref<HTMLButtonElement>()
 const viewport = ref<HTMLElement>()
@@ -79,6 +86,10 @@ function backdropStart(event: PointerEvent) { outsideStart = outside(event) }
 function backdropEnd(event: MouseEvent) {
   if (outsideStart && outside(event)) close()
   outsideStart = false
+}
+function viewerKeydown(event: KeyboardEvent) {
+  // The shared annotator listens on window for Ctrl/Cmd+Z, scoped to its focused controls.
+  if (!props.image.localFile || !((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z')) event.stopPropagation()
 }
 function retry() { status.value = 'loading'; attempt.value++ }
 async function toggleSize() {
@@ -114,6 +125,7 @@ onBeforeUnmount(() => { closing = true; dialog.value?.close(); restoreFocus() })
 .viewer-control:focus-visible, .image-viewer-viewport:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .viewer-download-error { margin: 0; padding: 8px 16px; color: var(--c-error); font-size: 13px; overflow-wrap: anywhere; }
 .image-viewer-viewport { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; background: var(--c-bg-soft); }
+.viewer-annotation { padding: 16px; }
 .image-viewer-canvas { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 16px; }
 .image-viewer-canvas img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
 .image-viewer-canvas img.loading { visibility: hidden; }

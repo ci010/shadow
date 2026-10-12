@@ -1,6 +1,6 @@
 <template>
   <div ref="node" class="tree-node" :class="decoration ? `git-${decoration}` : undefined" @keydown="menuKey">
-    <TreeRow button-class="tree-row" :button-attrs="{ 'data-path': fullPath, 'aria-busy': loading, 'aria-disabled': !active }" :label="entry.name" :depth="depth"
+    <TreeRow button-class="tree-row" :button-attrs="{ 'data-path': fullPath, 'data-reference-kind': entry.type === 'dir' ? 'folder' : 'file', draggable: active && !entry.archive, 'aria-busy': loading, 'aria-disabled': !active }" :label="entry.name" :depth="depth"
       :selected="selectedPath === fullPath" :current="selectedPath === fullPath ? 'page' : undefined"
       :title="decoration ? `${fullPath}\n${entry.type === 'dir' ? t('Contains changes: ') : ''}${gitChangeLabel(decoration)}` : fullPath"
       :expanded="expandable ? expanded : undefined" @select="onRowClick"

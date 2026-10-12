@@ -4,6 +4,9 @@ export interface ImagePreview {
   name: string
   downloadUrl?: string
   trigger?: HTMLElement
+  /** Draft attachment identity and stable original for the annotation dialog. */
+  attachmentKey?: string
+  localFile?: File
 }
 
 export function isPreviewImageUrl(src: string): boolean {

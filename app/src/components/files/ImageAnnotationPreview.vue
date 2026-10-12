@@ -20,6 +20,10 @@
           </template>
         </HoverInfo>
       </div>
+      <div class="image-annotation-tools" role="group" :aria-label="t('Drawing tool')">
+        <button type="button" class="image-annotation-tool" :aria-pressed="tool === 'freehand'" :disabled="!canEdit" @click="tool = 'freehand'">{{ t('Freehand') }}</button>
+        <button type="button" class="image-annotation-tool" :aria-pressed="tool === 'line'" :disabled="!canEdit" @click="tool = 'line'">{{ t('Straight line') }}</button>
+      </div>
       <div class="image-annotation-actions">
         <HoverInfo text="Undo the last stroke (Ctrl+Z)">
           <template #default="{ triggerProps }">
@@ -36,7 +40,7 @@
       </div>
     </div>
     <p class="image-annotation-hint">
-      {{ sourceError ? t('Image preview · References unavailable') : editable ? t('Draw to mark · Ctrl-drag to attach') : t('Marking unavailable in this chat · Ctrl-drag to attach elsewhere') }}
+      {{ sourceError ? t('Image preview · References unavailable') : editable ? localFile ? t('Draw to mark · Shift-drag for a straight line') : t('Draw to mark · Ctrl-drag to attach') : t('Marking unavailable in this chat · Ctrl-drag to attach elsewhere') }}
     </p>
     <p v-if="loading" class="image-annotation-status" role="status">{{ t('Loading image…') }}</p>
     <div v-if="loaded && sourceError" class="image-annotation-error image-annotation-source-error" role="status">
@@ -73,6 +77,7 @@ import { AnnotationLoadError, AnnotationPointer, annotationLoadErrorMessage, ann
 
 const props = defineProps<{
   src: string
+  localFile?: File
   name: string
   sourceKey: string
   contextKey: string
@@ -92,6 +97,8 @@ const palette = [
 const canvas = ref<HTMLCanvasElement>()
 const preview = ref<HTMLElement>()
 const color = ref(palette[0]!.color)
+const tool = ref<'freehand' | 'line'>('freehand')
+let strokeIsLine = false
 const loading = ref(false)
 const loaded = ref(false)
 const busy = ref(false)
@@ -104,7 +111,7 @@ const sourceError = ref('')
 const controlHeld = ref(false)
 const canEdit = computed(() => props.active && props.editable && loaded.value && !busy.value && !sourceError.value)
 const canUndo = computed(() => props.active && props.editable && loaded.value && hasMarks.value && !sourceError.value)
-const dragReady = computed(() => props.active && loaded.value && controlHeld.value && !busy.value && !exportError.value && !sourceError.value)
+const dragReady = computed(() => props.active && loaded.value && !props.localFile && controlHeld.value && !busy.value && !exportError.value && !sourceError.value)
 const pointer = new AnnotationPointer()
 let lastPoint: AnnotationPoint | null = null
 let strokeColor = ''
@@ -122,7 +129,7 @@ let identity = { sourceKey: props.sourceKey, contextKey: props.contextKey }
 let releaseDrag: (() => void) | undefined
 
 function updateContext(file: File | null) {
-  if (!disposed) emit('image-context', { ...identity, file, ...(file ? { source: imageSource(true) } : {}) })
+  if (!disposed) emit('image-context', { ...identity, file, ...(file && originalPath ? { source: imageSource(true) } : {}) })
 }
 function imageSource(modified: boolean) {
   if (!originalPath) throw new Error(t('The image source is unavailable. Reopen the image to retry.'))
@@ -175,22 +182,26 @@ async function loadImage() {
   request = abort
   let url: string | undefined
   try {
-    const response = await fetch(props.src, { signal: abort.signal })
-    if (disposed || generation !== loadGeneration || abort.signal.aborted) return
-    if (!response.ok) throw new AnnotationLoadError(t('Image request failed (HTTP {status}). Retry or open the raw image.', { status: response.status }))
     let sourcePath: string | undefined
-    try {
-      sourcePath = imageSourcePath(response.headers)
-    } catch (error) {
-      sourceError.value = error instanceof Error ? error.message : t('The image source could not be read. Reload the image source to retry.')
+    let blob: Blob
+    if (props.localFile) {
+      blob = props.localFile
+    } else {
+      const response = await fetch(props.src, { signal: abort.signal })
+      if (disposed || generation !== loadGeneration || abort.signal.aborted) return
+      if (!response.ok) throw new AnnotationLoadError(t('Image request failed (HTTP {status}). Retry or open the raw image.', { status: response.status }))
+      try {
+        sourcePath = imageSourcePath(response.headers)
+      } catch (error) {
+        sourceError.value = error instanceof Error ? error.message : t('The image source could not be read. Reload the image source to retry.')
+      }
+      const headerError = annotationSizeError(Number(response.headers.get('content-length')))
+      if (headerError) throw new AnnotationLoadError(headerError)
+      blob = await response.blob()
     }
-    const length = Number(response.headers.get('content-length'))
-    const headerError = annotationSizeError(length)
-    if (headerError) throw new AnnotationLoadError(headerError)
-    const blob = await response.blob()
     const sizeError = annotationSizeError(blob.size)
     if (sizeError) throw new AnnotationLoadError(sizeError)
-    if (!blob.type.toLowerCase().startsWith('image/')) throw new AnnotationLoadError(t('The response is not an image. Retry or open the raw image.'))
+    if (!props.localFile && !blob.type.toLowerCase().startsWith('image/')) throw new AnnotationLoadError(t('The response is not an image. Retry or open the raw image.'))
     if (disposed || generation !== loadGeneration) return
     url = URL.createObjectURL(blob)
     objectUrl = url
@@ -287,7 +298,8 @@ function pointerDown(event: PointerEvent) {
   strokeWidth = 4 * target.width / target.getBoundingClientRect().width
   strokeColor = color.value
   lastPoint = point
-  strokes.push({ color: strokeColor, width: strokeWidth, points: [point] })
+  strokeIsLine = tool.value === 'line' || event.shiftKey
+  strokes.push({ color: strokeColor, width: strokeWidth, points: strokeIsLine ? [point, point] : [point] })
   context.fillStyle = strokeColor
   context.beginPath()
   context.arc(point.x, point.y, strokeWidth / 2, 0, Math.PI * 2)
@@ -298,6 +310,10 @@ function pointerMove(event: PointerEvent) {
   if (!pointer.owns(event.pointerId)) return
   if (!(event.buttons & 1)) { finishStroke(); return }
   event.preventDefault()
+  if (strokeIsLine) {
+    drawSegment(event)
+    return
+  }
   const events = event.getCoalescedEvents?.() ?? []
   for (const sample of events.length ? events : [event]) drawSegment(sample)
 }
@@ -305,6 +321,16 @@ function drawSegment(event: PointerEvent) {
   const point = eventPoint(event)
   const context = canvas.value?.getContext('2d')
   if (!point || !lastPoint || !context) return
+  if (strokeIsLine) {
+    const stroke = strokes.at(-1)
+    if (!stroke) return
+    stroke.points[1] = point
+    // Replace the old endpoint preview, retaining earlier strokes underneath.
+    renderOriginal()
+    for (const mark of strokes) drawAnnotationStroke(context, mark)
+    lastPoint = point
+    return
+  }
   context.strokeStyle = strokeColor
   context.lineWidth = strokeWidth
   context.lineCap = 'round'
@@ -363,7 +389,7 @@ function retry() {
   else if (canEdit.value) exportMarkedImage()
 }
 function dragStart(event: DragEvent) {
-  if (!event.ctrlKey || !props.active || !loaded.value || busy.value || exportError.value || sourceError.value || !event.dataTransfer) {
+  if (!event.ctrlKey || !props.active || !loaded.value || busy.value || exportError.value || sourceError.value || !originalPath || !event.dataTransfer) {
     event.preventDefault()
     return
   }
@@ -388,7 +414,7 @@ function windowBlur() {
   controlHeld.value = false
   if (pointer.active) cancelPending(t('Drawing was interrupted. Retry marked image to attach the visible marks.'))
 }
-watch(() => [props.src, props.sourceKey, props.contextKey], () => {
+watch(() => [props.src, props.localFile, props.sourceKey, props.contextKey], () => {
   cancelPending()
   identity = { sourceKey: props.sourceKey, contextKey: props.contextKey }
   void loadImage()
@@ -424,8 +450,10 @@ onBeforeUnmount(() => {
 .image-annotation-preview { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; gap: 10px; color: var(--c-text); }
 .image-annotation-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
 .image-annotation-colors { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.image-annotation-actions { display: flex; gap: 6px; }
-.image-annotation-swatch, .image-annotation-clear, .image-annotation-undo, .image-annotation-retry { min-height: 32px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; font-size: 12px; cursor: pointer; }
+.image-annotation-actions, .image-annotation-tools { display: flex; gap: 6px; }
+.image-annotation-tool { padding: 5px 10px; }
+.image-annotation-tool[aria-pressed="true"] { border-color: var(--c-text); background: var(--c-bg-muted); }
+.image-annotation-tool, .image-annotation-swatch, .image-annotation-clear, .image-annotation-undo, .image-annotation-retry { min-height: 32px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; font-size: 12px; cursor: pointer; }
 .image-annotation-swatch { display: grid; place-items: center; width: 32px; padding: 5px; }
 .image-annotation-swatch span { display: grid; place-items: center; width: 20px; height: 20px; background: var(--marker-color); color: #111; font-weight: 800; }
 .image-annotation-swatch[aria-pressed="true"] { border-color: var(--c-text); }
@@ -444,7 +472,7 @@ onBeforeUnmount(() => {
 .image-annotation-error { color: var(--c-error); font-size: 12px; line-height: 1.5; }
 .image-annotation-error p { margin: 0 0 8px; max-width: 65ch; }
 @media (pointer: coarse) {
-  .image-annotation-swatch, .image-annotation-clear, .image-annotation-undo, .image-annotation-retry, .image-annotation-custom input { min-height: 44px; }
+  .image-annotation-tool, .image-annotation-swatch, .image-annotation-clear, .image-annotation-undo, .image-annotation-retry, .image-annotation-custom input { min-height: 44px; }
   .image-annotation-swatch, .image-annotation-custom input { width: 44px; }
 }
 </style>

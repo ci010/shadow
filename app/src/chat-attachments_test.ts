@@ -10,6 +10,7 @@ import {
   isImageAttachment,
   revokeChatAttachmentPreviews,
   updateImageAttachment,
+  replaceDraftImageAttachment,
   uploadChatAttachments,
 } from './chat-attachments.ts'
 
@@ -294,4 +295,23 @@ test('fork uploads carry parent locality without materializing the conversation'
       assert.equal(init.body.get('parentSessionId'), 'web:chat-parent')
       return Response.json({ path: 'C:\\uploads\\photo.png' })
     }, 'web:chat-parent')
+})
+
+test('draft annotation replaces the original slot and clear restores the original without duplicating files', () => {
+  const original = new File(['original'], 'paste.png', { type: 'image/png' })
+  const marked = new File(['marks'], 'paste-marked.png', { type: 'image/png' })
+  const revoked: string[] = []
+  const options = { createObjectUrl: (file: File) => `blob:${file.name}`, revokeObjectUrl: (url: string) => revoked.push(url) }
+  const draft = appendChatAttachments([], [new File(['text'], 'notes.txt'), original], { createObjectUrl: options.createObjectUrl })
+  const key = draft[1]!.key
+  const edited = replaceDraftImageAttachment(draft, key, marked, options)
+  assert.equal(edited.length, 2)
+  assert.equal(edited[0], draft[0])
+  assert.equal(edited[1]!.key, key)
+  assert.equal(edited[1]!.file, marked)
+  assert.equal(edited[1]!.source, undefined)
+  const cleared = replaceDraftImageAttachment(edited, key, original, options)
+  assert.equal(cleared[1]!.file, original)
+  assert.deepEqual(revoked, ['blob:paste.png', 'blob:paste-marked.png'])
+  assert.deepEqual(replaceDraftImageAttachment([], key, marked, options), [])
 })

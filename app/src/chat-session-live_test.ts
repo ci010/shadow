@@ -5,6 +5,8 @@ import test, { type TestContext } from 'node:test'
 import * as Vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
+import * as fileReferenceDrag from './file-reference-drag.ts'
+const { startFileReferenceDrag } = fileReferenceDrag
 import { createLiveRefresh } from './live-refresh.ts'
 import type { LiveObserver } from './live-client.ts'
 import { sessionActivity } from './session-activity.ts'
@@ -45,6 +47,7 @@ function fixture(t: TestContext, canWrite = false) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText
   new Function('require', 'module', 'exports', 'window', 'document', code)((id: string) => {
+    if (id === '../file-reference-drag.ts') return fileReferenceDrag
     if (id === 'vue') return { ...Vue, onMounted: () => {} }
     if (id.endsWith('.vue')) return { default: {} }
     if (id === 'vue-router') return { useRoute: () => ({ name: 'chat', query: {}, params: {} }), useRouter: () => ({ replace() {} }) }
@@ -421,6 +424,16 @@ test('composer file drops preserve drafts, deduplicate mixed batches and reject 
   await Vue.nextTick()
   const image = state.pendingAttachments[1]
   state.openImagePreview({src: image.previewUrl, name: image.file.name})
+  assert.equal(state.imagePreview.attachmentKey, image.key)
+  assert.equal(state.imagePreview.localFile, image.file)
+  const marked = new File(['marked'], 'photo-marked.png', { type: 'image/png' })
+  state.handleDraftImageContext({ contextKey: state.fileContextKey, sourceKey: image.key, file: marked })
+  await Vue.nextTick()
+  assert.equal(state.pendingAttachments.length, 2)
+  assert.equal(state.pendingAttachments[1].file, marked)
+  assert.equal(state.imagePreview.localFile, image.file, 'Stable original prevents reloading the canvas after export')
+  state.handleDraftImageContext({ contextKey: state.fileContextKey, sourceKey: image.key, file: null })
+  assert.equal(state.pendingAttachments[1].file, image.file, 'Clear restores rather than removes the pasted image')
   state.clearPendingAttachments()
   await Vue.nextTick()
   assert.equal(state.imagePreview, undefined, 'Removing draft attachments closes previews before their blob URLs can remain stale')
@@ -434,4 +447,31 @@ test('composer file drops preserve drafts, deduplicate mixed batches and reject 
     assert.equal(state.pendingAttachments.length, 0)
     assert.match(state.composerError, mode === 'remote' ? /remote workspaces/ : /cannot receive file attachments/)
   }
+})
+
+test('filetree drops add deduplicated references without upload or draft changes and reject expired/cross-project tokens', t => {
+  const f = fixture(t)
+  const state = f.mount('a').state()
+  state.currentWorkdir = { kind: 'local', displayPath: 'C:\\repo' }
+  const data = new Map<string, string>()
+  const transfer = { get types() { return [...data.keys()] }, effectAllowed: 'none', dropEffect: 'none',
+    setData(type: string, value: string) { data.set(type, value) }, getData(type: string) { return data.get(type) ?? '' } }
+  const event = { dataTransfer: transfer, preventDefault() {}, stopPropagation() {} }
+  const release = startFileReferenceDrag(transfer, 'http://fixture/projects/a', state.currentWorkdir, 'notes.txt', 'file')!
+  state.handleAttachmentDragOver(event)
+  assert.equal(state.attachmentDropTarget, true)
+  state.handleAttachmentDrop(event)
+  state.handleAttachmentDrop(event)
+  assert.deepEqual(state.contextItems, [{ kind: 'file', path: 'C:\\repo\\notes.txt' }])
+  assert.equal(state.pendingAttachments.length, 0)
+  assert.equal(state.inputText, 'Keep this exact unsent draft')
+  assert.equal(f.requests.length, 0)
+  release()
+  state.handleAttachmentDrop(event)
+  assert.match(state.composerError, /file tree again/)
+  const other = startFileReferenceDrag(transfer, 'http://fixture/projects/b', state.currentWorkdir, 'other.txt', 'file')!
+  state.handleAttachmentDrop(event)
+  assert.equal(state.contextItems.length, 1)
+  assert.match(state.composerError, /file tree again/)
+  other()
 })

@@ -468,7 +468,9 @@
       :active="visible && keyboardActive && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'"
       :can-quote="canQuoteSelection" @quote="quoteSelection" />
     <SessionDeleteDialog v-if="deletion" :target="deletion" @close="deletion = undefined" @deleted="sessionsDeleted" />
-    <ImageViewer v-if="imagePreview" :image="imagePreview" @close="imagePreview = undefined" />
+    <ImageViewer v-if="imagePreview" :image="imagePreview" :context-key="fileContextKey"
+      :editable="canQuoteSelection && canAttachFiles && !submissionBusy"
+      @image-context="handleDraftImageContext" @image-busy="handleImageBusy" @close="imagePreview = undefined" />
   </div>
 </template>
 
@@ -550,7 +552,8 @@ import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
 import { createFolderChatDraft, createRemoteChatDraft } from '../remote-conversations.ts'
 import { createExecutionLocationDraft, type ExecutionLocation } from '../execution-locations.ts'
 import type { SessionDetails } from '../session-details.ts'
-import { appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
+import { appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
+import { hasFileReference, readFileReference } from '../file-reference-drag.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { isUserMessage, resendableUserMessage, messageHistoryMarkers, groupMessageHistoryMarkers } from '../message-history.ts'
@@ -1286,7 +1289,13 @@ const expandedThinking = reactive(new Set<number>())
 const previousPhysicalId = ref<string | null>(null)
 const viewingPhysicalId = ref<string | null>(null)
 const imagePreview = shallowRef<ImagePreview>()
-function openImagePreview(image: ImagePreview) { clearSelection(); imagePreview.value = image }
+function openImagePreview(image: ImagePreview) {
+  clearSelection()
+  const attachment = pendingAttachments.value.find(item => item.previewUrl === image.src)
+  imagePreview.value = attachment
+    ? { ...image, attachmentKey: attachment.key, localFile: attachment.file }
+    : image
+}
 function previewImageKeydown(event: KeyboardEvent) {
   const image = imagePreviewFromEvent(event)
   if (!image) return
@@ -1297,7 +1306,10 @@ function previewImageKeydown(event: KeyboardEvent) {
 watch([() => props.apiBase, () => props.projectId, () => props.sessionId, activeSessionId, viewingPhysicalId, paneActive, conversationDocumentVisible, activePanel, () => route.fullPath],
   () => { imagePreview.value = undefined })
 watch(() => pendingAttachments.value.map(item => item.previewUrl), (urls, previous) => {
-  if (imagePreview.value && previous.includes(imagePreview.value.src) && !urls.includes(imagePreview.value.src)) imagePreview.value = undefined
+  const image = imagePreview.value
+  if (image?.attachmentKey) {
+    if (!pendingAttachments.value.some(item => item.key === image.attachmentKey)) imagePreview.value = undefined
+  } else if (image && previous.includes(image.src) && !urls.includes(image.src)) imagePreview.value = undefined
 })
 const physicalIdStack = ref<string[]>([])
 const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation(
@@ -1644,6 +1656,18 @@ function handleImageBusy(update: ImageContextBusy): void {
   else imageEditsBusy.value.delete(update.sourceKey)
 }
 
+function handleDraftImageContext(update: ImageContextUpdate): void {
+  const image = imagePreview.value
+  if (disposed || update.contextKey !== fileContextKey.value || !image?.localFile
+    || image.attachmentKey !== update.sourceKey) return
+  if (!canQuoteSelection.value || !canAttachFiles.value || submissionBusy.value) return
+  try {
+    pendingAttachments.value = replaceDraftImageAttachment(pendingAttachments.value, update.sourceKey, update.file ?? image.localFile)
+  } catch (cause) {
+    composerError.value = cause instanceof Error ? cause.message : t('Could not attach the marked image. Try again.')
+  }
+}
+
 function handleImageContext(update: ImageContextUpdate): void {
   if (update.contextKey !== fileContextKey.value || disposed) return
   if (update.file && (!canQuoteSelection.value || !canAttachFiles.value)) {
@@ -1659,7 +1683,7 @@ function handleImageContext(update: ImageContextUpdate): void {
 }
 
 function isAttachmentDrop(data: DataTransfer | null): boolean {
-  return hasImageReference(data) || !!data && Array.from(data.types).includes('Files')
+  return hasFileReference(data) || hasImageReference(data) || !!data && Array.from(data.types).includes('Files')
 }
 
 function handleAttachmentDragOver(event: DragEvent): void {
@@ -1687,6 +1711,14 @@ function handleAttachmentDrop(event: DragEvent): void {
     return
   }
   try {
+    if (hasFileReference(event.dataTransfer)) {
+      const reference = readFileReference(event.dataTransfer)
+      if (!reference || reference.apiBase !== props.apiBase) throw new Error(t('Drag a file from this project’s file tree again.'))
+      contextItems.value = addChatContext(contextItems.value, reference.kind, [reference.path])
+      composerError.value = ''
+      chatInput.value?.focus({ preventScroll: true })
+      return
+    }
     const reference = readImageReference(event.dataTransfer)
     if (reference) {
       pendingAttachments.value = updateImageAttachment(pendingAttachments.value, reference.sourceKey, reference.file, { source: reference.source })

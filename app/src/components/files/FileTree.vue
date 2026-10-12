@@ -1,5 +1,5 @@
 <template>
-  <div ref="tree" class="file-tree" :class="{ 'has-preview': previewEntry, 'tree-only': treeOnly }">
+  <div ref="tree" @dragstart="referenceDragStart" @dragend="referenceDragEnd" class="file-tree" :class="{ 'has-preview': previewEntry, 'tree-only': treeOnly }">
     <section class="file-tree-list" :aria-label="folderId ? t('Folder files') : t('Session files')" :aria-busy="loading || sourcePending">
       <header class="file-tree-header">
         <div v-if="treeOnly" class="file-tree-modes" role="tablist" :aria-label="t('Explorer view')">
@@ -53,7 +53,8 @@
             :entry="searchEntry(path)" :depth="0" :active="active && !sourcePending" :workspace-key="workspaceKey"
             :selected-path="selectedPath" :reveal-version="revealVersion" :refresh-version="revision"
             @open="onOpen" @node-offline="fileOffline = true" @context-menu="openContextMenu" />
-          <button v-else type="button" class="file-search-result"
+          <button v-else type="button" class="file-search-result" :draggable="active && !sourcePending"
+            :data-path="path" data-reference-kind="file"
             :aria-current="selectedPath === path ? 'page' : undefined" :title="path" @click="openSearchResult(path)"
             @contextmenu.prevent.stop="openContextMenu({ event: $event, path })" @keydown="menuKey($event, path)">
             <span class="i-lucide-file w-4 h-4" aria-hidden="true" /><span>{{ path }}</span>
@@ -100,6 +101,7 @@ import type { OpenFile } from '../../file-workbench.ts'
 import { canRetainHomeTree, fileEntryKey, fileWorkspaceKey, reconcileFileEntries, type FileTreeSource } from '../../file-tree-state.ts'
 import { HomeTreeCacheKey, type HomeTreeState } from '../../home-tree-cache.ts'
 import { isArchive } from '../../archive-format.ts'
+import { startFileReferenceDrag } from '../../file-reference-drag.ts'
 
 const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; folderId?: string; previewOnOpen?: boolean; treeOnly?: boolean; active?: boolean; gitStatus?: GitStatus; gitLoading?: boolean; gitError?: string; gitOffline?: boolean; remote?: boolean; selectedPath?: string; revealVersion?: number }>(), { active: true, remote: false, revealVersion: 0 })
 const emit = defineEmits<{ open: [payload: OpenFile]; 'refresh-git': [] }>()
@@ -128,6 +130,19 @@ const expectedHome = computed(() => homeCache?.expectsHome({ apiBase: props.apiB
 const currentSource = (): FileTreeSource => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folderId, home: expectedHome.value })
 const displaySource = ref(currentSource())
 const sourcePending = ref(false)
+let releaseReferenceDrag: (() => void) | undefined
+function referenceDragEnd() { releaseReferenceDrag?.(); releaseReferenceDrag = undefined }
+function referenceDragStart(event: DragEvent) {
+  referenceDragEnd()
+  const row = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-reference-kind][data-path]') : null
+  if (!row || !event.dataTransfer || !props.active || sourcePending.value || offline.value) { event.preventDefault(); return }
+  const kind = row.dataset.referenceKind
+  if (kind !== 'file' && kind !== 'folder') { event.preventDefault(); return }
+  releaseReferenceDrag = startFileReferenceDrag(event.dataTransfer, displaySource.value.apiBase, workdir.value, row.dataset.path ?? '', kind)
+  if (!releaseReferenceDrag) event.preventDefault()
+}
+onUnmounted(referenceDragEnd)
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.active], referenceDragEnd)
 const contextMenu = shallowRef<FileTreeMenuRequest>()
 function openContextMenu(request: FileTreeMenuRequest) {
   if (props.active && !sourcePending.value && !offline.value) contextMenu.value = request
