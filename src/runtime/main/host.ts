@@ -1,3 +1,5 @@
+import { appProxyPlugin } from '../../config/proxy-routes.ts'
+import { updateBackendNetwork } from '../../execution/network/backend.ts'
 import { Hono } from 'hono'
 import { dirname, resolve } from 'node:path'
 import { stat } from 'node:fs/promises'
@@ -145,6 +147,7 @@ export async function startProjectHost(
       provider = updatedProvider
       try {
         for (const [id, store] of stores) await scopes.get(id)?.run(() => store.refreshShared())
+        await updateBackendNetwork(changed.network?.proxyEnabled ?? true)
       } catch (error) {
         activeConfig = previous
         provider = previousProvider
@@ -209,7 +212,7 @@ export async function startProjectHost(
   }
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
-  registerGatewayRoutes(app, [browserAuth.plugin(), ...(mobileAccess ? [mobileAccess.managementPlugin()] : []), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
+  registerGatewayRoutes(app, [browserAuth.plugin(), ...(mobileAccess ? [mobileAccess.managementPlugin()] : []), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), appProxyPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
     launchCredential, browserAuth, clientAddresses, authorizeClient: request => {
       if (mobileAccess?.authorizeMain(request)) return true
       const projectId = a2aRequestProject(request)

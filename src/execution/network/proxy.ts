@@ -10,6 +10,10 @@ export const proxyConfigurationSchema = z.object({
   bypass: z.array(z.string()),
 }).strict()
 export type ProxyConfiguration = z.infer<typeof proxyConfigurationSchema>
+let proxyEnabled = true
+export function setLocalProxyEnabled(enabled: boolean): void { proxyEnabled = enabled }
+export function isLocalProxyEnabled(): boolean { return proxyEnabled }
+
 const direct = (): ProxyConfiguration => ({ source: 'direct', bypass: [] })
 
 function proxyUrl(value: string): string {
@@ -44,9 +48,10 @@ export function windowsProxyConfiguration(settings: WindowsProxySettings): Proxy
 }
 
 export async function localProxyConfiguration(signal?: AbortSignal, options: {
-  env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; readWindows?: typeof readWindowsProxy
+  env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; readWindows?: typeof readWindowsProxy; detectOnly?: boolean
 } = {}): Promise<ProxyConfiguration> {
   signal?.throwIfAborted()
+  if (!options.detectOnly && !proxyEnabled) return direct()
   const env = options.env ?? process.env
   const http = env.http_proxy ?? env.HTTP_PROXY
   const https = env.https_proxy ?? env.HTTPS_PROXY

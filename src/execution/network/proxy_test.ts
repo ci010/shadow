@@ -250,7 +250,7 @@ test('real CONNECT transport and native Node preload use the configured proxy wh
       '--import', 'tsx', '--input-type=module', '--eval', `
         import assert from 'node:assert/strict';
         import { WebSocket, getGlobalDispatcher } from 'undici';
-        import { initializeBackendNetwork } from ${JSON.stringify(new URL('./backend.ts', import.meta.url).href)};
+        import { initializeBackendNetwork, updateBackendNetwork } from ${JSON.stringify(new URL('./backend.ts', import.meta.url).href)};
         await Promise.all([initializeBackendNetwork(), initializeBackendNetwork()]);
         const dispatcher = getGlobalDispatcher();
         await initializeBackendNetwork();
@@ -263,13 +263,18 @@ test('real CONNECT transport and native Node preload use the configured proxy wh
           ws.onerror = () => reject(new Error('Gateway connection failed'));
           ws.onclose = resolve;
         });
+        await updateBackendNetwork(false);
+        await assert.rejects(fetch('http://resource.example.invalid/disabled'));
+        console.log(await (await fetch('http://127.0.0.1:${target.port}/disabled-local')).text());
+        await updateBackendNetwork(true);
+        console.log(await (await fetch('http://re-enabled.example.invalid/re-enabled')).text());
         await dispatcher.close();
       `,
     ], { timeout: 15_000, windowsHide: true, env })
     assert.match(backend.stdout, /Backend proxy source: environment/)
     assert.match(backend.stdout, /synthetic resource\nsynthetic resource\nsynthetic gateway/)
-    assert.equal(requests.length, 4, 'Backend fetch and WebSocket use CONNECT, while loopback bypasses the proxy')
-    assert.deepEqual(requests.slice(-2), ['resource.example.invalid:80', 'gateway.example.invalid:80'])
+    assert.equal(requests.length, 5, 'Disabled requests bypass the proxy; re-enabling applies immediately to the same dispatcher')
+    assert.deepEqual(requests.slice(-3), ['resource.example.invalid:80', 'gateway.example.invalid:80', 're-enabled.example.invalid:80'])
   } finally {
     await dispatcher.close()
     for (const client of gateway.clients) client.terminate()

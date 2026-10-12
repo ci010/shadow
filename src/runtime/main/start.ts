@@ -8,6 +8,6 @@ export async function startMainRuntime(
   config: Config,
   options: MainRuntimeOptions = {},
 ): Promise<MainRuntimeHandle> {
-  await initializeBackendNetwork()
+  await initializeBackendNetwork(config.network?.proxyEnabled ?? true)
   return startProjectHost(config, options, createProjectRuntime)
 }

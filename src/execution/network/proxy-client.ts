@@ -5,12 +5,12 @@ import { proxyForUrl, resolveProxyForUrl, type ProxyConfiguration } from './prox
 export class LocalProxyDispatcher extends Dispatcher {
   private readonly direct = new Agent()
   private readonly proxies = new Map<string, ProxyAgent>()
-  private readonly configuration: ProxyConfiguration
+  private readonly configuration: ProxyConfiguration | (() => ProxyConfiguration)
   private readonly resolveProxy: typeof resolveProxyForUrl
   private readonly pending = new Map<AbortController, Promise<void>>()
   private closed = false
 
-  constructor(configuration: ProxyConfiguration, resolveProxy = resolveProxyForUrl) {
+  constructor(configuration: ProxyConfiguration | (() => ProxyConfiguration), resolveProxy = resolveProxyForUrl) {
     super()
     this.configuration = configuration
     this.resolveProxy = resolveProxy
@@ -18,8 +18,9 @@ export class LocalProxyDispatcher extends Dispatcher {
 
   override dispatch(options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
     if (this.closed) throw new Error('Proxy dispatcher is closed.')
-    if (this.configuration.source === 'windows-auto') return this.dispatchAutomatic(options, handler)
-    const proxy = proxyForUrl(this.configuration, String(options.origin))
+    const configuration = typeof this.configuration === 'function' ? this.configuration() : this.configuration
+    if (configuration.source === 'windows-auto') return this.dispatchAutomatic(options, handler, configuration)
+    const proxy = proxyForUrl(configuration, String(options.origin))
     return this.dispatcher(proxy).dispatch(options, handler)
   }
 
@@ -33,7 +34,7 @@ export class LocalProxyDispatcher extends Dispatcher {
     return dispatcher
   }
 
-  private dispatchAutomatic(options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
+  private dispatchAutomatic(options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler, configuration: ProxyConfiguration): boolean {
     const abort = new AbortController()
     let active: Dispatcher.DispatchController | undefined
     let cancel: ((error?: Error) => void) | undefined
@@ -69,7 +70,7 @@ export class LocalProxyDispatcher extends Dispatcher {
       try {
         abort.signal.throwIfAborted()
         const url = new URL(options.path, String(options.origin))
-        const proxy = await this.resolveProxy(this.configuration, url, abort.signal)
+        const proxy = await this.resolveProxy(configuration, url, abort.signal)
         abort.signal.throwIfAborted()
         this.dispatcher(proxy).dispatch(options, forwarding)
       } catch (cause) {

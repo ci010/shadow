@@ -39,6 +39,11 @@ export interface ProjectConfigOptions {
 
 /** Provider setup may probe a model, but cannot select an project's defaults. */
 export class AppProviderConfigStore extends ConfigStore {
+  updateProxy(enabled: boolean, signal?: AbortSignal): Promise<Config> {
+    if (typeof enabled !== 'boolean') throw new TypeError('Invalid proxy policy')
+    return super.update(raw => ({ ...raw, network: { ...(record(raw.network) ? raw.network : {}), proxyEnabled: enabled } }), signal)
+  }
+
   updateWebSearch(patch: WebSearchPatch, signal?: AbortSignal): Promise<Config> {
     const parsed = WebSearchPatchSchema.parse(patch)
     return super.update(raw => {
@@ -120,7 +125,7 @@ export class ProjectConfigStore extends ConfigStore {
     const tools = ConfigSchema.shape.tools.parse({
       ...withoutWebSearchConfig(config.tools), ...sharedWebSearchConfig(shared.tools),
     })
-    return { ...config, channels, agent, providers: shared.providers, tools }
+    return { ...config, channels, agent, providers: shared.providers, tools, network: shared.network }
   }
 
   async init(legacy?: Config, serializedLegacy?: Raw): Promise<Config> {
@@ -131,7 +136,7 @@ export class ProjectConfigStore extends ConfigStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       const initial = legacy ?? ConfigSchema.parse({ channels: {}, mcp: {} })
-      const { providers: _providers, ...raw } = serializedLegacy ?? rawConfig(initial)
+      const { providers: _providers, network: _network, ...raw } = serializedLegacy ?? rawConfig(initial)
       if (legacy && !serializedLegacy) raw.channels = {}
       raw.mcp = rawConfig(initial).mcp
       if (record(raw.tools)) raw.tools = withoutWebSearchConfig(raw.tools)
@@ -192,10 +197,13 @@ export class ProjectConfigStore extends ConfigStore {
         !isDeepStrictEqual(next.providers, redactConfig(previous.providers))) {
         throw new TypeError('Shared providers must be changed through App provider settings')
       }
+      if (!isDeepStrictEqual(next.network, previous.network)) {
+        throw new TypeError('Shared proxy settings must be changed through App settings')
+      }
       if (record(next.agent) && next.agent.workspace !== undefined && next.agent.workspace !== this.scope.home) {
         throw new TypeError('Project Home cannot be changed through configuration')
       }
-      const { providers: _providers, ...owned } = next
+      const { providers: _providers, network: _network, ...owned } = next
       if (record(owned.tools)) {
         const previousTools = record(previous.tools) ? previous.tools : {}
         const redactedTools = redactConfig(previousTools) as Raw

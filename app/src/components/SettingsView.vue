@@ -12,6 +12,7 @@
       <div class="settings-section">
         <ModelDefaultsForm v-if="section === 'models'" :api-base="apiBase" scope="app" />
         <WebSearchSettings v-if="section === 'web-search'" :api-base="apiBase" />
+        <ProxySettings v-if="section === 'proxy'" :api-base="apiBase" />
         <SoundSettings v-if="section === 'sounds'" />
         <section v-if="section === 'language'" aria-labelledby="language-settings-title">
           <h2 id="language-settings-title">{{ t('Language') }}</h2>
@@ -32,6 +33,7 @@ import type { ProviderSetupStatus } from '../provider-setup.ts'
 import ProvidersView from './ProvidersView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
 import WebSearchSettings from './WebSearchSettings.vue'
+import ProxySettings from './ProxySettings.vue'
 import SoundSettings from './SoundSettings.vue'
 import LanguageSelector from './LanguageSelector.vue'
 import { t } from '../i18n.ts'
@@ -43,6 +45,7 @@ const sections = [
   { id: 'providers', get label() { return t('Providers') }, icon: 'i-lucide-cpu' },
   { id: 'models', get label() { return t('Models') }, icon: 'i-lucide-sliders-horizontal' },
   { id: 'web-search', get label() { return t('Web search') }, icon: 'i-lucide-search' },
+  { id: 'proxy', get label() { return t('Proxy') }, icon: 'i-lucide-network' },
   { id: 'sounds', get label() { return t('Sounds') }, icon: 'i-lucide-volume-2' },
   { id: 'language', get label() { return t('Language') }, icon: 'i-lucide-languages' },
 ]

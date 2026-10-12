@@ -55,7 +55,7 @@ export function isPublicWebShell(request: Request, development = false): boolean
   if (path === '/' || path === '/index.html' || path === '/favicon.png' || path === '/favicon.ico') return true
   if (['/manifest.webmanifest', '/sw.js', '/pwa/icon-192.png', '/pwa/icon-512.png', '/pwa/apple-touch-icon.png'].includes(path)) return true
   if (path.startsWith('/assets/') || isProjectPagePath(path)) return true
-  if (/^\/(?:chat(?:\/[^/]+)?|projects|workspaces|nodes|providers|approvals|settings(?:\/(?:channels|providers|models))?|agents(?:\/[^/]+)?|logs|spans)\/?$/.test(path)) return true
+  if (/^\/(?:chat(?:\/[^/]+)?|projects|workspaces|nodes|providers|approvals|settings(?:\/(?:channels|providers|models|web-search|proxy|sounds|language))?|agents(?:\/[^/]+)?|logs|spans)\/?$/.test(path)) return true
   return development && /^\/(?:@vite\/|@id\/|@fs\/|src\/|node_modules\/|hmr(?:\/|$))/.test(path)
 }
 
