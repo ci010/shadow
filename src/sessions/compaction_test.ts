@@ -11,7 +11,7 @@ import { AgentTypesManager } from '../agent/types/manager.ts'
 import { Bus } from '../bus/bus.ts'
 import type { OutboundMessage } from '../bus/events.ts'
 import { EventService } from '../events/service.ts'
-import type { ChatMessage, LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
+import { ProviderHttpError, TokenLimitExceededError, isContextSizeError, type ChatMessage, type LLMProvider, type LLMResponseUsage } from '../providers/provider.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import { ReadTool } from '../tools/read.ts'
@@ -336,3 +336,119 @@ for (const [name, createStore] of stores) {
     })
   })
 }
+
+
+test('context-size detection uses structured errors, not arbitrary error text', () => {
+  assert.equal(isContextSizeError(new ProviderHttpError(413, '<html>proxy limit</html>')), true)
+  assert.equal(isContextSizeError(new TokenLimitExceededError('limit')), true)
+  assert.equal(isContextSizeError(new ProviderHttpError(400, '413 payload too large')), false)
+  assert.equal(isContextSizeError(new Error('413 payload too large')), false)
+})
+
+for (const [name, createStore] of stores) {
+  for (const repeated of [false, true]) {
+    test(`${name}: HTTP 413 compacts image history with summary fallback; repeated=${repeated}`, { timeout: 15000 }, async () => {
+      await withTempWorkspace(async workspace => {
+        const store = createStore(join(workspace, 'sessions'))
+        await store.init()
+        const calls: ChatMessage[][] = []
+        let summaries = 0
+        const provider: LLMProvider = {
+          name: 'fixture', listModels: () => ['fixture'],
+          async chat(messages, tools) {
+            if (tools.some(tool => tool.function.name === 'handoff_summary')) {
+              summaries++
+              // Even the bounded textual summary request may be too large.
+              assert.doesNotMatch(JSON.stringify(messages), /data:image/)
+              throw new ProviderHttpError(413, 'proxy limit')
+            }
+            calls.push(structuredClone(messages))
+            if (calls.length === 1 || repeated) throw new ProviderHttpError(413, '<html>limit</html>')
+            return { content: 'Recovered.', toolCalls: [] }
+          },
+        }
+        const handoff = new HandoffManager(provider, llm.contextWindow, { autoHandoff: false }, workspace, store)
+        const bus = new Bus()
+        let handoffs = 0
+        bus.on('session.handoff', () => { handoffs++ })
+        const session = new TestSession(workspace, 'test:413', { sessionId: 'test:413', segmentIndex: 0, mode: 'session' }, [
+          { role: 'system', content: 'System prompt' },
+          { role: 'user', content: [
+            { type: 'text', text: 'Analyze attached image and continue the task.' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,' + 'A'.repeat(10000) } },
+          ] },
+          { role: 'assistant', content: null, tool_calls: [{ id: 'old-call', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+          { role: 'tool', tool_call_id: 'old-call', name: 'read', content: 'Completed old tool result' },
+        ], provider, new SessionTools(new Tools(workspace), workspace), bus, store, handoff, () => {})
+        const finished = Promise.withResolvers<SessionTurnFact>()
+        bus.on('session.turn.finished', fact => { finished.resolve(fact) })
+        try {
+          session.dispatch({ id: 'input', timestamp: new Date().toISOString(), kind: 'message', content: 'Continue image task', policy: 'queue',
+            source: { kind: 'event', eventId: 'input', type: 'fixture', source: 'system' },
+          }, llm)
+          const result = await finished.promise
+          assert.equal(result.status, repeated ? 'failed' : 'completed')
+          assert.equal(calls.length, 2, 'only one recovery attempt per turn')
+          assert.equal(summaries, 1, 'summary request is not retried recursively')
+          assert.equal(handoffs, 1)
+          assert.equal(session.getState().segmentIndex, 1)
+          assert.match(JSON.stringify(calls[0]), /data:image/)
+          assert.doesNotMatch(JSON.stringify(calls[1]), /data:image/)
+          assert.match(String(calls[1][1].content), /Continue image task|Completed old tool result/)
+          assert.ok(!calls[1].some(message => message.role === 'tool'), 'no orphan tool results in continuation')
+          assert.equal((await store.readFirstRecord(session.physicalSessionId))?.summary_context, calls[1][1].content)
+          const saved = await readFile(join(workspace, 'memory', 'sessions', 'test_413.md'), 'utf8')
+          assert.match(saved, /Continue image task/)
+        } finally {
+          session.stop()
+          await session.completion
+          await handoff.stop()
+          store.close?.()
+        }
+      })
+    })
+  }
+}
+
+for (const failure of ['token-limit', 'authentication', 'abort'] as const) {
+  test(`summary fallback only recovers size errors (${failure})`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new JsonlSessionStore(join(workspace, 'sessions'))
+      await store.init()
+      let calls = 0
+      const error = failure === 'token-limit' ? new TokenLimitExceededError('limit')
+        : failure === 'authentication' ? new ProviderHttpError(401, 'denied') : new DOMException('Aborted', 'AbortError')
+      const provider: LLMProvider = { name: 'fixture', listModels: () => ['fixture'], async chat() { calls++; throw error } }
+      const handoff = new HandoffManager(provider, llm.contextWindow, {}, workspace, store)
+      try {
+        const result = handoff.create('test:summary', 'test:summary-0', 'test:summary-1', [{ role: 'user', content: 'Preserve this objective' }], llm.model)
+        if (failure === 'token-limit') assert.match((await result).prompt, /Preserve this objective/)
+        else await assert.rejects(result, caught => caught === error)
+        assert.equal(calls, 1)
+      } finally { await handoff.stop(); store.close?.() }
+    })
+  })
+}
+
+test('stopping handoff overrides a concurrent size rejection without persisting fallback', async () => {
+  await withTempWorkspace(async workspace => {
+    const store: SessionStore = new JsonlSessionStore(join(workspace, 'sessions'))
+    await store.init()
+    const started = Promise.withResolvers<void>()
+    const provider: LLMProvider = { name: 'fixture', listModels: () => ['fixture'],
+      async chat(_messages, _tools, options) {
+        started.resolve()
+        return await new Promise((_resolve, reject) => {
+          options.signal!.addEventListener('abort', () => reject(new ProviderHttpError(413, 'late size rejection')), { once: true })
+        })
+      },
+    }
+    const handoff = new HandoffManager(provider, llm.contextWindow, {}, workspace, store)
+    const result = handoff.create('test:abort-summary', 'old', 'new', [{ role: 'user', content: 'Task' }], llm.model)
+    const rejected = assert.rejects(result, /Handoff runtime stopped/)
+    await started.promise
+    await handoff.stop()
+    await rejected
+    await assert.rejects(readFile(join(workspace, 'memory', 'sessions', 'test_abort-summary.md')), { code: 'ENOENT' })
+  })
+})

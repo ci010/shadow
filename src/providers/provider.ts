@@ -237,6 +237,15 @@ export class ProviderHttpError extends Error {
 
 }
 
+/** Request-size rejections can be recovered by compacting session context.
+ * Use structured provider errors, never response-body/message matching (413 may
+ * be emitted by a proxy with an HTML or empty body).
+ */
+export function isContextSizeError(error: unknown): boolean {
+  return error instanceof TokenLimitExceededError
+    || error instanceof ProviderHttpError && error.status === 413
+}
+
 export const providerFailureKinds = ['authentication', 'network', 'proxy', 'rate-limit', 'unavailable', 'storage', 'request'] as const
 export type ProviderFailureKind = typeof providerFailureKinds[number]
 

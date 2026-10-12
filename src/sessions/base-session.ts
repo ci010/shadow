@@ -20,7 +20,7 @@ import {
   type LLMProvider,
   type LLMResponseUsage,
   type ToolCall,
-  TokenLimitExceededError,
+  isContextSizeError,
 } from '../providers/provider.ts'
 import type { SessionTools } from '../tools/registry.ts'
 import { toolResultText, type ToolDefinition, type ToolResult } from '../tools/tool.ts'
@@ -224,6 +224,7 @@ export abstract class BaseSession {
       llm.reasoningEffort
     executionContext = { ...executionContext, model, temperature, maxTokens, thinking, reasoningEffort }
     const budget = new InferenceBudget()
+    let contextRecoveryAttempted = false
     executionContext.infer = createNodeInference({
       provider: this.provider, budget,
       llm: { model, temperature, maxTokens, thinking, reasoningEffort },
@@ -328,9 +329,14 @@ export abstract class BaseSession {
       ).catch((err) => err as Error), signal)
 
       signal.throwIfAborted()
-      if (response instanceof TokenLimitExceededError) {
-        console.warn(`[${this.id}] Token limit exceeded`)
-        if (await this.handleTokenLimitExceeded(llm)) continue
+      if (isContextSizeError(response)) {
+        console.warn(`[${this.id}] Provider context/request size limit exceeded`)
+        // One forced handoff per turn: oversized system prompts/tools or a
+        // provider limit smaller than the summary cannot be repaired by looping.
+        if (!contextRecoveryAttempted) {
+          contextRecoveryAttempted = true
+          if (await this.handleTokenLimitExceeded(llm)) continue
+        }
         throw response
       } else if (response instanceof Error) {
         throw response

@@ -579,3 +579,15 @@ test('completed SSE returns promptly and releases an otherwise-open stream', { t
   assert.equal(cancelled, true)
   assert.equal(body.locked, false)
 })
+
+
+test('HTTP 413 keeps its typed status across proxy body formats without retry', async t => {
+  const calls = harness(t, [
+    new Response('<html>Request too large</html>', { status: 413 }),
+    new Response(null, { status: 413 }),
+    new Response(new ReadableStream({ start(controller) { controller.error(new TypeError('body failed')) } }), { status: 413 }),
+  ])
+  for (let i = 0; i < 3; i++) await assert.rejects(openaiResponses(defaults), error =>
+    error instanceof ProviderHttpError && error.status === 413)
+  assert.equal(calls.length, 3)
+})

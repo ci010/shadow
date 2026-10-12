@@ -123,6 +123,9 @@ export async function openaiChat(params: {
       phase = 'response'
 
       if (!res.ok) {
+        // A proxy may reject by size without a readable JSON error body.
+        if (res.status === 413) throw new ProviderHttpError(413,
+          `${params.providerName ?? 'LLM'} chat failed: request payload too large`)
         const text = await res.text()
         let code: string | undefined
         // Detect token-limit errors so the agent loop can trigger a forced handoff

@@ -1,3 +1,4 @@
+import { ProviderHttpError } from './provider.ts'
 import type {
   ChatMessage,
   LLMProvider,
@@ -128,6 +129,7 @@ export class AnthropicProvider implements LLMProvider {
     })
 
     if (!res.ok) {
+      if (res.status === 413) throw new ProviderHttpError(413, 'Anthropic chat failed: request payload too large')
       const text = await res.text()
       throw new Error(`Anthropic chat failed: ${res.status} ${text}`)
     }

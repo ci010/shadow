@@ -3,7 +3,7 @@ import type {
   LLMProvider,
   LLMResponseUsage,
 } from '../../providers/provider.ts'
-import { contentText } from '../../providers/provider.ts'
+import { contentText, isContextSizeError } from '../../providers/provider.ts'
 import { workspacePath } from '../../utils/paths.ts'
 import { dirname } from 'node:path'
 import { readFileSync } from 'node:fs'
@@ -250,12 +250,20 @@ export class HandoffManager {
       this.store,
     )
     if (sourcePhysicalId) session.usageOwner = { sessionId, physicalId: sourcePhysicalId }
-    await session.run(executionContext, {
-      model,
-      temperature: 0,
-      contextWindow: this.contextWindow,
-      maxTokens: HANDOFF_LOOP_MAX_TOKENS,
-    })
+    try {
+      await session.run(executionContext, {
+        model,
+        temperature: 0,
+        contextWindow: this.contextWindow,
+        maxTokens: HANDOFF_LOOP_MAX_TOKENS,
+      })
+    } catch (error) {
+      signal.throwIfAborted()
+      if (!isContextSizeError(error)) throw error
+      // Do not recursively summarize an oversized summary request.
+      capture.context = null
+      console.warn('[handoff] Summary request exceeds context size, using local fallback')
+    }
     signal.throwIfAborted()
 
     if (!capture.context) {

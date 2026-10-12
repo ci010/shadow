@@ -1,6 +1,7 @@
 import { open } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { imageSize } from 'image-size'
+import { optimizePngForModel } from './image-optimization.ts'
 import type { ImageContentPart } from '../providers/provider.ts'
 
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -36,15 +37,42 @@ export function imageFromBytes(bytes: Uint8Array, expectedMime?: string): {
   } }
 }
 
-export function imageFromDataUrl(url: string): ImageContentPart {
+function parseImageDataUrl(url: string): { bytes: Uint8Array; mime: string } {
   const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]*={0,2})$/i.exec(url)
   if (!match || match[2].length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4) {
     throw new Error('Expected a PNG, JPEG, GIF or WebP data URL of at most 5 MiB.')
   }
-  return imageFromBytes(Buffer.from(match[2], 'base64'), match[1]).part
+  return { bytes: Buffer.from(match[2], 'base64'), mime: match[1] }
 }
 
-export async function readImage(path: string, signal?: AbortSignal) {
+export function imageFromDataUrl(url: string): ImageContentPart {
+  const { bytes, mime } = parseImageDataUrl(url)
+  return imageFromBytes(bytes, mime).part
+}
+
+async function modelImageFromBytes(bytes: Uint8Array, expectedMime?: string, signal?: AbortSignal) {
+  signal?.throwIfAborted()
+  const original = imageFromBytes(bytes, expectedMime)
+  if (original.mime !== 'image/png') return original
+  const optimized = await optimizePngForModel(bytes, original.width, original.height, signal)
+  signal?.throwIfAborted()
+  if (optimized) {
+    try {
+      const converted = imageFromBytes(optimized, 'image/webp')
+      if (converted.width === original.width && converted.height === original.height) return converted
+    } catch { /* Invalid codec output must not break a valid original input. */ }
+  }
+  return original
+}
+
+/** Validate first; only the model copy changes. Source URLs/files remain untouched. */
+export async function imageFromDataUrlForModel(url: string, signal?: AbortSignal): Promise<ImageContentPart> {
+  signal?.throwIfAborted()
+  const { bytes, mime } = parseImageDataUrl(url)
+  return (await modelImageFromBytes(bytes, mime, signal)).part
+}
+
+export async function readImage(path: string, signal?: AbortSignal, options?: { optimizeForModel?: boolean }) {
   signal?.throwIfAborted()
   const file = await open(path, 'r')
   try {
@@ -61,6 +89,8 @@ export async function readImage(path: string, signal?: AbortSignal) {
       length += bytesRead
     }
     signal?.throwIfAborted()
-    return imageFromBytes(bytes.subarray(0, length))
+    return options?.optimizeForModel
+      ? await modelImageFromBytes(bytes.subarray(0, length), undefined, signal)
+      : imageFromBytes(bytes.subarray(0, length))
   } finally { await file.close() }
 }
