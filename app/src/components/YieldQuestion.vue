@@ -40,7 +40,6 @@
               <span class="yield-selected i-lucide-check" :class="{ visible: customMode }" aria-hidden="true" />
             </button>
           </div>
-          <p v-if="useComposer && answerable && (inputQuestion || customMode)" class="yield-composer-note"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ t('Type your answer...') }}</p>
           <div v-if="!useComposer && (customMode || inputQuestion)" :id="`${id}-custom`" class="yield-custom" :class="{ 'input-response': inputQuestion }">
             <label :for="`${id}-response`" class="yield-sr-only">{{ t('Your response') }}</label>
             <textarea :id="`${id}-response`" ref="customInput" v-model="customText" rows="3" required
@@ -50,7 +49,7 @@
         <p :id="`${id}-status`" class="yield-status" :class="{ 'yield-sr-only': answerable }">{{ request.recipient.kind === 'parent'
           ? t('Waiting for the parent session. Only that session can answer.') : request.recipient.kind === 'caller' ? t('Waiting for the authenticated A2A caller.')
           : canAnswer ? inputQuestion ? t('Provide the requested information. This reply does not grant new permissions.') : t('Choose an option, then Continue, or write your own answer. Letter keys select options while this question is focused.') : t('Waiting for an authorized user. You have read-only access.') }}</p>
-        <p v-if="request.deadline || decisionRequest?.timeoutPaused || inputQuestion" :id="`${id}-deadline`" class="yield-status">{{ yieldDeadlineText(request, now) }}</p>
+        <p v-if="request.deadline || decisionRequest?.timeoutPaused" :id="`${id}-deadline`" class="yield-status">{{ yieldDeadlineText(request, now) }}</p>
         <p v-if="decisionRequest?.supersedes" class="yield-status">{{ t('Revised in response to your feedback:') }} {{ decisionRequest.revisionReason }}{{ t('. This is a new unanswered version.') }}</p>
         <DecisionDiscussion v-if="decisionRequest?.origin && !decisionRequest.ownerOnly && answerable" :exact-proposal="!!decisionRequest.workProposal"
           :key="request.id" :reference="{ sessionId: request.sessionId, physicalId: decisionRequest.origin.physicalId, requestId: request.id }"
@@ -174,7 +173,6 @@ fieldset:not(:disabled) .yield-option:hover { background: var(--c-bg-muted); bor
 fieldset:disabled .yield-option { cursor: default; }
 fieldset:disabled .yield-index { color: var(--c-text-muted); }
 .yield-status { margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; }
-.yield-composer-note { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
 .yield-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; flex-shrink: 0; gap: 8px; margin-top: 16px; padding: 12px 4px 0; border-top: 1px solid var(--c-border); }
 .yield-actions:empty { display: none; }
 .yield-reload { margin-right: auto; }
