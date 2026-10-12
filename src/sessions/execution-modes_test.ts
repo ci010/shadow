@@ -87,7 +87,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
     resolve: (name: string) => ({
       name, description: '', prompt: '', source: 'builtin',
       root: name === 'sub',
-      defaultMode: name === 'verify' ? 'task' : 'session',
+      defaultMode: name === 'leaf' ? 'call' : name === 'verify' ? 'task' : 'session',
       ...(name === 'limited' ? { allowedTools: ['subagent', 'ask', 'reply', 'message', 'read'] } : {}),
     }),
     allNames: () => ['general', 'sub', 'limited', 'verify'],
@@ -1370,3 +1370,45 @@ test('separate script invocations never share their outer provider admission key
     } finally { await f.sessions.stop() }
   })
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: one-shot context previews match the actual tool mode ceiling`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        // A role-only preview must use the role default, not implicitly session.
+        const rolePreview = await f.sessions.getContext({ agentType: 'verify' })
+        for (const name of ['cron', 'event_subscribe', 'continuation']) {
+          assert(!rolePreview.tools.some(tool => tool.name === name))
+        }
+        const leafPreview = await f.sessions.getContext({ agentType: 'leaf' })
+        for (const name of ['subagent', 'ask', 'reply', 'message', 'cancel', 'cron', 'event_subscribe', 'continuation']) {
+          assert(!leafPreview.tools.some(tool => tool.name === name))
+        }
+        const execSchema = leafPreview.tools.find(tool => tool.name === 'exec')!.parameters as any
+        assert.equal(execSchema.properties.timeout_ms.minimum, 1)
+        assert.equal(execSchema.properties.timeout_ms.maximum, 120000)
+        const id = await f.sessions.startSession({ agentType: 'general', mode: 'task', channel: 'virtual', task: 'Preview task' })
+        assert(id)
+        const request = await f.next(id)
+        const actual = await f.sessions.getContext({ sessionId: id })
+        const preview = await f.sessions.getContext({ sessionId: id, preview: true })
+        assert.equal(actual.source, 'active-history')
+        assert.equal(preview.source, 'preview')
+        const sorted = (tools: { name: string }[]) => tools.map(tool => tool.name).sort()
+        assert.deepEqual(sorted(actual.tools), [...request.names].sort())
+        assert.deepEqual(sorted(preview.tools), sorted(actual.tools))
+        for (const name of ['cron', 'event_subscribe', 'continuation']) assert(!request.names.includes(name))
+        assert(request.names.includes('ask'))
+        assert(request.names.includes('subagent'))
+        request.resolve(done())
+        await waitFor(() => f.sessions.getSessionState(id)?.executionStatus === 'completed')
+        const historical = await f.sessions.getContext({ sessionId: id, preview: true })
+        assert.deepEqual(sorted(historical.tools), sorted(preview.tools))
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+}

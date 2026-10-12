@@ -6,7 +6,7 @@ import { ToolNoEffectError, ToolOutcomeUnknownError, isCompletedToolFailure, too
 import { imageFromDataUrl, MAX_TOOL_IMAGES } from '../utils/image-input.ts'
 import type { ExecutionContext } from './context.ts'
 import type { McpConnection } from '../mcp/client.ts'
-import type { ExecutionMode } from '../sessions/execution-mode.ts'
+import { allowedSubagentModes, executionModeAllowsTool, type ExecutionMode } from '../sessions/execution-mode.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js'
 import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/types.js'
@@ -17,8 +17,6 @@ import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from './ask-policy.ts'
 type Tool = TypedTool<ToolResult>
 
 export type ToolExecutionPolicy = (tool: Tool, args: Record<string, unknown>, context: ExecutionContext) => string | undefined
-
-const CALL_DENIED_TOOLS = new Set(['subagent', 'ask', 'reply', 'message', 'cancel', 'work', 'event_subscribe', 'event_source', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'initiative', 'skill_read', 'skill_save'])
 
 const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
@@ -329,8 +327,7 @@ export class SessionTools extends Tools {
   /** Check if a tool name passes the allow/block policy. */
   private isToolAllowed(name: string): boolean {
     if (name === 'ask' && !this.askAvailable) return false
-    if ((name === 'session' || name === 'work') && this.scope && this.scope.mode !== 'session') return false
-    if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) return false
+    if (!executionModeAllowsTool(this.scope?.mode, name)) return false
     if (name === 'subagent' && this.scope?.modes.length === 0) return false
     if (this.allowed) return this.allowed.has(name)
     // Opt-in tools are hidden unless explicitly in allowedTools
@@ -458,7 +455,7 @@ export class SessionTools extends Tools {
 
   private isDynamicToolAllowed(name: string): boolean {
     if (name === 'ask' && !this.askAvailable) return false
-    if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) return false
+    if (!executionModeAllowsTool(this.scope?.mode, name)) return false
     if (this.allowed) return this.allowed.has('invoke_tool')
     return !this.blocked?.has(name)
   }
@@ -477,7 +474,8 @@ export class SessionTools extends Tools {
   }
 
   setExecutionScope(mode: ExecutionMode, modes: readonly ExecutionMode[], blocked?: (reason: string) => void): void {
-    this.scope = { mode, modes: [...modes], blocked }
+    const ceiling = allowedSubagentModes(mode, false)
+    this.scope = { mode, modes: modes.filter(candidate => ceiling.includes(candidate)), blocked }
   }
 
   get executionMode(): ExecutionMode | undefined { return this.scope?.mode }
@@ -515,10 +513,8 @@ export class SessionTools extends Tools {
         || args.timeout_ms < 1 || args.timeout_ms > MAX_CALL_TIMEOUT_MS)) {
       return this.rejectExecution(`Call exec requires timeout_ms between 1 and ${MAX_CALL_TIMEOUT_MS}; background execution is forbidden.`)
     }
-    if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) {
-      const reason = `${name} is unavailable in a leaf call; return to the caller for coordination or deferred-capable execution.`
-      this.scope.blocked?.(reason)
-      return `Blocked: ${reason} Partial work and side effects are not rolled back.`
+    if (!executionModeAllowsTool(this.scope?.mode, name)) {
+      return this.rejectExecution(`${name} is unavailable in ${this.scope?.mode} mode; return to the parent for durable coordination or deferred work.`)
     }
     if (name === 'subagent' && this.scope && !this.scope.modes.includes('task') && args.mode === undefined) {
       return `Error: mode is required in this scope; choose ${this.scope.modes.join(', ')}.`
@@ -551,6 +547,7 @@ export class SessionTools extends Tools {
     }
     const copy = new SessionTools(base, this.workspace,
       this.allowed ? [...this.allowed] : undefined, this.blocked ? [...this.blocked] : undefined, this.allowedModules)
+    copy.scope = this.scope
     copy.borrowedOwner = this.dynamicOwner
     copy.askAvailable = this.askAvailable
     copy.borrowedLifetime = this.ownerSignal

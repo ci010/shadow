@@ -21,3 +21,18 @@ export function allowedSubagentModes(
   if (mode === 'task') return ['call']
   return ['task', 'call']
 }
+
+// Mode limits are hard ceilings, including for dynamically imported tools.
+const SESSION_ONLY_TOOLS = new Set([
+  'session', 'work', 'initiative', 'continuation',
+  'event_subscribe', 'event_source', 'cron', 'cron_add', 'cron_list', 'cron_remove',
+])
+const CALL_COORDINATION_TOOLS = new Set([
+  'subagent', 'ask', 'reply', 'message', 'cancel', 'skill_read', 'skill_save',
+])
+
+export function executionModeAllowsTool(mode: ExecutionMode | undefined, name: string): boolean {
+  if (!mode || mode === 'session') return true
+  if (SESSION_ONLY_TOOLS.has(name)) return false
+  return mode !== 'call' || !CALL_COORDINATION_TOOLS.has(name)
+}

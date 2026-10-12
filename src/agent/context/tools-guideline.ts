@@ -1,15 +1,16 @@
 import type { SessionPromptContext } from './builder.ts'
-import { allowedSubagentModes } from '../../sessions/execution-mode.ts'
+import { allowedSubagentModes, executionModeAllowsTool } from '../../sessions/execution-mode.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from '../../tools/ask-policy.ts'
 
 export function toolsGuideline(ctx: SessionPromptContext): string {
   const mode = ctx.mode ?? ctx.agent.defaultMode
+  const allows = (name: string) => executionModeAllowsTool(mode, name) && isToolAllowed(ctx.agent, name)
   const coordinator = ctx.agent.name === 'orchestrator'
-  const modes = !coordinator && isToolAllowed(ctx.agent, 'subagent')
+  const modes = !coordinator && allows('subagent')
     ? allowedSubagentModes(mode, !!ctx.parentSessionId) : []
   const sections: string[] = []
-  if (mode !== 'call' && isToolAllowed(ctx.agent, 'work')) {
+  if (mode !== 'call' && allows('work')) {
     sections.push(`### Shared work notes
 
 Ordinary requests execute directly. Work is an optional notebook, never a gate or permission.
@@ -22,14 +23,14 @@ Ordinary requests execute directly. Work is an optional notebook, never a gate o
 - Completion is reported outcome, not human acceptance; runtime activity is separate. No adopt/checkpoint/settle protocol.`)
   }
 
-  if (isToolAllowed(ctx.agent, 'sql')) {
+  if (allows('sql')) {
     sections.push(`### Conventions
 
 \`sql({})\`: schemas; Work reads, Project rules with genuine human sources, not inferred approval. Explicit instructions need no second approval.
 User preferences: profiles. Reply style: conversation. Task limits: Work. Old conventions: history.`)
   }
 
-  if (!coordinator && isToolAllowed(ctx.agent, 'exec')) {
+  if (!coordinator && allows('exec')) {
     sections.push(`### Shell
 
 ${ctx.execNodeOnly
@@ -44,7 +45,7 @@ ${mode === 'call'
   if (mode !== 'call' && !channelSupportsAsk(ctx.channel, ctx.sessionId)) {
     sections.push(`### Questions in chat\n\n${CHAT_QUESTION_GUIDANCE}`)
   }
-  if (mode !== 'call' && channelSupportsAsk(ctx.channel, ctx.sessionId) && isToolAllowed(ctx.agent, 'ask')) {
+  if (mode !== 'call' && channelSupportsAsk(ctx.channel, ctx.sessionId) && allows('ask')) {
     sections.push(`### Questions and decisions
 
 - **\`ask\`** — \`kind: "input"\` needs only a question for missing text, never authorization. \`kind: "decision"\` handles consequential decisions, not routine choices.
@@ -68,12 +69,12 @@ ${mode === 'call'
   Your request goes to ${ctx.channel === 'a2a' ? 'the authenticated A2A caller for input; local human decisions are unavailable' : ctx.parentSessionId ? 'your actual parent' : 'the human'}, regardless of completion routing.
   Wait for the result; the default is not permission to proceed early.
   Session/global configuration controls waiting, not model arguments.
-${isToolAllowed(ctx.agent, 'reply')
+${allows('reply')
     ? '- Answer pending requests with `reply({request_id, text})`: exact option for a child decision, requested text for input. Message/final text does not resume them. Only the stored parent or remote owner may reply.'
     : ''}`.trim())
   }
 
-  if (mode !== 'call' && isToolAllowed(ctx.agent, 'cancel')) {
+  if (mode !== 'call' && allows('cancel')) {
     sections.push(`### Executions
 
 Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executionId>\` for output. \`cancel({executionId})\` awaits local cleanup or reports remote state. No polling or extra callbacks.`)
@@ -101,12 +102,14 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
     lines.push(modes.includes('task')
       ? '- Omitted `mode` defaults to `task`, independent of the selected role default. Use explicit `mode: "call"` for a blocking call.'
       : '- Specify `mode: "call"` explicitly; tasks may create only calls.')
-    lines.push('- No durable sessions through subagent. Use session for permitted durable peers. Temporary executions are internal and never create native platform threads.')
+    lines.push(mode === 'session' && allows('session')
+      ? '- No durable sessions through subagent. Use session for permitted durable peers. Temporary executions are internal and never create native platform threads.'
+      : '- No durable sessions through subagent. Temporary executions are internal and never create native platform threads.')
     lines.push('- Use `preload_tools` for imported tools needed immediately, e.g. `{ "chrome-devtools": [] }`; role restrictions still apply.')
     sections.push(lines.join('\n'))
   }
 
-  if (mode === 'session' && isToolAllowed(ctx.agent, 'session')) {
+  if (mode === 'session' && allows('session')) {
     sections.push(`### Peer conversations
 
 - Reuse peers: discover \`grep:v:sessions\`; \`v:sessions/<id>/brief\` gives metadata and conversation URL, not work scope.
@@ -116,7 +119,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 - Read \`v:project/folders\` for registered resources; never resolve remote display paths on Main.
 - The coordinator routes work, not the structural parent of peer conversations.`)
   }
-  if (coordinator) {
+  if (coordinator && mode === 'session') {
     sections.push(`### Coordinator Capability Boundary
 
 The single Project coordinator is web:orchestrator. Its hard runtime
@@ -131,7 +134,7 @@ Read its schema on demand; legacy shared drafts remain under \`project_config\`.
 Read \`v:skills/tool-operations\` for maintenance details; it never widens this cap.`)
   }
 
-  if (mode !== 'call' && isToolAllowed(ctx.agent, 'message')) {
+  if (mode !== 'call' && allows('message')) {
     sections.push(`### Messaging
 
 - **\`message(sessionId, content)\`**: authorized Project peers, or your running task for same-assignment corrections;

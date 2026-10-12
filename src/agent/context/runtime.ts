@@ -6,6 +6,7 @@ import {
 import { IdentityManager } from '../identity.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import { getArch, getOs } from '../../utils/runtime.ts'
+import { capabilityDiscovery } from './capability-prompt.ts'
 import { allowedSubagentModes } from '../../sessions/execution-mode.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from '../../channels/capabilities.ts'
 import { LOCAL_NODE_ID } from '../../sessions/locality.ts'
@@ -252,7 +253,7 @@ export function runtimeDiscoveryProvider(deps: RuntimeProviderDeps): SystemPromp
         ? allowedSubagentModes(ctx.mode ?? ctx.agent.defaultMode, !!ctx.parentSessionId) : []
       const lines: string[] = []
       if (!coordinator && ctx.agent.skills !== false) {
-        const skillsSummary = deps.getSkillsSummary(ctx.admin ?? false, ctx.sessionId)
+        const skillsSummary = capabilityDiscovery(deps.getSkillsSummary(ctx.admin ?? false, ctx.sessionId), ctx)
         if (skillsSummary) lines.push(skillsSummary, '')
       }
 

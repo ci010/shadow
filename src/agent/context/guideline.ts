@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
-import { allowedSubagentModes } from '../../sessions/execution-mode.ts'
+import { allowedSubagentModes, executionModeAllowsTool } from '../../sessions/execution-mode.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
+import { capabilityPrompt } from './capability-prompt.ts'
 import { toolsGuideline } from './tools-guideline.ts'
 import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from '../../tools/ask-policy.ts'
 
@@ -15,9 +16,9 @@ export function guidelineProvider(): SystemPromptProvider {
     getPromptSection(ctx) {
       const agentType = ctx.agent
 
-      const sections = [agentType.prompt]
+      const sections = [capabilityPrompt(agentType.prompt, ctx)]
 
-      if (agentType.name !== 'orchestrator') sections.push(TOOLS)
+      if (agentType.name !== 'orchestrator') sections.push(capabilityPrompt(TOOLS, ctx))
       sections.push(toolsGuideline(ctx))
       return sections.join('\n\n')
     },
@@ -30,10 +31,11 @@ export function executionContractProvider(): SystemPromptProvider {
 
 export function executionModeGuideline(ctx: SessionPromptContext): string {
   const mode = ctx.mode ?? ctx.agent.defaultMode
+  const allows = (name: string) => executionModeAllowsTool(mode, name) && isToolAllowed(ctx.agent, name)
   const hasDelegationParent = !!ctx.parentSessionId
-  const modes = ctx.agent.name !== 'orchestrator' && isToolAllowed(ctx.agent, 'subagent')
+  const modes = ctx.agent.name !== 'orchestrator' && allows('subagent')
     ? allowedSubagentModes(mode, hasDelegationParent) : []
-  const decision = !channelSupportsAsk(ctx.channel, ctx.sessionId) ? CHAT_QUESTION_GUIDANCE : isToolAllowed(ctx.agent, 'ask')
+  const decision = !channelSupportsAsk(ctx.channel, ctx.sessionId) ? CHAT_QUESTION_GUIDANCE : allows('ask')
     ? 'Use ask for missing input or consequential decisions; reply answers a specific pending request.'
     : 'Report blockers or missing input explicitly; do not invent an answer.'
   if (mode === 'call') {

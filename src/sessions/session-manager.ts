@@ -2500,6 +2500,7 @@ ${JSON.stringify(request)}`,
     sessionId?: string,
     behaviorOverride?: { allowedTools?: string[]; blockedTools?: string[] },
     channel?: string,
+    modeOverride?: ExecutionMode,
   ): Array<{ name: string; description: string; parameters: unknown }> {
     const conversationPolicy = sessionId ? this.deps.conversationPolicies?.resolve(sessionId) : undefined
     if (conversationPolicy && sessionId) {
@@ -2526,7 +2527,8 @@ ${JSON.stringify(request)}`,
       : behaviorOverride ?? (state ? this.resolveAgentTypeTools(state.agentType, state.sessionKind) : {})
     const scoped = new SessionTools(this.deps.tools, this.workspace, policy.allowedTools, policy.blockedTools)
     scoped.restrictChannelTools(channel, sessionId)
-    if (sessionId) scoped.setExecutionScope(this.sessionStates[sessionId]?.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
+    const mode = modeOverride ?? state?.mode ?? 'session'
+    scoped.setExecutionScope(mode, allowedSubagentModes(mode, !!delegationOwner(state)))
     const allDefs = scoped.getDefinitions()
     const filtered = allDefs.filter((d) =>
       isToolAllowed(policy, d.function.name, d.optIn)
@@ -2589,13 +2591,14 @@ ${JSON.stringify(request)}`,
     const state = opts.sessionId ? this.sessionStates[sessionId] : undefined
     const behavior = state?.config ?? {}
     const agentTypeName = opts.agentType ?? state?.agentType ?? 'general'
-    const agentType = this.deps.agentTypes.resolve(agentTypeName)
-    if (!agentType) {
+    const resolvedAgentType = this.deps.agentTypes.resolve(agentTypeName)
+    if (!resolvedAgentType) {
       throw new TypeError(
         `[session-manager] getContext: unknown agent type "${agentTypeName}"`,
       )
     }
 
+    const { agentType, allowedTools, blockedTools } = this.resolveAgentTypeTools(agentTypeName, state?.sessionKind)
     const promptCtx: SessionPromptContext = {
       projectId: this.deps.projectId,
       behavior,
@@ -2615,14 +2618,10 @@ ${JSON.stringify(request)}`,
     }
 
     const { systemPrompt, sections } = await this.deps.context.buildSystemPromptDetails(promptCtx)
-    const { allowedTools, blockedTools } = this.resolveAgentTypeTools(
-      agentTypeName,
-      state?.sessionKind,
-    )
     const tools = this.getToolDefinitions(opts.sessionId, {
       allowedTools,
       blockedTools,
-    }, channel)
+    }, channel, promptCtx.mode)
 
     const decisions = opts.sessionId ? await this.decisionValidityPrompt(sessionId) : ''
     return { source: 'preview', systemPrompt: decisions ? `${systemPrompt}\n\n${decisions}` : systemPrompt,
