@@ -51,9 +51,6 @@
           : canAnswer ? inputQuestion ? t('Provide the requested information. This reply does not grant new permissions.') : t('Choose an option, then Continue, or write your own answer. Letter keys select options while this question is focused.') : t('Waiting for an authorized user. You have read-only access.') }}</p>
         <p v-if="request.deadline || decisionRequest?.timeoutPaused" :id="`${id}-deadline`" class="yield-status">{{ yieldDeadlineText(request, now) }}</p>
         <p v-if="decisionRequest?.supersedes" class="yield-status">{{ t('Revised in response to your feedback:') }} {{ decisionRequest.revisionReason }}{{ t('. This is a new unanswered version.') }}</p>
-        <DecisionDiscussion v-if="decisionRequest?.origin && !decisionRequest.ownerOnly && answerable" :exact-proposal="!!decisionRequest.workProposal"
-          :key="request.id" :reference="{ sessionId: request.sessionId, physicalId: decisionRequest.origin.physicalId, requestId: request.id }"
-          :api-base="apiBase" :can-request="answerable && !busy" @updated="refresh" />
       </div>
       <div class="yield-actions">
         <button v-if="error" class="btn yield-reload" type="button" :disabled="loading || busy" @click="refresh">{{ loading ? t('Reloading…') : t('Reload question') }}</button>
@@ -73,7 +70,6 @@
 import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { MAX_YIELD_CUSTOM_TEXT_LENGTH, useYieldRequest, yieldDeadlineText, isInputRequest, type AskRequest } from '../yield-requests.ts'
-import DecisionDiscussion from './DecisionDiscussion.vue'
 import DecisionBrief from './DecisionBrief.vue'
 import WorkContextPath from './WorkContextPath.vue'
 

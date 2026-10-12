@@ -40,7 +40,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, useId, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import FileWorkbench from './files/FileWorkbench.vue'
 import ProjectWorkbench from './ProjectWorkbench.vue'
@@ -113,11 +113,13 @@ onUnmounted(() => {
 })
 watch(() => dashboardSelected.value && (wide.value || !coordinatorOpen.value),
   visible => emit('dashboard-visible', visible), { immediate: true })
-defineExpose({ showDashboard: () => {
+function showDashboard() {
   if (!wide.value) coordinatorOpen.value = false
   activePane.value = 'dashboard'
   workbench.value?.showConversation()
-} })
+}
+provide('shadow:show-project-dashboard', showDashboard)
+defineExpose({ showDashboard })
 </script>
 
 <style scoped>

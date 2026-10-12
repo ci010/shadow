@@ -33,8 +33,7 @@
     <p v-else-if="decision.status === 'superseded'" class="decision-note">{{ t('This version was replaced without selecting an answer.') }} {{ decision.result }}</p>
     <p v-else-if="!decision.answer && ['investigation', 'deferred', 'invalidated'].includes(decision.status)" class="decision-note">{{ decision.result }} {{ t('No option was selected. Only investigation or already-authorized unaffected work may continue.') }}</p>
     <template v-if="apiBase !== undefined">
-      <DecisionGraph v-if="decision.reference" :reference="decision.reference" :api-base="apiBase" @inspect="emit('inspect', $event)" @click="emit('interact')" />
-      <DecisionDiscussion v-if="decision.reference" :reference="decision.reference" :api-base="apiBase" :can-invalidate="canManage && !decision.invalidated" @updated="emit('updated')" @click="emit('interact')" />
+      <RouterLink v-if="route?.params.projectId" class="decision-dashboard" :to="{ name: 'chat', params: { projectId: route.params.projectId, sessionId: ORCHESTRATOR_SESSION_ID } }" @click="openDashboard">{{ t('Dashboard') }} <span aria-hidden="true">↗</span></RouterLink>
       <YieldSource v-for="source in decision.sources" :key="JSON.stringify(source)" :source="source" :api-base="apiBase"
         :answered="decision.action === 'answer'"
         @inspect="emit('inspect', $event)" @click="emit('interact')" />
@@ -52,12 +51,13 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
+import { inject } from 'vue'
 import { decisionStatusLabel, type YieldDecision } from '../yield-history.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import ToolPayload from './ToolPayload.vue'
 import YieldSource from './YieldSource.vue'
-import DecisionGraph from './DecisionGraph.vue'
-import DecisionDiscussion from './DecisionDiscussion.vue'
+import { RouterLink, useRoute } from 'vue-router'
+import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import DecisionBrief from './DecisionBrief.vue'
 import WorkContextPath from './WorkContextPath.vue'
 import MessageAttachments from './MessageAttachments.vue'
@@ -65,6 +65,9 @@ import type { SessionDetails } from '../session-details.ts'
 import type { ImagePreview } from '../image-viewer.ts'
 import type { OpenFile } from '../file-workbench.ts'
 defineProps<{ decision: YieldDecision; apiBase?: string; canManage?: boolean; sessionId?: string; workdir?: SessionDetails['workdir'] }>()
+const route = useRoute()
+const showProjectDashboard = inject<(() => void) | undefined>('shadow:show-project-dashboard', undefined)
+function openDashboard() { emit('interact'); showProjectDashboard?.() }
 const emit = defineEmits<{ interact: []; inspect: [sessionId: string]; updated: []; preview: [image: ImagePreview]; open: [file: OpenFile] }>()
 </script>
 
@@ -86,6 +89,8 @@ header > span:first-child { flex: 0 0 16px; width: 16px; height: 16px; }
 .decision-answer { margin: 12px 0; padding: 8px 12px; border-left: 2px solid var(--c-blue); background: var(--c-bg-soft); }
 .decision-answer p { margin: 4px 0; white-space: pre-wrap; }
 .decision-note { margin: 8px 0; color: var(--c-text-secondary); }
+.decision-dashboard { display: inline-flex; align-items: center; gap: 4px; margin: 8px 0; color: var(--c-blue); }
+.decision-dashboard:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .decision-details { margin: 8px 0; }
 .decision-details summary { cursor: pointer; color: var(--c-text-secondary); }
 .decision-details summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
