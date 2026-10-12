@@ -44,7 +44,7 @@ test('expanded official write tools render historical unified file diffs across 
           import { createApp, computed, h, reactive } from 'vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
           import { groupToolActivity } from '/src/tool-activity.ts';
-          const state = reactive({ id:'edit', sessionId:${JSON.stringify(sessionId)}, extra:'' });
+          const state = reactive({ id:'edit', sessionId:${JSON.stringify(sessionId)}, extra:'', defaultOpen:false });
           window.__diffFixture = state;
           const listeners = new Map(['selectionchange','pointerup','pointercancel'].map(type => [type,new Set()]));
           const add = document.addEventListener.bind(document), remove = document.removeEventListener.bind(document);
@@ -69,7 +69,7 @@ test('expanded official write tools render historical unified file diffs across 
           createApp({ setup() {
             const batch = computed(() => groupToolActivity(calls()).get(0));
             return () => h('main', {style:'max-width:920px;margin:24px auto;padding:0 12px'}, [
-              h(ToolActivityGroup, {batch:batch.value, apiBase:location.origin, sessionId:state.sessionId}),
+              h(ToolActivityGroup, {batch:batch.value, defaultOpen:state.defaultOpen, apiBase:location.origin, sessionId:state.sessionId}),
             ]);
           } }).mount('#app');`
       },

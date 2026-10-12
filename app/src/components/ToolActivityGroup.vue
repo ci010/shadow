@@ -1,12 +1,11 @@
 <template>
-  <details v-disclosure-motion class="tool-group tool-activity" @toggle.self="groupOpen = isOpen($event)">
+  <details v-disclosure-motion class="tool-group tool-activity" :open="groupOpen" @toggle.self="groupOpen = isOpen($event)">
     <summary class="tool-activity-summary trace-header" :title="summaryTitle" @click="emit('interact')">
       <span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />
       <span v-if="batch.files" class="activity-icon i-lucide-file-diff" aria-hidden="true" />
       <span class="activity-title">{{ summaryTitle }}</span>
       <LineChangeCounts v-if="batch.changes" :changes="batch.changes" :partial="batch.incomplete" />
       <span v-else-if="batch.files" class="activity-status">{{ t('Line counts unavailable') }}</span>
-      <span v-if="batch.entries.some(entry => entry.failed)" class="activity-failed">{{ t('Failed') }}</span>
       <span v-if="running" class="activity-status">{{ t('Running') }}</span>
     </summary>
     <div class="activity-list trace-guide">
@@ -47,14 +46,14 @@
 
 <script setup lang="ts">
 import { t, formatNumber } from '../i18n.ts'
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import type { ToolActivity, ToolActivityBatch } from '../tool-activity.ts'
 import { matchedFileIcon } from '../file-icons.ts'
 import { vDisclosureMotion } from '../disclosure-motion.ts'
 import LineChangeCounts from './LineChangeCounts.vue'
 import ToolPayload from './ToolPayload.vue'
 import ToolFileDiffPreview from './ToolFileDiffPreview.vue'
-const props = defineProps<{ batch: ToolActivityBatch; running?: boolean; apiBase?: string; sessionId?: string }>()
+const props = defineProps<{ batch: ToolActivityBatch; defaultOpen?: boolean; running?: boolean; apiBase?: string; sessionId?: string }>()
 const emit = defineEmits<{ interact: [] }>()
 const summaryTitle = computed(() => {
   const { entries, files } = props.batch
@@ -62,7 +61,9 @@ const summaryTitle = computed(() => {
   const others = files ? entries.filter(entry => !entry.file).length : entries.length - 1
   return others ? t('{title} and {count} other tool calls', { title, count: others }, others) : title
 })
-const groupOpen = ref(false)
+const groupOpen = ref(!!props.defaultOpen)
+// Preserve manual toggles while the group remains at the same conversation position.
+watch(() => props.defaultOpen, open => { groupOpen.value = !!open })
 const expanded = reactive(new Set<number>())
 const closedResults = reactive(new Set<number>())
 function isOpen(event: Event): boolean {
