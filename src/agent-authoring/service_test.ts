@@ -257,7 +257,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const patch = (body: unknown) => http.request(`/api/sessions/${encodeURIComponent(id)}/config`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       })
-      const defaults = { model: 'configured-agent-model', reasoningEffort: 'low', thinking: { type: 'enabled' } }
+      const defaults = { model: 'configured-agent-model', reasoningEffort: 'low', thinking: { type: 'enabled' }, contextWindow: 128_000 }
       assert.deepEqual(f.sessions.getSessionInferenceDefaults(id), defaults)
       const graph = await (await http.request('/api/sessions/graph')).json()
       assert.deepEqual(graph.sessions.find((session: { sessionId: string }) => session.sessionId === id).inferenceDefaults, defaults)

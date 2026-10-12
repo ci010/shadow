@@ -1,7 +1,7 @@
 import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { projectJson } from './projects.ts'
-import { isReasoningEffort } from '../../src/agent/llm-config.ts'
+import { isReasoningEffort, isContextWindow } from '../../src/agent/llm-config.ts'
 import type { ReasoningSettings } from './session-settings.ts'
 
 export interface ModelDefaults extends ReasoningSettings {
@@ -18,6 +18,7 @@ export interface ModelDefaultsState extends ModelDefaults {
 
 function validFields(value: unknown): value is ModelDefaults {
   return isRecord(value)
+    && (value.contextWindow === undefined || (typeof value.contextWindow === "number" && Number.isSafeInteger(value.contextWindow) && value.contextWindow > 0))
     && (value.model === undefined || (typeof value.model === 'string' && !!value.model.trim()))
     && (value.quickModel === undefined || typeof value.quickModel === 'string')
     && (value.temperature === undefined || (typeof value.temperature === 'number' && Number.isFinite(value.temperature)))
@@ -27,7 +28,7 @@ function validFields(value: unknown): value is ModelDefaults {
 
 export function parseModelDefaults(value: unknown): ModelDefaultsState {
   if (!isRecord(value) || !validFields(value) || typeof value.model !== 'string' || typeof value.temperature !== 'number'
-    || !validFields(value.overrides) || !validFields(value.inherited)
+    || !validFields(value.overrides) || (value.overrides.contextWindow !== undefined && !isContextWindow(value.overrides.contextWindow)) || !validFields(value.inherited)
     || typeof value.inherited.model !== 'string' || typeof value.inherited.temperature !== 'number') {
     throw new Error(t('Main returned invalid model defaults. Reload settings and retry.'))
   }

@@ -319,3 +319,16 @@ test('gateway rejects unapproved origins and preflight headers', async () => {
     null,
   )
 })
+
+
+test('organize failures before Project routing carry sanitized gateway diagnostics', async () => {
+  const app = createApp([], 'fixture-secret')
+  const response = await app.request('/projects/fixture/api/work/organize', { method: 'POST', body: '{}' })
+  assertEquals(response.status, 401)
+  const body = await response.json()
+  assertEquals(body.stage, 'gateway')
+  assertEquals(body.error, 'unauthorized')
+  assertEquals(response.headers.get('X-Correlation-ID'), body.correlationId)
+  assert(typeof body.correlationId === 'string' && body.correlationId.length === 36)
+  assert(!JSON.stringify(body).includes('fixture-secret'))
+})

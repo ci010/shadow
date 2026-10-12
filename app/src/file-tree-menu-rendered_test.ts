@@ -46,6 +46,10 @@ test('rendered file menus copy paths, gate native reveal, report failures and re
             h(Node,{apiBase:location.origin,sessionId:'fixture',dir:'src',depth:0,
               entry:{name:'a.ts',type:'file',ext:'.ts',size:1,mtime:null},
               onOpen:()=>window.fixture.opened++,onContextMenu:value=>request.value=value}),
+            h(Node,{apiBase:location.origin,sessionId:'fixture',dir:'',depth:0,changesOnly:true,
+              entry:{name:'nested',type:'dir',ext:'',size:0,mtime:null},
+              changes:[{path:'nested/child.ts',status:'modified'}],
+              onContextMenu:value=>request.value=value}),
             request.value ? h(Menu,{request:request.value,workdir:workdir.value,onClose:()=>request.value=undefined}) : null
           ]}).mount('#app');`
       },
@@ -119,15 +123,39 @@ test('rendered file menus copy paths, gate native reveal, report failures and re
           await run("fixture.holdCopy=false;fixture.releaseCopy()");
           await wait("!document.querySelector('.file-menu')");
           assert.equal(await run("fixture.copied"),${JSON.stringify('C:\\project\\src\\a.ts')});
-          // No menu means normal copy is left untouched.
+          // Focused rows invoke file actions without first opening a menu.
+          assert.equal(await shortcut({key:'c',ctrlKey:true}),false);
+          await wait("fixture.copyCalls==="+(calls+2)+"&&!document.querySelector('.file-menu')");
+          assert.equal(await run("fixture.copied"),${JSON.stringify('C:\\project\\src\\a.ts')});
+          assert.equal(await run("document.activeElement.dataset.path"),'src/a.ts');
+          assert.equal(await shortcut({key:'C',ctrlKey:true,shiftKey:true}),false);
+          await wait("fixture.copyCalls==="+(calls+3)+"&&!document.querySelector('.file-menu')");
+          assert.equal(await run("fixture.copied"),'src/a.ts');
+          assert.equal(await shortcut({key:'c',ctrlKey:true,altKey:true}),true);
+          assert.equal(await shortcut({key:'c',ctrlKey:true,isComposing:true}),true);
+          assert.equal(await shortcut({key:'c',ctrlKey:true,repeat:true}),false);
+          assert.equal(await run("fixture.copyCalls"),calls+3);
+          // Editing focus remains browser-owned.
+          await run("const input=document.createElement('input');document.body.append(input);input.focus()");
           assert.equal(await shortcut({key:'c',ctrlKey:true}),true);
-          assert.equal(await run("fixture.copyCalls"),calls+1);
+          assert.equal(await run("fixture.copyCalls"),calls+3);
+          // Recursive bubbling must not replace the child's action with its parent path.
+          await wait("!!Array.from(document.querySelectorAll('.tree-row')).find(row=>row.dataset.path==='nested/child.ts')");
+          await run("Array.from(document.querySelectorAll('.tree-row')).find(row=>row.dataset.path==='nested/child.ts').focus()");
+          assert.equal(await shortcut({key:'C',ctrlKey:true,shiftKey:true}),false);
+          await wait("fixture.copied==='nested/child.ts'&&!document.querySelector('.file-menu')");
+          assert.equal(await run("fixture.copyCalls"),calls+4);
+          assert.equal(await run("document.activeElement.dataset.path"),'nested/child.ts');
           await run("fixture.failCopy=true");
           await open(); await wait("!!document.querySelector('.file-menu')");
           await run("document.querySelector('.file-menu button').click()");
           await wait("!!document.querySelector('.file-menu [role=alert]')");
           await escape(); await wait("!document.querySelector('.file-menu')");
           await run("fixture.failCopy=false;window.shadowDesktop={fileExplorer:{showInFolder:async path=>{if(fixture.failReveal)throw new Error('missing');fixture.revealed=path}}};void 0");
+          await run("document.querySelector('.tree-row').focus()");
+          assert.equal(await shortcut({key:'R',altKey:true,shiftKey:true}),false);
+          await wait("fixture.revealed!==undefined&&!document.querySelector('.file-menu')");
+          assert.equal(await run("fixture.revealed"),${JSON.stringify('C:\\project\\src\\a.ts')});
           await open(); await wait("document.querySelectorAll('.file-menu button').length===3");
           await run("document.querySelectorAll('.file-menu button')[2].click()");
           await wait("!document.querySelector('.file-menu')");

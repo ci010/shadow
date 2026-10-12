@@ -37,11 +37,13 @@ export interface SidebarSession {
   config?: {
     model?: string
     thinking?: { type: 'enabled' | 'disabled' }
+    contextWindow?: number
     reasoningEffort?: ReasoningEffort
   }
   inferenceDefaults?: {
     model: string
     thinking?: { type: 'enabled' | 'disabled' }
+    contextWindow?: number
     reasoningEffort?: ReasoningEffort
   }
 }
@@ -145,6 +147,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       channelAddress,
       inferenceDefaults: isRecord(defaults) && typeof defaults.model === 'string' ? {
         model: defaults.model,
+        ...(typeof defaults.contextWindow === "number" ? { contextWindow: defaults.contextWindow } : {}),
         thinking: isRecord(defaults.thinking) ? { type: defaults.thinking.type === 'enabled' ? 'enabled' : 'disabled' } : undefined,
         reasoningEffort: isReasoningEffort(defaults.reasoningEffort) ? defaults.reasoningEffort : undefined,
       } : undefined,
@@ -168,6 +171,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       waitingForCall: session.waitingForCall as boolean | undefined,
       parentToolCallId: session.parentToolCallId as string | undefined,
       config: config ? {
+        ...(typeof config.contextWindow === "number" ? { contextWindow: config.contextWindow } : {}),
         model: typeof config.model === 'string' ? config.model : undefined,
         thinking: isRecord(config.thinking) && (config.thinking.type === 'enabled' || config.thinking.type === 'disabled')
           ? { type: config.thinking.type } : undefined,

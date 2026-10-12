@@ -67,3 +67,28 @@ test('project config saves directly await MCP activation instead of observing fi
     await manager.stop()
   })
 })
+
+
+test('App and Project context APIs accept only three choices and null inheritance', async () => {
+  await withTempWorkspace(async root => {
+    const configPath = join(root, 'app-context.json')
+    await writeFile(configPath, '{}')
+    const global = new AppProviderConfigStore({ configPath })
+    const project = new ProjectConfigStore({ configPath: join(root, 'project-context.json'), home: join(root, 'home'), getSharedConfig: () => ConfigSchema.parse({}) })
+    await project.init()
+    const app = new Hono()
+    appModelDefaultsPlugin(global)(app)
+    projectConfigPlugin(project)(app)
+    for (const path of ['/api/app/model-defaults', '/api/config/model-defaults']) {
+      const patch = (contextWindow: unknown) => app.request(path, { method: 'PATCH', body: JSON.stringify({ contextWindow }) })
+      for (const window of [0, 262144, '400000', false]) assert.equal((await patch(window)).status, 400)
+      for (const window of [256000, 400000, 1000000]) {
+        const result = await patch(window)
+        assert.equal(result.status, 200)
+        assert.equal((await result.json()).overrides.contextWindow, window)
+      }
+      assert.equal((await patch(null)).status, 200)
+      assert.equal((await (await app.request(path)).json()).overrides.contextWindow, undefined)
+    }
+  })
+})

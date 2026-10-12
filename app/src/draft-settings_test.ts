@@ -38,3 +38,16 @@ test('conversation model selections persist without a provider turn and can be c
     assert.equal(result.reasoningEffort, 'medium')
   }
 })
+
+
+test('context overrides survive draft reload and clearing removes the stored override', () => {
+  const values = new Map<string, string>()
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value) } }
+  const key = draftSettingsKey('http://fixture', 'context-a')
+  saveDraftSettings(storage, key, { contextWindow: 1000000 })
+  assert.deepEqual(loadDraftSettings(storage, key), { contextWindow: 1000000 })
+  assert.equal(loadDraftSettings(storage, draftSettingsKey('http://fixture', 'context-b')), undefined)
+  saveDraftSettings(storage, key, { contextWindow: null })
+  assert.deepEqual(loadDraftSettings(storage, key), {})
+  assert.throws(() => saveDraftSettings(storage, key, { contextWindow: 262144 }), /invalid/)
+})

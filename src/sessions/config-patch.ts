@@ -1,10 +1,10 @@
 import type { SessionConfig } from './session-store.ts'
-import { isReasoningEffort } from '../agent/llm-config.ts'
+import { isReasoningEffort, isContextWindow } from '../agent/llm-config.ts'
 import { parseYieldPolicy } from './yield-contract.ts'
 
 export interface SessionConfigPatch {
   set: Partial<SessionConfig>
-  unset: Array<'model' | 'thinking' | 'reasoningEffort' | 'yield'>
+  unset: Array<'model' | 'thinking' | 'reasoningEffort' | 'yield' | 'contextWindow'>
 }
 
 export function isConfigObject(value: unknown): value is Record<string, unknown> {
@@ -18,12 +18,15 @@ export function parseSessionConfigPatch(
   if (!isConfigObject(value)) throw new TypeError('invalid_config')
   const patch: SessionConfigPatch = { set: {}, unset: [] }
   for (const [key, item] of Object.entries(value)) {
-    if (key !== 'thinking' && key !== 'reasoningEffort' && key !== 'model' && key !== 'yield') {
+    if (key !== 'thinking' && key !== 'reasoningEffort' && key !== 'model' && key !== 'yield' && key !== 'contextWindow') {
       throw new TypeError('invalid_config_key')
     }
     if (key === 'model' && !allowModel) throw new TypeError('invalid_config_key')
     if (item === null) {
       patch.unset.push(key)
+    } else if (key === 'contextWindow') {
+      if (!isContextWindow(item)) throw new TypeError('invalid_contextWindow')
+      patch.set.contextWindow = item
     } else if (key === 'yield') {
       patch.set.yield = parseYieldPolicy(item)
     } else if (key === 'model') {

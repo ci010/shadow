@@ -83,7 +83,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { computed, nextTick, onDeactivated, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ProjectGroup from './ProjectGroup.vue'
 import ProjectConversation from './ProjectConversation.vue'
@@ -95,7 +95,8 @@ import { projectBase } from '../api-url.ts'
 import { createProjectsClient, projectChatLocation, type ProjectRecord } from '../projects.ts'
 import { createConversationResources, type ConversationResource } from '../project-workspaces.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
-import type { FolderRecord } from '../folders-client.ts'
+import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
+import { createNewConversationShortcut, resolveConversationFolder } from '../new-conversation-shortcut.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { DEFAULT_PROJECT_SIDEBAR, projectSidebarStorageKey, restoreProjectSidebarPreferences } from '../project-sidebar.ts'
 import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
@@ -304,6 +305,35 @@ function startDraft(projectId: string, folder?: FolderRecord, remote = false) {
   publish(resource)
   void router.push(projectChatLocation(resource))
 }
+const keyboardActive = ref(true)
+const newConversationShortcut = createNewConversationShortcut({
+  context() {
+    if (!keyboardActive.value || !props.visible || !installation.value.uiScopes.includes('chat:write')
+      || !['chat', 'project-settings', 'agents'].includes(String(route.name))) return
+    const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
+    if (!projects.value.some(project => project.id === projectId)) return
+    return { projectId, sessionId: selected.value?.sessionId ?? '', folder: selected.value?.folder }
+  },
+  async resolveFolder(context, signal) {
+    const lease = liveState.acquireProject(props.apiBase, context.projectId)
+    try {
+      await lease.graph.refresh()
+      if (signal.aborted) return
+      if (lease.graph.state.error) throw new Error(lease.graph.state.error)
+      return await resolveConversationFolder(context.sessionId, lease.graph.state.value ?? [],
+        () => createFoldersClient(projectBase(props.apiBase, context.projectId)).list(signal))
+    } finally { lease.release() }
+  },
+  start(context, folder) { startDraft(context.projectId, folder) },
+  failed(cause) {
+    error.value = cause instanceof Error ? cause.message : t('Could not resolve the conversation folder. Retry.')
+    sidebarOpen.value = true
+  },
+})
+// Synchronous cancellation also covers switching away and back during a pending read.
+watch(() => [route.fullPath, selected.value?.key, selected.value?.sessionId, automation.value?.id,
+  props.apiBase, props.visible, keyboardActive.value, installation.value.uiScopes.join(','),
+  projects.value.map(project => project.id).join(',')], () => newConversationShortcut.cancel(), { flush: 'sync' })
 function navigate(projectId: string, sessionId: string, child?: string) {
   automation.value = undefined
   if (!sessionId) { startDraft(projectId); return }
@@ -419,9 +449,14 @@ onMounted(() => {
   window.addEventListener('shadow:projects-changed', onCatalogChanged)
   window.addEventListener('shadow:project-deleted', onProjectDeleted)
   window.addEventListener('keydown', sidebarKeydown)
+  window.addEventListener('keydown', newConversationShortcut.keydown)
 })
-onDeactivated(() => { closeSidebar(false) })
+onActivated(() => { keyboardActive.value = true })
+onDeactivated(() => { keyboardActive.value = false; newConversationShortcut.cancel(); closeSidebar(false) })
 onUnmounted(() => {
+  keyboardActive.value = false
+  newConversationShortcut.cancel()
+  window.removeEventListener('keydown', newConversationShortcut.keydown)
   mutation?.abort(); sidebarObserver?.disconnect()
   window.removeEventListener('resize', measureSidebar)
   window.removeEventListener('shadow:projects-changed', onCatalogChanged)

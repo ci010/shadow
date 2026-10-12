@@ -1,5 +1,11 @@
 import type { ModelInfo } from '../providers/provider.ts'
 
+export const CONTEXT_WINDOWS = [256000, 400000, 1000000] as const
+export type ContextWindow = typeof CONTEXT_WINDOWS[number]
+export function isContextWindow(value: unknown): value is ContextWindow {
+  return CONTEXT_WINDOWS.some(window => window === value)
+}
+
 export interface ThinkingConfig {
   type: 'enabled' | 'disabled'
 }
@@ -35,11 +41,12 @@ export interface LlmRuntimeConfig {
 }
 
 export type InferenceSettings = Partial<Pick<LlmRuntimeConfig,
-  'model' | 'temperature' | 'maxTokens' | 'thinking' | 'reasoningEffort'>>
+  'model' | 'temperature' | 'maxTokens' | 'thinking' | 'reasoningEffort' | 'contextWindow'>>
 
 /** Omitted values inherit, rather than clearing the preceding configuration. */
 export function inferenceSettings(value: InferenceSettings | undefined): InferenceSettings {
   return {
+    ...(value?.contextWindow !== undefined ? { contextWindow: value.contextWindow } : {}),
     ...(value?.model !== undefined ? { model: value.model } : {}),
     ...(value?.temperature !== undefined ? { temperature: value.temperature } : {}),
     ...(value?.maxTokens !== undefined ? { maxTokens: value.maxTokens } : {}),
@@ -51,7 +58,9 @@ export function inferenceSettings(value: InferenceSettings | undefined): Inferen
 export function resolveInferenceSettings(
   defaults: LlmRuntimeConfig, agent?: InferenceSettings, session?: InferenceSettings,
 ): LlmRuntimeConfig {
-  return { ...defaults, ...inferenceSettings(agent), ...inferenceSettings(session) }
+  // Context has only global/Project/session layers, not Agent frontmatter.
+  const { contextWindow: _agentWindow, ...agentSettings } = inferenceSettings(agent)
+  return { ...defaults, ...agentSettings, ...inferenceSettings(session) }
 }
 
 export function validateInferenceCapabilities(

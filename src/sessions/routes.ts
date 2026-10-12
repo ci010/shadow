@@ -279,8 +279,7 @@ export function sessionsApiPlugin(
         }
         const firstMsg = await sessions.getFirstUserMessage(session.sessionId)
         let inferenceDefaults: ReturnType<SessionManager['getSessionInferenceDefaults']> | null
-        if (state && execution.mode === 'session' && ['qq', 'discord', 'feishu'].includes(
-          channelAddressFromSessionId(session.sessionId)?.platform ?? session.sessionId.split(':', 1)[0])) {
+        if (state && execution.mode === 'session') {
           try {
             inferenceDefaults = sessions.getSessionInferenceDefaults(session.sessionId)
           } catch (error) {

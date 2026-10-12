@@ -42,8 +42,11 @@ export function createQuickActionsClient(base: string, projectId: string, reques
     async actions(signal?: AbortSignal) { return list((await json('/api/actions', { signal })).actions, parseQuickAction) },
     async folders(signal?: AbortSignal) {
       return list((await json('/api/folders', { signal })).folders, (value): ActionFolder => {
-        if (!record(value) || !text(value.id) || !text(value.name) || typeof value.path !== 'string' || !['local', 'remote'].includes(String(value.kind))) throw invalid()
-        return value as unknown as ActionFolder
+        // FolderRecord's legacy/local wire shape deliberately omits kind. Only an
+        // absent kind means local; unknown explicit kinds must never become local.
+        if (!record(value) || !text(value.id) || !text(value.name) || typeof value.path !== 'string'
+          || (value.kind !== undefined && value.kind !== 'local' && value.kind !== 'remote')) throw invalid()
+        return { id: value.id, name: value.name, path: value.path, kind: value.kind ?? 'local' } as ActionFolder
       })
     },
     async save(input: Partial<Omit<QuickAction, 'id'>>, id?: string, signal?: AbortSignal) {

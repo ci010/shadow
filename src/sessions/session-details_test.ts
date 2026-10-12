@@ -43,6 +43,31 @@ const invalidConfigs = [
 ]
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: details use runtime budget and actual handoff policy, not catalog limits`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      let windowTokens = 400_000
+      const policy = { enabled: false, low: .6, high: .9, windowTokens: 400_000 }
+      const sessions = makeManager(workspace, store, {
+        getLlmRuntimeConfig: () => ({ model: 'fixture', contextWindow: windowTokens, temperature: 0 }),
+        handoffManager: { getContextPolicy: () => policy } as SessionManagerDeps['handoffManager'],
+      })
+      try {
+        await store.saveState('web:budget', { sessionId: 'web:budget', segmentIndex: 0, config: { model: 'unlisted' } })
+        await store.createSessionLog(newPhysicalSessionId('web:budget', 0, 1), [{ role: 'assistant', usage }])
+        await sessions.start()
+        const details = await sessions.getSessionDetails('web:budget')
+        equal(details?.context.windowTokens, 400_000)
+        deepEqual(details?.context.handoff, policy)
+        // Read the Project's current runtime config on every request.
+        windowTokens = 250_000
+        equal((await sessions.getSessionDetails('web:budget'))?.context.windowTokens, 250_000)
+        deepEqual((await sessions.getSessionDetails('web:budget'))?.context.handoff, policy)
+      } finally { await sessions.stop(); store.close?.() }
+    })
+  })
+
   for (const platform of ['qq', 'discord', 'feishu']) test(`${Store.name}: ${platform} conversation PATCH persists only selected overrides and null restores inherited settings`, async t => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -67,7 +92,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         deepEqual(sessions.getSessionConfig(peer), {})
         const graph = await (await app.request('/api/sessions/graph')).json()
         for (const id of [key, peer, legacy]) {
-          deepEqual(graph.sessions.find((s: { sessionId: string }) => s.sessionId === id).inferenceDefaults, { model: 'fixture' })
+          deepEqual(graph.sessions.find((s: { sessionId: string }) => s.sessionId === id).inferenceDefaults, { model: 'fixture', contextWindow: 999 })
         }
         const defaults = sessions.getSessionInferenceDefaults.bind(sessions)
         const unavailable = t.mock.method(sessions, 'getSessionInferenceDefaults', (id: string) => {
@@ -79,7 +104,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           equal(response.status, 200, 'A disabled binding must not break the conversation list')
           const graph = await response.json()
           equal(graph.sessions.find((s: { sessionId: string }) => s.sessionId === key).inferenceDefaults, null)
-          deepEqual(graph.sessions.find((s: { sessionId: string }) => s.sessionId === peer).inferenceDefaults, { model: 'fixture' })
+          deepEqual(graph.sessions.find((s: { sessionId: string }) => s.sessionId === peer).inferenceDefaults, { model: 'fixture', contextWindow: 999 })
         } finally { unavailable.mock.restore() }
         await sessions.stop()
         const restarted = makeManager(workspace, store)
@@ -321,7 +346,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           sessionId: 'web:one', name: 'Actual question',
           workdir: { kind: 'local', displayPath: sessionWorkspacePath(workspace, 'web:owner'), nodeId: 'local', available: true, availability: 'available' },
           usage, usageScope: 'session', subagentUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, usageIncomplete: true,
-          context: { usedTokens: 120, windowTokens: 8000 },
+          context: { usedTokens: 120, windowTokens: 999 },
         })
 
         test(`${Store.name}: total usage includes nested task/call ownership but excludes forks, peers and other projects`, async () => {
@@ -381,7 +406,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           deepEqual(details?.workdir, expected)
           equal(details?.name, null)
           equal(details?.usage, null)
-          deepEqual(details?.context, { usedTokens: null, windowTokens: null })
+          deepEqual(details?.context, { usedTokens: null, windowTokens: 999 })
         }
       } finally {
         store.close?.()

@@ -259,7 +259,78 @@ Project 因果总览、无 Work 的运行活动、上下文问答和隔离的只
 **agent 能正常工作，用户能理解并纠正工作方向，而双方不必为了维持这份理解
 再做一份同样昂贵的协调工作。**
 
-## 9. 维护本文
+## 9. 本轮用户总览要求与第一版落地（2026-10-11）
+
+**来源：本轮用户讨论，不是模型自行增加的记账要求。** 用户进一步明确：
+基本 dashboard 应该先回答过去发生了什么、有哪些话题、每个话题最新／最终状态；
+复杂话题再展开内部结构，包括人或模型作出的决策。用户随后指出顶部
+“已固定的操作”占用太多空间，并反馈 Quick Actions 获取数据失败。
+这补充了第 1 节的用户总览目标，没有撤销前文关于权限、来源和执行／结果区别的原则。
+
+当前实现：
+
+- 默认 Overview 是包含结束记录的话题历史，不再默认打开工作因果画布。
+  优先按已保存 Work 根节点及显式后代组织；没有显式链接的会话单独显示为
+  **以会话为线索的话题**，明确不是经过验证的语义话题划分。
+- 卡片首屏展示根节点现有报告／目标、记录状态、最近时间和关联会话执行状态；
+  展开查看局部摘要、关系类型、来源、阻碍与下一步，仍可打开原有详情、
+  Canvas、Board、Graph 和对话。执行结束或笔记 done 都不是用户接受结果。
+- 展开时才读取关联会话的原生决策记录，保留问题、原始片段／请求 ID、回答时间；
+  区分人的回答、上级模型回答、超时默认项、未答问题、无回答关闭与失效记录。
+  模型笔记中的“选定方案”不冒充原生已回答决策。历史按会话展示，不声称
+  一个会话内的所有决策都属于同一个语义话题。
+- 用户待答事项与内部影响评估／未知副作用恢复分开计数。后续用户反馈“不知道 review 要填写什么”后，内部项进一步移到无数字催办的 Agent 诊断入口，默认不出现在首页；诊断打开后仍默认收起，说明由 Agent 复核、用户无需填写，按钮仅“查看笔记”。
+- 调查确认自动观察器会因为最终报告重新措辞 objective 而提升语义 revision，
+  并且子笔记的进度更新会重写祖先 basis。现在仅新用户／上级指令允许重写目标；
+  report-only 更新保留目标和旧 basis，既减少虚假目标变化，也不把真实人工目标变化
+  自动当作已经复核。已有记录不批量清除或伪造复核结论。
+- 固定操作改为紧凑条带，没有固定操作时不占位；失败保留紧凑错误和重试入口。
+  前端现已接受真实本地 FolderRecord 合同中省略 kind 的形状，仅缺省 kind
+  解释为 local，显式 remote 或未知 kind 不会降级成本地。
+
+**已知边界：**没有回填历史会话的语义话题、最终报告或模型日常隐式取舍；
+根节点摘要可能落后于某条分支，界面显示现有记录而不是自动编造综合结论。
+决策读取限最近 20 个物理片段／100 条原生记录；截断或无法读取明确标记。
+没有证据的用户接受状态不推断为已接受。Quick Actions 的 kind 合同差异可用
+真实 FolderRegistry 输出复现，但本轮没有读取用户运行数据，不能保证截图中的
+每一次获取失败都只有这一原因。测试是合成数据与本地组件回归，不代替真实模型
+长期运行或用户理解验证。
+
+### 9.1 后续用户反馈与本轮语义总览（2026-10-12）
+
+**来源：用户明确指出话题列表散乱、需要整体任务分类，Overview 与 Dashboard
+目的重复；随后明确表示旧 UI 是实验品，无需保留冗余入口，并要求主动触发整理。**
+据此，默认入口现在只有 Dashboard，按关注目的分组 → 独立话题最新状态 → 可展开
+证据／内部结构／原生决策历史。主视图只保留总览与类似 issue 的 Board；因果结构与
+Graph 是总览内部的局部折叠展示，不再提供独立 Canvas／Graph 或“结构工具”入口。
+话题内部展示已保存角色、supports／requires／assumption、上级及跨话题依赖；缺失
+角色或关系明确标注，不把模型分组当作因果证据。紧凑固定操作与默认隐藏的 Agent 诊断保留。
+
+- 原有每会话观察调用增加可选的语义分类、共同目的和近期关注动机推断；每条推断
+  引用当前输入证据 ID／物理片段。最多提供 8 条既有分类／目的短文本帮助稳定命名，
+  不注入其他会话全文、不检查文件／运行目录。类别按共同目的而非固定技术 taxonomy。
+- 所有分类、目的、动机均明确标为**模型解释，不是已确认用户意图**；不创建新的
+  work 关系、分派、权限或用户接受状态。相同推断类别仅合并展示分组，不合并话题。
+  缺少推断的旧记录显示“尚未分类”，不按关键词假装做过语义理解。
+- 新增“整理近期话题”按钮，界面事前说明会调用模型；打开界面不调用。用户点击才
+  运行一次项目级整理（不是仅 flush 待处理事件），输入最多最近更新的 30 个现有根笔记，
+  总计 32,000 字符的有界字段：目标、摘要、下一步和已记录原话（若有）。这允许整理
+  已有记录，但不扫描或回填聊天历史，也不假装覆盖没有笔记的会话。
+- 整理结果存入项目 SQLite 独立快照，附推断时间、输入／遗漏数量、来源 key／sequence。
+  校验只能引用本次输入、每话题只能出现一次；保存前校验笔记版本。变化后显示可能
+  过时，失败保留上一份快照；整理与自动观察共享单调用占用、90 秒超时与停止取消。
+  后端使用现有项目路由授权、空请求体严格校验，客户端与后端都阻止并发重复触发。
+- 不新增周期性／页面打开总结调用；自动观察成本仍是一版新证据一次原调用，增加
+  有界提示与输出字段。主动整理每次点击新增一次观察模型任务（默认 quickModel／model，
+  可由 workObserver.model 覆盖），不自动重试。关闭自动观察不阻止用户明确主动整理。
+
+**验证与边界：**新增 schema、旧 JSON 解析／SQLite 重开、来源校验、整理重复／失败／
+版本冲突、授权／输入校验、前端分组／过时标记与实际 Electron 渲染回归。
+合成模型验证调用数与合同，不证明真实模型的分类或动机判断正确；用户可深入原话题
+和决策证据。输入窗口外与没有记录的话题保持可见且未分类。会话 JSONL／SQLite
+历史形态未改动；观察字段可选，旧 work 读取不需要迁移或昂贵历史调用。
+
+## 10. 维护本文
 
 未来修改需标明哪些是用户目标、哪些是已选择的设计、哪些仍是候选实验，
 并记录支持判断的证据。保留失败和取舍，不把历史方案改写成一直正确。
@@ -274,3 +345,13 @@ Project 因果总览、无 Work 的运行活动、上下文问答和隔离的只
 - [后端协调回归](../src/sessions/work-integration_test.ts)
 - [笔记与上下文回归](../src/sessions/work-alignment_test.ts)
 - [原生界面回归](../app/src/work-alignment-rendered_test.ts)
+
+## Current correction: integrated overview (2026-10-12)
+
+The dashboard is now one native Project overview graph, not the old causal canvas and work graph moved into separate folds. Overview and Board are the only main work views. Focus-group controls scope the same graph without merging topic identities; group purpose/motivation remain labelled model hypotheses. Nodes use persisted work roles (goals, approaches, tasks), original saved decisions and reported results. Selecting a node shows its source, authority, time and typed incoming/outgoing relationships, with work-detail and conversation navigation instead of a duplicate raw-record wall. Decisions are loaded lazily for the selected topic's conversations; history bounds and missing segments remain visible.
+
+Relation classes are intentionally different: parent-child hierarchy; declared dependencies; recorded purpose relations; original decision context; cited decisions; explicit reconsideration; chronological precedence; and evidenced causal influence. The last is limited to persisted applied work proposals with an exact decision reference and base/applied revisions. A decision reference alone does not prove impact. Timestamps describe last changed/reported events, not historical topic creation or a complete causal timeline. Missing history is represented as unavailable references, never invented contents. Automatic observations and reports are not human acceptance.
+
+Organize now queues behind automatic observation with a bounded wait and independent cancellation; duplicate manual requests are rejected. HTTP pre-model rejection paths and model/overview failures carry sanitized machine codes, stages and correlation IDs and produce stage logs. UI errors translate known codes and display safe identifiers/status, not raw provider messages. Successful responses are schema-validated and rendered before the background live-state refresh. Opening the dashboard still makes no organization/model request.
+
+Diagnosis limitation: the previously reported bare “整理失败” has no correlated organize request or model call in the examined runtime telemetry, so its actual runtime cause remains unknown. Busy rejection, hidden pre-model errors, network failure and response failures are hardened paths, not an asserted diagnosis. Source changes require the normal later application reload/release; this work does not restart the production backend or make paid model calls.

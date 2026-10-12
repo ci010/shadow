@@ -14,11 +14,14 @@
         <button ref="effortRow" type="button" class="model-setting-row model-menu-effort" :disabled="settingsDisabled" @click="openPage('effort')" @keydown.right.prevent="openPage('effort')">
           <span>{{ t('Effort') }}</span><span class="model-menu-value">{{ effortLabel }}</span><span class="model-chevron i-lucide-chevron-right" aria-hidden="true" />
         </button>
+        <button v-if="settings" ref="contextRow" type="button" class="model-setting-row model-menu-context" :disabled="settingsDisabled" @click="openPage('context')" @keydown.right.prevent="openPage('context')">
+          <span>{{ t('Context window') }}</span><span class="model-menu-value">{{ contextLabel }}</span><span class="model-chevron i-lucide-chevron-right" aria-hidden="true" />
+        </button>
       </template>
       <template v-else>
       <div class="model-menu-heading">
         <button v-if="settings" type="button" class="model-menu-back" :aria-label="t('Back to model settings')" @click="back">
-          <span class="model-chevron i-lucide-chevron-left" aria-hidden="true" /><span>{{ page === 'model' ? t('Model') : t('Effort') }}</span>
+          <span class="model-chevron i-lucide-chevron-left" aria-hidden="true" /><span>{{ page === 'model' ? t('Model') : page === 'context' ? t('Context window') : t('Effort') }}</span>
         </button>
         <span v-else>{{ t('Model') }}</span><span class="model-scope">{{ page === 'model' ? t('For new turns') : t('This conversation') }}</span>
       </div>
@@ -35,6 +38,10 @@
         <p v-if="!options.length" class="model-empty">{{ t('No matching models.') }}</p>
       </div>
       </template>
+      <div v-else-if="page === 'context'" class="model-options" role="group" :aria-label="t('Context window')">
+        <button class="model-option" :aria-pressed="settings?.contextWindow == null" @click="chooseEffort({ contextWindow: null }, close)">{{ t('Follow project default') }} · {{ contextWindowLabel(selection.defaultReasoning?.value.contextWindow) }}</button>
+        <button v-for="window in CONTEXT_WINDOWS" :key="window" class="model-option" :aria-pressed="settings?.contextWindow === window" @click="chooseEffort({ contextWindow: window }, close)">{{ window === 1000000 ? '1M' : `${window / 1000}K` }} · {{ t('This conversation') }}</button>
+      </div>
       <ReasoningControls v-else-if="settings" :settings="settings" :inherited-settings="selection.defaultReasoning?.value" :conversation-defaults="conversationDefaults" :model="selection.current.value" :disabled="unavailable || !!settingsDisabled" :busy="pending" @change="chooseEffort($event, close)" />
       </template>
       <p v-if="selection.error.value" class="model-error" role="alert">{{ selection.error.value }}</p>
@@ -44,18 +51,21 @@
 </template>
 
 <script setup lang="ts">
+import { CONTEXT_WINDOWS } from '../../../src/agent/llm-config.ts'
 import { t } from '../i18n.ts'
 import { computed, nextTick, ref } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import ReasoningControls from './ReasoningControls.vue'
 import { filterModelOptions, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
-import { currentEffort, effortOptions, type ReasoningSettings } from '../session-settings.ts'
+import { contextWindowLabel, currentEffort, effortOptions, type ReasoningSettings } from '../session-settings.ts'
 
 const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean; conversationDefaults?: boolean }>()
 const emit = defineEmits<{ 'change-settings': [patch: ReasoningSettings] }>()
 const selection = useModelSelection()
 const query = ref('')
-const page = ref<'menu' | 'model' | 'effort'>(props.settings ? 'menu' : 'model')
+const page = ref<'menu' | 'model' | 'effort' | 'context'>(props.settings ? 'menu' : 'model')
+const contextRow = ref<HTMLButtonElement>()
+const contextLabel = computed(() => `${props.settings?.contextWindow == null ? t("Default · ") : ""}${contextWindowLabel(props.settings?.contextWindow ?? selection?.defaultReasoning?.value.contextWindow)}`)
 const menu = ref<HTMLElement>()
 const search = ref<HTMLInputElement>()
 const modelRow = ref<HTMLButtonElement>()
@@ -75,13 +85,13 @@ function resetMenu() {
   page.value = props.settings ? 'menu' : 'model'
   query.value = ''
 }
-async function openPage(next: 'model' | 'effort') {
-  if (next === 'effort' && props.settingsDisabled) return
+async function openPage(next: 'model' | 'effort' | 'context') {
+  if (next !== 'model' && props.settingsDisabled) return
   page.value = next
   await nextTick()
   if (next === 'model') search.value?.focus({ preventScroll: true })
   else {
-    const target = menu.value?.querySelector<HTMLElement>('.effort-option[aria-pressed="true"]')
+    const target = next === 'context' ? menu.value?.querySelector<HTMLElement>('.model-option[aria-pressed="true"]') : menu.value?.querySelector<HTMLElement>('.effort-option[aria-pressed="true"]')
       ?? menu.value?.querySelector<HTMLElement>('.effort-option:not(:disabled)')
     target?.focus({ preventScroll: true })
   }
@@ -91,7 +101,7 @@ async function back() {
   page.value = 'menu'
   query.value = ''
   await nextTick()
-  const target = previous === 'model' ? modelRow.value : effortRow.value
+  const target = previous === 'model' ? modelRow.value : previous === 'context' ? contextRow.value : effortRow.value
   target?.focus({ preventScroll: true })
 }
 function submenuKey(event: KeyboardEvent) {

@@ -123,6 +123,25 @@ function registerGatewayRoutes(
   plugins: GatewayPlugin[],
   opts: GatewayRouteOptions = {},
 ) {
+  // Diagnose organize requests rejected before the Project plugin (origin/auth/routing).
+  // Do not log URLs, headers, credentials or arbitrary error messages.
+  app.use('*', async (c, next) => {
+    const path = new URL(c.req.url).pathname
+    if (c.req.method !== 'POST' || !/^\/(?:projects\/[^/]+\/)?api\/work\/organize$/.test(path)) return next()
+    await next()
+    if (c.res.ok || c.res.headers.has('X-Correlation-ID')) return
+    const correlationId = crypto.randomUUID()
+    const payload: unknown = await c.res.clone().json().catch(() => null)
+    const candidate = payload && typeof payload === 'object' ? (payload as { error?: unknown }).error : undefined
+    const code = typeof candidate === 'string' && /^[a-z_]{1,80}$/.test(candidate) ? candidate : 'organization_gateway_failed'
+    const stage = 'gateway'
+    console.error('[work-organization]', { correlationId, stage, code, status: c.res.status })
+    const headers = new Headers(c.res.headers)
+    headers.set('X-Correlation-ID', correlationId)
+    headers.set('Content-Type', 'application/json')
+    headers.delete('Content-Length')
+    c.res = new Response(JSON.stringify({ error: code, stage, correlationId }), { status: c.res.status, headers })
+  })
   const launchCredential = resolveLaunchCredential(
     opts.launchCredential,
     env.GATEWAY_LAUNCH_CREDENTIAL,

@@ -65,7 +65,23 @@
               <span>{{ details?.context.usedTokens != null ? formatTokenCount(details.context.usedTokens) : t('Not reported') }}</span>
               <span>{{ details?.context.windowTokens != null ? t('{value1} limit', { value1: formatTokenCount(details.context.windowTokens) }) : t('Limit unavailable') }}</span>
             </div>
-            <progress v-if="percent !== null" :value="Math.min(percent, 100)" max="100" :aria-label="t('Context window usage')" :aria-valuetext="`${percent}%`" />
+            <div v-if="details?.context.windowTokens != null" class="context-bar" role="img"
+              :aria-label="percent === null ? t('Context usage not reported') : t('{value1}% context used', { value1: percent })">
+              <span v-if="capacity.usedPercent !== null" class="context-used" :style="{ width: `${capacity.usedPercent}%` }" />
+              <span v-else class="context-unknown" />
+              <span v-for="marker in capacity.markers" :key="marker.kind" class="context-marker" :class="marker.kind"
+                :style="{ left: `${marker.percent}%` }" aria-hidden="true" />
+            </div>
+            <ul class="context-legend">
+              <li><span class="context-swatch used" aria-hidden="true" />{{ t('Reported prompt (all content)') }}</li>
+              <li><span class="context-swatch remaining" aria-hidden="true" />{{ capacity.remainingTokens === null ? t('Remaining unknown') : t('{value1} remaining', { value1: formatTokenCount(capacity.remainingTokens) }) }}</li>
+            </ul>
+            <p v-if="capacity.overflowTokens" class="details-note">{{ t('{value1} over capacity', { value1: formatTokenCount(capacity.overflowTokens) }) }}</p>
+            <p v-if="details?.context.handoff" class="details-note">{{ details.context.handoff.enabled ? t('Auto handoff enabled') : t('Auto handoff disabled') }}</p>
+            <ul v-if="capacity.markers.length" class="context-legend">
+              <li v-for="marker in capacity.markers" :key="marker.kind"><span class="context-swatch" :class="marker.kind" aria-hidden="true" />{{ marker.kind === 'low' ? t('Low (between turns)') : t('High (during turn)') }}: {{ Math.round(marker.ratio * 1000) / 10 }}% · {{ formatTokenCount(marker.tokens) }}</li>
+            </ul>
+            <p class="details-note">{{ t('Prompt includes instructions, messages and tools; separate token counts are not reported.') }}</p>
             <p class="details-note">{{ t('Last reported context, not a live draft estimate.') }}</p>
           </div>
         </div>
@@ -83,7 +99,7 @@ import ComposerPopover from './ComposerPopover.vue'
 import CopyableId from './CopyableId.vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { chatContextName } from '../chat-draft.ts'
-import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
+import { contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
 import { ORCHESTRATOR_SESSION_ID, type TopicMetadata } from '../project-coordination.ts'
 
 const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; topic?: TopicMetadata; physicalId: string | null; revision: number; active: boolean; canRename?: boolean }>()
@@ -167,6 +183,7 @@ const folder = computed(() => coordinator.value ? t('Project-wide · No folder')
   : details.value?.workdir.displayPath
   ? chatContextName(details.value.workdir.displayPath)
   : loading.value ? t('Loading folder...') : t('Folder unavailable'))
+const capacity = computed(() => contextCapacity(details.value?.context ?? { usedTokens: null, windowTokens: null }))
 const percent = computed(() => details.value ? contextPercent(details.value.context) : null)
 const tokenColumns = computed(() => [
   { label: t('Total'), usage: details.value?.usage },
@@ -261,10 +278,19 @@ onUnmounted(() => { cancel(); stopRename() })
 .context-heading, .context-counts { display: flex; justify-content: space-between; gap: 12px; }
 .context-heading { margin-top: 18px; }
 .context-counts { margin: 8px 0 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
-progress { display: block; width: 100%; height: 6px; border: 0; border-radius: var(--radius-pill); overflow: hidden; background: var(--c-bg-muted); appearance: none; }
-progress::-webkit-progress-bar { background: var(--c-bg-muted); border-radius: var(--radius-pill); }
-progress::-webkit-progress-value { background: var(--c-blue); border-radius: var(--radius-pill); }
-progress::-moz-progress-bar { background: var(--c-blue); border-radius: var(--radius-pill); }
+.context-bar { position: relative; display: flex; width: 100%; height: 10px; border-radius: var(--radius-pill); background: var(--c-bg-muted); }
+.context-used { background: var(--c-blue); border-radius: inherit; }
+.context-unknown { width: 100%; border-radius: inherit; background: repeating-linear-gradient(135deg, transparent 0 4px, var(--c-border) 4px 8px); }
+.context-marker { position: absolute; top: -3px; bottom: -3px; border-left: 2px solid; transform: translateX(-1px); }
+.context-marker.low { border-color: #b7791f; }
+.context-marker.high { border-color: var(--c-error); border-left-style: dashed; }
+.context-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 0; margin: 8px 0; list-style: none; color: var(--c-text-secondary); font-size: 12px; }
+.context-legend li { display: flex; align-items: center; gap: 5px; }
+.context-swatch { display: inline-block; width: 9px; height: 9px; flex-shrink: 0; border: 1px solid var(--c-border); }
+.context-swatch.used { background: var(--c-blue); }
+.context-swatch.remaining { background: var(--c-bg-muted); }
+.context-swatch.low { background: #b7791f; }
+.context-swatch.high { background: var(--c-error); }
 .details-note { margin: 8px 0; }
 .details-error { color: var(--c-error); overflow-wrap: anywhere; }
 @media (max-width: 700px), (pointer: coarse) {

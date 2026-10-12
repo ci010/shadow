@@ -35,3 +35,24 @@ test('Quick Actions rejects HTTP failures and mismatched identities', async () =
   const mismatch = createQuickActionsClient('http://fixture', 'p', async () => new Response(JSON.stringify({ action: { ...action, id: 'other' } })))
   await assert.rejects(mismatch.save({ pinned: true }, 'a'), /invalid/)
 })
+
+test('Quick Actions accepts the actual local FolderRecord wire shape and preserves explicit remote kinds', async () => {
+  const { FolderRegistry } = await import('../../src/folders/registry.ts')
+  const { mkdtemp, mkdir, rm } = await import('node:fs/promises')
+  const { resolve } = await import('node:path')
+  await mkdir('.test-artifacts', { recursive: true })
+  const directory = await mkdtemp(resolve('.test-artifacts', 'quick-actions-folders-'))
+  try {
+    const registry = new FolderRegistry(directory)
+    await registry.init()
+    await registry.register(directory)
+    const payload = registry.list()
+    assert.equal(payload[0]?.kind, undefined, 'Local folder API intentionally does not require kind')
+    const client = createQuickActionsClient('http://fixture', 'p', async () => new Response(JSON.stringify({ folders: payload })))
+    assert.equal((await client.folders())[0]?.kind, 'local')
+    const remote = createQuickActionsClient('http://fixture', 'p', async () => new Response(JSON.stringify({ folders: [{ id: 'remote', name: 'Remote', path: 'opaque', kind: 'remote' }] })))
+    assert.equal((await remote.folders())[0]?.kind, 'remote')
+    const malformed = createQuickActionsClient('http://fixture', 'p', async () => new Response(JSON.stringify({ folders: [{ id: 'remote', name: 'Remote', path: 'opaque', kind: 'unsupported' }] })))
+    await assert.rejects(malformed.folders(), /invalid/)
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})

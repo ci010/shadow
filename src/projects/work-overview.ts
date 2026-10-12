@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { workProgressSchema } from '../initiatives/work-contract.ts'
+import { projectFocusSnapshotSchema } from './focus-contract.ts'
+import { workFocusInferenceSchema, workProgressSchema } from '../initiatives/work-contract.ts'
 import { githubSnapshotSchema } from './github/contracts.ts'
 import { workNotesSchema, workDecisionContextSchema } from '../initiatives/work-notes.ts'
 
@@ -14,14 +15,16 @@ export const projectWorkItemSchema = z.object({
   manager: id.nullable(), assignee: id.nullable(), paused: z.boolean(), adopted: z.boolean(),
   proposals: z.number().int().nonnegative(), interpretationReview: z.boolean(), changedAt: id,
   objective: z.string().optional(),
+  decisionInfluences: z.array(z.object({ reason: z.string(), baseRevision: z.number().int().positive(), appliedRevision: z.number().int().positive(), request: z.object({ sessionId: id, physicalId: id, requestId: id }) })).optional(),
   origin: z.enum(['human', 'agent_interpretation']).optional(),
   userQuote: z.string().optional(),
   notes: workNotesSchema.optional(),
   contextChanged: z.boolean().optional(),
   github: z.array(githubWorkReferenceSchema).optional(),
-  observation: z.object({ sessionId: id, observedAt: z.string(), sources: z.array(z.object({ id, physicalId: id })) }).optional(),
+  observation: z.object({ sessionId: id, observedAt: z.string(), sources: z.array(z.object({ id, physicalId: id })), focus: workFocusInferenceSchema.optional() }).optional(),
 })
 export const projectWorkOverviewSchema = z.object({
+  focus: projectFocusSnapshotSchema.optional(),
   items: z.array(projectWorkItemSchema),
   sessions: z.array(z.object({
     sessionId: id, title: id, assignable: z.boolean(),

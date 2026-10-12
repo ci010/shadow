@@ -38,6 +38,10 @@ class TestSession extends Session {
 
   get contextUsage(): LLMResponseUsage | undefined { return this.usage }
 
+  appendWithWindow(contextWindow: number, ...messages: ChatMessage[]): Promise<void> {
+    return this.appendMessages({ ...llm, contextWindow }, ...messages)
+  }
+
   append(...messages: ChatMessage[]): Promise<void> {
     return this.appendMessages(llm, ...messages)
   }
@@ -237,6 +241,16 @@ for (const [name, createStore] of stores) {
       }
     })
   }
+
+  test(`${name}: auto compaction uses the turn budget instead of the shared manager default`, async () => {
+    await fixture(async ({ session, handoff }) => {
+      session.seedUsage({ promptTokens: 250000, completionTokens: 0, totalTokens: 250000 })
+      await session.appendWithWindow(1000000, { role: 'user', content: 'Large conversation' })
+      assert.equal(handoff.calls, 0)
+      await session.appendWithWindow(256000, { role: 'user', content: 'Smaller conversation' })
+      assert.equal(handoff.calls, 1)
+    })
+  })
 
   for (const fallback of ['no rebuilder', 'failed rebuild'] as const) {
     test(`${name}: compaction with ${fallback} never caches a per-inference work agreement`, async () => {

@@ -1,6 +1,6 @@
 import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
-import { isReasoningEffort } from '../../src/agent/llm-config.ts'
+import { isReasoningEffort, isContextWindow } from '../../src/agent/llm-config.ts'
 import type { ConversationSettings } from './session-settings.ts'
 
 export function draftSettingsKey(apiBase: string, projectId: string, folderId?: string, remote = false): string {
@@ -8,13 +8,15 @@ export function draftSettingsKey(apiBase: string, projectId: string, folderId?: 
 }
 
 function parseSettings(value: unknown): ConversationSettings {
-  if (!isRecord(value) || Object.keys(value).some(key => !['model', 'thinking', 'reasoningEffort'].includes(key))
+  if (!isRecord(value) || Object.keys(value).some(key => !['model', 'thinking', 'reasoningEffort', 'contextWindow'].includes(key))
+    || (value.contextWindow != null && !isContextWindow(value.contextWindow))
     || (value.model != null && (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 256))
     || (value.thinking != null && (!isRecord(value.thinking) || !['enabled', 'disabled'].includes(String(value.thinking.type))))
     || (value.reasoningEffort != null && !isReasoningEffort(value.reasoningEffort))) {
     throw new Error(t('Saved draft model settings are invalid. Choose the model and effort again to replace them.'))
   }
   return {
+    ...(isContextWindow(value.contextWindow) ? { contextWindow: value.contextWindow } : {}),
     ...(typeof value.model === 'string' ? { model: value.model } : {}),
     ...(isRecord(value.thinking) ? { thinking: { type: value.thinking.type === 'disabled' ? 'disabled' as const : 'enabled' as const } } : {}),
     ...(isReasoningEffort(value.reasoningEffort) ? { reasoningEffort: value.reasoningEffort } : {}),

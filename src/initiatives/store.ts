@@ -1,3 +1,4 @@
+import { projectFocusSnapshotSchema, type ProjectFocusSnapshot } from '../projects/focus-contract.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
@@ -72,7 +73,7 @@ export class InitiativeStore {
       if (version.user_version < 5) {
         this.#db.exec(`BEGIN IMMEDIATE; ${WORK_SCHEMA} PRAGMA user_version=5; COMMIT;`)
       }
-      this.#db.exec('CREATE TABLE IF NOT EXISTS work_observations (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;')
+      this.#db.exec('CREATE TABLE IF NOT EXISTS work_observations (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT; CREATE TABLE IF NOT EXISTS project_focus_summary (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;')
       const integrity = this.#db.prepare('PRAGMA quick_check').all()
       if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || this.#db.prepare('PRAGMA foreign_key_check').all().length) {
         throw new Error('Corrupt initiative database')
@@ -123,6 +124,25 @@ export class InitiativeStore {
   workRecords(): WorkRecord[] {
     return this.#transaction('', () => this.#all('SELECT data FROM work_contracts ORDER BY id')
       .map(row => workRecordSchema.parse(JSON.parse(String(row.data)))), undefined, true)
+  }
+
+  projectFocus(): ProjectFocusSnapshot | undefined {
+    return this.#transaction('', () => {
+      const row = this.#one('project_focus_summary', 'current')
+      return row ? projectFocusSnapshotSchema.parse(JSON.parse(String(row.data))) : undefined
+    }, undefined, true)
+  }
+
+  saveProjectFocus(value: ProjectFocusSnapshot): void {
+    const snapshot = projectFocusSnapshotSchema.parse(value)
+    this.#transaction('work-observer', () => {
+      for (const source of snapshot.sources) {
+        const row = this.#one('work_contracts', source.key)
+        if (Number(row?.sequence) !== source.sequence) throw new WorkConflict('Topics changed during organization; retry with current notes.')
+      }
+      this.#write('INSERT INTO project_focus_summary (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
+        ['current', JSON.stringify(snapshot)])
+    })
   }
 
   workObservations(): WorkObservation[] {
@@ -532,7 +552,7 @@ export class InitiativeStore {
     const db = this.#db as DatabaseSync & { setAuthorizer?: (callback: (action: number, arg1: string | null, arg2: string | null, database: string | null) => number) => void }
     if (!db.setAuthorizer) throw new Error('InitiativeStore requires node:sqlite setAuthorizer (use Node 24.15+)')
     const codes = constants as unknown as Record<string, number>
-    const workTables = ['work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_observations']
+    const workTables = ['work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_observations', 'project_focus_summary']
     const readable = new Set([...Object.keys(TABLE_COLUMNS), 'initiative_legacy_imports', ...workTables])
     db.setAuthorizer((action, arg1, arg2, database) => {
       if (database && database !== 'main') return codes.SQLITE_DENY!

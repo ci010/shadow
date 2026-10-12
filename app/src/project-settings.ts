@@ -25,6 +25,7 @@ export function parseProjectConfig(value: unknown): ProjectConfig {
 
 export function configReasoning(config: ProjectConfig): ReasoningSettings {
   return {
+    contextWindow: typeof config.agent.contextWindow === "number" ? config.agent.contextWindow : undefined,
     thinking: isRecord(config.agent.thinking) ? { type: config.agent.thinking.type === 'enabled' ? 'enabled' : 'disabled' } : null,
     reasoningEffort: isReasoningEffort(config.agent.reasoningEffort) ? config.agent.reasoningEffort : null,
   }

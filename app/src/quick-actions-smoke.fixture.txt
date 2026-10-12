@@ -36,6 +36,21 @@ try {
     return {geometry:true,crud:true,run:true,import:true};
   })()`)
   assert.deepEqual(result, { geometry: true, crud: true, run: true, import: true })
+  await win.webContents.executeJavaScript(`fetch('/__pinned-state?mode=empty')`)
+  await win.loadURL(process.env.QUICK_ACTIONS_URL! + '__pinned')
+  const compact = await win.webContents.executeJavaScript(`(async () => {
+    const wait = async fn => { for(let i=0;i<100;i++){if(fn())return;await new Promise(r=>setTimeout(r,30))}throw Error('Timed out: '+document.body.innerText) };
+    await wait(()=>document.querySelector('.quick-actions[aria-busy=false]'));
+    if(document.querySelector('.quick-actions').getBoundingClientRect().height !== 0) throw Error('Empty pins occupied dashboard space');
+    await fetch('/__pinned-state?mode=error');
+    window.dispatchEvent(new CustomEvent('shadow:quick-actions-changed',{detail:'p'}));
+    await wait(()=>document.querySelector('.quick-actions [role=alert]'));
+    if(!document.querySelector('[role=alert]').textContent.includes('invalid Quick Actions data')) throw Error('Malformed wire data was hidden');
+    if(document.querySelector('.scope') || document.body.innerText.includes('Pin an action from chat')) throw Error('Compact error includes irrelevant empty-state copy');
+    if(document.querySelector('.quick-actions').getBoundingClientRect().height > 130) throw Error('Error pinned section too large');
+    return true;
+  })()`)
+  assert.equal(compact, true)
   console.log('QUICK_ACTIONS_OK')
   app.exit(0)
 } catch (error) { console.error(error); app.exit(1) }

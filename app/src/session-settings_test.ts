@@ -124,3 +124,16 @@ test('GPT effort options include every requested level without changing non-GPT 
       ['default', 'none', 'low', 'high', 'max'])
   }
 })
+
+
+test('context choices PATCH only the selected conversation and retain null inheritance', async () => {
+  for (const contextWindow of [256000, 400000, 1000000, null]) {
+    const settings = await updateSessionSettings('http://fixture', 'web:context-one', { contextWindow }, new AbortController().signal,
+      async (url, options) => {
+        assert.match(String(url), /web%3Acontext-one/)
+        assert.deepEqual(JSON.parse(String(options?.body)), { contextWindow })
+        return Response.json({ key: 'web:context-one', config: contextWindow === null ? {} : { contextWindow } })
+      })
+    assert.equal(settings.contextWindow, contextWindow ?? undefined)
+  }
+})

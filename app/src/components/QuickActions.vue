@@ -1,9 +1,9 @@
 <template>
-  <section ref="root" class="quick-actions" :class="{ pinned: pinnedOnly }" :aria-label="t('Project Quick Actions')" :aria-busy="busy" @keydown.esc.stop.prevent="emit('close')">
+  <section v-show="!pinnedOnly || shown.length || error" ref="root" class="quick-actions" :class="{ pinned: pinnedOnly }" :aria-label="t('Project Quick Actions')" :aria-busy="busy" @keydown.esc.stop.prevent="emit('close')">
     <header><h2>{{ pinnedOnly ? t('Pinned actions') : t('Quick Actions') }}</h2><button type="button" :disabled="busy" @click="refresh">{{ t('Refresh') }}</button><button v-if="!pinnedOnly" type="button" :aria-label="t('Close actions')" @click="emit('close')">×</button></header>
-    <p class="scope">{{ t('Project scoped · commands run directly in their saved target folder, not the chat folder.') }}</p>
+    <p v-if="!pinnedOnly" class="scope">{{ t('Project scoped · commands run directly in their saved target folder, not the chat folder.') }}</p>
     <p v-if="error" role="alert">{{ error }} <button type="button" :disabled="busy" @click="refresh">{{ t('Retry') }}</button></p>
-    <p v-if="!shown.length && !busy">{{ pinnedOnly ? t('Pin an action from chat to show it here.') : t('No actions yet. Create one or discover package scripts.') }}</p>
+    <p v-if="!pinnedOnly && !shown.length && !busy && !error">{{ pinnedOnly ? t('Pin an action from chat to show it here.') : t('No actions yet. Create one or discover package scripts.') }}</p>
     <div v-for="action in shown" :key="action.id" class="action-row">
       <div class="buttons"><button v-if="canWrite" type="button" :disabled="busy || !!latest(action.id) && actionRunning(latest(action.id)!)" @click="confirmRun = action.id">{{ action.name }}</button><strong v-else>{{ action.name }}</strong><span>{{ folderName(action.folderId) }}</span><span v-if="latest(action.id)">{{ t(latest(action.id)!.state) }}</span></div>
       <details><summary>{{ t('Details') }}</summary>
@@ -124,7 +124,15 @@ onUnmounted(() => { generation++; controller?.abort(); clearTimeout(timer); wind
 defineExpose({ focus: () => root.value?.querySelector<HTMLElement>('button')?.focus() })
 </script>
 <style scoped>
-.quick-actions.pinned { flex: 0 0 auto; max-height: 220px; overflow: auto; border-bottom: 1px solid var(--c-border); }
+.quick-actions.pinned { flex: 0 0 auto; max-height: 160px; overflow: auto; border-bottom: 1px solid var(--c-border); padding: 6px 16px; font-size: 12px; }
+.pinned header h2 { font-size: 12px; font-weight: 500; }
+.pinned header button { min-height: 26px; padding: 3px 6px; }
+.pinned .action-row { padding: 4px 0; margin-top: 4px; }
+.pinned [role=alert] { margin: 4px 0; line-height: 1.4; }
+.pinned .action-row > .buttons { display: inline-flex; margin-right: 12px; }
+.pinned .action-row > details { display: inline-block; vertical-align: top; }
+.pinned .action-row > details[open] { display: block; }
+.pinned .action-row > details > summary { padding: 6px 0; }
 .quick-actions { padding: 12px; color: var(--c-text); font-size: 13px; }
 header, .buttons, .script { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; } header h2 { margin: 0; flex: 1; font-size: 14px; }
 .scope, .target, summary span { color: var(--c-text-secondary); font-size: 12px; overflow-wrap: anywhere; }

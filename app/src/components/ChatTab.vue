@@ -681,7 +681,7 @@ const modelOverride = ref<string>()
 const explicitModel = computed(() => modelOverride.value ?? activeSession.value?.config?.model ?? '')
 const channelConversation = computed(() => isChannelConversation(activeSession.value))
 const inheritedModel = computed(() => channelConversation.value ? activeSession.value?.inferenceDefaults?.model ?? '' : modelSelection?.current.value ?? '')
-const inheritedReasoning = computed(() => channelConversation.value ? activeSession.value?.inferenceDefaults ?? {} : modelSelection?.defaultReasoning?.value ?? {})
+const inheritedReasoning = computed(() => ({ ...(channelConversation.value ? activeSession.value?.inferenceDefaults ?? {} : modelSelection?.defaultReasoning?.value ?? {}), contextWindow: activeSession.value?.inferenceDefaults?.contextWindow ?? modelSelection?.defaultReasoning?.value.contextWindow }))
 const conversationModel = computed(() => explicitModel.value || inheritedModel.value)
 const providerReadiness = useProviderReadiness()
 const providerNotice = computed(() => providerReadiness?.enabled.value
@@ -913,6 +913,7 @@ async function changeConversationSettings(patch: ConversationSettings): Promise<
   if (savingSettings.value || (!modelOnly && requestBusy.value) || pickingContext.value) return
   if ((!('model' in patch) || (patch.model ?? null) === (explicitModel.value || null))
     && (!('thinking' in patch) || (patch.thinking?.type ?? null) === (reasoningSettings.value.thinking?.type ?? null))
+    && (!('contextWindow' in patch) || (patch.contextWindow ?? null) === (reasoningSettings.value.contextWindow ?? null))
     && (!('reasoningEffort' in patch) || (patch.reasoningEffort ?? null) === (reasoningSettings.value.reasoningEffort ?? null))) return
   settingsError.value = ''
   if (!activeSessionId.value) {
@@ -934,9 +935,10 @@ async function changeConversationSettings(patch: ConversationSettings): Promise<
     const settings = await updateSessionSettings(props.apiBase, sessionId, patch, controller.signal)
     if (controller.signal.aborted) return
     settingsOverride.value = settings
+    detailsRevision.value++
     modelOverride.value = settings.model ?? ''
     allSessions.value = allSessions.value.map(session => session.sessionId === sessionId ? {
-      ...session, config: { ...session.config, model: settings.model ?? undefined, thinking: settings.thinking ?? undefined, reasoningEffort: settings.reasoningEffort ?? undefined },
+      ...session, config: { ...session.config, contextWindow: settings.contextWindow ?? undefined, model: settings.model ?? undefined, thinking: settings.thinking ?? undefined, reasoningEffort: settings.reasoningEffort ?? undefined },
     } : session)
   } catch (cause) {
     if (!controller.signal.aborted) settingsError.value = cause instanceof Error ? cause.message : t('Could not save conversation settings. Please try again.')
@@ -2834,7 +2836,10 @@ window.addEventListener('blur', clearQueueModifier)
 watch(paneActive, active => { if (!active) clearQueueModifier() })
 const onGlobalConfigChanged = (event: Event) => {
   const projectId = (event as CustomEvent<{ projectId?: string }>).detail?.projectId
-  if (!projectId || projectId === props.projectId) detailsRevision.value++
+  if (!projectId || projectId === props.projectId) {
+    detailsRevision.value++
+    void loadSessionList()
+  }
 }
 window.addEventListener('shadow:config-changed', onGlobalConfigChanged)
 onUnmounted(() => {
@@ -3022,10 +3027,14 @@ function resendLastMessage() {
 .chat-working :deep(.working-wave) { flex: 0 0 auto; }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: var(--conversation-max-width); margin: 12px auto 16px; }
 .composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
-.composer-box.composer-working { animation: composer-breathe 3s ease-in-out infinite; }
+.composer-box.composer-working { animation: composer-breathe 9s ease-in-out infinite; }
 @keyframes composer-breathe {
-  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-primary) 8%, transparent), 0 0 6px color-mix(in srgb, var(--c-primary) 4%, transparent); }
-  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-primary) 28%, transparent), 0 0 16px color-mix(in srgb, var(--c-primary) 12%, transparent); }
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-blue) 10%, transparent), 0 0 6px color-mix(in srgb, var(--c-blue) 4%, transparent); }
+  16.667% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-blue) 75%, transparent), 0 0 22px color-mix(in srgb, var(--c-blue) 32%, transparent); }
+  33.333% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-purple) 10%, transparent), 0 0 6px color-mix(in srgb, var(--c-purple) 4%, transparent); }
+  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-purple) 75%, transparent), 0 0 22px color-mix(in srgb, var(--c-purple) 32%, transparent); }
+  66.667% { box-shadow: 0 0 0 1px rgb(6 182 212 / 10%), 0 0 6px rgb(6 182 212 / 4%); }
+  83.333% { box-shadow: 0 0 0 1px rgb(6 182 212 / 75%), 0 0 22px rgb(6 182 212 / 32%); }
 }
 @media (prefers-reduced-motion: reduce) {
   .composer-box.composer-working { animation: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-primary) 20%, transparent); }

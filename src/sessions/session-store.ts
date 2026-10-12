@@ -79,6 +79,7 @@ export interface SessionConfig {
   /** DeepSeek thinking mode toggle */
   thinking?: ThinkingConfig
   /** DeepSeek reasoning effort level */
+  contextWindow?: number
   reasoningEffort?: ReasoningEffort
   /** Omitted inherits global policy; null timeout waits indefinitely. */
   yield?: YieldPolicy

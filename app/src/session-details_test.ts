@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { i18n } from './i18n.ts'
-import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from './session-details.ts'
+import { contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from './session-details.ts'
 
 const details: SessionDetails = {
   sessionId: 'web:chat-example',
@@ -76,4 +76,28 @@ test('session details reject cross-session, malformed and nonfinite measurements
     ...[-1, 1.5, Infinity, NaN, '100'].map(usedTokens => ({ ...details, context: { ...details.context, usedTokens } })),
     { ...details, context: { usedTokens: 2, windowTokens: 0 } },
   ]) assert.throws(() => parseSessionDetails(value, details.sessionId), /session details/)
+})
+
+test('capacity preserves unknowns, clips geometry and uses actual handoff budget', () => {
+  assert.deepEqual(contextCapacity({ usedTokens: null, windowTokens: 400_000 }), {
+    usedPercent: null, remainingTokens: null, overflowTokens: null, markers: [],
+  })
+  const capacity = contextCapacity({ usedTokens: 450_000, windowTokens: 400_000,
+    handoff: { enabled: false, low: .75, high: .95, windowTokens: 400_000 } })
+  assert.equal(capacity.usedPercent, 100)
+  assert.equal(capacity.remainingTokens, 0)
+  assert.equal(capacity.overflowTokens, 50_000)
+  assert.deepEqual(capacity.markers, [
+    { kind: 'low', ratio: .75, tokens: 300_000, percent: 75 },
+    { kind: 'high', ratio: .95, tokens: 380_000, percent: 95 },
+  ])
+  assert.equal(contextCapacity({ usedTokens: 0, windowTokens: 400_000 }).remainingTokens, 400_000)
+})
+
+test('optional handoff policy validates numeric thresholds and enabled state', () => {
+  const handoff = { enabled: false, low: .6, high: .9, windowTokens: 400_000 }
+  assert.deepEqual(parseSessionDetails({ ...details, context: { ...details.context, handoff } }, details.sessionId).context.handoff, handoff)
+  for (const invalid of [{ low: NaN }, { high: Infinity }, { low: -1 }, { high: 1.1 }, { enabled: 'true' }, { windowTokens: 0 }]) {
+    assert.throws(() => parseSessionDetails({ ...details, context: { ...details.context, handoff: { ...handoff, ...invalid } } }, details.sessionId))
+  }
 })

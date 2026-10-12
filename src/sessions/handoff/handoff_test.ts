@@ -135,3 +135,18 @@ test('handoff stop aborts and drains its own internal loop without writing a can
     await assert.rejects(readFile(join(home, 'memory', 'sessions', 'same-session.md')), { code: 'ENOENT' })
   })
 })
+
+
+test('handoff summary loops receive each source turn budget without mutating shared defaults', async t => {
+  await withTempWorkspace(async home => {
+    const windows: number[] = []
+    t.mock.method(HandoffSession.prototype, 'run', async (_ctx: ExecutionContext, llm: import("../../agent/llm-config.ts").LlmRuntimeConfig) => { windows.push(llm.contextWindow) })
+    const manager = new HandoffManager({} as LLMProvider, 123456, {}, home, new JsonlSessionStore(join(home, '.sessions')))
+    try {
+      await Promise.all([256000, 1000000].map((window, index) => manager.create(`budget-${index}`, `old-${index}`, `new-${index}`,
+        [{ role: 'user', content: 'Preserve this objective' }], 'fixture', undefined, undefined, window)))
+      assert.deepEqual(windows.sort((a, b) => a - b), [256000, 1000000])
+      assert.equal(manager.getContextPolicy().windowTokens, 123456)
+    } finally { await manager.stop() }
+  })
+})

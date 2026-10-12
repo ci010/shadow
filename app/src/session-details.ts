@@ -14,7 +14,7 @@ export interface SessionDetails {
   subagentUsage?: SessionDetails['usage']
   usageIncomplete?: boolean
   usageScope: 'session' | 'segment' | 'latest-call'
-  context: { usedTokens: number | null; windowTokens: number | null }
+  context: { usedTokens: number | null; windowTokens: number | null; handoff?: { enabled: boolean; low: number; high: number; windowTokens: number } }
 }
 
 const tokenCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
@@ -42,6 +42,11 @@ export function parseSessionDetails(value: unknown, sessionId: string): SessionD
     || (value.usageScope !== 'session' && value.usageScope !== 'segment' && value.usageScope !== 'latest-call')) throw invalid()
   const usedTokens = nullableCount(value.context.usedTokens)
   const windowTokens = nullableCount(value.context.windowTokens)
+  const handoff = value.context.handoff
+  if (handoff !== undefined && (!isRecord(handoff) || typeof handoff.enabled !== 'boolean'
+    || typeof handoff.low !== 'number' || !Number.isFinite(handoff.low) || handoff.low < 0 || handoff.low > 1
+    || typeof handoff.high !== 'number' || !Number.isFinite(handoff.high) || handoff.high < 0 || handoff.high > 1
+    || !tokenCount(handoff.windowTokens) || handoff.windowTokens === 0)) throw invalid()
   for (const key of ['nodeId', 'nodeName', 'displayName']) {
     if (value.workdir[key] !== undefined && typeof value.workdir[key] !== 'string') throw invalid()
   }
@@ -67,7 +72,7 @@ export function parseSessionDetails(value: unknown, sessionId: string): SessionD
     ...(value.subagentUsage !== undefined ? { subagentUsage: parseUsage(value.subagentUsage) } : {}),
     ...(value.usageIncomplete !== undefined ? { usageIncomplete: value.usageIncomplete } : {}),
     usageScope: value.usageScope === 'session' ? 'session' : value.usageScope === 'segment' ? 'segment' : 'latest-call',
-    context: { usedTokens, windowTokens },
+    context: { usedTokens, windowTokens, ...(handoff !== undefined ? { handoff: handoff as NonNullable<SessionDetails['context']['handoff']> } : {}) },
   }
 }
 
@@ -80,4 +85,18 @@ export function formatTokenCount(value: number): string {
 export function contextPercent(context: SessionDetails['context']): number | null {
   return context.usedTokens === null || context.windowTokens === null
     ? null : Math.round(context.usedTokens / context.windowTokens * 1000) / 10
+}
+
+/** Unknown usage is not free capacity. Clip geometry, not the reported counts. */
+export function contextCapacity(context: SessionDetails['context']) {
+  const { usedTokens: used, windowTokens: window, handoff } = context
+  return {
+    usedPercent: used === null || window === null ? null : Math.min(100, used / window * 100),
+    remainingTokens: used === null || window === null ? null : Math.max(0, window - used),
+    overflowTokens: used === null || window === null ? null : Math.max(0, used - window),
+    markers: handoff && window !== null ? (['low', 'high'] as const).map(kind => ({
+      kind, ratio: handoff[kind], tokens: Math.round(handoff[kind] * handoff.windowTokens),
+      percent: Math.min(100, handoff[kind] * handoff.windowTokens / window * 100),
+    })) : [],
+  }
 }

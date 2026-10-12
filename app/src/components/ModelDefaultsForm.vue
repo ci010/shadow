@@ -14,27 +14,34 @@
           <option v-for="option in effortOptionsForModel(model || state?.inherited.model || '')" :key="option.value" :value="option.value">{{ option.value === 'default' ? t('Follow {parentLabel} · {inheritedEffort}', { parentLabel: parentLabel, inheritedEffort: inheritedEffort }) : option.label }}</option>
         </UiSelect>
       </label>
+      <label class="settings-field">{{ t('Context window') }}
+        <UiSelect v-model="contextWindow">
+          <option value="">{{ t('Use inherited values') }} · {{ contextWindowLabel(state?.inherited.contextWindow) }}</option>
+          <option v-for="window in CONTEXT_WINDOWS" :key="window" :value="String(window)">{{ window === 1000000 ? '1M' : `${window / 1000}K` }}</option>
+        </UiSelect>
+      </label>
       <label class="settings-field">{{ t('Temperature') }}
         <input v-model="temperature" type="number" step="0.1" :placeholder="t('Follow {parentLabel}: {value2}', { parentLabel: parentLabel, value2: state?.inherited.temperature ?? '' })" />
       </label>
       <div class="settings-actions">
         <button class="btn save-defaults" type="submit">{{ saving ? t('Saving...') : t('Save model defaults') }}</button>
-        <button class="btn" type="button" @click="model = ''; effort = 'default'; temperature = ''; notice = ''">{{ t('Use inherited values') }}</button>
+        <button class="btn" type="button" @click="model = ''; effort = 'default'; temperature = ''; contextWindow = ''; notice = ''">{{ t('Use inherited values') }}</button>
       </div>
     </fieldset>
-    <p v-if="state" class="settings-help">{{ t('Effective now:') }} {{ state.model }} · {{ currentEffort(state) }} {{ t('effort.') }}</p>
+    <p v-if="state" class="settings-help">{{ t('Effective now:') }} {{ state.model }} · {{ currentEffort(state) }} {{ t('effort.') }} · {{ t('Context window') }}: {{ contextWindowLabel(state.contextWindow) }}</p>
     <p v-if="notice" class="settings-help" role="status">{{ notice }}</p>
   </form>
 </template>
 
 <script setup lang="ts">
+import { CONTEXT_WINDOWS } from '../../../src/agent/llm-config.ts'
 import UiSelect from './UiSelect.vue'
 import UiCombobox from './UiCombobox.vue'
 import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { createModelDefaultsClient, type ModelDefaultsState } from '../model-defaults.ts'
 import { createProjectSettingsClient } from '../project-settings.ts'
-import { currentEffort, effortOptionsForModel, reasoningSettingsForEffort, type EffortChoice } from '../session-settings.ts'
+import { contextWindowLabel, currentEffort, effortOptionsForModel, reasoningSettingsForEffort, type EffortChoice } from '../session-settings.ts'
 
 const props = defineProps<{ apiBase: string; scope: 'app' | 'project'; projectId?: string }>()
 
@@ -42,6 +49,7 @@ const parentLabel = computed(() => props.scope === 'app' ? t('built-in defaults'
 const state = ref<ModelDefaultsState>()
 const model = ref('')
 const effort = ref<EffortChoice>('default')
+const contextWindow = ref('')
 const temperature = ref<string | number>('')
 const inheritedEffort = computed(() => currentEffort(state.value?.inherited ?? {}))
 const models = ref<string[]>([])
@@ -56,6 +64,7 @@ function accept(value: ModelDefaultsState) {
   state.value = value
   model.value = value.overrides.model ?? ''
   effort.value = currentEffort(value.overrides)
+  contextWindow.value = value.overrides.contextWindow == null ? '' : String(value.overrides.contextWindow)
   temperature.value = value.overrides.temperature ?? ''
 }
 async function load() {
@@ -80,6 +89,7 @@ async function save() {
     const value = temperature.value === '' ? null : Number(temperature.value)
     if (value !== null && !Number.isFinite(value)) throw new Error(t('Enter a valid temperature or leave it empty.'))
     const result = await client.save({
+      contextWindow: contextWindow.value === '' ? null : Number(contextWindow.value),
       model: model.value.trim() || null, temperature: value, ...reasoningSettingsForEffort(effort.value),
     }, controller.signal)
     if (controller.signal.aborted) return

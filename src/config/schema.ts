@@ -172,6 +172,8 @@ export const AgentSchema = z.object({
   sessionStorage: z.enum(['jsonl', 'sqlite']).default('jsonl'),
   /** DeepSeek thinking mode toggle */
   thinking: z.object({ type: z.enum(['enabled', 'disabled']) }).optional(),
+  /** Optional three-tier context budget; omission preserves provider/model defaults. */
+  contextWindow: z.union([z.literal(256000), z.literal(400000), z.literal(1000000)]).optional(),
   /** Default reasoning effort, unless overridden by a conversation. */
   reasoningEffort: z.enum(REASONING_EFFORTS).default('medium'),
 })

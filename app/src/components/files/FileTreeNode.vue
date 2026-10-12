@@ -49,7 +49,7 @@
 
 <script setup lang="ts">
 import { t } from '../../i18n.ts'
-import type { FileTreeMenuRequest } from '../../file-tree-menu.ts'
+import { fileTreeShortcut, type FileTreeMenuRequest } from '../../file-tree-menu.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, toRefs, watch } from 'vue'
 import FileTreeNode from './FileTreeNode.vue'
 import TreeRow from '../TreeRow.vue'
@@ -94,7 +94,14 @@ function openContextMenu(event: MouseEvent | KeyboardEvent) {
   if (props.active) emit('context-menu', { event, path: fullPath.value, entry: props.entry })
 }
 function menuKey(event: KeyboardEvent) {
-  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openContextMenu(event)
+  // Recursive nodes must only act on their own row, not a descendant or action button.
+  if (event.target !== node.value?.querySelector('.tree-row') || !props.active || event.defaultPrevented || event.isComposing) return
+  const shortcut = fileTreeShortcut(event)
+  if (shortcut) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!event.repeat) emit('context-menu', { event, path: fullPath.value, entry: props.entry, shortcut })
+  } else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openContextMenu(event)
 }
 
 const files = computed(() => useSessionFiles(props.apiBase, props.folderId))

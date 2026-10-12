@@ -83,6 +83,11 @@ export class HandoffManager {
     this.handoffMaxThreshold = config.handoffMaxThreshold ?? 0.95
   }
 
+  /** Read-only view of the budget and thresholds actually used by auto handoff. */
+  getContextPolicy(contextWindow = this.contextWindow) {
+    return { enabled: this.autoHandoff, low: this.handoffMinThreshold, high: this.handoffMaxThreshold, windowTokens: contextWindow }
+  }
+
   async create(
     sessionId: string,
     sourceSessionId: string,
@@ -91,11 +96,12 @@ export class HandoffManager {
     model: string,
     boundary?: RuntimeBoundary,
     sourceState?: SessionState,
+    contextWindow = this.contextWindow,
   ): Promise<CompactResult> {
     if (this.stopped) throw new Error('HandoffManager is stopped')
     const controller = new AbortController()
     const signal = boundary ? AbortSignal.any([controller.signal, boundary.signal]) : controller.signal
-    const create = () => this.createWithinScope(sessionId, sourceSessionId, targetSessionId, messages, model, signal, boundary, sourceState)
+    const create = () => this.createWithinScope(sessionId, sourceSessionId, targetSessionId, messages, model, signal, boundary, sourceState, contextWindow)
     const pending = this.scope ? this.scope.run(create) : create()
     this.running.set(pending, controller)
     try {
@@ -120,6 +126,7 @@ export class HandoffManager {
     signal: AbortSignal,
     boundary?: RuntimeBoundary,
     sourceState?: SessionState,
+    contextWindow = this.contextWindow,
   ): Promise<CompactResult> {
     // Run the combined handoff+reflect loop
     const context = await this.runHandoffLoop(
@@ -130,6 +137,7 @@ export class HandoffManager {
       boundary,
       sourceState,
       sourceSessionId,
+      contextWindow,
     )
 
     const snapshot: HandoffOptions = {
@@ -155,6 +163,7 @@ export class HandoffManager {
     usage: LLMResponseUsage | undefined,
     inLoop: boolean,
     extraToken = 0,
+    contextWindow = this.contextWindow,
   ): boolean {
     if (!this.autoHandoff) {
       console.debug('Auto handoff disabled by config')
@@ -164,11 +173,11 @@ export class HandoffManager {
       console.debug('Auto handoff check: prompt token count unavailable')
       return false
     }
-    if (this.contextWindow <= 0) {
+    if (contextWindow <= 0) {
       console.debug('Auto handoff check: invalid contextWindow')
       return false
     }
-    return ((usage.promptTokens + extraToken) / this.contextWindow) >=
+    return ((usage.promptTokens + extraToken) / contextWindow) >=
       (inLoop ? this.handoffMaxThreshold : this.handoffMinThreshold)
   }
 
@@ -182,6 +191,7 @@ export class HandoffManager {
     boundary?: RuntimeBoundary,
     sourceState?: SessionState,
     sourcePhysicalId?: string,
+    contextWindow = this.contextWindow,
   ): Promise<HandoffContext> {
     const fallback = this.synthesizeContext(messages)
     const transcript = this.buildTranscript(messages)
@@ -254,7 +264,7 @@ export class HandoffManager {
       await session.run(executionContext, {
         model,
         temperature: 0,
-        contextWindow: this.contextWindow,
+        contextWindow,
         maxTokens: HANDOFF_LOOP_MAX_TOKENS,
       })
     } catch (error) {

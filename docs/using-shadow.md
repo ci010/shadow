@@ -127,7 +127,22 @@ Use a Project's **+** menu to open a local folder, clone a repository, or start
 from scratch without selecting a folder. A folder's **+** starts a conversation
 in that folder. A new draft does not create a session until its first message is
 sent. Selecting the Project name opens its **Dashboard** as a permanent tab,
-alongside Knowledge, project settings, agents and open files. **Coordinator**
+alongside Knowledge, project settings, agents and open files. The Dashboard groups
+recent focus by inferred shared purpose, then shows separate topics with their latest
+reports and expandable evidence/decision history. Model interpretations are not
+confirmed user intent; legacy topics without inference remain unclassified.
+**Organize recent topics** explicitly calls the configured observation model once on
+bounded recent saved notes, including existing notes. Opening the page does not call
+it. Results show their time and source note versions; failed organization keeps previous
+results. Errors distinguish busy/changed notes, invalid model JSON or citations,
+model availability and a failed overview refresh; the latter may follow a successful save.
+The main work views are **Dashboard** and an issue-style **Board**. Expanded topics
+show saved goal/approach/task/finding roles, parent links, supports/requires/assumption
+relations and dependencies (including cross-topic links). Missing roles or causal
+relations are shown honestly, not inferred from model topic categories. The causal
+map and relation graph are expandable local sections within the Dashboard, not
+separate view entries. Native questions and decision history retain their navigation.
+**Coordinator**
 opens a separate, resizable right-hand panel; switching document tabs keeps its
 conversation and unsent draft. On narrow screens, the panel uses the available
 space until you close it to return to the selected tab. Folder and conversation
@@ -330,6 +345,12 @@ than guessing a new target. Scans do not rewrite content. Knowledge lives in
 the Project Home, not a session's remote workdir.
 
 ## Conversation and files
+
+Press **Ctrl+N** (**Cmd+N** on macOS) in the project workspace to open a
+new conversation draft in the current Project. If the selected conversation
+belongs to a registered folder, the draft uses that same folder; otherwise it
+starts **From scratch**. Opening a draft does not send a message or allocate a
+session until the first send.
 
 In the coordinator conversation, click the source session in a **Session
 progress** message or the recipient in a **Message to** card to open that

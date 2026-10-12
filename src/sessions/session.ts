@@ -416,7 +416,7 @@ export class Session extends BaseSession {
 
       if (
         !hasToolResults && !hasPendingToolCalls &&
-        this.handoffManager.shouldHandoff(usage, true, extra)
+        this.handoffManager.shouldHandoff(usage, true, extra, llm.contextWindow)
       ) {
         await this.compact(llm)
       }
@@ -540,7 +540,7 @@ export class Session extends BaseSession {
         completionTokens: 0,
         totalTokens: tokens,
       }
-      if (this.handoffManager.shouldHandoff(usage, false)) {
+      if (this.handoffManager.shouldHandoff(usage, false, 0, llm.contextWindow)) {
         await this.compact(llm)
         console.info(`[sleep] Session compacted (cold): ${this.id}`)
       }
@@ -642,6 +642,7 @@ export class Session extends BaseSession {
       llm.model,
       this.tools.boundary,
       this.state,
+      llm.contextWindow,
     )
     this.tools.boundary?.assertCurrent()
 

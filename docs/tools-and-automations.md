@@ -381,8 +381,8 @@ is not a delivery retry command.
 
 ### Automatic observation (MVP)
 
-`workObserver.enabled` defaults to `true`; set it to `false` to disable the extra
-inference. Optional `workObserver.model` overrides `agent.quickModel`, falling
+`workObserver.enabled` defaults to `true`; set it to `false` to disable automatic
+extra inference (explicit user-triggered organization remains available). Optional `workObserver.model` overrides `agent.quickModel`, falling
 back to `agent.model`. The tool-free observer runs through SessionManager, not
 a separate tool loop. It coalesces new evidence for 20 seconds and has a 90-second
 deadline per inference; unchanged evidence does not trigger repeated calls.
@@ -402,6 +402,25 @@ not a proven causal explanation. Manual/worker edits pause automatic replacement
 stale model results cannot overwrite newer evidence or edits. Invalid output and
 inference failures remain visible, rather than manufacturing progress. This is
 not semantic proof of intent, acceptance, or automatic contextual question routing.
+
+The same per-session call can also save evidence-labelled semantic categories,
+shared purpose and inferred recent user motivation. These are display hypotheses,
+not user quotations or execution authority. Up to eight persisted category/purpose
+snippets provide bounded naming context; no additional automatic model call is made.
+
+The single Dashboard groups recent focus → separate topics → expandable evidence
+and decision history. Missing semantic inference is honestly unclassified. Causal
+structure, Board and Graph are advanced structure tools rather than a second homepage.
+**Organize recent topics** explicitly calls the same configured tool-free model once.
+It can classify already-recorded notes, not just pending observation events. Input is
+at most 30 recently updated root notes / 32,000 characters of bounded fields, not
+filesystem data or whole chat histories. Successful results persist in the Project
+SQLite database with time and source note versions. Other topics remain unclassified.
+The UI labels model interpretation, omitted inputs and subsequent source changes.
+Opening the Dashboard never triggers this call. Duplicate concurrent requests return
+409; strict input/authorization, the shared single-call slot, 90-second timeout and
+shutdown cancellation apply. Invalid output, source-version conflicts or provider
+failure keep the previous snapshot. No automatic retry or historical backfill occurs.
 
 ### Current-task steering and inference overrides
 

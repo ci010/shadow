@@ -18,7 +18,7 @@ import type {
 } from '../agent/context/builder.ts'
 import type { EventService } from '../events/service.ts'
 import type { IdentityManager } from '../agent/identity.ts'
-import { resolveInferenceSettings, validateInferenceCapabilities, type InferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
+import { isContextWindow, resolveInferenceSettings, validateInferenceCapabilities, type InferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { ProjectScope } from '../projects/scope.ts'
 import { channelAddressFromSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
@@ -1937,7 +1937,7 @@ ${JSON.stringify(request)}`,
     const defaults = this.deps.getLlmRuntimeConfig?.()
     if (!defaults) return undefined
     const resolved = resolveInferenceSettings(defaults, this.deps.conversationPolicies?.resolve(sessionId)?.agent)
-    return { model: resolved.model, thinking: resolved.thinking, reasoningEffort: resolved.reasoningEffort }
+    return { contextWindow: defaults.contextWindow, model: resolved.model, thinking: resolved.thinking, reasoningEffort: resolved.reasoningEffort }
   }
 
   async applySessionConfigPatch(
@@ -1945,6 +1945,7 @@ ${JSON.stringify(request)}`,
     patch: SessionConfigPatch,
     create = false,
   ): Promise<void> {
+    if (patch.set.contextWindow !== undefined && !isContextWindow(patch.set.contextWindow)) throw new TypeError('invalid_contextWindow')
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId] ??
         (create ? await this.createMissingState(sessionId) : null)
@@ -2149,7 +2150,11 @@ ${JSON.stringify(request)}`,
       capability.capabilityId === workdir.workdir.capabilityId && capability.kind === 'workdir')
     const model = state.config?.model ?? this.deps.conversationPolicies?.resolve(sessionId)?.agent.model
       ?? this.deps.getLlmRuntimeConfig?.().model
-    const window = model ? this.deps.getKnownContextWindow?.(model) : null
+    // Inference overrides inherit the Project runtime context budget; model
+    // catalog metadata is only a fallback for older integrations.
+    const window = state.config?.contextWindow ?? this.deps.getLlmRuntimeConfig?.().contextWindow
+      ?? (model ? this.deps.getKnownContextWindow?.(model) : null)
+    const handoff = this.deps.handoffManager?.getContextPolicy(window ?? undefined)
     return {
       ...(state.projectId ? { projectId: state.projectId } : {}),
       ...parseTopicSessionFields(state),
@@ -2173,6 +2178,7 @@ ${JSON.stringify(request)}`,
       usageScope: 'session' as const,
       context: {
         usedTokens,
+        ...(handoff ? { handoff } : {}),
         windowTokens: typeof window === 'number' && Number.isSafeInteger(window) && window > 0 ? window : null,
       },
     }

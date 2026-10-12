@@ -20,7 +20,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { t } from '../../i18n.ts'
-import { canShowInExplorer, fileTreePaths, type FileTreeMenuRequest } from '../../file-tree-menu.ts'
+import { canShowInExplorer, fileTreePaths, fileTreeShortcut, type FileTreeMenuRequest } from '../../file-tree-menu.ts'
 import type { DirListing } from '../../composables/useSessionFiles.ts'
 import { useTextCopy } from '../../composables/useTextCopy.ts'
 
@@ -57,15 +57,13 @@ async function reveal() {
 }
 function keydown(event: KeyboardEvent) {
   if (event.defaultPrevented || event.isComposing) return
-  const key = event.key.toLowerCase()
-  const copyShortcut = key === 'c' && event.ctrlKey && !event.altKey && !event.metaKey
-  const revealShortcut = key === 'r' && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey
-  if (copyShortcut || revealShortcut) {
+  const shortcut = fileTreeShortcut(event)
+  if (shortcut) {
     event.preventDefault()
     event.stopPropagation()
     if (event.repeat || busy.value) return
-    if (copyShortcut) void copyPath(event.shiftKey ? paths.value.relative : paths.value.full)
-    else void reveal()
+    if (shortcut === 'reveal') void reveal()
+    else void copyPath(shortcut === 'copy-relative' ? paths.value.relative : paths.value.full)
     return
   }
   if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); close(); return }
@@ -89,6 +87,16 @@ onMounted(async () => {
   }
   menu.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
   window.addEventListener('resize', close)
+  // Tree shortcuts use the same guarded actions/error UI as the context menu.
+  const shortcut = props.request.shortcut
+  if (shortcut === 'reveal') {
+    if (canReveal.value) void reveal()
+    else close()
+  } else if (shortcut) {
+    const path = shortcut === 'copy-relative' ? paths.value.relative : paths.value.full
+    if (path) void copyPath(path)
+    else close()
+  }
 })
 onUnmounted(() => window.removeEventListener('resize', close))
 </script>

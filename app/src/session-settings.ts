@@ -1,15 +1,21 @@
 import { t } from './i18n.ts'
 import { isRecord, type SidebarSession } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
-import { isGptModel, isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
+import { isGptModel, isReasoningEffort, isContextWindow, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 
 export interface ReasoningSettings {
+  contextWindow?: number | null
   thinking?: { type: 'enabled' | 'disabled' } | null
   reasoningEffort?: ReasoningEffort | null
 }
 
 export interface ConversationSettings extends ReasoningSettings {
   model?: string | null
+}
+
+export function contextWindowLabel(value: number | null | undefined): string {
+  if (value == null) return t('Default')
+  return value >= 1000000 ? `${value / 1000000}M` : `${value / 1000}K`
 }
 
 export function isChannelConversation(session: SidebarSession | undefined): boolean {
@@ -65,12 +71,14 @@ export async function updateSessionSettings(
     throw new Error(t('Main returned invalid conversation settings. Please try again.'))
   }
   const config = isRecord(data.config) ? data.config : {}
-  if ((config.model !== undefined && (typeof config.model !== 'string' || !config.model.trim()))
+  if ((config.contextWindow !== undefined && !isContextWindow(config.contextWindow))
+    || (config.model !== undefined && (typeof config.model !== 'string' || !config.model.trim()))
     || (config.thinking !== undefined && (!isRecord(config.thinking) || !['enabled', 'disabled'].includes(String(config.thinking.type))))
     || (config.reasoningEffort !== undefined && !isReasoningEffort(config.reasoningEffort))) {
     throw new Error(t('Main returned invalid conversation settings. Please try again.'))
   }
   return {
+    ...(isContextWindow(config.contextWindow) ? { contextWindow: config.contextWindow } : {}),
     ...(typeof config.model === 'string' ? { model: config.model } : {}),
     thinking: isRecord(config.thinking) ? { type: config.thinking.type === 'enabled' ? 'enabled' : 'disabled' } : null,
     reasoningEffort: isReasoningEffort(config.reasoningEffort) ? config.reasoningEffort : null,

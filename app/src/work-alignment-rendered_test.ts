@@ -30,6 +30,8 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
   const writes: { action: string; version: number; data: unknown }[] = [], answers: unknown[] = []
   let reportingSessionId = 'web:fixture', reportingWrites = 0, exhibitRequests = 0
   let empty = false, unavailable = false, deleteAttempts = 0, questionOpen = true
+  let organizationAttempts = 0
+  let organized = false
   const at = '2026-10-05T00:00:00Z'
   const rootKey = 'work:11111111-1111-4111-8111-111111111111'
   const graderKey = 'work:22222222-2222-4222-8222-222222222222'
@@ -101,6 +103,9 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
         import { createLocalMainAdminContext } from '/src/installation-context.ts';
         const state = reactive({ visible:true, draft:'Keep my unsent draft', navigated:'', deleting:false, deleted:false });
         window.fixture = state;
+        window.organizationCalls = 0;
+        const originalFetch = window.fetch;
+        window.fetch = (...args) => { if (String(args[0]).endsWith('/api/work/organize')) window.organizationCalls++; return originalFetch(...args); };
         window.fixtureKeys = ${JSON.stringify({ root: rootKey, note: record.key, grader: graderKey })};
         window.showProjectDelete = () => { state.deleting = true; };
         const installation = reactive(createLocalMainAdminContext(location.origin));
@@ -174,6 +179,24 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
             } else json({ request: pending })
           } else if (path.includes('/decisions/') && path.endsWith('/reviews')) {
             json({ reviews: [] })
+          } else if (path === '/projects/p/api/folders') {
+            // Real local FolderRecord wire shape has no kind discriminator.
+            json({ folders: [{ id: 'fixture-folder', name: 'Fixture source', path: '/fixture', createdAt: at }] })
+          } else if (path === '/projects/p/api/actions') {
+            json({ actions: [{ id: 'fixture-action', name: 'Build fixture', command: 'echo fixture', folderId: 'fixture-folder', pinned: true }] })
+          } else if (path === '/projects/p/api/actions/runs') {
+            json({ runs: [] })
+          } else if (path === '/projects/p/api/work-history') {
+            json({ records: [
+              { request: { ...question, id: 'history-human' }, answer: { requestId: 'history-human', option: question.options[1], answeredBy: 'user', answeredAt: at } },
+              { request: { ...question, id: 'history-parent', recipient: { kind: 'parent', sessionId: 'parent' } }, answer: { requestId: 'history-parent', option: question.options[0], answeredBy: 'parent', answeredAt: at } },
+              { request: { ...question, id: 'history-timeout' }, answer: { requestId: 'history-timeout', option: question.defaultOption, answeredBy: 'timeout', answeredAt: at } },
+              { request: { ...question, id: 'history-pending' } },
+            ], errors: [], truncated: false })
+          } else if (path === '/projects/p/api/work/organize') {
+            await body(); organizationAttempts++
+            if (organizationAttempts === 1) { response.statusCode = 502; json({ error: 'model_json_invalid', message: 'private provider text must not be displayed' }) }
+            else { organized = true; json({}) }
           } else if (path === '/projects/p/api/work') {
             if (unavailable) { response.statusCode = 503; json({ error: 'unavailable' }); return }
             const summary = (key: string, title: string, status = 'pending', assignee: string | null = null) => ({
@@ -185,10 +208,13 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
               parentKey: item.workflow!.parentKey ?? null, dependencies: item.workflow!.dependencies, revision: item.revision, sequence: item.sequence,
               notes: item.notes, objective: item.definition.objective, origin: item.origin })
             json({
+              focus: organized ? { inferredAt: at, origin: 'model_interpretation', inputCount: 1, omittedCount: 0,
+                sources: [{ key: rootKey, sequence: goal.sequence }], result: { groups: [{ category: 'Understand release effects',
+                  purpose: 'Use the available evidence to explain release effects', motivation: 'The user may want confidence before release', topicKeys: [rootKey] }] } } : undefined,
               items: empty ? [] : [note(goal), { ...summary('work:inputs', 'Prepare evaluation inputs', 'done', 'web:reviewer'), parentKey: rootKey },
-                note(record), note(grader), { ...summary('work:followup', 'Document the comparison', 'blocked'),
+                note(record), note(grader), { ...summary('work:followup', 'Document the comparison', 'blocked'), dependencies: [rootKey],
                   observation: { sessionId: 'web:reviewer', observedAt: at, sources: [{ id: 'observed-input', physicalId: 'review-segment' }] } }],
-              observer: { enabled: true, running: true, pending: 1, errors: [] },
+              observer: { enabled: true, running: false, pending: 1, errors: [] },
               sessions: [
                 { sessionId: 'web:fixture', title: 'Evaluation session', assignable: true, activity: questionOpen ? 'waiting' : 'idle', workKey: record.key },
                 { sessionId: 'web:reviewer', title: 'Review session', assignable: true, activity: 'idle' },

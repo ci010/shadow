@@ -76,6 +76,15 @@ export type WorkDecision = z.infer<typeof workDecisionSchema>
 export const WORK_APPROVE = 'Apply this work proposal'
 export const WORK_REJECT = 'Keep the current work unchanged'
 
+/** Display-only model interpretation. Never execution authority or a user quotation. */
+export const workFocusInferenceSchema = z.object({
+  category: z.string().trim().min(1).max(120),
+  purpose: z.string().trim().min(1).max(500),
+  motivation: z.string().trim().min(1).max(1000),
+  evidence: z.array(z.object({
+    id: z.string().min(1).max(512), physicalId: z.string().min(1).max(1024),
+  }).strict()).min(1).max(12),
+}).strict()
 export const workRecordSchema = z.object({
   key: z.string().min(1).max(600), subject: workSubjectSchema,
   revision: z.number().int().positive(), sequence: z.number().int().positive(),
@@ -107,7 +116,13 @@ export const workRecordSchema = z.object({
       id: z.string().min(1).max(512), physicalId: z.string().min(1).max(1024),
     }).strict()).max(12),
     observedAt: z.string().datetime(),
-  }).strict().optional(),
+    focus: workFocusInferenceSchema.optional(),
+  }).strict().superRefine((value, ctx) => {
+    if (value.focus && !value.focus.evidence.every(ref => value.sources.some(source =>
+      source.id === ref.id && source.physicalId === ref.physicalId))) {
+      ctx.addIssue({ code: 'custom', path: ['focus', 'evidence'], message: 'Focus evidence must reference observation sources.' })
+    }
+  }).optional(),
 }).strict()
 export type WorkRecord = z.infer<typeof workRecordSchema>
 export interface WorkStamp { key: string; revision: number; adoptionId?: string; assignmentRevision?: number }

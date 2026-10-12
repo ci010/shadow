@@ -188,7 +188,7 @@ function createLlmRuntimeConfig(config: Config): LlmRuntimeConfig {
   return {
     model: config.agent.model,
     temperature: config.agent.temperature,
-    contextWindow: resolveContextWindow(bareModel, {
+    contextWindow: config.agent.contextWindow ?? resolveContextWindow(bareModel, {
       modelContextWindows: providerConfig?.modelContextWindows,
     }),
     thinking: config.agent.thinking,
@@ -1197,7 +1197,7 @@ export async function createProjectRuntime(
     }),
     topicsPlugin(topics, dependencies.authorize),
     sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
-    projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => workObserver.status()),
+    projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => workObserver.status(), signal => workObserver.organize(signal)),
     githubPlugin(github, dependencies.authorize),
     backgroundTasksPlugin(backgroundTasks, id => !!sessions.getSessionState(id)),
     remoteSessionPlugin({

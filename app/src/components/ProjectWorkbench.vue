@@ -12,42 +12,47 @@
       <main v-show="wide || !panel" class="workbench-main">
         <div class="workbench-toolbar">
           <div class="work-view-switch" role="group" :aria-label="t('Work view')">
-            <button type="button" :aria-pressed="view === 'canvas'" @click="view = 'canvas'">{{ t('Overview') }}</button>
+            <button type="button" :aria-pressed="view === 'history'" @click="view = 'history'">{{ t('Dashboard') }}</button>
             <button type="button" :aria-pressed="view === 'board'" @click="view = 'board'">{{ t('Board') }}</button>
-            <button type="button" :aria-pressed="view === 'graph'" @click="view = 'graph'">{{ t('Graph') }}</button>
           </div>
-          <span class="work-count">{{ filtered.length }} {{ t('of') }} {{ data?.items.length ?? 0 }} {{ t('items') }}</span>
-          <button type="button" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
+          <button v-if="canWrite && view === 'history'" type="button" :disabled="organizing" :title="t('Calls the model once using bounded recent Project notes; no automatic calls on opening.')" @click="organizeTopics">{{ organizing ? t('Organizing…') : t('Organize recent topics') }}</button>
+          <small v-if="canWrite && view === 'history' && !organizationMessage">{{ t('Organization calls the model once; opening this dashboard does not.') }}</small>
+          <span v-if="view === 'history' && organizationMessage" class="organization-status" role="status">{{ organizationMessage }}</span>
+          <button type="button" :aria-expanded="diagnosticsOpen" @click="diagnosticsOpen = !diagnosticsOpen">{{ t('Agent diagnostics') }}</button>
+          <span v-if="view !== 'history'" class="work-count">{{ filtered.length }} {{ t('of') }} {{ data?.items.length ?? 0 }} {{ t('items') }}</span>
+          <button type="button" class="work-refresh" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
           <button v-if="canWrite" type="button" class="new-work" @click="newWork">{{ t('New work') }}</button>
         </div>
         <form class="work-filters" :aria-label="t('Filter work')" @submit.prevent>
           <label class="work-search">{{ t('Search') }}<input v-model="filter.query" type="search" :placeholder="t('Find work…')" /></label>
-          <label>{{ t('Initiative') }}<UiSelect v-model="filter.root"><option value="">{{ t('All work') }}</option><option v-for="item in initiatives" :key="item.key" :value="item.key">{{ item.title }}</option></UiSelect></label>
-          <label>{{ t('Assigned to') }}<UiSelect v-model="filter.assignee"><option value="">{{ t('Any session') }}</option><option value="unassigned">{{ t('Unassigned') }}</option>
+          <label v-if="view !== 'history'">{{ t('Initiative') }}<UiSelect v-model="filter.root"><option value="">{{ t('All work') }}</option><option v-for="item in initiatives" :key="item.key" :value="item.key">{{ item.title }}</option></UiSelect></label>
+          <label v-if="view !== 'history'">{{ t('Assigned to') }}<UiSelect v-model="filter.assignee"><option value="">{{ t('Any session') }}</option><option value="unassigned">{{ t('Unassigned') }}</option>
             <option v-for="session in assignedSessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option>
           </UiSelect></label>
-          <label class="completed-filter"><input v-model="filter.terminal" type="checkbox" />{{ t('Include completed') }}</label>
+          <label v-if="view !== 'history'" class="completed-filter"><input v-model="filter.terminal" type="checkbox" />{{ t('Include completed') }}</label>
         </form>
         <p v-if="error" class="workbench-error" role="alert">{{ error }} {{ t('Showing the last loaded state, if available.') }} <button @click="refresh">{{ t('Retry') }}</button></p>
         <div v-if="!data && loading" class="workbench-empty" role="status">{{ t('Loading Project work…') }}</div>
         <template v-if="data">
-          <details v-if="data.requests.some(request => request.recipient !== 'parent' && request.recipient !== 'caller') || reviews.length || unknownEffects.length" class="work-attention" :open="view !== 'canvas'">
-            <summary>{{ t('Needs your attention') }} · {{ data.requests.filter(request => request.recipient !== 'parent' && request.recipient !== 'caller').length + reviews.length + unknownEffects.length }}</summary>
+          <details v-if="data.requests.some(request => request.recipient !== 'parent' && request.recipient !== 'caller')" class="work-attention" :open="true">
+            <summary>{{ t('Needs your attention') }} · {{ data.requests.filter(request => request.recipient !== 'parent' && request.recipient !== 'caller').length }}</summary>
             <button v-for="request in data.requests.filter(request => request.recipient !== 'parent' && request.recipient !== 'caller')" :key="request.id" type="button" @click="focusRequest(request)">
               <span>{{ request.kind === 'decision' ? t('Decision') : t('Question') }} · {{ sessionTitle(request.sessionId) }}</span>
               <strong>{{ request.question }}</strong><span>{{ t('Open request →') }}</span>
             </button>
+          </details>
+          <details v-if="diagnosticsOpen" class="work-diagnostics"><summary>{{ t('Internal review and recovery') }} · {{ reviews.length + unknownEffects.length }}</summary>
+            <p>{{ t('Agents reassess these branches. You do not need to fill in a review; only explicit questions require your reply.') }}</p>
             <button v-for="item in reviews" :key="item.key" type="button" @click="selectWork(item.key)">
-              <span>{{ t('Impact not yet reviewed') }}</span><strong>{{ item.title }}</strong><span>{{ t('Review →') }}</span>
+              <span>{{ t('Impact not yet reviewed') }}</span><strong>{{ item.title }}</strong><span>{{ t('Inspect note →') }}</span>
             </button>
             <button v-for="effect in unknownEffects" :key="effect.id" type="button" @click="effect.workKeys[0] ? selectWork(effect.workKeys[0]) : openSession(effect.sessionId)">
-              <span>{{ t('Outcome unknown') }}</span><strong>{{ effect.tool }} · {{ sessionTitle(effect.sessionId) }}</strong><span>{{ t('Reconcile →') }}</span>
+              <span>{{ t('Outcome unknown') }}</span><strong>{{ effect.tool }} · {{ sessionTitle(effect.sessionId) }}</strong><span>{{ t('Inspect note →') }}</span>
             </button>
           </details>
-          <ProjectContextCanvas v-if="view === 'canvas'" :data="data" :matches="filtered" :api-base="apiBase" :selected="selected"
-            :filtering="!!(filter.query.trim() || filter.root || filter.assignee)"
-            :can-write="canWrite" :active="visible && !appsVisible" :focus-request="requestedFocus"
-            @select="selectWork" @session="openSession" @discuss="discussNode" @updated="refresh" />
+          <div v-if="view === 'history'" class="overview-content">
+            <ProjectOverviewGraph :data="data" :api-base="apiBase" :query="filter.query" @select="selectWork" @session="openSession" />
+          </div>
           <div v-else-if="!data.items.length" class="workbench-empty">
             <span class="i-lucide-workflow empty-work-icon" aria-hidden="true" />
             <h2>{{ t('No work items yet') }}</h2><p>{{ t('Conversations can stay conversations. Ask the coordinator to organize work when there is an outcome to track.') }}</p>
@@ -68,7 +73,7 @@
               </div>
             </section>
           </div>
-          <WorkGraph v-else :items="filtered" :selected="selected" :sessions="data.sessions" @select="selectWork" @session="openSession" />
+
         </template>
       </main>
       <aside v-show="panel" :id="panelId" class="coordination-panel" :aria-label="panel === 'github' ? t('GitHub integration') : t('Work details')">
@@ -106,6 +111,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import { organizationErrorMessage, organizationDiagnostic } from '../organization-error.ts'
 import UiSelect from './UiSelect.vue'
 import QuickActions from './QuickActions.vue'
 import { t } from '../i18n.ts'
@@ -117,9 +123,10 @@ import type { ProjectLiveLease } from '../project-live-state.ts'
 import { ORCHESTRATOR_SESSION_ID as coordinatorId } from '../project-coordination.ts'
 import { filterWork, groupWork, workAttention, workColumns, workRoots } from '../project-work.ts'
 import WorkItemCard from './WorkItemCard.vue'
-import WorkGraph from './WorkGraph.vue'
-import ProjectContextCanvas from './ProjectContextCanvas.vue'
-import type { ProjectWorkOverview } from '../../../src/projects/work-overview.ts'
+import ProjectOverviewGraph from './ProjectOverviewGraph.vue'
+
+
+import { projectWorkOverviewSchema, type ProjectWorkOverview } from '../../../src/projects/work-overview.ts'
 import WorkAlignment from './WorkAlignment.vue'
 import DecisionOwner from './DecisionOwner.vue'
 import ProjectGitHub from './ProjectGitHub.vue'
@@ -132,13 +139,49 @@ const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string
 const live = useProjectLiveState(), installation = useInstallationContext(), route = useRoute(), router = useRouter()
 const lease = shallowRef<ProjectLiveLease>()
 const lastSnapshot = shallowRef<ProjectWorkOverview>()
-const data = computed(() => lease.value?.work.state.value ?? lastSnapshot.value)
+const organizationSnapshot = shallowRef<ProjectWorkOverview>()
+const data = computed(() => organizationSnapshot.value ?? lease.value?.work.state.value ?? lastSnapshot.value)
 const error = computed(() => lease.value?.work.state.error)
 const loading = computed(() => lease.value?.work.state.loading)
 const canWrite = computed(() => installation.value.uiScopes.includes('chat:write'))
-const view = ref<'canvas' | 'board' | 'graph'>('canvas'), panel = ref<'work' | 'github' | ''>('')
+const view = ref<'history' | 'board'>('history'), panel = ref<'work' | 'github' | ''>('')
+
 const selected = ref(''), editing = ref(false), wide = ref(false)
-const requestedFocus = ref<{ id: string }>()
+
+const diagnosticsOpen = ref(false)
+const organizing = ref(false), organizationMessage = ref('')
+let organizationController: AbortController | undefined
+async function organizeTopics() {
+  if (organizing.value || !canWrite.value) return
+  const apiBase = props.apiBase, projectId = props.projectId
+  const controller = new AbortController()
+  organizationController = controller
+  organizing.value = true; organizationMessage.value = data.value?.observer?.running ? t('Waiting for observation to finish; organization will then run once.') : t('This action calls the model once.')
+  let failureMessage = organizationErrorMessage('organization_network_failed'), diagnostic = ''
+  try {
+    const response = await fetch(`${apiBase}/api/work/organize`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: '{}', signal: controller.signal })
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}))
+      failureMessage = organizationErrorMessage(body?.error)
+      diagnostic = organizationDiagnostic(body, response.status)
+      throw new Error('Organization HTTP failure')
+    }
+    if (apiBase !== props.apiBase || projectId !== props.projectId || controller.signal.aborted) return
+    const result = projectWorkOverviewSchema.safeParse(await response.json())
+    if (!result.success) { failureMessage = organizationErrorMessage('organization_response_invalid'); throw new Error('Invalid organization response') }
+    organizationSnapshot.value = result.data
+    void lease.value?.work.refresh()
+    if (apiBase !== props.apiBase || projectId !== props.projectId || controller.signal.aborted) return
+    organizationMessage.value = t('Recent topics organized. Interpretations are not confirmed user intent.')
+  } catch {
+    if (!controller.signal.aborted && apiBase === props.apiBase && projectId === props.projectId)
+      organizationMessage.value = t(failureMessage) + diagnostic
+  } finally {
+    if (organizationController === controller) { organizing.value = false; organizationController = undefined }
+  }
+}
+watch(() => lease.value?.work.state.revision, () => { organizationSnapshot.value = undefined })
 const appsVisible = ref(false)
 function toggleApps() {
   appsVisible.value = !appsVisible.value
@@ -154,6 +197,7 @@ const containerWidth = ref(0), preferredPanelWidth = ref(400)
 const resizeBounds = computed(() => sidebarWidthBounds(containerWidth.value, 320, containerWidth.value))
 const panelWidth = computed(() => clampSidebarWidth(preferredPanelWidth.value, resizeBounds.value))
 const filter = reactive({ query: '', root: '', assignee: '', terminal: false })
+const overviewMatches = computed(() => filterWork(data.value?.items ?? [], { query: filter.query, root: '', assignee: '', terminal: true }))
 const filtered = computed(() => filterWork(data.value?.items ?? [], filter))
 const groups = computed(() => groupWork(filtered.value, data.value?.items ?? []))
 const columns = computed(() => workColumns.filter(column => column.status !== 'cancelled' && column.status !== null
@@ -207,10 +251,11 @@ async function discussNode(key: string) {
   emit('compose', t('Discuss the premise of {title} ({key}):', { title: item?.title ?? key, key }) + '\n')
 }
 async function focusRequest(request: ProjectWorkOverview['requests'][number]) {
-  view.value = 'canvas'
+  view.value = 'history'
+
   clearFilters()
   panel.value = ''
-  requestedFocus.value = { id: request.id }
+  openSession(request.sessionId)
 }
 async function newWork() {
   panel.value = ''
@@ -218,6 +263,9 @@ async function newWork() {
   emit('compose', 'Help me organize a new work item:\n')
 }
 watch(() => [props.apiBase, props.projectId, props.visible] as const, ([apiBase, projectId, visible], previous) => {
+  if (apiBase !== previous?.[0] || projectId !== previous?.[1]) {
+    organizationSnapshot.value = undefined; organizationController?.abort(); organizationController = undefined; organizing.value = false; organizationMessage.value = ''
+  }
   lastSnapshot.value = apiBase === previous?.[0] && projectId === previous?.[1] ? data.value : undefined
   lease.value?.release(); lease.value = undefined
   if (visible) lease.value = live.acquireProject(apiBase, projectId, undefined, true)
@@ -240,9 +288,12 @@ onMounted(() => {
   })
   if (rootElement.value) observer.observe(rootElement.value)
 })
-onUnmounted(() => { lease.value?.release(); observer?.disconnect(); removeGuard() })
+onUnmounted(() => { organizationController?.abort(); lease.value?.release(); observer?.disconnect(); removeGuard() })
 </script>
 <style scoped>
+.overview-content { overflow: auto; min-height: 0; }
+.overview-structure, .overview-graph { margin: 16px; border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; }
+.overview-structure summary, .overview-graph summary { cursor: pointer; }
 .project-workbench { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: var(--c-text); }
 .workbench-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--c-border); }
 h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 30px; }
@@ -258,7 +309,11 @@ button:where(:not(.ui-select)) > span[class^=i-], h2 > span[class^=i-] { width: 
 .has-panel:not(.compact) .workbench-body { grid-template-columns: minmax(0, 1fr) var(--coordination-panel-width); }
 .workbench-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .workbench-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 14px 16px 8px; }
-.work-view-switch { display: flex; }
+.work-view-switch { display: flex; align-items: center; gap: 8px; }
+.advanced-views { font-size: 12px; }
+.advanced-views summary { cursor: pointer; padding: 6px; }
+.advanced-views[open] { display: flex; }
+.advanced-views button { margin: 2px; }
 .work-view-switch button:where(:not(.ui-select)) + button:where(:not(.ui-select)) { margin-left: -1px; }
 [aria-pressed=true] { background: var(--c-selection-bg); border-color: var(--c-selection-border); color: var(--c-primary); }
 .work-count { flex: 1; min-width: 80px; font-size: 12px; color: var(--c-text-secondary); }
@@ -268,6 +323,9 @@ button:where(:not(.ui-select)) > span[class^=i-], h2 > span[class^=i-] { width: 
 .work-filters input:not([type=checkbox]), .work-filters .ui-select { width: 100%; min-width: 0; min-height: 34px; padding: 5px 7px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); }
 .work-filters .completed-filter { flex: none; flex-direction: row; align-items: center; min-height: 34px; }
 .workbench-error { padding: 10px 16px; margin: 0; color: var(--c-error); font-size: 12px; }
+.work-diagnostics { flex-shrink: 0; padding: 8px 16px; font-size: 12px; color: var(--c-text-secondary); max-height: 180px; overflow: auto; border-bottom: 1px solid var(--c-border-soft); }
+.work-diagnostics summary { cursor: pointer; }
+.work-diagnostics button { margin: 4px; }
 .work-attention { flex-shrink: 0; max-height: 200px; overflow-y: auto; padding: 10px 16px; border-bottom: 1px solid var(--c-border); background: var(--c-warn-bg); }
 .work-attention summary { font-size: 13px; font-weight: 600; cursor: pointer; color: var(--c-warn); }
 .work-attention button:where(:not(.ui-select)) { display: flex; width: 100%; justify-content: start; text-align: left; flex-wrap: wrap; border: 0; border-top: 1px solid var(--c-border-soft); background: transparent; margin-top: 6px; padding: 7px 0; }

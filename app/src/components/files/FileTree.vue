@@ -89,7 +89,7 @@ import { t } from '../../i18n.ts'
 import { computed, inject, nextTick, onUnmounted, ref, shallowRef, useId, watch } from 'vue'
 import FileTreeNode from './FileTreeNode.vue'
 import FileTreeContextMenu from './FileTreeContextMenu.vue'
-import type { FileTreeMenuRequest } from '../../file-tree-menu.ts'
+import { fileTreeShortcut, type FileTreeMenuRequest } from '../../file-tree-menu.ts'
 import FilePreviewModal from './FilePreviewModal.vue'
 import HoverInfo from '../HoverInfo.vue'
 import NodeOfflineState from './NodeOfflineState.vue'
@@ -148,10 +148,12 @@ function openContextMenu(request: FileTreeMenuRequest) {
   if (props.active && !sourcePending.value && !offline.value) contextMenu.value = request
 }
 function menuKey(event: KeyboardEvent, path: string) {
-  if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+  if (!props.active || sourcePending.value || offline.value || event.defaultPrevented || event.isComposing) return
+  const shortcut = fileTreeShortcut(event)
+  if (!shortcut && event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
   event.preventDefault()
   event.stopPropagation()
-  openContextMenu({ event, path })
+  if (!event.repeat) openContextMenu({ event, path, shortcut })
 }
 watch(() => [props.apiBase, props.sessionId, props.folderId, props.active, workdir.value, sourcePending.value, filterQuery.value, changesOnly.value],
   () => { contextMenu.value = undefined })

@@ -12,7 +12,9 @@ const summary = JSON.stringify({ track: true, title: 'Replace selectors', object
 test('observer progress preserves semantic revision and failed execution is visibly blocked', async () => withTempWorkspace(async home => {
   const store = new InitiativeStore(home), bus = new Bus(), scope = createProjectScope('fixture')
   const state: SessionState = { sessionId: 'web:chat-root', projectId: 'fixture', segmentIndex: 0, executionStatus: 'running' }
-  const observer = new WorkObserver(store, { bus, scope, state: () => state, changed() {}, summarize: async () => summary })
+  let reportNumber = 0
+  const observer = new WorkObserver(store, { bus, scope, state: () => state, changed() {}, summarize: async () =>
+    JSON.stringify({ ...JSON.parse(summary), objective: `Report paraphrase ${++reportNumber}` }) })
   const report = (turnId: string, status: 'completed' | 'failed') => bus.emit('session.turn.finished', {
     sessionId: state.sessionId, turnId, inputId: turnId, source: { kind: 'session', sessionId: state.sessionId },
     status, content: status === 'failed' ? 'Build failed' : 'Progress report',
@@ -75,10 +77,17 @@ test('observer coalesces evidence, persists notes without assigning work, and pr
     assert.equal(store.workFocus('web:chat-root'), undefined)
     await observer.flush()
     assert.equal(calls, 2, 'unchanged evidence costs no new inference')
-    store.saveWork({ ...root, sequence: root.sequence + 1, changedBy: 'human', definition: { ...root.definition, objective: 'Human goal' } }, root.sequence, 'human', 'note')
+    store.saveWork({ ...root, revision: root.revision + 1, sequence: root.sequence + 1, changedBy: 'human', definition: { ...root.definition, objective: 'Human goal' } }, root.sequence, 'human', 'note')
+    bus.emit('session.turn.finished', { sessionId: 'virtual:child', turnId: 'child-report', inputId: 'child',
+      source: { kind: 'session', sessionId: 'virtual:child' }, status: 'completed', content: 'Progress only' })
+    await observer.flush()
+    const reportedChild = store.workRecords().find(record => record.key === child.key)!
+    assert.deepEqual(reportedChild.notes?.basis, child.notes?.basis, 'A report cannot acknowledge a changed human goal')
+    assert.equal(reportedChild.definition.objective, child.definition.objective)
+    assert.equal(calls, 3)
     request('third')
     await observer.flush()
-    assert.equal(calls, 2)
+    assert.equal(calls, 3)
     assert.equal(store.workRecords().find(record => record.key === root.key)?.definition.objective, 'Human goal')
     assert.match(observer.status().errors[0]!.error, /paused/)
   } finally { await observer.stop(); store.close(); scope.close() }
@@ -130,4 +139,86 @@ test('observer ignores other projects, managed channels, automation and its own 
     assert.equal(runs, 0)
     assert.equal(store.workObservations().length, 0)
   } finally { await observer.stop(); store.close(); scope.close() }
+}))
+
+test('new user instructions can change an observed goal; report paraphrases cannot', async () => withTempWorkspace(async home => {
+  const store = new InitiativeStore(home), bus = new Bus(), scope = createProjectScope('fixture')
+  const state: SessionState = { sessionId: 'web:chat-goal', projectId: 'fixture', segmentIndex: 0 }
+  let objective = 'Original goal'
+  const observer = new WorkObserver(store, { bus, scope, state: () => state, changed() {}, summarize: async () =>
+    JSON.stringify({ ...JSON.parse(summary), objective }) })
+  const request = (id: string) => bus.emit('session.input.accepted', { sessionId: state.sessionId,
+    input: { kind: 'message', id, timestamp: new Date().toISOString(), content: objective, policy: 'queue',
+      source: { kind: 'user', sender: { channel: 'web', chatId: 'goal', senderId: 'user', messageId: id } } } })
+  try {
+    request('initial'); await observer.flush()
+    objective = 'Changed user goal'; request('changed'); await observer.flush()
+    assert.equal(store.workRecords()[0]!.revision, 2)
+    assert.equal(store.workRecords()[0]!.definition.objective, objective)
+    objective = 'Report paraphrase'
+    bus.emit('session.turn.finished', { sessionId: state.sessionId, turnId: 'report', inputId: 'changed',
+      source: { kind: 'session', sessionId: state.sessionId }, status: 'completed', content: objective })
+    await observer.flush()
+    assert.equal(store.workRecords()[0]!.revision, 2)
+    assert.equal(store.workRecords()[0]!.definition.objective, 'Changed user goal')
+  } finally { await observer.stop(); store.close(); scope.close() }
+}))
+
+test('existing observer call saves evidence-labelled focus without extra inference and rejects invented citations', async () => withTempWorkspace(async home => {
+  const store = new InitiativeStore(home), bus = new Bus(), scope = createProjectScope('fixture')
+  const state: SessionState = { sessionId: 'web:chat-focus', projectId: 'fixture', segmentIndex: 0 }
+  let calls = 0, invented = false
+  const observer = new WorkObserver(store, { bus, scope, state: () => state, changed() {}, summarize: async input => {
+    calls++
+    const value = JSON.parse(input), event = value.events.at(-1)
+    assert(value.instruction.includes('not validated intent'))
+    return JSON.stringify({ ...JSON.parse(summary), focus: { category: 'Consistent interaction',
+      purpose: 'Make controls easier to use', motivation: 'The user may want predictable interaction',
+      evidence: [{ id: invented ? 'invented' : event.id, physicalId: event.physicalId }] } })
+  } })
+  const request = (id: string) => bus.emit('session.input.accepted', { sessionId: state.sessionId,
+    input: { kind: 'message', id, timestamp: new Date().toISOString(), content: 'Make controls consistent', policy: 'queue',
+      source: { kind: 'user', sender: { channel: 'web', chatId: 'focus', senderId: 'user', messageId: id } } } })
+  try {
+    request('first'); await observer.flush()
+    assert.equal(calls, 1)
+    const saved = store.workRecords()[0]!
+    assert.equal(saved.observation?.focus?.category, 'Consistent interaction')
+    assert.equal(saved.requestSource, undefined, 'Inferred motivation is never a user quote')
+    await observer.flush(); assert.equal(calls, 1)
+    invented = true; request('second'); await observer.flush()
+    assert.equal(store.workRecords()[0]!.sequence, saved.sequence)
+    assert.match(observer.status().errors[0]!.error, /outside the observed events/)
+  } finally { await observer.stop(); store.close(); scope.close() }
+}))
+
+
+test('manual organization waits for automatic observation and queued cancellation does not cancel it', async () => withTempWorkspace(async home => {
+  const store = new InitiativeStore(home), bus = new Bus(), scope = createProjectScope('fixture')
+  const state: SessionState = { sessionId: 'web:chat-root', projectId: 'fixture', segmentIndex: 0 }
+  const gate = Promise.withResolvers<void>()
+  let calls = 0
+  const observer = new WorkObserver(store, { bus, scope, state: () => state, changed() {}, summarize: async input => {
+    calls++
+    if (JSON.parse(input).topics) return JSON.stringify({ groups: [] })
+    await gate.promise
+    return summary
+  } })
+  try {
+    bus.emit('session.turn.finished', { sessionId: state.sessionId, turnId: 'report', inputId: 'report',
+      source: { kind: 'session', sessionId: state.sessionId }, status: 'completed', content: 'Progress' })
+    const automatic = observer.flush()
+    const controller = new AbortController()
+    const cancelled = observer.organize(controller.signal)
+    await assert.rejects(observer.organize(new AbortController().signal), /already running/)
+    controller.abort()
+    await assert.rejects(cancelled)
+    assert.equal(calls, 1)
+    const queued = observer.organize(new AbortController().signal)
+    assert.equal(calls, 1)
+    gate.resolve()
+    await automatic; await queued
+    assert.equal(calls, 2)
+    assert(store.projectFocus())
+  } finally { gate.resolve(); await observer.stop(); store.close(); scope.close() }
 }))
