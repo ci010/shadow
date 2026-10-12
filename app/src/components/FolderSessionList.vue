@@ -41,7 +41,10 @@
             <CopyableId class="session-info-id" :value="session.sessionId" :label="t('Session ID')" />
           </div>
           <p v-if="delegatedLabel(session)">{{ delegatedLabel(session) }}</p>
-          <button class="session-info-open" @click="$emit('select', session.sessionId); close()">{{ t('Open conversation') }}</button>
+          <div class="session-info-actions">
+            <button type="button" class="session-info-open" @click="$emit('select', session.sessionId); close()">{{ t('Open conversation') }}</button>
+            <button type="button" class="session-info-delete" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="close(); $emit('delete', session.sessionId)">{{ t('Delete conversation') }}</button>
+          </div>
           <template v-if="descendants(session).length">
             <h4>{{ t('Related conversations') }}</h4>
             <FolderSessionList class="session-info-related" :sessions="descendants(session)" :active-session-id="activeSessionId" :collapsed="collapsed"
@@ -122,8 +125,11 @@ function isWorking(session: SidebarSession) { return isWorkingStage(activityStag
 .session-info-key { font-size: 12px; color: var(--c-text-muted); }
 .session-info-related { max-height: min(204px, 30dvh); overflow: auto; overscroll-behavior: contain; }
 .session-info h4 { margin: 16px 0 6px; font-size: 12px; font-weight: 500; color: var(--c-text-secondary); }
-.session-info-open { margin-top: 6px; padding: 6px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; cursor: pointer; }
+.session-info-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.session-info-open, .session-info-delete { padding: 6px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; cursor: pointer; }
 .session-info-open:hover { background: var(--c-bg-muted); }
+.session-info-delete { color: var(--c-error); }
+.session-info-delete:hover { background: var(--c-error-bg); }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 @media (hover: none), (max-width: 700px) { .session-delete { opacity: 1; } }
 </style>
