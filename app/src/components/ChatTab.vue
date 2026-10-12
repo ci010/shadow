@@ -262,14 +262,20 @@
             :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'"
             :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
           <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" role="status" aria-live="polite">
-            <SessionActivity :stage="sessionStage" />
+            <SessionActivity :stage="sessionStage" :hide-symbol="!isWaitingStage(sessionStage)" />
             <span class="chat-working-detail">{{ isCall ? t('Call · inherited context · blocking') : t('Task · fresh context · async') }} {{ t('· Read-only trace') }}</span>
+            <WorkingWave v-if="composerWorking" />
           </div>
-          <div v-else-if="sessionWorking && !viewingPhysicalId" class="chat-working" :class="sessionStage" role="status" aria-live="polite"
+          <div v-else-if="(sessionWorking || activeSubagents.length) && !viewingPhysicalId" class="chat-working" :class="[sessionStage, { 'has-subagents': activeSubagents.length }]" role="status" aria-live="polite"
             :title="sessionStage === 'tool' ? (streamingToolCallData?.name || t('Running a tool call')) : undefined">
-            <SessionActivity :stage="sessionStage" />
-            <span v-if="!isWaitingStage(sessionStage)" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || t('Running a tool call')) : t('The agent is working on your request') }}</span>
-            <WorkingWave v-if="!isWaitingStage(sessionStage)" />
+            <SessionActivity v-if="sessionWorking" :stage="sessionStage" :hide-symbol="!isWaitingStage(sessionStage)" />
+            <span v-if="sessionWorking && !isWaitingStage(sessionStage) && !activeSubagents.length" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || t('Running a tool call')) : t('The agent is working on your request') }}</span>
+            <template v-if="activeSubagents.length">
+              <span class="working-status-divider" v-if="sessionWorking" aria-hidden="true">·</span>
+              <span class="subagent-status-label">{{ subagentActivityLabel(activeSubagentActivity) }}</span>
+              <span class="subagent-status-detail" :title="activeSubagentDetails">{{ activeSubagentDetails }}</span>
+            </template>
+            <WorkingWave v-if="composerWorking" />
           </div>
         </div>
         <YieldQuestion v-if="!isCall" ref="yieldQuestion" :api-base="apiBase" :session-id="activeSessionId"
@@ -326,7 +332,7 @@
           <div v-if="canResend" class="resend-bar">
             <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> {{ t('Resend last message') }}</button>
           </div>
-          <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget, 'composer-dual-actions': requestBusy && showComposerSend, 'composer-answering': answeringQuestion }"
+          <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget, 'composer-dual-actions': requestBusy && showComposerSend, 'composer-answering': answeringQuestion, 'composer-working': composerWorking }"
             @dragover="handleAttachmentDragOver" @dragleave="handleAttachmentDragLeave" @drop="handleAttachmentDrop">
           <p v-if="answeringQuestion" :id="domId('reply-context')" class="composer-reply-context">
             <span class="i-lucide-message-circle-reply w-4 h-4" aria-hidden="true" />
@@ -520,7 +526,7 @@ import ResponseDisclosure from './ResponseDisclosure.vue'
 import { isBackgroundResponse, parseResponseContext, type ResponseContext } from '../../../src/sessions/response-context.ts'
 import { inlineExecutionMessages } from '../execution-messages.ts'
 import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
-import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions } from '../subagent-executions.ts'
+import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl, hostBase } from '../api-url.ts'
 import { automationChatLocation } from '../automations.ts'
@@ -545,7 +551,7 @@ import { isUserMessage, resendableUserMessage, messageHistoryMarkers, groupMessa
 import CommandResult from './CommandResult.vue'
 import { mergeCommandResults } from '../command-results.ts'
 import { isCommandReceipt, type CommandReceipt } from '../../../src/slash-commands/receipt.ts'
-import { displayedSessionStages as resolveDisplayedStages, isWaitingStage, isWorkingStage, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
+import { displayedSessionStages as resolveDisplayedStages, isAnimatingStage, isWaitingStage, isWorkingStage, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
 import type { SessionRecovery } from '../../../src/sessions/session-store.ts'
 import { canRedirectComposerKey, isComposerFocusKey } from '../composer-autofocus.ts'
 import { groupSenderNames, parseSessionMessage, sessionMessageTitle, type SessionMessageSource } from '../message-author.ts'
@@ -793,6 +799,10 @@ const sessionStage = computed<SessionStage | null>(() =>
   activeSessionId.value ? (displayedSessionStages.value[activeSessionId.value] ?? null) : null,
 )
 const sessionWorking = computed(() => isWorkingStage(sessionStage.value))
+const activeSubagentActivity = computed(() => summarizeSubagents(activeSubagents.value, displayedSessionStages.value))
+const activeSubagentDetails = computed(() => activeSubagents.value.map(agent => agent.label).join(' · '))
+const composerWorking = computed(() => !viewingPhysicalId.value && (isAnimatingStage(sessionStage.value)
+  || activeSubagentActivity.value.running > 0))
 const awaitingCall = computed(() => sessionStage.value === 'waiting-for-call')
 const requestBusy = computed(() => preparingSend.value || streaming.value || sessionWorking.value || sessionStage.value === 'pending'
   || !!currentRequest.value && currentRequest.value.state.phase !== 'finished')
@@ -2959,16 +2969,27 @@ function resendLastMessage() {
 .chat-messages { position: relative; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding-block: 12px calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
 .session-status-row { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0 8px; width: calc(100% - 40px); max-width: var(--conversation-max-width); min-width: 0; margin: 0 auto; }
 .chat-working { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: min(240px, 100%); min-height: 32px; margin: 8px 0 0 auto; padding: 5px 10px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-control); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }
+.chat-working.has-subagents { flex: 1 1 0; max-width: 100%; }
+.subagent-status-label { flex: 0 1 auto; font-size: 12px; }
+.subagent-status-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.working-status-divider { color: var(--c-text-muted); }
 .chat-working.waiting { border-color: var(--c-warn); background: var(--c-warn-bg); color: var(--c-warn); }
 .chat-working-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
-.session-status-row:has(.session-work-controls:not([style*="display: none"])) .chat-working-detail,
-.session-status-row:has(.session-work-controls:not([style*="display: none"])) .chat-working :deep(.working-wave) { display: none; }
+.session-status-row:has(.session-work-controls:not([style*="display: none"])) .chat-working-detail { display: none; }
 .execution-summary { flex-wrap: wrap; border-color: var(--c-border); background: var(--c-bg-soft); }
 .session-status-row .execution-summary .chat-working-detail { display: block; }
 .execution-summary .chat-working-detail { display: block; white-space: normal; }
 .chat-working :deep(.working-wave) { flex: 0 0 auto; }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: var(--conversation-max-width); margin: 12px auto 16px; }
 .composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
+.composer-box.composer-working { animation: composer-breathe 3s ease-in-out infinite; }
+@keyframes composer-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-primary) 8%, transparent), 0 0 6px color-mix(in srgb, var(--c-primary) 4%, transparent); }
+  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-primary) 28%, transparent), 0 0 16px color-mix(in srgb, var(--c-primary) 12%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-box.composer-working { animation: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-primary) 20%, transparent); }
+}
 .composer-box:focus-within, .composer-box:has(.composer-control[aria-expanded="true"]) { border-color: var(--c-blue); }
 .composer-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .composer-input { display: flex; min-width: 0; }

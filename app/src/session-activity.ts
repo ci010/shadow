@@ -4,6 +4,11 @@ import { parseSessionRecovery, type SessionRecovery } from '../../src/sessions/s
 export type SessionStage = 'idle' | 'llm' | 'tool' | 'waiting' | 'waiting-for-call' | 'inactive' | 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 export type WorkingStage = 'llm' | 'tool' | 'waiting' | 'waiting-for-call' | 'running'
 
+/** Active computation, unlike a request paused for user input or a child call. */
+export function isAnimatingStage(stage: unknown): boolean {
+  return stage === 'llm' || stage === 'tool' || stage === 'running'
+}
+
 export function isWaitingStage(stage: unknown): boolean {
   return stage === 'waiting' || stage === 'waiting-for-call'
 }

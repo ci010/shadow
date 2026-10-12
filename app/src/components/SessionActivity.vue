@@ -1,6 +1,6 @@
 <template>
   <span class="session-activity" :class="[activity.kind, { working: activity.working, compact, 'icon-only': iconOnly, 'status-icons': statusIcons }]" :title="label" :aria-label="compact ? label : undefined" :role="compact ? 'img' : undefined">
-    <span v-if="iconOnly || stage || !delegatedLabel" class="activity-symbol" aria-hidden="true">
+    <span v-if="!hideSymbol && (iconOnly || stage || !delegatedLabel)" class="activity-symbol" aria-hidden="true">
       <span v-if="compact || statusIcons" :class="statusIcon" class="status-icon" />
       <span v-else-if="activity.kind === 'waiting'" class="i-lucide-message-circle-question attention-icon" />
       <span v-else-if="activity.kind === 'running'" class="activity-wave"><i /><i /><i /></span>
@@ -24,7 +24,7 @@ import { computed } from 'vue'
 import { isWaitingStage, isWorkingStage, sessionActivity } from '../session-activity.ts'
 import { subagentActivityLabel, type SubagentActivity } from '../subagent-executions.ts'
 
-const props = defineProps<{ stage?: string | null; compact?: boolean; iconOnly?: boolean; statusIcons?: boolean; subagents?: SubagentActivity }>()
+const props = defineProps<{ stage?: string | null; compact?: boolean; iconOnly?: boolean; statusIcons?: boolean; hideSymbol?: boolean; subagents?: SubagentActivity }>()
 const activity = computed(() => sessionActivity(props.iconOnly && !isWorkingStage(props.stage)
   ? props.subagents?.waiting ? 'waiting' : props.subagents?.running ? 'running' : props.subagents?.pending ? 'pending' : props.stage
   : props.stage))

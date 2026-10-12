@@ -79,7 +79,7 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
           window.executionInspections = 0;
           createApp({ render: () => h('main', [
             h(ToolActivityGroup, { batch }),
-            h(ExecutionMessage, { execution, onInspect: () => window.executionInspections++ })
+            h(ExecutionMessage, { execution, selected: true, onInspect: () => window.executionInspections++ })
           ]) }).mount('#app');`
         if (id !== '\0trace-fixture') return
         return `import { createApp, h } from 'vue';

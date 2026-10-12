@@ -209,6 +209,11 @@ async function main() {
     window.webContents.debugger.detach()
     window.setContentSize(1200, 1100)
 
+    assert.equal(await execute(`document.querySelector('.execution-inspect').getAttribute('aria-pressed')`), 'true')
+    assert.equal(await execute(`document.querySelector('.execution-card').classList.contains('execution-selected')`), true)
+    assert.equal(await execute(`getComputedStyle(document.querySelector('.execution-inspect')).backgroundColor`), 'rgba(0, 0, 0, 0)', 'Selection does not fill an inset header rectangle')
+    assert.equal(await execute(`getComputedStyle(document.querySelector('.execution-card .message-preview-content')).minHeight`), '0px')
+    assert.equal(await execute(`getComputedStyle(document.querySelector('.execution-details > summary')).paddingLeft`), '0px')
     assert.equal(await execute(`document.querySelectorAll('.execution-details .tool-payload').length`), 0)
     await click('.execution-details > summary')
     await wait(colored('.execution-arguments'))

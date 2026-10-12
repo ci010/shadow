@@ -1,5 +1,5 @@
 <template>
-  <MessagePreviewCard class="execution-card" :label="execution.label" :collapsible="!!(execution.output || execution.partialWork)"
+  <MessagePreviewCard class="execution-card" :class="{ 'execution-selected': !!execution.sessionId && selected }" :label="execution.label" :collapsible="!!(execution.output || execution.partialWork)"
     :data-execution-id="execution.sessionId" :data-execution-mode="execution.mode" @interact="emit('interact')">
     <template #heading>
       <button class="execution-inspect trace-header" :disabled="!execution.sessionId" :aria-pressed="execution.sessionId ? !!selected : undefined"
@@ -47,19 +47,24 @@ function inspect() {
 <style scoped>
 .execution-card { min-width: 0; }
 .execution-inspect { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--c-text); font: inherit; text-align: left; cursor: pointer; }
-.execution-inspect:hover:not(:disabled) { background: var(--c-bg-muted); }
-.execution-inspect[aria-pressed="true"] { background: var(--c-bg-muted); }
+.execution-selected { border-color: var(--c-selection-border); }
+.execution-inspect:hover:not(:disabled) { background: transparent; }
+.execution-inspect:hover:not(:disabled) .execution-copy strong,
+.execution-inspect[aria-pressed="true"] .execution-copy strong { color: var(--c-primary); }
 .execution-inspect:disabled { cursor: default; }
 .execution-inspect:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .execution-copy { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
 .execution-copy strong { overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
 .execution-copy > span { color: var(--c-text-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .execution-icon { flex: 0 0 16px; width: 16px; height: 16px; color: var(--c-text-secondary); }
-.execution-output { min-width: 0; overflow-wrap: anywhere; }
+.execution-output { min-width: 0; padding-block: 4px 8px; overflow-wrap: anywhere; }
+.execution-output :deep(.prose) { color: var(--c-text-body); font-size: 13px; line-height: 1.6; }
+.execution-output :deep(.prose > :first-child) { margin-top: 0; }
+.execution-output :deep(.prose > :last-child) { margin-bottom: 0; }
 .execution-partial { white-space: pre-wrap; font-size: 12px; color: var(--c-text-secondary); }
 .execution-blocked { color: var(--c-error); font-size: 12px; }
 .execution-details { font-size: 12px; color: var(--c-text-secondary); }
-.execution-details summary { cursor: pointer; }
+.execution-details summary { padding: 8px 0; cursor: pointer; }
 .execution-details summary:hover { color: var(--c-text); }
 .execution-detail-label { font-size: 12px; line-height: 24px; }
 .execution-details .trace-chevron { transition: transform 200ms cubic-bezier(.22, 1, .36, 1); }

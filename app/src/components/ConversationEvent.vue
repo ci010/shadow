@@ -81,6 +81,13 @@ function toggle(event: Event) {
 .event-response { font-size: 0.8rem; }
 .event-response .event-header { flex: 1; width: auto; padding: 0; }
 .event-response .event-fields { padding-inline: 0; }
+.event-response .event-content { padding-block: 4px 8px; }
+.event-response .event-content :deep(.prose) { color: var(--c-text-body); font-size: 13px; line-height: 1.6; }
+.event-response .event-content :deep(.prose > :first-child) { margin-top: 0; }
+.event-response .event-content :deep(.prose > :last-child) { margin-bottom: 0; }
+.event-response .event-disclosure { padding-inline: 0; }
+.event-response .event-inspect-header:is(:hover, :active, [aria-pressed="true"]) { background: transparent; }
+.event-response .event-inspect-header:hover .event-copy strong { color: var(--c-primary); }
 .event-header { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: var(--trace-row-height); padding: 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; list-style: none; cursor: pointer; }
 .event-copy { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
 .event-copy strong { color: var(--c-text); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }

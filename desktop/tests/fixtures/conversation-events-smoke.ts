@@ -73,6 +73,10 @@ export async function verifyConversationEvents(
   await execute(`window.__conversationFixture.childSessionId = 'web:peer'`)
   await frame()
   assert.equal(await execute(`document.querySelector('${completeEvent} .event-inspect-header').getAttribute('aria-pressed')`), 'true')
+  assert.equal(await execute(`getComputedStyle(document.querySelector('${completeEvent} .event-inspect-header')).backgroundColor`), 'rgba(0, 0, 0, 0)', 'Selected completion cards emphasize the border and title, not an inset filled rectangle')
+  assert.equal(await execute(`getComputedStyle(document.querySelector('${completeEvent} .message-preview-content')).minHeight`), '0px', 'Expanded completion cards do not retain five lines of empty preview padding')
+  assert.equal(await execute(`getComputedStyle(document.querySelector('${completeEvent} .event-disclosure')).paddingLeft`), '0px', 'The details disclosure aligns with the card body')
+  assert.equal(await execute(`getComputedStyle(document.querySelector('${completeEvent} .event-content .prose')).fontSize`), '13px', 'Event output uses compact card typography')
   await execute(`window.__conversationFixture.childSessionId = null`)
   for (const selector of [startEvent, externalEvent]) {
     await execute(`document.querySelector('${selector}').open = true; document.querySelector('${selector} .event-metadata').open = true`)

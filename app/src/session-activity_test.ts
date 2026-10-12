@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { displayedSessionStages, isWorkingStage, prominentWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, sessionActivity, shouldRefreshReadonlyHistory } from './session-activity.ts'
+import { displayedSessionStages, isAnimatingStage, isWorkingStage, prominentWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, sessionActivity, shouldRefreshReadonlyHistory } from './session-activity.ts'
 
 test('sidebar groups prioritize yields over active work without confusing blocking calls with requests for a reply', () => {
   assert.equal(prominentWorkingStage(['llm', 'waiting-for-call', 'waiting']), 'waiting')
@@ -83,4 +83,11 @@ test('waiting retains attention but refreshes readonly history only on stage cha
   assert.equal(shouldRefreshReadonlyHistory('idle', 'idle', 5000), true)
   assert.equal(shouldRefreshReadonlyHistory('llm', 'llm', 1500), true)
   assert.equal(shouldRefreshReadonlyHistory('tool', 'tool', 1500), true)
+})
+
+test('working animations distinguish computation from waiting and terminal states', () => {
+  for (const stage of ['llm', 'tool', 'running']) assert.equal(isAnimatingStage(stage), true)
+  for (const stage of ['waiting', 'waiting-for-call', 'pending', 'idle', 'inactive', 'completed', 'failed', 'cancelled', undefined, null]) {
+    assert.equal(isAnimatingStage(stage), false)
+  }
 })

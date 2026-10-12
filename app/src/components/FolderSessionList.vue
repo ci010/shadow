@@ -26,6 +26,7 @@
         <SessionActivity v-if="activityStage(session) || delegatedLabel(session)" :stage="activityStage(session)" :subagents="delegatedActivity(session)" compact icon-only status-icons />
         <span v-else :class="session.isDirectChat ? 'i-lucide-message-square' : 'i-lucide-bot'" />
       </template>
+      <template #meta><WorkingWave v-if="isAnimating(session)" class="session-working-wave" /></template>
       <template #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
       <template v-if="showInfo" #info="{ close }">
         <div class="session-info">
@@ -57,11 +58,12 @@ import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import { sessionNavigationParent, visibleSessions, type SidebarSession } from '../folders-sidebar.ts'
 import SessionActivity from './SessionActivity.vue'
+import WorkingWave from './WorkingWave.vue'
 import TreeRow from './TreeRow.vue'
 import HoverInfo from './HoverInfo.vue'
 import CopyableId from './CopyableId.vue'
 import { rootSessionFamilies } from '../folder-rail.ts'
-import { isWorkingStage, prominentWorkingStage } from '../session-activity.ts'
+import { isAnimatingStage, isWorkingStage, prominentWorkingStage } from '../session-activity.ts'
 import { subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 const props = withDefaults(defineProps<{
   sessions: SidebarSession[]
@@ -92,10 +94,15 @@ function delegatedActivity(session: SidebarSession) {
   return summarizeSubagents(members.flatMap(item => props.executionsByOwner?.get(item.sessionId) ?? []), props.stages)
 }
 function delegatedLabel(session: SidebarSession) { return subagentActivityLabel(delegatedActivity(session)) }
+function isAnimating(session: SidebarSession) {
+  const members = props.rail ? family(session) : [session]
+  return members.some(item => isAnimatingStage(props.stages[item.sessionId])) || delegatedActivity(session).running > 0
+}
 function isWorking(session: SidebarSession) { return isWorkingStage(activityStage(session)) || delegatedActivity(session).running > 0 }
 </script>
 
 <style scoped>
+.session-working-wave { color: var(--c-text-secondary); }
 .folder-session-list { list-style: none; padding: 0; margin: 0; }
 .folder-session-row.needs-reply { box-shadow: inset 3px 0 var(--c-warn); background: var(--c-warn-bg); }
 .folder-session-row.needs-reply.active { background: var(--c-selection-bg); }
