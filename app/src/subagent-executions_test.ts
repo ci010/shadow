@@ -223,3 +223,17 @@ test('mode surfaces compile without replacing existing composer, hidden preview 
     if (filename === 'SessionActivity.vue') assert.match(source, /activity\.working && !isWaitingStage\(activity\.kind\)/)
   }
 })
+
+
+test('composer loading uses three scaling squares rather than a spinner', async () => {
+  const source = await readFile(new URL('./components/WorkingWave.vue', import.meta.url), 'utf8')
+  assert.match(source, /<i \/><i \/><i \/>/)
+  assert.match(source, /width: 6px; height: 6px/)
+  assert.match(source, /transform: scale\(/)
+  assert.doesNotMatch(source, /rotate\(|scaleY\(/)
+  assert.match(source, /prefers-reduced-motion: reduce/)
+  const chat = await readFile(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
+  assert.match(chat, /sessionWorking \|\| activeSubagents.length/)
+  assert.match(chat, /subagentActivityLabel\(activeSubagentActivity\)/)
+  assert.match(chat, /<WorkingWave v-if="composerWorking"/)
+})
