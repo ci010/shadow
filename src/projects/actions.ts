@@ -30,7 +30,7 @@ export class ProjectActions {
   #launches = new Set<Promise<ActionRun>>()
   #starting = 0
   readonly filePath: string
-  constructor(home: string, private folders: FolderRegistry, private processes = new ProcessManager()) {
+  constructor(home: string, private folders: FolderRegistry, private processes = new ProcessManager(), private localExecutor = true) {
     this.filePath = join(home, 'user-actions.v1.json')
   }
   async init() {
@@ -120,6 +120,7 @@ export class ProjectActions {
     return pending
   }
   async #start(id: string): Promise<ActionRun> {
+    if (!this.localExecutor) throw new FolderError('local_executor_disabled', 'Main local executor is disabled. Local Quick Actions cannot run; no Main or remote fallback is available.', 409)
     if (this.#closing) throw new FolderError('actions_stopping', 'Project is shutting down.', 503)
     const action = structuredClone(this.#actions.find(a => a.id === id))
     if (!action) throw new FolderError('action_not_found', 'Action not found.', 404)

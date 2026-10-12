@@ -5,7 +5,6 @@ export type MainWizardStep =
   | 'choose-data-directory'
   | 'initialize-main'
   | 'configure-provider'
-  | 'choose-local-capabilities'
   | 'launch-main'
   | 'complete'
 
@@ -31,6 +30,8 @@ export interface UnselectedWizardState extends WizardStateBase {
 export interface MainWizardState extends WizardStateBase {
   readonly mode: 'main'
   readonly step: MainWizardStep
+  /** Absent only in setup state written before role-level execution choice. */
+  readonly localExecutor?: boolean
 }
 
 export interface ChildWizardState extends WizardStateBase {
@@ -44,11 +45,10 @@ export type WizardState =
   | ChildWizardState
 
 export type WizardEvent =
-  | { readonly type: 'select-role'; readonly mode: InstallationMode }
+  | { readonly type: 'select-role'; readonly mode: InstallationMode; readonly localExecutor?: boolean }
   | { readonly type: 'data-directory-selected' }
   | { readonly type: 'main-initialized' }
   | { readonly type: 'provider-configured' }
-  | { readonly type: 'local-capabilities-selected' }
   | { readonly type: 'pairing-offer-entered' }
   | { readonly type: 'fingerprint-verified' }
   | { readonly type: 'device-named' }
@@ -59,15 +59,13 @@ const MAIN_TRANSITIONS: Readonly<Partial<Record<MainWizardStep, WizardEvent['typ
   'choose-data-directory': 'data-directory-selected',
   'initialize-main': 'main-initialized',
   'configure-provider': 'provider-configured',
-  'choose-local-capabilities': 'local-capabilities-selected',
   'launch-main': 'sidecar-ready',
 }
 
 const MAIN_NEXT: Readonly<Partial<Record<MainWizardStep, MainWizardStep>>> = {
   'choose-data-directory': 'initialize-main',
   'initialize-main': 'configure-provider',
-  'configure-provider': 'choose-local-capabilities',
-  'choose-local-capabilities': 'launch-main',
+  'configure-provider': 'launch-main',
   'launch-main': 'complete',
 }
 
@@ -91,7 +89,6 @@ const MAIN_STEPS = new Set<MainWizardStep>([
   'choose-data-directory',
   'initialize-main',
   'configure-provider',
-  'choose-local-capabilities',
   'launch-main',
   'complete',
 ])
@@ -124,6 +121,7 @@ export function transitionWizard(state: WizardState, event: WizardEvent): Wizard
       revision: state.revision + 1,
       mode: 'main',
       step: 'choose-data-directory',
+      ...(event.localExecutor === undefined ? {} : { localExecutor: event.localExecutor }),
     }
     return {
       version: 1,
@@ -155,7 +153,7 @@ export function parseWizardState(value: unknown): WizardState {
 
   const candidate = value as Record<string, unknown>
   const fields = Object.keys(candidate)
-  if (fields.some((field) => !['version', 'revision', 'mode', 'step'].includes(field))) {
+  if (fields.some((field) => !['version', 'revision', 'mode', 'step', 'localExecutor'].includes(field))) {
     throw new TypeError('Wizard state contains unknown fields')
   }
   if (candidate.version !== 1) throw new TypeError('Unsupported wizard state version')
@@ -165,6 +163,13 @@ export function parseWizardState(value: unknown): WizardState {
 
   const mode = candidate.mode
   const step = candidate.step
+  if ('localExecutor' in candidate && (mode !== 'main' || typeof candidate.localExecutor !== 'boolean')) {
+    throw new TypeError('localExecutor must be a boolean for Main setup only')
+  }
+  // Resume old installations at the next step without repeating a removed screen.
+  if (mode === 'main' && step === 'choose-local-capabilities') {
+    return { ...candidate, step: 'launch-main' } as unknown as MainWizardState
+  }
   if (mode === null && step === 'choose-role') return candidate as unknown as UnselectedWizardState
   if (mode === 'main' && typeof step === 'string' && MAIN_STEPS.has(step as MainWizardStep)) {
     return candidate as unknown as MainWizardState
@@ -173,4 +178,44 @@ export function parseWizardState(value: unknown): WizardState {
     return candidate as unknown as ChildWizardState
   }
   throw new TypeError('Wizard state mode and step are incompatible')
+}
+export function parseWizardEvent(value: unknown): WizardEvent {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Wizard event must be an object')
+  }
+  const candidate = value as Record<string, unknown>
+  const allowedFields = candidate.type === 'select-role'
+    ? ['type', 'mode', 'localExecutor']
+    : ['type']
+  if (Object.keys(candidate).some((field) => !allowedFields.includes(field))) {
+    throw new TypeError('Wizard event contains unknown fields')
+  }
+  const eventTypes = new Set<WizardEvent['type']>([
+    'select-role',
+    'data-directory-selected',
+    'main-initialized',
+    'provider-configured',
+    'pairing-offer-entered',
+    'fingerprint-verified',
+    'device-named',
+    'child-capabilities-selected',
+    'sidecar-ready',
+  ])
+  if (
+    typeof candidate.type !== 'string' ||
+    !eventTypes.has(candidate.type as WizardEvent['type'])
+  ) {
+    throw new TypeError('Unknown wizard event type')
+  }
+  if (candidate.type === 'select-role') {
+    if (candidate.mode !== 'main' && candidate.mode !== 'child') {
+      throw new TypeError('select-role requires mode main or child')
+    }
+    if ('localExecutor' in candidate && (candidate.mode !== 'main' || typeof candidate.localExecutor !== 'boolean')) {
+      throw new TypeError('localExecutor must be a boolean for Main setup only')
+    }
+    return { type: candidate.type, mode: candidate.mode,
+      ...(candidate.localExecutor === undefined ? {} : { localExecutor: candidate.localExecutor as boolean }) }
+  }
+  return { type: candidate.type } as WizardEvent
 }

@@ -227,8 +227,9 @@ export class BootstrapCoordinator {
         return { ok: false, code: 'invalid-state', state: current }
       }
       try {
-        await this.launchProfiles.save({ version: 1, role: 'main', ...options })
-        const status = await this.runtimeHost.start({ role: 'main', ...options })
+        const launchOptions = { ...options, localExecutor: current.localExecutor ?? options.localExecutor }
+        await this.launchProfiles.save({ version: 1, role: 'main', ...launchOptions })
+        const status = await this.runtimeHost.start({ role: 'main', ...launchOptions })
         if (status.phase !== 'ready') return { ok: false, code: 'launch-failed', state: current }
         const next = transitionWizard(current, { type: 'sidecar-ready' })
         await this.storage.save(next)

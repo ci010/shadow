@@ -15,6 +15,8 @@ import { isVirtualPath } from '../vfs/virtual-fs.ts'
 import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from './ask-policy.ts'
 type Tool = TypedTool<ToolResult>
 
+export type ToolExecutionPolicy = (tool: Tool, args: Record<string, unknown>, context: ExecutionContext) => string | undefined
+
 const CALL_DENIED_TOOLS = new Set(['subagent', 'ask', 'reply', 'message', 'cancel', 'work', 'event_subscribe', 'event_source', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'initiative', 'skill_read', 'skill_save'])
 
 const CHAT_DISPLAY_MAX_LENGTH = 200
@@ -34,6 +36,9 @@ export function toolInvocationContract(tools: Tool[]): string {
  * Central registry of all available tools.
  */
 export class Tools {
+  private executionPolicy?: ToolExecutionPolicy
+  setExecutionPolicy(policy: ToolExecutionPolicy): void { this.executionPolicy = policy }
+  getExecutionPolicy(): ToolExecutionPolicy | undefined { return this.executionPolicy }
   private workGuard?: WorkToolGuard
   setWorkGuard(guard: WorkToolGuard): void { this.workGuard = guard }
   getWorkGuard(): WorkToolGuard | undefined { return this.workGuard }
@@ -114,6 +119,8 @@ export class Tools {
       s?.setStatus({ code: 2, message: 'Tool not found' })
       return `Error: unknown tool "${name}"`
     }
+    const executionDenied = (context.tools?.getExecutionPolicy() ?? this.getExecutionPolicy())?.(tool, args, context)
+    if (executionDenied) return executionDenied
     if (context.remoteWorkdir && tool.supportsRemoteWorkdir !== true) {
       return `Error: tool "${name}" does not support remote workdirs`
     }
@@ -277,6 +284,7 @@ export class Tools {
  * Lookup order: dynamic layer first, then base registry.
  */
 export class SessionTools extends Tools {
+  override getExecutionPolicy(): ToolExecutionPolicy | undefined { return super.getExecutionPolicy() ?? this.base.getExecutionPolicy() }
   private askAvailable = true
 
   restrictChannelTools(channel?: string, sessionId?: string): void {
@@ -389,6 +397,8 @@ export class SessionTools extends Tools {
   createIsolated(): SessionTools {
     const tools = new SessionTools(this.base, this.workspace,
       this.allowed ? [...this.allowed] : undefined, this.blocked ? [...this.blocked] : undefined, this.allowedModules)
+    const policy = this.getExecutionPolicy()
+    if (policy) tools.setExecutionPolicy(policy)
     tools.scope = this.scope
     tools.askAvailable = this.askAvailable
     return tools
@@ -530,6 +540,8 @@ export class SessionTools extends Tools {
   /** Blocking callers retain ownership of borrowed tool resources until the child returns. */
   snapshot(): SessionTools {
     const base = new Tools(this.workspace)
+    const policy = this.getExecutionPolicy()
+    if (policy) base.setExecutionPolicy(policy)
     const guard = this.getWorkGuard()
     if (guard) base.setWorkGuard(guard)
     for (const name of this.names()) {

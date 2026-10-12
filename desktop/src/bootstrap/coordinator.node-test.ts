@@ -44,7 +44,7 @@ function mainDirectoryState(): WizardState {
 
 function mainLaunchState(): WizardState {
   let state: WizardState = mainDirectoryState()
-  for (const type of ['data-directory-selected', 'main-initialized', 'provider-configured', 'local-capabilities-selected'] as const) {
+  for (const type of ['data-directory-selected', 'main-initialized', 'provider-configured'] as const) {
     state = transitionWizard(state, { type })
   }
   return state
@@ -305,4 +305,34 @@ test('development overrides wizard and saved production ports without rewriting 
     assert.equal(profile.port, 43123)
     await resumedHost.stop()
   }
+})
+
+test('Main role preference survives setup reload, launch retry and later runtime restart', async () => {
+  const storage = new MemoryStorage(null)
+  const profiles = new MemoryLaunchProfiles()
+  let attempts = 0
+  const starts: unknown[] = []
+  const host: MainRuntimeHost = { start: async options => {
+    starts.push(options)
+    if (++attempts === 1) throw new Error('retry launch')
+    return { phase: 'ready', apiBase: 'http://127.0.0.1:43123' }
+  } }
+  let coordinator = createCoordinator(storage, host, profiles)
+  await coordinator.dispatch({ type: 'select-role', mode: 'main', localExecutor: false })
+  coordinator = createCoordinator(storage, host, profiles)
+  assert.equal((await coordinator.load() as { localExecutor?: boolean }).localExecutor, false)
+  coordinator.registerDirectorySelection('main-folder', 'C:\\test-main')
+  assert.equal((await coordinator.commitMainDirectory('main-folder')).ok, true)
+  assert.equal((await coordinator.initializeMain()).ok, true)
+  assert.equal((await coordinator.dispatch({ type: 'provider-configured' })).step, 'launch-main')
+  // Persisted selection is authoritative even if a stale renderer sends the old default.
+  assert.equal((await coordinator.launchMain({ localExecutor: true, port: 43123 })).ok, false)
+  assert.equal((await coordinator.launchMain({ localExecutor: true, port: 43123 })).ok, true)
+  assert.equal((await coordinator.ensureRuntime()).ok, true)
+  assert.deepEqual(starts, [
+    { role: 'main', localExecutor: false, port: 43123 },
+    { role: 'main', localExecutor: false, port: 43123 },
+    { version: 1, role: 'main', localExecutor: false, port: 43123 },
+  ])
+  assert.deepEqual(await profiles.load(), { version: 1, role: 'main', localExecutor: false, port: 43123 })
 })

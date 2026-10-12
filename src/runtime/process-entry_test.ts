@@ -104,6 +104,7 @@ test('Main start loads the mutable config and preserves its workspace', async ()
   assertEquals(started, {
     config: mutableConfig,
     options: {
+      localExecutor: false,
       localNodeId: 'main-node',
       configPath: '/srv/shadow/state/config/bot.config.json',
       clusterSnapshotPath: '/srv/shadow/state/cluster/registry.v1.json',
@@ -236,4 +237,14 @@ test('compiled Child argv starts Child instead of falling back to legacy Main', 
   )
   assertEquals(result.route, 'runtime')
   assertEquals(legacyCalls, 0)
+})
+
+
+test('Main start forwards explicit local executor enablement', async () => {
+  let localExecutor: boolean | undefined
+  const deps = dependencies({ version: 1, mode: 'main', dataDir: './state', localNodeId: 'main' }, {
+    startMainRuntime: (_config, options) => { localExecutor = options.localExecutor; return stoppedLifecycle },
+  })
+  await runProcessEntry([process.execPath, 'src/index.ts', 'server', 'start', '--config', 'bootstrap.json', '--local-executor'], deps)
+  assertEquals(localExecutor, true)
 })

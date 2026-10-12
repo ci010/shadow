@@ -13,7 +13,6 @@ export type MainWizardStep =
 	| 'choose-data-directory'
 	| 'initialize-main'
 	| 'configure-provider'
-	| 'choose-local-capabilities'
 	| 'launch-main'
 	| 'complete'
 
@@ -28,13 +27,12 @@ export type ChildWizardStep =
 
 export type WizardState =
 	| { readonly version: 1; readonly revision: number; readonly mode: null; readonly step: 'choose-role' }
-	| { readonly version: 1; readonly revision: number; readonly mode: 'main'; readonly step: MainWizardStep }
+	| { readonly version: 1; readonly revision: number; readonly mode: 'main'; readonly step: MainWizardStep; readonly localExecutor?: boolean }
 	| { readonly version: 1; readonly revision: number; readonly mode: 'child'; readonly step: ChildWizardStep }
 
 export type RendererWizardEvent =
-	| { readonly type: 'select-role'; readonly mode: InstallationMode }
+	| { readonly type: 'select-role'; readonly mode: InstallationMode; readonly localExecutor?: boolean }
 	| { readonly type: 'provider-configured' }
-	| { readonly type: 'local-capabilities-selected' }
 
 export type BootstrapCommandResult =
 	| { readonly ok: true; readonly state: WizardState }

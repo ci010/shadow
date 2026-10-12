@@ -5,6 +5,39 @@ to the same Node backend; Electron provides setup and native-window controls, no
 a separate agent implementation. The [architecture reference](architecture.md)
 explains the implementation and its limitations.
 
+## Desktop setup: Main or Child
+
+Choose the computer's role on the first setup page:
+
+- **Main** manages sessions, providers, workspace data and connected devices.
+  Selecting Main reveals **Also run tasks on this computer**, enabled by default.
+  The choice is saved with setup progress and reused when Main launches or
+  restarts. It is not a local-model/provider setting.
+- **Child** executes supported remote tasks for an existing Main. It does not
+  show a redundant local-executor toggle; pairing still requires explicit
+  execution consent.
+
+With local execution turned off, Main still runs the model/session loop and
+manages its data. Agent local commands, inline Node scripts, executable tool
+imports (including MCP and browser tools), and local Quick Action runs are
+blocked. Existing Quick Action definitions are retained. Supported remote
+execution requires an explicitly selected Child workdir/capability; merely
+connecting a Child does not automatically relocate a local session or make
+every tool remote-capable. Unsupported tools report an error instead of
+silently executing on Main. Remote inline Node scripts and remote leaf-call
+execution remain unsupported.
+
+This is a task-execution capability setting, **not an OS sandbox** or a way to
+run the model on Child. Main retains file/network operations, installed
+fixed-purpose search helpers, and provider/auth/channel infrastructure. Owner
+configuration changes may still perform MCP discovery; agent-initiated virtual
+MCP configuration writes are blocked before executable discovery.
+
+There is no separate local-capabilities page. After choosing Main, setup has
+four steps: data directory, initialization, provider information, and launch.
+An unfinished older setup resumes past the removed page and retains its saved
+execution preference when available.
+
 ## Language
 
 Choose **English**, **Simplified Chinese**, or **System language** using the

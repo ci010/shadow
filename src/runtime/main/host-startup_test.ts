@@ -115,3 +115,27 @@ test('a failed Project remains explicitly unavailable without taking the shared 
     } finally { await runtime.shutdown() }
   })
 })
+
+
+test('host propagates coordinator mode to every Project and stops advertising Main shell without affecting readiness', async () => {
+  for (const localExecutor of [undefined, true, false]) await withTempWorkspace(async root => {
+    const home = join(root, 'home')
+    const catalog = new ProjectCatalog(`${home}.projects`)
+    await catalog.init()
+    await catalog.create('Second Project')
+    const config = ConfigSchema.parse({ agent: { workspace: home, model: 'fixture@openai' },
+      providers: { openai: { apiKey: 'synthetic', baseUrl: 'http://127.0.0.1:1' } }, channels: {}, mcp: {} })
+    const seen = new Set<string>()
+    const runtime = await startProjectHost(config, { localExecutor, gateway: { host: '127.0.0.1', port: 0 } }, async (_config, dependencies) => {
+      assert.equal(dependencies.localExecutor, localExecutor !== false)
+      const main = dependencies.mainCluster.getNodeInventory().nodes.find(node => node.role === 'main')!
+      assert(main)
+      assert.equal(main.capabilities.some(capability => capability.kind === 'shell'), localExecutor !== false)
+      seen.add(dependencies.project.id)
+      return { app: new Hono(), folders: new FolderRegistry(dependencies.home), ready: Promise.resolve(),
+        async shutdown() {}, updateConfig() {} }
+    })
+    try { await runtime.ready; assert.equal(seen.size, 2) }
+    finally { await runtime.shutdown() }
+  })
+})

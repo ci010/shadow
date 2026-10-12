@@ -1,4 +1,5 @@
 import { basename, isAbsolute, relative, resolve } from 'node:path'
+import { LOCAL_EXECUTOR_DISABLED } from '../execution/coordinator-policy.ts'
 import { readFile } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
 import { McpToolAdapter, mcpToolContract } from '../mcp/adapter.ts'
@@ -238,6 +239,7 @@ export class ImportTool implements Tool {
     private chromeManager?: ChromeManager,
     private getSkillDirectory: SkillDirectoryResolver = () => undefined,
     private mcpIndex = new McpToolIndex(workspace),
+    private canLoad?: (entry: LoadableEntry) => boolean,
   ) {
     this.builtins = new Map(loadable)
     this.projectId = this.scope?.projectId ?? chromeManager?.projectId
@@ -649,6 +651,7 @@ export class ImportTool implements Tool {
 
     // JSON MCP config file
     if (path.endsWith('.json')) {
+      if (this.canLoad) return `Error: ${LOCAL_EXECUTOR_DISABLED} MCP configuration imports are unavailable.`
       return await this.loadFromJsonConfig(path, tools, extraArgs, args.server, options)
     }
 
@@ -748,6 +751,8 @@ export class ImportTool implements Tool {
         : ' No tools are currently available to load.'
       return `Unknown tool "${name}".${hint}`
     }
+
+    if (this.canLoad && !this.canLoad(entry)) return `Error: ${LOCAL_EXECUTOR_DISABLED} Source "${name}" cannot be initialized.`
 
     if (isMcpLoadable(entry)) {
       if (name === 'chrome-devtools' && this.sessionBrowsersEnabled()) {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -35,4 +36,19 @@ test('atomic file storage rejects invalid persisted state', async (context) => {
     writeFile(storage.filePath, '{"version":2}', 'utf8')
   )
   await assert.rejects(storage.load(), /Unsupported wizard state version/)
+})
+test('durable Main execution preference and legacy capability-step migration survive storage reload', async context => {
+  const scratch = fileURLToPath(new URL('../../../.tmp/', import.meta.url))
+  await mkdir(scratch, { recursive: true })
+  const directory = await mkdtemp(join(scratch, 'wizard-state-'))
+  context.after(() => rm(directory, { recursive: true, force: true }))
+  const filePath = bootstrapStatePath(directory)
+  for (const localExecutor of [true, false]) {
+    const state = transitionWizard(createWizardState(), { type: 'select-role', mode: 'main', localExecutor })
+    await new AtomicFileBootstrapStateStorage(filePath).save(state)
+    assert.deepEqual(await new AtomicFileBootstrapStateStorage(filePath).load(), state)
+  }
+  const legacy = { version: 1, revision: 4, mode: 'main', step: 'choose-local-capabilities' }
+  await writeFile(filePath, JSON.stringify(legacy))
+  assert.deepEqual(await new AtomicFileBootstrapStateStorage(filePath).load(), { ...legacy, step: 'launch-main' })
 })

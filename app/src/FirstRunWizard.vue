@@ -50,6 +50,10 @@
 							<span><strong>{{ t('Child') }}</strong><small>{{ t('Runs remote tasks for an existing Main. You review execution access before pairing.') }}</small></span>
 						</button>
 					</div>
+					<label v-if="selectedRole === 'main'" class="toggle-row role-capability">
+						<span><strong>{{ t('Also run tasks on this computer') }}</strong><small id="local-executor-help">{{ t('When off, execution tasks require a connected Child device. Main still manages your sessions and data.') }}</small></span>
+						<input v-model="localExecutor" type="checkbox" role="switch" :disabled="busy" :aria-label="t('Also run tasks on this computer')" aria-describedby="local-executor-help">
+					</label>
 					<div class="actions">
 						<button class="primary-button" :disabled="busy || !selectedRole" @click="chooseRole">
 							{{ busy ? t('Saving…') : selectedRole === 'child' ? t('Continue as Child') : t('Continue as Main') }}
@@ -141,25 +145,12 @@
 					</div>
 				</div>
 
-				<div v-else-if="state.step === 'choose-local-capabilities'" class="setup-content">
-					<p class="lead">{{ t('Choose whether this computer may execute approved local tools.') }}</p>
-					<label class="toggle-row">
-						<span><strong>{{ t('Local executor') }}</strong><small>{{ t('Run approved commands and tools on this computer.') }}</small></span>
-						<input v-model="localExecutor" type="checkbox" role="switch" :disabled="busy">
-					</label>
-					<div class="actions">
-						<button class="primary-button" :disabled="busy" @click="saveCapabilities">
-							{{ busy ? t('Saving…') : t('Continue') }}
-						</button>
-					</div>
-				</div>
-
 				<div v-else-if="state.step === 'launch-main'" class="setup-content">
 					<p class="lead">{{ t('Launch Main, then connect your model provider in the app.') }}</p>
 					<div class="launch-summary">
 						<div><span>{{ t('Role') }}</span><strong>{{ t('Main') }}</strong></div>
 						<div><span>{{ t('Provider setup') }}</span><strong>{{ t('After launch') }}</strong></div>
-						<div><span>{{ t('Local executor') }}</span><strong>{{ localExecutor ? t('Enabled') : t('Disabled') }}</strong></div>
+						<div><span>{{ t('Also run tasks on this computer') }}</span><strong>{{ localExecutor ? t('Enabled') : t('Disabled') }}</strong></div>
 					</div>
 					<div class="actions">
 						<button class="primary-button" :disabled="busy" @click="launchMain">
@@ -216,7 +207,9 @@ const state = ref(props.initialState)
 const selectedRole = ref<'main' | 'child' | null>(null)
 const directorySelection = ref<NativeDirectorySelection | null>(null)
 const directoryPath = ref('')
-const localExecutor = ref(loadLocalExecutorChoice())
+const localExecutor = ref(props.initialState?.mode === 'main'
+	? props.initialState.localExecutor ?? loadLocalExecutorChoice()
+	: true)
 const busy = ref(false)
 const actionError = ref('')
 const executionConsent = ref(false)
@@ -239,7 +232,7 @@ function togglePairingMode() {
 	actionError.value = ''
 }
 
-const mainSteps = ['choose-data-directory', 'initialize-main', 'configure-provider', 'choose-local-capabilities', 'launch-main'] as const
+const mainSteps = ['choose-data-directory', 'initialize-main', 'configure-provider', 'launch-main'] as const
 const showRoleChoice = computed(() => state.value?.mode === null)
 const currentStepIndex = computed(() => state.value?.mode === 'main' ? mainSteps.indexOf(state.value.step as typeof mainSteps[number]) : -1)
 const progressLabel = computed(() => t('Step {value1} of {length}', { value1: Math.max(1, currentStepIndex.value + 1), length: mainSteps.length }))
@@ -252,7 +245,6 @@ const heading = computed(() => {
 		'choose-data-directory': t('Choose Main directory'),
 		'initialize-main': t('Initialize Main'),
 		'configure-provider': t('Connect a provider after launch'),
-		'choose-local-capabilities': t('Local capabilities'),
 		'launch-main': t('Ready to launch'),
 	}
 	return titles[state.value?.step ?? ''] ?? t('Set up Main')
@@ -275,7 +267,9 @@ async function run(
 
 async function chooseRole(): Promise<void> {
 	if (!selectedRole.value) return
-	await run(() => props.api.bootstrap.dispatch({ type: 'select-role', mode: selectedRole.value! }))
+	await run(() => props.api.bootstrap.dispatch(selectedRole.value === 'main'
+		? { type: 'select-role', mode: 'main', localExecutor: localExecutor.value }
+		: { type: 'select-role', mode: 'child' }))
 	await loadDirectory()
 	await loadChild()
 }
@@ -375,18 +369,6 @@ async function configureProvider(): Promise<void> {
 	await run(() => props.api.bootstrap.dispatch({ type: 'provider-configured' }))
 }
 
-async function saveCapabilities(): Promise<void> {
-	await run(async () => {
-		const next = await props.api.bootstrap.dispatch({ type: 'local-capabilities-selected' })
-		try {
-			window.localStorage.setItem(LOCAL_EXECUTOR_KEY, String(localExecutor.value))
-		} catch {
-			// The current launch can still use the in-memory choice.
-		}
-		return next
-	})
-}
-
 async function launchMain(): Promise<void> {
 	await run(async () => {
 		const result = await props.api.bootstrap.launchMain({ localExecutor: localExecutor.value, port: MAIN_LAUNCH_PORT })
@@ -457,6 +439,7 @@ button { font: inherit; }
 input[type="checkbox"] { accent-color: var(--accent); }
 .toggle-row span strong, .toggle-row span small { display: block; }
 .toggle-row span small { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.role-capability { margin-top: 16px; padding-block: 12px; }
 .toggle-row input[role="switch"] { width: 38px; height: 20px; }
 .launch-summary { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: var(--radius-surface); overflow: hidden; }
 .launch-summary div { display: grid; gap: 6px; padding: 14px 16px; border-right: 1px solid var(--line); font-size: 12px; }

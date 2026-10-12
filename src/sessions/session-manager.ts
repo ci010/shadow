@@ -300,6 +300,8 @@ export class SessionManager {
     if (this.stopped || !this.deps.projectId) throw new Error('Authoring evaluation requires a running Project session manager.')
     const llm = this.deps.getLlmRuntimeConfig?.()
     if (!llm) throw new Error('Authoring evaluation requires the configured LLM runtime.')
+    const executionPolicy = this.deps.tools.getExecutionPolicy()
+    if (executionPolicy) input.tools.setExecutionPolicy(executionPolicy)
     return evaluateAuthoringScenario({
       ...input, workspace: this.workspace, projectId: this.deps.projectId,
       provider: this.deps.provider, llm: { ...llm, ...input.llmOverrides },
@@ -328,6 +330,8 @@ export class SessionManager {
           learning: { batchId: input.batchId, pipeline: input.pipeline } },
       }
       const tools = input.tools(state)
+      const executionPolicy = this.deps.tools.getExecutionPolicy()
+      if (executionPolicy) tools.setExecutionPolicy(executionPolicy)
       let persisted = false
       try {
         input.signal.throwIfAborted()
@@ -2854,6 +2858,8 @@ ${JSON.stringify(request)}`,
       resolvedAgentType.allowedModules,
     )
     if (!conversationPolicy && !this.calls.has(sessionId)) sessionTools.setExecutionScope(state.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
+    const executionPolicy = this.deps.tools.getExecutionPolicy()
+    if (executionPolicy) sessionTools.setExecutionPolicy(executionPolicy)
     sessionTools.restrictChannelTools(msg.channel, sessionId)
 
     // Import tools specified by parent (e.g., subagent preload_tools param)

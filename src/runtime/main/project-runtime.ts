@@ -173,6 +173,7 @@ import { DownloadTool } from '../../tools/download.ts'
 import { createPromptCaptureStore } from '../../sessions/prompt-capture.ts'
 import { createA2aRuntime } from '../../a2a/runtime.ts'
 import { isDeepStrictEqual } from 'node:util'
+import { CoordinatorExecutionPolicy } from '../../execution/coordinator-policy.ts'
 
 function resolvePrimaryProviderName(modelSpec: string): string {
   const { model, provider } = parseModelSpec(modelSpec)
@@ -269,6 +270,8 @@ export async function createProjectRuntime(
   // ── Build tool registry ─────────────────────────────────────────────
   const vfs = new VirtualFs()
   const tools = new Tools(workspace)
+  const coordinator = dependencies.localExecutor === false ? new CoordinatorExecutionPolicy() : undefined
+  if (coordinator) tools.setExecutionPolicy(coordinator.check)
   tools.register(new ReadTool(workspace, vfs))
   tools.register(
     new WriteTool(
@@ -336,7 +339,7 @@ export async function createProjectRuntime(
 
   const commandHandler = new CommandHandlerManager()
   const processManager = new ProcessManager()
-  const userActions = new ProjectActions(workspace, folderRegistry, processManager)
+  const userActions = new ProjectActions(workspace, folderRegistry, processManager, dependencies.localExecutor !== false)
   await userActions.init()
   cleanup.push(() => userActions.shutdown())
   commandHandler.register(
@@ -393,8 +396,8 @@ export async function createProjectRuntime(
   await knowledgeMaintenance.init()
   cleanup.push(() => knowledgeMaintenance.stop())
   registerKnowledgeRoutes(app, { workspace, skills, authorize: dependencies.authorize, maintenance: knowledgeMaintenance })
-  const importTool = new ImportTool(loadable, workspace, chromeManager, name => skills.getSkillDirectory(name))
-  tools.register(new SearchTool(workspace, webSearchTool, vfs))
+  const importTool = new ImportTool(loadable, workspace, chromeManager, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport)
+  tools.register(new SearchTool(workspace, webSearchTool, vfs, dependencies.localExecutor !== false))
   tools.register(new InvokeTool(importTool))
 
   // Purge stale tool-result temp files from previous runs
@@ -543,7 +546,10 @@ export async function createProjectRuntime(
   cleanup.push(() => sessions.stop())
   const a2a = createA2aRuntime({ projectId: project.id, workspace, config: config.a2a, app, sessions, bus, agentTypes })
   cleanup.push(() => a2a.close())
-  for (const tool of a2a.tools) importTool.registerBuiltin(tool.name, tool)
+  for (const tool of a2a.tools) {
+    importTool.registerBuiltin(tool.name, tool)
+    coordinator?.allow(tool) // HTTP delegation, not Main host execution.
+  }
   deliverInput = (sessionId, input) => sessions.deliver(sessionId, input)
   const ioLocations = (sessionId: string) => {
     const state = sessions.getSessionState(sessionId)
@@ -1216,6 +1222,22 @@ export async function createProjectRuntime(
   tools.register(
     new SubagentTool(bus, sessions, agentTypes, channels, a2a.sessions),
   )
+
+  // Fail closed for new/custom tools. These exact built-in objects provide data and
+  // coordination, not arbitrary executable loading. File/search helpers remain Main
+  // infrastructure; this profile is deliberately not a filesystem or network sandbox.
+  if (coordinator) {
+    for (const name of [
+      'read', 'write', 'plan_write', 'view_edit', 'search', 'invoke_tool',
+      'sql', 'session', 'work', 'message', 'ask', 'reply', 'cancel', 'continuation', 'subagent',
+    ]) {
+      const tool = tools.get(name)
+      if (tool) coordinator.allow(tool)
+    }
+    coordinator.allowRemoteShell(tools.get('exec')!)
+    context.register({ name: 'coordinator-execution', getPromptSection: () =>
+      'Main local executor is disabled. Main provides inference, coordination and file storage. Host executable tools, scripts, MCP and browser execution are unavailable on Main. Use an explicitly selected online Child workdir for supported remote shell/filesystem operations; never fall back to Main. Remote Node scripts and remote leaf-call exec are not supported.' })
+  }
 
   // ── Graceful shutdown ─────────────────────────────────────────────
   let shutdownPromise: Promise<void> | undefined

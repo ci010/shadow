@@ -31,7 +31,6 @@ test('first-run remains visible at every resumable Main step', () => {
 		'choose-data-directory',
 		'initialize-main',
 		'configure-provider',
-		'choose-local-capabilities',
 		'launch-main',
 	] as const) {
 		assertEquals(shouldShowFirstRun(mainState(step)), true)

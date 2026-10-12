@@ -3309,5 +3309,7 @@
   "Unsupported script names (not imported):": "Unsupported script names (not imported):",
   "Checking model provider readiness...": "Checking model provider readiness...",
   "Set a base URL in provider settings before sending.": "Set a base URL in provider settings before sending.",
-  "Model provider is not ready": "Model provider is not ready"
+  "Model provider is not ready": "Model provider is not ready",
+  "Also run tasks on this computer": "Also run tasks on this computer",
+  "When off, execution tasks require a connected Child device. Main still manages your sessions and data.": "When off, execution tasks require a connected Child device. Main still manages your sessions and data."
 }

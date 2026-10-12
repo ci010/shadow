@@ -169,6 +169,22 @@ Startup plans contain validated arguments and normalized configuration, not
 descriptive service-name catalogs. Actual services are assembled by the Main
 and production Child factories.
 
+For `server start`, `--local-executor` enables Main task execution; without it,
+the existing parsed `false` value now reaches all Project runtimes. Electron
+persists the Main-only role-page choice (enabled by default) in setup state and
+the launch profile. Legacy direct runtime callers that omit `localExecutor`
+retain enabled behavior. The [coordinator execution policy](../src/execution/coordinator-policy.ts)
+enforces an identity-based allowlist through base and session tool registries,
+including cloned registries, plus an importer gate before executable tool
+initialization. Explicit Child shell/filesystem routes remain available; local
+shell/Node, unreviewed executable tools, and Quick Action runs fail closed, with
+no automatic remote placement or Main fallback. Main does not advertise a shell
+capability when disabled. This is not process isolation: Main storage, network
+operations, installed search helpers, provider/auth/channel infrastructure and
+owner-driven configuration discovery remain active. See
+[desktop setup](using-shadow.md#desktop-setup-main-or-child) for user-facing
+behavior and remote-execution limitations.
+
 The Child lifecycle starts credential validation, local executor lifecycle
 management, the Main connector, and an optional authenticated loopback control
 listener in that order; shutdown and partial-start rollback reverse the

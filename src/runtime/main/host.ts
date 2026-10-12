@@ -106,7 +106,7 @@ export async function startProjectHost(
   const mainCluster = await startup.measure('cluster', () => createMainCluster({
     authorizeInventory: authorize,
     localNodeInventory: () => mainLocalNodeInventory({
-      localNodeId: options.localNodeId ?? 'local', implementationVersion: '0.1.0', shellAvailable: true,
+      localNodeId: options.localNodeId ?? 'local', implementationVersion: '0.1.0', shellAvailable: options.localExecutor !== false,
       folders: {
         list: () => catalog.folders(),
         lookupWorkdir: ref => {
@@ -181,6 +181,7 @@ export async function startProjectHost(
         runtime = await scope.run(() => factory(projectConfig, {
           project, home: paths.home, scope, catalog, configStore: store,
           mainCluster, copilotAuth, chromePortAllocator, authorize, realtimeHub,
+          localExecutor: options.localExecutor !== false,
         }))
         await runtime.ready
         if (stopping) {

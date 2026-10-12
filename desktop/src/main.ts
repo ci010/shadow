@@ -60,7 +60,7 @@ import {
   registerRuntimeHostQuitLifecycle,
 } from './sidecar/runtime-host.js'
 import { installRuntimeRequestAuthorization, type RuntimeAuthorization } from './runtime-authorization.js'
-import { type WizardEvent } from './wizard/state-machine.js'
+import { parseWizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { desktopIconPath, desktopTrayIconPath, framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
 import { installTrayMenu } from './tray.js'
@@ -260,44 +260,6 @@ export function createMainWindow(target: RendererTarget, showOnReady = true): Br
   enforceNavigationPolicy(window.webContents, target)
   window.once('ready-to-show', () => { if (showOnReady) window.show() })
   return window
-}
-
-function parseWizardEvent(value: unknown): WizardEvent {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new TypeError('Wizard event must be an object')
-  }
-  const candidate = value as Record<string, unknown>
-  const allowedFields = candidate.type === 'select-role'
-    ? ['type', 'mode']
-    : ['type']
-  if (Object.keys(candidate).some((field) => !allowedFields.includes(field))) {
-    throw new TypeError('Wizard event contains unknown fields')
-  }
-  const eventTypes = new Set<WizardEvent['type']>([
-    'select-role',
-    'data-directory-selected',
-    'main-initialized',
-    'provider-configured',
-    'local-capabilities-selected',
-    'pairing-offer-entered',
-    'fingerprint-verified',
-    'device-named',
-    'child-capabilities-selected',
-    'sidecar-ready',
-  ])
-  if (
-    typeof candidate.type !== 'string' ||
-    !eventTypes.has(candidate.type as WizardEvent['type'])
-  ) {
-    throw new TypeError('Unknown wizard event type')
-  }
-  if (candidate.type === 'select-role') {
-    if (candidate.mode !== 'main' && candidate.mode !== 'child') {
-      throw new TypeError('select-role requires mode main or child')
-    }
-    return { type: candidate.type, mode: candidate.mode }
-  }
-  return { type: candidate.type } as WizardEvent
 }
 
 async function start(): Promise<void> {

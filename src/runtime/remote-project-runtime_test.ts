@@ -19,7 +19,7 @@ import { folderFixture } from '../folders/test-fixtures.ts'
 import { CopilotAuthenticator } from '../providers/copilot.ts'
 import { ChromePortAllocator } from '../browser/chrome-manager.ts'
 
-test('production project composition creates remote folders and sessions with opaque refs', { timeout: 60000 }, async t => {
+for (const localExecutor of [undefined, false]) test(`production project composition creates remote folders and sessions with opaque refs (localExecutor=${localExecutor})`, { timeout: 60000 }, async t => {
   const { root, workspace, folders } = await folderFixture(t)
   const home = join(workspace, 'org-home')
   await mkdir(home)
@@ -48,7 +48,7 @@ test('production project composition creates remote folders and sessions with op
   const effective = await configStore.init(config)
   let scope = createProjectScope('default')
   const startRuntime = () => scope.run(() => createProjectRuntime(effective, {
-    project, home, scope, catalog, configStore, mainCluster: cluster, copilotAuth: new CopilotAuthenticator(),
+    localExecutor, project, home, scope, catalog, configStore, mainCluster: cluster, copilotAuth: new CopilotAuthenticator(),
     chromePortAllocator: new ChromePortAllocator(), authorize: () => true,
   }))
   let runtime = await startRuntime()

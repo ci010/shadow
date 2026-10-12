@@ -55,6 +55,7 @@ export class SearchTool implements Tool {
     workspace: string,
     private webSearchTool?: Tool,
     virtualFs?: VirtualFs,
+    private autoInstallRipgrep = true,
   ) {
     this.workspace = workspace
     this.glob = new GlobTool(workspace, virtualFs)
@@ -66,6 +67,7 @@ export class SearchTool implements Tool {
     // Re-check each time until rg is found (background install may have finished)
     this.ripgrepAvailable = await detectRipgrep()
     if (this.ripgrepAvailable) return true
+    if (!this.autoInstallRipgrep) return false
 
     // Only attempt install once (singleton handles concurrency + timeout)
     if (this.installAttempted) return false

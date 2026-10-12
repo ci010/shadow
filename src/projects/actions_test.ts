@@ -128,3 +128,33 @@ test('failed termination restores retryable state and a second stop succeeds', a
     assert.equal((await actions.stop(run.id)).state, 'stopped')
   } finally { await actions.shutdown(); await f.close() }
 })
+
+
+test('coordinator mode denies direct and gateway Quick Action runs but preserves saved definitions and discovery', async () => {
+  const f = await fixture()
+  const actions = new ProjectActions(f.home, f.folders, {
+    spawn: async () => assert.fail('Main process must not launch'),
+  } as unknown as ProcessManager, false)
+  await actions.init()
+  try {
+    await writeFile(join(f.folder, 'package.json'), JSON.stringify({ scripts: { test: 'echo test' } }))
+    const action = await actions.create({ name: 'saved', command: 'must never run', folderId: f.record.id })
+    await actions.patch(action.id, { pinned: true })
+    assert.equal(actions.list()[0].pinned, true)
+    assert.equal((await actions.scripts(f.record.id)).scripts[0].name, 'test')
+    await assert.rejects(actions.run(action.id), { code: 'local_executor_disabled', status: 409 })
+    const app = new Hono()
+    projectActionsPlugin(actions, () => true)(app)
+    const response = await app.request(`/api/actions/${action.id}/run`, { method: 'POST' })
+    assert.equal(response.status, 409)
+    assert.equal((await response.json()).error, 'local_executor_disabled')
+    assert.deepEqual(actions.runs(), [])
+    const reloaded = new ProjectActions(f.home, f.folders, undefined, false)
+    await reloaded.init()
+    assert.equal(reloaded.list()[0].id, action.id)
+    await assert.rejects(reloaded.run(action.id), { code: 'local_executor_disabled' })
+    await reloaded.shutdown()
+    await actions.delete(action.id)
+    assert.deepEqual(actions.list(), [])
+  } finally { await actions.shutdown(); await f.close() }
+})

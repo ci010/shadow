@@ -5,6 +5,8 @@ export interface MainRuntimeHandle {
 }
 
 export interface MainRuntimeOptions {
+  /** Agent host execution; omitted preserves legacy standalone behavior. */
+  readonly localExecutor?: boolean
   readonly localNodeId?: string
   readonly configPath?: string
   readonly clusterSnapshotPath?: string
