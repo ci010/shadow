@@ -285,7 +285,7 @@ body,
 /* Interactive elements get pointer cursor */
 a, button, select, label[for],
 input[type="checkbox"], input[type="radio"],
-[role="button"], [tabindex] {
+[role="button"] {
   cursor: pointer;
 }
 
