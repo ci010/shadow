@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import type { Hono } from 'hono'
 import type { Bus } from '../bus/bus.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
@@ -73,7 +73,7 @@ export function createA2aRuntime(options: {
     registerA2aRoutes(app, undefined, () => undefined)
     return { tools: [], sessions: undefined, authorize: () => false, validate: () => {}, close: async () => {} }
   }
-  const store = new A2aStore(join(workspace, '.a2a'))
+  const store = new A2aStore(projectStoragePath(workspace, '.a2a'))
   store.init()
   let inboundUnavailable = false
   const disableInbound = (error: unknown) => {

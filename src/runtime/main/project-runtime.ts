@@ -451,11 +451,11 @@ export async function createProjectRuntime(
   const context = new ContextBuilder(workspace)
   const botStore = new BotInstanceStore({
     projectId: project.id,
-    path: resolve(workspace, '..', 'config', 'bots.v1.json'),
+    path: resolve(workspace, 'config', 'bots.v1.json'),
     ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
   })
-  const authoringDirectory = resolve(workspace, '..', 'config', 'agent-resources')
-  const integrationDirectory = resolve(workspace, '..', 'config', 'channel-integrations')
+  const authoringDirectory = resolve(workspace, 'config', 'agent-resources')
+  const integrationDirectory = resolve(workspace, 'config', 'channel-integrations')
   const memoryDomains = new MemoryDomains(project.id, resolve(integrationDirectory, 'memory'))
   const channelIntegrations = new IntegrationStore({
     projectId: project.id, workspace, directory: integrationDirectory, bots: botStore, agents: agentTypes, memory: memoryDomains,

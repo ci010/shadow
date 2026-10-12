@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
@@ -132,7 +133,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       : new SqliteSessionStore(join(home, 'sessions'))
     const base = new Tools(home)
     const skills = new SkillsManager(home)
-    const dir = join(home, 'skills', 'echo')
+    const dir = projectStoragePath(home, 'skills', 'echo')
     await mkdir(dir, { recursive: true })
     const manifest = '---\nname: echo\ndescription: Echo helper\ntools:\n  echo_tool:\n    source: echo.ts\n    description: Echo helper\n    parameters: {type: object, properties: {}}\n    imports: [node:fs]\n---\nCall echo_tool with empty args.'
     await writeFile(join(dir, 'SKILL.md'), manifest)

@@ -1,4 +1,5 @@
 import { requireToolText } from './tool.ts'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { access, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -44,7 +45,7 @@ function setup(home: string) {
 async function addSkill(home: string, skills: SkillsManager, name: string,
   tools: Record<string, Pick<SkillToolDeclarations[string], 'source'> & Partial<SkillToolDeclarations[string]>>,
   extra: Partial<SkillMeta> = {}) {
-  const dir = join(home, 'skills', name)
+  const dir = projectStoragePath(home, 'skills', name)
   await mkdir(join(dir, 'tools'), { recursive: true })
   const declarations = Object.fromEntries(Object.entries(tools).map(([alias, declaration]) => [alias, {
     description: 'Synthetic string tool',
@@ -285,7 +286,7 @@ test('admin, agent-role and remote restrictions cannot be bypassed by skill regi
 test('malformed frontmatter tools are discoverable as errors without disabling healthy skills', async () => {
   await withTempWorkspace(async home => {
     const f = setup(home)
-    const dir = join(home, 'skills', 'invalid')
+    const dir = projectStoragePath(home, 'skills', 'invalid')
     await mkdir(dir, { recursive: true })
     const text = '---\nname: invalid\ntools:\n  wrong: {source: /absolute.ts}\n---\nInvalid tool'
     await writeFile(join(dir, 'SKILL.md'), text)

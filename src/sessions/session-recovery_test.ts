@@ -17,7 +17,7 @@ import { SqliteSessionStore } from './session-store-sqlite.ts'
 import { sessionsApiPlugin } from './routes.ts'
 import type { SessionMessageInput, SessionTurnFact } from './input.ts'
 import type { SessionState, SessionStore, StoredMessage } from './session-store.ts'
-import { isBackgroundResponse } from './response-context.ts'
+import { hasNoAdmittedUserInput } from './response-context.ts'
 import { ProviderTransportError } from '../providers/provider.ts'
 import { CopilotAuthError } from '../providers/copilot.ts'
 import { parseSessionRecovery } from './session-store.ts'
@@ -189,7 +189,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: Continue keeps an aborted user request expanded without expanding a background request`, async () => {
+  test(`${Store.name}: Continue preserves user participation without turning an event into user input`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -217,7 +217,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           await waitFor(() => f.facts.length === (index + 2))
           const history = (await f.sessions.getHistory(id, { shallow: true })).messages
           const response = history.filter(message => message.role === 'assistant').at(-1)!
-          assert.equal(isBackgroundResponse(response.responseContext), source.kind !== 'user')
+          assert.equal(hasNoAdmittedUserInput(response.responseContext), source.kind !== 'user')
         }
       } finally { await f.sessions.stop(); store.close?.() }
     })
@@ -245,7 +245,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         f.calls[0].resolve(done())
         await waitFor(() => f.facts.length === 1)
         const reply = (await f.sessions.getHistory(id, { shallow: true })).messages.filter(message => message.role === 'assistant').at(-1)!
-        assert.equal(isBackgroundResponse(reply.responseContext), false)
+        assert.equal(hasNoAdmittedUserInput(reply.responseContext), false)
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
@@ -386,7 +386,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           restored.calls[0].resolve(done())
           await waitFor(() => restored.facts.length === 1)
           const reply = (await restored.sessions.getHistory(id, { shallow: true })).messages.filter(message => message.role === 'assistant').at(-1)!
-          assert.equal(isBackgroundResponse(reply.responseContext), false)
+          assert.equal(hasNoAdmittedUserInput(reply.responseContext), false)
         } finally { await restored.sessions.stop() }
       } finally { await f.sessions.stop(); store.close?.() }
     })

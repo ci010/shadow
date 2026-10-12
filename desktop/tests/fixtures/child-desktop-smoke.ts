@@ -18,7 +18,8 @@ async function main() {
     await window.loadURL(`${base}__child`)
     const run = (script: string) => window.webContents.executeJavaScript(script)
     await run(`new Promise((resolve,reject)=>{const timer=setInterval(()=>{if(window.fixture&&document.querySelector('.role-option')){clearInterval(timer);resolve()}},20);setTimeout(()=>{clearInterval(timer);reject(new Error('Wizard did not mount'))},10000)})`)
-    await run(`(async()=>{const sleep=()=>new Promise(r=>setTimeout(r,50));document.querySelectorAll('.role-option')[1].click();await sleep();document.querySelector('.primary-button').click();await sleep()})()`)
+    assert.equal(await run(`document.querySelector('details.advanced-setup').open`), false)
+    await run(`(async()=>{const sleep=()=>new Promise(r=>setTimeout(r,50));document.querySelector('details.advanced-setup > summary').click();await sleep();document.querySelectorAll('.role-option')[1].click();await sleep();document.querySelector('.primary-button').click();await sleep()})()`)
     assert.equal(await run(`document.querySelector('.child-form button[type=submit]').disabled`), true)
     assert.equal(await run(`document.getElementById('child-offer') === null && document.getElementById('child-pin') === null`), true)
     const invitation = 'shadow-child:v1:' + btoa(JSON.stringify({

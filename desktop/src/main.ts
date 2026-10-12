@@ -42,6 +42,7 @@ import {
   handlePairChild,
   handleGetMainDirectorySelection,
   handleInitializeMain,
+  handlePrepareProvider,
   handleOpenCopilotLogin,
   handleSelectMainDirectoryPath,
   IPC_CHANNELS,
@@ -166,6 +167,12 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: 
       return result
     },
   )
+  ipcMain.handle(IPC_CHANNELS.prepareProvider, (event, ...rawArguments: unknown[]) => {
+    assertBootstrapSender(event)
+    return handlePrepareProvider({
+      prepareProvider: options => startup.start(() => coordinator.prepareProvider(options)),
+    }, rawArguments)
+  })
   ipcMain.handle(
     IPC_CHANNELS.ensureRuntime,
     (event, ...rawArguments: unknown[]) => {

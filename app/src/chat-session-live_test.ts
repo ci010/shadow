@@ -10,7 +10,7 @@ import type { LiveObserver } from './live-client.ts'
 import { sessionActivity } from './session-activity.ts'
 import { createProjectLiveState } from './project-live-state.ts'
 import type { LiveClient } from './live-client.ts'
-import { createResponseContext, isBackgroundResponse, type ResponseContext } from '../../src/sessions/response-context.ts'
+import { createResponseContext, type ResponseContext } from '../../src/sessions/response-context.ts'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 const root = 'web:chat-parent'
@@ -137,18 +137,20 @@ test('composer attachment-only answers upload once and preserve the attachment a
   assert.equal(f.requests.some(request => request.path.endsWith('/send')), false)
 })
 
-test('background response origin survives live boundaries and restoration; legacy replies remain expanded', async t => {
+for (const source of [
+  { kind: 'session', sessionId: 'web:peer' },
+  { kind: 'event', eventId: 'completed', type: 'background-task-complete', source: 'background-task' },
+  { kind: 'event', eventId: 'failed', type: 'subagent-failed', source: 'worker' },
+] as const) test(`${source.kind}: response provenance survives streaming and history without determining presentation`, async t => {
   const f = fixture(t)
   const view = f.mount('a')
   const state = view.state()
   state.messages = []
-  const context = createResponseContext('turn', { kind: 'session', sessionId: 'web:peer' }, 'session', 'web')!
+  const context = createResponseContext('turn', source, 'session', 'web')!
   const stream = { accumulated: '' }
   state.applyStreamPayload({ event: 'response', content: 'Partial', responseContext: context }, stream)
   assert.deepEqual(state.streamResponseContext, context)
-  assert(isBackgroundResponse(state.streamResponseContext))
-  assert.equal(state.expandedResponses.size, 0)
-  state.setResponseExpanded(context, true)
+  assert.equal(state.streamResponseContext.userInvolved, false)
   state.applyStreamPayload({ event: 'response', content: ' reply', media: ['result.txt'], responseContext: context }, stream)
   state.applyStreamPayload({ event: 'tool_call', toolCall: { name: 'read', arguments: {} }, toolCallId: 'read' }, stream)
   assert.equal(state.messages[0].content, 'Partial reply')
@@ -156,7 +158,7 @@ test('background response origin survives live boundaries and restoration; legac
   assert.deepEqual(state.messages[0].media, ['result.txt'])
   const next: ResponseContext = { ...context, responseId: 'turn:1', userInvolved: true }
   state.applyStreamPayload({ event: 'response', content: 'User answer', done: true, responseContext: next }, stream)
-  assert(!isBackgroundResponse(state.messages.at(-1).responseContext))
+  assert.deepEqual(state.messages.at(-1).responseContext, next)
   assert.equal(state.streamResponseContext, undefined)
   assert.deepEqual(state.streamMedia, [])
   const history = [
@@ -165,30 +167,26 @@ test('background response origin survives live boundaries and restoration; legac
     { role: 'assistant', content: 'Older event reply with no provenance' },
   ]
   state.messages = state.collapseHistory(history)
-  assert.deepEqual(state.messages.map((message: { responseContext?: ResponseContext }) => isBackgroundResponse(message.responseContext)), [true, false, false])
-  assert(state.expandedResponses.has(context.responseId), 'Refresh must preserve an explicitly opened response')
+  assert.deepEqual(state.messages.map((message: { responseContext?: ResponseContext }) => message.responseContext), [context, next, undefined])
   assert.equal(state.inputText, 'Keep this exact unsent draft')
-  view.props.sessionId = 'web:another'
-  await Vue.nextTick()
-  assert.equal(state.expandedResponses.size, 0)
 })
 
-test('media-only background responses and invalid display metadata never lose the body or attachments', async t => {
+test('media-only event-triggered responses and invalid display metadata never lose the body or attachments', async t => {
   const f = fixture(t)
   const state = f.mount('a').state()
   state.messages = []
   const context = createResponseContext('turn', { kind: 'event', eventId: 'event', type: 'tick', source: 'system' }, 'session', 'web')!
   state.applyStreamPayload({ event: 'response', media: ['image.png'], done: true, responseContext: context }, { accumulated: '' })
   assert.deepEqual(state.messages[0].media, ['image.png'])
-  assert(isBackgroundResponse(state.messages[0].responseContext))
+  assert.deepEqual(state.messages[0].responseContext, context)
   const warnings = t.mock.method(console, 'warn', () => {})
   state.applyStreamPayload({ event: 'response', content: 'Keep this response', done: true,
     responseContext: { ...context, userInvolved: 'false' } }, { accumulated: '' })
   assert.equal(state.messages[1].content, 'Keep this response')
-  assert(!isBackgroundResponse(state.messages[1].responseContext))
+  assert.equal(state.messages[1].responseContext, undefined)
   assert.equal(warnings.mock.calls.length, 1)
   state.applyStreamPayload({ event: 'response', content: '', done: true, responseContext: context }, { accumulated: '' })
-  assert.equal(state.messages.length, 2, 'An empty final does not create an empty disclosure')
+  assert.equal(state.messages.length, 2, 'An empty final does not create an empty message')
 })
 
 test('chat keeps outgoing message actions outside generic tools and routes recipient navigation through the current pane', async t => {

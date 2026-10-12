@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -81,7 +82,7 @@ test('polling source uses host-held credential, restores checkpoint, and avoids 
       url: 'https://api.github.com/repos/test/repo/issues/1/events',
       authorization: 'Bearer synthetic-secret',
     })
-    const persisted = await readFile(join(workspace, '.events', 'polling-sources.json'), 'utf8')
+    const persisted = await readFile(projectStoragePath(workspace, '.events', 'polling-sources.json'), 'utf8')
     assert.doesNotMatch(persisted, /synthetic-secret/)
     await sources.stop()
     await events.stop()
@@ -132,7 +133,7 @@ test('source checksum, grant, and failures do not silently advance the cursor', 
       }`
     sources.create({ id: 'issue-watch', ownerSessionId: 'owner', code: failingCode, intervalMs: 60_000, grant })
     await assert.rejects(sources.run('issue-watch', 'owner'), /session unavailable/)
-    const path = join(workspace, '.events', 'polling-sources.json')
+    const path = projectStoragePath(workspace, '.events', 'polling-sources.json')
     const persisted = JSON.parse(await readFile(path, 'utf8'))
     assert.equal(persisted[0].checkpoint, null)
     assert.deepEqual(persisted[0].seen, [])

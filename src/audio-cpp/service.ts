@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { access, mkdir, mkdtemp, open, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { delimiter, extname, join } from 'node:path'
+import { delimiter, dirname, extname, join } from 'node:path'
 import { z } from 'zod'
 import { writePrivateFile } from '../config/store.ts'
 import { workspacePath } from '../utils/paths.ts'
@@ -189,6 +189,8 @@ export class AudioCppService {
         next[update.task] = selected
       }
       if (!await this.binary(next)) throw new Error('Configure an installed audiocpp_cli binary first; read v:skills/audio-cpp')
+      signal?.throwIfAborted()
+      await mkdir(dirname(this.configPath), { recursive: true })
       signal?.throwIfAborted()
       writePrivateFile(this.configPath, JSON.stringify(configSchema.parse(next), null, 2) + '\n')
       return this.status()

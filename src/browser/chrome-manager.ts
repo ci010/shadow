@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { resolve } from 'node:path'
 import { spawn as childSpawn } from 'node:child_process'
 import { Buffer } from 'node:buffer'
@@ -484,7 +485,7 @@ export class ChromeManager {
       signal.throwIfAborted()
       if (await active(lease.port)) return { error: 'Reserved Chrome port is occupied; refusing to attach an unowned browser' }
       signal.throwIfAborted()
-      const userDataDir = resolve(this.workspace, '.browser', crypto.randomUUID())
+      const userDataDir = projectStoragePath(this.workspace, '.browser', crypto.randomUUID())
       await mkdir(userDataDir, { recursive: true })
       signal.throwIfAborted()
       const result = this.options.runtime
@@ -555,7 +556,7 @@ export class ChromeManager {
       if (!userDataDir) {
         if (this.needsIsolatedProfile(port)) {
           // Parallel session — create isolated user data dir with credentials copied
-          userDataDir = resolve(this.workspace, '.browser', `session-${port}`)
+          userDataDir = projectStoragePath(this.workspace, '.browser', `session-${port}`)
           const defaultDir = getDefaultUserDataDir(exePath)
           if (defaultDir) {
             try {
@@ -585,7 +586,7 @@ export class ChromeManager {
 
     const session: ChromeSession = {
       port,
-      userDataDir: explicitUserDataDir ?? resolve(this.workspace, '.browser', `session-${port}`),
+      userDataDir: explicitUserDataDir ?? projectStoragePath(this.workspace, '.browser', `session-${port}`),
       pid,
       owned,
     }

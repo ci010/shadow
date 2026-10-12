@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../src/utils/data-paths.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -240,8 +241,8 @@ export async function runEventWait(options: LiveOptions, liveProvider: LLMProvid
     context.register(workspaceProvider(workspace, vfs))
     context.register(guidelineProvider())
     context.register(runtimeDiscoveryProvider(runtime))
-    store = storage === 'sqlite' ? new SqliteSessionStore(join(workspace, '.sessions'))
-      : new JsonlSessionStore(join(workspace, '.sessions'))
+    store = storage === 'sqlite' ? new SqliteSessionStore(projectStoragePath(workspace, '.sessions'))
+      : new JsonlSessionStore(projectStoragePath(workspace, '.sessions'))
     await store.init()
     const contextWindow = resolveContextWindow(model)
     handoff = new HandoffManager(provider, contextWindow, { autoHandoff: false }, workspace, store)

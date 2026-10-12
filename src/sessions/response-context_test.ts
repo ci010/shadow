@@ -8,7 +8,7 @@ import type { SessionStore } from './session-store.ts'
 import { withResponseAudience } from '../agent/context/response-audience.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import type { InputSource } from './input.ts'
-import { continuedUserInvolvement, createResponseContext, isBackgroundResponse, parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
+import { continuedUserInvolvement, createResponseContext, hasNoAdmittedUserInput, parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
 
 const user: InputSource = { kind: 'user', sender: { channel: 'web', chatId: 'owner', senderId: 'owner', messageId: 'input' } }
 const event: InputSource = { kind: 'event', eventId: 'event', type: 'subagent-failed', source: 'worker',
@@ -47,10 +47,10 @@ test('response context is a small runtime projection, not historical user involv
   const context = createResponseContext('turn', event, 'session', 'web')!
   assert.deepEqual(context, { version: 1, turnId: 'turn', responseId: 'turn:0', userInvolved: false,
     source: { kind: 'event', eventId: 'event', type: 'subagent-failed', source: 'worker', status: 'failed' } })
-  assert(isBackgroundResponse(context))
-  assert(!isBackgroundResponse({ ...context, userInvolved: true }))
-  assert(!isBackgroundResponse(createResponseContext('turn', user, 'session', 'web')))
-  assert(!isBackgroundResponse(undefined))
+  assert(hasNoAdmittedUserInput(context))
+  assert(!hasNoAdmittedUserInput({ ...context, userInvolved: true }))
+  assert(!hasNoAdmittedUserInput(createResponseContext('turn', user, 'session', 'web')))
+  assert(!hasNoAdmittedUserInput(undefined))
   assert.deepEqual(parseResponseContext(context), context)
 })
 
@@ -74,7 +74,7 @@ test('unfinished user tool loops retain their audience across event turns, endin
   const repaired = reconcileResponseContinuity(messages)
   assert.deepEqual(messages, original)
   assert.deepEqual(repaired.messages.filter(message => message.role === 'assistant')
-    .map(message => isBackgroundResponse(message.responseContext)), [false, false, false, true])
+    .map(message => hasNoAdmittedUserInput(message.responseContext)), [false, false, false, true])
   assert.equal(repaired.messages[3].responseContext?.source, background.source)
   assert.equal(repaired.messages[5].responseContext?.responseId, 'event-turn:1')
   assert.equal(repaired.unfinishedUserResponse, false)
@@ -145,6 +145,9 @@ test('per-inference audience guidance neither mutates reusable prompts nor accum
   const first = withResponseAudience(messages, background)
   assert.match(String(first[0].content), /no user input admitted/)
   assert.match(String(first[0].content), /not as a new user request/)
+  assert.match(String(first[0].content), /provenance, not the response audience/)
+  assert.match(String(first[0].content), /including asynchronous work/)
+  assert.match(String(first[0].content), /Do not force a short background summary/)
   assert.match(String(first[0].content), /return no user-facing text instead of another acknowledgement/)
   const mixed = withResponseAudience(messages, { ...background, userInvolved: true })
   assert.match(String(mixed[0].content), /Answer the user's request normally/)

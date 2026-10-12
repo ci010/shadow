@@ -1,3 +1,5 @@
+import { resolveLegacyProjectPath } from '../storage/legacy-paths.ts'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join } from 'node:path'
@@ -64,7 +66,7 @@ export class IoBroker {
   private bufferedBytes = 0
 
   constructor(readonly options: IoBrokerOptions) {
-    this.root = join(options.workspace, '.io', 'runs')
+    this.root = projectStoragePath(options.workspace, '.io', 'runs')
     this.now = options.now ?? Date.now
   }
 
@@ -367,10 +369,11 @@ export class IoBroker {
     const record = this.record(id)
     const artifact = record.run.artifacts.find(item => item.id === artifactId)
     if (!artifact?.path) throw new IoError('artifact_not_found', 'Artifact not found', 404)
+    const path = resolveLegacyProjectPath(this.options.workspace, artifact.path)
     let metadata
-    try { metadata = await stat(artifact.path) } catch { throw new IoError('artifact_not_found', 'Artifact file is unavailable', 404) }
+    try { metadata = await stat(path) } catch { throw new IoError('artifact_not_found', 'Artifact file is unavailable', 404) }
     if (!metadata.isFile()) throw new IoError('artifact_not_found', 'Artifact is not a regular file', 404)
-    return { path: artifact.path, artifact: { ...artifact, size: metadata.size } }
+    return { path, artifact: { ...artifact, size: metadata.size } }
   }
 
   private finish(record: ActiveRun, status: 'completed' | 'cancelled' | 'failed' | 'denied' | 'interrupted', error?: string): Promise<IoRun> {

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { ConfigSchema } from '../config/schema.ts'
 import { redactConfig } from '../config/store.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
+import { projectPaths } from './contracts.ts'
 import { AppProviderConfigStore, ProjectConfigStore } from './config-store.ts'
 
 test('existing Projects start with retired voice settings and keep unrelated configuration', async () => {
@@ -137,5 +138,25 @@ test('org defaults persist independently while shared credentials never enter sc
     await restored.init()
     assert.equal(restored.current().agent.model, 'new@openai')
     assert.deepEqual(restored.current().learning, { ...fresh.current().learning, enabled: false })
+  })
+})
+
+
+test('canonical Project config binds Home to project root and preserves existing settings', async () => {
+  await withTempWorkspace(async root => {
+    const paths = projectPaths(root, 'default')
+    assert.equal(paths.home, paths.root)
+    assert.equal(paths.configPath, join(paths.home, 'config', 'project.json'))
+    const shared = ConfigSchema.parse({ agent: { workspace: root } })
+    const store = new ProjectConfigStore({ ...paths, getSharedConfig: () => shared })
+    await store.init()
+    assert.equal(store.current().agent.workspace, paths.root)
+    const original = JSON.stringify({ agent: { workspace: paths.root, model: 'retained@openai' }, learning: { enabled: false } })
+    await writeFile(paths.configPath, original)
+    const reloaded = new ProjectConfigStore({ ...paths, getSharedConfig: () => shared })
+    await reloaded.init()
+    assert.equal(reloaded.current().agent.workspace, paths.root)
+    assert.equal(reloaded.current().agent.model, 'retained@openai')
+    assert.equal(await readFile(paths.configPath, 'utf8'), original)
   })
 })

@@ -100,14 +100,15 @@ test('Main start loads the mutable config and preserves its workspace', async ()
   )
 
   assertEquals(result.route, 'runtime')
-  assertEquals(loadedPath, '/srv/shadow/state/config/bot.config.json')
+  assertEquals(loadedPath, '/srv/shadow/state/app.json')
   assertEquals(started, {
     config: mutableConfig,
     options: {
+      dataDir: '/srv/shadow/state',
       localExecutor: false,
       localNodeId: 'main-node',
-      configPath: '/srv/shadow/state/config/bot.config.json',
-      clusterSnapshotPath: '/srv/shadow/state/cluster/registry.v1.json',
+      configPath: '/srv/shadow/state/app.json',
+      clusterSnapshotPath: '/srv/shadow/state/devices/registry.v1.json',
       gateway: { port: 43123 },
     },
   })

@@ -1,5 +1,6 @@
+import { projectStoragePath } from '../../utils/data-paths.ts'
 import { readFile } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, relative } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import type { SessionManager } from '../../sessions/session-manager.ts'
 import { physicalSessionId } from '../../sessions/session-identity.ts'
@@ -104,9 +105,10 @@ export class LearningRuntime {
 
   private memoryPath(path: string): string | undefined {
     const normalized = path.startsWith('v:memory/') ? `memory/${path.slice(9)}` : path
-    const local = relative(this.sessions.workspace, resolve(this.sessions.workspace, normalized)).replaceAll('\\', '/')
+    const local = relative(this.sessions.workspace, projectStoragePath(this.sessions.workspace, normalized)).replaceAll('\\', '/')
     if (isAbsolute(local) || local === '..' || local.startsWith('../')) return undefined
-    return local.startsWith('memory/') && local.endsWith('.md') || local === 'SOUL.md' ? local : undefined
+    if (local === 'config/SOUL.md') return 'SOUL.md'
+    return local.startsWith('memory/') && local.endsWith('.md') ? local : undefined
   }
 
   /** Audit persisted tool results, not the agent's description of success. */
@@ -158,7 +160,7 @@ export class LearningRuntime {
           const path = this.memoryPath(change.path)
           if (!path) {
             if (requireResolved && !batch.artifacts.some(artifact =>
-              resolve(this.sessions.workspace, artifact.path) === resolve(this.sessions.workspace, change.path))) {
+              projectStoragePath(this.sessions.workspace, artifact.path) === projectStoragePath(this.sessions.workspace, change.path))) {
               throw new LearningRunError(`Unmanaged learning write: ${change.path}. Publish through learned_skill or report draft_only/partial.`, false)
             }
             continue
@@ -166,7 +168,7 @@ export class LearningRuntime {
           if (!batch.artifacts.some(artifact => artifact.path === path)) {
             if (!capture) throw new LearningRunError(`Unreported learning write after receipt: ${path}`, false)
             this.ledger.artifact(batch.id, { path, kind: path === 'SOUL.md' ? 'soul' : 'memory',
-              revision: fingerprint(await readFile(join(this.sessions.workspace, path), 'utf8')) })
+              revision: fingerprint(await readFile(projectStoragePath(this.sessions.workspace, path), 'utf8')) })
             batch = this.ledger.batchFor(batch.attempts.at(-1)!)!
           }
         }
@@ -193,13 +195,13 @@ export class LearningRuntime {
           const name = artifact.path.split('/')[1]
           if (!this.skillStore || this.skillStore.read(name).revision !== artifact.revision
             || !this.skills?.getSkillDirectory(name)) throw new Error(`Learned skill is changed or undiscoverable: ${artifact.path}`)
-        } else if (fingerprint(await readFile(join(this.sessions.workspace, artifact.path), 'utf8')) !== artifact.revision) {
+        } else if (fingerprint(await readFile(projectStoragePath(this.sessions.workspace, artifact.path), 'utf8')) !== artifact.revision) {
           throw new Error(`Learning artifact changed after writing: ${artifact.path}`)
         }
       }
       for (const event of batch.events) {
         signal.throwIfAborted()
-        const lines = (await readFile(join(this.sessions.workspace, event.path), 'utf8')).split('\n').filter(Boolean)
+        const lines = (await readFile(projectStoragePath(this.sessions.workspace, event.path), 'utf8')).split('\n').filter(Boolean)
         if (!lines.some(line => isDeepStrictEqual(JSON.parse(line), JSON.parse(JSON.stringify(event))))) {
           throw new Error(`Learning event is missing or changed: ${event.id}`)
         }

@@ -18,6 +18,7 @@ export const IPC_CHANNELS = {
   commitMainDirectory: 'shadow:bootstrap:commit-main-directory',
   initializeMain: 'shadow:bootstrap:initialize-main',
   launchMain: 'shadow:bootstrap:launch-main',
+  prepareProvider: 'shadow:bootstrap:prepare-provider',
   ensureRuntime: 'shadow:bootstrap:ensure-runtime',
   retryRuntime: 'shadow:bootstrap:retry-runtime',
   childSetup: 'shadow:bootstrap:child-setup',
@@ -87,6 +88,7 @@ export interface ShadowDesktopApi {
     commitMainDirectory(selectionId: string): Promise<BootstrapCommandResult>
     initializeMain(): Promise<BootstrapCommandResult>
     launchMain(options: LaunchMainOptions): Promise<BootstrapCommandResult>
+    prepareProvider(options: LaunchMainOptions): Promise<EnsureRuntimeResult>
     ensureRuntime(): Promise<EnsureRuntimeResult>
     retryRuntime(): Promise<EnsureRuntimeResult>
     childSetup(): Promise<ChildSetupInfo>
@@ -166,6 +168,14 @@ export function handleEnsureRuntime(
 ): Promise<EnsureRuntimeResult> {
   parseNoArguments(rawArguments)
   return coordinator.ensureRuntime()
+}
+
+export function handlePrepareProvider(
+  coordinator: { prepareProvider(options: LaunchMainOptions): Promise<EnsureRuntimeResult> },
+  rawArguments: readonly unknown[],
+): Promise<EnsureRuntimeResult> {
+  if (rawArguments.length !== 1) throw new TypeError('Provider preparation requires one options object')
+  return coordinator.prepareProvider(parseLaunchMainOptions(rawArguments[0]))
 }
 
 export function parseSelectionId(value: unknown): string {

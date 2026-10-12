@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   handleGetMainDirectorySelection,
   handleSelectMainDirectoryPath,
   handleInitializeMain,
+  handlePrepareProvider,
+  IPC_CHANNELS,
   parseLaunchMainOptions,
   parseNoArguments,
   parseSelectionId,
@@ -83,4 +86,33 @@ test('directory IPC obtains a trusted default without arguments and validates ed
     assert.throws(() => handleSelectMainDirectoryPath(coordinator, args), /requires one absolute path/)
   }
   assert.deepEqual(paths, [path])
+})
+test('prepareProvider IPC requires exactly the public Main options and returns only EnsureRuntimeResult', async () => {
+  const received: unknown[] = []
+  const expected = { ok: false, code: 'runtime-unavailable' } as const
+  const coordinator = { prepareProvider: async (options: unknown) => { received.push(options); return expected } }
+  const options = { localExecutor: false, port: 43123 }
+  assert.deepEqual(await handlePrepareProvider(coordinator, [options]), expected)
+  for (const args of [[], [options, 'extra'], [options, undefined]]) {
+    assert.throws(() => handlePrepareProvider(coordinator, args), /requires one options object/)
+  }
+  for (const input of [undefined, null, [], 'main', {},
+    { localExecutor: true }, { port: 43123 },
+    { localExecutor: 'false', port: 43123 },
+    ...[0, 65536, -1, 0.5, NaN, Infinity, '43123'].map(port => ({ localExecutor: false, port })),
+    { ...options, launchToken: 'secret' }, { ...options, dataDir: 'C:\\private' },
+    { ...options, configPath: 'C:\\private' }, { ...options, role: 'child' },
+    { ...options, apiBase: 'https://example.com' },
+  ]) assert.throws(() => handlePrepareProvider(coordinator, [input]), /launch options are invalid/)
+  assert.deepEqual(received, [options])
+})
+
+test('provider preparation preload and Main route use the same guarded sender as launch and update RuntimeStartup', () => {
+  assert.equal(IPC_CHANNELS.prepareProvider, 'shadow:bootstrap:prepare-provider')
+  const preload = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  assert.match(preload, /prepareProvider:\s*\(options: LaunchMainOptions\)\s*=>\s*ipcRenderer\.invoke\(IPC_CHANNELS\.prepareProvider, options\)/)
+  assert.match(main, /IPC_CHANNELS\.prepareProvider,\s*\(event, \.\.\.rawArguments: unknown\[\]\) => \{\s*assertBootstrapSender\(event\)\s*return handlePrepareProvider\(\{\s*prepareProvider: options => startup\.start\(\(\) => coordinator\.prepareProvider\(options\)\),\s*\}, rawArguments\)/)
+  assert.match(main, /IPC_CHANNELS\.launchMain,[\s\S]*?assertBootstrapSender\(event\)/)
+  assert.match(main, /!mainWindow \|\| event\.sender !== mainWindow\.webContents \|\| event\.senderFrame !== mainWindow\.webContents\.mainFrame/)
 })

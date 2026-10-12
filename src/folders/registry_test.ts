@@ -1,7 +1,8 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { absoluteDirectoryPath, FolderRegistry } from './registry.ts'
 import { folderFixture } from './test-fixtures.ts'
@@ -48,7 +49,8 @@ test('registers empty folders, normalizes aliases, serializes writes, and preser
   const copy = registry.get(folder.id)!
   copy.path = 'tampered'
   assert.equal(registry.get(folder.id)?.path, folder.path)
-  assert.deepEqual(await readdir(workspace), ['folders.v2.json'])
+  assert.deepEqual(await readdir(workspace), ['state'])
+  assert.deepEqual(await readdir(join(workspace, 'state')), ['folders.v2.json'])
 })
 
 test('unavailable registered folders remain in the registry without recreation or display-path trust', async (t) => {
@@ -85,7 +87,8 @@ test('unavailable registered folders remain in the registry without recreation o
 test('registry validates malformed data rather than silently resetting or overwriting it', async (t) => {
   const { workspace, folders } = await folderFixture(t)
   const valid = { id: randomUUID(), name: 'Custom name', path: folders, createdAt: new Date().toISOString() }
-  const file = join(workspace, 'folders.v2.json')
+  const file = projectStoragePath(workspace, 'folders.v2.json')
+  await mkdir(dirname(file), { recursive: true })
   for (const content of [
     '{',
     JSON.stringify([]),
@@ -126,10 +129,11 @@ test('rejects relative, missing, and file paths; abort and failed persistence do
   await assert.rejects(pending, { name: 'AbortError' })
   assert.deepEqual(registry.list(), [])
   assert.deepEqual(await readdir(workspace), [])
-  await mkdir(registry.filePath)
+  await mkdir(registry.filePath, { recursive: true })
   await assert.rejects(registry.register(folders))
   assert.deepEqual(registry.list(), [])
-  assert.deepEqual(await readdir(workspace), ['folders.v2.json'])
+  assert.deepEqual(await readdir(workspace), ['state'])
+  assert.deepEqual(await readdir(join(workspace, 'state')), ['folders.v2.json'])
   const inaccessible = new FolderRegistry(workspace)
   await assert.rejects(inaccessible.init())
   await rm(registry.filePath, { recursive: true })

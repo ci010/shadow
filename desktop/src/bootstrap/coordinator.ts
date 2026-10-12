@@ -13,6 +13,7 @@ import {
   transitionWizard,
   type WizardEvent,
   type WizardState,
+  type MainWizardState,
 } from '../wizard/state-machine.js'
 
 export interface MainRuntimeStartOptions {
@@ -220,6 +221,36 @@ export class BootstrapCoordinator {
     })
   }
 
+  /** Start the authenticated backend for provider HTTP setup without completing the wizard. */
+  prepareProvider(options: { readonly localExecutor: boolean; readonly port: number }): Promise<EnsureRuntimeResult> {
+    return this.serialize(async () => {
+      const current = await this.load()
+      if (current.mode !== 'main' || (current.step !== 'configure-provider' && current.step !== 'launch-main')) {
+        return { ok: false, code: 'invalid-state' }
+      }
+      try {
+        const launchOptions = await this.mainLaunchOptions(current, options)
+        await this.launchProfiles.save({ version: 1, role: 'main', ...launchOptions })
+      } catch {
+        return { ok: false, code: 'runtime-unavailable' }
+      }
+      return this.ensureRuntimeForState(current)
+    })
+  }
+
+  private async mainLaunchOptions(
+    current: MainWizardState,
+    options: { readonly localExecutor: boolean; readonly port: number },
+  ): Promise<{ readonly localExecutor: boolean; readonly port: number }> {
+    const profile = await this.launchProfiles.load()
+    if (profile && profile.role !== 'main') throw new Error('Saved launch role does not match Main setup')
+    // Keep resumed/prepared runtimes stable when an older renderer sends defaults.
+    return {
+      port: profile?.port ?? options.port,
+      localExecutor: current.localExecutor ?? profile?.localExecutor ?? options.localExecutor,
+    }
+  }
+
   launchMain(options: { readonly localExecutor: boolean; readonly port: number }): Promise<BootstrapCommandResult> {
     return this.serialize(async () => {
       const current = await this.load()
@@ -227,7 +258,7 @@ export class BootstrapCoordinator {
         return { ok: false, code: 'invalid-state', state: current }
       }
       try {
-        const launchOptions = { ...options, localExecutor: current.localExecutor ?? options.localExecutor }
+        const launchOptions = await this.mainLaunchOptions(current, options)
         await this.launchProfiles.save({ version: 1, role: 'main', ...launchOptions })
         const status = await this.runtimeHost.start({ role: 'main', ...launchOptions })
         if (status.phase !== 'ready') return { ok: false, code: 'launch-failed', state: current }
@@ -241,52 +272,54 @@ export class BootstrapCoordinator {
   }
 
   ensureRuntime(): Promise<EnsureRuntimeResult> {
-    return this.serialize(async () => {
-      const current = await this.load()
-      if (current.mode === null || (current.step !== 'launch-main' && current.step !== 'complete')) {
-        return { ok: false, code: 'invalid-state' }
-      }
+    return this.serialize(async () => this.ensureRuntimeForState(await this.load()))
+  }
 
-      let profile: LaunchProfile | null
-      try {
-        profile = await this.launchProfiles.load()
-      } catch {
-        return { ok: false, code: 'runtime-unavailable' }
-      }
-      if (profile === null) return { ok: false, code: 'profile-missing' }
-      if (profile.role !== current.mode) return { ok: false, code: 'runtime-unavailable' }
+  private async ensureRuntimeForState(current: WizardState): Promise<EnsureRuntimeResult> {
+    if (current.mode === null || (current.step !== 'complete'
+      && !(current.mode === 'main' && (current.step === 'configure-provider' || current.step === 'launch-main')))) {
+      return { ok: false, code: 'invalid-state' }
+    }
 
-      try {
-        const config = current.mode === 'child'
-          ? await this.childBootstrap?.readConfig()
-          : await this.configReader.readMain()
-        if (!config) return { ok: false, code: 'runtime-unavailable' }
-        const status = await this.runtimeHost.start(profile)
-        if (status.phase !== 'ready' || status.apiBase === undefined) {
-          const failure = startupFailure(status)
-          return { ok: false, code: 'runtime-unavailable', ...(failure ? { failure } : {}) }
-        }
-        if (current.mode === 'child') return {
-          ok: true,
-          context: { version: 1, mode: 'child', localNodeId: config.localNodeId,
-            mainConnection: 'connecting', mainLatencyMs: null, uiScopes: [], apiBase: status.apiBase },
-        }
-        return {
-          ok: true,
-          context: {
-            version: 1,
-            mode: 'main',
-            localNodeId: config.localNodeId,
-            mainConnection: 'connected',
-            mainLatencyMs: null,
-            uiScopes: MAIN_UI_SCOPES,
-            apiBase: status.apiBase,
-          },
-        }
-      } catch {
-        return { ok: false, code: 'runtime-unavailable' }
+    let profile: LaunchProfile | null
+    try {
+      profile = await this.launchProfiles.load()
+    } catch {
+      return { ok: false, code: 'runtime-unavailable' }
+    }
+    if (profile === null) return { ok: false, code: 'profile-missing' }
+    if (profile.role !== current.mode) return { ok: false, code: 'runtime-unavailable' }
+
+    try {
+      const config = current.mode === 'child'
+        ? await this.childBootstrap?.readConfig()
+        : await this.configReader.readMain()
+      if (!config) return { ok: false, code: 'runtime-unavailable' }
+      const status = await this.runtimeHost.start(profile)
+      if (status.phase !== 'ready' || status.apiBase === undefined) {
+        const failure = startupFailure(status)
+        return { ok: false, code: 'runtime-unavailable', ...(failure ? { failure } : {}) }
       }
-    })
+      if (current.mode === 'child') return {
+        ok: true,
+        context: { version: 1, mode: 'child', localNodeId: config.localNodeId,
+          mainConnection: 'connecting', mainLatencyMs: null, uiScopes: [], apiBase: status.apiBase },
+      }
+      return {
+        ok: true,
+        context: {
+          version: 1,
+          mode: 'main',
+          localNodeId: config.localNodeId,
+          mainConnection: 'connected',
+          mainLatencyMs: null,
+          uiScopes: MAIN_UI_SCOPES,
+          apiBase: status.apiBase,
+        },
+      }
+    } catch {
+      return { ok: false, code: 'runtime-unavailable' }
+    }
   }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {

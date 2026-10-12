@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../src/utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { fork, type ChildProcess } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -296,7 +297,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
     await artifact('conversation.json', conversation)
     return accepted
   }
-  const home = join(directory, 'home'), project = projectPaths(`${home}.projects`, 'default')
+  const home = join(directory, 'home'), project = projectPaths(home, 'default')
   try {
     const proxyPort = await listening.promise, port = await reserveAppPort()
     base = `http://127.0.0.1:${port}`
@@ -483,7 +484,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
       await new Promise<void>((resolve, reject) => proxy.close(error => error ? reject(error) : resolve()))
       await writeFile(join(output, 'runtime.log'), redact(logs))
     }
-    const sessions = join(project.home, '.sessions')
+    const sessions = projectStoragePath(project.home, '.sessions')
     try {
       for (const entry of await readdir(sessions, { withFileTypes: true })) {
         if (entry.isFile() && /\.(json|jsonl)$/.test(entry.name)) {

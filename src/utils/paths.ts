@@ -1,15 +1,17 @@
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
+import { projectDataPaths, projectStoragePath } from './data-paths.ts'
+import { resolveLegacyProjectPath } from '../storage/legacy-paths.ts'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 
 /**
- * Remove stale tool-result temp files older than `maxAgeMs` from `<workspace>/.tmp/`.
+ * Remove stale tool-result temp files older than `maxAgeMs` from `<Project Home>/tmp/`.
  */
 export async function cleanupTempFiles(
   workspace: string,
   maxAgeMs = 60 * 60 * 1_000,
 ): Promise<void> {
-  const tmpDir = join(workspace, '.tmp')
+  const tmpDir = projectDataPaths(workspace).tmp
   try {
     const cutoff = Date.now() - maxAgeMs
     for (const entry of await readdir(tmpDir, { withFileTypes: true })) {
@@ -52,12 +54,12 @@ export function workspacePath(
   workspace: string,
   ...segments: string[]
 ): string {
-  return resolve(workspace, ...segments)
+  return projectStoragePath(workspace, ...segments)
 }
 
 /**
  * Absolute path of the per-session working directory
- * (`<workspace>/<safeSessionId>/`).
+ * (`<Project Home>/workdirs/<safeSessionId>/`).
  *
  * Each logical session gets its own folder so that files the agent produces
  * stay isolated instead of cluttering the shared workspace root.
@@ -66,7 +68,7 @@ export function sessionWorkspacePath(
   workspace: string,
   sessionId: string,
 ): string {
-  return resolve(workspace, safeSessionId(sessionId))
+  return resolve(projectDataPaths(workspace).workdirs, safeSessionId(sessionId))
 }
 
 /**
@@ -93,13 +95,13 @@ export function resolveAgentPath(
   cwd: string,
   p: string,
 ): string {
-  if (isAbsolute(p)) return p
+  if (isAbsolute(p)) return resolveLegacyProjectPath(workspace, p)
   const normalized = dealiasMemoryPath(p)
   const firstSegment = normalized.split(/[\\/]/)[0]
   if (
     /^v:memory(?=[\\/]|$)/.test(p) || firstSegment === '.tmp'
   ) {
-    return resolve(workspace, normalized)
+    return projectStoragePath(workspace, normalized)
   }
   return resolve(cwd, normalized)
 }
@@ -131,7 +133,7 @@ export async function readFileIfExists(
 
 /**
  * Save binary data into the per-session uploads folder
- * (`<workspace>/<safeSessionId>/uploads/<filename>`) and return the
+ * (`<Project Home>/workdirs/<safeSessionId>/uploads/<filename>`) and return the
  * session-relative path (e.g. `"uploads/discord_123.png"`).
  *
  * The returned path resolves back to the same file from within the session via
@@ -164,15 +166,19 @@ export async function readMediaFile(
 ): Promise<{ filename: string; data: Uint8Array; ext: string }> {
   let absPath: string
   if (isAbsolute(mediaPath)) {
-    absPath = mediaPath
+    absPath = resolveLegacyProjectPath(workspace, mediaPath)
   } else {
     const cwd = sessionWorkspacePath(workspace, sessionId)
     absPath = resolveAgentPath(workspace, cwd, mediaPath)
     // Fall back to the shared workspace root for files saved before uploads
     // were per-session, or media referenced by a plain root-relative path.
     if (!(await fileExists(absPath))) {
-      const rootPath = resolve(workspace, mediaPath)
+      const rootPath = projectStoragePath(workspace, mediaPath)
       if (await fileExists(rootPath)) absPath = rootPath
+      else {
+        const managedPath = resolve(projectDataPaths(workspace).workdirs, mediaPath)
+        if (await fileExists(managedPath)) absPath = managedPath
+      }
     }
   }
   const data = await readFile(absPath)

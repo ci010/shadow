@@ -6,7 +6,7 @@
  *   pnpm migrate:sessions <sessions-dir>
  *
  * Example:
- *   pnpm migrate:sessions ./workspace/.sessions
+ *   pnpm migrate:sessions ./projects/default/state/sessions
  *
  * What it does:
  *   1. Scans <sessions-dir> for *.json state files and *.jsonl log files
@@ -361,7 +361,7 @@ async function main() {
   if (!sessionsDir) {
     console.error('Usage: migrate-sessions-to-sqlite.ts <sessions-dir>')
     console.error(
-      'Example: migrate-sessions-to-sqlite.ts ./workspace/.sessions',
+      'Example: migrate-sessions-to-sqlite.ts ./projects/default/state/sessions',
     )
     process.exit(1)
   }

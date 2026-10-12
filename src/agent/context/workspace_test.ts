@@ -1,5 +1,6 @@
 import assert, { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
+import { sessionWorkspacePath } from '../../utils/paths.ts'
 import { resolve } from 'node:path'
 import type { AgentTypeDefinition } from '../types/types.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
@@ -44,7 +45,7 @@ test('workspace prompt uses the same managed path as runtime locality', async ()
   assert((prompt ?? '').includes(
     `**Working directory**: \`${runtime.workdir.path}\``,
   ))
-  assertEquals(runtime.workdir.path, resolve(workspace, 'discord_owner'))
+  assertEquals(runtime.workdir.path, sessionWorkspacePath(workspace, 'discord:owner'))
 })
 
 test('folder workspace prompt distinguishes actual cwd from private uploads', async () => {
@@ -55,7 +56,7 @@ test('folder workspace prompt distinguishes actual cwd from private uploads', as
     capability: { kind: 'workdir', online: true, path },
   })).getPromptSection(context({ workdir: localFolderWorkdirRef('folder') }))
   assert(prompt?.includes(`**Working directory**: \`${path}\``))
-  assert(prompt?.includes(resolve(workspace, 'discord_top')))
+  assert(prompt?.includes(sessionWorkspacePath(workspace, 'discord:top')))
   assert(prompt?.includes('**Session uploads**'))
   assert(prompt?.includes('not the registered folder'))
 })
@@ -77,7 +78,7 @@ test('workspace prompt reports unavailable capability without a local path', asy
   assert((prompt ?? '').includes('**Node**: `child-node`'))
   assert((prompt ?? '').includes('**Capability**: `folder-capability`'))
   assert((prompt ?? '').includes('**Unavailable reason**: `node-missing`'))
-  assertEquals(prompt?.includes(resolve(workspace, 'discord_top')), false)
+  assertEquals(prompt?.includes(sessionWorkspacePath(workspace, 'discord:top')), false)
   assertEquals(prompt?.includes('C:\\Folders\\example'), false)
 })
 

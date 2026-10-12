@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { join } from 'node:path'
 import test from 'node:test'
 import { withTempWorkspace } from '../testing/workspace.ts'
@@ -16,8 +17,8 @@ import type { SessionInput } from '../sessions/input.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 
 async function put(home: string, path: string[], content: string): Promise<void> {
-  await mkdir(join(home, ...path.slice(0, -1)), { recursive: true })
-  await writeFile(join(home, ...path), content)
+  await mkdir(projectStoragePath(home, ...path.slice(0, -1)), { recursive: true })
+  await writeFile(projectStoragePath(home, ...path), content)
 }
 
 const skill = (marker: string) => `---\nname: shared\ndescription: ${marker}\n---\n${marker}`

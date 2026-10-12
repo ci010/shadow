@@ -228,8 +228,8 @@ export class KnowledgeService {
     if (!only || !only.startsWith('memory/')) {
       for (const { skill, source, shadowsBuiltin } of this.skills.availableSkillSources(true)) {
         const file = resolve(skill.dirPath, 'SKILL.md')
-        const within = relative(this.workspace, file)
-        const id = source === 'builtin' ? `builtin:skills/${skill.meta.name}` : posixPath(within)
+        const within = relative(workspacePath(this.workspace, 'skills'), file)
+        const id = source === 'builtin' ? `builtin:skills/${skill.meta.name}` : `skills/${posixPath(within)}`
         if (only && id !== only) continue
         if (source === 'project' && (isAbsolute(within) || !/^skills\/[^/]+\/SKILL\.md$/.test(id))) {
           throw new KnowledgeError('unsafe_knowledge_path', 'Project skills must remain in the project skills directory', 403)

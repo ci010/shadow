@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import fs from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
@@ -260,7 +261,7 @@ export class SkillEditStore {
   private queue: Promise<void> = Promise.resolve()
 
   constructor(workspace: string, private readonly skills: SkillsManager) {
-    this.root = resolve(workspace, 'skills')
+    this.root = projectStoragePath(workspace, 'skills')
     if (this.root !== resolve(skills.loadPaths().workspaceDir)) {
       throw new TypeError('SkillEditStore and SkillsManager must use the same workspace')
     }
@@ -358,7 +359,11 @@ export class SkillEditStore {
     signal?.throwIfAborted()
     // Validation is complete before any persistent directory is touched.
     if (!assertAncestors(this.root)) {
-      if (!assertAncestors(dirname(this.root))) throw new Error('Skill workspace must already exist')
+      const config = dirname(this.root)
+      if (!assertAncestors(config)) {
+        if (!assertAncestors(dirname(config))) throw new Error('Skill workspace must already exist')
+        fs.mkdirSync(config)
+      }
       fs.mkdirSync(this.root)
     }
     const transaction = join(this.root, `.skill-edit-${randomUUID()}`)

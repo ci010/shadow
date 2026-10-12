@@ -33,9 +33,9 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const pathB = join(root, 'B-private-folder')
       for (const directory of [home, pathA, pathB]) await mkdir(directory)
       await writeFile(join(home, 'SOUL.md'), 'BASE_HOME_NOT_IMPORTED\n')
-      const projectHome = projectPaths(`${home}.projects`, 'default').home
-      await mkdir(projectHome, { recursive: true })
-      await writeFile(join(projectHome, 'SOUL.md'), 'ORG_A_PRIVATE_IDENTITY_7f01\n')
+      const projectHome = projectPaths(home, 'default').home
+      await mkdir(join(projectHome, 'config'), { recursive: true })
+      await writeFile(join(projectHome, 'config', 'SOUL.md'), 'ORG_A_PRIVATE_IDENTITY_7f01\n')
       await writeFile(join(home, 'unknown-user-file.bin'), Buffer.from([0, 41, 255]))
       await writeFile(join(pathA, 'sentinel.txt'), 'A file only')
       await writeFile(join(pathB, 'sentinel.txt'), 'B file only')
@@ -61,7 +61,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const credential = randomUUID()
       const options = { configPath, localNodeId: 'fixture-main', gateway: { host: '127.0.0.1', port, launchCredential: credential } }
       const base = `http://127.0.0.1:${port}`
-      const projectConfigPath = projectPaths(`${home}.projects`, 'default').configPath
+      const projectConfigPath = projectPaths(home, 'default').configPath
       await mkdir(dirname(projectConfigPath), { recursive: true })
       await writeFile(projectConfigPath, JSON.stringify({ voice: { enabled: false, timeoutMs: 30000 }, a2a: { server: {
         url: `${base}/projects/default/a2a`, agentType: 'a2a-text',
@@ -166,7 +166,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
         assert.equal((await request(prefix + '/api/config', 'PATCH', {
           ...config, tools: { ...config.tools, webSearchProvider: 'brave' },
         })).status, 400)
-        assert.doesNotMatch(await readFile(projectPaths(`${home}.projects`, id).configPath, 'utf8'), /synthetic-search-|ApiKey|webSearchProvider/)
+        assert.doesNotMatch(await readFile(projectPaths(home, id).configPath, 'utf8'), /synthetic-search-|ApiKey|webSearchProvider/)
       }
       assert.equal(JSON.parse(await readFile(configPath, 'utf8')).tools.exaApiKey, 'synthetic-search-exa')
       for (const project of [a, b]) {

@@ -51,6 +51,8 @@ const api: ShadowDesktopApi = Object.freeze({
     initializeMain: () => ipcRenderer.invoke(IPC_CHANNELS.initializeMain),
     launchMain: (options: LaunchMainOptions) =>
       ipcRenderer.invoke(IPC_CHANNELS.launchMain, options),
+    prepareProvider: (options: LaunchMainOptions) =>
+      ipcRenderer.invoke(IPC_CHANNELS.prepareProvider, options),
     ensureRuntime: () => ipcRenderer.invoke(IPC_CHANNELS.ensureRuntime),
     retryRuntime: () => ipcRenderer.invoke(IPC_CHANNELS.retryRuntime),
     childSetup: () => ipcRenderer.invoke(IPC_CHANNELS.childSetup),

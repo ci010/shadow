@@ -91,7 +91,7 @@ test('current catalog retains reservations, retirements, jobs and exclusive fold
     await catalog.reserveRemoteWorkdirs('default', [ref])
     const reload = new ProjectCatalog(host)
     await reload.init()
-    assert.equal(reload.filePath, join(host, 'projects.v2.json'))
+    assert.equal(reload.filePath, join(host, 'projects.json'))
     assert.deepEqual(reload.folders(), [folder])
     assert.equal(reload.remoteClaims()[0].projectId, 'default')
     await assert.rejects(reload.reserveRemoteWorkdirs(other.id, [ref]), /another project/)
@@ -106,7 +106,7 @@ test('current catalog retains reservations, retirements, jobs and exclusive fold
     assert.equal(persisted.version, 2)
     assert.equal(persisted.retiredFolders[0].id, folder.id)
     assert.deepEqual(projectPaths(host, 'default'), {
-      root: join(host, 'projects', 'default'), home: join(host, 'projects', 'default', 'workspace'),
+      root: join(host, 'projects', 'default'), home: join(host, 'projects', 'default'),
       configPath: join(host, 'projects', 'default', 'config', 'project.json'),
     })
   })
@@ -120,7 +120,7 @@ test('unsupported catalog formats and unknown ownership fields fail without over
       { version: 2, projects: [], folders: [], unexpectedOwner: 'foreign' },
     ]) {
       const value = JSON.stringify(data)
-      const file = join(host, 'projects.v2.json')
+      const file = join(host, 'projects.json')
       await writeFile(file, value)
       await assert.rejects(new ProjectCatalog(host).init(), /Invalid/)
       assert.equal(await readFile(file, 'utf8'), value)
@@ -131,7 +131,8 @@ test('unsupported catalog formats and unknown ownership fields fail without over
 test('folder registries and bot records accept only current documents without converting them', async () => {
   await withTempWorkspace(async root => {
     const folder = { id: randomUUID(), name: 'Directory', path: root, createdAt: new Date().toISOString() }
-    const file = join(root, 'folders.v2.json')
+    await mkdir(join(root, 'state'), { recursive: true })
+    const file = join(root, 'state', 'folders.v2.json')
     await writeFile(file, JSON.stringify({ version: 1, folders: [folder] }))
     await assert.rejects(new FolderRegistry(root).init(), /invalid/)
     await writeFile(file, JSON.stringify({ version: 2, folders: [folder] }))

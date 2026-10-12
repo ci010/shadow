@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -31,7 +32,7 @@ export class ProjectActions {
   #starting = 0
   readonly filePath: string
   constructor(home: string, private folders: FolderRegistry, private processes = new ProcessManager(), private localExecutor = true) {
-    this.filePath = join(home, 'user-actions.v1.json')
+    this.filePath = projectStoragePath(home, 'user-actions.v1.json')
   }
   async init() {
     try {

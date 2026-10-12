@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import type { SessionState, SessionStore } from '../sessions/session-store.ts'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -22,7 +23,7 @@ function assertStatesOwnership(states: Record<string, SessionState>, projectId: 
 
 /** Reserve current-format workdirs from both stores before admitting new remote folders. */
 export async function reserveRemoteSessionWorkdirs(home: string, catalog: ProjectCatalog, projectId: string): Promise<void> {
-  const directory = join(home, '.sessions')
+  const directory = projectStoragePath(home, '.sessions')
   try { await stat(directory) } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error

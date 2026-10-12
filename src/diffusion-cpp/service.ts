@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
-import { access, open, readFile, rm, stat } from 'node:fs/promises'
+import { access, mkdir, open, readFile, rm, stat } from 'node:fs/promises'
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { writePrivateFile } from '../config/store.ts'
@@ -343,6 +343,8 @@ export class DiffusionCppService {
         if (preset === 'qwen_image_edit') await validateQwenEditComponents(selected)
         next.presets[preset] = selected
       }
+      signal?.throwIfAborted()
+      await mkdir(dirname(this.configPath), { recursive: true })
       signal?.throwIfAborted()
       writePrivateFile(this.configPath, JSON.stringify(configSchema.parse(next), null, 2) + '\n')
       return this.status()

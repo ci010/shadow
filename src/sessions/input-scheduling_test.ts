@@ -18,7 +18,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
-import { createResponseContext, isBackgroundResponse } from './response-context.ts'
+import { createResponseContext, hasNoAdmittedUserInput } from './response-context.ts'
 import { channelMessageInput, type SessionInput, type SessionMessageInput, type SessionTurnFact } from './input.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import { Session } from './session.ts'
@@ -278,7 +278,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       const history = (await f.manager.getHistory(f.state.sessionId, { shallow: true })).messages.filter(message => message.role === 'assistant')
       const responses = f.outboundMessages.filter(message => message.event === 'response')
       assert.deepEqual(history.map(message => message.responseContext), responses.map(message => message.responseContext))
-      assert.deepEqual(history.map(message => isBackgroundResponse(message.responseContext)), [false, true, true, false])
+      assert.deepEqual(history.map(message => hasNoAdmittedUserInput(message.responseContext)), [false, true, true, false])
       assert.deepEqual(f.facts.map(fact => fact.content), ['Exact result 0', 'Exact result 1', 'Exact result 2', 'Exact result 3'])
       assert.deepEqual(responses.map(message => message.content), f.facts.map(fact => fact.content))
       assert.equal(new Set(history.map(message => message.responseContext?.turnId)).size, 4)
@@ -288,7 +288,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
 }
 
 for (const policy of ['steering', 'queue', 'silent'] as const) {
-  test(`${policy}: only user input admitted to the current inference expands a background response`, async () => {
+  test(`${policy}: only user input admitted to the current inference changes prompt participation`, async () => {
     const f = await fixture()
     const tool = Promise.withResolvers<string>()
     const started = Promise.withResolvers<void>()
@@ -308,8 +308,8 @@ for (const policy of ['steering', 'queue', 'silent'] as const) {
       f.calls[1].resolve(done('Final output'))
       await waitFor(() => f.facts.length === 1)
       const responses = f.outboundMessages.filter(message => message.event === 'response')
-      assert(isBackgroundResponse(responses[0].responseContext))
-      assert.equal(isBackgroundResponse(responses[1].responseContext), policy !== 'steering')
+      assert(hasNoAdmittedUserInput(responses[0].responseContext))
+      assert.equal(hasNoAdmittedUserInput(responses[1].responseContext), policy !== 'steering')
       assert.equal(responses[0].responseContext?.turnId, responses[1].responseContext?.turnId)
       assert.notEqual(responses[0].responseContext?.responseId, responses[1].responseContext?.responseId)
       if (policy === 'queue') {
@@ -398,7 +398,7 @@ for (const afterTools of [false, true]) {
       assert.match(String(f.calls.at(-1)!.messages[0].content), /no user input admitted/)
       f.calls.at(-1)!.resolve(done('Background coordination'))
       await waitFor(() => f.facts.length === 3)
-      assert(isBackgroundResponse(f.outboundMessages.at(-1)?.responseContext))
+      assert(hasNoAdmittedUserInput(f.outboundMessages.at(-1)?.responseContext))
     } finally { await f.close() }
   })
 }
@@ -670,7 +670,7 @@ for (const policy of ['queue', 'silent', 'interactive', 'steering'] as const) {
       tool.resolve('Tool done')
       await waitFor(() => f.calls.length === 2)
       const steered = policy === 'interactive' || policy === 'steering'
-      assert.equal(f.calls[1].messages.some((m) => JSON.stringify(m.content).includes('next')), steered)
+      assert.equal(f.calls[1].messages.some((m) => m.role === 'user' && JSON.stringify(m.content).includes('next')), steered)
       assert.equal(f.calls[1].messages.filter((m) => m.tool_call_id === 'tool-1').length, 1)
       f.calls[1].resolve(done())
       if (policy === 'queue') {

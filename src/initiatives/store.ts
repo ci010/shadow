@@ -1,6 +1,7 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { constants, DatabaseSync } from 'node:sqlite'
 import { HANDOFF_VIEW, ITEM_ACTIVITY_VIEW, SCHEMA, TABLE_COLUMNS } from './schema.ts'
 import { parseSql, type Statement, type Value } from './sql.ts'
@@ -46,8 +47,8 @@ export class InitiativeStore {
   constructor(home: string, options: InitiativeStoreOptions = {}) {
     this.home = resolve(home)
     this.#options = options
-    mkdirSync(this.home, { recursive: true })
-    const filename = join(this.home, 'initiatives.sqlite')
+    const filename = projectStoragePath(this.home, 'initiatives.sqlite')
+    mkdirSync(dirname(filename), { recursive: true })
     if (existsSync(filename)) {
       const stat = lstatSync(filename)
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Initiative database must be a regular file, not a symbolic link')
@@ -471,17 +472,17 @@ export class InitiativeStore {
   }
 
   migrateLegacyMarkdown(): { imported: number; skipped: number } {
-    return this.migrateLegacy(join(this.home, 'projects'))
+    return this.migrateLegacy(projectStoragePath(this.home, 'projects'))
   }
 
-  /** root is this Home's projects directory. Originals remain immutable legacy archives. */
+  /** root is this Home's state/legacy-initiatives directory. Originals remain immutable legacy archives. */
   migrateLegacy(legacyRoot: string): { imported: number; skipped: number } {
     if (this.#closed) throw new Error('InitiativeStore is closed')
     if (this.#busy) throw new Error('Reentrant InitiativeStore access is not supported')
     const root = resolve(legacyRoot)
-    if (root !== join(this.home, 'projects')) throw new Error('Legacy imports must use this Project Home/projects directory')
+    if (root !== projectStoragePath(this.home, 'projects')) throw new Error('Legacy imports must use this Project state/legacy-initiatives directory')
     if (!existsSync(root)) return { imported: 0, skipped: 0 }
-    if (lstatSync(root).isSymbolicLink() || realpathSync(root) !== join(realpathSync(this.home), 'projects')) throw new Error('Legacy root must not redirect outside Home')
+    if (lstatSync(root).isSymbolicLink() || realpathSync(root) !== projectStoragePath(realpathSync(this.home), 'projects')) throw new Error('Legacy root must not redirect outside Home')
     return this.#transaction('legacy-import', () => {
       let imported = 0
       let skipped = 0

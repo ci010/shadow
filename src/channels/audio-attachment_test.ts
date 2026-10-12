@@ -1,3 +1,4 @@
+import { sessionWorkspacePath } from '../utils/paths.ts'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -43,7 +44,7 @@ test('Discord audio is kept as a session attachment; a failed download is not tr
     await dispatch('MESSAGE_CREATE', message)
     assert.deepEqual(messages[0].media, ['uploads/discord_456.ogg'])
     assert.equal(messages[0].content, '')
-    assert.equal(await readFile(join(workspace, 'discord_100', messages[0].media![0]), 'utf8'), 'voice')
+    assert.equal(await readFile(join(sessionWorkspacePath(workspace, 'discord:100'), messages[0].media![0]), 'utf8'), 'voice')
     downloadSucceeds = false
     await dispatch('MESSAGE_CREATE', { ...message, id: '124' })
     assert.equal(messages[1].media, undefined)

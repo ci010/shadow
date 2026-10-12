@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -15,7 +16,7 @@ async function fixture(t: TestContext) {
   await mkdir(root)
   t.after(() => rm(root, { recursive: true, force: true }))
   const put = async (id: string, content: string) => {
-    const file = join(root, ...id.split('/'))
+    const file = projectStoragePath(root, ...id.split('/'))
     await mkdir(dirname(file), { recursive: true })
     await writeFile(file, content)
     return file
@@ -128,7 +129,7 @@ test('project skill delete invalidates renamed skill cache immediately, retains 
   assert.equal(before.entries.some(entry => entry.id === 'builtin:skills/cron'), false)
   f.service.delete(entry.id, entry.revision)
   assert.equal(existsSync(join(f.root, entry.id)), false)
-  assert.equal(existsSync(join(f.root, 'skills/custom-directory/resource.ts')), true)
+  assert.equal(existsSync(projectStoragePath(f.root, 'skills/custom-directory/resource.ts')), true)
   assert.notEqual(f.skills.getSkillBody('cron'), staleSkill.body)
   f.skills.setSkill('cron', staleSkill)
   assert.notEqual(f.skills.getSkillBody('cron'), staleSkill.body)
@@ -181,8 +182,8 @@ test('symlink and ancestor junction escapes are never browsed or deleted', async
 test('project skills behind junctions are denied even if the runtime discovered them', async t => {
   const f = await fixture(t)
   await f.put('outside/SKILL.md', '---\nname: escape\n---\n# Private')
-  await mkdir(join(f.root, 'skills'))
-  await symlink(join(f.root, 'outside'), join(f.root, 'skills', 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+  await mkdir(projectStoragePath(f.root, 'skills'), { recursive: true })
+  await symlink(join(f.root, 'outside'), projectStoragePath(f.root, 'skills', 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
   await f.skills.load()
   assert.throws(() => f.service.catalog(), { status: 403 })
   assert.throws(() => f.service.detail('skills/escape/SKILL.md'), { status: 403 })

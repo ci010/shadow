@@ -1,7 +1,8 @@
-import { resolve } from 'node:path'
+import { projectStoragePath } from './data-paths.ts'
+import { dirname, resolve } from 'node:path'
 import { spawn as childSpawn } from 'node:child_process'
 import { Buffer } from 'node:buffer'
-import { readdir, readFile, stat as nodeStat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat as nodeStat, writeFile } from 'node:fs/promises'
 import process from 'node:process'
 import { env } from 'node:process'
 import { getOs, isWindows } from './runtime.ts'
@@ -241,7 +242,7 @@ async function findRgInDir(dir: string, rgName: string, depth = 0): Promise<stri
  * Creates the file if it doesn't exist. Avoids duplicate entries.
  */
 async function appendEnvPath(workspace: string, dir: string): Promise<void> {
-  const envPath = resolve(workspace, '.env')
+  const envPath = projectStoragePath(workspace, '.env')
   const sep = isWindows ? ';' : ':'
 
   try {
@@ -266,6 +267,7 @@ async function appendEnvPath(workspace: string, dir: string): Promise<void> {
       content = content.trimEnd() + (content.trim() ? '\n' : '') + line + '\n'
     }
 
+    await mkdir(dirname(envPath), { recursive: true })
     await writeFile(envPath, content)
     console.info(`[ripgrep] Persisted PATH addition to ${envPath}`)
   } catch (e) {

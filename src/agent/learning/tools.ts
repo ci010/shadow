@@ -1,5 +1,5 @@
+import { projectStoragePath } from '../../utils/data-paths.ts'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { z } from 'zod'
 import type { ExecutionContext } from '../../tools/context.ts'
 import type { Tool } from '../../tools/tool.ts'
@@ -57,13 +57,13 @@ export class LearningTools {
     if (previous) return `Learning event already recorded: ${id}`
     const when = new Date().toISOString()
     const path = `memory/events/${batch.createdAt.slice(0, 10)}.jsonl`
-    const file = join(this.runtime.sessions.workspace, path)
+    const file = projectStoragePath(this.runtime.sessions.workspace, path)
     // Recover an append that committed immediately before the journal write/process failed.
     const prior = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean)
       .map(line => JSON.parse(line) as LearningEvent).find(event => event.id === id) : undefined
     const event: LearningEvent = prior ?? { ...entry, origin, id, when, path }
     if (!prior) {
-      mkdirSync(join(this.runtime.sessions.workspace, 'memory', 'events'), { recursive: true })
+      mkdirSync(projectStoragePath(this.runtime.sessions.workspace, 'memory', 'events'), { recursive: true })
       appendFileSync(file, JSON.stringify(event) + '\n')
     }
     this.runtime.ledger.event(batch.id, event)
@@ -89,7 +89,7 @@ export class LearningTools {
       const batch = this.authorize(context)
       const args = z.union([readSchema, decisionSchema]).parse(raw)
       const path = `memory/decisions/${args.name}.md`
-      const file = join(this.runtime.sessions.workspace, path)
+      const file = projectStoragePath(this.runtime.sessions.workspace, path)
       const current = existsSync(file) ? readFileSync(file, 'utf8') : ''
       const currentRevision = current ? fingerprint(current) : ''
       if (args.action === 'read') return JSON.stringify({ path, revision: currentRevision, content: current })
@@ -187,7 +187,7 @@ export class LearningTools {
       const args = z.union([z.object({ action: z.literal('read') }).strict(), z.object({
         action: z.literal('save'), revision, content: text, rationale: text, evidence: z.array(text).min(2),
       }).strict()]).parse(raw)
-      const file = join(this.runtime.sessions.workspace, 'SOUL.md')
+      const file = projectStoragePath(this.runtime.sessions.workspace, 'SOUL.md')
       if (existsSync(file)) {
         const stat = lstatSync(file)
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) throw new Error('SOUL.md must be a regular, unaliased Project file.')

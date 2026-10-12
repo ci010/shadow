@@ -5,17 +5,31 @@ to the same Node backend; Electron provides setup and native-window controls, no
 a separate agent implementation. The [architecture reference](architecture.md)
 explains the implementation and its limitations.
 
-## Desktop setup: Main or Child
+## Desktop setup
 
-Choose the computer's role on the first setup page:
+The recommended first-run path is **Get started → Connect a model service →
+Start chatting**. You do not need to choose a deployment role or data directory:
+Shadow defaults to running the workspace on this computer (Main), with local
+execution enabled, and uses its saved data directory or the default `~/.shadow`.
+Initialization runs automatically rather than asking for a separate confirmation.
 
-- **Main** manages sessions, providers, workspace data and connected devices.
-  Selecting Main reveals **Also run tasks on this computer**, enabled by default.
+The model-service step contains the real provider connection form, including
+GitHub.com / GHE.com Copilot login, API-key providers, and local endpoints. The
+backend starts for setup, but the wizard remains unfinished until the connection
+is ready and you choose **Start chatting**. Already configured installations can
+reuse their connection after a readiness check.
+
+**Advanced settings (optional)** on the welcome page keeps the less common choices:
+
+- **Choose a different data folder** opens the directory page. Keep the suggested
+  path, enter another full path, or browse. No existing data is moved or deleted.
+- **Also run tasks on this computer** controls Main's local execution capability.
   The choice is saved with setup progress and reused when Main launches or
   restarts. It is not a local-model/provider setting.
-- **Child** executes supported remote tasks for an existing Main. It does not
-  show a redundant local-executor toggle; pairing still requires explicit
-  execution consent.
+- **Connect to an existing workspace** selects Child for an additional device.
+  Child executes supported remote tasks for an existing Main; it is not another
+  independent workspace. It does not show a redundant local-executor toggle,
+  and pairing still requires explicit execution consent.
 
 With local execution turned off, Main still runs the model/session loop and
 manages its data. Agent local commands, inline Node scripts, executable tool
@@ -33,10 +47,12 @@ fixed-purpose search helpers, and provider/auth/channel infrastructure. Owner
 configuration changes may still perform MCP discovery; agent-initiated virtual
 MCP configuration writes are blocked before executable discovery.
 
-There is no separate local-capabilities page. After choosing Main, setup has
-four steps: data directory, initialization, provider information, and launch.
-An unfinished older setup resumes past the removed page and retains its saved
-execution preference when available.
+There is no separate local-capabilities or initialization confirmation page.
+Unfinished older setups retain their saved role, directory, and execution
+preference. Setup retries continue from the saved stage; even a legacy launch
+stage checks the provider connection instead of treating the former information
+page as completed authentication. An older Desktop without the provider-setup
+runtime command must be updated; setup does not silently skip the connection.
 
 ## Language
 
@@ -508,3 +524,18 @@ conversations, see [tools and automations](tools-and-automations.md). For
 publishing restricted conversation agents, see
 [conversation agent authoring](agent-authoring.md). For project-owned bot
 instances and QQ delivery limits, see [messaging channels](channels.md).
+
+### Freeform questions in conversation history
+
+An agent's `ask(kind=input)` appears as a separate **Question and answer** card
+in the conversation. Reply using the existing message box; after a confirmed
+answer receipt arrives, the card keeps the answer and its attachments beside the
+original question. This is an information request, not a decision or permission
+grant. User, parent-session and caller replies remain distinguished.
+
+On refresh, cards are rebuilt from paired tool calls and results. Only a current
+pending request shows a waiting state. A missing or unrecognized receipt means
+**No confirmed answer**, not an active wait or success; explicit failure or
+cancellation remains unconfirmed. Raw question records remain available in the
+card disclosure. Historical records without a tool call in the loaded segment
+are not reconstructed from a separate input-history service.

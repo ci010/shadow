@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../../utils/data-paths.ts'
 /**
  * weixin_sdk.ts
  *
@@ -386,7 +387,7 @@ export class WeixinRepository {
   private seenSet: Set<string>
 
   constructor(workspace: string) {
-    this.dir = join(workspace, 'wechat')
+    this.dir = projectStoragePath(workspace, 'wechat')
     mkdirSync(this.dir, { recursive: true })
     this.data = this._load()
     this.seenSet = new Set(this.data.seenMessages)

@@ -23,6 +23,7 @@ const renderedOptions = {
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }
 test('conversation presentation and compacted history render across themes and viewport sizes', renderedOptions, t => renderConversation(t))
+test('event-triggered user answers stay visible in live and restored conversations', renderedOptions, t => renderConversation(t, 'response-audience'))
 test('system events preserve hierarchy, navigation and metadata across themes and viewport sizes', renderedOptions, t => renderConversation(t, 'events'))
 test('coordinator progress and outgoing message links navigate from the embedded primary pane', renderedOptions, t => renderConversation(t, 'coordinator-navigation'))
 test('received and outgoing session messages have explicit English and Chinese direction at desktop and mobile widths', renderedOptions, t => renderConversation(t, 'message-direction'))
@@ -30,15 +31,18 @@ test('session exchanges use fixed-height preview cards with accessible animated 
 test('call and task responses share five-line faded preview cards and the tool rail width', renderedOptions, t => renderConversation(t, 'response-cards'))
 test('wide asymmetric conversation keeps users right and AI cards full-width across themes and desktop/mobile', renderedOptions, t => renderConversation(t, 'reading-layout'))
 
-async function renderConversation(t: TestContext, scenario: 'presentation' | 'events' | 'coordinator-navigation' | 'message-direction' | 'session-exchanges' | 'response-cards' | 'reading-layout' = 'presentation') {
+async function renderConversation(t: TestContext, scenario: 'presentation' | 'response-audience' | 'events' | 'coordinator-navigation' | 'message-direction' | 'session-exchanges' | 'response-cards' | 'reading-layout' = 'presentation') {
   const directory = resolve(root, '.test-artifacts', `conversation-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const { descriptor } = parse(readFileSync(resolve(root, 'app', 'src', 'components', 'ChatTab.vue'), 'utf8'))
-  const template = descriptor.template!.content
+  const template = descriptor.template!.content.replaceAll('\r\n', '\n')
   const start = template.indexOf('<template v-for="(msg, idx) in displayMessages"')
   const end = template.indexOf('<IoRequestCard v-for="run in ioAfter.get(-1)"')
   assert(start >= 0 && end > start)
+  const streamStart = template.indexOf('<!-- Streaming response -->')
+  const streamEnd = template.indexOf('\n          </div>\n        </div>', streamStart)
+  assert(streamStart >= 0 && streamEnd > streamStart)
   const skeleton = template.match(/<ConversationSkeleton[\s\S]*?\/>/)?.[0]
   assert.ok(skeleton, 'Use the actual loading condition and activity binding')
   const continuityStart = template.indexOf('<details v-if="unlinkedExecutions.length"')
@@ -52,7 +56,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
         :revision="0" :active="true" :can-rename="true" />${segmentNavigation}</div>
       <div class="chat-history" :style="readingLayout ? {height:'calc(100vh - 160px)'} : undefined">
       <div :class="readingLayout ? 'chat-messages' : undefined" :style="readingLayout ? undefined : {display:'contents'}">
-      <div class="chat-message-list">${skeleton}${template.slice(continuityStart, end)}
+      <div class="chat-message-list">${skeleton}${template.slice(continuityStart, end)}${template.slice(streamStart, streamEnd)}
       <div class="fixture-stages"><SessionActivity v-for="stage in ['idle', 'llm', 'tool', 'waiting', 'completed', 'failed']" :key="stage" :stage="stage" /></div>
       </div></div></div>
       <div v-if="readingLayout" class="chat-composer"><div class="composer-box"><div class="composer-input"><textarea aria-label="Message" placeholder="Message..." /></div></div></div>
@@ -87,6 +91,8 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
           import ConversationSkeleton from '/src/components/ConversationSkeleton.vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
           import YieldDecision from '/src/components/YieldDecision.vue';
+          import InputQuestion from '/src/components/InputQuestion.vue';
+          import { inlineInputQuestions } from '/src/input-history.ts';
           import SessionMessageDisclosure from '/src/components/SessionMessageDisclosure.vue';
           import { inlineYieldDecisions } from '/src/yield-history.ts';
           import MessageTimestamp from '/src/components/MessageTimestamp.vue';
@@ -94,8 +100,6 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
           import SessionHeading from '/src/components/SessionHeading.vue';
           import SegmentNavigation from '/src/components/SegmentNavigation.vue';
           import ConversationSummary from '/src/components/ConversationSummary.vue';
-          import ResponseDisclosure from '/src/components/ResponseDisclosure.vue';
-          import { isBackgroundResponse } from '/@fs/${resolve(root, 'src', 'sessions', 'response-context.ts').replaceAll('\\', '/')}';
           import { inlineMessageActions } from '/src/message-actions.ts';
           import { groupToolActivity } from '/src/tool-activity.ts';
           import { messageAttachments } from '/src/message-attachments.ts';
@@ -105,7 +109,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
           const state = reactive({ loadingHistory:true, messages:[], visible:true, conversationDocumentVisible:true,
             readingLayout:false, mobileLayout:false,
             activePanel:'conversation', route:{name:'chat'}, viewingPhysicalId:null, activeSessionId:'web:owner',
-            streaming:false, streamContent:'', isDirectChat:true, requestBusy:false, currentRecovery:null,
+            streaming:false, streamContent:'', streamMedia:[], streamTimestamp:null, streamResponseContext:undefined, isDirectChat:true, requestBusy:false, currentRecovery:null,
             embedded:false, enableChildPane:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]},
             compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[], childSessionId:null,
             executionFixtures:{11:{mode:'task',label:'Compile and finish native helper',agentType:'sub',
@@ -244,28 +248,26 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
           const empty = { render:() => null };
           createApp({
             __scopeId:'data-v-fixture',
-            components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, SessionMessageDisclosure,
-              SessionHeading, SegmentNavigation, ConversationSummary, ResponseDisclosure, ExecutionMessage, ConversationEvent, CommandResult:empty,
+            components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, InputQuestion, SessionMessageDisclosure,
+              SessionHeading, SegmentNavigation, ConversationSummary, ExecutionMessage, ConversationEvent, CommandResult:empty,
               MessageAttachments:empty, IoRequestCard:empty },
             render,
             setup() {
-              const expandedResponses = reactive(new Set());
               const sessions = [{ sessionId:'web:peer', label:'Reviewer with a deliberately long name', mode:'session' }];
               const messageActions = computed(() => inlineMessageActions(state.messages, sessions));
               const yieldDecisions = computed(() => inlineYieldDecisions(state.messages, null, state.decisionRecords));
+              const inputQuestions = computed(() => inlineInputQuestions(state.messages));
               const nav = useConversationNavigation({
                 props:{ managed:true, get embedded() { return state.embedded }, get enableChildPane() { return state.enableChildPane },
                   sessionId:'web:owner', projectId:'fixture' },
                 router:{replace(){}}, emit:(event, id) => state.navigation.push({event,id}),
                 sessions:() => sessions, reset(){}, refresh(){}, mounted:() => true, newDraft(){},
               });
-              return { ...toRefs(state), t, formatNumber, messageActions, yieldDecisions, SessionMessageDisclosure,
-                expandedResponses, isBackgroundResponse,
-                setResponseExpanded(context, open) { if (!context) return; if (open) expandedResponses.add(context.responseId); else expandedResponses.delete(context.responseId) },
+              return { ...toRefs(state), t, formatNumber, messageActions, yieldDecisions, inputQuestions, SessionMessageDisclosure,
                 displayMessages:computed(() => state.messages.map(msg => ({ ...msg, attachmentBody:messageAttachments(msg.content) }))),
                 inlineExecutions:computed(() => ({entries:new Map(Object.entries(state.executionFixtures).map(([index, value]) => [Number(index), value]))})),
                 ioAfter:new Map(), expandedThinking:new Set(),
-                toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded,
+                toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded, ...inputQuestions.value.excluded,
                   ...Object.keys(state.executionFixtures).map(Number), 12]))),
                 inspectExecution:nav.inspectExecution, sourceForEvent:meta => meta.attrs['source-session-id'] ? ({
                   ...sessions[0],sessionId:meta.attrs['source-session-id'],
@@ -330,6 +332,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
   const env: NodeJS.ProcessEnv = { CONVERSATION_SMOKE_URL: server.resolvedUrls.local[0] }
+  if (scenario === 'response-audience') env.CONVERSATION_RESPONSE_AUDIENCE_ONLY = '1'
   if (scenario === 'events') env.CONVERSATION_EVENTS_ONLY = '1'
   if (scenario === 'coordinator-navigation') env.CONVERSATION_NAVIGATION_ONLY = '1'
   if (scenario === 'message-direction') env.CONVERSATION_DIRECTION_ONLY = '1'

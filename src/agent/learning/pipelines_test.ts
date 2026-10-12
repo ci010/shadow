@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -280,7 +281,7 @@ test('direct writes and unresolved tool failures cannot masquerade as no-change,
       const batch = f.runtime.ledger.create('reflector', [source], [])
       f.runtime.ledger.bind(batch.id, 'cron:pending')
       f.runtime.ledger.propose(batch.id, 'no_change', 'Reviewed')
-      const path = join(workspace, '.learning', 'state.v1.json')
+      const path = projectStoragePath(workspace, '.learning', 'state.v1.json')
       const saved = await readFile(path, 'utf8')
       await rm(path)
       await mkdir(path)
@@ -310,7 +311,7 @@ test('direct writes and unresolved tool failures cannot masquerade as no-change,
       await assert.rejects(f.tools.soul.execute(args, ctx), /distinct source sessions/)
       await assert.rejects(f.tools.soul.execute({ ...args, evidence: ['web:source', 'web:other'], content: '# Soul' }, ctx), /continuity/)
       await f.tools.soul.execute({ ...args, evidence: ['web:source', 'web:other'] }, ctx)
-      assert.match(await readFile(join(workspace, 'SOUL.md'), 'utf8'), /Keep reasons conditional/)
+      assert.match(await readFile(projectStoragePath(workspace, 'SOUL.md'), 'utf8'), /Keep reasons conditional/)
     })
   })
 test('lesson skills use the real shared edit store and are immediately discoverable, never executable', async () => {

@@ -34,15 +34,14 @@ export class AtomicMainAgentConfigInitializer implements MainAgentConfigInitiali
       JSON.parse(await readFile(this.runtimeConfigFilePath, 'utf8')),
     )
     const dataDir = resolve(runtimeConfig.dataDir)
-    const workspace = join(dataDir, 'workspace')
-    const configFilePath = join(dataDir, 'config', 'bot.config.json')
+    const workspace = dataDir
+    const configFilePath = join(dataDir, 'app.json')
     const config: MainAgentConfig = {
       agent: { workspace, sessionStorage: 'sqlite' },
       channels: { web: { enabled: true } },
       providers: { copilot: {} },
     }
 
-    await mkdir(workspace, { recursive: true })
     await mkdir(dirname(configFilePath), { recursive: true })
     if (await validateExistingConfig(configFilePath, config)) return
 
@@ -97,19 +96,18 @@ async function validateExistingConfig(filePath: string, expected: MainAgentConfi
   return true
 }
 
+// Desktop checks only the storage boundary and basic shape. The backend owns full
+// schema validation; resumed setup must not discard provider/model customization.
 function isCompatibleMainAgentConfig(value: unknown, expected: MainAgentConfig): boolean {
-  if (!isRecordWithExactKeys(value, ['agent', 'channels', 'providers'])) return false
-  const agent = value.agent
-  const channels = value.channels
-  const providers = value.providers
-  return isRecordWithExactKeys(agent, ['workspace', 'sessionStorage'])
-    && agent.workspace === expected.agent.workspace
-    && agent.sessionStorage === 'sqlite'
-    && isRecordWithExactKeys(channels, ['web'])
-    && isRecordWithExactKeys(channels.web, ['enabled'])
-    && channels.web.enabled === true
-    && isRecordWithExactKeys(providers, ['copilot'])
-    && isRecordWithExactKeys(providers.copilot, [])
+  if (!isRecord(value) || !isRecord(value.agent)) return false
+  return value.agent.workspace === expected.agent.workspace
+    && (value.agent.sessionStorage === undefined || value.agent.sessionStorage === 'sqlite' || value.agent.sessionStorage === 'jsonl')
+    && (value.channels === undefined || isRecord(value.channels))
+    && (value.providers === undefined || isRecord(value.providers))
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isRecordWithExactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {

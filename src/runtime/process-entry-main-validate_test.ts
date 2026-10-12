@@ -41,7 +41,7 @@ test('root process entry validates a real Main bootstrap config path', async () 
       assertEquals(result.result.paths.bootstrapConfigPath, bootstrapPath)
       assertEquals(
         result.result.paths.mutableAgentConfigPath,
-        join(directory, 'state', 'config', 'bot.config.json'),
+        join(directory, 'state', 'app.json'),
       )
     }
   } finally {

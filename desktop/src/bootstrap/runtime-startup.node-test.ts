@@ -55,3 +55,33 @@ test('a crashed runtime does not return cached ready context or restart on obser
   })
   assert.equal(launches, 1)
 })
+
+test('provider setup attempts replace current result and retries use the persisted-profile launcher', async () => {
+  let retries = 0
+  const startup = new RuntimeStartup(async () => { retries++; return ready }, () => ({ phase: 'ready' }))
+  const failure = { ok: false, code: 'runtime-unavailable', failure: { role: 'main', kind: 'readiness-timeout' } } as const
+  assert.deepEqual(await startup.start(async () => failure), failure)
+  assert.deepEqual(await startup.current(), failure)
+  assert.equal(retries, 0)
+  assert.deepEqual(await startup.start(), ready)
+  assert.deepEqual(await startup.current(), ready)
+  assert.equal(retries, 1)
+  assert.deepEqual(await startup.start(async () => ready), ready)
+  assert.deepEqual(await startup.current(), ready)
+  assert.equal(retries, 1)
+})
+
+test('explicit setup validates its own role/step after any pending saved-profile startup', async () => {
+  let resolve!: (value: EnsureRuntimeResult) => void
+  const startup = new RuntimeStartup(() => new Promise(done => { resolve = done }), () => ({ phase: 'ready' }))
+  const pending = startup.start()
+  let setupCalls = 0
+  const setup = startup.start(async () => { setupCalls++; return { ok: false, code: 'invalid-state' } })
+  await Promise.resolve()
+  assert.equal(setupCalls, 0)
+  resolve(ready)
+  assert.deepEqual(await pending, ready)
+  assert.deepEqual(await setup, { ok: false, code: 'invalid-state' })
+  assert.equal(setupCalls, 1)
+  assert.deepEqual(await startup.current(), { ok: false, code: 'invalid-state' })
+})

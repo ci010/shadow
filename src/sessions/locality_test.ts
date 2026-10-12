@@ -1,3 +1,4 @@
+import { sessionWorkspacePath } from '../utils/paths.ts'
 import { deepEqual as assertEquals, notDeepEqual as assertNotEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import { resolve } from 'node:path'
@@ -30,7 +31,7 @@ test('local folders resolve only trusted absolute capability paths, retaining pr
     capability: { kind: 'workdir', online: true, path },
   }))
   assertEquals(workdir.capabilityId, 'local-project-v1:folder-a')
-  assertEquals(result.sessionDataDir, resolve(workspace, 'web_owner'))
+  assertEquals(result.sessionDataDir, sessionWorkspacePath(workspace, 'web:owner'))
   assertEquals(result.workdir, { available: true, locality: 'local', workdir, path })
   for (const capability of [
     undefined,
@@ -94,12 +95,12 @@ test('legacy state normalizes to its existing managed folder', () => {
   assertEquals(nested.workdir, topLevel.workdir)
   assertEquals(resolveSessionLocations(workspace, topLevel), {
     home: workspace,
-    sessionDataDir: resolve(workspace, 'discord_top'),
+    sessionDataDir: sessionWorkspacePath(workspace, 'discord:top'),
     workdir: {
       available: true,
       locality: 'local',
       workdir: topLevel.workdir,
-      path: resolve(workspace, 'discord_top'),
+      path: sessionWorkspacePath(workspace, 'discord:top'),
     },
   })
 })

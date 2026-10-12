@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
@@ -38,7 +39,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
 test('remote reservations reject a foreign persistence format before committing claims', async () => {
   await withTempWorkspace(async root => {
     const home = join(root, 'project-home')
-    const directory = join(home, '.sessions')
+    const directory = projectStoragePath(home, '.sessions')
     const catalog = new ProjectCatalog(join(root, 'host.projects'))
     await catalog.init()
     const jsonl = new JsonlSessionStore(directory)
@@ -51,7 +52,7 @@ test('remote reservations reject a foreign persistence format before committing 
     test('remote reservations validate and collect each persistence snapshot only once', async t => {
       await withTempWorkspace(async root => {
         const home = join(root, 'home')
-        const directory = join(home, '.sessions')
+        const directory = projectStoragePath(home, '.sessions')
         const catalog = new ProjectCatalog(join(root, 'host.projects'))
         await catalog.init()
         const jsonl = new JsonlSessionStore(directory)

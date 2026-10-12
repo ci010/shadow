@@ -336,3 +336,126 @@ test('Main role preference survives setup reload, launch retry and later runtime
   ])
   assert.deepEqual(await profiles.load(), { version: 1, role: 'main', localExecutor: false, port: 43123 })
 })
+
+function mainProviderState(): WizardState {
+  return transitionWizard(transitionWizard(mainDirectoryState(), { type: 'data-directory-selected' }), { type: 'main-initialized' })
+}
+
+test('prepareProvider starts the authenticated host and exposes only safe context without completing setup', async () => {
+  const { RuntimeHost } = await import('../sidecar/runtime-host.js')
+  const { RuntimeStartup } = await import('./runtime-startup.js')
+  const state = mainProviderState()
+  const storage = new MemoryStorage(state)
+  const profiles = new MemoryLaunchProfiles()
+  let launches = 0
+  let authorized: unknown
+  let status: import('../sidecar/supervisor.js').SidecarStatus = { phase: 'stopped' }
+  const host = new RuntimeHost({
+    paths: { executablePath: 'node', appPath: '.', resourcesPath: '.', userDataPath: '.', packaged: true },
+    tokenFactory: () => 'synthetic-private-launch-token',
+    onAuthorizationChanged: authorization => { authorized = authorization },
+    supervisorFactory: () => ({
+      get status() { return status },
+      start: async request => {
+        launches++
+        assert.deepEqual(await profiles.load(), { version: 1, role: 'main', port: 43123, localExecutor: false })
+        status = { phase: 'ready', role: request.role, apiBase: 'http://127.0.0.1:43123' }
+        return status
+      },
+      stop: async () => undefined,
+    }),
+  })
+  const coordinator = createCoordinator(storage, host, profiles)
+  const startup = new RuntimeStartup(() => coordinator.ensureRuntime(), () => host.status)
+  const result = await startup.start(() => coordinator.prepareProvider({ port: 43123, localExecutor: false }))
+  assert.deepEqual(result, {
+    ok: true,
+    context: {
+      version: 1, mode: 'main', localNodeId: 'local-node-id', mainConnection: 'connected', mainLatencyMs: null,
+      uiScopes: ['chat:read', 'chat:write', 'knowledge:read', 'main:admin', 'nodes:admin', 'audit:read'],
+      apiBase: 'http://127.0.0.1:43123',
+    },
+  })
+  assert.deepEqual(authorized, { apiBase: 'http://127.0.0.1:43123', launchToken: 'synthetic-private-launch-token' })
+  assert.equal(JSON.stringify(result).includes('token'), false)
+  assert.deepEqual(await startup.current(), result)
+  assert.deepEqual(await storage.load(), state)
+  // A reload and stale default options reuse the profile and the same backend.
+  assert.deepEqual(await coordinator.ensureRuntime(), result)
+  assert.deepEqual(await coordinator.prepareProvider({ port: 43124, localExecutor: true }), result)
+  assert.deepEqual(await storage.load(), state)
+  await coordinator.dispatch({ type: 'provider-configured' })
+  assert.equal((await coordinator.launchMain({ port: 43124, localExecutor: true })).ok, true)
+  assert.equal((await coordinator.load()).step, 'complete')
+  assert.equal(launches, 1)
+  await host.stop()
+})
+
+test('prepareProvider failures retain setup and safe diagnostics, then retry with saved localExecutor', async () => {
+  const initial = mainProviderState()
+  assert.equal(initial.mode, 'main')
+  const state = { ...initial, mode: 'main' as const, localExecutor: false }
+  const storage = new MemoryStorage(state)
+  const profiles = new MemoryLaunchProfiles()
+  let attempts = 0
+  const coordinator = createCoordinator(storage, {
+    start: async options => {
+      assert.equal(options.localExecutor, false)
+      if (++attempts === 1) return { phase: 'failed', role: 'main', kind: 'readiness-timeout', elapsedMs: 15000, message: 'private-token' }
+      if (attempts === 2) throw new Error('C:\\private token=secret')
+      return { phase: 'ready', apiBase: 'http://127.0.0.1:43123' }
+    },
+  }, profiles)
+  assert.deepEqual(await coordinator.prepareProvider({ port: 43123, localExecutor: true }), {
+    ok: false, code: 'runtime-unavailable', failure: { role: 'main', kind: 'readiness-timeout', elapsedMs: 15000 },
+  })
+  assert.deepEqual(await profiles.load(), { version: 1, role: 'main', port: 43123, localExecutor: false })
+  assert.deepEqual(await storage.load(), state)
+  assert.deepEqual(await coordinator.prepareProvider({ port: 43123, localExecutor: true }), { ok: false, code: 'runtime-unavailable' })
+  assert.deepEqual(await storage.load(), state)
+  assert.equal((await coordinator.ensureRuntime()).ok, true)
+  assert.deepEqual(await storage.load(), state)
+})
+
+test('prepareProvider rejects early Main, complete and every Child step without config writes or starts', async () => {
+  const child = transitionWizard(createWizardState(), { type: 'select-role', mode: 'child' })
+  for (const state of [
+    createWizardState(), mainDirectoryState(),
+    transitionWizard(mainDirectoryState(), { type: 'data-directory-selected' }),
+    transitionWizard(mainLaunchState(), { type: 'sidecar-ready' }),
+    ...(['enter-pairing-offer', 'verify-fingerprint', 'name-device', 'choose-capabilities', 'launch-child', 'complete'] as const)
+      .map(step => ({ ...child, mode: 'child' as const, step })),
+  ]) {
+    const unexpected = async (): Promise<never> => { assert.fail('invalid state must have no side effects') }
+    const storage = new MemoryStorage(state)
+    const coordinator = new BootstrapCoordinator(storage, { writeMain: unexpected }, { initialize: unexpected },
+      { start: unexpected }, { load: unexpected, save: unexpected }, { readMain: unexpected })
+    assert.deepEqual(await coordinator.prepareProvider({ port: 43123, localExecutor: true }), { ok: false, code: 'invalid-state' })
+    assert.deepEqual(await storage.load(), state)
+  }
+})
+
+test('prepareProvider resumes legacy launch-main without requiring a profile or advancing its state', async () => {
+  const state = mainLaunchState()
+  const storage = new MemoryStorage(state)
+  const profiles = new MemoryLaunchProfiles()
+  const coordinator = createCoordinator(storage, { start: async () => ({ phase: 'ready', apiBase: 'http://127.0.0.1:43123' }) }, profiles)
+  assert.equal((await coordinator.prepareProvider({ port: 43123, localExecutor: false })).ok, true)
+  assert.deepEqual(await storage.load(), state)
+  assert.deepEqual(await profiles.load(), { version: 1, role: 'main', localExecutor: false, port: 43123 })
+})
+
+test('provider preparation cannot bypass durable profile failures or overwrite a saved Child profile', async () => {
+  for (const profiles of [
+    { load: async () => null, save: async () => { throw new Error('private path') } },
+    { load: async () => { throw new Error('private path') }, save: async () => assert.fail('must not overwrite unreadable profile') },
+    { load: async () => ({ version: 1, role: 'child', port: 43124 } as const), save: async () => assert.fail('must not overwrite Child profile') },
+  ]) {
+    const state = mainProviderState()
+    const storage = new MemoryStorage(state)
+    const coordinator = createCoordinator(storage, { start: async () => assert.fail('must not start without a saved Main profile') }, profiles)
+    assert.deepEqual(await coordinator.prepareProvider({ port: 43123, localExecutor: true }), { ok: false, code: 'runtime-unavailable' })
+    assert.deepEqual(await storage.load(), state)
+  }
+  assert.deepEqual(await createCoordinator(new MemoryStorage(mainProviderState())).ensureRuntime(), { ok: false, code: 'profile-missing' })
+})

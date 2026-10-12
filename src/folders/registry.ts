@@ -1,7 +1,8 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
-import { open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises'
-import { basename, isAbsolute, join, normalize, parse } from 'node:path'
+import { mkdir, open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, normalize, parse } from 'node:path'
 import type { WorkdirCapabilityState, WorkdirRefV1 } from '../sessions/locality.ts'
 import type { FolderRecord } from './contracts.ts'
 import type { ProjectCatalog } from '../projects/catalog.ts'
@@ -101,7 +102,7 @@ export class FolderRegistry {
   #remoteOwnership?: RemoteFolderOwnership
 
   constructor(workspace: string, private readonly scope?: { projectId: string; catalog: ProjectCatalog }) {
-    this.filePath = join(absoluteDirectoryPath(workspace), 'folders.v2.json')
+    this.filePath = projectStoragePath(absoluteDirectoryPath(workspace), 'folders.v2.json')
   }
 
   init(): Promise<void> {
@@ -220,6 +221,7 @@ export class FolderRegistry {
   }
 
   async #persist(records: FolderRecord[], signal?: AbortSignal): Promise<void> {
+    await mkdir(dirname(this.filePath), { recursive: true })
     const temporary = `${this.filePath}.${randomUUID()}.tmp`
     let created = false
     try {

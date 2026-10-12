@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -26,7 +27,7 @@ const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const projectId = '11111111-1111-4111-8111-111111111111'
 
 async function definition(workspace: string, role: string, prompt: string, tools = 'read') {
-  const directory = join(workspace, 'agents', role)
+  const directory = projectStoragePath(workspace, 'agents', role)
   await mkdir(directory, { recursive: true })
   await writeFile(join(directory, 'AGENT.md'), `---\nallowedTools: [${tools}]\ndefaultMode: session\n---\n${prompt}`)
 }
@@ -246,7 +247,7 @@ test('refresh rereads builtin definitions and rejects invalid updated files with
     await definition(workspace, 'general', 'VALID_ROLE')
     await manager.load()
     const before = manager.resolve('general')
-    await writeFile(join(workspace, 'agents', 'general', 'AGENT.md'), '---\nallowedModules: [invalid]\n---\nINVALID_ROLE')
+    await writeFile(projectStoragePath(workspace, 'agents', 'general', 'AGENT.md'), '---\nallowedModules: [invalid]\n---\nINVALID_ROLE')
     await assert.rejects(manager.refresh('general'))
     assert.equal(manager.resolve('general'), before)
   })

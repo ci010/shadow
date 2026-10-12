@@ -1,5 +1,5 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { mkdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import type { McpServerConfig } from '../config/schema.ts'
 import { writePrivateFile } from '../config/store.ts'
 import { McpConnection, type McpToolInfo } from './client.ts'
@@ -96,7 +96,7 @@ export class McpToolIndex {
   constructor(private readonly workspace: string) {}
 
   private path(identity: string): string {
-    return join(this.workspace, '.mcp-tool-index', `${identity}.json`)
+    return projectStoragePath(this.workspace, '.mcp-tool-index', `${identity}.json`)
   }
 
   async read(config: McpServerConfig): Promise<IndexedMcpTools | undefined> {
@@ -180,7 +180,7 @@ export class McpToolIndex {
         tools: validateTools(tools),
       }
       const text = JSON.stringify(record) + '\n'
-      await mkdir(join(this.workspace, '.mcp-tool-index'), { recursive: true, mode: 0o700 })
+      await mkdir(projectStoragePath(this.workspace, '.mcp-tool-index'), { recursive: true, mode: 0o700 })
       signal?.throwIfAborted()
       writePrivateFile(this.path(record.fingerprint), text)
     } catch (error) {

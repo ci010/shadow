@@ -6,10 +6,10 @@
 				<div>
 					<h1 id="setup-title">{{ heading }}</h1>
 				</div>
-				<span v-if="state?.mode === 'main'" class="step-count">{{ progressLabel }}</span>
+				<span v-if="state && state.mode !== 'child'" class="step-count">{{ progressLabel }}</span>
 			</header>
 
-			<div v-if="state?.mode === 'main'" class="progress-track" aria-hidden="true">
+			<div v-if="state && state.mode !== 'child'" class="progress-track" aria-hidden="true">
 				<span :style="{ width: `${progressPercent}%` }" />
 			</div>
 
@@ -21,42 +21,50 @@
 
 			<template v-else-if="state">
 				<div v-if="showRoleChoice" class="setup-content">
-					<p class="lead">{{ t('Choose how this computer will participate.') }}</p>
-					<div class="role-list" role="radiogroup" :aria-label="t('Computer role')">
-						<button
-							class="role-option"
-							:class="{ selected: selectedRole === 'main' }"
-							role="radio"
-							:aria-checked="selectedRole === 'main'"
-							:disabled="busy"
-							@click="selectedRole = 'main'"
-						>
-							<span class="role-icon" aria-hidden="true">
-								<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="7" rx="1"/><rect x="4" y="14" width="16" height="7" rx="1"/><path d="M8 6.5h.01M8 17.5h.01"/></svg>
-							</span>
-							<span><strong>{{ t('Main') }}</strong><small>{{ t('Runs the workspace and coordinates connected computers.') }}</small></span>
-						</button>
-						<button
-							class="role-option"
-							:class="{ selected: selectedRole === 'child' }"
-							role="radio"
-							:aria-checked="selectedRole === 'child'"
-							:disabled="busy"
-							@click="selectedRole = 'child'"
-						>
-							<span class="role-icon" aria-hidden="true">
-								<svg viewBox="0 0 24 24"><rect x="5" y="2.5" width="14" height="19" rx="2"/><path d="M9 18h6"/></svg>
-							</span>
-							<span><strong>{{ t('Child') }}</strong><small>{{ t('Runs remote tasks for an existing Main. You review execution access before pairing.') }}</small></span>
-						</button>
-					</div>
-					<label v-if="selectedRole === 'main'" class="toggle-row role-capability">
-						<span><strong>{{ t('Also run tasks on this computer') }}</strong><small id="local-executor-help">{{ t('When off, execution tasks require a connected Child device. Main still manages your sessions and data.') }}</small></span>
-						<input v-model="localExecutor" type="checkbox" role="switch" :disabled="busy" :aria-label="t('Also run tasks on this computer')" aria-describedby="local-executor-help">
-					</label>
+					<p class="lead">{{ t('Connect a model service and start chatting. Recommended settings are already selected.') }}</p>
+					<p class="field-help">{{ t('Your data folder is set up automatically. You can choose a different location in advanced settings.') }}</p>
+					<details class="advanced-setup">
+						<summary>{{ t('Advanced settings (optional)') }}</summary>
+						<div class="role-list" role="radiogroup" :aria-label="t('Computer role')">
+							<button
+								class="role-option"
+								:class="{ selected: selectedRole === 'main' }"
+								role="radio"
+								:aria-checked="selectedRole === 'main'"
+								:disabled="busy"
+								@click="selectedRole = 'main'"
+							>
+								<span class="role-icon" aria-hidden="true">
+									<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="7" rx="1"/><rect x="4" y="14" width="16" height="7" rx="1"/><path d="M8 6.5h.01M8 17.5h.01"/></svg>
+								</span>
+								<span><strong>{{ t('Use this computer (recommended)') }}</strong><small>{{ t('Create your workspace here. No other computer is needed.') }}</small></span>
+							</button>
+							<button
+								class="role-option"
+								:class="{ selected: selectedRole === 'child' }"
+								role="radio"
+								:aria-checked="selectedRole === 'child'"
+								:disabled="busy"
+								@click="selectedRole = 'child'"
+							>
+								<span class="role-icon" aria-hidden="true">
+									<svg viewBox="0 0 24 24"><rect x="5" y="2.5" width="14" height="19" rx="2"/><path d="M9 18h6"/></svg>
+								</span>
+								<span><strong>{{ t('Connect to an existing workspace') }}</strong><small>{{ t('For an additional device: pair with a Main you have already set up.') }}</small></span>
+							</button>
+						</div>
+						<label v-if="selectedRole === 'main'" class="toggle-row role-capability">
+							<span><strong>{{ t('Also run tasks on this computer') }}</strong><small id="local-executor-help">{{ t('When off, execution tasks require a connected Child device. Main still manages your sessions and data.') }}</small></span>
+							<input v-model="localExecutor" type="checkbox" role="switch" :disabled="busy" :aria-label="t('Also run tasks on this computer')" aria-describedby="local-executor-help">
+						</label>
+						<label v-if="selectedRole === 'main'" class="toggle-row">
+							<span><strong>{{ t('Choose a different data folder') }}</strong><small>{{ t('Optional. Otherwise, Shadow uses the saved or default location.') }}</small></span>
+							<input v-model="customDirectory" type="checkbox" :disabled="busy" :aria-label="t('Choose a different data folder')">
+						</label>
+					</details>
 					<div class="actions">
 						<button class="primary-button" :disabled="busy || !selectedRole" @click="chooseRole">
-							{{ busy ? t('Saving…') : selectedRole === 'child' ? t('Continue as Child') : t('Continue as Main') }}
+							{{ busy ? t('Preparing your workspace…') : selectedRole === 'child' ? t('Connect this device') : t('Get started') }}
 						</button>
 					</div>
 				</div>
@@ -95,9 +103,9 @@
 					</form>
 				</div>
 
-				<div v-else-if="state.step === 'choose-data-directory'" class="setup-content">
-					<p class="lead">{{ t('Choose where Main should keep its configuration and workspace data.') }}</p>
-					<label class="field-label" for="main-directory">{{ t('Main directory') }}</label>
+				<div v-else-if="state.step === 'choose-data-directory' && !automaticDirectory" class="setup-content">
+					<p class="lead">{{ t('Choose where Shadow stores its settings and workspace data, or keep the recommended location.') }}</p>
+					<label class="field-label" for="main-directory">{{ t('Data folder') }}</label>
 					<div class="directory-field">
 						<input
 							id="main-directory"
@@ -122,41 +130,23 @@
 					</div>
 				</div>
 
-				<div v-else-if="state.step === 'initialize-main'" class="setup-content">
-					<p class="lead">{{ t('Create the initial Main configuration in the selected directory.') }}</p>
-					<div class="summary-row"><span>{{ t('Configuration') }}</span><strong>{{ t('Ready to initialize') }}</strong></div>
-					<div class="actions">
-						<button class="primary-button" :disabled="busy" @click="initializeMain">
-							{{ busy ? t('Initializing…') : t('Initialize Main') }}
-						</button>
-					</div>
-				</div>
-
-				<div v-else-if="state.step === 'configure-provider'" class="setup-content">
-					<p class="lead">{{ t('After Main launches, choose and connect a model provider in the app before your first chat.') }}</p>
-					<ul class="provider-options">
-						<li><strong>GitHub Copilot</strong> {{ t('— sign in with your GitHub account using a device code.') }}</li>
-						<li><strong>{{ t('API key or local provider') }}</strong> {{ t('— use another supported provider or your own local endpoint.') }}</li>
-					</ul>
-					<div class="actions">
-						<button class="primary-button" :disabled="busy" @click="configureProvider">
-							{{ busy ? t('Saving…') : t('Continue') }}
-						</button>
-					</div>
-				</div>
-
-				<div v-else-if="state.step === 'launch-main'" class="setup-content">
-					<p class="lead">{{ t('Launch Main, then connect your model provider in the app.') }}</p>
-					<div class="launch-summary">
-						<div><span>{{ t('Role') }}</span><strong>{{ t('Main') }}</strong></div>
-						<div><span>{{ t('Provider setup') }}</span><strong>{{ t('After launch') }}</strong></div>
-						<div><span>{{ t('Also run tasks on this computer') }}</span><strong>{{ localExecutor ? t('Enabled') : t('Disabled') }}</strong></div>
-					</div>
-					<div class="actions">
-						<button class="primary-button" :disabled="busy" @click="launchMain">
-							{{ busy ? t('Launching…') : t('Launch Main') }}
-						</button>
-					</div>
+				<div v-else-if="state.mode === 'main'" class="setup-content">
+					<template v-if="providerContext && providerStatus && !providerStatus.ready">
+						<ProviderSetup :api-base="providerContext.apiBase" :status="providerFormStatus" mode="setup"
+							@configured="providerConfigured" @retry="prepareProvider" @saving="providerSaving = $event" />
+					</template>
+					<template v-else-if="providerStatus?.ready && state.step === 'launch-main'">
+						<p class="lead">{{ t('Your model service is connected. You are ready to start.') }}</p>
+						<div class="launch-summary">
+							<div><span>{{ t('Model service') }}</span><strong>{{ providerDisplayName(providerStatus.provider) }}</strong></div>
+							<div v-if="providerStatus.host"><span>{{ t('GitHub account host') }}</span><strong>{{ providerStatus.host }}</strong></div>
+						</div>
+						<div class="actions"><button class="primary-button" :disabled="busy || providerSaving" @click="launchMain">{{ busy ? t('Opening your workspace…') : t('Start chatting') }}</button></div>
+					</template>
+					<template v-else>
+						<p class="lead" role="status">{{ busy ? t('Preparing your workspace…') : t('Continue setting up your workspace.') }}</p>
+						<div v-if="!busy" class="actions"><button class="primary-button" @click="continueMain()">{{ t('Retry setup') }}</button></div>
+					</template>
 				</div>
 
 				<div v-if="actionError" class="notice error-notice action-error" role="alert">
@@ -170,7 +160,10 @@
 
 <script setup lang="ts">
 import { t } from './i18n.ts'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import ProviderSetup from './ProviderSetup.vue'
+import { createProviderSetupClient, providerDisplayName, type ProviderSetupStatus } from './provider-setup.ts'
+import type { InstallationContextV1 } from './installation-context.ts'
 import shadowLogo from './assets/shadow-logo.png'
 import { decodeChildInvitation } from './device-pairing-invitation.ts'
 import {
@@ -204,7 +197,20 @@ const emit = defineEmits<{
 }>()
 
 const state = ref(props.initialState)
-const selectedRole = ref<'main' | 'child' | null>(null)
+const selectedRole = ref<'main' | 'child'>('main')
+const customDirectory = ref(false)
+const automaticDirectory = ref(false)
+const providerContext = ref<InstallationContextV1 | null>(null)
+const providerStatus = ref<ProviderSetupStatus | null>(null)
+// Missing credentials are the normal first-run state, not an error the user caused.
+const providerFormStatus = computed(() => {
+	const status = providerStatus.value
+	return status && ['missing_credentials', 'missing_base_url'].includes(status.reason ?? '')
+		? { ...status, reason: undefined } : status
+})
+const providerSaving = ref(false)
+const lifetime = new AbortController()
+onBeforeUnmount(() => lifetime.abort())
 const directorySelection = ref<NativeDirectorySelection | null>(null)
 const directoryPath = ref('')
 const localExecutor = ref(props.initialState?.mode === 'main'
@@ -232,23 +238,28 @@ function togglePairingMode() {
 	actionError.value = ''
 }
 
-const mainSteps = ['choose-data-directory', 'initialize-main', 'configure-provider', 'launch-main'] as const
 const showRoleChoice = computed(() => state.value?.mode === null)
-const currentStepIndex = computed(() => state.value?.mode === 'main' ? mainSteps.indexOf(state.value.step as typeof mainSteps[number]) : -1)
-const progressLabel = computed(() => t('Step {value1} of {length}', { value1: Math.max(1, currentStepIndex.value + 1), length: mainSteps.length }))
-const progressPercent = computed(() => Math.max(0, ((currentStepIndex.value + 1) / mainSteps.length) * 100))
+const currentStepIndex = computed(() => {
+	if (state.value?.mode !== 'main' || ['choose-data-directory', 'initialize-main'].includes(state.value.step)) return 0
+	return providerStatus.value?.ready && state.value.step === 'launch-main' ? 2 : 1
+})
+const progressLabel = computed(() => t('Step {value1} of {length}', { value1: currentStepIndex.value + 1, length: 3 }))
+const progressPercent = computed(() => ((currentStepIndex.value + 1) / 3) * 100)
 const heading = computed(() => {
 	if (props.loadError) return t('Connect to desktop')
-	if (state.value?.mode === null) return t('Set up this computer')
-	if (state.value?.mode === 'child') return t('Child setup')
-	const titles: Partial<Record<string, string>> = {
-		'choose-data-directory': t('Choose Main directory'),
-		'initialize-main': t('Initialize Main'),
-		'configure-provider': t('Connect a provider after launch'),
-		'launch-main': t('Ready to launch'),
-	}
-	return titles[state.value?.step ?? ''] ?? t('Set up Main')
+	if (state.value?.mode === null) return t('Welcome to Shadow')
+	if (state.value?.mode === 'child') return t('Connect this device')
+	if (state.value?.step === 'choose-data-directory' && !automaticDirectory.value) return t('Choose a data folder')
+	if (state.value?.step === 'initialize-main' || state.value?.step === 'choose-data-directory') return t('Preparing your workspace…')
+	return currentStepIndex.value === 2 ? t('You are ready') : t('Connect a model service')
 })
+
+async function reloadSavedProgress(): Promise<void> {
+	try {
+		const saved = await props.api.bootstrap.load()
+		if (!lifetime.signal.aborted) state.value = saved
+	} catch { /* Keep the last known step while Desktop is unreachable. */ }
+}
 
 async function run(
 	operation: () => Promise<WizardState>,
@@ -259,6 +270,7 @@ async function run(
 	try {
 		state.value = await operation()
 	} catch {
+		await reloadSavedProgress()
 		actionError.value = failureMessage
 	} finally {
 		busy.value = false
@@ -266,12 +278,16 @@ async function run(
 }
 
 async function chooseRole(): Promise<void> {
-	if (!selectedRole.value) return
+	if (busy.value) return
+	automaticDirectory.value = selectedRole.value === 'main' && !customDirectory.value
 	await run(() => props.api.bootstrap.dispatch(selectedRole.value === 'main'
 		? { type: 'select-role', mode: 'main', localExecutor: localExecutor.value }
 		: { type: 'select-role', mode: 'child' }))
-	await loadDirectory()
-	await loadChild()
+	if (lifetime.signal.aborted) return
+	if (state.value?.mode === 'main') {
+		if (customDirectory.value) await loadDirectory()
+		else await continueMain()
+	} else await loadChild()
 }
 
 async function loadChild(): Promise<void> {
@@ -332,7 +348,10 @@ async function loadDirectory(): Promise<void> {
 	}
 }
 
-onMounted(async () => { await loadDirectory(); await loadChild() })
+onMounted(async () => {
+	if (state.value?.mode === 'main' && state.value.step !== 'choose-data-directory') await continueMain()
+	else { await loadDirectory(); await loadChild() }
+})
 
 async function pickDirectory(): Promise<void> {
 	actionError.value = ''
@@ -349,34 +368,94 @@ async function pickDirectory(): Promise<void> {
 
 async function commitDirectory(): Promise<void> {
 	if (busy.value || (!directoryPath.value.trim() && !directorySelection.value)) return
-	await run(async () => {
-		const result = await commitMainDirectoryChoice(props.api, directoryPath.value, directorySelection.value)
-		if (!result.ok) throw new Error(t('command failed'))
-		directorySelection.value = null
-		return result.state
-	}, t('Main directory could not be saved. Enter a full absolute path to a writable folder, check its permissions and available disk space, then retry.'))
+	await continueMain(true)
 }
 
-async function initializeMain(): Promise<void> {
-	await run(async () => {
-		const result = await props.api.bootstrap.initializeMain()
-		if (!result.ok) throw new Error(t('command failed'))
-		return result.state
-	}, t('Main could not be initialized. Check that the selected folder is writable and has free space. If it already contains a configuration, keep it intact and check its compatibility before retrying.'))
+async function continueMain(useChosenDirectory = false): Promise<void> {
+	if (busy.value || state.value?.mode !== 'main') return
+	busy.value = true
+	actionError.value = ''
+	try {
+		lifetime.signal.throwIfAborted()
+		if (state.value.step === 'choose-data-directory') {
+			if (!useChosenDirectory) {
+				const selection = await loadMainDirectorySelection(props.api, directorySelection.value)
+				lifetime.signal.throwIfAborted()
+				if (!selection) throw new Error('Directory selection unavailable')
+				useDirectorySelection(selection)
+			}
+			const result = await commitMainDirectoryChoice(props.api, directoryPath.value, directorySelection.value)
+			lifetime.signal.throwIfAborted()
+			if (!result.ok) throw new Error('Directory setup failed')
+			state.value = result.state
+			directorySelection.value = null
+		}
+		if (state.value.mode === 'main' && state.value.step === 'initialize-main') {
+			const result = await props.api.bootstrap.initializeMain()
+			lifetime.signal.throwIfAborted()
+			if (!result.ok) throw new Error('Initialization failed')
+			state.value = result.state
+		}
+		await connectProviderRuntime()
+	} catch {
+		await reloadSavedProgress()
+		if (state.value?.step === 'choose-data-directory') automaticDirectory.value = false
+		if (!lifetime.signal.aborted) actionError.value = t('Setup could not finish. Check the data folder permissions and desktop connection, then retry. Existing data is preserved.')
+	} finally { busy.value = false }
 }
 
-async function configureProvider(): Promise<void> {
-	await run(() => props.api.bootstrap.dispatch({ type: 'provider-configured' }))
+async function connectProviderRuntime(): Promise<void> {
+	if (!props.api.bootstrap.prepareProvider) {
+		actionError.value = t('Update and restart Desktop to connect a model service during setup.')
+		return
+	}
+	const result = await props.api.bootstrap.prepareProvider({ localExecutor: localExecutor.value, port: MAIN_LAUNCH_PORT })
+	lifetime.signal.throwIfAborted()
+	if (!result.ok || result.context.mode !== 'main') throw new Error('Runtime unavailable')
+	providerContext.value = result.context
+	await checkProvider()
+}
+
+async function checkProvider(): Promise<void> {
+	if (!providerContext.value) throw new Error('Runtime unavailable')
+	const status = await createProviderSetupClient(providerContext.value.apiBase).status(lifetime.signal, true)
+	lifetime.signal.throwIfAborted()
+	providerStatus.value = status
+	if (status.ready && state.value?.step === 'configure-provider') {
+		state.value = await props.api.bootstrap.dispatch({ type: 'provider-configured' })
+	}
+}
+
+async function prepareProvider(): Promise<void> {
+	if (busy.value) return
+	busy.value = true
+	actionError.value = ''
+	try { await connectProviderRuntime() }
+	catch { if (!lifetime.signal.aborted) actionError.value = t('The model setup service could not be reached. Check Desktop and retry.') }
+	finally { busy.value = false }
+}
+
+async function providerConfigured(): Promise<void> {
+	if (busy.value) return
+	busy.value = true
+	actionError.value = ''
+	try {
+		await checkProvider()
+		if (!providerStatus.value?.ready) actionError.value = t('Connect a model service before continuing.')
+	} catch { if (!lifetime.signal.aborted) actionError.value = t('The model setup service could not be reached. Check Desktop and retry.') }
+	finally { busy.value = false }
 }
 
 async function launchMain(): Promise<void> {
+	if (busy.value || !providerStatus.value?.ready) return
 	await run(async () => {
 		const result = await props.api.bootstrap.launchMain({ localExecutor: localExecutor.value, port: MAIN_LAUNCH_PORT })
-		if (!result.ok) throw new Error(t('command failed'))
+		if (!result.ok) throw new Error('Launch failed')
 		return result.state
-	}, t('Main could not launch. Check that the runtime port is available, then retry.'))
+	}, t('Your workspace could not open. Your settings are saved; retry when ready.'))
 	if (state.value?.step === 'complete') emit('complete')
 }
+
 </script>
 
 <style scoped>
@@ -394,6 +473,11 @@ async function launchMain(): Promise<void> {
 	background: var(--c-bg);
 	font-family: inherit;
 }
+.advanced-setup { margin-top: 22px; }
+.advanced-setup > summary { cursor: pointer; color: var(--muted); margin-bottom: 16px; }
+.setup-content :deep(.provider-setup) { width: 100%; max-width: none; padding: 0; border: 0; box-shadow: none; }
+.setup-content :deep(.provider-setup > .setup-title) { display: none; }
+.setup-content :deep(.provider-setup .primary) { background: var(--accent); border-color: var(--accent); }
 .setup-panel { width: min(700px, 100%); min-height: 470px; padding: 34px 38px; border: 1px solid var(--line); border-radius: var(--radius-overlay); background: var(--c-bg-card); }
 .setup-header { display: grid; grid-template-columns: 44px 1fr auto; gap: 14px; align-items: center; }
 .brand-mark { width: 44px; height: 44px; display: block; object-fit: contain; }
@@ -447,7 +531,12 @@ input[type="checkbox"] { accent-color: var(--accent); }
 @keyframes enter { from { opacity: 0; transform: translateY(4px); } }
 @media (max-width: 620px) {
 	.setup-shell { place-items: start center; padding: 16px; }
-	.setup-panel { min-height: 0; padding: 24px 20px; }
+	.advanced-setup { margin-top: 22px; }
+.advanced-setup > summary { cursor: pointer; color: var(--muted); margin-bottom: 16px; }
+.setup-content :deep(.provider-setup) { width: 100%; max-width: none; padding: 0; border: 0; box-shadow: none; }
+.setup-content :deep(.provider-setup > .setup-title) { display: none; }
+.setup-content :deep(.provider-setup .primary) { background: var(--accent); border-color: var(--accent); }
+.setup-panel { min-height: 0; padding: 24px 20px; }
 	.setup-header { grid-template-columns: 40px 1fr; }
 	.step-count { grid-column: 2; }
 	.role-list, .launch-summary { grid-template-columns: 1fr; }

@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -58,7 +59,7 @@ export class PollingSources {
     private canDeliver: (sessionId: string) => boolean,
     private hasCredential: (ref: string) => boolean,
   ) {
-    const directory = join(workspace, '.events')
+    const directory = projectStoragePath(workspace, '.events')
     mkdirSync(directory, { recursive: true, mode: 0o700 })
     this.path = join(directory, 'polling-sources.json')
   }

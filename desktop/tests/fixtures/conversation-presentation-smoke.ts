@@ -462,8 +462,11 @@ async function main() {
     assert.match(await execute(`document.querySelector('.yield-decision').textContent`), /Default selected by timeout/)
     assert.equal(await execute(`document.querySelector('.yield-decision').getAttribute('data-msg-idx')`), '7')
     assert.equal(await execute(`document.querySelectorAll('.yield-decision button, .yield-decision input').length`), 0, 'Historical decisions cannot submit answers')
-    assert.equal(await execute(`document.querySelector('.response-disclosure').open`), false)
-    assert.match(await execute(`document.querySelector('.response-disclosure > summary').textContent`), /Background response.*subagent-failed.*Reviewer.*Trigger failed/)
+    const eventAnswer = '[data-msg-idx="9"].chat-assistant'
+    assert.equal(await execute(`document.querySelector('.response-disclosure')`), null, 'Event provenance must not classify the assistant answer as an internal reply')
+    assert.equal(await execute(`document.querySelector('${eventAnswer}').getAttribute('role')`), 'article')
+    assert.match(await execute(`document.querySelector('${eventAnswer} .prose').innerText`), /original changes are untouched/)
+    assert.ok(await execute(`document.querySelector('${eventAnswer}').getBoundingClientRect().height > 0`), 'Event-triggered failures are visible without expansion')
     assert.equal(await execute(`document.querySelector('.system-event .event-details').open`), false)
     assert.equal(await execute(`document.querySelector('.system-event .event-inspect-header').getAttribute('aria-pressed')`), 'false')
     assert.ok(await execute(`document.querySelector('.system-event .event-inspect-header .i-lucide-git-branch')`))
@@ -475,14 +478,14 @@ async function main() {
     assert.ok(await execute(`document.querySelector('.execution-details summary .trace-chevron')`), 'Tool details use a chevron, not a permanently visible guide')
     assert.equal(await execute(`document.querySelector('.execution-details').open`), false)
     assert.equal(await execute(`getComputedStyle(document.querySelector('.execution-details')).borderLeftStyle`), 'none', 'Closed tool details have no always-visible guide')
-    assert.ok(await execute(`{ const headers=['.tool-activity-summary','.response-disclosure > summary','.system-event .event-inspect-header','.execution-inspect']
+    assert.ok(await execute(`{ const headers=['.tool-activity-summary','.system-event .event-inspect-header','.execution-inspect']
       .map(selector => getComputedStyle(document.querySelector(selector)).minHeight);
       new Set(headers).size === 1 && headers[0] === '40px'; }`), 'Execution and event headers share the trace rhythm')
-    assert.ok(await execute(`{ const response=document.querySelector('.response-disclosure').getBoundingClientRect();
+    assert.ok(await execute(`{ const response=document.querySelector('${eventAnswer}').getBoundingClientRect();
       const event=document.querySelector('.system-event').getBoundingClientRect();
       const execution=document.querySelector('.execution-card').getBoundingClientRect();
       Math.abs(response.right - event.right) < 2 && Math.abs(event.right - execution.right) < 2; }`), 'All trace rows share the same edge')
-    assert.equal(await execute(`getComputedStyle(document.querySelector('.system-event .prose')).fontSize`),
+    assert.equal(await execute(`getComputedStyle(document.querySelector('${eventAnswer} .prose')).fontSize`),
       await execute(`getComputedStyle(document.querySelector('.chat-assistant .prose')).fontSize`))
     const workEvent = '[data-event-id="work:fixture"]'
     assert.equal(await execute(`document.querySelector('${workEvent}').open`), false)
@@ -501,20 +504,50 @@ async function main() {
     await execute(`document.querySelector('${workEvent} .event-metadata > summary').click()`)
     assert.equal(await execute(`document.querySelector('.yield-decision').closest('.response-disclosure')`), null)
     assert.equal(await execute(`document.querySelector('.tool-activity').closest('.response-disclosure')`), null)
-    await execute(`document.querySelector('.response-disclosure > summary').focus()`)
-    window.webContents.debugger.attach('1.3')
-    await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
-    for (const type of ['keyDown', 'keyUp']) {
-      await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
-        type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}),
-      })
-    }
-    await wait(`document.querySelector('.response-disclosure').open`)
-    window.webContents.debugger.detach()
-    assert.match(await execute(`document.querySelector('.response-disclosure .prose').textContent`), /original changes are untouched/)
-    await execute(`void (window.__conversationFixture.messages = [...window.__conversationFixture.messages])`)
+    // Reproduce an asynchronous completion after the earlier user turn already ended.
+    // The stored participation flag remains false; it is not an audience classification.
+    await execute(`void Object.assign(window.__conversationFixture.messages[9], {
+      content:'Completed the migration. Verification passed. Please restart the application.',
+      responseContext:{version:1,turnId:'completion',responseId:'completion:0',userInvolved:false,
+        source:{kind:'event',eventId:'completed',type:'background-task-complete',source:'background-task'}}
+    }); void (window.__conversationFixture.messages = [...window.__conversationFixture.messages])`)
     await frame()
-    assert.equal(await execute(`document.querySelector('.response-disclosure').open`), true, 'Message refresh preserves disclosure intent')
+    assert.match(await execute(`document.querySelector('${eventAnswer} .prose').innerText`), /Please restart the application/)
+    assert.equal(await execute(`document.querySelector('${eventAnswer}').closest('details')`), null, 'Reloaded async completion answers need no expansion')
+    await execute(`void Object.assign(window.__conversationFixture, {streaming:true,
+      streamContent:'Completed the migration. Please restart the application.',
+      streamResponseContext:window.__conversationFixture.messages[9].responseContext})`)
+    await frame()
+    assert.match(await execute(`document.querySelector('.chat-assistant [class~="selectable-text"]').innerText`), /Please restart the application/)
+    assert.equal(await execute(`document.querySelector('.chat-assistant [class~="selectable-text"]').closest('details')`), null, 'Streaming uses the same user-facing presentation')
+    assert.equal(await execute(`document.querySelector('.response-disclosure')`), null)
+    await execute(`void Object.assign(window.__conversationFixture, {streaming:false,streamContent:''})`)
+    await frame()
+    if (process.env.CONVERSATION_RESPONSE_AUDIENCE_ONLY) {
+      for (const width of [1800, 1100, 390]) {
+        window.setContentSize(width, 844)
+        for (const dark of [false, true]) for (const locale of ['en', 'zh-CN']) {
+          await execute(`document.documentElement.classList.toggle('dark', ${dark}); window.__setConversationLocale('${locale}')`)
+          await frame()
+          const answer = await execute(`(() => {
+            const message = document.querySelector('${eventAnswer}');
+            const rail = document.querySelector('.chat-message-list').getBoundingClientRect();
+            const rect = message.getBoundingClientRect();
+            return {text:message.innerText,hidden:!!message.closest('details'),height:rect.height,
+              width:rect.width,rail:rail.width,right:rect.right,edge:rail.right,
+              overflow:message.scrollWidth > message.clientWidth};
+          })()`)
+          assert.match(answer.text, /Please restart the application/)
+          assert.equal(answer.hidden, false)
+          assert(answer.height > 0 && answer.width >= answer.rail * .8 && answer.right <= answer.edge + 1)
+          assert.equal(answer.overflow, false)
+          assert.equal(await execute(`document.querySelector('.response-disclosure')`), null)
+        }
+      }
+      assert.deepEqual(errors, [])
+      console.log('CONVERSATION_SMOKE_OK')
+      return
+    }
     await execute(`window.__conversationFixture.messages[1].content = 'Routine progress. '.repeat(60)`)
     await frame()
     assert.equal(await execute(`document.querySelector('.chat-session').dataset.expanded`), 'true', 'Content refresh preserves expansion')
@@ -569,14 +602,14 @@ async function main() {
         assert(layout.proseWidth <= layout.contentWidth + 1, 'Expanded Markdown stays within its rail')
         assert.equal(layout.proseMaxWidth, 'none', 'Outgoing message Markdown uses the shared conversation measure')
         assert.ok(await execute(`Math.abs(document.querySelector('.message-action').getBoundingClientRect().width
-          - document.querySelector('.response-disclosure').getBoundingClientRect().width) < 1`), 'Session exchanges share the bounded trace width on wide panes')
+          - document.querySelector('${eventAnswer}').getBoundingClientRect().width) < 1`), 'Session exchanges share the bounded trace width on wide panes')
         assert.equal(layout.userProseMaxWidth, 'none', 'Human message Markdown fills its content-sized bubble')
         assert.equal(layout.overflow, false)
         assert.equal(layout.actionOverflow, false)
-        assert.equal(await execute(`document.querySelector('.response-disclosure').scrollWidth > document.querySelector('.response-disclosure').clientWidth`), false)
-        if (width === 390) assert.ok(await execute(`{ const body=document.querySelector('.response-body').getBoundingClientRect();
-          const message=document.querySelector('.response-body .chat-assistant').getBoundingClientRect();
-          message.width >= body.width * .8 && message.right <= body.right + 1; }`), 'Expanded background text uses the available mobile rail')
+        assert.equal(await execute(`document.querySelector('${eventAnswer}').scrollWidth > document.querySelector('${eventAnswer}').clientWidth`), false)
+        if (width === 390) assert.ok(await execute(`{ const body=document.querySelector('.chat-message-list').getBoundingClientRect();
+          const message=document.querySelector('${eventAnswer}').getBoundingClientRect();
+          message.width >= body.width * .8 && message.right <= body.right + 1; }`), 'User-facing completion text uses the available mobile rail')
         assert.equal(await execute(`document.querySelector('.execution-card').scrollWidth > document.querySelector('.execution-card').clientWidth`), false)
         assert.equal(await execute(`document.querySelector('.system-event').scrollWidth > document.querySelector('.system-event').clientWidth`), false)
         const work = await execute(`(() => {

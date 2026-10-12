@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -50,7 +51,7 @@ test('independent Project Home databases cannot observe or modify one another', 
   b.query("UPDATE initiatives SET goal='Other Project' WHERE id='build'")
   assert.equal(a.rows('SELECT goal FROM initiatives')[0]!.goal, 'Ship it')
   assert.equal(b.rows('SELECT goal FROM initiatives')[0]!.goal, 'Other Project')
-  assert.throws(() => a.store.migrateLegacy(join(b.home, 'projects')), /this Project/)
+  assert.throws(() => a.store.migrateLegacy(projectStoragePath(b.home, 'projects')), /this Project/)
 })
 
 test('work reference validation is Project-local, read-only and checks the item parent', (t) => {
@@ -70,7 +71,7 @@ test('work reference validation is Project-local, read-only and checks the item 
   assert.deepEqual(f.rows('SELECT * FROM initiatives'), before)
   assert.deepEqual(f.rows('SELECT * FROM initiative_items'), items)
   assert.deepEqual(f.rows('SELECT * FROM initiative_entries'), entries)
-  const writer = new DatabaseSync(join(f.home, 'initiatives.sqlite'))
+  const writer = new DatabaseSync(projectStoragePath(f.home, 'initiatives.sqlite'))
   try {
     writer.exec('BEGIN IMMEDIATE')
     f.store.assertWorkReference('build', 'work')
@@ -411,7 +412,7 @@ for (const version of [1, 2]) test(`version-${version} databases gain attention 
   const items = f.rows('SELECT * FROM initiative_items')
   const entries = f.rows('SELECT * FROM initiative_entries')
   f.store.close()
-  const db = new DatabaseSync(join(f.home, 'initiatives.sqlite'))
+  const db = new DatabaseSync(projectStoragePath(f.home, 'initiatives.sqlite'))
   db.exec(`DROP VIEW initiative_item_activity; DROP VIEW initiative_handoffs;
     CREATE VIEW initiative_handoffs AS SELECT p.*, 1 AS needs_handoff FROM initiatives p
       WHERE p.status='active' AND (p.owner_session_id IS NULL OR session_is_inactive(p.owner_session_id)=1);
@@ -497,7 +498,7 @@ function legacy(slug: string, status = 'active'): string {
 }
 
 function writeLegacy(home: string, slug: string, content: string): string {
-  const directory = join(home, 'projects', slug)
+  const directory = projectStoragePath(home, 'projects', slug)
   mkdirSync(directory, { recursive: true })
   const file = join(directory, 'project.md')
   writeFileSync(file, content)
@@ -550,7 +551,7 @@ test('corrupt persisted records fail on reopen rather than being silently repair
   const f = fixture(t)
   f.create()
   f.store.close()
-  const db = new DatabaseSync(join(f.home, 'initiatives.sqlite'))
+  const db = new DatabaseSync(projectStoragePath(f.home, 'initiatives.sqlite'))
   db.exec("UPDATE initiatives SET title=''")
   db.close()
   assert.throws(() => new InitiativeStore(f.home), /title/)
@@ -559,7 +560,7 @@ test('corrupt persisted records fail on reopen rather than being silently repair
 test('corrupt audit JSON and invalid database bytes are not silently replaced', (t) => {
   const f = fixture(t)
   f.create(); f.store.close()
-  const path = join(f.home, 'initiatives.sqlite')
+  const path = projectStoragePath(f.home, 'initiatives.sqlite')
   const db = new DatabaseSync(path)
   db.exec("UPDATE initiative_entries SET content='not JSON' WHERE kind='audit'")
   db.close()
@@ -572,14 +573,14 @@ test('corrupt audit JSON and invalid database bytes are not silently replaced', 
 test('oversized and unsupported databases fail explicitly at reopen', (t) => {
   const f = fixture(t)
   f.store.close()
-  const db = new DatabaseSync(join(f.home, 'initiatives.sqlite'))
+  const db = new DatabaseSync(projectStoragePath(f.home, 'initiatives.sqlite'))
   const insert = db.prepare("INSERT INTO initiatives VALUES (?, 'Title', '', '', 'active', 'owner', 'owner', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', 1)")
   db.exec('BEGIN')
   for (let index = 0; index < 5001; index++) insert.run(`initiative-${index}`)
   db.exec('COMMIT')
   db.close()
   assert.throws(() => new InitiativeStore(f.home), /row limit/)
-  const unsupported = new DatabaseSync(join(f.home, 'initiatives.sqlite'))
+  const unsupported = new DatabaseSync(projectStoragePath(f.home, 'initiatives.sqlite'))
   unsupported.exec('PRAGMA user_version=999')
   unsupported.close()
   assert.throws(() => new InitiativeStore(f.home), /Unsupported/)

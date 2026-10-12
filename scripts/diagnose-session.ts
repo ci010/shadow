@@ -23,7 +23,7 @@ const { values } = parseArgs({
   },
 })
 if (!values['sessions-dir'] || !values.session) {
-  throw new Error('Usage: node --import tsx scripts/diagnose-session.ts --sessions-dir <project .sessions> --session <logical ID> [--storage jsonl|sqlite] [--otel-db <path>] [--project <id>] [--view summary|full] [--out <new file>]')
+  throw new Error('Usage: node --import tsx scripts/diagnose-session.ts --sessions-dir <Project Home/state/sessions> --session <logical ID> [--storage jsonl|sqlite] [--otel-db <path>] [--project <id>] [--view summary|full] [--out <new file>]')
 }
 if (values.storage !== 'jsonl' && values.storage !== 'sqlite') throw new Error('storage must be jsonl or sqlite')
 const params = new URLSearchParams({ view: values.view, recordOffset: values.offset, recordLimit: values.limit })

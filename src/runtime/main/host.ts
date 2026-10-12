@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { dirname, resolve } from 'node:path'
 import { stat } from 'node:fs/promises'
+import { appDataPaths } from '../../utils/data-paths.ts'
 import type { MainRuntimeHandle, MainRuntimeOptions } from './contracts.ts'
 import { resolveUiDistDirectory } from './paths.ts'
 import type { Config } from '../../config/schema.ts'
@@ -43,7 +44,8 @@ export async function startProjectHost(
 ): Promise<MainRuntimeHandle> {
   const startup = new StartupTimings('host')
   const baseHome = resolve(config.agent.workspace)
-  const hostHome = `${baseHome}.projects`
+  const appPaths = appDataPaths(options.dataDir ?? baseHome)
+  const hostHome = appPaths.root
   const catalog = new ProjectCatalog(hostHome, [baseHome])
   await startup.measure('catalog', () => catalog.init())
   for (const project of catalog.list()) {
@@ -74,7 +76,7 @@ export async function startProjectHost(
   const realtimeHub = new RealtimeHub({ projectExists: id => !!catalog.get(id) })
   cleanup.push(() => realtimeHub.close())
   cleanup.push(catalog.observeProjects(() => realtimeHub.invalidateProjects()))
-  const hostOtelStore = new OtelStore(resolve(hostHome, '.host.otel.db'))
+  const hostOtelStore = new OtelStore(appPaths.hostTelemetry)
   let hostTelemetry: ReturnType<typeof initializeNodeTelemetry>
   try { hostTelemetry = initializeNodeTelemetry(hostOtelStore, { serviceName: 'shadow-host' }) }
   catch (error) { hostOtelStore.close(); throw error }
@@ -118,14 +120,14 @@ export async function startProjectHost(
         },
       },
     }),
-    snapshotAdapter: new AtomicFileRegistrySnapshotAdapter(options.clusterSnapshotPath ?? resolve(baseHome, '.cluster', 'registry.v1.json')),
+    snapshotAdapter: new AtomicFileRegistrySnapshotAdapter(options.clusterSnapshotPath ?? resolve(appPaths.devices, 'registry.v1.json')),
     localHello: { protocolMajor: 1, protocolMinor: 0, implementationVersion: '0.1.0', features: ['jobs-v1', 'capabilities-v1', 'workdir-display-v1'] },
     authorizeOfferCreation: request => launchCredential ? validateLaunchCredential(request.headers.get('Authorization') ?? undefined, launchCredential) : false,
     clientKey: request => clientAddresses.resolve(request),
   }))
   cleanup.push(() => mainCluster.closeNodeConnections())
   const deviceNetwork = new MainDeviceNetwork({
-    configPath: resolve(options.clusterSnapshotPath ? dirname(options.clusterSnapshotPath) : resolve(baseHome, '.cluster'), 'device-network.v1.json'),
+    configPath: resolve(options.clusterSnapshotPath ? dirname(options.clusterSnapshotPath) : appPaths.devices, 'device-network.v1.json'),
     cluster: mainCluster,
     clientAddresses,
     authorize: request => launchCredential ? validateLaunchCredential(request.headers.get('Authorization') ?? undefined, launchCredential) : false,

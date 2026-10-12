@@ -81,9 +81,9 @@ function paths(root: string): RuntimeDerivedPaths {
     bootstrapConfigPath: join(root, 'bootstrap.json'),
     bootstrapDirectory: root,
     dataDir: join(root, 'data'),
-    mutableAgentConfigPath: join(root, 'data', 'config', 'bot.config.json'),
-    clusterSnapshotPath: join(root, 'data', 'cluster', 'registry.v1.json'),
-    childCredentialPath: join(root, 'data', 'credentials', 'device-credential.v1.json'),
+    mutableAgentConfigPath: join(root, 'data', 'app.json'),
+    clusterSnapshotPath: join(root, 'data', 'devices', 'registry.v1.json'),
+    childCredentialPath: join(root, 'data', 'devices', 'device-credential.v1.json'),
   }
 }
 

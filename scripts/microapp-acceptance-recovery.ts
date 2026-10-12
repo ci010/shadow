@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../src/utils/data-paths.ts'
 import { createHash } from 'node:crypto'
 import type { Dirent } from 'node:fs'
 import { lstat, mkdir, open, opendir, readFile, realpath } from 'node:fs/promises'
@@ -53,7 +54,7 @@ export async function exportAcceptanceRecovery(home: string, output: string, pub
   if (publications.length > 20) throw new Error('Recovery publication limit exceeded')
   const store = new MicroAppStore(home)
   const bundles = new Map(await Promise.all(publications.map(async record => [record.id, await store.bundle(record)] as const)))
-  const states = await new JsonlSessionStore(join(home, '.sessions')).listAllStates()
+  const states = await new JsonlSessionStore(projectStoragePath(home, '.sessions')).listAllStates()
   const scopes = new Map<string, string[]>()
   for (const state of Object.values(states)) {
     const location = resolveSessionLocations(home, state).workdir

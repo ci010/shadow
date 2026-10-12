@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { DiffusionCppService, runSdCpp } from './service.ts'
 
@@ -36,16 +37,20 @@ test('optional sd-cli reports errors, requires license acknowledgment and reject
       licenseAcknowledged: true,
     }), /owned by Shadow/)
     await assert.rejects(() => service.configure({ binary: join(workspace, 'missing-cli') }), { code: 'ENOENT' })
+    await assert.rejects(access(join(workspace, 'config')), { code: 'ENOENT' })
     await service.configure({ binary: process.execPath })
+    assert.equal((await service.status()).configPath, join(workspace, 'config', 'diffusion-cpp.json'))
+    assert.equal((await new DiffusionCppService(workspace).read()).binary, (await service.read()).binary)
+    await assert.rejects(access(join(workspace, '.diffusion-cpp.json')), { code: 'ENOENT' })
     await service.configure({ preset: 'qwen_image_2_1', diffusion, vae, llm, licenseAcknowledged: true })
     assert.equal((await service.status()).presets.qwen_image_2_1.status, 'path_accessible')
-    assert.match(await readFile(join(workspace, '.diffusion-cpp.json'), 'utf8'), /licenseAcknowledged/)
+    assert.match(await readFile(projectStoragePath(workspace, '.diffusion-cpp.json'), 'utf8'), /licenseAcknowledged/)
     assert.equal((await service.status()).presets.qwen_image_2_1.imageEdit, false)
     await assert.rejects(() => service.image({ prompt: 'edit', reference: diffusion }, join(workspace, 'edit.png')), /requires --llm_vision/)
     await writeFile(vae, 'truncated')
     assert.equal((await service.status()).presets.qwen_image_2_1.status, 'invalid')
     await assert.rejects(() => service.image({ prompt: 'hello' }, join(workspace, 'image.png')), /Invalid model file header/)
-    await writeFile(join(workspace, '.diffusion-cpp.json'), JSON.stringify({ version: 2, presets: {} }))
+    await writeFile(projectStoragePath(workspace, '.diffusion-cpp.json'), JSON.stringify({ version: 2, presets: {} }))
     await assert.rejects(() => service.status(), /Invalid literal/)
   })
 })
@@ -219,7 +224,7 @@ test('legacy Qwen edit uses complete Diffusers shard indexes and requires a refe
     await assert.rejects(() => service.configure({
       preset: 'qwen_image_edit', llm: otherLlm, licenseAcknowledged: true,
     }), /same cache/)
-    const configPath = join(workspace, '.diffusion-cpp.json')
+    const configPath = projectStoragePath(workspace, '.diffusion-cpp.json')
     const configured = JSON.parse(await readFile(configPath, 'utf8'))
     configured.presets.qwen_image_edit.llm = otherLlm
     await writeFile(configPath, JSON.stringify(configured))

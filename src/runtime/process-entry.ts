@@ -12,6 +12,7 @@ export interface ProcessEntryDependencies {
   readonly startMainRuntime: (
     config: Config,
     options: {
+      readonly dataDir: string
       readonly localExecutor: boolean
       readonly localNodeId: string
       readonly configPath: string
@@ -52,6 +53,7 @@ export async function runProcessEntry(
         paths.mutableAgentConfigPath,
       )
       return await dependencies.startMainRuntime(config, {
+        dataDir: paths.dataDir,
         localExecutor: plan.localExecutor,
         localNodeId: plan.config.localNodeId,
         configPath: paths.mutableAgentConfigPath,

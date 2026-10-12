@@ -1,6 +1,7 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { getArch, getOs } from '../utils/runtime.ts'
@@ -14,11 +15,11 @@ function manifest(name = 'example', body = 'Original instructions', extra: Recor
 
 function setup(workspace: string) {
   const skills = new SkillsManager(workspace)
-  return { skills, store: new SkillEditStore(workspace, skills), directory: join(workspace, 'skills', 'example') }
+  return { skills, store: new SkillEditStore(workspace, skills), directory: projectStoragePath(workspace, 'skills', 'example') }
 }
 
 function noTransactions(workspace: string): void {
-  const root = join(workspace, 'skills')
+  const root = projectStoragePath(workspace, 'skills')
   if (fs.existsSync(root)) assert.deepEqual(fs.readdirSync(root).filter(name => name.startsWith('.skill-edit-')), [])
 }
 
@@ -149,7 +150,7 @@ test('builtin-only packages are readable but immutable; existing project overrid
     assert.ok(read.files['SKILL.md'])
     await assert.rejects(store.save(name, { 'SKILL.md': manifest(name) }, null), /Builtin-only/)
     await assert.rejects(store.save(name, { 'SKILL.md': manifest(name) }, read.revision), /Builtin-only/)
-    const target = join(workspace, 'skills', name)
+    const target = projectStoragePath(workspace, 'skills', name)
     fs.mkdirSync(target, { recursive: true })
     fs.writeFileSync(join(target, 'SKILL.md'), manifest(name, 'Project override'))
     assert.equal(store.read(name).source, 'project')
@@ -203,7 +204,7 @@ test('junctions and hard links cannot be read or edited as package resources', a
     fs.linkSync(join(outside, 'data.txt'), join(directory, 'hard.txt'))
     assert.throws(() => store.read('example'), /regular file/)
     fs.unlinkSync(join(directory, 'hard.txt'))
-    fs.symlinkSync(outside, join(workspace, 'skills', 'linked'), 'junction')
+    fs.symlinkSync(outside, projectStoragePath(workspace, 'skills', 'linked'), 'junction')
     assert.throws(() => store.read('linked'), /symlink|junction/)
     await assert.rejects(store.save('linked', { 'SKILL.md': manifest('linked') }, null), /symlink|junction/)
     assert.equal(fs.readFileSync(join(outside, 'data.txt'), 'utf8'), 'untouched')
@@ -216,7 +217,8 @@ test('symlinked owning skills roots are rejected before creation', async () => {
     const { store } = setup(workspace)
     const outside = join(workspace, 'outside')
     fs.mkdirSync(outside)
-    fs.symlinkSync(outside, join(workspace, 'skills'), 'junction')
+    fs.mkdirSync(dirname(projectStoragePath(workspace, 'skills')), { recursive: true })
+    fs.symlinkSync(outside, projectStoragePath(workspace, 'skills'), 'junction')
     assert.throws(() => store.read('example'), /symlink|junction/)
     await assert.rejects(store.save('example', { 'SKILL.md': manifest() }, null), /symlink|junction/)
     assert.deepEqual(fs.readdirSync(outside), [])
@@ -230,7 +232,7 @@ test('count, byte and depth limits reject rather than truncate existing or propo
     const tooMany = Object.fromEntries(Array.from({ length: SKILL_EDIT_LIMITS.files + 1 }, (_, i) => [`${i}.txt`, 'x']))
     await assert.rejects(store.save('example', tooMany, null), /file count limit/)
     await assert.rejects(store.save('example', { [`${'a/'.repeat(SKILL_EDIT_LIMITS.depth)}file`]: 'x' }, null), /depth limit/)
-    assert.equal(fs.existsSync(join(workspace, 'skills')), false)
+    assert.equal(fs.existsSync(projectStoragePath(workspace, 'skills')), false)
     const saved = await store.save('example', { 'SKILL.md': manifest() }, null)
     for (let i = 0; i < SKILL_EDIT_LIMITS.files; i++) fs.writeFileSync(join(directory, `${i}.txt`), 'x')
     assert.throws(() => store.read('example'), /file count limit/)
@@ -249,7 +251,7 @@ test('already aborted and queued aborted saves do not write', async () => {
     const { store } = setup(workspace)
     const aborted = AbortSignal.abort()
     await assert.rejects(store.save('example', { 'SKILL.md': manifest() }, null, false, aborted), { name: 'AbortError' })
-    assert.equal(fs.existsSync(join(workspace, 'skills')), false)
+    assert.equal(fs.existsSync(projectStoragePath(workspace, 'skills')), false)
     const saved = await store.save('example', { 'SKILL.md': manifest() }, null)
     const controller = new AbortController()
     const pending = store.save('example', { 'new.txt': 'never written' }, saved.revision, false, controller.signal)
@@ -325,8 +327,8 @@ test('cleanup failures are explicit even when the save has committed', async t =
     assert.ok(store.read('example').revision)
     assert.match(skills.getSkillBody('example')!, /Original instructions/)
     t.mock.restoreAll()
-    for (const entry of fs.readdirSync(join(workspace, 'skills'))) {
-      if (entry.startsWith('.skill-edit-')) fs.rmSync(join(workspace, 'skills', entry), { recursive: true })
+    for (const entry of fs.readdirSync(projectStoragePath(workspace, 'skills'))) {
+      if (entry.startsWith('.skill-edit-')) fs.rmSync(projectStoragePath(workspace, 'skills', entry), { recursive: true })
     }
     noTransactions(workspace)
   })
@@ -366,14 +368,14 @@ test('rollback failure is explicit and never deletes the only surviving original
       return rename(from, to)
     })
     await assert.rejects(store.save('example', { 'keep.txt': 'new' }, saved.revision), /replacement and rollback failed; original retained at/)
-    const transactions = fs.readdirSync(join(workspace, 'skills')).filter(name => name.startsWith('.skill-edit-'))
+    const transactions = fs.readdirSync(projectStoragePath(workspace, 'skills')).filter(name => name.startsWith('.skill-edit-'))
     assert.equal(transactions.length, 1)
-    const previous = join(workspace, 'skills', transactions[0]!, 'previous')
+    const previous = projectStoragePath(workspace, 'skills', transactions[0]!, 'previous')
     assert.equal(fs.readFileSync(join(previous, 'keep.txt'), 'utf8'), 'irreplaceable')
     assert.equal(readSkillDirectory(previous).revision, saved.revision)
     t.mock.restoreAll()
-    fs.renameSync(previous, join(workspace, 'skills', 'example'))
-    fs.rmSync(join(workspace, 'skills', transactions[0]!), { recursive: true })
+    fs.renameSync(previous, projectStoragePath(workspace, 'skills', 'example'))
+    fs.rmSync(projectStoragePath(workspace, 'skills', transactions[0]!), { recursive: true })
     noTransactions(workspace)
   })
 })

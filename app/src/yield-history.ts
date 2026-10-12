@@ -99,6 +99,7 @@ export function inlineYieldDecisions(
     if (message.event !== 'tool_call') continue
     const call = resolveToolCall(message)
     if (call.name !== 'ask' && call.name !== 'reply') continue
+    if (call.name === 'ask' && call.args.kind === 'input') continue
     const action = call.name === 'reply' ? 'answer' : call.args.action === undefined ? 'ask' : call.args.action
     let decision: YieldDecision
     if (action === 'ask') {

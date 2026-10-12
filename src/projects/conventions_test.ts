@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
@@ -104,7 +105,7 @@ test('Work query snapshots follow the live authority, never persist, and cannot 
         'PRAGMA user_version', 'DROP TABLE project_conventions',
         "SELECT load_extension('outside') FROM project_conventions",
       ]) assert.throws(() => store.query(sql, 'web:owner', human('Rule')))
-      const disk = new DatabaseSync(join(root, 'conventions.sqlite'), { readOnly: true })
+      const disk = new DatabaseSync(projectStoragePath(root, 'conventions.sqlite'), { readOnly: true })
       try { assert.equal(disk.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name LIKE 'work_%'").get()!.n, 0) }
       finally { disk.close() }
     } finally { store.close(); other.close() }

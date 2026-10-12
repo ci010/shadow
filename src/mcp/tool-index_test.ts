@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -45,7 +46,7 @@ async function fixture(t: TestContext) {
     workspace,
     index: new McpToolIndex(workspace),
     connect, list, disconnect,
-    directory: join(workspace, '.mcp-tool-index'),
+    directory: projectStoragePath(workspace, '.mcp-tool-index'),
   }
 }
 

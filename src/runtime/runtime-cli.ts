@@ -96,14 +96,15 @@ export function deriveRuntimePaths(
     dataDir: resolvedDataDir,
     mutableAgentConfigPath: path.join(
       resolvedDataDir,
-      'config',
-      'bot.config.json',
+      'app.json',
     ),
     clusterSnapshotPath: path.join(
       resolvedDataDir,
-      'cluster',
+      'devices',
       'registry.v1.json',
     ),
+    // Child protected identity has its own lifecycle; this Main-layout migration
+    // must not silently change the location of existing Child pairing credentials.
     childCredentialPath: path.join(
       resolvedDataDir,
       'credentials',

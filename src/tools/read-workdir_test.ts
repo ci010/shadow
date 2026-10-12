@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -27,8 +28,9 @@ test('read directory and relative files use the same capability-backed cwd despi
       signal: new AbortController().signal } as ExecutionContext
     for (const path of [...collisions, '.tmp/fixture.txt']) {
       for (const [base, label] of [[home, 'home'], [repo, 'repo']]) {
-        await mkdir(dirname(join(base, path)), { recursive: true })
-        await writeFile(join(base, path), `${label}:${path}`)
+        const file = base === home && path.startsWith('.tmp/') ? projectStoragePath(home, path) : join(base, path)
+        await mkdir(dirname(file), { recursive: true })
+        await writeFile(file, `${label}:${path}`)
       }
     }
     const vfs = new VirtualFs()
@@ -61,7 +63,7 @@ test('managed fallback stays the effective cwd; only explicit Home aliases escap
     const cwd = locations.workdir.path
     assert.equal(cwd, locations.sessionDataDir)
     for (const path of collisions) assert.equal(resolveAgentPath(home, cwd, path), resolve(cwd, path))
-    assert.equal(resolveAgentPath(home, cwd, '.tmp/file'), join(home, '.tmp/file'))
+    assert.equal(resolveAgentPath(home, cwd, '.tmp/file'), projectStoragePath(home, '.tmp/file'))
     assert.equal(resolveAgentPath(home, cwd, 'v:memory/file'), join(home, 'memory/file'))
     assert.equal(resolveAgentPath(home, cwd, 'uploads/file'), join(cwd, 'uploads/file'))
   })

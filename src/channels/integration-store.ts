@@ -1,6 +1,7 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { z } from 'zod'
 import { PrivateDocument, assertPrivateFileBoundary } from '../utils/private-document.ts'
 import { writePrivateFile } from '../config/store.ts'
@@ -119,7 +120,7 @@ export class IntegrationStore {
     }
   }
 
-  private agentDirectory(name: string): string { return resolve(this.options.workspace, 'agents', name) }
+  private agentDirectory(name: string): string { return projectStoragePath(this.options.workspace, 'agents', name) }
   private assertAgentFile(agent: IntegrationAgent): void {
     const path = join(this.agentDirectory(agent.name), 'AGENT.md')
     let content: string

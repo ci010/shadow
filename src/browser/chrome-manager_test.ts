@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { isAbsolute, join, relative } from 'node:path'
@@ -79,7 +80,7 @@ test('two project browsers use distinct managed profiles and shared port leases 
       assert.equal(launches.length, 2)
       for (const [i, allocation] of [a, b].entries()) {
         const launch = launches.find((entry) => entry.port === allocation.port)!
-        const path = relative(join(homes[i], '.browser'), launch.profile)
+        const path = relative(projectStoragePath(homes[i], '.browser'), launch.profile)
         assert(path && !path.startsWith('..') && !isAbsolute(path))
       }
       assert('error' in await managers[1].allocate('different-session', a.port))
@@ -225,7 +226,7 @@ test('project sessions pin independent browser choices without changing the proj
         assert.equal(fixture.launches.find((launch) => launch.port === result.port)?.path, expectedPaths[i])
       }
       for (const launch of fixture.launches) {
-        const path = relative(join(home, '.browser'), launch.profile)
+        const path = relative(projectStoragePath(home, '.browser'), launch.profile)
         assert(path && !path.startsWith('..') && !isAbsolute(path))
         assert.deepEqual(await readdir(launch.profile), [])
       }

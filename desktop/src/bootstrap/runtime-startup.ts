@@ -20,10 +20,13 @@ export class RuntimeStartup {
     return { ok: false, code: 'runtime-unavailable', ...(failure ? { failure } : {}) }
   }
 
-  start(): Promise<EnsureRuntimeResult> {
-    if (this.pending) return this.attempt
+  // Setup can supply its first launch; subsequent retries use the persisted profile.
+  start(launch?: () => Promise<EnsureRuntimeResult>): Promise<EnsureRuntimeResult> {
+    // Explicit setup commands must still validate their role/step, even while a
+    // saved-profile startup is pending. Ordinary retries share the current attempt.
+    if (this.pending) return launch ? this.attempt.then(() => this.start(launch)) : this.attempt
     this.pending = true
-    this.attempt = Promise.resolve().then(this.launch).catch((): EnsureRuntimeResult => {
+    this.attempt = Promise.resolve().then(launch ?? this.launch).catch((): EnsureRuntimeResult => {
       console.error('[desktop] Runtime startup failed; retry from the recovery screen.')
       return { ok: false, code: 'runtime-unavailable' }
     }).finally(() => { this.pending = false })

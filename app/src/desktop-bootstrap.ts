@@ -85,6 +85,7 @@ export interface ShadowDesktopApi {
 		clear?(): Promise<void>
 		commitMainDirectory(selectionId: string): Promise<BootstrapCommandResult>
 		initializeMain(): Promise<BootstrapCommandResult>
+		prepareProvider?(options: { readonly localExecutor: boolean; readonly port: number }): Promise<EnsureRuntimeResult>
 		launchMain(options: { readonly localExecutor: boolean; readonly port: number }): Promise<BootstrapCommandResult>
 		ensureRuntime(): Promise<EnsureRuntimeResult>
 		retryRuntime?(): Promise<EnsureRuntimeResult>

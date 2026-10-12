@@ -1,4 +1,6 @@
 import { isAbsolute, posix, relative } from 'node:path'
+import { projectStoragePath } from '../utils/data-paths.ts'
+import { resolveLegacyProjectPath } from '../storage/legacy-paths.ts'
 import type { KnowledgeDetail, KnowledgeLink } from './contracts.ts'
 
 export interface MarkdownReference {
@@ -199,7 +201,12 @@ export function canonicalReference(
     if (!normalized.startsWith('skills/') || normalized.split('/').some(p => p.startsWith('.'))) return undefined
     return `builtin:${normalized.replace(/\/SKILL\.md$/, '')}`
   }
-  if (isAbsolute(target)) target = relative(workspace, target).replace(/\\/g, '/')
+  if (isAbsolute(target)) {
+    const physical = resolveLegacyProjectPath(workspace, target)
+    const skillRelative = relative(projectStoragePath(workspace, 'skills'), physical).replace(/\\/g, '/')
+    target = !isAbsolute(skillRelative) && skillRelative !== '..' && !skillRelative.startsWith('../')
+      ? `skills/${skillRelative}` : relative(workspace, physical).replace(/\\/g, '/')
+  }
   else if (/^[a-z][a-z\d+.-]*:/i.test(target)) return undefined
   else if (!/^(?:memory|skills)\//.test(target)) {
     if (source.startsWith('builtin:')) {

@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { trace } from '@opentelemetry/api'
 import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -223,7 +224,7 @@ export class Tools {
     toolName: string,
     result: string,
   ): Promise<string> {
-    const tmpDir = join(this.workspace, '.tmp')
+    const tmpDir = projectStoragePath(this.workspace, '.tmp')
     try {
       await mkdir(tmpDir, { recursive: true })
     } catch { /* exists */ }

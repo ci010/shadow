@@ -1,6 +1,7 @@
 import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { sessionWorkspacePath } from '../utils/paths.ts'
+import { resolveLegacyProjectPath } from '../storage/legacy-paths.ts'
 import { isImagePath, readImage } from '../utils/image-input.ts'
 
 export async function validateAnswerUploads(workspace: string, owner: string, media: string[], signal?: AbortSignal): Promise<void> {
@@ -10,7 +11,7 @@ export async function validateAnswerUploads(workspace: string, owner: string, me
     for (const path of media) {
       signal?.throwIfAborted()
       if (!isAbsolute(path) || path.includes('\0')) throw new TypeError('Attach files uploaded to this conversation.')
-      const target = await realpath(resolve(path))
+      const target = await realpath(resolveLegacyProjectPath(workspace, resolve(path)))
       const rel = relative(realRoot, target)
       if (!rel || rel === '..' || rel.startsWith(`..\\`) || rel.startsWith('../') || isAbsolute(rel)
         || !(await stat(target)).isFile()) throw new TypeError('Attach files uploaded to this conversation.')

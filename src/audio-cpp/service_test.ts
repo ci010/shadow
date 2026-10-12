@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { access, readFile, readdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { AudioCppService, runAudioCpp } from './service.ts'
 import { ToolNoEffectError } from '../tools/tool.ts'
@@ -10,11 +11,12 @@ test('audio.cpp remains optional and reports broken explicit configuration', asy
   await withTempWorkspace(async workspace => {
     const service = new AudioCppService(workspace, async () => '{}')
     const absent = await service.status()
-    assert.equal(absent.configPath, join(workspace, '.audio-cpp.json'))
+    assert.equal(absent.configPath, projectStoragePath(workspace, '.audio-cpp.json'))
     assert.equal(absent.models.asr.status, 'not_configured')
     await assert.rejects(() => service.transcribe(join(workspace, 'input.wav')), /not installed/)
     await assert.rejects(() => service.configure({ task: 'asr', family: 'qwen3_asr', path: join(workspace, 'missing.gguf') }), { code: 'ENOENT' })
-    await writeFile(join(workspace, '.audio-cpp.json'), JSON.stringify({ version: 1, binary: join(workspace, 'missing-cli') }))
+    await mkdir(join(workspace, 'config'), { recursive: true })
+    await writeFile(projectStoragePath(workspace, '.audio-cpp.json'), JSON.stringify({ version: 1, binary: join(workspace, 'missing-cli') }))
     const broken = await service.status()
     assert.equal(broken.status, 'binary_error')
     assert.match(broken.error ?? '', /missing-cli/)
@@ -54,7 +56,11 @@ test('configure validates binary, model and reserved flags; ASR and TTS use the 
     await assert.rejects(() => service.configure({ task: 'tts', family: 'kokoro_tts', path: model, options: ['--out', 'override.wav'] }), /owned by Shadow/)
     await assert.rejects(() => service.configure({ binary: process.execPath }), /array/)
     invalidLoader = false
+    await assert.rejects(access(join(workspace, 'config')), { code: 'ENOENT' })
     await service.configure({ binary: process.execPath })
+    assert.equal((await service.status()).configPath, join(workspace, 'config', 'audio-cpp.json'))
+    assert.equal((await new AudioCppService(workspace).read()).binary, (await service.read()).binary)
+    await assert.rejects(access(join(workspace, '.audio-cpp.json')), { code: 'ENOENT' })
     await service.configure({ task: 'asr', family: 'qwen3_asr', path: model, options: ['--language', 'en'] })
     await service.configure({ task: 'tts', family: 'kokoro_tts', path: model })
     assert.equal((await service.status()).models.asr.status, 'path_accessible')
@@ -68,7 +74,7 @@ test('configure validates binary, model and reserved flags; ASR and TTS use the 
     await assert.rejects(() => service.transcribe(model), /requires WAV/)
     failAsr = true
     await assert.rejects(() => service.transcribe(input), /bad model/)
-    assert.deepEqual(await readdir(join(workspace, '.tmp')), [])
+    assert.deepEqual(await readdir(projectStoragePath(workspace, '.tmp')), [])
     failTts = true
     const partial = join(workspace, 'partial.wav')
     await assert.rejects(() => service.speak('hello', partial), /synthesis failed/)
@@ -80,7 +86,7 @@ test('configure validates binary, model and reserved flags; ASR and TTS use the 
     })
     await assert.rejects(() => corrupt.speak('hello', partial), /valid WAV/)
     await assert.rejects(() => access(partial), { code: 'ENOENT' })
-    await access(join(workspace, '.audio-cpp.json'))
+    await access(projectStoragePath(workspace, '.audio-cpp.json'))
   })
 })
 
@@ -103,19 +109,20 @@ test('configure accepts both loader catalog generations and leaves saved setting
       await service.configure({ binary: process.execPath })
       assert.equal((await service.status()).status, 'available')
     }
-    const config = await readFile(join(workspace, '.audio-cpp.json'), 'utf8')
+    const config = await readFile(projectStoragePath(workspace, '.audio-cpp.json'), 'utf8')
     for (const catalog of ['not json', '{}', '[]', '{"schema_version":2,"loaders":{}}',
       '{"schema_version":1,"loaders":{"kokoro_tts":{"tasks":"tts"}}}']) {
       const service = new AudioCppService(workspace, async () => catalog)
       await assert.rejects(service.configure({ binary: process.execPath }), ToolNoEffectError)
-      assert.equal(await readFile(join(workspace, '.audio-cpp.json'), 'utf8'), config)
+      assert.equal(await readFile(projectStoragePath(workspace, '.audio-cpp.json'), 'utf8'), config)
     }
   })
 })
 
 test('malformed stored settings are rejected instead of silently resetting configuration', async () => {
   await withTempWorkspace(async workspace => {
-    await writeFile(join(workspace, '.audio-cpp.json'), JSON.stringify({ version: 2, asr: { family: 'x', path: 'x' } }))
+    await mkdir(join(workspace, 'config'), { recursive: true })
+    await writeFile(projectStoragePath(workspace, '.audio-cpp.json'), JSON.stringify({ version: 2, asr: { family: 'x', path: 'x' } }))
     await assert.rejects(() => new AudioCppService(workspace).status())
   })
 })

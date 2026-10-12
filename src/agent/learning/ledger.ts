@@ -1,6 +1,6 @@
+import { projectStoragePath } from '../../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { z } from 'zod'
 import { writePrivateFile } from '../../config/store.ts'
 import type { LearningOutcome } from '../../cron/contracts.ts'
@@ -55,12 +55,12 @@ export class LearningLedger {
   private committed: z.infer<typeof stateSchema>
   private readonly file: string
   constructor(readonly workspace: string, readonly projectId: string) {
-    this.file = join(workspace, '.learning', 'state.v1.json')
+    this.file = projectStoragePath(workspace, '.learning', 'state.v1.json')
     if (existsSync(this.file)) {
       this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, 'utf8')))
       if (this.state.projectId !== projectId) throw new Error('Learning journal belongs to a different Project')
     } else {
-      const legacyFile = join(workspace, 'memory', '.reflect-watermark.json')
+      const legacyFile = projectStoragePath(workspace, 'memory', '.reflect-watermark.json')
       const legacy = existsSync(legacyFile) ? z.object({
         lastRunAt: z.string(), sessions: stateSchema.shape.legacy,
       }).parse(JSON.parse(readFileSync(legacyFile, 'utf8'))).sessions : {}
@@ -72,7 +72,7 @@ export class LearningLedger {
   private save(): void {
     try {
       stateSchema.parse(this.state)
-      mkdirSync(join(this.workspace, '.learning'), { recursive: true })
+      mkdirSync(projectStoragePath(this.workspace, '.learning'), { recursive: true })
       writePrivateFile(this.file, JSON.stringify(this.state) + '\n')
       this.committed = structuredClone(this.state)
     } catch (error) {

@@ -3,6 +3,7 @@ import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Hono } from 'hono'
 import { join } from 'node:path'
+import { stat } from 'node:fs/promises'
 import { ConfigSchema } from '../../config/schema.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
 import { ProjectCatalog } from '../../projects/catalog.ts'
@@ -14,7 +15,7 @@ import type { RealtimeHub } from '../../realtime/hub.ts'
 test('host starts Projects concurrently with bounded pressure and waits for their readiness', { timeout: 15_000 }, async () => {
   await withTempWorkspace(async root => {
     const home = join(root, 'home')
-    const catalog = new ProjectCatalog(`${home}.projects`)
+    const catalog = new ProjectCatalog(home)
     await catalog.init()
     for (let index = 0; index < 4; index++) await catalog.create(`Project ${index}`)
     const releases: Array<() => void> = []
@@ -77,7 +78,7 @@ test('host starts Projects concurrently with bounded pressure and waits for thei
 test('a failed Project remains explicitly unavailable without taking the shared Main feed down', async () => {
   await withTempWorkspace(async root => {
     const home = join(root, 'home')
-    const catalog = new ProjectCatalog(`${home}.projects`)
+    const catalog = new ProjectCatalog(home)
     await catalog.init()
     const failed = await catalog.create('Unavailable fixture')
     const config = ConfigSchema.parse({
@@ -120,7 +121,7 @@ test('a failed Project remains explicitly unavailable without taking the shared 
 test('host propagates coordinator mode to every Project and stops advertising Main shell without affecting readiness', async () => {
   for (const localExecutor of [undefined, true, false]) await withTempWorkspace(async root => {
     const home = join(root, 'home')
-    const catalog = new ProjectCatalog(`${home}.projects`)
+    const catalog = new ProjectCatalog(home)
     await catalog.init()
     await catalog.create('Second Project')
     const config = ConfigSchema.parse({ agent: { workspace: home, model: 'fixture@openai' },
@@ -137,5 +138,27 @@ test('host propagates coordinator mode to every Project and stops advertising Ma
     })
     try { await runtime.ready; assert.equal(seen.size, 2) }
     finally { await runtime.shutdown() }
+  })
+})
+
+
+test('explicit app data root overrides workspace and owns canonical host and Project files', async () => {
+  await withTempWorkspace(async root => {
+    const dataDir = join(root, 'app')
+    const oldWorkspace = join(root, 'old-workspace')
+    const config = ConfigSchema.parse({ agent: { workspace: oldWorkspace }, channels: {}, mcp: {} })
+    const runtime = await startProjectHost(config, { dataDir, gateway: { host: '127.0.0.1', port: 0 } }, async (projectConfig, dependencies) => {
+      assert.equal(dependencies.home, join(dataDir, 'projects', 'default'))
+      assert.equal(projectConfig.agent.workspace, dependencies.home)
+      return { app: new Hono(), folders: new FolderRegistry(dependencies.home), ready: Promise.resolve(), async shutdown() {}, updateConfig() {} }
+    })
+    try {
+      for (const path of ['projects.json', 'telemetry/host.db', 'projects/default/config/project.json']) {
+        assert.equal((await stat(join(dataDir, path))).isFile(), true)
+      }
+      await assert.rejects(stat(join(dataDir, 'projects', 'default', 'workspace')), { code: 'ENOENT' })
+      await assert.rejects(stat(`${oldWorkspace}.projects`), { code: 'ENOENT' })
+    } finally { await runtime.shutdown() }
+    assert.equal((await stat(join(dataDir, 'devices', 'registry.v1.json'))).isFile(), true)
   })
 })

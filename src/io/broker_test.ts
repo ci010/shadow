@@ -1,7 +1,8 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { test } from 'node:test'
@@ -326,7 +327,7 @@ test('restart preserves pending definitions and artifact paths but never reconne
     emit([...server.clients][0], { type: 'artifact', path })
     await until(() => broker.get(run.id).artifacts.length === 1)
     await broker.shutdown()
-    const legacyPath = join(home, '.io', 'runs', `${randomUUID()}.json`)
+    const legacyPath = projectStoragePath(home, '.io', 'runs', `${randomUUID()}.json`)
     const legacy = '{"definition":{"program":"never execute this legacy program"}}'
     await writeFile(legacyPath, legacy)
     const restarted = new IoBroker(broker.options)
@@ -374,5 +375,42 @@ test('authenticated routes relay events, expose non-consuming updates, and bound
     assert.equal(updates.status, 400)
     const wrongSession = await app.request(`/api/io/runs/${run.id}?sessionId=web:two`, { headers: { Authorization: 'fixture-auth' } })
     assert.equal(wrongSession.status, 404)
+  })
+})
+
+
+test('migrated artifacts resolve on access without rewriting recorded absolute paths', async () => {
+  await fixture(async ({ broker, endpoint, home, server, root }) => {
+    const nextHome = join(root, 'projects', 'one')
+    const legacyHome = join(root, 'workspace.projects', 'projects', 'one', 'workspace')
+    const oldPath = join(legacyHome, 'web_one', 'saved.txt')
+    await mkdir(join(legacyHome, 'web_one'), { recursive: true })
+    await writeFile(oldPath, 'retained artifact')
+    const { run } = await approved(broker, endpoint)
+    emit([...server.clients][0], { type: 'artifact', path: oldPath })
+    await until(() => broker.get(run.id).artifacts.length === 1)
+    await broker.shutdown()
+    const filename = run.id + '.json'
+    const record = await readFile(projectStoragePath(home, '.io', 'runs', filename), 'utf8')
+    await mkdir(projectStoragePath(nextHome, '.io', 'runs'), { recursive: true })
+    await writeFile(projectStoragePath(nextHome, '.io', 'runs', filename), record)
+    await writeFile(join(nextHome, 'state', 'layout-migration.json'), JSON.stringify({ version: 1, legacyHome }))
+    const nextDirectory = join(nextHome, 'workdirs', 'web_one')
+    await mkdir(nextDirectory, { recursive: true })
+    const nextPath = join(nextDirectory, 'saved.txt')
+    await rename(oldPath, nextPath)
+    const restarted = new IoBroker({ ...broker.options, workspace: nextHome })
+    await restarted.start()
+    try {
+      const artifact = restarted.get(run.id).artifacts[0]
+      assert.equal(artifact.path, oldPath)
+      assert.equal((await restarted.artifactPath(run.id, artifact.id)).path, nextPath)
+      const app = new Hono()
+      registerIoRoutes(app, restarted, () => true)
+      const response = await app.request('/api/io/runs/' + run.id + '/artifacts/' + artifact.id)
+      assert.equal(response.status, 200)
+      assert.equal(await response.text(), 'retained artifact')
+      assert.equal(JSON.parse(await readFile(projectStoragePath(nextHome, '.io', 'runs', filename), 'utf8')).artifacts[0].path, oldPath)
+    } finally { await restarted.shutdown() }
   })
 })

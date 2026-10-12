@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { randomUUID } from 'node:crypto'
@@ -404,7 +405,7 @@ test('owner API requires authorization and exact reviewed revision; reconnect pe
   await assert.rejects(f.config.commit(owner, stale.id, stale.hash, signal()), /expired or configuration changed/)
   const reopened = new IntegrationStore({ ...f.config.options })
   assert.equal(reopened.snapshot().revision, f.config.snapshot().revision)
-  await writeFile(join(f.home, 'agents', f.profile.name, 'AGENT.md'), 'PRIVATE_EDIT_CANARY')
+  await writeFile(projectStoragePath(f.home, 'agents', f.profile.name, 'AGENT.md'), 'PRIVATE_EDIT_CANARY')
   await assert.rejects(f.input(), /changed outside/)
 })
 
@@ -571,7 +572,7 @@ test('revoked domains can be disabled and interrupted approvals preserve manual 
   await assert.rejects(f.config.commit(owner, draft.id, draft.hash, signal()), /Synthetic interruption/)
   assert.equal(f.config.draft(draft.id).status, 'applying')
   await assert.rejects(f.config.propose(owner, { kind: 'domain.create', name: 'Blocked', domainKind: 'shared' }, f.config.snapshot().revision, signal()), /needs recovery/)
-  const file = join(f.home, 'agents', f.profile.name, 'AGENT.md')
+  const file = projectStoragePath(f.home, 'agents', f.profile.name, 'AGENT.md')
   await writeFile(file, 'MANUAL_CHANGE_CANARY')
   interrupt = false
   const reopened = new IntegrationStore({ ...f.config.options })
@@ -622,7 +623,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
 
   test(`${Store.name}: scoped learning retains source versions, separate cursors and private skills through all pipelines`, async t => {
     const f = await fixture(t, Store)
-    await writeFile(join(f.home, 'SOUL.md'), 'GLOBAL_SOUL_MUST_NOT_CHANGE')
+    await writeFile(projectStoragePath(f.home, 'SOUL.md'), 'GLOBAL_SOUL_MUST_NOT_CHANGE')
     await f.send('201', 'CUSTOMER_A_LEARNING_CANARY')
     await f.send('202', 'CUSTOMER_B_LEARNING_CANARY')
     const a = f.sessions.getSessionState(f.id())!.channelBoundary!
@@ -648,9 +649,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert(resources.filter(resource => resource.kind !== 'history').every(resource => resource.sources.some(source => source.resourceId && source.version)))
     }
     assert.equal(f.outbound.length, sent, 'Learning has no Discord output transport')
-    assert.equal(await readFile(join(f.home, 'SOUL.md'), 'utf8'), 'GLOBAL_SOUL_MUST_NOT_CHANGE')
+    assert.equal(await readFile(projectStoragePath(f.home, 'SOUL.md'), 'utf8'), 'GLOBAL_SOUL_MUST_NOT_CHANGE')
     assert.equal(existsSync(join(f.home, 'memory')), false)
-    assert.equal(existsSync(join(f.home, 'skills')), false)
+    assert.equal(existsSync(projectStoragePath(f.home, 'skills')), false)
     const workers = f.sessions.listSessions().filter(row => f.sessions.getSessionState(row.sessionId)?.channelBoundary?.learning)
     assert.equal(workers.length, 6)
     for (const worker of workers) {

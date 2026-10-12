@@ -1,5 +1,6 @@
+import { projectStoragePath } from '../../utils/data-paths.ts'
 import { lstatSync, mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname } from 'node:path'
 import { writePrivateFile } from '../../config/store.ts'
 import { githubStateSchema, parseGitHubUrl, type GitHubState } from './contracts.ts'
 
@@ -38,8 +39,8 @@ export class GitHubStore {
   private state: GitHubState
   private readonly path: string
   constructor(home: string, private persist: typeof writePrivateFile = writePrivateFile) {
-    mkdirSync(home, { recursive: true })
-    this.path = join(home, 'github-integration.json')
+    this.path = projectStoragePath(home, 'github-integration.json')
+    mkdirSync(dirname(this.path), { recursive: true })
     let saved: unknown = { version: 1, repositories: [], resources: [], links: [], operations: [], subscriptions: [], notifications: [], imports: [], errors: {} }
     try {
       const stat = lstatSync(this.path)

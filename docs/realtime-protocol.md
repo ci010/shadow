@@ -83,7 +83,8 @@ user steering affects subsequent output without rewriting earlier responses.
 An event's historical user origin does not count as present user participation.
 An interrupted user request retains its audience without changing the event/session
 source, delivery policy, or authority. A final assistant response without tool calls
-ends that continuity; later independent background responses remain folded.
+ends that prompt continuity; later independent event turns do not inherit user participation.
+This flag describes input participation, not the audience of the output.
 History reads repair older lost audience flags across unfinished tool loops before
 truncation or pagination, without rewriting JSONL/SQLite records or response IDs.
 Continue reuses the unfinished request's audience: an interrupted user request
@@ -92,14 +93,15 @@ does not turn it into a user request. Older recovery records without audience
 metadata use the saved turn's response or input provenance. A user Retry is a
 new user-involved turn even when it reuses existing model history.
 
-Web defaults explicitly marked, non-user conversational responses to a
-**Background response** disclosure, both live and after history reload. Full
-text and attachments remain accessible; the header shows source and any recorded
-trigger failure. User-involved output and legacy records without metadata retain
-their normal presentation. Invalid/unsupported metadata produces a diagnostic and
-does not hide the response. Task cards, event cards, yield decisions and recovery
-controls retain their existing behavior. Opening a response survives updates in
-the current conversation; no persistent visibility preference is stored.
+Web displays conversational assistant responses normally, both while streaming and
+after history reload, regardless of their triggering source or `userInvolved` flag.
+An event such as `background-task-complete` can resume work and produce the final
+answer to the user; trigger provenance must not label or fold that answer as a
+**Background response**. Existing records use the same presentation without a data
+migration. Text, attachments, timestamps, usage and search remain available.
+Incoming event cards, peer messages, tool/task cards, yield decisions and recovery
+controls retain their existing presentation. Invalid/unsupported metadata produces
+a diagnostic and does not hide the response.
 
 The metadata is stored on the same assistant record in both JSONL and SQLite,
 not in extra log rows, and is stripped from provider wire messages. It does not
@@ -108,8 +110,9 @@ external channel delivery. QQ, Discord and other channels still receive the
 original final text, not Web disclosure labels.
 
 Per-inference guidance asks reusable user conversations to address their reader,
-not the triggering Agent/event, and to keep pure background summaries brief
-without omitting material results or blockers. It is guidance, not runtime
+not the triggering Agent/event. Event-triggered continuations of user requests
+receive a normal complete answer, including asynchronous results. Independent
+updates should be brief without omitting material results or blockers. It is guidance, not runtime
 truncation. A peer reply still requires the existing `message` tool. Task/call
 and inbound A2A result contracts do not receive this audience instruction.
 This display policy does not change request routing or turn delivery. Explicit

@@ -1,5 +1,6 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { existsSync, lstatSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { parseSql, type Statement, type Value } from '../initiatives/sql.ts'
@@ -55,8 +56,8 @@ export class ProjectConventions {
   private readonly db: DatabaseSync
   private closed = false
   constructor(home: string, private readonly work: () => WorkRecord[]) {
-    mkdirSync(home, { recursive: true })
-    const filename = join(home, 'conventions.sqlite')
+    const filename = projectStoragePath(home, 'conventions.sqlite')
+    mkdirSync(dirname(filename), { recursive: true })
     if (existsSync(filename)) {
       const stat = lstatSync(filename)
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 134_217_728) throw new Error('Invalid Project conventions database file.')

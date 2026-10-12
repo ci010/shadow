@@ -16,7 +16,7 @@ import { startProjectHost } from './host.ts'
 
 test('Main revokes admission, drains project services before deleting Home and resumes interrupted cleanup on restart', { timeout: 15_000 }, async () => {
   await withTempWorkspace(async root => {
-    const home = join(root, 'home'), catalog = new ProjectCatalog(`${home}.projects`)
+    const home = join(root, 'home'), catalog = new ProjectCatalog(home)
     await catalog.init()
     const project = await catalog.create('Delete fixture')
     const interrupted = await catalog.create('Interrupted fixture')

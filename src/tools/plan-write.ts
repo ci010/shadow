@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { dirname, resolve } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import type { Tool, ToolParameters } from './tool.ts'
@@ -6,12 +7,12 @@ import { isWindows } from '../utils/runtime.ts'
 
 /**
  * Scoped write tool for the plan agent.
- * Only writes to `<workspace>/.plans/` — prevents arbitrary file writes.
+ * Only writes to `<Project Home>/state/plans/` — prevents arbitrary file writes.
  */
 export class PlanWriteTool implements Tool {
   readonly name = 'plan_write'
   readonly description =
-    'Write or edit a planning document in .plans/. Shared task status belongs in Initiative items, not a second checklist.'
+    'Write or edit a planning document in Project Home/state/plans/. Shared task status belongs in Initiative items, not a second checklist.'
   readonly optIn = true
   readonly parameters: ToolParameters = {
     type: 'object',
@@ -19,7 +20,7 @@ export class PlanWriteTool implements Tool {
       path: {
         type: 'string',
         description:
-          'File path relative to .plans/ (e.g. "my-plan.md"). Subdirectories allowed.',
+          'File path relative to Project Home/state/plans/ (e.g. "my-plan.md"). Subdirectories allowed.',
       },
       content: {
         type: 'string',
@@ -37,12 +38,12 @@ export class PlanWriteTool implements Tool {
   private plansDir: string
 
   constructor(workspace: string) {
-    this.plansDir = resolve(workspace, '.plans')
+    this.plansDir = projectStoragePath(workspace, '.plans')
   }
 
   getChatTextDisplay(args: Record<string, unknown>): string {
     const icon = args.match ? '✏️' : '📝'
-    return `${icon} .plans/${String(args.path)}`
+    return `${icon} ${resolve(this.plansDir, String(args.path))}`
   }
 
   async execute(args: Record<string, unknown>): Promise<string> {
@@ -55,7 +56,7 @@ export class PlanWriteTool implements Tool {
 
     const filePath = resolve(this.plansDir, rawPath)
 
-    // Double-check resolved path is within .plans/
+    // Double-check resolved path is within Project Home/state/plans/
     const sep = isWindows ? '\\' : '/'
     const normalizedPlans = resolve(this.plansDir)
     const normalizedFile = resolve(filePath)
@@ -63,7 +64,7 @@ export class PlanWriteTool implements Tool {
       !normalizedFile.startsWith(normalizedPlans + sep) &&
       normalizedFile !== normalizedPlans
     ) {
-      return 'Error: path must stay within .plans/ directory'
+      return 'Error: path must stay within Project Home/state/plans/ directory'
     }
 
     const content = String(args.content)
@@ -75,19 +76,19 @@ export class PlanWriteTool implements Tool {
       try {
         existing = await readFile(filePath, 'utf8')
       } catch {
-        return `Error: file not found: .plans/${rawPath}`
+        return `Error: file not found: ${filePath}`
       }
       const updated = applyReplacement(existing, match, content)
       if (updated === null) {
         return 'Error: match string not found in file'
       }
       await writeFile(filePath, updated)
-      return `✏️ .plans/${rawPath}`
+      return `✏️ ${filePath}`
     }
 
     // Full write mode
     await mkdir(dirname(filePath), { recursive: true })
     await writeFile(filePath, content)
-    return `📝 .plans/${rawPath}`
+    return `📝 ${filePath}`
   }
 }

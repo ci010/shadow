@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { extname, isAbsolute, join, relative } from 'node:path'
 import {
   mkdir,
@@ -461,7 +462,7 @@ export class ReadTool implements Tool<ToolResult> {
       const bytes = new Uint8Array(await res.arrayBuffer())
       const ext = guessExtension(contentType, url)
       const filename = `web-fetch-${Date.now()}.${ext}`
-      const tmpDir = join(this.workspace, '.tmp')
+      const tmpDir = projectStoragePath(this.workspace, '.tmp')
       try {
         await mkdir(tmpDir, { recursive: true })
       } catch { /* exists */ }
@@ -502,7 +503,7 @@ export class ReadTool implements Tool<ToolResult> {
     const tokenEstimate = roughTokenCountEstimation(content, '.md')
     if (tokenEstimate > MAX_TOKENS) {
       const filename = `web-fetch-${Date.now()}.md`
-      const tmpDir = join(this.workspace, '.tmp')
+      const tmpDir = projectStoragePath(this.workspace, '.tmp')
       try {
         await mkdir(tmpDir, { recursive: true })
       } catch { /* exists */ }

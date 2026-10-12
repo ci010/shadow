@@ -52,8 +52,9 @@ test('default selection is read-only until explicitly saved and then initializes
   const initialized = await coordinator.initializeMain()
   assert.equal(initialized.ok, true)
   assert.equal(initialized.state.step, 'configure-provider')
-  const config = JSON.parse(await readFile(join(f.dataDir, 'config', 'bot.config.json'), 'utf8'))
-  assert.equal(config.agent.workspace, join(f.dataDir, 'workspace'))
+  const config = JSON.parse(await readFile(join(f.dataDir, 'app.json'), 'utf8'))
+  assert.equal(config.agent.workspace, f.dataDir)
+  await assert.rejects(stat(join(f.dataDir, 'workspace')), { code: 'ENOENT' })
   assert.equal((await stat(config.agent.workspace)).isDirectory(), true)
 })
 

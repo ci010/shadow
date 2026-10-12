@@ -1,3 +1,4 @@
+import { sessionWorkspacePath } from '../utils/paths.ts'
 import assert, { deepEqual as assertEquals, notDeepEqual as assertNotEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import { join, resolve } from 'node:path'
@@ -304,7 +305,7 @@ test('session file base preserves legacy and inherited managed directories', () 
 
   assert(legacy.available && legacy.locality === 'local')
   assert(inherited.available && inherited.locality === 'local')
-  assertEquals(legacy.path, resolve(workspace, 'discord_top'))
+  assertEquals(legacy.path, sessionWorkspacePath(workspace, 'discord:top'))
   assertEquals(inherited.path, legacy.path)
 })
 

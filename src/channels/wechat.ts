@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 /**
  * WeChat iLink Bot channel.
  *
@@ -12,7 +13,6 @@
  *   POST /wechat/monitor/stop  → stop message polling
  */
 
-import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type { Hono } from 'hono'
 import type { OutboundMessage } from '../bus/events.ts'
@@ -214,7 +214,7 @@ export class WeChatChannel extends AbstractChannel {
   constructor(bus: Bus, private readonly options: WeChatChannelOptions) {
     super(bus, options.allowFrom)
     this.workspace = options.workspace
-    this.mediaDir = join(options.workspace, 'uploads', 'wechat')
+    this.mediaDir = projectStoragePath(options.workspace, 'uploads', 'wechat')
 
     const routeTag = resolveRouteTag()
     this.repository = new WeixinRepository(options.workspace)

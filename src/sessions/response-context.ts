@@ -11,6 +11,7 @@ export interface ResponseContext {
     | { kind: 'user' }
     | { kind: 'session'; sessionId: string }
     | { kind: 'event'; eventId: string; type: string; source: string; status?: 'failed' | 'cancelled' }
+  /** Admitted user participation/continuity, not the recipient or a visibility flag. */
   userInvolved: boolean
 }
 
@@ -32,7 +33,9 @@ export function createResponseContext(
   return { version: 1, turnId, responseId: `${turnId}:0`, source: origin, userInvolved: source.kind === 'user' }
 }
 
-export function isBackgroundResponse(context: ResponseContext | undefined): boolean {
+/** Prompt participation only: an event-triggered response still addresses the conversation reader.
+ * Never use this predicate to classify the recipient or fold assistant output. */
+export function hasNoAdmittedUserInput(context: ResponseContext | undefined): boolean {
   return !!context && !context.userInvolved && context.source.kind !== 'user'
 }
 

@@ -143,6 +143,9 @@
               :running="streaming && !viewingPhysicalId" @inspect="inspectExecution" @interact="clearSelection">
               <div class="chat-content prose" v-html="renderMarkdown(messageActions.entries.get(idx)!.content)" />
             </MessageAction>
+            <InputQuestion v-else-if="inputQuestions.entries.has(idx)" :entry="inputQuestions.entries.get(idx)!"
+              :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" :data-msg-idx="idx"
+              @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" @interact="clearSelection" />
             <YieldDecision v-else-if="yieldDecisions.entries.has(idx)" :decision="yieldDecisions.entries.get(idx)!"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :api-base="apiBase" :data-msg-idx="idx" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
@@ -163,18 +166,15 @@
             <!-- Compaction summary (previous conversation context) -->
             <ConversationSummary v-else-if="msg.isSummary" :content="msg.content"
               :render-content="renderMarkdown" @interact="clearSelection" />
-            <!-- Normal messages -->
-            <ResponseDisclosure v-else :context="msg.responseContext" :message-index="idx" :timestamp="msg.timestamp"
-              :open="expandedResponses.has(msg.responseContext?.responseId ?? '')"
-              @update:open="setResponseExpanded(msg.responseContext, $event)" @interact="clearSelection">
-            <component :is="msg.sessionSource ? SessionMessageDisclosure : 'div'"
+            <!-- User-facing messages: trigger provenance does not determine the recipient. -->
+            <component v-else :is="msg.sessionSource ? SessionMessageDisclosure : 'div'"
               v-bind="msg.sessionSource ? {
                 title: sessionMessageTitle(msg.sessionSource),
                 recipient: msg.sessionSource.id || msg.sessionSource.name || t('Unknown session'),
                 sessionId: msg.sessionSource.id,
                 timestamp: msg.timestamp,
               } : {}"
-              :data-msg-idx="isBackgroundResponse(msg.responseContext) ? undefined : idx"
+              :data-msg-idx="idx"
               :class="[
                 msg.sessionSource ? 'chat-session' : msg.role === 'user' ? 'chat-bubble chat-user' : 'chat-bubble chat-assistant',
               ]"
@@ -209,7 +209,6 @@
               <MessageTimestamp v-if="!msg.sessionSource" :timestamp="msg.timestamp" />
               </div>
             </component>
-            </ResponseDisclosure>
             <YieldDecision v-for="[index, decision] in yieldDecisions.after.get(idx)"
               :key="decision.requestId" :decision="decision" :api-base="apiBase"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
@@ -220,6 +219,9 @@
           <p v-if="decisionRecordError" class="composer-error" role="alert">{{ decisionRecordError }}
             <button type="button" @click="refreshDecisionRecords">{{ t('Retry decision history') }}</button>
           </p>
+          <InputQuestion v-if="inputQuestions.unlinked" :entry="inputQuestions.unlinked"
+            :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir"
+            @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" @interact="clearSelection" />
           <IoRequestCard v-for="run in ioAfter.get(-1)" :key="run.id" :run="run" :base="apiBase" />
           <details v-if="ioEarlier.length" class="unlinked-executions">
             <summary>{{ t('Earlier captures ·') }} {{ ioEarlier.length }}</summary>
@@ -227,17 +229,13 @@
           </details>
           <p v-if="ioError" class="composer-error" role="alert">{{ t('Capture requests:') }} {{ ioError }}</p>
           <!-- Streaming response -->
-          <ResponseDisclosure v-if="streaming && !viewingPhysicalId && (streamContent || streamMedia.length)" :context="streamResponseContext" :timestamp="streamTimestamp"
-            :open="expandedResponses.has(streamResponseContext?.responseId ?? '')"
-            @update:open="setResponseExpanded(streamResponseContext, $event)" @interact="clearSelection">
-          <div class="chat-bubble chat-assistant" :data-search-message-idx="displayMessages.length" role="article" :aria-label="t('Assistant message')">
+          <div v-if="streaming && !viewingPhysicalId && (streamContent || streamMedia.length)" class="chat-bubble chat-assistant" :data-search-message-idx="displayMessages.length" role="article" :aria-label="t('Assistant message')">
             <div class="chat-content selectable-text">
               <span>{{ streamContent }}</span>
             </div>
             <MessageAttachments :paths="streamMedia" :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />
             <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
-          </ResponseDisclosure>
           </div>
         </div>
         <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
@@ -511,6 +509,8 @@ import SessionActivity from './SessionActivity.vue'
 import SegmentNavigation from './SegmentNavigation.vue'
 import WorkingWave from './WorkingWave.vue'
 import YieldQuestion from './YieldQuestion.vue'
+import InputQuestion from './InputQuestion.vue'
+import { inlineInputQuestions } from '../input-history.ts'
 import { composerSubmitIntent } from '../composer-submit.ts'
 import SessionWorkControls from './SessionWorkControls.vue'
 import SessionWorkStatus from './SessionWorkStatus.vue'
@@ -529,8 +529,7 @@ import ConversationSkeleton from './ConversationSkeleton.vue'
 import MessageAction from './MessageAction.vue'
 import { inlineMessageActions } from '../message-actions.ts'
 import ConversationEvent from './ConversationEvent.vue'
-import ResponseDisclosure from './ResponseDisclosure.vue'
-import { isBackgroundResponse, parseResponseContext, type ResponseContext } from '../../../src/sessions/response-context.ts'
+import { parseResponseContext, type ResponseContext } from '../../../src/sessions/response-context.ts'
 import { inlineExecutionMessages } from '../execution-messages.ts'
 import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
 import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
@@ -1230,6 +1229,11 @@ const yieldDecisions = computed(() => inlineYieldDecisions(
     && pendingYield.value?.sessionId === activeSessionId.value ? pendingYield.value : null, decisionRecords.value,
 ))
 
+const inputQuestions = computed(() => inlineInputQuestions(
+  displayMessages.value, !viewingPhysicalId.value && sessionStage.value === 'waiting'
+    && activeAsk.value?.sessionId === activeSessionId.value && isInputRequest(activeAsk.value) ? activeAsk.value : null,
+))
+
 function handleYieldRequest(value: AskRequest | null) {
   const request = value && !isInputRequest(value) ? value : null
   if (disposed) return
@@ -1270,20 +1274,13 @@ async function refreshDecisionRecords() {
   }
 }
 const toolActivity = computed(() => groupToolActivity(displayMessages.value, new Set([
-  ...inlineExecutions.value.excluded, ...messageActions.value.excluded, ...yieldDecisions.value.excluded,
+  ...inlineExecutions.value.excluded, ...messageActions.value.excluded, ...yieldDecisions.value.excluded, ...inputQuestions.value.excluded,
 ])))
 const allSessions = ref<SidebarSession[]>([])
 const sessionsLoading = ref(false)
 const sessionsError = ref('')
 const collapsedSessions = reactive(new Set<string>())
 const expandedThinking = reactive(new Set<number>())
-const expandedResponses = reactive(new Set<string>())
-function setResponseExpanded(context: ResponseContext | undefined, open: boolean) {
-  if (!context) return
-  if (open) expandedResponses.add(context.responseId)
-  else expandedResponses.delete(context.responseId)
-}
-watch([() => props.apiBase, () => props.projectId, () => props.sessionId, activeSessionId], () => expandedResponses.clear())
 
 // ── Segment navigation state ─────────────────────────────────────────────────
 const previousPhysicalId = ref<string | null>(null)
@@ -2171,8 +2168,6 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   signal.throwIfAborted()
   const wrapper = messagesContainer.value?.querySelector<HTMLElement>(`[data-search-message-idx="${match.entry.messageIndex}"]`)
   if (!wrapper) throw new Error(t('This message changed while searching. Retry search.'))
-  const response = segment.messages[match.entry.messageIndex]?.responseContext
-  if (response && isBackgroundResponse(response)) setResponseExpanded(response, true)
   for (let parent = wrapper.parentElement; parent && parent !== messagesContainer.value; parent = parent.parentElement) {
     if (parent instanceof HTMLDetailsElement) parent.open = true
   }
@@ -3224,22 +3219,20 @@ function resendLastMessage() {
 .mobile-message-settings :deep(.composer-control), .mobile-message-settings .context-action { width: 100%; min-height: 44px; justify-content: flex-start; font-size: 14px; }
 .conversation-empty { color: var(--c-text-secondary); font-size: 14px; user-select: none; }
 
-.chat-message-list > :deep(:is(.chat-assistant, .system-event, .response-disclosure, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
+.chat-message-list > :deep(:is(.chat-assistant, .system-event, .input-question, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
   min-width: 0;
   width: var(--ai-surface-width);
   max-width: var(--ai-surface-width);
   box-sizing: border-box;
   align-self: flex-start;
 }
-.chat-message-entry > :deep(:is(.chat-assistant, .system-event, .response-disclosure, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
+.chat-message-entry > :deep(:is(.chat-assistant, .system-event, .input-question, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
   min-width: 0;
   width: var(--ai-surface-width);
   max-width: var(--ai-surface-width);
   box-sizing: border-box;
   align-self: flex-start;
 }
-.chat-message-list > :deep(.response-disclosure .chat-assistant) { max-width: 100%; }
-.chat-message-entry > :deep(.response-disclosure .chat-assistant) { max-width: 100%; }
 
 .system-event, .compaction-summary, .execution-card {
   width: 100%;

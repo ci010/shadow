@@ -227,7 +227,7 @@ export class KnowledgeMaintenanceService {
     return new Map(this.skills.availableSkillSources(true).map(({ skill, source }) => [
       skill.meta.name,
       source === 'builtin' ? `builtin:skills/${skill.meta.name}`
-        : relative(this.workspace, resolve(skill.dirPath, 'SKILL.md')).split(sep).join('/'),
+        : `skills/${relative(workspacePath(this.workspace, 'skills'), resolve(skill.dirPath, 'SKILL.md')).split(sep).join('/')}`,
     ]))
   }
 
@@ -391,7 +391,7 @@ export class KnowledgeMaintenanceService {
     try { safePath(this.directory) }
     catch (error) {
       if (errno(error) !== 'ENOENT') throw error
-      mkdirSync(this.directory, { mode: 0o700 })
+      mkdirSync(this.directory, { recursive: true, mode: 0o700 })
     }
     safePath(this.directory)
     this.assertDiskCurrent()

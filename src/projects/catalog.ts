@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, rm } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { appDataPaths } from '../utils/data-paths.ts'
 import { writePrivateFile } from '../config/store.ts'
 import type { FolderRecord, RemoteFolderRecord } from '../folders/contracts.ts'
 import { parseWorkdirIdentity, workdirIdentitiesOverlap, type WorkdirIdentityV1 } from '../execution/workdir-identity.ts'
@@ -98,10 +99,16 @@ export class ProjectCatalog {
 
   constructor(hostHome: string, private readonly reservedHomes: readonly string[] = []) {
     this.hostHome = resolve(hostHome)
-    this.filePath = join(this.hostHome, 'projects.v2.json')
+    this.filePath = appDataPaths(this.hostHome).catalog
   }
 
   async init(): Promise<void> {
+    try {
+      await lstat(join(this.hostHome, '.layout-migration', 'copy.lock'))
+      throw new Error('Data-layout migration is in progress or was interrupted. Keep Shadow stopped until the migration receipt is verified and its lock is released.')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
     await mkdir(this.hostHome, { recursive: true })
     try {
       const data: unknown = JSON.parse(await readFile(this.filePath, 'utf8'))
@@ -170,6 +177,18 @@ export class ProjectCatalog {
       this.#data = data as CatalogData
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      const legacyCatalogs = [
+        join(this.hostHome, 'workspace.projects', 'projects.v2.json'),
+        join(`${this.hostHome}.projects`, 'projects.v2.json'),
+      ]
+      for (const legacyCatalog of legacyCatalogs) {
+        try {
+          await lstat(legacyCatalog)
+          throw new Error(`Legacy project data detected at ${legacyCatalog}. Stop Shadow and run the explicit data-layout migration before starting; no new catalog was created.`)
+        } catch (legacyError) {
+          if ((legacyError as NodeJS.ErrnoException).code !== 'ENOENT') throw legacyError
+        }
+      }
       const data: CatalogData = {
         version: 2, projects: [{ id: DEFAULT_PROJECT_ID, name: 'Default', createdAt: new Date().toISOString() }], folders: [],
       }

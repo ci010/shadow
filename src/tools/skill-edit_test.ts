@@ -1,4 +1,5 @@
 import { requireToolText } from './tool.ts'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { readFile, writeFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -64,9 +65,9 @@ test('ordinary Skills save directly; hidden baselines detect other sessions and 
     assert.match(requireToolText(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Stale') } })), /conflict|changed|stale/i)
     assert.equal(f.skills.getSkill('learned')?.body, 'Second')
     await f.invoke(b, 'skill_read', { name: 'learned' })
-    await writeFile(join(home, 'skills', 'learned', 'SKILL.md'), manifest('External'))
+    await writeFile(projectStoragePath(home, 'skills', 'learned', 'SKILL.md'), manifest('External'))
     assert.match(requireToolText(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Stale again') } })), /conflict|changed|stale/i)
-    assert.equal(await readFile(join(home, 'skills', 'learned', 'SKILL.md'), 'utf8'), manifest('External'))
+    assert.equal(await readFile(projectStoragePath(home, 'skills', 'learned', 'SKILL.md'), 'utf8'), manifest('External'))
     a.tools.resetDynamic()
     b.tools.resetDynamic()
   })
@@ -150,13 +151,13 @@ test('a Skill whose manifest was deleted can be restored without losing retained
     const f = setup(home)
     const a = f.context('web:restore')
     await f.editing.save({ name: 'learned', files: { 'SKILL.md': manifest('First'), 'notes.txt': 'Preserved' } }, a)
-    await unlink(join(home, 'skills', 'learned', 'SKILL.md'))
-    f.skills.forgetSkillDirectory(join(home, 'skills', 'learned'))
+    await unlink(projectStoragePath(home, 'skills', 'learned', 'SKILL.md'))
+    f.skills.forgetSkillDirectory(projectStoragePath(home, 'skills', 'learned'))
     const current = JSON.parse(f.editing.read({ name: 'learned' }, a))
     assert.equal(current.content, null)
     assert.deepEqual(current.files, ['notes.txt'])
     await f.editing.save({ name: 'learned', files: { 'SKILL.md': manifest('Restored') } }, a)
     assert.equal(f.skills.getSkill('learned')?.body, 'Restored')
-    assert.equal(await readFile(join(home, 'skills', 'learned', 'notes.txt'), 'utf8'), 'Preserved')
+    assert.equal(await readFile(projectStoragePath(home, 'skills', 'learned', 'notes.txt'), 'utf8'), 'Preserved')
   })
 })

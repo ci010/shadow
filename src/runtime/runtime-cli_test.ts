@@ -310,8 +310,8 @@ test('derived paths resolve relative data directories without mutating config co
       bootstrapConfigPath: '/srv/shadow/conf/bootstrap.json',
       bootstrapDirectory: '/srv/shadow/conf',
       dataDir: '/srv/shadow/state',
-      mutableAgentConfigPath: '/srv/shadow/state/config/bot.config.json',
-      clusterSnapshotPath: '/srv/shadow/state/cluster/registry.v1.json',
+      mutableAgentConfigPath: '/srv/shadow/state/app.json',
+      clusterSnapshotPath: '/srv/shadow/state/devices/registry.v1.json',
       childCredentialPath:
         '/srv/shadow/state/credentials/device-credential.v1.json',
     },
@@ -326,8 +326,8 @@ test('derived paths resolve relative data directories without mutating config co
       bootstrapConfigPath: 'C:\\Shadow\\conf\\bootstrap.json',
       bootstrapDirectory: 'C:\\Shadow\\conf',
       dataDir: 'C:\\Shadow\\state',
-      mutableAgentConfigPath: 'C:\\Shadow\\state\\config\\bot.config.json',
-      clusterSnapshotPath: 'C:\\Shadow\\state\\cluster\\registry.v1.json',
+      mutableAgentConfigPath: 'C:\\Shadow\\state\\app.json',
+      clusterSnapshotPath: 'C:\\Shadow\\state\\devices\\registry.v1.json',
       childCredentialPath:
         'C:\\Shadow\\state\\credentials\\device-credential.v1.json',
     },

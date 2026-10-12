@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import fs, { existsSync } from 'node:fs'
@@ -23,7 +24,7 @@ async function fixture(t: TestContext) {
     await rm(root, { recursive: true, force: true })
   })
   const put = async (id: string, content: string | Buffer) => {
-    const file = join(root, ...id.split('/'))
+    const file = projectStoragePath(root, ...id.split('/'))
     await mkdir(dirname(file), { recursive: true })
     await writeFile(file, content)
     return file
@@ -66,7 +67,7 @@ test('scan distinguishes missing, present uncatalogued resources/directories, an
   for (const label of ['valid', 'external', 'self']) assert.equal(byLabel.has(label), false)
   assert.equal(await readFile(join(f.root, source), 'utf8'), text)
   assert.equal(await readFile(join(f.root, 'outside/private.md'), 'utf8'), '# Not inspectable via link')
-  assert.equal(existsSync(join(f.root, '.knowledge-maintenance', 'report.json')), true)
+  assert.equal(existsSync(projectStoragePath(f.root, '.knowledge-maintenance', 'report.json')), true)
   assert.equal(f.maintenance.status().intervalMs, KNOWLEDGE_MAINTENANCE_INTERVAL_MS)
   const originalFindings = structuredClone(report.findings)
   report.findings.length = 0
@@ -126,7 +127,7 @@ test('effective skill aliases and Markdown entities never turn existing resource
   const f = await fixture(t)
   const content = '---\nname: helper\n---\n# Helper'
   await f.put('skills/different-directory/SKILL.md', content)
-  f.skills.setSkill('helper', { ...parseSkillFile(content, 'helper'), dirPath: join(f.root, 'skills/different-directory') })
+  f.skills.setSkill('helper', { ...parseSkillFile(content, 'helper'), dirPath: projectStoragePath(f.root, 'skills/different-directory') })
   await f.put('skills/different-directory/assets/file.txt', 'present')
   await f.put('memory/a&b.txt', 'present')
   await f.put('memory/AB.txt', 'present')
@@ -176,7 +177,7 @@ test('session memories, conventions, JSONL history, project skills, and builtins
   await f.put('skills/project/SKILL.md', project)
   await f.put('bundled/SKILL.md', link)
   const parsed = parseSkillFile(project, 'project')
-  const skill = { ...parsed, dirPath: join(f.root, 'skills', 'project') }
+  const skill = { ...parsed, dirPath: projectStoragePath(f.root, 'skills', 'project') }
   const builtin = { ...parseSkillFile(link, 'bundled'), dirPath: join(f.root, 'bundled') }
   t.mock.method(f.skills, 'availableSkillSources', () => [
     { source: 'project' as const, shadowsBuiltin: false, skill },
@@ -189,9 +190,9 @@ test('session memories, conventions, JSONL history, project skills, and builtins
   for (const finding of report.findings) {
     assert.throws(() => f.maintenance.preview(report.id, finding.sourceId), { status: 409 })
   }
-  for (const id of sources) assert.equal(await readFile(join(f.root, id), 'utf8'), link)
+  for (const id of sources) assert.equal(await readFile(projectStoragePath(f.root, id), 'utf8'), link)
   assert.equal(await readFile(join(f.root, 'memory/events/2026-09-20.jsonl'), 'utf8'), '{"refs":["memory/gone.md"]}\n')
-  assert.equal(await readFile(join(f.root, 'skills/project/SKILL.md'), 'utf8'), project)
+  assert.equal(await readFile(projectStoragePath(f.root, 'skills/project/SKILL.md'), 'utf8'), project)
   assert.equal(await readFile(join(f.root, 'bundled/SKILL.md'), 'utf8'), link)
 })
 
@@ -263,7 +264,7 @@ test('corrupt reports are nonfatal at startup and recover only after preserving 
   const f = await fixture(t)
   await f.put('memory/topic.md', '[missing](memory/gone.md)')
   await f.maintenance.scan()
-  const path = join(f.root, '.knowledge-maintenance/report.json')
+  const path = projectStoragePath(f.root, '.knowledge-maintenance/report.json')
   const original = await readFile(path, 'utf8')
   const corrupt = JSON.parse(original)
   corrupt.report.findings[0].label = 'corrupted'
@@ -275,7 +276,7 @@ test('corrupt reports are nonfatal at startup and recover only after preserving 
   assert.equal(reader.status().report, null)
   assert.equal(await readFile(path, 'utf8'), JSON.stringify(corrupt))
   await reader.scan()
-  const directory = join(f.root, '.knowledge-maintenance')
+  const directory = projectStoragePath(f.root, '.knowledge-maintenance')
   const archives = (await readdir(directory)).filter(name => name.startsWith('report.invalid-'))
   assert.equal(archives.length, 1)
   assert.equal(await readFile(join(directory, archives[0]), 'utf8'), JSON.stringify(corrupt))
@@ -296,7 +297,7 @@ test('unsafe or unreadable maintenance storage does not prevent startup and rema
   const f = await fixture(t)
   await f.put('memory/topic.md', '[missing](memory/gone.md)')
   await f.maintenance.scan()
-  const path = join(f.root, '.knowledge-maintenance/report.json')
+  const path = projectStoragePath(f.root, '.knowledge-maintenance/report.json')
   const original = fs.lstatSync
   const mocked = t.mock.method(fs, 'lstatSync', (file: fs.PathLike, ...args: unknown[]) => {
     if (file === path) throw Object.assign(new Error('Permission denied'), { code: 'EACCES' })
@@ -314,9 +315,9 @@ test('unsafe or unreadable maintenance storage does not prevent startup and rema
   syncBuiltinESMExports()
   await unreadable.scan()
   assert.equal(unreadable.status().lastError, undefined)
-  await rm(join(f.root, '.knowledge-maintenance'), { recursive: true })
+  await rm(projectStoragePath(f.root, '.knowledge-maintenance'), { recursive: true })
   await mkdir(join(f.root, 'outside'))
-  await symlink(join(f.root, 'outside'), join(f.root, '.knowledge-maintenance'), process.platform === 'win32' ? 'junction' : 'dir')
+  await symlink(join(f.root, 'outside'), projectStoragePath(f.root, '.knowledge-maintenance'), process.platform === 'win32' ? 'junction' : 'dir')
   const unsafe = new KnowledgeMaintenanceService(f.root, f.skills)
   t.after(() => unsafe.stop())
   await unsafe.init()
@@ -324,7 +325,7 @@ test('unsafe or unreadable maintenance storage does not prevent startup and rema
   assert.equal(unsafe.status().report, null)
   await assert.rejects(unsafe.scan(), { status: 403 })
   assert.equal(existsSync(join(f.root, 'outside/report.json')), false)
-  await rm(join(f.root, '.knowledge-maintenance'), { recursive: true })
+  await rm(projectStoragePath(f.root, '.knowledge-maintenance'), { recursive: true })
   await unsafe.scan()
   assert.equal(unsafe.status().lastError, undefined)
 })
@@ -373,7 +374,7 @@ test('report size is bounded incrementally rather than allocating an unbounded r
   await f.put('memory/large-title.md', '# ' + 'h'.repeat(8192) + '\n' + '[missing](memory/absent.md)\n'.repeat(5000))
   await assert.rejects(f.maintenance.scan(), { status: 413 })
   assert.equal(f.maintenance.status().report, null)
-  assert.equal(existsSync(join(f.root, '.knowledge-maintenance/report.json')), false)
+  assert.equal(existsSync(projectStoragePath(f.root, '.knowledge-maintenance/report.json')), false)
 })
 
 test('maintenance routes are authorized, strictly validate payloads, and require server-owned previews', async t => {

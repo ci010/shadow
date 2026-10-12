@@ -195,3 +195,44 @@ test('project deletion refuses linked storage rather than deleting another direc
     assert.equal(await readFile(join(target, 'keep.txt'), 'utf8'), 'Keep')
   })
 })
+
+
+test('canonical catalog refuses unmigrated legacy data and preserves migrated catalog bytes', async () => {
+  await withTempWorkspace(async root => {
+    const legacy = join(root, 'workspace.projects')
+    await mkdir(legacy)
+    const original = JSON.stringify({ version: 2, projects: [{ id: 'default', name: 'Existing', createdAt: new Date().toISOString() }], folders: [] })
+    await writeFile(join(legacy, 'projects.v2.json'), original)
+    const catalog = new ProjectCatalog(root)
+    assert.equal(catalog.filePath, join(root, 'projects.json'))
+    await assert.rejects(catalog.init(), /explicit data-layout migration/)
+    await assert.rejects(stat(catalog.filePath), { code: 'ENOENT' })
+    assert.equal(await readFile(join(legacy, 'projects.v2.json'), 'utf8'), original)
+    await writeFile(catalog.filePath, original)
+    await catalog.init()
+    assert.equal(catalog.get('default')?.name, 'Existing')
+    assert.equal(await readFile(catalog.filePath, 'utf8'), original)
+  })
+})
+
+
+test('catalog cannot start against an interrupted or active layout migration', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(root)
+    await catalog.init()
+    const before = await readFile(catalog.filePath, 'utf8')
+    await mkdir(join(root, '.layout-migration', 'copy.lock'), { recursive: true })
+    await assert.rejects(new ProjectCatalog(root).init(), /migration is in progress or was interrupted/)
+    assert.equal(await readFile(catalog.filePath, 'utf8'), before)
+  })
+})
+
+test('standalone legacy workspace sibling is not silently replaced by an empty catalog', async () => {
+  await withTempWorkspace(async root => {
+    const home = join(root, 'workspace')
+    await mkdir(`${home}.projects`, { recursive: true })
+    await writeFile(join(`${home}.projects`, 'projects.v2.json'), '{"legacy":"synthetic"}')
+    await assert.rejects(new ProjectCatalog(home).init(), /Legacy project data detected/)
+    await assert.rejects(readFile(join(home, 'projects.json')), { code: 'ENOENT' })
+  })
+})

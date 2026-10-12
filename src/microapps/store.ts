@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
@@ -42,7 +43,7 @@ export async function readAppBundle(directory: string, manifestValue: unknown, s
 export class MicroAppStore {
   readonly root: string
   private records = new Map<string, AppRecord>()
-  constructor(home: string) { this.root = join(home, '.microapps') }
+  constructor(home: string) { this.root = projectStoragePath(home, '.microapps') }
 
   async init() {
     await mkdir(this.root, { recursive: true })

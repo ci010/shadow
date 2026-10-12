@@ -265,42 +265,53 @@ provided by this catalog.
 
 ### Actual storage
 
-The [Main host](../src/runtime/main/) resolves the configured
-`agent.workspace` and appends `.projects` to obtain the host root.
-[`projectPaths`](../src/projects/contracts.ts) defines this layout:
+The [Main host](../src/runtime/main/) uses the explicit application `dataDir`;
+standalone callers fall back to `agent.workspace`. Pure helpers in
+[`data-paths.ts`](../src/utils/data-paths.ts) and
+[`projectPaths`](../src/projects/contracts.ts) define the canonical layout:
 
 ```text
-<workspaceBase>\                      configured base / shared device state
-  .cluster\registry.v1.json            shared registry unless overridden
-<workspaceBase>.projects\              sibling of the configured base
-  projects.v2.json                     catalog and folder ownership index
-  .host.otel.db                        host-only diagnostics
-  projects\
-    default\                          stable ID; display name may change
-      config\
-        project.json                  Project settings, no shared providers
-        bots.v1.json                  private bot-instance configuration
-      workspace\                      Default's active Home
-        .sessions\                    JSONL and/or SQLite history
-        memory\                       wiki, decisions, events; legacy watermark
-        .learning\state.v1.json        learning batches, outcomes and retries
-        skills\ / agents\ / SOUL.md    project-owned learned content
-        .events\ / .cron\ / .otel.db    Project-owned state
-    <project-id>\
-      config\...
-      workspace\...
+<dataDir>/
+  app.json                           shared application/provider settings
+  projects.json                      catalog, schema version 2 unchanged
+  devices/                           Main registry and device network settings
+  telemetry/host.db                  host-only diagnostics
+  projects/<id>/                     Project Home (default is a stable ID)
+    config/
+      project.json                   Project settings, no shared providers
+      bots.v1.json                    private bot-instance configuration
+      agent-resources/               authored resources and credentials
+      channel-integrations/          integration configuration
+      skills/  agents/  SOUL.md      project-owned learned content
+    memory/                          wiki, identities, events and indexes
+    state/
+      sessions/                      JSONL and/or SQLite history
+      initiatives.sqlite  conventions.sqlite
+      events/  cron/  learning/  io/  microapps/  browser/
+      telemetry/otel.db
+    workdirs/<safe-session-id>/      managed working directories and uploads
+    cache/mcp-tool-index/            rebuildable tool catalog cache
+    tmp/                            shared scratch, public .tmp alias retained
 ```
 
-Only canonical Project storage is loaded. Unsupported catalogs,
-ownership formats, and storage locations are not upgraded or imported.
-New catalogs initialize Default without copying an existing Home, its session
-history, memory, skills, or folder registrations. Old directories remain
-untouched but are not visible through this catalog. This is an intentional
-compatibility break, not an automatic data migration.
+No empty top-level `workspace` or `.projects` suffix is created. Internal
+logical path aliases map service readers/writers to the same layout; ordinary
+relative tool paths still resolve from the effective working directory, not
+Project configuration. Registered external repositories and remote capabilities
+are not moved. Browser profiles, I/O artifacts, Micro Apps, and learning state
+are durable data, not disposable caches.
 
-Shared provider configuration and Copilot credentials stay in their existing
-host/profile locations. The device registry remains at the configured base
-unless explicitly overridden, so this cleanup does not reset device pairing.
+Migration is explicit and offline; see [data migration](data-migration.md).
+Startup refuses an active/interrupted migration lock or detectable unmigrated
+legacy catalog instead of silently creating an empty Default. The copy tool
+retains old data, verifies ordinary files and SQLite recovery, and publishes
+`app.json` last. A Project migration marker supports bounded access to historical
+absolute paths under that same application's old managed Home; arbitrary remote
+paths and external repository paths are never reinterpreted.
+
+Copilot credentials remain in their existing host/profile location; this
+migration does not change the protected Child credential storage or reset Child
+pairing identities. Main registry files are copied intact into `devices/`.
 Current JSONL and SQLite records keep distinct `projectId` and `folderId`
 ownership; unsupported formats fail rather than reinterpret old IDs.
 
@@ -2698,7 +2709,16 @@ native window controls; setup/runtime recovery remains an Electron concern.
 
 The bootstrap coordinator persists setup state and a Main/Child launch profile,
 initializes the selected role, and starts/resumes its backend before mounting
-the product UI. Child onboarding invokes the existing production pairing code
+the product UI. First-run presentation defaults to Main and the saved/default
+data directory; role, local execution, and custom-directory choices remain under
+optional advanced settings. The renderer automatically drives the existing
+directory and initialization commands, preserving their resumable states rather
+than adding a second configuration writer. During `configure-provider`, a guarded
+`prepareProvider` IPC prepares the launch profile and starts the authenticated
+Main runtime without completing setup. The wizard reuses the normal HTTP
+`ProviderSetup` component and advances after a live provider readiness check.
+Legacy `launch-main` states also check their connection, and Child retains its
+separate pairing/consent flow. Child onboarding invokes the existing production pairing code
 in the backend, keeps the PIN out of process arguments and saved configuration,
 and uses OS-protected identity storage. Local runtime readiness and connectivity
 to Main are separate states. The renderer can show first-run setup, pending
