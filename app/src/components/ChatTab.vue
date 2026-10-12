@@ -484,6 +484,7 @@ import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
 import { Marked } from 'marked'
+import { paddedStrongCompatibility } from '../markdown-strong-compat.ts'
 import katex from 'katex'
 import MessageAttachments from './MessageAttachments.vue'
 import ImageViewer from './ImageViewer.vue'
@@ -614,6 +615,7 @@ function openConversationLink(event: MouseEvent) {
 }
 
 const marked = new Marked({ breaks: true })
+marked.use(paddedStrongCompatibility())
 marked.use({
   renderer: {
     link({ href, title, text }) {

@@ -20,7 +20,7 @@
     </div>
     <Teleport to="body">
       <OverlayTransition @after-leave="shownPanel = null">
-      <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" role="dialog" tabindex="-1"
+      <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" :class="{ 'subagent-panel': shownPanel === 'subagents' }" role="dialog" tabindex="-1"
         :aria-labelledby="`${id}-${shownPanel || 'background'}`" :style="position" @keydown="popupKeydown">
         <div v-show="shownPanel === 'background'">
           <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />
@@ -160,7 +160,7 @@ onDeactivated(() => { expanded.value = null })
 .session-work-attention { color: var(--c-warn); }
 .work-icon { width: 14px; height: 14px; flex: 0 0 14px; }
 .subagent-list > p { margin: 8px 0; color: var(--c-text-secondary); }
-.subagent-inspect { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 0; border: 0; background: transparent; color: var(--c-text); text-align: left; font: inherit; cursor: pointer; }
+.subagent-inspect { display: flex; align-items: center; gap: 10px; box-sizing: border-box; width: 100%; padding: 10px 12px; border: 0; border-radius: 0; background: transparent; color: var(--c-text); text-align: left; font: inherit; cursor: pointer; }
 .subagent-inspect + .subagent-inspect { border-top: 1px solid var(--c-border-soft); }
 .subagent-inspect:hover { background: var(--c-bg-muted); }
 .subagent-inspect:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
@@ -172,6 +172,10 @@ onDeactivated(() => { expanded.value = null })
   margin: 0; padding: 12px 16px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay);
   background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 12px 36px var(--c-shadow);
 }
+/* Separate the popup gutter from the row's content inset; keep focus rings
+   inside the gutter and retain the background-task panel's existing spacing. */
+.session-work-panel.subagent-panel { padding: 6px; }
+.subagent-panel .subagent-list > p { margin: 0; padding: 10px 12px; }
 .session-work-panel:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 @media (max-width: 700px) {
   .session-work-panel { padding: 12px; }
