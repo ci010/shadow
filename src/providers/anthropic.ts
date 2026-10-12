@@ -1,4 +1,5 @@
-import { ProviderHttpError } from './provider.ts'
+import { withProviderRetry } from './retry.ts'
+import { ProviderHttpError, providerTransportFailure } from './provider.ts'
 import type {
   ChatMessage,
   LLMProvider,
@@ -117,52 +118,60 @@ export class AnthropicProvider implements LLMProvider {
     if (system) body.system = system
     if (tools.length > 0) body.tools = convertTools(tools)
 
-    const res = await fetch(`${this.baseUrl.replace(/\/+$/, '')}/messages`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify(body),
-      signal: options.signal,
-    })
-
-    if (!res.ok) {
-      if (res.status === 413) throw new ProviderHttpError(413, 'Anthropic chat failed: request payload too large')
-      const text = await res.text()
-      throw new Error(`Anthropic chat failed: ${res.status} ${text}`)
-    }
-
-    const json = (await res.json()) as any
-
-    let content: string | null = null
-    const toolCalls: ToolCall[] = []
-
-    for (const block of json.content ?? []) {
-      if (block.type === 'text') {
-        content = (content ?? '') + block.text
-      } else if (block.type === 'tool_use') {
-        toolCalls.push({
-          id: block.id,
-          name: block.name,
-          arguments: block.input as Record<string, unknown>,
+    return withProviderRetry(async () => {
+      let phase: 'connect' | 'response' = 'connect'
+      try {
+        const res = await fetch(`${this.baseUrl.replace(/\/+$/, '')}/messages`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': this.apiKey,
+            'anthropic-version': ANTHROPIC_VERSION,
+          },
+          body: JSON.stringify(body),
+          signal: options.signal,
         })
-      }
-    }
 
-    return {
-      content,
-      toolCalls,
-      model: json.model ?? model,
-      usage: json.usage
-        ? {
-          promptTokens: json.usage.input_tokens,
-          completionTokens: json.usage.output_tokens,
-          totalTokens: json.usage.input_tokens + json.usage.output_tokens,
+        phase = 'response'
+        if (!res.ok) {
+          if (res.status === 413) throw new ProviderHttpError(413, 'Anthropic chat failed: request payload too large')
+          const text = await res.text()
+          throw new ProviderHttpError(res.status, `Anthropic chat failed: ${res.status} ${text}`)
         }
-        : undefined,
-    }
+
+        const json = (await res.json()) as any
+
+        let content: string | null = null
+        const toolCalls: ToolCall[] = []
+
+        for (const block of json.content ?? []) {
+          if (block.type === 'text') {
+            content = (content ?? '') + block.text
+          } else if (block.type === 'tool_use') {
+            toolCalls.push({
+              id: block.id,
+              name: block.name,
+              arguments: block.input as Record<string, unknown>,
+            })
+          }
+        }
+
+        return {
+          content,
+          toolCalls,
+          model: json.model ?? model,
+          usage: json.usage
+            ? {
+              promptTokens: json.usage.input_tokens,
+              completionTokens: json.usage.output_tokens,
+              totalTokens: json.usage.input_tokens + json.usage.output_tokens,
+            }
+            : undefined,
+        }
+      } catch (error) {
+        throw providerTransportFailure(error, phase, options.signal)
+      }
+    }, options.signal)
   }
 
   listModels(): string[] {

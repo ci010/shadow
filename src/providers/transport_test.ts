@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { AnthropicProvider } from './anthropic.ts'
+import { withProviderRetry } from './retry.ts'
 import { openaiChat } from './openai-compatible.ts'
 import { openaiResponses } from './openai-responses.ts'
 import { ProviderTransportError, providerTransportFailure } from './provider.ts'
@@ -7,7 +9,7 @@ import { ProviderTransportError, providerTransportFailure } from './provider.ts'
 const options = { url: 'https://synthetic.invalid/model', apiKey: 'synthetic', model: 'fixture', messages: [], tools: [] }
 const reset = () => new TypeError('terminated', { cause: Object.assign(new Error('private socket details'), { code: 'UND_ERR_SOCKET' }) })
 
-for (const [name, chat] of [['chat', openaiChat], ['responses', openaiResponses]] as const) {
+for (const [name, chat] of [['chat', openaiChat], ['responses', openaiResponses], ['anthropic', (params: typeof options & { signal?: AbortSignal }) => new AnthropicProvider({ apiKey: params.apiKey, baseUrl: params.url }).chat(params.messages, params.tools, { model: params.model, signal: params.signal })]] as const) {
   test(`${name}: response interruption never replays a paid POST or returns partial tool calls`, async t => {
     let pulls = 0
     const body = new ReadableStream({
@@ -43,6 +45,40 @@ for (const [name, chat] of [['chat', openaiChat], ['responses', openaiResponses]
     await assert.rejects(chat(options), error => error === programmerError)
     assert.equal(fetch.mock.callCount(), 2)
   })
+
+  test(`${name}: known pre-connection failures share retry and cancellation`, async t => {
+    const controller = new AbortController()
+    const fetch = t.mock.method(globalThis, 'fetch', async () => {
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }) })
+    })
+    t.mock.method(console, 'warn', () => controller.abort(new Error('stop retry')))
+    await assert.rejects(chat({ ...options, signal: controller.signal }), /aborted|stop retry/i)
+    assert.equal(fetch.mock.callCount(), 1)
+  })
+
+  test(`${name}: HTTP failures never retry`, async t => {
+    for (const status of [401, 413, 429, 500, 503]) {
+      const fetch = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status }))
+      await assert.rejects(chat(options))
+      assert.equal(fetch.mock.callCount(), 1)
+      fetch.mock.restore()
+    }
+  })
+
+  test(`${name}: a safe connection failure retries to a complete response`, async t => {
+    let count = 0
+    t.mock.method(console, 'warn', () => {})
+    t.mock.method(globalThis, 'fetch', async () => {
+      if (++count === 1) throw new TypeError('fetch failed', { cause: Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }) })
+      return Response.json(name === 'responses'
+        ? { status: 'completed', output: [{ type: 'message', id: 'msg', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: 'Complete', annotations: [] }] }] }
+        : name === 'anthropic' ? { content: [{ type: 'text', text: 'Complete' }] }
+        : { choices: [{ message: { content: 'Complete' } }] })
+    })
+    assert.equal((await chat(options)).content, 'Complete')
+    assert.equal(count, 2)
+  })
+
 }
 
 test('known pre-connection failure can retry; abort during backoff prevents another request', async t => {
@@ -75,4 +111,24 @@ test('transport classification preserves abort reasons and rejects arbitrary dia
   const failed = providerTransportFailure(new TypeError('fetch failed', { cause }), 'connect')
   assert.ok(failed instanceof ProviderTransportError)
   assert.equal(failed.mayHaveBeenProcessed, false)
+})
+
+
+test('shared retry exhausts five retries and preserves the final classified error', async t => {
+  const errors: ProviderTransportError[] = []
+  const waits: string[] = []
+  t.mock.method(console, 'warn', (message: string) => { waits.push(message) })
+  await assert.rejects(withProviderRetry(async () => {
+    const error = new ProviderTransportError('connect', 'ECONNREFUSED')
+    errors.push(error)
+    throw error
+  }), error => error === errors.at(-1))
+  assert.equal(errors.length, 6)
+  assert.equal(waits.length, 5)
+  waits.forEach((message, i) => assert.match(message, new RegExp(`after ${(i + 1) * 1000}ms`)))
+})
+
+test('shared retry pre-abort prevents even the initial request', async () => {
+  const reason = new Error('cancelled')
+  await assert.rejects(withProviderRetry(async () => assert.fail('must not call'), AbortSignal.abort(reason)), error => error === reason)
 })

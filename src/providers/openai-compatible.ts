@@ -1,4 +1,4 @@
-import { setTimeout as delay } from 'node:timers/promises'
+import { withProviderRetry } from './retry.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { isGptModel, type ReasoningEffort, type ThinkingConfig } from '../agent/llm-config.ts'
 import { spanAttributes } from '../otel/tracing.ts'
@@ -9,7 +9,7 @@ import type {
   LLMResponse,
   ToolCall,
 } from './provider.ts'
-import { ProviderHttpError, ProviderTransportError, TokenLimitExceededError, providerTransportFailure } from './provider.ts'
+import { ProviderHttpError, TokenLimitExceededError, providerTransportFailure } from './provider.ts'
 import { chatCompletionImages } from './tool-images.ts'
 
 // ---------------------------------------------------------------------------
@@ -94,20 +94,7 @@ export async function openaiChat(params: {
 
   console.debug(`Calling LLM`)
 
-  // Only failures known to precede a connection may replay the request.
-  const MAX_RETRIES = 5
-  let lastErr: unknown
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      const wait = 1000 * attempt
-      console.warn(
-        `LLM fetch attempt ${attempt + 1} after ${wait}ms (${
-          lastErr instanceof Error ? lastErr.message : lastErr
-        })`,
-      )
-      await delay(wait, undefined, { signal: params.signal })
-    }
-    params.signal?.throwIfAborted()
+  return withProviderRetry(async () => {
     let phase: 'connect' | 'response' = 'connect'
     try {
       const res = await fetch(params.url, {
@@ -198,11 +185,9 @@ export async function openaiChat(params: {
           : undefined,
       }
     } catch (err) {
-      lastErr = providerTransportFailure(err, phase, params.signal)
-      if (!(lastErr instanceof ProviderTransportError) || lastErr.mayHaveBeenProcessed) throw lastErr
+      throw providerTransportFailure(err, phase, params.signal)
     }
-  }
-  throw lastErr
+  }, params.signal)
 }
 
 // ---------------------------------------------------------------------------

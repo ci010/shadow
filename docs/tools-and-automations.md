@@ -206,10 +206,13 @@ Recognized model connection/response failures include their phase and a bounded
 transport code. An interrupted response is discarded, including partial tool
 calls, and is not automatically replayed: the provider may already have processed
 or billed the request. Inspect completed work before explicitly continuing.
-Chat Completions retains bounded retries only for known failures before connection
-(DNS, connection refusal or connect timeout); cancellation interrupts backoff.
-Responses requests are not automatically retried. HTTP authorization handling
-remains provider-specific.
+Chat Completions, Responses and Anthropic Messages share the same bounded retry
+policy: at most five retries after the initial attempt, with 1, 2, 3, 4 and 5 second
+backoffs, only for known failures before connection (DNS, connection refusal or
+connect timeout). Cancellation interrupts backoff and prevents another request.
+Ambiguous connection failures, interrupted responses and HTTP errors are not
+retried by this mechanism. Copilot retains its separate single refresh/retry on
+HTTP 401; other HTTP authorization handling remains provider-specific.
 
 Shadow keeps the base tool list small. Search and read virtual paths to
 discover skills or tool contracts; use `invoke_tool` for a known dynamic

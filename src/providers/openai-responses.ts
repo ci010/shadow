@@ -1,3 +1,4 @@
+import { withProviderRetry } from './retry.ts'
 import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { spanAttributes } from '../otel/tracing.ts'
@@ -398,37 +399,39 @@ export async function openaiResponses(params: {
   if (params.tools.length) body.tools = params.tools.map(({ function: fn }) => ({
     type: 'function', name: fn.name, description: fn.description, parameters: fn.parameters, strict: false,
   }))
-  const response = await fetch(params.url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${params.apiKey}`, ...params.headers },
-    body: JSON.stringify(body), signal: params.signal,
-  }).catch(error => { throw providerTransportFailure(error, 'connect', params.signal) })
-  if (!response.ok) {
-    let text = ''
-    if (response.body) {
-      try {
-        for await (const chunk of chunks(response, params.signal)) text += chunk
-      } catch {
-        params.signal?.throwIfAborted()
-        failure(undefined, response.status)
-      }
-    }
-    let error: unknown
-    try { error = JSON.parse(text) } catch { /* HTTP status is still authoritative. */ }
-    failure(error, response.status)
-  }
-  let result: unknown
-  try {
-    if (response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
-      result = await streamResponse(response, params.signal)
-    } else {
+  return withProviderRetry(async () => {
+    const response = await fetch(params.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${params.apiKey}`, ...params.headers },
+      body: JSON.stringify(body), signal: params.signal,
+    }).catch(error => { throw providerTransportFailure(error, 'connect', params.signal) })
+    if (!response.ok) {
       let text = ''
-      for await (const chunk of chunks(response, params.signal)) text += chunk
-      result = parseJson(text)
+      if (response.body) {
+        try {
+          for await (const chunk of chunks(response, params.signal)) text += chunk
+        } catch {
+          params.signal?.throwIfAborted()
+          failure(undefined, response.status)
+        }
+      }
+      let error: unknown
+      try { error = JSON.parse(text) } catch { /* HTTP status is still authoritative. */ }
+      failure(error, response.status)
     }
-  } catch (error) {
-    throw providerTransportFailure(error, 'response', params.signal)
-  }
-  params.signal?.throwIfAborted()
-  return finalResponse(result, params.model, params.providerName)
+    let result: unknown
+    try {
+      if (response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
+        result = await streamResponse(response, params.signal)
+      } else {
+        let text = ''
+        for await (const chunk of chunks(response, params.signal)) text += chunk
+        result = parseJson(text)
+      }
+    } catch (error) {
+      throw providerTransportFailure(error, 'response', params.signal)
+    }
+    params.signal?.throwIfAborted()
+    return finalResponse(result, params.model, params.providerName)
+  }, params.signal)
 }
