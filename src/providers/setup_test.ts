@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { randomUUID } from 'node:crypto'
-import { basename, join } from 'node:path'
+import { join, relative } from 'node:path'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { setImmediate } from 'node:timers/promises'
 import { Hono } from 'hono'
@@ -32,15 +32,16 @@ function authHarness(options: { existing?: boolean; poll?: unknown; failWrite?: 
   const gate = new Promise<void>((resolve) => { releasePoll = resolve })
   let releaseStart!: () => void
   const startGate = new Promise<void>((resolve) => { releaseStart = resolve })
-  const auth = new CopilotAuthenticator(join(process.cwd(), '.test-data', 'virtual'), {
+  const tokenDir = join(process.cwd(), '.test-data', 'virtual')
+  const auth = new CopilotAuthenticator(tokenDir, {
     now: () => epoch,
     storage: {
-      read: (path) => files.get(basename(path)),
+      read: (path) => files.get(relative(tokenDir, path)),
       write: (path, value) => {
         if (options.failWrite) throw new Error('synthetic-storage-secret')
-        files.set(basename(path), value)
+        files.set(relative(tokenDir, path), value)
       },
-      remove: (path) => { files.delete(basename(path)) },
+      remove: (path) => { files.delete(relative(tokenDir, path)) },
     },
     wait: async (_ms, signal) => {
       await Promise.race([
@@ -56,7 +57,7 @@ function authHarness(options: { existing?: boolean; poll?: unknown; failWrite?: 
       calls.push(String(url))
       if (String(url).endsWith('/device/code')) {
         if (options.blockedStart) await startGate
-        return Response.json(device)
+        return Response.json({ ...device, verification_uri: `${new URL(String(url)).origin}/login/device` })
       }
       if (String(url).endsWith('/access_token')) return Response.json(options.poll ?? { access_token: 'synthetic-access' })
       return Response.json(key)
@@ -79,12 +80,15 @@ function fixture(
   let now = epoch
   let applyCount = 0
   let failApply = false
+  let activationGate: Promise<void> | undefined
+  let releaseActivation: (() => void) | undefined
   const store = new ConfigStore({
     configPath: path, getConfig: () => active,
-    onChanged: (config) => {
+    onChanged: async (config) => {
       if (failApply) throw new Error('synthetic-activation-secret')
       applyCount++
       active = config
+      await activationGate
     },
   })
   const setup = new ProviderSetup({ store, getConfig: () => active, auth: auth.auth, fetch: request, now: () => now })
@@ -100,6 +104,8 @@ function fixture(
     active: () => active,
     applyCount: () => applyCount,
     failApply: () => { failApply = true },
+    pauseActivation: () => { activationGate = new Promise<void>(resolve => { releaseActivation = resolve }) },
+    resumeActivation: () => { releaseActivation?.() },
     advanceTime: (ms: number) => { now += ms },
   }
 }
@@ -197,7 +203,7 @@ test('configured inventory lists meaningful providers, selected model and safe f
   assert.deepEqual(body, { providers: [
     { provider: 'openai', authMode: 'api-key', hasApiKey: true, selected: true, model: 'gpt-4o@openai', baseUrl: 'https://api.openai.com/v1' },
     { provider: 'anthropic', authMode: 'api-key', hasApiKey: true, selected: false, baseUrl: 'https://api.anthropic.com/v1' },
-    { provider: 'copilot', authMode: 'copilot', hasApiKey: false, selected: false },
+    { provider: 'copilot', authMode: 'copilot', host: 'github.com', hasApiKey: false, selected: false },
     { provider: 'local', authMode: 'none', hasApiKey: false, selected: false, baseUrl: 'http://127.0.0.1:11434/v1' },
     { provider: 'quick', authMode: 'api-key', hasApiKey: false, selected: false },
     { provider: 'windows', authMode: 'api-key', hasApiKey: false, selected: false },
@@ -227,7 +233,7 @@ test('configured inventory excludes default selections and blank placeholders bu
   }
   const f = fixture(t, { providers: { copilot: {} } })
   assert.deepEqual(await (await f.app.request('/api/provider/configured')).json(), { providers: [
-    { provider: 'copilot', authMode: 'copilot', hasApiKey: false, selected: true, model: f.active().agent.model },
+    { provider: 'copilot', authMode: 'copilot', host: 'github.com', hasApiKey: false, selected: true, model: f.active().agent.model },
   ] })
 })
 
@@ -258,7 +264,7 @@ test('configured inventory includes nonselected cached Copilot without getting o
     const { providers } = await (await f.app.request('/api/provider/configured')).json()
     assert.deepEqual(providers[0], { provider: 'local', authMode: 'none', hasApiKey: false, selected: true, model: 'small@local', baseUrl: 'http://localhost:11434/v1' })
     assert.deepEqual(providers.slice(1), cache === 'access' || cache === 'valid-key'
-      ? [{ provider: 'copilot', authMode: 'copilot', hasApiKey: false, selected: false }]
+      ? [{ provider: 'copilot', authMode: 'copilot', host: 'github.com', hasApiKey: false, selected: false }]
       : [])
     assert.deepEqual([...auth.files], before)
     assert.deepEqual(auth.calls, [])
@@ -569,4 +575,157 @@ test('factory passes saved DeepSeek API key and base URL to its actual runtime i
   await provider.chat([{ role: 'user', content: 'hello' }], [], { model: 'deepseek-v4-flash' })
   assert.equal(request?.headers.get('authorization'), 'Bearer synthetic-config-key')
   assert.equal(request?.url, 'http://localhost:1234/v1/chat/completions')
+})
+
+
+test('GHE login HTTP selects its host through OAuth, persists it, and exposes no credentials', async t => {
+  for (const host of ['msft.ghe.com', 'microsoft.ghe.com']) {
+    const f = fixture(t, { agent: { model: 'gpt-4o@copilot' } }, authHarness({ existing: true }))
+    const response = await f.app.request('/api/auth/login', {
+      method: 'POST', body: JSON.stringify({ host }),
+    })
+    assert.equal(response.status, 200)
+    const login = await response.json()
+    assert.equal(login.state, 'pending', 'A cached github.com key must not bypass enterprise authorization')
+    assert.equal(login.host, host)
+    assert.equal(login.verificationUri, `https://${host}/login/device`)
+    assert.equal(f.auth.auth.getHost(), 'github.com', 'Pending login does not switch active credentials')
+    assert.deepEqual(f.auth.calls, [`https://${host}/login/device/code`])
+    f.auth.releasePoll()
+    await settle(f.setup, login.loginId)
+    assert.equal(f.setup.get(login.loginId)?.state, 'succeeded')
+    assert.equal(f.setup.get(login.loginId)?.host, host)
+    assert.equal(f.auth.auth.getHost(), host)
+    assert.deepEqual(f.auth.calls, [
+      `https://${host}/login/device/code`,
+      `https://${host}/login/oauth/access_token`,
+      `https://api.${host}/copilot_internal/v2/token`,
+    ])
+    const status = await f.setup.status()
+    assert.equal(status.host, host)
+    assert.equal(status.ready, true)
+    assert.equal(f.setup.configured().find(p => p.provider === 'copilot')?.host, host)
+    assert.doesNotMatch(JSON.stringify({ login, status, terminal: f.setup.get(login.loginId) }), /synthetic-|access_token|device_code/)
+  }
+})
+
+test('invalid enterprise hosts are rejected before any network or credential changes', async t => {
+  const f = fixture(t, {})
+  for (const host of ['', 'ghe.com', 'evil.example', 'msft.ghe.com.evil.example', 'a.b.ghe.com',
+    'http://msft.ghe.com', 'msft.ghe.com:443', 'https://user@msft.ghe.com',
+    'msft.ghe.com/path', 'msft.ghe.com?query', 'msft.ghe.com#fragment', '-bad.ghe.com']) {
+    const response = await f.app.request('/api/auth/login', { method: 'POST', body: JSON.stringify({ host }) })
+    assert.equal(response.status, 400, host)
+  }
+  assert.deepEqual(f.auth.calls, [])
+  assert.equal(f.auth.files.size, 0)
+})
+
+test('pending sign-in and attempt aliases never silently reuse another enterprise host', async t => {
+  const f = fixture(t, {})
+  const login = await f.setup.start(undefined, undefined, undefined, true, 'msft.ghe.com')
+  for (const attemptId of [login.loginId, randomUUID()]) {
+    const response = await f.app.request('/api/auth/login', {
+      method: 'POST', body: JSON.stringify({ attemptId, host: 'microsoft.ghe.com' }),
+    })
+    assert.equal(response.status, 409)
+  }
+  const sameHost = await f.setup.start(undefined, undefined, undefined, true, 'msft.ghe.com')
+  assert.equal(sameHost.loginId, login.loginId)
+  assert.equal(f.auth.calls.length, 1)
+  f.setup.cancel(login.loginId)
+  assert.equal(f.setup.get(login.loginId)?.host, 'msft.ghe.com')
+  assert.equal(f.auth.auth.getHost(), 'github.com')
+  const next = await f.setup.start(undefined, undefined, undefined, true, 'microsoft.ghe.com')
+  assert.equal(next.host, 'microsoft.ghe.com')
+  assert.equal(next.verificationUri, 'https://microsoft.ghe.com/login/device')
+})
+
+test('failed enterprise authorization preserves the previously active github.com credentials', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o@copilot' } }, authHarness({
+    existing: true, poll: { error: 'access_denied' },
+  }))
+  const before = [...f.auth.files]
+  assert.equal((await f.setup.status()).host, 'github.com')
+  const login = await f.setup.start(undefined, undefined, undefined, true, 'msft.ghe.com')
+  f.auth.releasePoll()
+  await settle(f.setup, login.loginId)
+  assert.equal(f.setup.get(login.loginId)?.state, 'denied')
+  assert.equal(f.setup.get(login.loginId)?.host, 'msft.ghe.com')
+  assert.equal(f.auth.auth.getHost(), 'github.com')
+  assert.deepEqual([...f.auth.files], before)
+  assert.equal((await f.setup.status()).ready, true)
+  assert.equal(f.applyCount(), 0)
+})
+
+
+test('enterprise host activation rolls back if provider config cannot be activated', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o@copilot' } }, authHarness({ existing: true }))
+  const before = [...f.auth.files]
+  const config = readFileSync(f.path, 'utf8')
+  f.failApply()
+  const login = await f.setup.start(undefined, undefined, undefined, true, 'msft.ghe.com')
+  f.auth.releasePoll()
+  await settle(f.setup, login.loginId)
+  assert.equal(f.setup.get(login.loginId)?.state, 'error')
+  assert.equal(f.auth.auth.getHost(), 'github.com')
+  assert.deepEqual([...f.auth.files], before)
+  assert.equal(readFileSync(f.path, 'utf8'), config)
+  assert.equal(f.applyCount(), 0)
+})
+
+
+test('readiness caches are keyed by active Copilot host even without a project config change', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o@copilot' } })
+  let host = 'github.com'
+  let probes = 0
+  t.mock.method(f.auth.auth, 'getHost', () => host)
+  t.mock.method(f.auth.auth, 'getApiKey', async () => { probes++; return 'synthetic-token' })
+  assert.equal((await f.setup.status()).host, 'github.com')
+  host = 'msft.ghe.com'
+  assert.equal((await f.setup.status()).host, 'msft.ghe.com')
+  assert.equal((await f.setup.status()).host, 'msft.ghe.com')
+  assert.equal(probes, 2)
+})
+
+
+test('cancel or sign-out during asynchronous activation cannot be overwritten by login success', async t => {
+  for (const signOut of [false, true]) {
+    const f = fixture(t, { agent: { model: 'gpt-4o@copilot' } }, authHarness({ existing: true }))
+    const before = [...f.auth.files]
+    f.pauseActivation()
+    const login = await f.setup.start(undefined, undefined, undefined, true, 'msft.ghe.com')
+    f.auth.releasePoll()
+    for (let i = 0; i < 20 && f.applyCount() === 0; i++) await setImmediate()
+    assert.equal(f.applyCount(), 1, 'Activation must be paused after credential persistence')
+    assert.equal(f.auth.auth.getHost(), 'msft.ghe.com')
+    if (signOut) f.setup.signOut()
+    else f.setup.cancel(login.loginId)
+    assert.equal(f.setup.get(login.loginId)?.state, 'cancelled')
+    f.resumeActivation()
+    await f.setup.dispose()
+    assert.equal(f.setup.get(login.loginId)?.state, 'cancelled')
+    if (signOut) {
+      assert.equal(f.auth.auth.getHost(), 'msft.ghe.com')
+      assert.equal(f.auth.auth.hasAccessToken(), false)
+      assert.equal(f.auth.auth.hasValidApiKey(), false, 'Rollback must not restore credentials removed by sign-out')
+    } else {
+      assert.equal(f.auth.auth.getHost(), 'github.com')
+      assert.deepEqual([...f.auth.files], before)
+    }
+  }
+})
+
+test('cached-credential login cannot report success after sign-out during activation', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o@copilot' } }, authHarness({ existing: true }))
+  f.pauseActivation()
+  const id = randomUUID()
+  const pending = f.setup.start(undefined, id)
+  for (let i = 0; i < 20 && f.applyCount() === 0; i++) await setImmediate()
+  assert.equal(f.applyCount(), 1)
+  f.setup.signOut()
+  f.resumeActivation()
+  assert.equal((await pending).state, 'cancelled')
+  assert.equal(f.setup.get(id)?.state, 'cancelled')
+  assert.equal(f.auth.auth.hasValidApiKey(), false)
 })

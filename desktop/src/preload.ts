@@ -66,8 +66,9 @@ const api: ShadowDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.selectMainDirectoryPath, path) as Promise<NativeDirectorySelection>,
   openExternal: (url: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.openExternal, url) as Promise<void>,
-  openCopilotLogin: () =>
-    ipcRenderer.invoke(IPC_CHANNELS.openCopilotLogin) as Promise<void>,
+  copilotLoginHostSupport: true,
+  openCopilotLogin: (verificationUri: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.openCopilotLogin, verificationUri) as Promise<void>,
 })
 
 contextBridge.exposeInMainWorld('shadowDesktop', api)

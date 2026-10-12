@@ -173,6 +173,26 @@ to inherit rather than copying the currently resolved value. Provider
 connections belong to **App settings**, while Project defaults belong to
 **Project settings → Models**.
 
+For Copilot accounts on **GitHub Enterprise Cloud (`*.ghe.com`)**, open the
+Copilot provider's sign-in form in **App settings**, choose **GitHub Enterprise
+Cloud**, and enter the host where your account has its Copilot license (for
+example, `msft.ghe.com` or `microsoft.ghe.com`). Complete the device authorization
+at the enterprise address shown in the form. These hosts are separate sign-in
+targets, not interchangeable aliases for `github.com`. The default GitHub.com
+option continues to support existing personal and organization accounts.
+
+A successful sign-in switches the installation's active Copilot host for all
+projects. Pending, cancelled, or denied authorization does not switch it.
+Credentials and model caches are separated by host, and the selected host is
+remembered across restarts. Signing out removes the **active host's** local
+credentials and model cache; it does not revoke browser/enterprise authorization,
+activate another saved host, or remove credentials saved for other hosts.
+Switching hosts requires using the sign-in form again. Enterprise SSO, a Copilot
+license, and the enterprise's access policies still apply. Only GitHub.com and
+single-tenant `*.ghe.com` hosts are supported, not arbitrary GitHub Enterprise
+Server URLs. Shadow's provider login is separate from the official Copilot CLI
+or the standalone A2A bridge's login.
+
 Copilot `model_not_supported` means the requested model was rejected for that
 request, not necessarily that the configuration file has a typo. The diagnostic
 names the actual `model@copilot` and endpoint. Refresh the model list, check the

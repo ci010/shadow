@@ -239,3 +239,83 @@ test('setup client sends keys only in POST body; cancellation is keepalive and s
   assert.equal(requests[1]?.init?.keepalive, true)
   assert.equal(requests[1]?.init?.method, 'DELETE')
 })
+
+
+test('Copilot setup and inventory preserve validated host and reject invalid hosts', () => {
+  const status = { provider: 'copilot', authMode: 'copilot', model: 'model', ready: true, hasApiKey: false }
+  const item = { ...status, selected: false }
+  for (const host of ['github.com', 'octocat.ghe.com']) {
+    assert.equal(parseProviderSetup({ ...status, host }).host, host)
+    assert.equal(parseConfiguredProviders({ providers: [{ ...item, host }] })[0]?.host, host)
+  }
+  for (const host of [null, 1, '', 'ghe.com', 'nested.tenant.ghe.com', 'https://tenant.ghe.com', 'evil.example', 'tenant.ghe.com:443', 'tenant.ghe.com/path', 'xn--tenant.ghe.com']) {
+    assert.throws(() => parseProviderSetup({ ...status, host }), /invalid provider status/)
+    assert.throws(() => parseConfiguredProviders({ providers: [{ ...item, host }] }), /invalid provider list/)
+    assert.throws(() => parseDeviceLogin({ ...pending, host }), /invalid login status/)
+  }
+})
+
+test('enterprise device links must match the validated response host exactly', () => {
+  const login = { ...pending, host: 'octocat.ghe.com', verificationUri: 'https://octocat.ghe.com/login/device' }
+  assert.deepEqual(parseDeviceLogin(login), login)
+  for (const verificationUri of [
+    COPILOT_VERIFICATION_URL, 'https://other.ghe.com/login/device',
+    'https://octocat.ghe.com:443/login/device', 'https://octocat.ghe.com/login/device?',
+    'https://octocat.ghe.com/login/device#', 'https://user@octocat.ghe.com/login/device',
+    'https://octocat.ghe.com/other/../login/device', 'https://octocat.ghe.com/login/device\n',
+  ]) assert.throws(() => parseDeviceLogin({ ...login, verificationUri }), /invalid GitHub device code/)
+  assert.throws(() => parseDeviceLogin({ ...pending, verificationUri: login.verificationUri }), /invalid GitHub device code/)
+})
+
+test('login client sends explicit canonical host and rejects invalid hosts before POST or mismatched responses', async () => {
+  const requests: Record<string, unknown>[] = []
+  const client = createProviderSetupClient('http://fixture.invalid', async (_url, init) => {
+    const body = JSON.parse(String(init?.body))
+    requests.push(body)
+    return Response.json({ ...pending, host: body.host, verificationUri: `https://${body.host}/login/device` })
+  })
+  await client.start('model', pending.loginId)
+  await client.start('model', pending.loginId, undefined, ' Octocat.GHE.com ')
+  assert.deepEqual(requests.map(body => body.host), ['github.com', 'octocat.ghe.com'])
+  assert.deepEqual(requests[1], { model: 'model', attemptId: pending.loginId, reauthenticate: true, host: 'octocat.ghe.com' })
+  await assert.rejects(client.start(undefined, undefined, undefined, 'https://evil.example'))
+  assert.equal(requests.length, 2)
+  const wrongHost = createProviderSetupClient('http://fixture.invalid', async () => Response.json(pending))
+  await assert.rejects(wrongHost.start(undefined, undefined, undefined, 'octocat.ghe.com'), /login host changed/)
+})
+
+test('retry retains enterprise selection and host changes are ignored during pending login', async () => {
+  const hosts: Array<string | undefined> = []
+  const views: LoginView[] = []
+  const login = { ...pending, host: 'octocat.ghe.com', verificationUri: 'https://octocat.ghe.com/login/device' }
+  const controller = createDeviceLoginController({
+    async start(_model, _id, _signal, host) { hosts.push(host); return login },
+    async poll() { return login },
+    async cancel() {},
+  }, view => views.push(view), () => () => {}, () => pending.loginId)
+  await controller.start(undefined, 'octocat.ghe.com')
+  await controller.start(undefined, 'github.com')
+  assert.equal(hosts.length, 1)
+  await controller.cancel()
+  await controller.start()
+  assert.deepEqual(hosts, ['octocat.ghe.com', 'octocat.ghe.com'])
+  assert.equal(views.at(-1)?.login?.verificationUri, login.verificationUri)
+  await controller.cancel()
+})
+
+test('poll cannot silently change the selected login host', async () => {
+  let tick: (() => void) | undefined
+  const views: LoginView[] = []
+  const cancelled: string[] = []
+  const controller = createDeviceLoginController({
+    async start() { return { ...pending, host: 'octocat.ghe.com', verificationUri: 'https://octocat.ghe.com/login/device' } },
+    async poll() { return { loginId: pending.loginId, host: 'github.com', state: 'succeeded' } },
+    async cancel(id) { cancelled.push(id) },
+  }, view => views.push(view), callback => { tick = callback; return () => { tick = undefined } }, () => pending.loginId)
+  await controller.start(undefined, 'octocat.ghe.com')
+  tick?.()
+  await flush()
+  assert.equal(views.at(-1)?.state, 'error')
+  assert.equal(views.some(view => view.state === 'succeeded'), false)
+  assert.deepEqual(cancelled, [pending.loginId])
+})

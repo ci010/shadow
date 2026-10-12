@@ -6,7 +6,7 @@
     </h2>
     <p class="lead">{{ lead }}</p>
     <p v-if="error || message" class="notice error" role="alert">{{ error || message }}</p>
-    <p v-if="signedOut" class="notice" role="status">{{ t('Signed out of GitHub Copilot on this installation. Sign in to get a new device code.') }}</p>
+    <p v-if="signedOut" class="notice" role="status">{{ t('Signed out of GitHub Copilot on {host} for this installation. Sign-ins on other hosts are unchanged.', { host: status?.host ?? 'github.com' }) }}</p>
     <p v-else-if="status?.reason && !status.ready && mode !== 'add' && !busy && !failedLogin && login.state !== 'succeeded'" class="notice error" role="alert">{{ providerDisplayName(status.provider) }} {{ t('is not ready.') }} {{ readinessMessage }}</p>
     <div v-if="mode !== 'edit' && !excludedProviders.includes('copilot')" class="method-tabs" :aria-label="t('Authentication method')">
       <button :aria-pressed="method === 'copilot'" :disabled="busy || saving" @click="method = 'copilot'">GitHub Copilot</button>
@@ -16,10 +16,22 @@
     <div v-if="method === 'copilot'" class="method-panel">
       <h2>{{ t('Use your GitHub Copilot account') }}</h2>
       <p>{{ t('Authorize Shadow on GitHub using a device code. Your account must have access to Copilot.') }}</p>
+      <p v-if="mode === 'edit' && status?.authMode === 'copilot'" class="help">{{ t('Current Copilot host: {host}', { host: status.host ?? 'github.com' }) }}</p>
+      <label>{{ t('GitHub account host') }}
+        <UiSelect v-model="copilotHostType" :disabled="busy || saving">
+          <option value="github">GitHub.com</option>
+          <option value="enterprise">{{ t('GitHub Enterprise Cloud (*.ghe.com)') }}</option>
+        </UiSelect>
+      </label>
+      <label v-if="copilotHostType === 'enterprise'">{{ t('Enterprise hostname') }}
+        <input v-model="enterpriseHost" placeholder="your-company.ghe.com" autocomplete="off" autocapitalize="none" spellcheck="false" :disabled="busy || saving" :aria-invalid="!!hostError">
+        <span v-if="hostError" class="help error">{{ hostError }}</span>
+        <span v-else class="help">{{ t('Enter your enterprise hostname, not a URL. Only GitHub Enterprise Cloud on ghe.com is supported.') }}</span>
+      </label>
       <div v-if="login.state === 'pending' && login.login" class="device-panel" role="status" aria-live="polite">
         <span>{{ t('Enter this code on GitHub') }}</span>
         <div class="device-code"><code>{{ login.login.userCode }}</code><button @click="copyCode">{{ copied ? t('Copied') : t('Copy code') }}</button></div>
-        <button class="primary" @click="openGitHub">{{ t('Open github.com/login/device') }}</button>
+        <button class="primary" @click="openGitHub">{{ t('Open {host}/login/device', { host: login.login.host ?? 'github.com' }) }}</button>
         <span>{{ login.login.verificationUri }}</span>
         <span>{{ t('Waiting for your authorization. Code expires at') }} {{ expiryTime }}.</span>
       </div>
@@ -28,13 +40,13 @@
         <button v-if="busy" :disabled="login.state === 'cancelling'" @click="cancelLogin">
           {{ login.state === 'cancelling' ? t('Cancelling...') : t('Cancel login') }}
         </button>
-        <button v-else class="primary" :disabled="saving" @click="startLogin">
+        <button v-else class="primary" :disabled="saving || !!hostError" @click="startLogin">
           {{ login.state === 'idle' ? t('Sign in with GitHub Copilot') : t('Retry GitHub Copilot login') }}
         </button>
         <button v-if="mode === 'edit' && !confirmSignOut && !signedOut" :disabled="saving" @click="confirmSignOut = true">{{ t('Sign out of GitHub Copilot') }}</button>
       </div>
       <div v-if="confirmSignOut" class="notice" role="group" :aria-label="t('Confirm Copilot sign-out')">
-        <p>{{ t('Remove the saved Copilot sign-in from this Shadow installation? This affects all projects. It does not sign you out of GitHub in your browser or revoke the GitHub authorization.') }}</p>
+        <p>{{ t('Remove the saved Copilot sign-in for {host} from this Shadow installation? This affects all projects. Sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.', { host: status?.host ?? 'github.com' }) }}</p>
         <div class="actions">
           <button :disabled="saving" @click="confirmSignOut = false">{{ t('Cancel') }}</button>
           <button :disabled="saving" @click="signOut">{{ saving ? t('Signing out...') : t('Sign out of GitHub Copilot') }}</button>
@@ -73,7 +85,7 @@ import UiSelect from './components/UiSelect.vue'
 import { t, formatDateTime } from './i18n.ts'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
-  COPILOT_VERIFICATION_URL, createDeviceLoginController, createProviderSetupClient,
+  normalizeCopilotHost, createDeviceLoginController, createProviderSetupClient,
   providerDisplayName, providerPresets,
   copilotFailureMessage,
   providerFailureMessage,
@@ -103,6 +115,17 @@ const model = ref(props.mode === 'add' || props.status?.authMode === 'copilot'
   ? providerPresets.find(item => item.id === initialProvider)?.model ?? ''
   : props.status?.model ?? 'gpt-4.1')
 const baseUrl = ref(props.mode === 'add' || props.status?.authMode === 'copilot' ? '' : props.status?.baseUrl ?? '')
+const initialCopilotHost = props.mode !== 'add' && props.status?.authMode === 'copilot' ? props.status.host ?? 'github.com' : 'github.com'
+const copilotHostType = ref(initialCopilotHost === 'github.com' ? 'github' : 'enterprise')
+const enterpriseHost = ref(initialCopilotHost === 'github.com' ? '' : initialCopilotHost)
+const selectedCopilotHost = computed(() => copilotHostType.value === 'github' ? 'github.com' : enterpriseHost.value)
+const hostError = computed(() => {
+  try {
+    const host = normalizeCopilotHost(selectedCopilotHost.value)
+    if (copilotHostType.value === 'enterprise' && host === 'github.com') throw new Error('Enterprise hostname required')
+    return ''
+  } catch { return t('Enter a valid enterprise hostname such as your-company.ghe.com, without a URL, port or path.') }
+})
 const apiKey = ref('')
 const message = ref('')
 const saving = ref(false)
@@ -172,7 +195,14 @@ async function saveProvider() {
     apiKey.value = ''
   }
 }
-function startLogin() { message.value = ''; copied.value = false; confirmSignOut.value = false; signedOut.value = false; void controller.start() }
+async function startLogin() {
+  if (hostError.value || busy.value) return
+  message.value = ''
+  copied.value = false
+  confirmSignOut.value = false
+  signedOut.value = false
+  await controller.start(undefined, normalizeCopilotHost(selectedCopilotHost.value))
+}
 async function signOut() {
   saving.value = true
   message.value = ''
@@ -198,14 +228,21 @@ async function copyCode() {
   } catch { message.value = t('Clipboard is unavailable. Select and copy the displayed device code manually.') }
 }
 async function openGitHub() {
+  const verificationUri = login.value.login?.verificationUri
+  if (login.value.state !== 'pending' || !verificationUri) return
   try {
     if (window.shadowDesktop) {
-      if (!window.shadowDesktop.openCopilotLogin) throw new Error(t('Restart Desktop to enable secure login links.'))
-      await window.shadowDesktop.openCopilotLogin()
+      // Older preload bridges ignore arguments and always open github.com.
+      if (!window.shadowDesktop.openCopilotLogin ||
+        (login.value.login?.host !== 'github.com' && login.value.login?.host !== undefined &&
+          window.shadowDesktop.copilotLoginHostSupport !== true)) {
+        throw new Error(t('Restart Desktop to enable secure login links.'))
+      }
+      await window.shadowDesktop.openCopilotLogin(verificationUri)
     } else {
-      window.open(COPILOT_VERIFICATION_URL, '_blank', 'noopener,noreferrer')
+      window.open(verificationUri, '_blank', 'noopener,noreferrer')
     }
-  } catch { message.value = t('Could not open the browser. Open https://github.com/login/device manually.') }
+  } catch { message.value = t('Could not open the browser. Open {uri} manually.', { uri: verificationUri }) }
 }
 const leave = () => { void controller.cancel() }
 watch(() => props.active, active => { if (!active) leave() })

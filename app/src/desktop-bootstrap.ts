@@ -96,7 +96,8 @@ export interface ShadowDesktopApi {
 	selectDirectory(): Promise<NativeDirectorySelection | null>
 	getMainDirectorySelection?(): Promise<NativeDirectorySelection>
 	selectMainDirectoryPath?(path: string): Promise<NativeDirectorySelection>
-	openCopilotLogin?(): Promise<void>
+	readonly copilotLoginHostSupport?: boolean
+	openCopilotLogin?(verificationUri: string): Promise<void>
 	openExternal?(url: string): Promise<void>
 }
 

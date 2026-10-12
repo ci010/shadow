@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { normalizeCopilotHost } from '../shared/copilot-host.ts'
 import { z } from 'zod'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { ConfigStore, REDACTED_SECRET } from '../config/store.ts'
@@ -21,6 +22,7 @@ export interface ProviderSetupStatus {
   ready: boolean
   reason?: string
   baseUrl?: string
+  host?: string
   hasApiKey: boolean
 }
 
@@ -30,12 +32,14 @@ export interface ConfiguredProvider {
   hasApiKey: boolean
   selected: boolean
   baseUrl?: string
+  host?: string
   model?: string
 }
 
 type LoginState = 'pending' | 'succeeded' | 'denied' | 'expired' | 'cancelled' | 'error'
 export interface LoginStatus {
   loginId: string
+  host?: string
   state: LoginState
   message?: string
   errorCode?: CopilotAuthFailure
@@ -63,10 +67,17 @@ const SetupInput = z.object({
   const spec = parseModelSpec(model)
   return !spec.provider || spec.provider === provider
 })
-const LoginInput = z.object({ model: Model.optional(), attemptId: AttemptId.optional(), reauthenticate: z.boolean().optional() }).strict()
+const CopilotHost = z.string().max(253).refine((value) => {
+  try { normalizeCopilotHost(value); return true } catch { return false }
+}).transform((value) => normalizeCopilotHost(value))
+const LoginInput = z.object({
+  model: Model.optional(), attemptId: AttemptId.optional(), reauthenticate: z.boolean().optional(),
+  host: CopilotHost.optional(),
+}).strict()
 type SetupInput = z.infer<typeof SetupInput>
 
 interface Flow {
+  host?: string
   status: LoginStatus
   model: string
   config?: Config
@@ -126,7 +137,7 @@ export class ProviderSetup {
   private active?: Flow
   private readonly shutdown = new AbortController()
   private readonly cleanupTimer: ReturnType<typeof setInterval>
-  private readiness?: { config: Config; until: number; value: Promise<ProviderSetupStatus> }
+  private readiness?: { host: string; config: Config; until: number; value: Promise<ProviderSetupStatus> }
 
   constructor(private readonly options: SetupOptions) {
     this.auth = options.auth ?? new CopilotAuthenticator()
@@ -158,6 +169,7 @@ export class ProviderSetup {
       providers.push({
         provider,
         authMode: settings.authMode,
+        ...(provider === 'copilot' ? { host: this.auth.getHost() } : {}),
         hasApiKey: !!settings.apiKey,
         selected: provider === selected,
         ...(baseUrl ? { baseUrl } : {}),
@@ -169,9 +181,9 @@ export class ProviderSetup {
 
   async status(refresh = false): Promise<ProviderSetupStatus> {
     const config = this.options.getConfig()
-    if (!refresh && this.readiness?.config === config && this.readiness.until > this.now()) return this.readiness.value
+    if (!refresh && this.readiness?.host === this.auth.getHost() && this.readiness.config === config && this.readiness.until > this.now()) return this.readiness.value
     const value = this.check(config, this.shutdown.signal, refresh)
-    this.readiness = { config, until: this.now() + 30_000, value }
+    this.readiness = { host: this.auth.getHost(), config, until: this.now() + 30_000, value }
     return value
   }
 
@@ -188,8 +200,10 @@ export class ProviderSetup {
       hasApiKey: !!settings.apiKey,
     }
     if (settings.authMode === 'copilot') {
+      status.host = this.auth.getHost()
       try {
         await this.auth.getApiKey(signal, refresh)
+        if (status.host !== this.auth.getHost()) throw new CopilotAuthError('cancelled')
         status.ready = true
       } catch (error) {
         const code = error instanceof CopilotAuthError ? error.code : 'network'
@@ -242,14 +256,19 @@ export class ProviderSetup {
     this.auth.signOut()
   }
 
-  start(model?: string, attemptId: string = randomUUID(), requestSignal?: AbortSignal, reauthenticate = false): Promise<LoginStatus & Partial<ProviderSetupStatus>> {
+  start(model?: string, attemptId: string = randomUUID(), requestSignal?: AbortSignal, reauthenticate = false, host?: string): Promise<LoginStatus & Partial<ProviderSetupStatus>> {
     this.prune()
+    const targetHost = normalizeCopilotHost(host ?? this.auth.getHost())
     const known = this.flows.get(attemptId)
-    if (known) return known.status.state === 'pending' ? known.started : Promise.resolve({ ...known.status })
+    if (known) {
+      if (known.host && known.host !== targetHost) return Promise.reject(new Error('Sign-in attempt belongs to another GitHub host.'))
+      return known.status.state === 'pending' ? known.started : Promise.resolve({ ...known.status })
+    }
     if (this.shutdown.signal.aborted) return Promise.reject(new CopilotAuthError('cancelled'))
     // Bound retained statuses/tombstones rather than letting clients grow them forever.
     if (this.flows.size >= 128) return Promise.reject(new Error('Too many sign-in attempts. Restart the application.'))
     if (this.active?.status.state === 'pending') {
+      if (this.active.host !== targetHost) return Promise.reject(new Error('Cancel the current sign-in before changing GitHub host.'))
       this.flows.set(attemptId, this.active)
       return this.active.started
     }
@@ -257,8 +276,8 @@ export class ProviderSetup {
     const requested = model ? parseModelSpec(model) : undefined
     if (requested?.provider && requested.provider !== 'copilot') return Promise.reject(new Error('Select a Copilot model.'))
     const flow: Flow = {
-      reauthenticate,
-      status: { loginId: attemptId, state: 'pending' },
+      reauthenticate, host: targetHost,
+      status: { loginId: attemptId, state: 'pending', host: targetHost },
       model: `${requested?.model ?? ((current.provider ?? detectProvider(current.model)) === 'copilot' ? current.model : DEFAULT_COPILOT_MODEL)}@copilot`,
       controller: new AbortController(),
       config: this.options.getConfig(),
@@ -279,17 +298,18 @@ export class ProviderSetup {
     const signal = flow.controller.signal
     try {
       signal.throwIfAborted()
-      if (!flow.reauthenticate) {
+      if (!flow.reauthenticate && flow.host === this.auth.getHost()) {
         try {
           await this.auth.getApiKey(signal, true)
           const status = await this.commit(flow)
+          signal.throwIfAborted()
           this.finish(flow, { loginId: flow.status.loginId, state: 'succeeded' })
           return { ...flow.status, ...status }
         } catch (error) {
           if (!(error instanceof CopilotAuthError) || !['missing', 'denied'].includes(error.code)) throw error
         }
       }
-      const device = await this.auth.startDeviceLogin(signal)
+      const device = await this.auth.startDeviceLogin(signal, flow.host)
       signal.throwIfAborted()
       flow.status = {
         ...flow.status,
@@ -313,6 +333,7 @@ export class ProviderSetup {
       const grant = await this.auth.completeDeviceLogin(device, signal, (ms) => { flow.status.intervalMs = ms })
       signal.throwIfAborted()
       await this.commit(flow, grant, signal)
+      signal.throwIfAborted()
       this.finish(flow, { loginId: flow.status.loginId, state: 'succeeded' })
     } catch (error) {
       this.fail(flow, expiration.aborted && !flow.controller.signal.aborted ? new CopilotAuthError('expired') : error)
@@ -321,14 +342,23 @@ export class ProviderSetup {
 
   private async commit(flow: Flow, grant?: CopilotGrant, signal = flow.controller.signal): Promise<ProviderSetupStatus> {
     const input = { provider: 'copilot', model: flow.model }
-    await this.options.store.update((raw) => {
+    let rollback: (() => void) | undefined
+    try {
+      await this.options.store.update((raw) => {
+        signal.throwIfAborted()
+        if (flow.config !== this.options.getConfig() || (!grant && flow.host !== this.auth.getHost())) {
+          throw new CopilotAuthError('cancelled')
+        }
+        if (grant) rollback = this.auth.persistGrant(grant, signal)
+        return changeSelection(raw, input)
+      }, signal)
       signal.throwIfAborted()
-      if (flow.config !== this.options.getConfig()) throw new CopilotAuthError('cancelled')
-      if (grant) this.auth.persistGrant(grant, signal)
-      return changeSelection(raw, input)
-    }, signal)
+    } catch (error) {
+      rollback?.()
+      throw error
+    }
     this.invalidate()
-    return { provider: 'copilot', model: flow.model, authMode: 'copilot', ready: true, hasApiKey: false }
+    return { provider: 'copilot', model: flow.model, authMode: 'copilot', ready: true, hasApiKey: false, host: this.auth.getHost() }
   }
 
   private fail(flow: Flow, error: unknown): void {
@@ -345,7 +375,7 @@ export class ProviderSetup {
   }
 
   private finish(flow: Flow, status: LoginStatus): void {
-    flow.status = status
+    flow.status = { ...status, ...(flow.host ? { host: flow.host } : {}) }
     flow.retainUntil = this.now() + LOGIN_STATUS_TTL_MS
   }
 
@@ -425,7 +455,7 @@ export class ProviderSetup {
       app.post('/api/auth/login', async (c) => {
         const input = LoginInput.safeParse(await c.req.json().catch(() => null))
         if (!input.success) return c.json({ error: 'Invalid sign-in request.' }, 400)
-        try { return c.json(await this.start(input.data.model, input.data.attemptId, c.req.raw.signal, input.data.reauthenticate)) } catch {
+        try { return c.json(await this.start(input.data.model, input.data.attemptId, c.req.raw.signal, input.data.reauthenticate, input.data.host)) } catch {
           return c.json({ error: 'Sign-in could not be started. Cancel the current attempt and try again.' }, 409)
         }
       })

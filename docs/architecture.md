@@ -1098,12 +1098,25 @@ provider**; it does not redetect every per-session model override. An
 Aggregation is routing and model discovery, not automatic failover.
 
 Explicit Copilot sign-in requests a fresh GitHub device code rather than silently
-reusing cached authentication. Failed attempts expose safe error codes, including
+reusing cached authentication. `POST /api/auth/login` accepts an optional `host`
+for `github.com` or a single-tenant `*.ghe.com` GitHub Enterprise Cloud host;
+omitting it uses the installation's active host (initially `github.com`). Login
+statuses and Copilot provider inventory/readiness include the host, not secrets.
+Device authorization, token exchange, refresh, and allowed API endpoints are
+bound to that host. The renderer and Electron validate the corresponding HTTPS
+device-authorization link rather than accepting arbitrary external login URLs.
+Concurrent login attempts for different hosts are rejected instead of aliased.
+
+Credentials and model caches are isolated by host; legacy GitHub.com files remain
+compatible. Successful authorization persists the active host for all projects
+in the installation. Failed attempts expose safe error codes, including
 system-proxy/PAC failures, without deleting the existing credentials. The
 authenticated `POST /api/auth/logout` endpoint cancels pending sign-in and removes
-the installation's local Copilot access token, API token, and model cache. It does
-not revoke GitHub authorization or sign out the browser. A refresh that was
-already in flight cannot restore credentials after their removal.
+the active host's local Copilot access token, API token, and model cache, retaining
+the selected host and other hosts' caches. It does not revoke GitHub authorization
+or sign out the browser. A refresh that was already in flight cannot restore
+credentials after their removal or send them to a newly selected host. Arbitrary
+self-hosted GitHub Enterprise Server domains are not supported.
 
 Context windows come from `model-registry.ts` plus provider-specific overrides.
 `quickModel` is used for lightweight steering classification; it does not create

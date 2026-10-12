@@ -92,7 +92,7 @@ const formStatus = computed<ProviderSetupStatus | null>(() => {
   if (item.selected && props.status?.provider === item.provider) return props.status
   return {
     provider: item.provider, authMode: item.authMode, hasApiKey: item.hasApiKey,
-    baseUrl: item.baseUrl, ready: false,
+    baseUrl: item.baseUrl, host: item.host, ready: false,
     model: item.model ?? providerPresets.find(preset => preset.id === item.provider)?.model ?? '',
   }
 })

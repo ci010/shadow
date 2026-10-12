@@ -97,7 +97,8 @@ export interface ShadowDesktopApi {
   getMainDirectorySelection(): Promise<NativeDirectorySelection>
   selectMainDirectoryPath(path: string): Promise<NativeDirectorySelection>
   openExternal(url: string): Promise<void>
-  openCopilotLogin(): Promise<void>
+  readonly copilotLoginHostSupport?: boolean
+  openCopilotLogin(verificationUri: string): Promise<void>
 }
 
 export function handlePairChild(
@@ -182,8 +183,15 @@ export async function handleOpenCopilotLogin(
   open: (url: string) => Promise<void>,
   rawArguments: readonly unknown[],
 ): Promise<void> {
-  parseNoArguments(rawArguments)
-  await open('https://github.com/login/device')
+  // Match the raw string: URL parsing would hide explicit :443, dot segments,
+  // whitespace and other spellings that must not cross this privileged boundary.
+  const uri = rawArguments[0]
+  if (rawArguments.length !== 1 || typeof uri !== 'string'
+    || !/^https:\/\/(?:github\.com|(?!xn--)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.ghe\.com)\/login\/device$/.test(uri)
+    || /\s/.test(uri)) {
+    throw new TypeError('Copilot login requires one trusted HTTPS device verification URI')
+  }
+  await open(uri)
 }
 
 export function parseLaunchMainOptions(value: unknown): LaunchMainOptions {

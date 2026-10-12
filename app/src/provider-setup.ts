@@ -1,8 +1,12 @@
 import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 import { createUuid } from './uuid.ts'
+import { normalizeCopilotHost, copilotVerificationUri } from '../../src/shared/copilot-host.ts'
+
+export { normalizeCopilotHost } from '../../src/shared/copilot-host.ts'
 
 export interface ProviderSetupStatus {
+  host?: string
   provider: string
   model: string
   authMode: 'api-key' | 'copilot' | 'none'
@@ -20,6 +24,7 @@ export interface ProviderSetupInput {
 }
 
 export interface ConfiguredProvider {
+  host?: string
   provider: string
   authMode: ProviderSetupStatus['authMode']
   hasApiKey: boolean
@@ -77,6 +82,7 @@ export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
       || names.has(item.provider) || typeof item.selected !== 'boolean'
       || (item.selected && selected) || typeof item.hasApiKey !== 'boolean'
       || !['api-key', 'copilot', 'none'].includes(String(item.authMode))
+      || (item.host !== undefined && (item.authMode !== 'copilot' || !isCopilotHost(item.host)))
       || (item.model !== undefined && typeof item.model !== 'string')
       || (item.baseUrl !== undefined && typeof item.baseUrl !== 'string')) {
       throw new Error(t('The backend returned an invalid provider list. Restart Main and retry.'))
@@ -85,6 +91,7 @@ export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
     selected ||= item.selected
     return {
       provider: item.provider,
+      ...(item.host !== undefined ? { host: normalizeCopilotHost(item.host) } : {}),
       selected: item.selected,
       hasApiKey: item.hasApiKey,
       authMode: item.authMode as ConfiguredProvider['authMode'],
@@ -96,6 +103,7 @@ export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
 
 export type LoginState = 'pending' | 'succeeded' | 'denied' | 'expired' | 'cancelled' | 'error'
 export interface DeviceLogin {
+  host?: string
   loginId: string
   state: LoginState
   userCode?: string
@@ -105,7 +113,12 @@ export interface DeviceLogin {
   errorCode?: string
 }
 
-export const COPILOT_VERIFICATION_URL = 'https://github.com/login/device'
+export const COPILOT_VERIFICATION_URL = copilotVerificationUri('github.com')
+
+function isCopilotHost(value: unknown): boolean {
+  try { normalizeCopilotHost(value); return true }
+  catch { return false }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -115,12 +128,14 @@ export function parseProviderSetup(value: unknown): ProviderSetupStatus {
   if (!isRecord(value) || typeof value.provider !== 'string' || typeof value.model !== 'string'
     || typeof value.ready !== 'boolean' || typeof value.hasApiKey !== 'boolean'
     || !['api-key', 'copilot', 'none'].includes(String(value.authMode))
+    || (value.host !== undefined && (value.authMode !== 'copilot' || !isCopilotHost(value.host)))
     || (value.baseUrl !== undefined && typeof value.baseUrl !== 'string')
     || (value.reason !== undefined && typeof value.reason !== 'string')) {
     throw new Error(t('The backend returned an invalid provider status. Restart Main and retry.'))
   }
   return {
     provider: value.provider,
+    ...(value.host !== undefined ? { host: normalizeCopilotHost(value.host) } : {}),
     model: value.model,
     ready: value.ready,
     hasApiKey: value.hasApiKey,
@@ -132,12 +147,13 @@ export function parseProviderSetup(value: unknown): ProviderSetupStatus {
 
 export function parseDeviceLogin(value: unknown): DeviceLogin {
   if (!isRecord(value) || typeof value.loginId !== 'string' || !/^[\w-]{1,100}$/.test(value.loginId)
-    || !['pending', 'succeeded', 'denied', 'expired', 'cancelled', 'error'].includes(String(value.state))) {
+    || !['pending', 'succeeded', 'denied', 'expired', 'cancelled', 'error'].includes(String(value.state))
+    || !isCopilotHost(value.host)) {
     throw new Error(t('The backend returned an invalid login status. Please retry.'))
   }
   if (value.state === 'pending' && (
     typeof value.userCode !== 'string' || !/^[A-Za-z0-9-]{4,32}$/.test(value.userCode)
-    || value.verificationUri !== COPILOT_VERIFICATION_URL
+    || value.verificationUri !== copilotVerificationUri(normalizeCopilotHost(value.host))
     || typeof value.expiresAt !== 'number' || !Number.isFinite(value.expiresAt)
     || typeof value.intervalMs !== 'number' || !Number.isFinite(value.intervalMs) || value.intervalMs < 1000
   )) {
@@ -145,6 +161,7 @@ export function parseDeviceLogin(value: unknown): DeviceLogin {
   }
   return {
     loginId: value.loginId,
+    ...(value.host !== undefined ? { host: normalizeCopilotHost(value.host) } : {}),
     state: value.state as LoginState,
     ...(typeof value.errorCode === 'string' && ['missing', 'denied', 'expired', 'cancelled', 'network', 'proxy', 'invalid', 'storage'].includes(value.errorCode)
       ? { errorCode: value.errorCode } : {}),
@@ -196,10 +213,12 @@ export function createProviderSetupClient(apiBase: string, request: typeof fetch
         method: 'POST', body: JSON.stringify(input),
       }))
     },
-    async start(model?: string, attemptId?: string, signal?: AbortSignal) {
+    async start(model?: string, attemptId?: string, signal?: AbortSignal, host?: string) {
+      const selectedHost = normalizeCopilotHost(host)
       const login = parseDeviceLogin(await json('/api/auth/login', {
-        method: 'POST', body: JSON.stringify({ model, attemptId, reauthenticate: true }), signal,
+        method: 'POST', body: JSON.stringify({ model, attemptId, reauthenticate: true, host: selectedHost }), signal,
       }))
+      if (normalizeCopilotHost(login.host) !== selectedHost) throw new Error(t('The login host changed. Please retry.'))
       if (attemptId && login.loginId !== attemptId) throw new Error(t('The login attempt changed. Please retry.'))
       return login
     },
@@ -239,6 +258,7 @@ export function createDeviceLoginController(
   let pollController: AbortController | undefined
   let startController: AbortController | undefined
   let activeId: string | undefined
+  let selectedHost = 'github.com'
   let cancellation: Promise<void> | undefined
   const update = (next: LoginView) => { view = next; changed(next) }
   const clear = () => {
@@ -251,6 +271,7 @@ export function createDeviceLoginController(
     try {
       const next = await client.poll(login.loginId, pollController.signal)
       if (current !== generation) return
+      if (normalizeCopilotHost(next.host) !== selectedHost) throw new Error('Login host changed')
       accept(next, current)
     } catch {
       if (current !== generation) return
@@ -269,8 +290,9 @@ export function createDeviceLoginController(
       unschedule = schedule(() => { void poll(login, current) }, Math.min(login.intervalMs ?? 2000, 5000))
     }
   }
-  async function start(model?: string) {
+  async function start(model?: string, host: string = selectedHost) {
     if (view.state === 'pending' || view.state === 'starting' || view.state === 'cancelling') return
+    selectedHost = normalizeCopilotHost(host)
     clear()
     const current = ++generation
     const attemptId = createId()
@@ -279,7 +301,7 @@ export function createDeviceLoginController(
     startController = requestController
     update({ state: 'starting' })
     try {
-      const login = await client.start(model, attemptId, requestController.signal)
+      const login = await client.start(model, attemptId, requestController.signal, selectedHost)
       if (current === generation) accept(login, current)
     } catch {
       if (current === generation) {
