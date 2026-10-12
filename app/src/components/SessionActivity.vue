@@ -3,14 +3,14 @@
     <span v-if="!hideSymbol && (iconOnly || stage || !delegatedLabel)" class="activity-symbol" aria-hidden="true">
       <span v-if="compact || statusIcons" :class="statusIcon" class="status-icon" />
       <span v-else-if="activity.kind === 'waiting'" class="i-lucide-message-circle-question attention-icon" />
-      <span v-else-if="activity.kind === 'running'" class="activity-wave"><i /><i /><i /></span>
+      <WorkingWave v-else-if="activity.kind === 'running'" />
       <span v-else-if="activity.working && !isWaitingStage(activity.kind)" class="activity-spinner" />
       <span v-else class="activity-dot" />
     </span>
     <span v-if="!iconOnly && (stage || !delegatedLabel) && (!compact || activity.kind === 'waiting')" class="activity-label">{{ compact ? t('Needs reply') : activity.label }}</span>
     <span v-if="delegatedLabel && !iconOnly" class="subagent-activity" :class="subagents?.running ? 'subagent-running' : subagents?.waiting ? 'subagent-waiting' : 'subagent-pending'" :title="delegatedLabel">
       <span class="subagent-symbol" aria-hidden="true">
-        <span v-if="subagents?.running" class="activity-wave subagent-wave"><i /><i /><i /></span>
+        <WorkingWave v-if="subagents?.running" />
         <span v-else class="i-lucide-git-branch subagent-icon" />
       </span>
       <span v-if="!iconOnly" class="activity-label">{{ compact ? t('{count} agents', { count: subagentCount }, subagentCount) : delegatedLabel }}</span>
@@ -19,6 +19,7 @@
 </template>
 
 <script setup lang="ts">
+import WorkingWave from './WorkingWave.vue'
 import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import { isWaitingStage, isWorkingStage, sessionActivity } from '../session-activity.ts'
@@ -64,11 +65,6 @@ const label = computed(() => [props.stage || !delegatedLabel.value ? activity.va
 .subagent-pending { color: var(--c-text-muted); }
 .subagent-symbol { display: grid; place-items: center; position: relative; width: 20px; height: 20px; flex: 0 0 20px; }
 .subagent-icon { width: 12px; height: 12px; }
-.activity-wave { display: flex; align-items: center; gap: 3px; height: 16px; }
-.activity-wave i { width: 3px; height: 13px; background: currentColor; animation: activity-wave 1.2s ease-in-out infinite; }
-.activity-wave i:nth-child(2) { animation-delay: .15s; }
-.activity-wave i:nth-child(3) { animation-delay: .3s; }
-@keyframes activity-wave { 0%, 100% { transform: scaleY(.35); opacity: .45; } 50% { transform: scaleY(1); opacity: 1; } }
 @keyframes activity-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .activity-spinner, .activity-wave i { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .activity-spinner { animation: none; } }
 </style>

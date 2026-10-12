@@ -225,13 +225,23 @@ test('mode surfaces compile without replacing existing composer, hidden preview 
 })
 
 
-test('composer loading uses three scaling squares rather than a spinner', async () => {
+test('loading indicators share three vertical bars and reduced-motion support', async () => {
   const source = await readFile(new URL('./components/WorkingWave.vue', import.meta.url), 'utf8')
   assert.match(source, /<i \/><i \/><i \/>/)
-  assert.match(source, /width: 6px; height: 6px/)
-  assert.match(source, /transform: scale\(/)
-  assert.doesNotMatch(source, /rotate\(|scaleY\(/)
-  assert.match(source, /prefers-reduced-motion: reduce/)
+  assert.match(source, /gap: 3px; width: 15px; height: 16px/)
+  assert.match(source, /width: 3px; height: 13px/)
+  assert.match(source, /transform: scaleY\(/)
+  assert.doesNotMatch(source, /rotate\(|transform: scale\(/)
+  assert.match(source, /prefers-reduced-motion: reduce[^\n]+animation: none/)
+  assert.match(source, /aria-hidden="true"/)
+  const activity = await readFile(new URL('./components/SessionActivity.vue', import.meta.url), 'utf8')
+  assert.match(activity, /<WorkingWave v-else-if="activity.kind === 'running'"/)
+  assert.match(activity, /<WorkingWave v-if="subagents\?\.running"/)
+  assert.doesNotMatch(activity, /activity-wave|<i \/>/)
+  for (const name of ['FolderSessionList', 'FoldersSidebar']) {
+    const consumer = await readFile(new URL(`./components/${name}.vue`, import.meta.url), 'utf8')
+    assert.match(consumer, /<WorkingWave v-if=/)
+  }
   const chat = await readFile(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
   assert.match(chat, /sessionWorking \|\| activeSubagents.length/)
   assert.match(chat, /subagentActivityLabel\(activeSubagentActivity\)/)

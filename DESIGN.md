@@ -414,9 +414,11 @@ Session IDs have an adjacent copy icon with copied/error feedback; Bot IDs use
 the same control. Copy the complete value even when its display is truncated.
 Keep normal hover dismissal, keyboard entry and square controls.
 
-Bot connection-in-progress indicators reuse the thinking indicator's three
-square vertical bars (`WorkingWave`): (3px) wide, (13px) tall, with a (1.2s)
-staggered scale/opacity animation. Keep the sidebar's (16px) status slot fixed.
+Composer loading, session running, delegated-agent activity, folder-session
+activity and bot connection-in-progress indicators share `WorkingWave`: three
+square-ended vertical bars, (3px) wide and (13px) tall with (3px) gaps and a
+(1.2s) staggered vertical-scale/opacity animation. Do not use a separate
+scaling-square variant. Keep the sidebar's (16px) status slot fixed.
 Other connection states retain their icons; reduced-motion preferences show
 static bars instead of a continuous animation.
 
