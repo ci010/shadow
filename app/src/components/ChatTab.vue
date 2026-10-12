@@ -197,7 +197,7 @@
                 v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
                 class="retry-row"
               >
-                <button class="btn btn-sm retry-btn" @click="retryLastRequest"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> {{ t('Retry') }}</button>
+                <button class="btn btn-sm retry-btn" :disabled="!!providerNotice" @click="retryLastRequest"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> {{ t('Retry') }}</button>
               </div>
               <MessageAttachments :paths="msg.attachmentBody.paths"               :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />
               <div class="chat-footer">
@@ -310,6 +310,12 @@
 
         <!-- Input (direct-chat only) -->
         <div v-if="(!activeSessionId || isDirectChat) && !viewingPhysicalId" class="chat-composer">
+          <div v-if="providerNotice" class="resume-bar provider-failure" :role="providerReadiness?.checking.value ? 'status' : 'alert'">
+            <div><strong>{{ t('Model provider is not ready') }}</strong><p>{{ providerNotice }}</p>
+              <button v-if="providerReadiness?.canConfigure.value" class="provider-settings-button" @click="router.push({ name: 'settings', params: { section: 'providers' } })">{{ t('Open provider settings') }}</button>
+            </div>
+            <button class="btn btn-sm" :disabled="providerReadiness?.checking.value" @click="providerReadiness?.retry()">{{ t('Retry') }}</button>
+          </div>
           <div v-if="currentRecovery && !requestBusy" class="resume-bar" :class="{ 'provider-failure': currentRecovery.providerFailure }" :role="currentRecovery.providerFailure ? 'alert' : 'status'">
             <div>
               <strong>{{ currentRecovery.providerFailure ? t('Model provider failed') : currentRecovery.reason === 'stopped' ? t('Request stopped') : currentRecovery.reason === 'failed' ? t('Request failed') : t('Request interrupted') }}</strong>
@@ -324,13 +330,13 @@
               </label>
             </div>
             <button class="resume-button" :aria-label="t('Resume interrupted request')"
-              :disabled="!installation.uiScopes.includes('chat:write') || savingSettings || pickingContext || !!currentRecovery.pendingToolCalls && acknowledgedRecoveryId !== currentRecovery.id"
+              :disabled="!!providerNotice || !installation.uiScopes.includes('chat:write') || savingSettings || pickingContext || !!currentRecovery.pendingToolCalls && acknowledgedRecoveryId !== currentRecovery.id"
               @click="resumeCurrentRequest()">
               <span class="i-lucide-play w-4 h-4" aria-hidden="true" /> {{ t('Continue') }}
             </button>
           </div>
           <div v-if="canResend" class="resend-bar">
-            <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> {{ t('Resend last message') }}</button>
+            <button class="resend-btn" :disabled="!!providerNotice" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> {{ t('Resend last message') }}</button>
           </div>
           <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget, 'composer-dual-actions': requestBusy && showComposerSend, 'composer-answering': answeringQuestion, 'composer-working': composerWorking }"
             @dragover="handleAttachmentDragOver" @dragleave="handleAttachmentDragLeave" @drop="handleAttachmentDrop">
@@ -472,6 +478,7 @@
 import { t, formatNumber } from '../i18n.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useProviderReadiness, providerReadinessMessage, providerBlocksSubmission } from '../provider-readiness.ts'
 import { providerFailureMessage } from '../provider-setup.ts'
 import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
@@ -674,6 +681,10 @@ const channelConversation = computed(() => isChannelConversation(activeSession.v
 const inheritedModel = computed(() => channelConversation.value ? activeSession.value?.inferenceDefaults?.model ?? '' : modelSelection?.current.value ?? '')
 const inheritedReasoning = computed(() => channelConversation.value ? activeSession.value?.inferenceDefaults ?? {} : modelSelection?.defaultReasoning?.value ?? {})
 const conversationModel = computed(() => explicitModel.value || inheritedModel.value)
+const providerReadiness = useProviderReadiness()
+const providerNotice = computed(() => providerReadiness?.enabled.value
+  ? providerReadinessMessage(providerReadiness.status.value, providerReadiness.checking.value, providerReadiness.error.value, conversationModel.value) : '')
+const providerSendBlocked = computed(() => providerBlocksSubmission(providerNotice.value, answeringQuestion.value, queueModifier.value))
 if (modelSelection) provideModelSelection({
   ...modelSelection, current: conversationModel,
   inherited: inheritedModel,
@@ -712,7 +723,7 @@ const composerPopoverTitle = computed(() =>
     : canAttachFiles.value
     ? t('Add files, or use the local Main desktop app to attach folders')
     : t('Folder context requires the local Main desktop app'))
-const canSend = computed(() => !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
+const canSend = computed(() => !providerSendBlocked.value && !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
   inputText.value,
   contextItems.value.length,
   pendingAttachments.value.length,
@@ -826,6 +837,7 @@ async function resumeCurrentRequest(): Promise<void> {
   const recovery = currentRecovery.value
   if (!sessionId || !recovery || requestBusy.value || !isDirectChat.value
     || !installation.value.uiScopes.includes('chat:write') || savingSettings.value || pickingContext.value) return
+  if (providerNotice.value) return
   const generation = sessionSelectionGeneration
   const control = createChatRequestControl(props.apiBase, () => {})
   requestControls.set(sessionId, control)
@@ -2435,6 +2447,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     await sendQuestionAnswer(activeAsk.value, content, attachments)
     return
   }
+  if (providerBlocksSubmission(providerNotice.value, false, !!opts?.queue)) return
   const followUp = requestBusy.value
   historyBrowsing = false
   historyLeftBottom = false
@@ -2613,7 +2626,7 @@ function isErrorMessage(msg: ChatMsg): boolean {
  * view and re-run the request on the existing history (no duplicate prompt).
  */
 function retryLastRequest(): void {
-  if (requestBusy.value) return
+  if (requestBusy.value || providerNotice.value) return
   while (messages.value.length && isErrorMessage(messages.value[messages.value.length - 1])) {
     messages.value.pop()
   }

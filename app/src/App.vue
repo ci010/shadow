@@ -86,6 +86,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useTheme } from './composables/useTheme'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
+import { provideProviderReadiness } from './provider-readiness.ts'
 import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
 import DesktopFrame from './DesktopFrame.vue'
 import MobileChrome from './components/MobileChrome.vue'
@@ -152,6 +153,10 @@ const isMain = computed(() => installationContext.value.mode === 'main' || insta
 const providerStatus = ref<ProviderSetupStatus | null>(null)
 const checkingProvider = ref(true)
 const providerError = ref('')
+provideProviderReadiness({ status: providerStatus, checking: checkingProvider, error: providerError, enabled: isMain,
+  canConfigure: computed(() => isMain.value && installationContext.value.uiScopes.includes('main:admin')),
+  retry: () => { void refreshProvider(true) },
+})
 const providerViewProps = computed(() => ({
   apiBase: resolvedBase.value,
   status: providerStatus.value,
@@ -171,6 +176,7 @@ async function refreshProvider(refresh = false) {
   providerRequest?.abort()
   providerRequest = new AbortController()
   const signal = providerRequest.signal
+  if (!refresh) providerStatus.value = null
   checkingProvider.value = isMain.value
   providerError.value = ''
   if (!isMain.value) return
@@ -180,7 +186,6 @@ async function refreshProvider(refresh = false) {
     providerStatus.value = status
   } catch (error) {
     if (signal.aborted || generation !== providerGeneration) return
-    providerStatus.value = null
     providerError.value = error instanceof Error ? error.message : t('Could not check provider configuration. Retry when Main is available.')
   } finally {
     if (generation === providerGeneration) checkingProvider.value = false
@@ -194,7 +199,11 @@ function providerConfigured() {
 
 watch(resolvedBase, () => { void refreshProvider() })
 const onConfigChanged = (event: Event) => {
-  if (!(event as CustomEvent<{ projectId?: string }>).detail?.projectId) void refreshProvider(true)
+  if (!(event as CustomEvent<{ projectId?: string }>).detail?.projectId) {
+    // Configuration may change the primary provider; old identity is no longer safe.
+    providerStatus.value = null
+    void refreshProvider(true)
+  }
 }
 
 const navigationGroups = computed(() => {

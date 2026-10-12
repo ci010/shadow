@@ -3295,5 +3295,8 @@
   "Standard error": "Standard error",
   "Actions": "Actions",
   "Run this command directly?": "Run this command directly?",
-  "Unsupported script names (not imported):": "Unsupported script names (not imported):"
+  "Unsupported script names (not imported):": "Unsupported script names (not imported):",
+  "Checking model provider readiness...": "Checking model provider readiness...",
+  "Set a base URL in provider settings before sending.": "Set a base URL in provider settings before sending.",
+  "Model provider is not ready": "Model provider is not ready"
 }
