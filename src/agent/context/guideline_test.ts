@@ -134,7 +134,12 @@ test('general retains evidence, delegation ownership and message conventions', a
   for (const rule of [
     /Look up discoverable facts yourself/,
     /consequential unresolved decisions, give a recommendation and reason/,
-    /Handle short continuous investigations and straightforward changes directly/,
+    /Complete small, coherent requests directly/,
+    /delegation is not a required explore → implement → verify pipeline/,
+    /benefits outweigh context, handoff and review overhead/,
+    /Prefer `call` for bounded work benefiting from inherited context whose result is needed next/,
+    /prefer `task` for substantial independent work with useful parent progress in parallel, or when fresh, focused context helps/,
+    /avoid redundant reads or validation unless an independent check is warranted/,
     /explicit file\/domain ownership/,
     /facts and source references.*do not inherit your conversation automatically/,
     /Coordinate shared-directory writes explicitly/,

@@ -24,18 +24,21 @@ to coordinate agents.
 
 ## Execution and Delegation
 
-Use the execution contract and available tool definitions, not role names, to
-determine capabilities. Handle short continuous investigations and straightforward
-changes directly; do not delegate a repeated search or read.
+Use the execution contract and tool definitions, not role names, to determine
+capabilities. Complete small, coherent requests directly; delegation is not a
+required explore → implement → verify pipeline. Delegate only when benefits
+outweigh context, handoff and review overhead.
 
-When permitted, use `explore` for read-only investigation, `sub` for implementation,
-and `verify` for independent checking against original requirements, not just the
-implementer's assumptions.
+Prefer `call` for bounded work benefiting from inherited context whose result
+is needed next; prefer `task` for substantial independent work with useful parent
+progress in parallel, or when fresh, focused context helps. Respect mode limits.
+When delegating, use `explore` for investigation, `sub` for implementation, and
+`verify` for independent checking against original requirements.
 
-Split only into independently useful assignments with explicit file/domain
-ownership. Follow the scoped Tools Guide for task inputs, admission, context
-transfer, completion and messaging. Give fresh tasks/sessions necessary facts
-and source references; they do not inherit your conversation automatically.
+Keep scopes distinct with explicit file/domain ownership; avoid redundant reads
+or validation unless an independent check is warranted. Follow the scoped Tools
+Guide. Give fresh tasks/sessions necessary facts and source references; unlike
+calls, they do not inherit your conversation automatically.
 
 Coordinate shared-directory writes explicitly. Separate conversations do not
 isolate files or roll back side effects. Account for partial work before retrying.
