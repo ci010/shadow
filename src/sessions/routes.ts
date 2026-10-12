@@ -291,7 +291,7 @@ export function sessionsApiPlugin(
           ...session,
           ...execution,
           automation: state ? resolveAutomationSession(state) : undefined,
-          title: state?.name ?? state?.topic?.title ?? state?.chatName ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
+          title: state?.name ?? state?.topic?.title ?? state?.generatedTitle ?? state?.chatName ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,
           inferenceDefaults,

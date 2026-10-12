@@ -12,8 +12,9 @@ const summary = JSON.stringify({ track: true, title: 'Replace selectors', object
 test('observer progress preserves semantic revision and failed execution is visibly blocked', async () => withTempWorkspace(async home => {
   const store = new InitiativeStore(home), bus = new Bus(), scope = createProjectScope('fixture')
   const state: SessionState = { sessionId: 'web:chat-root', projectId: 'fixture', segmentIndex: 0, executionStatus: 'running' }
+  const titles: string[] = []
   let reportNumber = 0
-  const observer = new WorkObserver(store, { bus, scope, state: () => state, changed() {}, summarize: async () =>
+  const observer = new WorkObserver(store, { bus, scope, state: () => state, changed() {}, updateTitle: async (id, title) => { assert.equal(id, state.sessionId); titles.push(title) }, summarize: async () =>
     JSON.stringify({ ...JSON.parse(summary), objective: `Report paraphrase ${++reportNumber}` }) })
   const report = (turnId: string, status: 'completed' | 'failed') => bus.emit('session.turn.finished', {
     sessionId: state.sessionId, turnId, inputId: turnId, source: { kind: 'session', sessionId: state.sessionId },
@@ -24,6 +25,7 @@ test('observer progress preserves semantic revision and failed execution is visi
     report('second', 'completed'); await observer.flush()
     assert.equal(store.workRecords()[0]!.revision, 1)
     assert.equal(store.workRecords()[0]!.sequence, 2)
+    assert.deepEqual(titles, ['Replace selectors', 'Replace selectors'])
     state.executionStatus = 'failed'
     report('third', 'failed'); await observer.flush()
     assert.equal(store.workRecords()[0]!.workflow?.status, 'blocked')

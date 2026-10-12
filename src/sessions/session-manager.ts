@@ -716,7 +716,7 @@ export class SessionManager {
     if (!state) throw new YieldError('not_found', 'Decision session not found.')
     return { reportingSessionId: state.decisionOwnerSessionId ?? sessionId,
       candidates: Object.values(this.sessionStates).filter(item => (!item.mode || item.mode === 'session') && !delegationOwner(item))
-        .map(item => ({ sessionId: item.sessionId, label: item.name ?? item.topic?.title ?? item.sessionId })) }
+        .map(item => ({ sessionId: item.sessionId, label: item.name ?? item.topic?.title ?? item.generatedTitle ?? item.sessionId })) }
   }
 
   async setDecisionOwner(sessionId: string, reportingSessionId: string): Promise<void> {
@@ -1905,6 +1905,23 @@ ${JSON.stringify(request)}`,
     })
   }
 
+  /** Persist a display-only summary title without modifying explicit conversation metadata. */
+  async updateGeneratedTitle(sessionId: string, value: string): Promise<void> {
+    // Observer titles allow 160 characters; display names allow 120 and one line.
+    const title = parseSessionName(value.replace(/[\r\n\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 120))
+    await this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state || this.stopped || this.deleting.has(sessionId)
+        || (this.deps.projectId && state.projectId !== this.deps.projectId)
+        || state.name || state.topic || state.chatName || state.channelBoundary || state.automation
+        || state.sessionKind === 'orchestrator' || (state.mode ?? 'session') !== 'session'
+        || state.generatedTitle === title) return
+      await this.store.saveState(sessionId, { ...state, generatedTitle: title })
+      state.generatedTitle = title
+      this.deps.bus.emit('session.renamed', { sessionId })
+    })
+  }
+
   async renameSession(sessionId: string, value: string): Promise<string> {
     const name = parseSessionName(value)
     return this.withStateCreation(sessionId, async () => {
@@ -2160,7 +2177,7 @@ ${JSON.stringify(request)}`,
       ...parseTopicSessionFields(state),
       description: state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
       sessionId,
-      name: state.name ?? state.topic?.title ?? state.chatName ?? (state.sessionKind === 'orchestrator' ? 'Project coordination' : await this.getFirstUserMessage(sessionId)),
+      name: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? (state.sessionKind === 'orchestrator' ? 'Project coordination' : await this.getFirstUserMessage(sessionId)),
       workdir: {
         kind: remote ? 'remote' as const : 'local' as const,
         displayPath: remote
@@ -2374,7 +2391,7 @@ ${JSON.stringify(request)}`,
     return Object.values(this.sessionStates).map((s) => ({
       ...(s.projectId ? { projectId: s.projectId } : {}),
       sessionId: s.sessionId,
-      name: s.name ?? s.topic?.title ?? s.chatName,
+      name: s.name ?? s.topic?.title ?? s.generatedTitle ?? s.chatName,
       description: s.description ?? (s.topic ? [s.topic.goal, s.topic.scope, s.topic.nonGoals].filter(Boolean).join('\n') : undefined),
       segmentIndex: s.segmentIndex,
       lastActivityAt: s.lastActivityAt,

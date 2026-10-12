@@ -66,6 +66,7 @@ export class WorkObserver {
       scope: ProjectScope
       state(id: string): SessionState | undefined | null
       summarize(input: string, signal: AbortSignal): Promise<string>
+      updateTitle?(sessionId: string, title: string): Promise<void>
       changed(): void
     },
     enabled = true,
@@ -293,6 +294,7 @@ export class WorkObserver {
               ...(result.focus ? { focus: result.focus } : {}) },
           }
           this.store.saveWork(record, prior?.sequence ?? 0, actor, prior ? 'note' : 'created')
+          await this.deps.updateTitle?.(entry.sessionId, result.title)
         }
         this.settled(entry)
         this.error = undefined

@@ -47,7 +47,7 @@ export interface TopicSummary {
   createdBySessionId?: string
   status: string
   lastActivityAt?: string
-  metadataSource: 'explicit' | 'description' | 'first_message' | 'identifier'
+  metadataSource: 'explicit' | 'summary' | 'description' | 'first_message' | 'identifier'
 }
 
 export interface TopicServiceOptions {
@@ -66,14 +66,14 @@ function topicSummary(projectId: string, state: SessionState, firstMessage?: str
     sessionId: state.sessionId,
     conversationUrl: `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(state.sessionId)}`,
     ...(state.sessionId.startsWith('web:') ? { chatId: state.sessionId.slice(4) } : {}),
-    title: state.name ?? state.topic?.title ?? (state.description || firstMessage)?.split('\n')[0]?.slice(0, 160) ?? state.sessionId,
+    title: state.name ?? state.topic?.title ?? state.generatedTitle ?? (state.description || firstMessage)?.split('\n')[0]?.slice(0, 160) ?? state.sessionId,
     description: state.description || (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : firstMessage) || '',
     folderId: state.folderId,
     initiativeId: state.initiativeId,
     createdBySessionId: state.createdBySessionId,
     status: state.recovery ? 'needs_attention' : state.executionStatus ?? 'idle',
     lastActivityAt: state.lastActivityAt,
-    metadataSource: state.name || state.topic ? 'explicit' : state.description ? 'description' : firstMessage ? 'first_message' : 'identifier',
+    metadataSource: state.name || state.topic ? 'explicit' : state.generatedTitle ? 'summary' : state.description ? 'description' : firstMessage ? 'first_message' : 'identifier',
   }
 }
 

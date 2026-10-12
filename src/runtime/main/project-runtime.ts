@@ -737,6 +737,7 @@ export async function createProjectRuntime(
   sessions.alignment = alignment
   const workObserver = new WorkObserver(initiatives, {
     bus, scope, state: id => sessions.getSessionState(id),
+    updateTitle: (id, title) => sessions.updateGeneratedTitle(id, title),
     changed: () => realtime.invalidateSessions(),
     summarize: async (task, signal) => {
       const id = await sessions.startSession({

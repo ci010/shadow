@@ -226,6 +226,47 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
+  test(`${Store.name}: summary titles persist, refresh and yield to explicit names`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const bus = new Bus(), renamed: string[] = []
+      bus.on('session.renamed', fact => renamed.push(fact.sessionId))
+      const sessions = makeManager(workspace, store, { bus })
+      try {
+        await store.saveState('web:auto', { sessionId: 'web:auto', segmentIndex: 0 })
+        await store.saveState('web:topic', { sessionId: 'web:topic', segmentIndex: 0,
+          topic: { title: 'Explicit topic', goal: 'Goal', scope: 'Scope' } })
+        await sessions.start()
+        await sessions.updateGeneratedTitle('web:auto', 'Initial summary')
+        await sessions.updateGeneratedTitle('web:auto', 'Updated summary')
+        equal((await sessions.getSessionDetails('web:auto'))?.name, 'Updated summary')
+        equal(sessions.listSessions().find(s => s.sessionId === 'web:auto')?.name, 'Updated summary')
+        equal((await store.getState('web:auto'))?.generatedTitle, 'Updated summary')
+        equal((await store.getState('web:auto'))?.name, undefined)
+        const app = new Hono()
+        sessionsApiPlugin(sessions)(app)
+        const graph = await (await app.request('/api/sessions/graph')).json()
+        equal(graph.sessions.find((s: { sessionId: string }) => s.sessionId === 'web:auto')?.title, 'Updated summary')
+        await sessions.setSessionConfig('web:auto', { model: 'fixture' })
+        await sessions.updateGeneratedTitle('web:auto', 'Updated summary')
+        deepEqual(renamed, ['web:auto', 'web:auto'])
+        await sessions.renameSession('web:auto', 'Manual title')
+        await sessions.updateGeneratedTitle('web:auto', 'Must not replace manual')
+        await sessions.updateGeneratedTitle('web:topic', 'Must not replace topic')
+        equal((await sessions.getSessionDetails('web:auto'))?.name, 'Manual title')
+        equal((await store.getState('web:topic'))?.generatedTitle, undefined)
+        await sessions.stop()
+        const restarted = makeManager(workspace, store)
+        await restarted.start()
+        try {
+          equal(restarted.getSessionState('web:auto')?.generatedTitle, 'Updated summary')
+          equal((await restarted.getSessionDetails('web:auto'))?.name, 'Manual title')
+        } finally { await restarted.stop() }
+      } finally { await sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: failed rename does not publish optimistic metadata or notifications`, async t => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

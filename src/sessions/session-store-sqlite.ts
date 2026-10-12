@@ -39,6 +39,7 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'channelBoundary',
   'workPolicy',
   'name',
+  'generatedTitle',
   'chatName',
   'physicalIdVersion',
   'sessionKind',
@@ -101,6 +102,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (value.channelBoundary !== undefined) metadata.channelBoundary = parseChannelBoundary(value.channelBoundary)
   if (value.workPolicy !== undefined) metadata.workPolicy = parseWorkPolicy(value.workPolicy)
   if (value.name !== undefined) metadata.name = parseSessionName(value.name)
+  if (value.generatedTitle !== undefined) metadata.generatedTitle = parseSessionName(value.generatedTitle)
   if (value.chatName !== undefined) metadata.chatName = parseSessionName(value.chatName)
   if (value.decisionOwnerSessionId !== undefined) metadata.decisionOwnerSessionId = parseDecisionOwner(value.decisionOwnerSessionId)
   if (value.physicalIdVersion !== undefined) metadata.physicalIdVersion = parsePhysicalIdVersion(value.physicalIdVersion)
@@ -370,6 +372,7 @@ export class SqliteSessionStore implements SessionStore {
         ...this.prototypeMetadataExtras.get(sessionKey),
         workPolicy: parseWorkPolicy(state.workPolicy),
         name: state.name === undefined ? undefined : parseSessionName(state.name),
+        generatedTitle: state.generatedTitle === undefined ? undefined : parseSessionName(state.generatedTitle),
         chatName: state.chatName === undefined ? undefined : parseSessionName(state.chatName),
         decisionOwnerSessionId: parseDecisionOwner(state.decisionOwnerSessionId),
         ...parseTopicSessionFields(state),
