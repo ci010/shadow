@@ -521,3 +521,13 @@ input:not([type]), textarea {
 
 /* Conversation chips share the same quiet resting edge; state borders win. */
 .chat-working:not(.waiting), .context-chip, .session-work-triggers > button:not([aria-expanded="true"]) { border-color: var(--c-border); }
+
+/* Shared theme-accent breathing for composer and microphone. */
+@keyframes input-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-blue) 10%, transparent), 0 0 6px color-mix(in srgb, var(--c-blue) 4%, transparent); }
+  16.667% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-blue) 75%, transparent), 0 0 22px color-mix(in srgb, var(--c-blue) 32%, transparent); }
+  33.333% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-purple) 10%, transparent), 0 0 6px color-mix(in srgb, var(--c-purple) 4%, transparent); }
+  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-purple) 75%, transparent), 0 0 22px color-mix(in srgb, var(--c-purple) 32%, transparent); }
+  66.667% { box-shadow: 0 0 0 1px rgb(6 182 212 / 10%), 0 0 6px rgb(6 182 212 / 4%); }
+  83.333% { box-shadow: 0 0 0 1px rgb(6 182 212 / 75%), 0 0 22px rgb(6 182 212 / 32%); }
+}

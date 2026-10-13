@@ -448,3 +448,26 @@ test('a detached renderer that cannot receive its picker is denied without enume
   assert.deepEqual(await h.display(), {})
   assert.equal(enumerated, false)
 })
+
+
+test('composer scoped preload approval reaches the actual Main arm/permission route, never bypassing frame, expiry or navigation', async t => {
+  const h = harness(); t.after(h.dispose)
+  let gesture = false
+  const api = createMediaCaptureApi({ invoke: async (channel, value) => h.invoke(channel, value) }, () => false, () => { const accepted = gesture; gesture = false; return accepted })
+  const mic = { runId: 'composer-audio-test', capabilities: ['microphone'] as const, durationMs: 65_000 }
+  await assert.rejects(api.arm(mic), /Start button/)
+  await assert.rejects(api.armComposerMicrophone!(mic), /trusted composer gesture/)
+  assert.equal(h.request(), false)
+  gesture = true
+  await api.armComposerMicrophone!(mic)
+  assert.equal(h.check(), true); assert.equal(h.request(), true)
+  assert.equal(h.request('media', { mediaTypes: ['video'] }), false)
+  assert.equal(h.request('media', { isMainFrame: false }), false)
+  assert.equal(h.request('media', { securityOrigin: 'https://evil.example' }), false)
+  await api.revoke({ runId: mic.runId }); assert.equal(h.request(), false)
+  gesture = true; await api.armComposerMicrophone!(mic); h.setTime(65_100); assert.equal(h.request(), false)
+  gesture = true; await api.armComposerMicrophone!(mic)
+  h.contents.emit('did-start-navigation', {}, 'http://127.0.0.1:5173/', false, true)
+  assert.equal(h.request(), false)
+  gesture = true; await assert.rejects(api.armComposerMicrophone!(mic), /trusted Main frame/)
+})

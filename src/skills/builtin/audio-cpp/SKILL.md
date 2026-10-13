@@ -12,11 +12,45 @@ Shadow does **not** ship audio.cpp executables or model weights. Do not claim
 speech recognition or synthesis is available until `audio_cpp status` shows an
 installed CLI and the requested model. Discover the `audio_cpp` contract with
 `search(query="audio_cpp", space="grep:v:tools")`, then call it with
-`invoke_tool`. Its `status`, `inspect`, `configure`, `transcribe`, and `speak`
-actions are the supported Shadow integration. This is a local-only tool: a
+`invoke_tool`. Its `status`, `assess`, `setup`, `configure_remote`, `inspect`, `configure`, `transcribe`, and `speak`
+actions are the supported Shadow integration. The local backend runs on the owning host only: a
 remote workdir must use a capability implemented on its own node, not Main's
-binary or model directory. Request user consent before network downloads,
+binary or model directory. An explicitly selected remote API route runs from the
+owning host and sends content only when transcribe/speak is invoked. Request user consent before network downloads,
 large disk use or a model with special license terms.
+
+## Unified Agent-driven setup
+
+The composer **Set up audio** button asks local vs remote and submits the choice to
+the session Agent. It does not record or upload. Import `audio` (same service as
+`audio_cpp`), then use `assess`, approval-gated `setup`, or `configure_remote`.
+Assess a specific model/backend with measured host RAM/disk/OS/architecture and
+published model-specific memory evidence, not universal guessed thresholds.
+Unsuitable recommends remote; unknown is not proof of incompatibility. Never switch
+or upload without the user choosing remote. `setup` verifies a self-contained ZIP CLI
+and single-file GGUF using trusted pinned SHA-256/size metadata, probes the CLI before
+model download, then registers managed paths and local task route automatically.
+No manual config/path edits, shell installers or implicit startup downloads.
+
+`setup` takes setup={approved:true,binary:{url,sha256,bytes,entry,platform,arch},
+model:{url,sha256,bytes,family},task,backend?,options?}. `assess` takes candidate=
+{family,backend?,downloadBytes,platform,arch,minimumMemoryBytes?,memoryEvidence?}.
+The optional memory requirement needs its published evidence URL.
+`configure_remote` takes task and remote={baseUrl,model,apiKeyEnv?}; API key values
+must never enter chat/tool arguments. Use an existing host environment reference.
+This config action uploads nothing. Credential provisioning remains host-side.
+transcribe/speak use the selected task route, without silent fallback. Local
+configure/setup selects local; remote configuration selects remote. Configure
+and CLI help/catalog probes are not successful inference; test a consented sample.
+
+SenseVoice-Small Q8 uses family `sense_asr`, package `sensevoice_small_q8`, file
+`sensevoice-small-q8-audiocpp-v1.gguf`, repo `FunAudioLLM/SenseVoiceSmall-GGUF-audiocpp`.
+Model spec revision `5c3fcfe748a8714216bc135476d5863084fddb72` is evidence, not a
+weight SHA-256. Resolve trusted pinned digest/size/license before setup and verify
+the chosen CLI supports sense_asr. One-ZIP setup requires all adjacent runtime
+libraries included; separate CUDA archives and multi-file model packages still
+need the verified explicit import workflow below. See docs/audio-setup.md in the
+source repository for limits and fixture-vs-live verification boundaries.
 
 ## Install the CLI, without guessing the asset
 

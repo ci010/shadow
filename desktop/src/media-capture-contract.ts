@@ -44,6 +44,8 @@ export interface DesktopMediaCaptureApi {
   readonly displayPicker?: DesktopDisplayPickerApi
   /** Call directly from trusted Start, before awaiting network work; never from a guest event. */
   arm(request: MediaCaptureGrantRequest): Promise<{ readonly expiresAt: number }>
+  /** Reserve from the observed composer gesture; microphone only, max 65 seconds. */
+  armComposerMicrophone?(request: MediaCaptureGrantRequest): Promise<{ readonly expiresAt: number }>
   /** Prevents acquisition; the renderer must also stop existing tracks and pending capture work. */
   revoke(request: { readonly runId: string }): Promise<void>
 }

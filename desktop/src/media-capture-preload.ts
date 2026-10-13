@@ -15,6 +15,7 @@ export function createMediaCaptureApi(
     removeListener?(channel: string, listener: (event: unknown, value: unknown) => void): unknown
   },
   hasUserActivation: () => boolean,
+  consumeComposerGesture?: () => boolean,
 ): DesktopMediaCaptureApi {
   return Object.freeze({
     displayPicker: Object.freeze({
@@ -48,6 +49,14 @@ export function createMediaCaptureApi(
       }
       return ipc.invoke(MEDIA_CAPTURE_CHANNELS.arm, parseMediaCaptureGrant(request)) as Promise<{ expiresAt: number }>
     },
+    ...(consumeComposerGesture ? { armComposerMicrophone: (request: Parameters<DesktopMediaCaptureApi['arm']>[0]) => {
+      const parsed = parseMediaCaptureGrant(request)
+      if (parsed.capabilities.length !== 1 || parsed.capabilities[0] !== 'microphone' || parsed.durationMs > 65_000) {
+        return Promise.reject(new TypeError('Composer gesture permits only a bounded microphone reservation'))
+      }
+      if (!consumeComposerGesture()) return Promise.reject(new TypeError('Microphone requires a trusted composer gesture'))
+      return ipc.invoke(MEDIA_CAPTURE_CHANNELS.arm, parsed) as Promise<{ expiresAt: number }>
+    } } : {}),
     revoke: (request) =>
       ipc.invoke(MEDIA_CAPTURE_CHANNELS.revoke, parseMediaCaptureRevocation(request)) as Promise<void>,
   } satisfies DesktopMediaCaptureApi)

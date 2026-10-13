@@ -11,6 +11,7 @@ import { createFolderDirectoriesApi } from './folder-directories.js'
 import { createChatContextApi } from './chat-context.js'
 import { DOCUMENT_TAB_CHANNEL, receiveDocumentTabShortcuts } from './document-tabs.js'
 import { createMediaCaptureApi } from './media-capture-preload.js'
+import { observeComposerMicrophoneGesture } from './composer-microphone-gesture.js'
 import { createStartupDiagnosticsApi } from './startup-diagnostics-ipc.js'
 import { createWebPairingApi } from './web-pairing-preload.js'
 import type { ChildPairInput } from './bootstrap/child.js'
@@ -34,7 +35,7 @@ const api: ShadowDesktopApi = Object.freeze({
   }),
   webPairing: createWebPairingApi(ipcRenderer),
   diagnostics: createStartupDiagnosticsApi(ipcRenderer),
-  mediaCapture: createMediaCaptureApi(ipcRenderer, () => navigator.userActivation.isActive),
+  mediaCapture: createMediaCaptureApi(ipcRenderer, () => navigator.userActivation.isActive, observeComposerMicrophoneGesture(window, document).consume),
   windowControls: createWindowControlsApi(ipcRenderer),
   folders: createFolderDirectoriesApi(ipcRenderer),
   chatContext: createChatContextApi(ipcRenderer),

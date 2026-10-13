@@ -126,3 +126,25 @@ test('malformed stored settings are rejected instead of silently resetting confi
     await assert.rejects(() => new AudioCppService(workspace).status())
   })
 })
+
+test('Project inference lease rejects concurrent speech work and releases after failure', async () => {
+  await withTempWorkspace(async workspace => {
+    const input = join(workspace, 'input.wav'); const model = join(workspace, 'model.gguf')
+    await writeFile(input, 'synthetic'); await writeFile(model, 'synthetic')
+    let unblock!: () => void
+    const hold = new Promise<void>(resolve => { unblock = resolve })
+    const service = new AudioCppService(workspace, async (_binary, args) => {
+      if (args.includes('--list-loaders')) return '[{"family":"sense_asr"}]'
+      await hold
+      await writeFile(args[args.indexOf('--text-out') + 1], 'exact text\r\n')
+      return ''
+    })
+    await service.configure({ binary: process.execPath, task: 'asr', family: 'sense_asr', path: model })
+    const active = service.transcribe(input)
+    await assert.rejects(service.transcribe(input), /busy/)
+    await assert.rejects(service.speak('hello', join(workspace, 'output.wav')), /busy/)
+    unblock(); assert.equal(await active, 'exact text\r\n')
+    await assert.rejects(service.transcribe(join(workspace, 'missing.wav')), { code: 'ENOENT' })
+    assert.equal(await service.transcribe(input), 'exact text\r\n')
+  })
+})

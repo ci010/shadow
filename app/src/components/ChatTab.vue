@@ -438,6 +438,8 @@
             >
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
             </button>
+            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && route.name === 'chat'" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote || !installation.uiScopes.includes('chat:write')"
+                @request="sendMessage($event)" />
             <button
               v-if="showComposerSend"
               class="composer-send"
@@ -500,6 +502,7 @@ import type { SessionDeletionTarget } from '../session-deletion.ts'
 import type { ToolDef } from './ToolsCard.vue'
 import ModelSelector from './ModelSelector.vue'
 import ComposerPopover from './ComposerPopover.vue'
+import AudioSetupButton from './AudioSetupButton.vue'
 import SlashCommandMenu from './SlashCommandMenu.vue'
 import MessageHistoryRail from './MessageHistoryRail.vue'
 import FileWorkbench from './files/FileWorkbench.vue'
@@ -3029,15 +3032,7 @@ function resendLastMessage() {
 .chat-working :deep(.working-wave) { flex: 0 0 auto; }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: var(--conversation-max-width); margin: 12px auto 16px; }
 .composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
-.composer-box.composer-working { animation: composer-breathe 9s ease-in-out infinite; }
-@keyframes composer-breathe {
-  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-blue) 10%, transparent), 0 0 6px color-mix(in srgb, var(--c-blue) 4%, transparent); }
-  16.667% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-blue) 75%, transparent), 0 0 22px color-mix(in srgb, var(--c-blue) 32%, transparent); }
-  33.333% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-purple) 10%, transparent), 0 0 6px color-mix(in srgb, var(--c-purple) 4%, transparent); }
-  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-purple) 75%, transparent), 0 0 22px color-mix(in srgb, var(--c-purple) 32%, transparent); }
-  66.667% { box-shadow: 0 0 0 1px rgb(6 182 212 / 10%), 0 0 6px rgb(6 182 212 / 4%); }
-  83.333% { box-shadow: 0 0 0 1px rgb(6 182 212 / 75%), 0 0 22px rgb(6 182 212 / 32%); }
-}
+.composer-box.composer-working { animation: input-breathe 9s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
   .composer-box.composer-working { animation: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-primary) 20%, transparent); }
 }
@@ -3047,7 +3042,7 @@ function resendLastMessage() {
 .composer-input textarea { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 78px; max-height: min(240px, 28dvh); overflow-y: auto; resize: none; padding: 3px 4px 10px; border: 0; outline: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 14px; line-height: 1.6; }
 .composer-input textarea::placeholder { color: var(--c-text-secondary); }
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; min-width: 0; }
-.composer-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: calc(100% - 42px); }
+.composer-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: calc(100% - 82px); }
 .composer-send { flex-shrink: 0; }
 .composer-box.attachment-drop-target { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
@@ -3094,7 +3089,7 @@ function resendLastMessage() {
 .context-action:hover { background: var(--c-bg-muted); }
 .context-action:disabled { opacity: .5; cursor: not-allowed; }
 .composer-error { margin: 8px 4px; color: var(--c-error); font-size: 12px; overflow-wrap: anywhere; }
-.composer-submit { display: flex; flex: 1; align-items: center; justify-content: flex-end; gap: 10px; margin-left: auto; min-width: 32px; max-width: 100%; container: composer-submit / inline-size; }
+.composer-submit { display: flex; flex: 1; align-items: center; justify-content: flex-end; gap: 10px; margin-left: auto; min-width: 74px; max-width: 100%; container: composer-submit / inline-size; }
 .composer-hint { min-width: 0; white-space: nowrap; text-align: right; color: var(--c-text-secondary); font-size: 11px; line-height: 1.4; }
 @container composer-submit (max-width: 320px) {
   .composer-hint { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); }

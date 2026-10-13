@@ -165,6 +165,7 @@ import { MicroApps } from '../../microapps/service.ts'
 import { microAppsPlugin } from '../../microapps/routes.ts'
 import { MicroAppTool } from '../../tools/micro-app.ts'
 import { AudioCppService } from '../../audio-cpp/service.ts'
+import { registerAudioRoutes } from '../../audio-cpp/routes.ts'
 import { AudioCppTool } from '../../tools/audio-cpp.ts'
 import { DiffusionCppService } from '../../diffusion-cpp/service.ts'
 import { DiffusionCppTool } from '../../tools/diffusion-cpp.ts'
@@ -650,7 +651,20 @@ export async function createProjectRuntime(
       return sessions.alignment.operationBasis(sessionId)
     }))
   microAppsPlugin(microApps, dependencies.authorize)(app)
-  importTool.registerBuiltin('audio_cpp', new AudioCppTool(new AudioCppService(workspace), project.id, workspace))
+  const audioService = new AudioCppService(workspace)
+  const audioRoutes = registerAudioRoutes(app, audioService, workspacePath(workspace, '.tmp'), dependencies.authorize, {
+    localInferenceAllowed: !coordinator,
+    sessionExists: id => sessions.getSessionState(id) !== null,
+    subscribeSessionClosed: cancel => {
+      const subscription = bus.on('session.changed', fact => {
+        if (!sessions.getSessionState(fact.sessionId)) cancel(fact.sessionId)
+      })
+      return () => bus.off(subscription)
+    },
+  })
+  cleanup.push(() => audioRoutes.close())
+  importTool.registerBuiltin('audio_cpp', new AudioCppTool(audioService, project.id, workspace))
+  importTool.registerBuiltin('audio', new AudioCppTool(audioService, project.id, workspace, 'audio'))
   importTool.registerBuiltin('diffusion_cpp', new DiffusionCppTool(
     new DiffusionCppService(workspace), project.id, workspace, sessionId => {
       const state = sessions.getSessionState(sessionId)
@@ -1257,6 +1271,7 @@ export async function createProjectRuntime(
     // Quiesce producers before draining output; one failed cleanup must not
     // leave the remaining channels, persistence writes, or gateway running.
     for (const close of [
+      () => audioRoutes.close(),
       () => a2a.close(),
       () => credentialRequests.stop(),
       stopPublicationReviews,
