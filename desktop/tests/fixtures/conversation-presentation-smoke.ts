@@ -324,7 +324,7 @@ async function main() {
         assert.ok(await execute(`Math.abs(document.querySelector('${selector}').getBoundingClientRect().height - ${collapsedHeight}) < 1`))
         await execute(`window.__cardBody = document.querySelector('${selector} .prose');
           document.querySelector('${selector} .message-preview-toggle').click()`)
-        await wait(`document.querySelector('${selector}').getAnimations({subtree:true}).some(animation => animation.transitionProperty === 'grid-template-rows')`)
+        await frame()
         await wait(`document.querySelector('${selector}').getAnimations({subtree:true}).length === 0`)
         assert.equal(await execute(`document.querySelector('${selector} .prose') === window.__cardBody`), true)
         assert.equal(await execute(`document.querySelector('${selector} .message-preview-body').inert`), false)
@@ -366,16 +366,22 @@ async function main() {
             assert.equal(fade.opacity, '1')
             assert.equal(fade.pointer, 'none')
             const typography = await execute(`(() => {
-              const normal = document.querySelector('.chat-assistant > .chat-content');
+              const normal = document.querySelector('.chat-assistant > .chat-content').cloneNode(true);
+              normal.style.fontSize = '13px';
+              normal.style.lineHeight = '1.6';
+              normal.style.color = 'var(--c-text-body)';
+              document.querySelector('.chat-assistant').append(normal);
               const card = document.querySelector('${selector} .chat-content');
               const read = root => ['', 'h2', 'p', 'strong', 'code', 'pre', 'pre code', 'ul', 'li'].map(selector => {
                 const style = getComputedStyle(selector ? root.querySelector(selector) : root);
                 return Object.fromEntries(['fontSize','fontFamily','lineHeight','marginTop','marginBottom',
                   'paddingTop','paddingLeft','color','backgroundColor'].map(key => [key, style[key]]));
               });
-              return {normal:read(normal),card:read(card)};
+              const result = {normal:read(normal),card:read(card)};
+              normal.remove();
+              return result;
             })()`)
-            assert.deepEqual(typography.card, typography.normal, 'Preview and expanded Markdown match ordinary messages without style overrides')
+            assert.deepEqual(typography.card, typography.normal, 'Preview and expanded Markdown retain normal formatting at compact task-card typography')
           }
           assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false)
           const widths = await execute(`['.chat-assistant','.chat-session','.message-action','.tool-activity']
@@ -447,11 +453,11 @@ async function main() {
     for (const selector of ['.message-action', '.chat-session']) {
       assert.equal(await execute(`document.querySelector('${selector}').dataset.expanded`), 'false', 'Session messages start collapsed regardless of direction or length')
       assert.equal(await execute(`document.querySelectorAll('${selector} .prose').length`), 1, 'Preview and expanded body use a single Markdown node')
-      assert.ok(await execute(`Math.abs(document.querySelector('${selector}').getBoundingClientRect().height - ${collapsedHeight}) < 1`), 'Collapsed cards have a fixed heading and five-line preview including device-pixel-rounded borders')
-      assert.ok(await execute(`Math.abs(document.querySelector('${selector} .message-preview-body').getBoundingClientRect().height - ${previewHeight}) < 1`), 'Preview shows a five-line body window')
+      assert.ok(await execute(`document.querySelector('${selector}').getBoundingClientRect().height <= ${collapsedHeight} + 1`), 'Collapsed cards are no taller than the five-line preview limit')
+      assert.ok(await execute(`document.querySelector('${selector} .message-preview-body').getBoundingClientRect().height <= ${previewHeight} + 1`), 'Preview shows at most five lines')
       assert.equal(await execute(`document.querySelector('${selector} .message-preview-body').inert`), true, 'Clipped body links cannot receive focus')
       await execute(`window.__previewBody = document.querySelector('${selector} .prose'); document.querySelector('${selector} .message-preview-toggle').click()`)
-      await wait(`document.querySelector('${selector}').getAnimations({subtree:true}).some(animation => animation.transitionProperty === 'grid-template-rows')`)
+      await frame()
       await wait(`document.querySelector('${selector}').getAnimations({subtree:true}).length === 0`)
       assert.equal(await execute(`window.__previewBody === document.querySelector('${selector} .prose')`), true, 'Expansion reveals the same rendered body rather than duplicating it')
     }
@@ -576,6 +582,13 @@ async function main() {
         await execute(`document.documentElement.classList.toggle('dark', ${dark})`)
         await frame()
         await delay(160)
+        const expandedHeight = await execute(`document.querySelector('.chat-session').getBoundingClientRect().height`)
+        await execute(`document.querySelector('.chat-session .message-preview-toggle').click()`)
+        await delay(250)
+        const collapsedHeight = await execute(`document.querySelector('.chat-session').getBoundingClientRect().height`)
+        assert(collapsedHeight <= expandedHeight + 1, 'A short collapsed message must not be taller than its expanded content')
+        await execute(`document.querySelector('.chat-session .message-preview-toggle').click()`)
+        await delay(250)
         const layout = await execute(`(() => {
           const list = document.querySelector('.chat-message-list').getBoundingClientRect();
           const user = document.querySelector('.chat-user:not(.chat-session)').getBoundingClientRect();
@@ -598,6 +611,8 @@ async function main() {
         assert(Math.abs(layout.actionLeft - layout.listLeft) < 1, 'Outgoing actions stay in the assistant column')
         assert(Math.abs(layout.actionWidth - layout.incomingWidth) < 1, 'Both exchange directions share the same heading width')
         assert.equal(layout.headersMatch, true, 'Incoming and outgoing heading typography and spacing match')
+        assert.deepEqual(await execute(`['.chat-session .prose', '.message-action-content .prose'].map(selector => { const style = getComputedStyle(document.querySelector(selector)); return [style.fontSize, style.lineHeight] })`),
+          [['13px', '20.8px'], ['13px', '20.8px']], 'Both exchange directions use the completed-task body typography')
         assert(layout.actionWidth <= layout.listWidth + 1)
         assert(layout.proseWidth <= layout.contentWidth + 1, 'Expanded Markdown stays within its rail')
         assert.equal(layout.proseMaxWidth, 'none', 'Outgoing message Markdown uses the shared conversation measure')

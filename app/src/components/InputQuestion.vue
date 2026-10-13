@@ -47,7 +47,7 @@ header > span:first-child { width: 16px; height: 16px; flex: 0 0 16px; }
 .input-status { margin-left: auto; font-size: 12px; color: var(--c-text-secondary); }
 .waiting-user .input-status, .waiting-parent .input-status, .waiting-caller .input-status { color: var(--c-warn); }
 .failed .input-status { color: var(--c-error); }
-.input-prompt { margin: 12px 0; font-size: 18px; font-weight: 600; line-height: 1.5; white-space: pre-wrap; }
+.input-prompt { margin: 12px 0; font-size: 13px; font-weight: 400; line-height: 1.6; white-space: pre-wrap; }
 .input-answer { margin: 12px 0; padding: 8px 12px; border-left: 2px solid var(--c-blue); background: var(--c-bg-soft); }
 .input-answer p { margin: 4px 0; white-space: pre-wrap; }
 .input-note, details { color: var(--c-text-secondary); font-size: 12px; }

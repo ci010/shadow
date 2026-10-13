@@ -29,10 +29,14 @@ const emit = defineEmits<{ inspect: [id: string]; interact: [] }>()
 </script>
 
 <style scoped>
-.session-message :deep(.message-preview-header > strong) { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; font-weight: 500; }
+.session-message :deep(.message-preview-header) { color: var(--c-text); font-size: 14px; }
+.session-message :deep(.message-preview-header > strong) { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; font-weight: 600; }
+.session-message :deep(.message-preview-body) { font-size: 13px; line-height: 1.6; }
+.session-message :deep(.message-preview-body .prose) { color: var(--c-text-body); font-size: 13px; line-height: 1.6; }
 .session-message-icon { flex: 0 0 14px; width: 14px; height: 14px; }
-.session-message-origin { flex: 0 0 auto; white-space: nowrap; }
-.session-message-link { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; max-width: 100%; min-height: 28px; padding: 4px 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.session-message-origin { flex: 0 0 auto; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
+.session-message-recipient { font-weight: 400; }
+.session-message-link { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; max-width: 100%; min-height: 28px; padding: 4px 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 400; text-align: left; cursor: pointer; }
 .session-message-link > span:first-child, .session-message-recipient { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-message-recipient { flex: 1 1 0; }
 .session-message-link:hover { color: var(--c-text); text-decoration: underline; }

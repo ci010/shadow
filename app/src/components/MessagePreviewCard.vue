@@ -41,14 +41,14 @@ function toggle() {
 .message-preview-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .message-preview-chevron { width: 14px; height: 14px; transition: transform 180ms cubic-bezier(.22, 1, .36, 1); }
 .message-preview-card[data-expanded="true"] .message-preview-chevron { transform: rotate(180deg); }
-.message-preview-body { position: relative; display: grid; grid-template-rows: 0fr; min-width: 0; margin-top: 4px; color: var(--c-text); overflow-wrap: anywhere; transition: grid-template-rows 160ms cubic-bezier(.22, 1, .36, 1); }
+.message-preview-body { position: relative; display: grid; grid-template-rows: 1fr; min-width: 0; margin-top: 4px; color: var(--c-text); overflow-wrap: anywhere; transition: grid-template-rows 160ms cubic-bezier(.22, 1, .36, 1); }
 .message-preview-card[data-expanded="true"] .message-preview-body { grid-template-rows: 1fr; transition-duration: 220ms; }
-.message-preview-content { min-height: 5lh; overflow: hidden; }
-.message-preview-card[data-expanded="true"] .message-preview-content { min-height: 0; }
+.message-preview-content { min-height: 0; max-height: 5lh; overflow: hidden; }
+.message-preview-card[data-expanded="true"] .message-preview-content { max-height: none; }
 .message-preview-body::after { content: ''; position: absolute; inset: auto 0 0; height: 2lh; background: linear-gradient(to bottom, transparent, var(--c-chat-action-bg)); pointer-events: none; opacity: 1; transition: opacity 160ms ease-out; }
 .message-preview-card[data-expanded="true"] .message-preview-body::after { opacity: 0; }
-.message-preview-card[data-expanded="false"] .message-preview-details { visibility: hidden; }
-.message-preview-card[data-collapsible="false"] .message-preview-content { min-height: 0; }
+.message-preview-card[data-expanded="false"] .message-preview-details { display: none; }
+.message-preview-card[data-collapsible="false"] .message-preview-content { max-height: none; }
 @media (prefers-reduced-motion: reduce) {
   .message-preview-body, .message-preview-chevron, .message-preview-body::after { transition: none; }
 }
