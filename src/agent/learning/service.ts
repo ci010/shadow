@@ -7,6 +7,7 @@ import type { LearningLedger } from './ledger.ts'
 
 export interface LearningConfig {
   enabled?: boolean
+  pipelines?: Partial<Record<keyof LearningCallbacks, boolean>>
   reflectIntervalMs: number
   encapsulateIntervalMs: number
   soulIntervalMs: number
@@ -49,6 +50,7 @@ const pipelines = Object.keys(intervalFields) as Pipeline[]
 
 function validateConfig(config: LearningConfig): void {
   if (config.enabled !== undefined && typeof config.enabled !== 'boolean') throw new TypeError('Learning enabled must be a boolean')
+  if (config.pipelines && Object.entries(config.pipelines).some(([key, value]) => !pipelines.includes(key as Pipeline) || typeof value !== 'boolean')) throw new TypeError('Invalid learning pipeline preference')
   for (const field of Object.values(intervalFields)) {
     if (!Number.isInteger(config[field]) || config[field] < 1 || config[field] > 2_147_483_647) {
       throw new TypeError(`Learning ${field} must be a positive timer interval`)
@@ -78,7 +80,7 @@ export class LearningService {
   ) {
     validateConfig(config)
     if (scope.closed) throw new Error('Learning requires a live project scope')
-    this.config = { ...config }
+    this.config = structuredClone(config)
     this.started = !lifecycle.deferStart
     this.callbacks = { ...callbacks }
     this.states = {
@@ -103,6 +105,7 @@ export class LearningService {
   }
 
   private get enabled(): boolean { return this.config.enabled !== false }
+  private pipelineEnabled(pipeline: Pipeline): boolean { return this.enabled && this.config.pipelines?.[pipeline] !== false }
 
   start(): void {
     if (this.stopped) throw new Error('LearningService is stopped')
@@ -133,10 +136,13 @@ export class LearningService {
   update(config: LearningConfig): void {
     if (this.stopped) throw new Error('LearningService is stopped')
     validateConfig(config)
-    this.config = { ...config }
+    const previous = this.config
+    this.config = structuredClone(config)
+    const preferenceOnly = previous.enabled === config.enabled && Object.values(intervalFields).every(field => previous[field] === config[field])
+      && JSON.stringify(previous.pipelines) !== JSON.stringify(config.pipelines)
     for (const pipeline of pipelines) {
       this.states[pipeline].intervalMs = config[intervalFields[pipeline]]
-      if (this.enabled) {
+      if (this.pipelineEnabled(pipeline) && (!preferenceOnly || previous.pipelines?.[pipeline] !== config.pipelines?.[pipeline])) {
         this.states[pipeline].pending = true
         this.states[pipeline].paused = undefined
         this.states[pipeline].retryAt = undefined
@@ -191,14 +197,14 @@ export class LearningService {
       const intervalMs = this.states[pipeline].intervalMs
       this.cron.registerManagedJob(builtin.id, {
         name: builtin.name, agentType: builtin.agentType, source: 'learning',
-        session: 'fresh', schedule: `every ${intervalMs}ms`, enabled: this.enabled,
+        session: 'fresh', schedule: `every ${intervalMs}ms`, enabled: this.pipelineEnabled(pipeline),
       }, intervalMs, (job, signal) => this.dispatch(pipeline, job, signal))
     }
   }
 
   private async dispatch(pipeline: Pipeline, job: CronJob, signal: AbortSignal): Promise<void> {
     const state = this.states[pipeline]
-    if ((!this.enabled && !this.manual.has(pipeline)) || this.stopped || !state.pending || this.running.has(pipeline)) return
+    if ((!this.pipelineEnabled(pipeline) && !this.manual.has(pipeline)) || this.stopped || !state.pending || this.running.has(pipeline)) return
     if (!this.manual.has(pipeline) && (state.paused || state.retryAt && Date.parse(state.retryAt) > Date.now())) return
     state.pending = false
     this.results.delete(pipeline)

@@ -91,7 +91,7 @@ test('heading renders accessible capacity, actual low/high thresholds and unknow
   assert.match(view.text(), /300K remaining/)
   assert.match(view.text(), /60%.*240K/)
   assert.match(view.text(), /90%.*360K/)
-  assert.match(view.text(), /separate token counts are not reported/)
+  assert.doesNotMatch(view.text(), /Total includes this conversation|Partial usage:|Auto handoff|separate token counts are not reported|Last reported context/)
   const bar = view.nodes().find(node => node.props.role === 'img')!
   assert.equal(bar.props['aria-label'], '25% context used')
   assert.equal(bar.children[0].props.style && (bar.children[0].props.style as Record<string, string>).width, '25%')
@@ -99,7 +99,24 @@ test('heading renders accessible capacity, actual low/high thresholds and unknow
   view.state.revision = 1
   await settle(); await settle()
   assert.match(view.text(), /Remaining unknown/)
-  assert.match(view.text(), /Auto handoff disabled/)
+  assert.doesNotMatch(view.text(), /Auto handoff/)
   assert.doesNotMatch(view.text(), /300K remaining/)
   assert.equal(view.nodes().find(node => node.props.role === 'img')!.props['aria-label'], 'Context usage not reported')
+})
+
+test('heading displays cache tokens and independently weighted rates for total and subagents', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    sessionId: 'web:cache', name: 'Cache fixture', workdir: { kind: 'local', displayPath: '/fixture' },
+    usage: { promptTokens: 1000, completionTokens: 100, totalTokens: 1100, cachedTokens: 750 },
+    subagentUsage: { promptTokens: 200, completionTokens: 20, totalTokens: 220, cachedTokens: 0 },
+    usageScope: 'session', context: { usedTokens: null, windowTokens: null },
+  }))
+  const view = mount(t, 'SessionHeading.vue', { apiBase: 'http://fixture', sessionId: 'web:cache',
+    name: 'Cache fixture', physicalId: null, revision: 0, active: true })
+  await settle()
+  assert.match(view.text(), /input\s+750\s+\(75%\)\s+cache\s+100\s+output/)
+  assert.match(view.text(), /input\s+0\s+\(0%\)\s+cache\s+20\s+output/)
+  const cacheRows = view.nodes().filter(node => node.tag === 'span' && node.props.title === 'Cache-read tokens / input tokens')
+  assert.equal(cacheRows.length, 2)
+  assert.ok(cacheRows.every(node => node.children.some(child => child.props['aria-label'] === 'Cache rate')))
 })

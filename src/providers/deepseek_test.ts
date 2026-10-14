@@ -119,6 +119,29 @@ test('Chat replays reasoning from every assistant turn, preserves tool IDs and s
   assert.deepEqual(messages, before)
 })
 
+test('DeepSeek reports cache-hit input tokens and keeps unset cache unreported', async (t) => {
+  const reported = [
+    {},
+    { prompt_tokens_details: { cached_tokens: 0 } },
+    { prompt_cache_hit_tokens: 60 },
+    { prompt_tokens_details: { cached_tokens: 30 }, prompt_cache_hit_tokens: 60 },
+    { prompt_tokens_details: { reasoning_tokens: 9 } },
+  ]
+  const calls = harness(t, reported.map(extra => Response.json({
+    model,
+    choices: [{ message: { content: 'Done', reasoning_content: 'Synthetic reasoning' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 100, completion_tokens: 4, total_tokens: 104, ...extra },
+  })))
+  const provider = new DeepSeekProvider()
+  const results = []
+  for (let index = 0; index < reported.length; index++) {
+    results.push(await provider.chat([{ role: 'user', content: 'Hello' }], [], { model }))
+  }
+  assert.equal(calls.length, reported.length)
+  assert.deepEqual(results.map(result => result.usage?.cachedTokens), [undefined, 0, 60, 30, undefined])
+  assert.deepEqual(results.map(result => result.usage?.promptTokens), reported.map(() => 100))
+})
+
 test('parallel tool image results become user images only after every matching tool output', async (t) => {
   const calls = harness(t, [completion()])
   const messages: ChatMessage[] = [
@@ -187,7 +210,7 @@ test('global config, agent frontmatter and compatible gateway accept low and rej
     method: 'POST', body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Hello' }], ...fields }),
   })
   for (const fields of [
-    { reasoning_effort: 'medium' }, { reasoning_effort: 'xhigh' }, { reasoning_effort: 'none' }, { reasoning_effort: false },
+    { reasoning_effort: 'none' }, { reasoning_effort: false },
     { thinking: { type: 'other' } }, { thinking: { type: 'enabled', extra: true } },
   ]) assert.equal((await send(fields)).status, 400)
   const response = await send({ reasoning_effort: 'low', thinking: { type: 'enabled' } })
@@ -205,4 +228,19 @@ test('dormant Responses transport still understands persisted DeepSeek plaintext
   assert.equal(first.reasoningContent, 'Synthetic retained reasoning')
   await openaiResponses({ ...params, messages: [{ role: 'assistant', content: null, provider_state: first.providerState }] })
   assert.deepEqual(calls[1].body.input, [{ ...item, summary: [] }])
+})
+
+
+test('DeepSeek maps shared medium/xhigh effort to documented high without losing historical reasoning', async (t) => {
+  const calls = harness(t, [completion(), completion()])
+  for (const reasoningEffort of ['medium', 'xhigh'] as const) {
+    await new DeepSeekProvider().chat([
+      { role: 'assistant', content: 'Earlier answer', reasoning_content: 'Earlier non-tool reasoning' },
+      { role: 'user', content: 'Continue using tools' },
+    ], [tool], { model, reasoningEffort })
+  }
+  for (const call of calls) {
+    assert.equal(call.body.reasoning_effort, 'high')
+    assert.equal((call.body.messages as ChatMessage[])[0].reasoning_content, 'Earlier non-tool reasoning')
+  }
 })

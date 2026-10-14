@@ -2,6 +2,13 @@ import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 
 export interface ToolActivityMessage {
+  role?: string
+  reasoningContent?: string
+  reasoningText?: string
+  isError?: boolean
+  isSummary?: boolean
+  sessionSource?: unknown
+  commandReceipt?: unknown
   event?: string
   content: string
   media?: string[]
@@ -33,12 +40,14 @@ export interface ToolActivity {
   grep?: boolean
   file?: string
   changes?: LineChanges
+  reasoning?: string
   failed: boolean
 }
 
 export interface ToolActivityBatch {
   end: number
   entries: ToolActivity[]
+  usages?: Array<{ index: number; usage: NonNullable<ToolActivityMessage['usage']> }>
   files: number
   changes?: LineChanges
   incomplete: boolean
@@ -129,7 +138,7 @@ export function pairToolResults(messages: readonly ToolActivityMessage[]): Map<n
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index]
     if (message.event === 'tool_call') pending.push(index)
-    if (message.event !== 'tool_call' && message.event !== 'tool_result') {
+    if (!isProcessMessage(message)) {
       for (let position = pending.length - 1; position >= 0; position--) {
         if (!messages[pending[position]].toolCallId) pending.splice(position, 1)
       }
@@ -145,18 +154,32 @@ export function pairToolResults(messages: readonly ToolActivityMessage[]): Map<n
   return pairs
 }
 
+export function isProcessMessage(message: ToolActivityMessage): boolean {
+  if (message.event === 'tool_call' || message.event === 'tool_result') return true
+  return message.role === 'assistant' && !message.event && !message.content.trim() && !message.media?.length
+    && !message.isError && !message.isSummary && !message.sessionSource && !message.commandReceipt
+    && !!(message.reasoningContent || message.reasoningText || message.usage)
+}
+
 /** Prose, events, and inline executions separate tool groups without losing ID pairing. */
-export function groupToolActivity(messages: readonly ToolActivityMessage[], excluded: ReadonlySet<number> = new Set()): Map<number, ToolActivityBatch> {
+export function groupToolActivity(messages: readonly ToolActivityMessage[], excluded: ReadonlySet<number> = new Set(), breakAfter: ReadonlySet<number> = new Set()): Map<number, ToolActivityBatch> {
   const groups = new Map<number, ToolActivityBatch>()
   const pairs = pairToolResults(messages)
   const pairedResults = new Set(pairs.values())
   for (let index = 0; index < messages.length;) {
-    if (excluded.has(index) || !['tool_call', 'tool_result'].includes(messages[index].event ?? '')) { index++; continue }
+    if (excluded.has(index) || !isProcessMessage(messages[index])) { index++; continue }
     const start = index
     const entries: ToolActivity[] = []
-    while (index < messages.length && !excluded.has(index) && ['tool_call', 'tool_result'].includes(messages[index].event ?? '')) {
+    const usages: NonNullable<ToolActivityBatch['usages']> = []
+    while (index < messages.length && (index === start || !breakAfter.has(index - 1)) && !excluded.has(index) && isProcessMessage(messages[index])) {
       const message = messages[index]
-      if (message.event === 'tool_call') {
+      if (!message.event) {
+        const reasoning = message.reasoningContent || message.reasoningText
+        if (reasoning?.trim()) entries.push({ index, name: '', title: t('Thinking'), summary: '', arguments: '',
+          reasoning, usage: message.usage, icon: 'tool', failed: false })
+        else if (message.usage) usages.push({ index, usage: message.usage })
+        index++
+      } else if (message.event === 'tool_call') {
         const resultIndex = pairs.get(index)
         const result = resultIndex === undefined ? undefined : messages[resultIndex]
         entries.push(activity(message, index, result))
@@ -173,7 +196,7 @@ export function groupToolActivity(messages: readonly ToolActivityMessage[], excl
     const changes = entries.filter(entry => entry.changes).map(entry => entry.changes!)
     if (entries.length) groups.set(start, {
       end: index,
-      entries,
+      entries, usages,
       files: new Set(entries.flatMap(entry => entry.file ? [entry.file] : [])).size,
       changes: changes.length ? changes.reduce((sum, next) => ({ added: sum.added + next.added, removed: sum.removed + next.removed }), { added: 0, removed: 0 }) : undefined,
       incomplete: entries.some(entry => !!entry.file && !entry.changes),

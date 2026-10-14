@@ -1,3 +1,5 @@
+import { withProviderRetry, type RateLimitWait } from '../providers/retry.ts'
+import { ProviderHttpError } from '../providers/provider.ts'
 import assert from 'node:assert/strict'
 import { getEventListeners } from 'node:events'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -132,7 +134,7 @@ async function fixture(options: {
     handoff, () => {}, undefined, options.quickModel, options.sleepInactivityMs,
   )
   return {
-    workspace, bus, facts, calls, tools, store, state, session: session!, manager: manager!,
+    workspace, bus, facts, calls, provider, tools, store, state, session: session!, manager: manager!,
     reports, ended, accepted, outbound, outboundMessages, preparations: () => preparations,
     async close() {
       const active = manager
@@ -1829,4 +1831,69 @@ describe('session lifecycle edge cases', () => {
       assert.equal(f.facts[1].inputId, 'wake')
     } finally { release.resolve(); await f.close() }
   })
+})
+
+for (const storage of ['jsonl', 'sqlite'] as const) {
+  test(`${storage}: mixed response text is emitted before either ordered tool finishes`, async () => {
+    const f = await fixture({ storage })
+    const held = Promise.withResolvers<string>()
+    const started: number[] = []
+    f.tools.register({
+      name: 'fixture_ordered', description: '', parameters: { type: 'object', properties: {} },
+      execute: async args => { started.push(Number(args.index)); return args.index === 1 ? held.promise : 'second result' },
+    })
+    try {
+      f.session.dispatch(input('mixed'), llm)
+      await waitFor(() => f.calls.length === 1)
+      f.calls[0].resolve({ content: 'Third output text', toolCalls: [
+        { id: 'first', name: 'fixture_ordered', arguments: { index: 1 } },
+        { id: 'second', name: 'fixture_ordered', arguments: { index: 2 } },
+      ], providerState: { provider: 'copilot', model: 'fixture', reasoning: [], outputItems: [
+        { type: 'function_call', call_id: 'first', name: 'fixture_ordered', arguments: '{"index":1}' },
+        { type: 'function_call', call_id: 'second', name: 'fixture_ordered', arguments: '{"index":2}' },
+        { type: 'message', id: 'text-third', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Third output text', annotations: [] }] },
+      ] } })
+      await waitFor(() => started.length === 1)
+      assert.equal(f.outboundMessages[0].event, 'response')
+      assert.equal(f.outboundMessages[0].content, 'Third output text')
+      assert.equal(f.outboundMessages[0].done, false)
+      assert.equal(f.outboundMessages.some(message => message.event === 'tool_result'), false)
+      assert.deepEqual(started, [1], 'side-effecting tools stay ordered')
+      held.resolve('first result')
+      await waitFor(() => f.calls.length === 2)
+      assert.deepEqual(started, [1, 2])
+      assert.deepEqual(f.outboundMessages.filter(message => message.event === 'tool_result').map(message => message.toolCallId), ['first', 'second'])
+      const history = await Array.fromAsync(f.store.readSessionLog(f.session.physicalSessionId))
+      assert.deepEqual(history.filter(message => message.role === 'tool').map(message => message.tool_call_id), ['first', 'second'])
+      assert.equal((history.find(message => message.role === 'assistant')?.provider_state as ChatMessage['provider_state'])?.outputItems?.[2].type, 'message')
+      f.calls[1].resolve(done())
+      await waitFor(() => f.facts.length === 1)
+    } finally { held.resolve('cleanup'); await f.close() }
+  })
+}
+
+test('automatic rate-limit waiting stays in the same turn, rejects duplicate Continue and cancels promptly', async () => {
+  const f = await fixture()
+  let calls = 0
+  const waits: Array<RateLimitWait | undefined> = []
+  f.bus.on('session.provider.waiting', ({ wait }) => waits.push(wait))
+  f.provider.chat = async (_messages, _tools, options) => withProviderRetry(async () => {
+    calls++
+    throw new ProviderHttpError(429, 'rate limited', '', { rejectedRequest: true, retryAfter: '30' })
+  }, options.signal, { provider: 'agnes', model: options.model })
+  try {
+    f.session.dispatch(userInput('rate-limited-input'), llm)
+    await waitFor(() => !!f.session.rateLimitWait)
+    assert.equal(f.session.phase, 'llm')
+    assert.equal(f.session.activeRequestId, 'rate-limited-input')
+    assert.throws(() => f.session.dispatch(control('duplicate', 'retry'), llm), /automatically waiting/)
+    assert.equal(calls, 1)
+    f.session.dispatch(control('stop', 'cancel'), llm)
+    await waitFor(() => f.facts.length === 1)
+    assert.equal(f.facts[0].status, 'cancelled')
+    assert.equal(calls, 1)
+    assert.equal(f.session.rateLimitWait, undefined)
+    assert.equal(waits[0]?.status, 429)
+    assert.equal(waits.at(-1), undefined)
+  } finally { await f.close() }
 })

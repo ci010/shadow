@@ -115,6 +115,8 @@ summary::-webkit-details-marker { display: none; }
 summary:focus-visible, button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .event-inspect:focus-visible { outline-offset: 2px; }
 .event-selected { border-color: var(--c-selection-border); }
+.system-event.event-completed { border-color: color-mix(in srgb, var(--c-success) 35%, var(--c-chat-border)); }
+.system-event.event-failed { border-color: color-mix(in srgb, var(--c-error) 35%, var(--c-chat-border)); }
 .event-inspect-header[aria-pressed="true"] { background: var(--c-selection-bg); }
 .event-inspect-header[aria-pressed="true"] .event-copy strong { color: var(--c-primary); }
 .event-completed .event-symbol { color: var(--c-success); }

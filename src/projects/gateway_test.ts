@@ -118,3 +118,46 @@ test('project deletion is authorized, owner-specific, explicit on conflict and r
     assert.equal((await app.request(`/api/projects/${project.id}/retry`, { method: 'POST', headers })).status, 404)
   })
 })
+
+// Exercise the renderer URL helpers through both real gateway layers, without a provider/network call.
+test('normalized Project organization URL reaches organization once; legacy double slash misses the route', async () => {
+  const { apiUrl, projectBase } = await import('../../app/src/api-url.ts')
+  const { projectWorkPlugin } = await import('./work-routes.ts')
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'home'))
+    await catalog.init()
+    const project = await catalog.create('Organization URL fixture')
+    let providerCalls = 0
+    const sessions = {
+      alignment: { store: { workRecords: () => [], workEffects: () => [], projectFocus: () => undefined } },
+      listSessions: () => [],
+    } as unknown as import('../sessions/session-manager.ts').SessionManager
+    const target = new Hono()
+    projectWorkPlugin(sessions, request => request.headers.get('authorization') === 'Bearer fixture-token',
+      undefined, undefined, async signal => { signal.throwIfAborted(); providerCalls++ })(target)
+    const app = new Hono()
+    registerGatewayRoutes(app, [], { launchCredential: 'fixture-token' })
+    registerProjectGateway(app, {
+      catalog, lookup: id => id === project.id ? { app: target, run: callback => callback() } : undefined,
+      start: async () => {}, remove: id => catalog.remove(id), status: () => ({ state: 'ready' }),
+      clientAddresses: new GatewayClientAddressRegistry(),
+    })
+    const base = projectBase('http://localhost', project.id)
+    assert(base.endsWith('/'))
+    const headers = { authorization: 'Bearer fixture-token', 'content-type': 'application/json' }
+    const legacy = new URL(`${base}/api/work/organize`)
+    assert.equal(legacy.pathname, `/projects/${project.id}//api/work/organize`)
+    const missed = await app.request(legacy.toString(), { method: 'POST', headers, body: '{}' })
+    assert.equal(missed.status, 404)
+    assert.equal(providerCalls, 0)
+    const normalized = apiUrl(base, '/api/work/organize')
+    assert.equal(normalized.pathname, `/projects/${project.id}/api/work/organize`)
+    assert.equal((await app.request(normalized.toString(), { method: 'POST', body: '{}' })).status, 401)
+    assert.equal(providerCalls, 0)
+    const reached = await app.request(normalized.toString(), { method: 'POST', headers, body: '{}' })
+    assert.equal(reached.status, 200)
+    assert.equal(providerCalls, 1)
+    assert.deepEqual((await reached.json()).items, [])
+    assert.match(reached.headers.get('X-Correlation-ID') ?? '', /^[0-9a-f-]{36}$/)
+  })
+})

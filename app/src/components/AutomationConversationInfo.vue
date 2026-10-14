@@ -7,17 +7,25 @@
       <p>{{ conversation.historyError.value }}</p><button class="btn btn-sm" :disabled="conversation.loading.value" @click="conversation.retry()">{{ t('Retry history') }}</button>
     </div>
     <p v-if="automation?.notice" class="automation-note" role="status">{{ automation.notice }}</p>
+    <div v-if="run?.organization" class="learning-outcome" role="status">
+      <strong>{{ run.title }}</strong>
+      <p>{{ t('Execution:') }} {{ statusLabel(run.status) }} · {{ t(run.organization.status === 'partial' ? 'Partial' : run.organization.status === 'completed' ? 'Completed' : 'Running') }} · {{ run.organization.coveredCount }}/{{ run.organization.manifestCount }} {{ t('Coverage') }} · {{ run.organization.patches }} {{ t('Saved patches') }}</p>
+    </div>
+    <p v-if="run?.organizationProblem" class="automation-note" role="alert">{{ run.organizationProblem === 'unfinished' ? t('Organization ended without finishing. Saved patches remain available.') : t('Organization execution failed. Open diagnostics or the trace for details.') }}</p>
     <details class="automation-info">
       <summary>{{ t('Automation details') }}<span v-if="run" class="run-time">{{ started(run.startedAt) }}</span></summary>
       <div class="automation-info-body">
         <template v-if="automation">
           <dl>
-            <dt>{{ automation.source === 'learning' ? t('Check frequency') : t('Schedule') }}</dt><dd><code>{{ automation.schedule }}</code></dd>
+            <dt>{{ automation.source !== 'cron' ? t('Check frequency') : t('Schedule') }}</dt><dd><code>{{ automation.schedule }}</code></dd>
             <dt>{{ t('Agent') }}</dt><dd>{{ automation.agentType || t('Default agent') }}</dd>
             <dt>{{ t('Dispatch') }}</dt><dd>{{ automation.enabled ? t('Enabled') : t('Disabled') }}</dd>
             <dt>{{ t('Session mode') }}</dt><dd>{{ t('Fresh — each dispatch starts a separate conversation.') }}</dd>
             <dt>{{ t('Prompt') }}</dt><dd>{{ automation.task || t('No prompt is available for this automation.') }}</dd>
           </dl>
+          <button v-if="canToggleAutomation(automation) && conversation.toggle" class="btn btn-sm" :disabled="conversation.updating?.value" @click="conversation.toggle()">{{ (automation.configuredEnabled ?? automation.enabled) ? t('Disable') : t('Enable') }}</button>
+          <p v-if="conversation.updateError?.value" role="alert">{{ conversation.updateError.value }}</p>
+          <p v-if="automation.source === 'system'">{{ t('Controls this automation feature, not the saved run. Disabling cancels its active execution; saved results remain available.') }}</p>
           <p v-if="automation.source === 'learning'">{{ t('Checks are activity-gated. A check does not necessarily start a run.') }}</p>
           <p v-if="!automation.enabled">{{ t('Dispatch is disabled. Saved conversations remain available.') }}</p>
         </template>
@@ -41,7 +49,7 @@
 import { t, formatDateTime } from '../i18n.ts'
 import { computed } from 'vue'
 import type { AutomationConversation } from '../composables/useAutomationConversation.ts'
-import { learningOutcomeLabel, type AutomationRunSummary } from '../automations.ts'
+import { canToggleAutomation, learningOutcomeLabel, type AutomationRunSummary } from '../automations.ts'
 
 const props = defineProps<{ conversation: AutomationConversation }>()
 const automation = computed(() => props.conversation.automation.value)

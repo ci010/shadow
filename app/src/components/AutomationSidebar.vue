@@ -1,12 +1,13 @@
 <template>
   <section v-if="jobs.length || initialLoading || error" class="automations-sidebar" :aria-label="t('Automations')" :aria-busy="loading">
     <h3 v-if="!rail">{{ t('Automations') }}</h3>
+    <p v-if="updateError && !rail" class="automations-note" role="alert">{{ updateError }}</p>
     <div v-if="error" class="automations-error" role="alert">
       <p v-if="!rail">{{ error }}</p>
       <button type="button" class="text-action" :aria-label="t('Retry automations')" @click="refresh">{{ t('Retry') }}</button>
     </div>
     <p v-if="initialLoading && !error && !rail" class="automations-note" role="status">{{ t('Loading automations…') }}</p>
-    <HoverInfo v-for="job in jobs" :key="job.id" :text="t('{name} · Fresh context per run', { name: job.name })"><template #default="{ triggerProps }">
+    <HoverInfo v-for="job in jobs" :key="job.id" :interactive="canToggleAutomation(job)" :text="t('{name} · Fresh context per run', { name: job.name })"><template #default="{ triggerProps }">
       <button type="button" class="automation-entry" v-bind="triggerProps" :class="{ selected: selectedId === job.id, 'is-rail': rail }"
         :aria-label="t('Open automation {name}', { name: job.name })" :aria-current="selectedId === job.id ? 'page' : undefined"
         :data-automation-id="job.id" @click="$emit('select', job.id)">
@@ -15,13 +16,22 @@
         <SessionActivity v-if="working(job.id)" :stage="working(job.id)" compact :icon-only="rail" :title="undefined" />
         <span v-else-if="!job.enabled && !rail" class="automation-history">{{ t('Inactive') }}</span>
       </button>
-    </template></HoverInfo>
+    </template>
+      <template #content>
+        <p class="hover-info-text">{{ t('{name} · Fresh context per run', { name: job.name }) }}</p>
+        <button v-if="canToggleAutomation(currentJob(job))" type="button" class="automation-action" :disabled="updating.has(job.id)"
+          :aria-busy="updating.has(job.id)" @click="toggle(job.id, job.toggleId ?? job.id, !preference(job))">
+          {{ preference(job) ? t('Disable') : t('Enable') }}
+        </button>
+      </template>
+    </HoverInfo>
   </section>
 </template>
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { computed } from 'vue'
+import { computed, reactive, ref } from 'vue'
+import { canToggleAutomation, setAutomationEnabled, type AutomationSummary } from '../automations.ts'
 import HoverInfo from './HoverInfo.vue'
 import SessionActivity from './SessionActivity.vue'
 import { useAutomationCatalog } from '../composables/useAutomationCatalog.ts'
@@ -34,6 +44,22 @@ const props = defineProps<{
 }>()
 defineEmits<{ select: [id: string] }>()
 const { jobs, error, loading, loaded, refresh } = useAutomationCatalog(() => props.apiBase, () => props.active)
+const updating = reactive(new Set<string>())
+const updateError = ref('')
+// Shared hover content can outlive the row's snapshot after catalog refresh.
+const currentJob = (job: AutomationSummary) => jobs.value.find(current => current.id === job.id) ?? job
+const preference = (job: AutomationSummary) => { const current = currentJob(job); return current.toggleEnabled ?? current.configuredEnabled ?? current.enabled }
+async function toggle(id: string, toggleId: string, enabled: boolean) {
+  if (updating.has(id)) return
+  const base = props.apiBase
+  updating.add(id)
+  updateError.value = ''
+  try {
+    await setAutomationEnabled(base, toggleId, enabled, new AbortController().signal)
+  } catch (cause) {
+    if (props.apiBase === base) updateError.value = cause instanceof Error ? cause.message : t('Automations are unavailable. Retry.')
+  } finally { updating.delete(id); if (props.apiBase === base) refresh() }
+}
 const initialLoading = computed(() => loading.value && !loaded.value)
 function working(id: string) {
   return prominentWorkingStage(props.groups.find(group => group.id === id)?.sessions.map(session => props.stages[session.sessionId]) ?? [])
@@ -44,6 +70,9 @@ function working(id: string) {
 .automations-sidebar { margin-top: var(--sidebar-section-gap); min-width: 0; }
 .automations-sidebar:first-child { margin-top: 0; }
 h3 { margin: 0 0 var(--sidebar-heading-gap); padding-inline: calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)) var(--sidebar-row-inset); color: var(--c-text-secondary); font-size: 12px; line-height: 20px; font-weight: 500; }
+.automation-action { margin-top: 10px; min-height: 32px; padding: 4px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; cursor: pointer; }
+.automation-action:disabled { opacity: .5; cursor: default; }
+.automation-action:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .automation-entry { display: flex; align-items: center; gap: var(--sidebar-icon-gap); width: 100%; min-width: 0; min-height: var(--sidebar-row-height); border: 0; border-radius: var(--radius-control); padding: 2px var(--sidebar-row-inset) 2px calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
 .automation-entry:hover { background: var(--c-bg-muted); }
 .automation-entry.selected { background: var(--c-selection-bg); color: var(--c-primary); }

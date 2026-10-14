@@ -15,7 +15,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('rendered Context window menu offers three budgets, separates overrides and restores inherited budget', {
+test('rendered channel and automation settings switch models, isolate sessions and restore inherited budgets', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -39,15 +39,18 @@ test('rendered Context window menu offers three budgets, separates overrides and
         }
         if (id !== '\0composer-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, ref } from 'vue';
+          import { createApp, h, ref, provide } from 'vue';
           import { createRouter, createMemoryHistory } from 'vue-router';
           import { provideMobileChrome } from '/src/composables/useMobileChrome.ts';
           import { provideModelSelection } from '/src/model-selection.ts';
+          import { computed } from 'vue';
+          import { automationConversationKey } from '/src/composables/useAutomationConversation.ts';
           import ChatTab from '/src/components/ChatTab.vue';
           import YieldQuestion from '/src/components/YieldQuestion.vue';
           const sessionId = 'web:chat-composer-fixture';
           const qqId = 'bot:fixture:bot:qq:group%3Afixture';
           const channelIds = [qqId, 'bot:fixture:bot:discord:fixture', 'bot:fixture:bot:feishu:fixture', 'discord:legacy', 'feishu:legacy'];
+          const automationIds = ['cron:fixture:first', 'cron:fixture:second'];
           const selectedSession = ref(sessionId);
           const view = ref();
           const dedicated = ref(false);
@@ -58,6 +61,7 @@ test('rendered Context window menu offers three budgets, separates overrides and
             showQQ:() => {fixture.question=null; selectedSession.value=qqId;},
             showChannel:id => {fixture.question=null; selectedSession.value=id;},
             showWeb:() => {selectedSession.value=sessionId;},
+            showAutomation:(index=0) => {fixture.question=null;selectedSession.value=automationIds[index];},
             reset() {const state=this.state(); state.requestControls.clear(); state.streaming=false; state.sessionStages={[sessionId]:'idle'}; state.currentWorkdir={kind:'local',displayPath:'C:\\\\fixture',available:true};},
             ask(kind='decision') {
               this.reset();
@@ -74,6 +78,7 @@ test('rendered Context window menu offers three budgets, separates overrides and
             const json=(data,status=200) => Promise.resolve(Response.json(data,{status}));
             if (url.pathname.endsWith('/graph')) return json({nodes:[],sessions:[
               {sessionId,mode:'session',segmentIndex:0,label:'Composer fixture'},
+              ...automationIds.map(id=>({sessionId:id,mode:'session',segmentIndex:0,label:'Automation fixture',config:fixture.configs[id] ?? {}})),
               ...channelIds.map(id=>({sessionId:id,mode:'session',segmentIndex:0,label:'Channel fixture',config:fixture.configs[id] ?? {},
                 inferenceDefaults:{model:'gpt-agent@fixture',thinking:{type:'enabled'},reasoningEffort:'low',contextWindow:fixture.contextWindow}})),
             ]});
@@ -113,12 +118,19 @@ test('rendered Context window menu offers three budgets, separates overrides and
           await router.push('/chat/fixture/' + sessionId);
           const app=createApp({setup() {
             provideMobileChrome();
+            const empty = computed(() => '');
+            provide(automationConversationKey, {
+              sessionId:computed(() => selectedSession.value), automation:computed(() => null), run:computed(() => undefined),
+              loading:computed(() => false), error:empty, historyError:empty,
+              hasPrevious:computed(() => false), historical:computed(() => false),
+              previous(){}, next(){}, current(){}, refresh(){}, retry(){},
+            });
             provideModelSelection({current:ref('gpt-project@fixture'),defaultReasoning:ref({reasoningEffort:'medium'}),
               options:ref(['gpt-agent@fixture','gpt-override@fixture']),disabled:ref(false),loading:ref(false),error:ref(''),
               select:async()=>{throw new Error('Conversation controls must not change project defaults');}});
             return () => dedicated.value
               ? h(YieldQuestion,{sessionId,apiBase:location.origin + '/projects/fixture',active:true,stage:'waiting',canAnswer:true})
-              : h(ChatTab,{key:selectedSession.value,ref:view,managed:true,projectId:'fixture',sessionId:selectedSession.value,apiBase:location.origin + '/projects/fixture'});
+              : h(ChatTab,{key:selectedSession.value,ref:view,managed:true,projectId:'fixture',sessionId:selectedSession.value,automationRun:automationIds.includes(selectedSession.value),apiBase:location.origin + '/projects/fixture'});
           }});
           app.provide(Symbol.for('shadow.live-client-pool'),{client:() => ({subscribe:() => ({ready:async()=>{},close(){}})}),dispose(){}});
           app.use(router).mount('#app');

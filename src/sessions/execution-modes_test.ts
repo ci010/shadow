@@ -52,10 +52,10 @@ async function waitFor(check: () => boolean) {
 }
 
 function fixture(workspace: string, store: SessionStore, settings: {
-  callTimeoutMs?: number; ignoreAbort?: boolean; hasInitiative?: (id: string) => boolean
+  callTimeoutMs?: number; ignoreAbort?: boolean; projectId?:string; hasInitiative?: (id: string) => boolean
 } = {}) {
   const requests: Array<{
-    sessionId: string; messages: ChatMessage[]; names: string[]; signal: AbortSignal; model?: string; effort?: string; settled: boolean
+    sessionId: string; messages: ChatMessage[]; names: string[]; signal: AbortSignal; model?: string; effort?: string; maxTokens?: number; settled: boolean
     resolve: (response: LLMResponse) => void; reject: (error: Error) => void
   }> = []
   const provider: LLMProvider = {
@@ -67,7 +67,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
         // Fixture identity precedes any per-inference runtime guidance.
         sessionId: JSON.parse(String(messages[0]!.content).split('\n', 1)[0]).sessionId as string,
         messages: structuredClone(messages), names: definitions.map(def => def.function.name),
-        signal, model: options?.model, effort: options?.reasoningEffort, settled: false,
+        signal, model: options?.model, effort: options?.reasoningEffort, maxTokens: options?.maxTokens, settled: false,
         resolve: (response: LLMResponse) => { request.settled = true; pending.resolve(response) },
         reject: (error: Error) => { request.settled = true; pending.reject(error) },
       }
@@ -96,7 +96,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
   const emit = events.emit.bind(events)
   events.emit = async value => { reports.push(value); await emit(value) }
   const sessions: SessionManager = new SessionManager({
-    workspace, store, provider, bus, tools, agentTypes, events,
+    workspace, store, provider, bus, tools, agentTypes, events, projectId:settings.projectId,
     handoffManager: { shouldHandoff: () => false },
     context: {
       buildSystemPrompt: async (ctx: any) => JSON.stringify({ sessionId: ctx.sessionId, mode: ctx.mode, role: ctx.agent.name }),
@@ -174,6 +174,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         }
         assert(f.sessions.getSessionState(id))
         observer.resolve(done('{"track":false}'))
+        const manualId = await f.sessions.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', task: 'Organize evidence', maxTokens: 16_384 })
+        assert(manualId)
+        const manual = await f.next(manualId)
+        assert.equal((await store.getState(manualId))?.config?.maxTokens, 16_384)
+        assert.deepEqual(manual.names, [])
+        assert.equal(manual.maxTokens, 16_384)
+        manual.resolve(done('{"groups":[]}'))
+        await assert.rejects(f.sessions.startSession({ agentType: 'work-observer', task: 'Invalid', maxTokens: NaN }), /positive safe integer/)
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
@@ -1411,4 +1419,77 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
+}
+
+// Dedicated organizer uses the actual normal session/tool loop, not a test provider loop.
+for(const Store of [JsonlSessionStore,SqliteSessionStore]) {
+  test(Store.name+': organizer commits across iterations before later provider failure or abort',async()=>withTempWorkspace(async workspace=>{
+    const {WorkOrganizer,ORGANIZATION_TOOLS}=await import('../projects/work-organizer.ts')
+    const {organizerRecord,organizerSource,organizerPatch}=await import('../testing/work-organization.ts')
+    const store:SessionStore=new Store(join(workspace,'sessions'));await store.init()
+    const f=fixture(workspace,store,{projectId:'fixture'}),initiatives=new InitiativeStore(workspace)
+    initiatives.saveWork(organizerRecord(1),0,'fixture','created');initiatives.saveWork(organizerRecord(2),0,'fixture','created')
+    let invalidations=0
+    const organizer=new WorkOrganizer(initiatives,{projectId:'fixture',activity:()=>'',physical:id=>{const s=f.sessions.getSessionState(id);return s?physicalSessionId(s):undefined},evidence:async id=>({sources:[organizerSource(Number(id.split('-').at(-1)))],partial:false}),changed:()=>invalidations++})
+    for(const tool of organizer.tools())f.tools.register(tool)
+    try {
+      await f.sessions.start()
+      for(const abort of [false,true]){
+        const controller=new AbortController(),chatId=abort?'abort':'error',id='work-organizer:'+chatId
+        const task=organizer.begin(id,'full',controller.signal)
+        const job=f.sessions.startSession({agentType:'work-organizer',mode:'task',channel:'work-organizer',chatId,task,signal:controller.signal,waitForCompletion:true,maxTokens:6000,executionLimits:{allowedTools:ORGANIZATION_TOOLS,inferenceRequests:8,toolCalls:24,argumentBytes:192000}})
+        const first=await f.next(id);assert.deepEqual(first.names,[...ORGANIZATION_TOOLS]);first.resolve(invoke('organization_read',{key:organizerRecord(1).key}))
+        const second=await f.next(id);assert(String(second.messages.at(-1)?.content).includes('Human goal 1'))
+        second.resolve(invoke('organization_patch',organizerPatch(1,initiatives.projectFocus()?.revision??0)))
+        const paused=await f.next(id)
+        assert.equal(initiatives.projectFocus()?.result.groups[0]?.cards?.[0]?.id,'card-1','UI snapshot available while provider awaits next iteration')
+        assert(invalidations>=2)
+        if(abort)controller.abort(new Error('fixture cancellation'));else paused.reject(new Error('fixture provider failure'))
+        await job
+        organizer.end()
+        assert.equal(initiatives.projectFocus()?.organization?.status,'partial')
+        assert.equal(initiatives.projectFocus()?.result.groups[0]?.cards?.[0]?.id,'card-1')
+      }
+    } finally {organizer.end();await f.sessions.stop();initiatives.close();await store.close?.()}
+  }))
+}
+
+for(const Store of [JsonlSessionStore,SqliteSessionStore]) for (const limit of [4,8]) {
+  test(Store.name+': organizer inference ceiling '+limit+' terminates the normal loop and releases stop',async()=>withTempWorkspace(async workspace=>{
+    const store:SessionStore=new Store(join(workspace,'sessions'));await store.init()
+    const f=fixture(workspace,store,{projectId:'fixture'})
+    f.tools.register({name:'organization_read',optIn:true,description:'Fixture bounded read',parameters:{type:'object',properties:{}},execute:async()=>'{"sources":[]}'})
+    try {
+      await f.sessions.start()
+      const id='work-organizer:budget'
+      const job=f.sessions.startSession({agentType:'work-organizer',mode:'task',channel:'work-organizer',chatId:'budget',task:'Bounded fixture',waitForCompletion:true,executionLimits:{allowedTools:['organization_read'],inferenceRequests:limit,toolCalls:24,argumentBytes:192000}})
+      for (let n=0; n<limit; n++) (await f.next(id)).resolve(invoke('organization_read',{}))
+      await job
+      assert.equal(f.requests.filter(r=>r.sessionId===id).length,limit)
+      const result=await f.sessions.getExecutionResult(id)
+      assert.equal(result?.status,'failed')
+      assert.match(result?.error??'',/maximum number of iterations|budget/i)
+    } finally {await f.sessions.stop();await store.close?.()}
+  }))
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(Store.name + ': observer host limit exposes no tools and never recovers with another provider call', async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions')); await store.init()
+    const f = fixture(workspace, store, { projectId: 'fixture' })
+    try {
+      await f.sessions.start()
+      const id = 'work-observer:one'
+      const job = f.sessions.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', chatId: 'one', task: 'Return JSON', waitForCompletion: true,
+        executionLimits: { allowedTools: [], inferenceRequests: 1, toolCalls: 1, argumentBytes: 1 } })
+      const request = await f.next(id); assert.deepEqual(request.names, [])
+      assert.doesNotMatch(String(request.messages[0]?.content), /Current Turn: Response Audience|Use message|Address the conversation's user/,
+        'Host-consumed JSON is not a user conversation or a peer message')
+      assert.match(String(request.messages[0]?.content), /inference/i, 'Retain the actual per-inference execution budget')
+      request.resolve(invoke('read', { path: 'not-allowed' }))
+      await job
+      assert.equal(f.requests.filter(r => r.sessionId === id).length, 1)
+      assert.equal((await f.sessions.getExecutionResult(id))?.status, 'failed')
+    } finally { await f.sessions.stop(); await store.close?.() }
+  }))
 }

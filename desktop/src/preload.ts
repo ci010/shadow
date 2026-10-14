@@ -40,6 +40,8 @@ const api: ShadowDesktopApi = Object.freeze({
   folders: createFolderDirectoriesApi(ipcRenderer),
   chatContext: createChatContextApi(ipcRenderer),
   bootstrap: Object.freeze({
+    dataLayoutStatus: () => ipcRenderer.invoke(IPC_CHANNELS.dataLayoutStatus),
+    upgradeDataLayout: () => ipcRenderer.invoke(IPC_CHANNELS.upgradeDataLayout),
     load: () =>
       ipcRenderer.invoke(IPC_CHANNELS.loadWizard) as Promise<WizardState>,
     dispatch: (event: WizardEvent) =>

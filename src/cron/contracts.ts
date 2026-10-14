@@ -1,10 +1,11 @@
 /** Renderer-safe scheduling and persisted run contracts. */
 export type CronContextMode = 'existing' | 'fresh'
 export interface AutomationConfigSnapshot {
-  source: 'cron' | 'learning'
+  source: 'cron' | 'learning' | 'system'
   schedule: string
   task?: string
   agentType?: string
+  organizationMode?: 'full' | 'delta'
   originSessionId?: string
 }
 export interface AutomationSessionRef {
@@ -14,17 +15,25 @@ export interface AutomationSessionRef {
   startedAt: string
   contextMode: 'fresh'
   config?: AutomationConfigSnapshot
+  organizationProblem?: 'execution_failed' | 'unfinished'
+  organization?: OrganizationOutcome
   legacy?: boolean
 }
 export interface AutomationSummary {
   id: string
   name: string
-  source: 'cron' | 'learning'
+  source: 'cron' | 'learning' | 'system'
   session: 'fresh'
   schedule: string
   task?: string
   agentType?: string
   enabled: boolean
+  configuredEnabled?: boolean
+  editable?: boolean
+  canToggle?: boolean
+  toggleId?: string
+  toggleEnabled?: boolean
+  disabledByGlobal?: boolean
   notice?: string
 }
 export interface AutomationRunSummary {
@@ -33,7 +42,36 @@ export interface AutomationRunSummary {
   startedAt: string
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'
   title?: string
+  scope?: 'full' | 'delta'
+  organizationProblem?: 'execution_failed' | 'unfinished'
+  organization?: OrganizationOutcome
   learning?: LearningOutcome
+}
+export interface OrganizationOutcome {
+  mode: 'full' | 'delta'
+  status: 'running' | 'completed' | 'partial'
+  coveredCount: number
+  manifestCount: number
+  patches: number
+}
+export const SYSTEM_AUTOMATIONS = {
+  organizer: { id: 'system:work-organizer', name: '话题整理', agentType: 'work-organizer' },
+  observer: { id: 'system:work-observer', name: '自动观察', agentType: 'work-observer' },
+} as const
+export function systemAutomationRef(agentType: 'work-organizer' | 'work-observer', sessionId: string, mode?: 'full' | 'delta'): AutomationSessionRef {
+  const job = Object.values(SYSTEM_AUTOMATIONS).find(job => job.agentType === agentType)!
+  return { jobId: job.id, name: mode === 'full' ? '话题全量重整' : mode === 'delta' ? '话题增量整理' : job.name,
+    runId: sessionId, startedAt: new Date().toISOString(), contextMode: 'fresh',
+    config: { source: 'system', schedule: 'Event-driven / manual', agentType, ...(mode ? { organizationMode: mode } : {}) } }
+}
+export function parseOrganizationOutcome(value: unknown): OrganizationOutcome | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object') throw new TypeError('Invalid organization outcome')
+  const v = value as Record<string, unknown>
+  if (!['full', 'delta'].includes(String(v.mode)) || !['running', 'completed', 'partial'].includes(String(v.status))
+    || ['coveredCount', 'manifestCount', 'patches'].some(k => typeof v[k] !== 'number' || !Number.isSafeInteger(v[k]) || (v[k] as number) < 0)
+    || (v.coveredCount as number) > (v.manifestCount as number)) throw new TypeError('Invalid organization outcome')
+  return { mode: v.mode, status: v.status, coveredCount: v.coveredCount, manifestCount: v.manifestCount, patches: v.patches } as OrganizationOutcome
 }
 export interface LearningOutcome {
   status: 'applied' | 'no_change' | 'partial' | 'blocked' | 'draft_only'
@@ -63,19 +101,31 @@ export function parseAutomationSessionRef(value: unknown): AutomationSessionRef 
   if (v.config !== undefined) {
     if (!v.config || typeof v.config !== 'object') throw new TypeError('Invalid automation snapshot')
     const c = v.config as Record<string, unknown>
-    if ((c.source !== 'cron' && c.source !== 'learning') || typeof c.schedule !== 'string'
+    if ((c.source !== 'cron' && c.source !== 'learning' && c.source !== 'system') || typeof c.schedule !== 'string'
+      || (c.organizationMode !== undefined && c.organizationMode !== 'full' && c.organizationMode !== 'delta')
       || ['task', 'agentType', 'originSessionId'].some(k => c[k] !== undefined && typeof c[k] !== 'string')) {
       throw new TypeError('Invalid automation snapshot')
     }
   }
+  if (v.organizationProblem !== undefined && v.organizationProblem !== 'execution_failed' && v.organizationProblem !== 'unfinished') throw new TypeError('Invalid organization problem')
+  parseOrganizationOutcome(v.organization)
   return structuredClone(value) as AutomationSessionRef
 }
 
 /** Only the old built-in source addresses qualify; titles and prompts never classify runs. */
 export function resolveAutomationSession(state: {
-  sessionId: string; automation?: AutomationSessionRef; agentType?: string; automationVersion?: 1
+  sessionId: string; automation?: AutomationSessionRef; agentType?: string; automationVersion?: 1; lastActivityAt?: string; parentSessionId?: string | null
 }): AutomationSessionRef | undefined {
   if (state.automation) return state.automation
+  // Historical built-in internal addresses only; a same-named custom agent on web/heartbeat is not a system run.
+  const internal = /^(work-organizer|work-observer):(.+)$/.exec(state.sessionId)
+  if (internal && state.agentType === internal[1] && !state.parentSessionId
+    && (internal[1] === 'work-organizer' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(internal[2]!) : /^work-observer-\d{13}$/.test(internal[2]!))) {
+    const ref = systemAutomationRef(internal[1] as 'work-organizer' | 'work-observer', state.sessionId)
+    ref.startedAt = state.lastActivityAt && Number.isFinite(Date.parse(state.lastActivityAt)) ? state.lastActivityAt : new Date(Number(/(\d{13})$/.exec(internal[2]!)?.[1] ?? 0)).toISOString()
+    ref.legacy = true
+    return ref
+  }
   if (state.automationVersion !== undefined) return undefined
   const match = /^heartbeat:(reflector|encapsulator|soul-reflector)-(\d{13})$/.exec(state.sessionId)
   if (!match || state.agentType !== match[1]) return undefined

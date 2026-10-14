@@ -1,4 +1,4 @@
-import { withProviderRetry } from './retry.ts'
+import { withProviderRetry, providerRetryScope } from './retry.ts'
 import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { spanAttributes } from '../otel/tracing.ts'
@@ -185,11 +185,11 @@ function input(messages: ChatMessage[], provider: string | undefined, model: str
   return result
 }
 
-function failure(value: unknown, status?: number): never {
+function failure(value: unknown, status?: number, retryAfter?: string | null): never {
   const payload = object(value) ? value : {}
   const error = object(payload.error) ? payload.error : payload
   const incomplete = object(payload.incomplete_details) ? payload.incomplete_details : {}
-  const rawCode = error.code ?? incomplete.reason
+  const rawCode = error.code || error.type || incomplete.reason
   const code = typeof rawCode === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(rawCode) ? rawCode : undefined
   // Never echo the server's message/body: it can contain prompt data or credentials.
   const state = ['failed', 'incomplete', 'cancelled'].includes(String(payload.status))
@@ -199,7 +199,7 @@ function failure(value: unknown, status?: number): never {
     'context_window_exceeded', 'max_prompt_tokens_exceeded', 'input_token_limit_exceeded'].includes(code)) {
     throw new TokenLimitExceededError(message)
   }
-  if (status !== undefined) throw new ProviderHttpError(status, message, code)
+  if (status !== undefined) throw new ProviderHttpError(status, message, code, { retryAfter, rejectedRequest: true })
   throw new Error(message)
 }
 
@@ -353,6 +353,8 @@ function finalResponse(value: unknown, model: string, provider?: string): LLMRes
     usage = {
       promptTokens: u.input_tokens as number, completionTokens: u.output_tokens as number,
       totalTokens: u.total_tokens as number,
+      ...(object(u.input_tokens_details) && u.input_tokens_details.cached_tokens != null
+        ? { cachedTokens: u.input_tokens_details.cached_tokens as number } : {}),
     }
   }
   return {
@@ -412,12 +414,12 @@ export async function openaiResponses(params: {
           for await (const chunk of chunks(response, params.signal)) text += chunk
         } catch {
           params.signal?.throwIfAborted()
-          failure(undefined, response.status)
+          failure(undefined, response.status, response.headers.get('retry-after'))
         }
       }
       let error: unknown
       try { error = JSON.parse(text) } catch { /* HTTP status is still authoritative. */ }
-      failure(error, response.status)
+      failure(error, response.status, response.headers.get('retry-after'))
     }
     let result: unknown
     try {
@@ -433,5 +435,5 @@ export async function openaiResponses(params: {
     }
     params.signal?.throwIfAborted()
     return finalResponse(result, params.model, params.providerName)
-  }, params.signal)
+  }, params.signal, { scope: providerRetryScope(params.url, params.apiKey), provider: params.providerName, model: params.model })
 }

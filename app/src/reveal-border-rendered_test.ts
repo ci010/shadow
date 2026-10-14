@@ -106,6 +106,11 @@ test('rendered Reveal proximity, state preservation, accessibility, lifecycle an
         await run(\`reply.classList.remove('\${selected}');wait(240)\`);
       }
     }
+    await run(\`reply.className='input-question answered';wait(100)\`);
+    await run(\`var r=reply.getBoundingClientRect();document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:r.left-2,clientY:r.top+240}));wait(240)\`);
+    assert.equal(await run('opacity(reply)>0.4 && reply.getBoundingClientRect().height>320'),true,'answered decision outer card reveals even above the small-panel height limit');
+    await run(\`reply.classList.add('waiting');wait(40)\`);
+    assert.equal(await run('opacity(reply)===0'),true,'waiting decision keeps its state border');
     await run(\`reply.className='chat-bubble chat-assistant';wait(100)\`);
     // Conversation status and task chips use the shared resting border.
     await run(\`window.chips=document.createElement('div');chips.style.cssText='position:fixed;left:40px;top:40px';chips.innerHTML='<div class="session-work-triggers"><button aria-expanded="false" style="width:160px;height:32px;border-width:1px;border-style:solid">Subagents</button></div><div class="chat-working" style="width:260px;height:32px;border-width:1px;border-style:solid">Working</div><div class="context-chip" style="width:120px;height:32px;border-width:1px;border-style:solid">Context</div>';document.body.append(chips);wait(100)\`);
@@ -114,6 +119,25 @@ test('rendered Reveal proximity, state preservation, accessibility, lifecycle an
     }
     await run(\`chips.querySelector('button').setAttribute('aria-expanded','true');wait(40)\`);
     assert.equal(await run("opacity(chips.querySelector('button'))===0"),true,'expanded chip keeps state');
+    await run(\`chips.querySelector('button').setAttribute('aria-expanded','false');chips.querySelectorAll('button,.chat-working').forEach(el=>el.classList.add('work-chip-active'));document.dispatchEvent(new Event('pointerleave'));wait(280)\`);
+    for(const selector of ['.session-work-triggers > button','.chat-working']) {
+      assert.equal(await run(\`getComputedStyle(chips.querySelector('\${selector}')).animationName==='work-chip-breathe'\`),true,'working chip owns ambient animation: '+selector);
+      const resting = await run(\`Number(getComputedStyle(chips.querySelector('\${selector}'),'::before').opacity)\`);
+      await run(\`var chip=chips.querySelector('\${selector}');var r=chip.getBoundingClientRect();document.dispatchEvent(new PointerEvent('pointermove',{pointerType:'mouse',clientX:r.right+2,clientY:r.top+16}));wait(260)\`);
+      assert.equal(await run(\`Number(getComputedStyle(chips.querySelector('\${selector}'),'::before').opacity)\`)>resting,true,'Reveal proximity strengthens ambient halo: '+selector);
+      assert.equal(await run(\`opacity(chips.querySelector('\${selector}'))>0.4\`),true,'ambient and local Reveal coexist: '+selector);
+      await run(\`document.dispatchEvent(new Event('pointerleave'));wait(280)\`);
+    }
+    await run(\`chips.querySelector('button').setAttribute('aria-expanded','true');wait(240)\`);
+    assert.equal(await run(\`Number(getComputedStyle(chips.querySelector('button'),'::before').opacity)>=.8\`),true,'expanded chip retains ambient halo without replacing its state border');
+    await run(\`window.popup=document.createElement('div');popup.className='session-work-panel work-chip-active work-popup-active';popup.tabIndex=-1;popup.style.cssText='position:fixed;left:420px;top:40px;width:300px;height:90px;overflow-y:auto;border:1px solid var(--c-border);background:var(--c-bg-card)';popup.textContent='Running subagent popup';document.body.append(popup);popup.focus();wait(200)\`);
+    assert.equal(await run(\`getComputedStyle(popup).animationName==='work-chip-breathe' && getComputedStyle(popup).boxShadow.includes('22px') && getComputedStyle(popup).boxShadow.includes('36px')\`),true,'focused popup retains elevation and ambient halo');
+    await run(\`popup.classList.remove('work-chip-active','work-popup-active');wait(40)\`);
+    assert.equal(await run(\`getComputedStyle(popup).animationName==='none'\`),true,'popup animation stops on completion');
+    await run(\`popup.remove();chips.querySelector('button').setAttribute('aria-expanded','false');document.activeElement.blur();wait(100)\`);
+    await screenshot('dark-working-chips');
+    await run(\`chips.querySelector('.chat-working').classList.remove('work-chip-active');wait(60)\`);
+    assert.equal(await run(\`getComputedStyle(chips.querySelector('.chat-working')).animationName==='none'\`),true,'completion stops ambient animation');
     await run('chips.remove();wait(100)');
     // Streaming growth has fresh geometry, without needing a new target registration.
     await run(\`reply.style.height='620px';wait(100)\`);

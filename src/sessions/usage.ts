@@ -9,7 +9,10 @@ export function parseTokenUsage(value: unknown): LLMResponseUsage | null {
   const { promptTokens, completionTokens, totalTokens } = value
   if (typeof promptTokens !== 'number' || typeof completionTokens !== 'number' || typeof totalTokens !== 'number'
     || ![promptTokens, completionTokens, totalTokens].every(token => Number.isSafeInteger(token) && token >= 0)) return null
-  return { promptTokens, completionTokens, totalTokens }
+  const cachedTokens = "cachedTokens" in value ? value.cachedTokens : undefined
+  if (cachedTokens !== undefined && (typeof cachedTokens !== "number" || !Number.isSafeInteger(cachedTokens)
+    || cachedTokens < 0 || cachedTokens > promptTokens)) return null
+  return { promptTokens, completionTokens, totalTokens, ...(cachedTokens !== undefined ? { cachedTokens } : {}) }
 }
 
 export function addTokenUsage(first: LLMResponseUsage | null, second: LLMResponseUsage | null): LLMResponseUsage | null {
@@ -19,6 +22,8 @@ export function addTokenUsage(first: LLMResponseUsage | null, second: LLMRespons
     promptTokens: first.promptTokens + second.promptTokens,
     completionTokens: first.completionTokens + second.completionTokens,
     totalTokens: first.totalTokens + second.totalTokens,
+    ...(first.cachedTokens !== undefined && second.cachedTokens !== undefined
+      ? { cachedTokens: first.cachedTokens + second.cachedTokens } : {}),
   }
   if (!parseTokenUsage(result)) throw new Error('Session token totals exceed the supported range.')
   return result

@@ -18,6 +18,7 @@ allowBuilds:
   electron-winstaller: true
   esbuild: true
   koffi: false
+  vue-demi: false # Vue 3 is the package default; no compatibility switch script needed.
 
 patchedDependencies:
   '@open-file-viewer/core@0.1.48': patches/@open-file-viewer__core@0.1.48.patch

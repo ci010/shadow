@@ -2,9 +2,9 @@ import { t } from '../i18n.ts'
 import { computed, ref, watch } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
-export type DiagnosisSection = 'trace' | 'prompt' | 'tools'
+export type DiagnosisSection = 'trace' | 'prompt' | 'tools' | 'stats'
 export function diagnosisSection(value: unknown): DiagnosisSection {
-  return value === 'prompt' || value === 'tools' ? value : 'trace'
+  return value === 'prompt' || value === 'tools' || value === 'stats' ? value : 'trace'
 }
 
 export function useDiagnosisNavigation(options: {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  correlateModelSpans, correlateToolSpans, eventMatches, fetchDiagnosisJson, formatTraceDuration, mergeTraceSpans, parseDiagnosisHistory, parseTracePage, recordedModelResponse, traceKey,
+  diagnosisBatchColor, correlateModelSpans, correlateToolSpans, eventMatches, fetchDiagnosisJson, formatTraceDuration, mergeTraceSpans, parseDiagnosisHistory, parseTracePage, recordedModelResponse, traceKey,
   DEFAULT_TRACE_WINDOW_MS, fitTraceWindow, latestTraceWindow, spanDuration, spanMatches, stackTimelineItems, traceDuration, type SessionTraceSpan,
 } from './session-diagnosis.ts'
 
@@ -224,4 +224,39 @@ test('legacy model responses match original message positions and completion int
   assert.equal(correlateModelSpans(modelResponses, [{ ...chats[0], endTime: 2100 }]).size, 0)
   assert.equal(correlateModelSpans(modelResponses, [{ ...chats[0], endTime: 800 }, { ...chats[0], spanId: 'retry' }]).size, 1, 'Earlier abandoned attempt cannot steal a retry response')
   assert.equal(correlateModelSpans([...modelResponses, { ...modelResponses[0], id: 'ambiguous' }], chats).size, 1, 'Ambiguous positions are not guessed')
+})
+
+test('batch identity belongs to the original assistant record, not filtered rows or reused tool IDs', () => {
+  const call = (id: string) => ({ id, function: { name: 'read', arguments: '{}' } })
+  const parsed = parseDiagnosisHistory({ currentPhysicalId: 'physical-1', messages: [
+    { role: 'user', content: 'request' },
+    { role: 'assistant', content: 'Third output text', tool_calls: [call('a'), call('b')] },
+    { role: 'tool', tool_call_id: 'b', content: 'second result' },
+    { role: 'tool', tool_call_id: 'a', content: 'first result' },
+    { role: 'assistant', content: '', tool_calls: [call('a')] },
+  ] })
+  const first = parsed.events.filter(event => event.batchNumber === 1)
+  assert.equal(first.length, 3)
+  assert.equal(new Set(first.map(event => event.batchId)).size, 1)
+  assert(first.every(event => event.batchSize === 3))
+  assert.deepEqual(first.map(event => event.result), [undefined, 'first result', 'second result'])
+  const filtered = parsed.events.filter(event => event.kind === 'TOOL')
+  assert.deepEqual(filtered.map(event => event.batchNumber), [1, 1, 2])
+  assert.notEqual(filtered[0].batchId, filtered[2].batchId)
+  assert.equal(filtered[2].batchSize, 1)
+  assert.equal(parsed.events[0].batchId, undefined)
+})
+
+test('batch palette uses stable ordinals, cycles and leaves non-batch events uncolored', () => {
+  const events = parseDiagnosisHistory({ messages: [
+    { role: 'user', content: 'input' },
+    { role: 'assistant', content: 'first', tool_calls: [{ id: 'a', function: { name: 'read', arguments: '{}' } }] },
+    { role: 'assistant', content: 'second' },
+    { role: 'user', content: '<event type="tick" />context' },
+    { role: 'tool', tool_call_id: 'orphan', content: 'orphan' },
+  ] }).events
+  assert.deepEqual(events.map(diagnosisBatchColor), [undefined, 'batch-color-0', 'batch-color-0', 'batch-color-1', undefined, undefined])
+  assert.deepEqual(events.filter(e => eventMatches(e, '', 'TOOL')).map(diagnosisBatchColor), ['batch-color-0', undefined])
+  assert.equal(diagnosisBatchColor({ batchId: 'six', batchNumber: 6 }), 'batch-color-0')
+  for (const batchNumber of [0, -1, 1.5, NaN, undefined]) assert.equal(diagnosisBatchColor({ batchId: 'bad', batchNumber }), undefined)
 })

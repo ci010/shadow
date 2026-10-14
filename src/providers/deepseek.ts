@@ -46,7 +46,9 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
     options: LLMProviderOptions,
   ): Promise<LLMResponse> {
     options.signal?.throwIfAborted()
-    if (options.reasoningEffort !== undefined && !['low', 'high', 'max'].includes(options.reasoningEffort)) {
+    const reasoningEffort = options.reasoningEffort === 'medium' || options.reasoningEffort === 'xhigh'
+      ? 'high' : options.reasoningEffort
+    if (reasoningEffort !== undefined && !['low', 'high', 'max'].includes(reasoningEffort)) {
       throw new ProviderHttpError(400, '[deepseek] Reasoning effort must be low, high or max.', 'unsupported_reasoning_effort')
     }
     messages = imageMessages(messages, options.model)
@@ -67,7 +69,7 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
       maxTokens: options.maxTokens,
       temperature: thinkingEnabled ? undefined : options.temperature ?? 0.7,
       thinking: options.thinking,
-      reasoningEffort: thinkingEnabled ? options.reasoningEffort : undefined,
+      reasoningEffort: thinkingEnabled ? reasoningEffort : undefined,
       signal: options.signal,
     })
     if (tools.length > 0 && !result.reasoningContent) {

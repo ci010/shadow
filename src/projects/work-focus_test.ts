@@ -6,6 +6,9 @@ import { InitiativeStore } from '../initiatives/store.ts'
 import { workRecordSchema } from '../initiatives/work-contract.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { createProjectScope } from './scope.ts'
+import { WorkOrganizer } from './work-organizer.ts'
+import { SessionTools, Tools } from '../tools/registry.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 import { WorkObserver, observedWorkSchema, recentFocusContext } from './work-observer.ts'
 import { projectWorkPlugin } from './work-routes.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
@@ -31,24 +34,35 @@ test('inference schema is optional for old JSON records and evidence is validate
   assert.deepEqual(Object.keys(context[0]!).sort(), ['category', 'purpose'])
 })
 
-test('explicit organization uses one bounded call, persists safely, rejects duplicates and keeps results on failure', async () => withTempWorkspace(async home => {
+test('explicit organization dispatches bounded tool organization, persists safely and rejects concurrent/stale runs', async () => withTempWorkspace(async home => {
   let store = new InitiativeStore(home)
   const scope = createProjectScope('fixture'), bus = new Bus()
   for (let i = 0; i < 35; i++) store.saveWork(record(i), 0, 'fixture', 'created')
   let calls = 0, mode = 'success', input = ''
   const gate = Promise.withResolvers<void>()
-  const observer = new WorkObserver(store, { scope, bus, state: () => null, changed() {}, summarize: async text => {
-    calls++; input = text
-    if (mode === 'wait') await gate.promise
-    if (mode === 'fail') throw new Error('Provider unavailable')
-    return JSON.stringify({ groups: [{ category: focus.category, purpose: focus.purpose, motivation: focus.motivation, topicKeys: [JSON.parse(text).topics[0].key] }] })
+  const observer = new WorkObserver(store, { scope, bus, state: () => null, changed() {}, summarize: async () => { throw new Error('Automatic summarizer must not organize') }, organize: async (runMode,signal) => {
+    calls++
+    const organizer = new WorkOrganizer(store,{projectId:'fixture',evidence:async()=>({sources:[],partial:true}),activity:()=>'',changed(){}})
+    const ctx = {sessionId:'fixture:organizer',physicalSessionId:'physical',projectId:'fixture',signal,tools:new SessionTools(new Tools(home),home)} as ExecutionContext
+    input=organizer.begin(ctx.sessionId,runMode,signal)
+    try {
+      if(mode==='wait')await gate.promise
+      if(mode==='fail')throw new Error('Provider unavailable')
+      const manifest=JSON.parse(input).manifest as {key:string}[]
+      for(const topic of manifest)await organizer.read({key:topic.key},ctx)
+      const groups=manifest.map((topic,index)=>({id:'topic-'+index,category:'Concrete topic '+index,purpose:focus.purpose,motivation:focus.motivation,topicKeys:[topic.key],cards:[]}))
+      await organizer.patch({patchId:'bounded-patch',expectedRevision:store.projectFocus()?.revision??0,groups,hierarchy:[0,1,2].map(index=>({id:'purpose-'+index,title:'Shared purpose '+index,purpose:focus.purpose,groupIds:groups.slice(index*10,index*10+10).map(g=>g.id)}))},ctx)
+      await organizer.finish({},ctx)
+    }finally{organizer.end()}
   } }, false)
   try {
     assert.equal(calls, 0)
     await observer.organize(new AbortController().signal)
     assert.equal(calls, 1)
-    assert.equal(JSON.parse(input).topics.length, 30)
+    assert.equal(JSON.parse(input).manifest.length, 30)
     assert.equal(store.projectFocus()?.omittedCount, 5)
+    assert.equal(store.projectFocus()?.result.groups.length, 30, 'all bounded concrete topics retained')
+    assert.equal(store.projectFocus()?.result.hierarchy?.filter(node => !node.parentId).length, 3, 'organization actually reduces semantic roots, not filters')
     assert.equal(store.projectFocus()?.origin, 'model_interpretation')
     const saved = store.projectFocus()
     mode = 'fail'
@@ -57,7 +71,7 @@ test('explicit organization uses one bounded call, persists safely, rejects dupl
     mode = 'wait'
     const running = observer.organize(new AbortController().signal)
     await assert.rejects(observer.organize(new AbortController().signal), /already running/)
-    const key = JSON.parse(input).topics[0].key
+    const key = JSON.parse(input).manifest[0].key
     const prior = store.workRecords().find(value => value.key === key)!
     store.saveWork({ ...prior, sequence: 2 }, 1, 'human', 'note')
     gate.resolve()
@@ -85,21 +99,23 @@ test('organization endpoint enforces authorization and strict empty input before
 })
 
 
-test('real-shaped model output accepts only a complete JSON fence and preserves citation safety', async () => withTempWorkspace(async home => {
-  const store = new InitiativeStore(home), scope = createProjectScope('fixture')
-  store.saveWork(record(1), 0, 'fixture', 'created')
-  let output = '\n```json\n' + JSON.stringify({ groups: [{ category: 'Release confidence', purpose: 'Understand effects', motivation: 'May want confidence', topicKeys: [record(1).key] }] }, null, 2) + '\n```\n'
-  const observer = new WorkObserver(store, { scope, bus: new Bus(), state: () => null, changed() {}, summarize: async () => output }, false)
-  try {
-    await observer.organize(new AbortController().signal)
-    const saved = store.projectFocus()
-    for (const invalid of ['Here is the JSON:\n' + output, '{"groups":[', '{"groups":[],"extra":true}', JSON.stringify({ groups: [{ category: 'x', purpose: 'x', motivation: 'x', topicKeys: ['invented'] }] })]) {
-      output = invalid
-      await assert.rejects(observer.organize(new AbortController().signal), /model_(json|schema)_invalid/)
-      assert.deepEqual(store.projectFocus(), saved)
-      assert.equal(observer.status().running, false)
+test('dedicated patches reject malformed structures, invented keys and unknown arguments without losing saved state',async()=>withTempWorkspace(async home=>{
+  const store=new InitiativeStore(home)
+  store.saveWork(record(1),0,'fixture','created')
+  const organizer=new WorkOrganizer(store,{projectId:'fixture',evidence:async()=>({sources:[],partial:true}),activity:()=>'',changed(){}})
+  const ctx={sessionId:'fixture:organizer',physicalSessionId:'physical',projectId:'fixture',signal:new AbortController().signal,tools:new SessionTools(new Tools(home),home)} as ExecutionContext
+  try{
+    organizer.begin(ctx.sessionId,'full',ctx.signal)
+    await organizer.read({key:record(1).key},ctx)
+    const patch={patchId:'valid',expectedRevision:0,groups:[{id:'release',category:'Release confidence',purpose:'Understand effects',motivation:'May want confidence',topicKeys:[record(1).key],cards:[]}],hierarchy:[{id:'release',title:'Release confidence',purpose:'Understand effects',groupIds:['release']}]}
+    await organizer.patch(patch,ctx)
+    const saved=store.projectFocus()
+    for(const invalid of [{...patch,patchId:'invalid',expectedRevision:1,extra:true},{...patch,patchId:'invalid',expectedRevision:1,groups:'{truncated'},{...patch,patchId:'invalid',expectedRevision:1,groups:[{...patch.groups[0],topicKeys:['invented']}]}]){
+      await assert.rejects(organizer.patch(invalid,ctx))
+      assert.deepEqual(store.projectFocus(),saved)
     }
-  } finally { await observer.stop(); store.close(); scope.close() }
+    await organizer.finish({},ctx)
+  }finally{organizer.end();store.close()}
 }))
 
 test('organization route does not call model failures invalid requests and distinguishes overview failure', async () => {

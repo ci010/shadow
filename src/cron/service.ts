@@ -120,8 +120,9 @@ export class CronService {
     if (!Number.isInteger(intervalMs) || intervalMs < 1 || intervalMs > 2_147_483_647) throw new TypeError('Invalid job interval')
     const job = { ...structuredClone(def), id, createdAt: this.managed.get(id)?.job.createdAt ?? new Date().toISOString() }
     if (!isCronJob(job) || this.jobs.has(id) || this.maintenance.has(id)) throw new TypeError('Invalid managed cron job')
+    const previous = this.managed.get(id)
     this.managed.set(id, { job, intervalMs, handler })
-    this.scheduleManaged(id)
+    if (!previous || previous.intervalMs !== intervalMs || previous.job.enabled !== job.enabled) this.scheduleManaged(id)
     this.onChanged?.()
   }
 
@@ -255,6 +256,21 @@ export class CronService {
     return removed
   }
 
+  /** Update a persisted user job without cancelling an admitted execution. */
+  async setJobEnabled(id: string, enabled: boolean): Promise<boolean> {
+    if (this.stopped) throw new Error('CronService is stopped')
+    const job = this.jobs.get(id)
+    if (!job) return false
+    if (typeof enabled !== 'boolean') throw new TypeError('Enabled must be a boolean')
+    job.enabled = enabled
+    this.scheduledJobs.get(id)?.stop()
+    this.scheduledJobs.delete(id)
+    this.scheduleCron(job)
+    await this.saveJobs()
+    this.onChanged?.()
+    return true
+  }
+
   listJobs(): CronJob[] {
     return structuredClone([...this.jobs.values(), ...[...this.managed.values()].map(m => m.job)])
   }
@@ -271,7 +287,7 @@ export class CronService {
           timezone: /^every\s+/i.test(job.schedule) ? 'UTC' : this.timezone,
           protect: true,
         },
-        () => this.scope ? this.scope.run(() => this.runJob(job)) : this.runJob(job),
+        () => job.enabled === false ? undefined : this.scope ? this.scope.run(() => this.runJob(job)) : this.runJob(job),
       )
       this.scheduledJobs.set(job.id, scheduled)
     } catch (err) {

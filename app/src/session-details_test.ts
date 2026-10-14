@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { i18n } from './i18n.ts'
-import { contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from './session-details.ts'
+import { cacheRate, contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from './session-details.ts'
 
 const details: SessionDetails = {
   sessionId: 'web:chat-example',
@@ -99,5 +99,18 @@ test('optional handoff policy validates numeric thresholds and enabled state', (
   assert.deepEqual(parseSessionDetails({ ...details, context: { ...details.context, handoff } }, details.sessionId).context.handoff, handoff)
   for (const invalid of [{ low: NaN }, { high: Infinity }, { low: -1 }, { high: 1.1 }, { enabled: 'true' }, { windowTokens: 0 }]) {
     assert.throws(() => parseSessionDetails({ ...details, context: { ...details.context, handoff: { ...handoff, ...invalid } } }, details.sessionId))
+  }
+})
+
+test('cache usage preserves unknown versus zero and uses input-token denominator', () => {
+  const usage = { ...details.usage!, cachedTokens: 10_000 }
+  const parsed = parseSessionDetails({ ...details, usage }, details.sessionId)
+  assert.equal(parsed.usage?.cachedTokens, 10_000)
+  assert.equal(cacheRate(parsed.usage), 25)
+  assert.equal(cacheRate(details.usage), null)
+  assert.equal(cacheRate({ ...usage, cachedTokens: 0 }), 0)
+  assert.equal(cacheRate({ promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0 }), null)
+  for (const cachedTokens of [-1, 40_001, NaN, 0.5, '0']) {
+    assert.throws(() => parseSessionDetails({ ...details, usage: { ...usage, cachedTokens } }, details.sessionId))
   }
 })

@@ -355,3 +355,50 @@ Relation classes are intentionally different: parent-child hierarchy; declared d
 Organize now queues behind automatic observation with a bounded wait and independent cancellation; duplicate manual requests are rejected. HTTP pre-model rejection paths and model/overview failures carry sanitized machine codes, stages and correlation IDs and produce stage logs. UI errors translate known codes and display safe identifiers/status, not raw provider messages. Successful responses are schema-validated and rendered before the background live-state refresh. Opening the dashboard still makes no organization/model request.
 
 Diagnosis limitation: the previously reported bare “整理失败” has no correlated organize request or model call in the examined runtime telemetry, so its actual runtime cause remains unknown. Busy rejection, hidden pre-model errors, network failure and response failures are hardened paths, not an asserted diagnosis. Source changes require the normal later application reload/release; this work does not restart the production backend or make paid model calls.
+
+### Native canvas presentation (October 2026)
+
+The Project overview now uses Vue Flow core 1.41.5, background 1.3.2 and controls 1.1.3, following the dedicated canvas/custom-node/handle pattern in `origin/dag-chat` (`packages/dag-chat/src/components/DagCanvas.vue`, `QANode.vue`, and `utils/layout.ts`). No branch checkout or legacy business logic was imported. Existing ownership-based layout remains authoritative: roots start horizontal; clicking or pressing Enter/Space selects and independently expands descendants downward; filtering and semantic edges do not force branches open. Pan, zoom and fit-view controls operate on a responsive dotted canvas. Compact custom cards keep detail/evidence in the selected context pane. Node dragging, connecting, edge editing and deletion are disabled: this canvas is a read-only presentation of recorded work, not a causal-graph editor. Temporal and cited-reference edges remain visually distinct from evidenced applied influence.
+
+Verification: `app/src/project-overview-graph-rendered_test.ts` renders the real library in a disposable Electron/Vite fixture, exercising expansion/collapse, nested lane layout, selected details, keyboard activation, zoom/fit controls and pane panning. Vue Flow requires a browser DOM; the former SSR-only handwritten-SVG assertion was replaced by this genuine renderer check.
+
+
+### Dashboard viewport update (October 2026)
+
+The overview canvas now fills the remaining workbench space. Search and a native
+category selector (with topic counts) float above it; the edge legend and context
+caveats are available under Evidence. Inferred group interpretations remain
+visible when filtering. Node details are dismissible overlays, with evidence
+expanded on demand. Board filters remain separate.
+
+Roots are ordered by latest recorded branch activity, newest left, with stable
+unknown-date fallback. Opening starts at readable zoom 1 near the newest roots;
+data refresh and expansion preserve the viewport. Filtering returns to recent
+matching roots without shrinking below readable zoom. Back to recent resets to
+zoom 1; Fit all topics is an explicit optional action in Evidence, not the default.
+
+
+### 用户纠正：讨论方向、取舍与成果，而非执行分工（2026-10）
+
+来源：用户以语音功能为例，明确要求保留曾讨论但后来搁置／放弃的微信输入法或第三方输入法方向；成果描述应更抽象，说明做了什么和状态。无人类参与取舍的 subagent 协助不应成为可见 child；每项成果可用简短自由 Markdown 说明 why、what、how。
+
+本轮将主动整理的输出改为面向人的语义话题与卡片：讨论方向、重要取舍、成果和未决事项，而不是照搬 session 委派树。运行记录继续保留为来源证据，不构成默认展示层级。卡片状态必须引用本次提供的证据；执行结束不等于完成，没有后续活动也不等于放弃。自由 Markdown 用于解释目的、结果与实现方式，展示时进行安全处理。
+
+此节修订上文“主动整理只读根笔记、32,000 字符且不读对话”的输入边界：整理现在通过 SessionManager 有界读取来源会话自身的物理片段，在 JSONL 和 SQLite 中均可读取用户输入与相关助手讨论／报告，以便恢复最终摘要遗漏的方案取舍。最多 30 个根笔记、240 条证据、每会话 8 个自身片段／80 条文本／扫描 20,000 条记录，总输入上限 64,000 字符（不含固定提示）。跳过 fork、工具轨迹和不能可靠确认人类来源的旧记录；不追踪整个 subagent 分工过程作为可见话题。
+
+语义结果连同证据和卡片状态来源保存在可向后读取的项目整理快照中；总览用它替代原始执行层级。旧快照不会自动重跑，需要用户明确点击“整理近期话题”。自动观察继续更新来源笔记，并可使快照标为过时，不新增周期性语义总结调用。
+
+验证采用明确讨论并放弃第三方输入法、转而实现本地语音输入的合成对话，检查取舍保留、成果合并、subagent-only 节点不展示、状态证据校验及 Markdown 呈现；包含 JSONL／SQLite 历史读取和真实 Electron／Vue Flow 渲染。此验证不证明真实语音对话已经重新整理，也不证明窗口之外的讨论已覆盖；未执行运行时模型调用、历史批量回填或应用重启。
+
+用户随后澄清：Agent 的重要决定、怎么做以及实质性的执行分工同样值得保留，目标是减少细节，不是只记录人类参与的选择。整理应保留影响方案或结果的模型取舍，明确标为模型决定；通常融入成果的 how，确有独立意义时才单独成卡。一般委派、核验、重试和局部修复不逐一展示，压缩为实现说明。此澄清优先于将无人类参与的模型决定一律排除的理解。
+
+
+## Inferred abstract overview hierarchy (2026-10-11)
+
+Implemented display contract: `result.hierarchy?: { id, title, purpose, parentId?, groupIndexes }[]`. Fresh manual organization supplies a hierarchy; older snapshots without it remain readable. Every existing concrete `result.groups` entry belongs to exactly one hierarchy node by index. Abstract nodes are display-only model interpretations, never user instructions, persisted work ownership, delegation, or causal assertions. Cards retain semantic dispositions, Markdown explanations, human/model/report source distinctions and state evidence.
+
+Bounds: organization considers at most 30 selected topic sources; groups max 30, each with max 30 topic keys and 20 cards; hierarchy max 60 nodes and four aggregation levels. IDs and topic memberships are unique, parents exist, cycles are rejected. The renderer uses saved hierarchy ownership as the single grouping truth, including root filters. It does not derive new semantic categories from labels. Legacy snapshots can use existing saved inferred categories; otherwise records appear under an explicit unorganized entry. Records outside the bounded organization window remain accessible under that entry rather than leaking individually into the root row or disappearing.
+
+The default graph shows a few saved abstract directions. Concrete topics and evidence cards are disclosed through nested, dashed 2D ownership regions; expanding one branch does not duplicate nodes or force unrelated branches open. Root recency follows descendant dates. Mixed or absent dispositions are presented as mixed/unknown, not silently completed. Initial zoom remains 1, with no automatic fit-all; expansion centers the selected parent above its region at readable zoom. Data refresh preserves the viewport. Existing records do not acquire a hierarchy automatically: manual organization remains the only model operation, and rendering makes no model call.
+
+Verification includes logic tests and real Electron/Vite-rendered synthetic fixtures: 35 concrete legacy topics (30 organized into three directions plus five explicitly unorganized) and 35 semantic evidence cards under two abstract directions with a nested subgroup. These fixtures demonstrate UI behavior, not completeness of a live project's bounded history or confirmation of inferred user intent.

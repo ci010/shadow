@@ -79,6 +79,7 @@ test('Knowledge and conversation controls preserve layout, navigation and global
             const props = reactive({visible:true});
             const conversationDocumentVisible = ref(true);
             const activePanel = ref('conversation');
+            const loadingHistory = ref(false);
             let historyBrowsing = false;
             let historyLeftBottom = false;
             ${scrollHandlers}

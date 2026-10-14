@@ -9,7 +9,7 @@
           {{ view.label }}<span v-if="view.id === 'tools'" class="view-count">{{ tools.length }}</span>
         </button>
       </div>
-      <span class="diagnosis-status" :class="{ working: working && !physicalId && !error }">
+      <span v-if="section !== 'stats'" class="diagnosis-status" :class="{ working: working && !physicalId && !error }">
         <i v-if="working && !physicalId && !error" aria-hidden="true" />
         {{ error ? t('Update unavailable') : physicalId ? t('Historical segment') : working ? t('Recording') : t('Auto-refresh') }}
       </span>
@@ -117,16 +117,18 @@
         <div v-for="group in eventGroups" :key="group.turn" class="trace-turn">
           <button class="turn-heading" :aria-expanded="!collapsedTurns.has(group.turn) || !!query || filter !== 'ALL'" @click="toggleTurn(group.turn)"><span>{{ collapsedTurns.has(group.turn) && !query && filter === 'ALL' ? '&#9656;' : '&#9662;' }} {{ group.turn ? t('Turn {turn}', { turn: group.turn }) : t('Session context') }}</span><span>{{ group.events.length }} {{ t('events') }}</span></button>
           <div v-show="!collapsedTurns.has(group.turn) || query || filter !== 'ALL'">
-          <div v-for="event in group.events" :key="event.id" class="trace-event" :class="{ expanded: expanded.has(event.id), highlighted: selectedEvent?.id === event.id }">
-            <button class="trace-event-header" :aria-expanded="expanded.has(event.id)" @click="toggleEvent(event.id)">
+          <div v-for="event in group.events" :key="event.id" class="trace-event" :class="[diagnosisBatchColor(event), { expanded: expanded.has(event.id), highlighted: selectedEvent?.id === event.id }]" :data-batch-id="event.batchId">
+            <button class="trace-event-header" :title="event.batchId ? batchDescription(event) : undefined" :aria-describedby="event.batchId ? domId(event.id + '-batch') : undefined" :aria-expanded="expanded.has(event.id)" @click="toggleEvent(event.id)">
               <span class="event-chevron" aria-hidden="true">{{ expanded.has(event.id) ? '&#9662;' : '&#9656;' }}</span>
               <span class="event-kind" :class="event.kind">{{ enumLabel(event.kind) }}</span>
               <strong v-if="event.kind === 'TOOL' || event.kind === 'CONTEXT' || event.kind === 'SESSION'" class="event-name">{{ event.title }}</strong>
               <span v-if="event.sessionSource" class="event-origin" :title="event.sessionSource.id">{{ event.sessionSource.id || event.sessionSource.name || t('Unknown session') }}</span>
+              <span v-if="event.batchId" class="event-batch-indicator" aria-hidden="true" />
               <span class="event-preview">{{ preview(event) }}</span>
               <span v-if="event.kind === 'TOOL' && toolSpan(event.id)" class="event-duration">{{ formatTraceDuration(spanDuration(toolSpan(event.id)!, now)) }}</span>
               <time class="event-time" :title="formatTime(event.timestamp)">{{ shortTime(event.timestamp) }}</time>
             </button>
+            <span v-if="event.batchId" :id="domId(event.id + '-batch')" class="batch-description">{{ batchDescription(event) }}</span>
             <div v-if="expanded.has(event.id) && (!collapsedTurns.has(group.turn) || query || filter !== 'ALL')" class="trace-event-detail">
               <div v-if="event.callId" class="event-call-id">{{ t('Call ID:') }} {{ event.callId }}<button v-if="toolSpan(event.id)" class="diagnosis-button" @click="selectSpan(toolSpan(event.id)!)">{{ t('Inspect timing') }}</button></div>
               <TraceEventDetails :event="event" />
@@ -156,6 +158,9 @@
       <p class="context-note">{{ t('Currently available tool definitions. Actual calls, arguments and results are in Trace.') }}</p>
       <ToolsCard :tools="tools" />
     </div>
+    <div v-show="section === 'stats'" :id="domId('diagnosis-stats')" class="diagnosis-scroll context-view" role="tabpanel" :aria-labelledby="domId('diagnosis-stats-tab')" tabindex="0">
+      <SessionProfile :api-base="apiBase" :session-id="sessionId" :active="active && section === 'stats'" />
+    </div>
   </section>
 </template>
 
@@ -168,10 +173,11 @@ import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import HoverInfo from './HoverInfo.vue'
 import TraceEventDetails from './TraceEventDetails.vue'
 import SystemPromptCard from './SystemPromptCard.vue'
+import SessionProfile from './SessionProfile.vue'
 import ToolsCard, { type ToolDef } from './ToolsCard.vue'
 import type { DiagnosisSection } from '../composables/useDiagnosisNavigation.ts'
 import {
-  correlateModelSpans, correlateToolSpans, detailText, eventMatches, fetchDiagnosisJson, fitTraceWindow, formatTraceDuration, latestTraceWindow, mergeTraceSpans, parseDiagnosisHistory, recordedModelResponse,
+  correlateModelSpans, correlateToolSpans, detailText, diagnosisBatchColor, eventMatches, fetchDiagnosisJson, fitTraceWindow, formatTraceDuration, latestTraceWindow, mergeTraceSpans, parseDiagnosisHistory, recordedModelResponse,
   parseTracePage, spanDuration, spanMatches, stackTimelineItems, traceDuration, traceKey,
   type DiagnosisEvent, type ModelResponseDetail, type SessionTraceSpan, type TracePage, type TraceWindow,
 } from '../session-diagnosis.ts'
@@ -189,7 +195,7 @@ const props = defineProps<{
   idPrefix?: string
 }>()
 const domId = (id: string) => props.idPrefix ? `${props.idPrefix}-${id}` : id
-const views = [{ id: 'trace', get label() { return t('Trace') } }, { id: 'prompt', get label() { return t('System prompt') } }, { id: 'tools', get label() { return t('Tools') } }] as const
+const views = [{ id: 'trace', get label() { return t('Trace') } }, { id: 'prompt', get label() { return t('System prompt') } }, { id: 'tools', get label() { return t('Tools') } }, { id: 'stats', get label() { return t('Statistics') } }] as const
 const section = defineModel<DiagnosisSection>('section', { default: 'trace' })
 const query = ref('')
 const kinds = ['ALL', 'USER', 'SESSION', 'ASSISTANT', 'TOOL', 'CONTEXT', 'SYSTEM']
@@ -352,6 +358,10 @@ function formatTime(value?: number): string {
 }
 function shortTime(value?: number): string {
   return value === undefined ? t('No timestamp') : formatDateTime(new Date(value), { hour12: false })
+}
+function batchDescription(event: DiagnosisEvent): string {
+  return t('Batch {number} · {count} items', { number: event.batchNumber, count: event.batchSize })
+    + '. ' + t('Items with the same batch number came from one LLM call.')
 }
 function preview(event: DiagnosisEvent): string {
   return (event.content || event.reasoning || t('Empty message')).replace(/\s+/g, ' ').slice(0, 180)
@@ -589,6 +599,19 @@ h3 { font-size: 14px; font-weight: 550; }
 .trace-event-header { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 6px; text-align: left; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; cursor: pointer; }
 .trace-event-header:hover, .trace-event.expanded { background: var(--c-bg-soft); }
 .event-chevron { font-size: 12px; width: 8px; flex-shrink: 0; }
+.event-batch-indicator { position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 2px; background: var(--batch-color); }
+.trace-event-header { position: relative; padding-left: 10px; }
+.batch-color-0 { --batch-color: #426bb5; }
+.batch-color-1 { --batch-color: #96702d; }
+.batch-color-2 { --batch-color: #398175; }
+.batch-color-3 { --batch-color: #9165ab; }
+.batch-color-4 { --batch-color: #b25f70; }
+:global(.dark .session-diagnosis .batch-color-0) { --batch-color: #89aff0; }
+:global(.dark .session-diagnosis .batch-color-1) { --batch-color: #d5b16d; }
+:global(.dark .session-diagnosis .batch-color-2) { --batch-color: #79bfb1; }
+:global(.dark .session-diagnosis .batch-color-3) { --batch-color: #bd98d4; }
+:global(.dark .session-diagnosis .batch-color-4) { --batch-color: #dc94a3; }
+.batch-description { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .event-kind { flex: 0 0 auto; display: inline-block; color: var(--c-text-secondary); background: var(--c-bg-muted); font: 600 9px ui-monospace, monospace; letter-spacing: .045em; padding: 4px 6px; border-radius: var(--radius-sm); }
 .event-origin { max-width: 25%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--c-text-secondary); }
 .event-name { max-width: 25%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text); font-size: 11px; font-weight: 500; }

@@ -41,7 +41,8 @@ export const projectWorkOverviewSchema = z.object({
     id, sessionId: id, tool: id, status: z.enum(['running', 'unknown']), workKeys: z.array(id),
   })),
   observer: z.object({
-    enabled: z.boolean(), running: z.boolean(), pending: z.number().int().nonnegative(),
+    organization: z.object({mode:z.enum(["full","delta"]),status:z.enum(["running","completed","partial"]),coveredCount:z.number().int().nonnegative(),manifestCount:z.number().int().nonnegative(),patches:z.number().int().nonnegative()}).optional(),
+    organizerEnabled: z.boolean().optional(), enabled: z.boolean(), running: z.boolean(), pending: z.number().int().nonnegative(),
     errors: z.array(z.object({ sessionId: id, error: z.string() })), error: z.string().optional(),
   }).optional(),
 }).superRefine((value, ctx) => {

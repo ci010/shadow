@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import test, { type TestContext } from 'node:test'
-import { createRenderer, defineComponent, h, inject, nextTick, reactive, type Component, type ComponentPublicInstance } from 'vue'
+import { createRenderer, defineComponent, h, inject, nextTick, reactive, ref, type Component, type ComponentPublicInstance } from 'vue'
 import { compileScript, compileTemplate, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
-import { AUTOMATION_PAGE_SIZE, fetchAutomations, fetchAutomationRuns, learningOutcomeLabel } from './automations.ts'
+import { AUTOMATION_PAGE_SIZE, fetchAutomations, fetchAutomationRuns, learningOutcomeLabel, setAutomationEnabled } from './automations.ts'
 import { createLiveRefresh } from './live-refresh.ts'
 import type { LiveObserver } from './live-client.ts'
 import { createAutomationCatalog } from './automation-catalog.ts'
@@ -155,9 +155,9 @@ test('errors are safe, 404 explicitly requests upgrade, and cancelled reads cann
 })
 
 function mount(t: TestContext, active = true, withSidebar = false) {
-  const requests: Array<{ url: URL; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
+  const requests: Array<{ url: URL; signal: AbortSignal; init: RequestInit; finish: (value: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (input: URL, init: RequestInit) => new Promise<Response>(resolve => {
-    requests.push({ url: new URL(String(input)), signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
+    requests.push({ url: new URL(String(input)), signal: init.signal!, init, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
   }))
   const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document')
   const visibility = Object.assign(new EventTarget(), { visibilityState: 'visible', getElementById: () => null })
@@ -205,7 +205,13 @@ function mount(t: TestContext, active = true, withSidebar = false) {
     new Function('require', 'module', 'exports', outputText)((id: string) => {
       if (id.endsWith('/HoverInfo.vue')) return { default: defineComponent({
         props: ['text', 'label', 'interactive', 'disabled'],
-        setup: (_props, { slots }) => () => slots.default?.({ triggerProps: {}, close: () => {} }),
+        setup: (_props, { slots }) => {
+          const opened = ref(false)
+          return () => h('span', { class: 'hover-info-test', onPointerenter: () => { opened.value = true } }, [
+            slots.default?.({ triggerProps: {}, close: () => {} }),
+            opened.value ? h('div', { class: 'hover-info-test-popup' }, slots.content?.({ close: () => {} })) : null,
+          ])
+        },
       }) }
       if (id.endsWith('/TreeRow.vue')) return { default: component('TreeRow.vue') }
       if (id.endsWith('/AutomationConversationInfo.vue')) return { default: component('AutomationConversationInfo.vue') }
@@ -658,4 +664,123 @@ test('history refresh failures preserve the selected conversation and expose ret
   await settle()
   assert.equal(view.state().historyError, '')
   assert.equal(view.props.selectedSessionId, run().sessionId)
+})
+
+test('sidebar preference actions live only in the popup and work under master suppression', async t => {
+  const view = mount(t, true, true)
+  await settle()
+  view.finish(0, page(), { ...automation(), enabled: false, configuredEnabled: true, editable: true, disabledByGlobal: true })
+  await settle()
+  const sidebarNodes = () => view.nodes(view.nodes().find(node => node.type === 'section' && node.props['aria-label'] === 'Automations')!)
+  const action = () => sidebarNodes().find(node => node.props.class === 'automation-action')
+  assert.equal(sidebarNodes().some(node => node.type === 'input'), false)
+  assert.equal(action(), undefined, 'No inline enable/disable control')
+  assert.doesNotMatch(view.text(), /Paused by global switch/)
+  const hover = sidebarNodes().find(node => node.props.class === 'hover-info-test')!
+  ;(hover.props.onPointerenter as () => void)()
+  await nextTick()
+  assert.equal(action()!.text, 'Disable', 'Action uses configured rather than effective state')
+  assert.equal(action()!.props.disabled, false)
+  ;(action()!.props.onClick as () => void)()
+  await nextTick()
+  assert.equal(action()!.props.disabled, true)
+  assert.equal(action()!.props['aria-busy'], true)
+  const patch = view.requests.at(-1)!
+  assert.equal(patch.init.method, 'PATCH')
+  assert.deepEqual(JSON.parse(String(patch.init.body)), { enabled: false })
+  ;(action()!.props.onClick as () => void)()
+  assert.equal(view.requests.at(-1), patch, 'Busy actions cannot submit duplicate updates')
+  patch.finish({ automation: { id: automation().id } })
+  await settle()
+  view.requests.findLast(request => request.url.pathname.endsWith('/api/automations'))!.finish({ automations: [{ ...automation(), enabled: false, configuredEnabled: false, editable: true, disabledByGlobal: true }] })
+  await settle()
+  assert.equal(action()!.text, 'Enable')
+  ;(action()!.props.onClick as () => void)()
+  await nextTick()
+  assert.deepEqual(JSON.parse(String(view.requests.at(-1)!.init.body)), { enabled: true })
+  view.requests.at(-1)!.finish({}, 503)
+  await settle()
+  assert.equal(action()!.props.disabled, false)
+  assert.ok(sidebarNodes().some(node => node.props.role === 'alert'))
+  view.requests.findLast(request => request.url.pathname.endsWith('/api/automations'))!.finish({ automations: [{ ...automation(), enabled: false }] })
+  await settle()
+  assert.equal(action(), undefined, 'Historical entries have no controls in the popup')
+  assert.doesNotMatch(view.text(), /Paused by global switch/)
+  assert.equal(sidebarNodes().some(node => node.type === 'input'), false)
+})
+
+test('automation updates use scoped PATCH and only send the item preference', async () => {
+  let called = false
+  await setAutomationEnabled('http://fixture/projects/a', 'learning:reflector', false, new AbortController().signal, async (input, init) => {
+    called = true
+    assert.equal(new URL(String(input)).pathname, '/projects/a/api/automations/learning%3Areflector')
+    assert.equal(init?.method, 'PATCH')
+    assert.deepEqual(JSON.parse(String(init?.body)), { enabled: false })
+    return Response.json({ automation: { id: 'learning:reflector' } })
+  })
+  assert.equal(called, true)
+})
+
+
+test('system automation renders scoped coverage history with stable feature controls', async t => {
+  const view = mount(t, true, true)
+  await settle()
+  const partial = { ...run(), title: '话题增量整理', scope: 'delta', organizationProblem: 'unfinished', organization: {
+    mode: 'delta', status: 'partial', coveredCount: 1, manifestCount: 3, patches: 1,
+  } }
+  const full = { ...run('full'), title: '话题全量重整', scope: 'full' }
+  view.finish(0, page([partial, full]), { ...automation(), source: 'system', canToggle: true, name: '话题整理', task: undefined, enabled: false, configuredEnabled: false, editable: true } as ReturnType<typeof automation>)
+  await settle()
+  assert.match(view.text(), /Execution history/)
+  assert.match(view.text(), /1\/3 Coverage/)
+  assert.match(view.text(), /Organization ended without finishing/)
+  assert.match(view.text(), /Partial/)
+  assert.match(view.text(), /Inactive/)
+  assert.match(view.text(), /Enable/)
+  assert.match(view.text(), /Controls this automation feature, not the saved run/)
+  assert.equal(view.state().history.runs.length, 2)
+  view.state().scope = 'delta'
+  await nextTick()
+  assert.equal(view.state().filteredRuns.length, 1)
+  assert.equal(view.state().filteredRuns[0].scope, 'delta')
+  const disclosures = view.nodes().filter(node => node.type === 'details')
+  assert(disclosures.length > 0)
+  assert(disclosures.every(node => !node.props.open))
+})
+
+
+test('internal prompts and semantic execution output are disclosed, never default transcript dumps', () => {
+  const { descriptor } = parse(readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8'))
+  const template = descriptor.template!.content
+  const internalDisclosure = template.match(/<AutomationPayload v-if="automationConversation\?\.automation\.value\?\.source === 'system'[^>]*\/>/)?.[0]
+  assert.ok(internalDisclosure)
+  assert.match(internalDisclosure, /:source="msg\.content"/)
+  const payload = readFileSync(new URL('./components/AutomationPayload.vue', import.meta.url), 'utf8')
+  assert.match(payload, /Execution input/)
+  assert.match(payload, /Execution output/)
+  assert.match(payload, /ToolPayload v-if="open"[^>]*boxed/)
+  assert.match(payload, /const open = ref\(false\)/)
+  assert.doesNotMatch(payload, /renderMarkdown/)
+})
+
+for (const feature of ['system:work-observer', 'system:work-organizer']) {
+  for (const enabled of [true, false]) {
+    test(`system feature ${feature} exposes ${enabled ? 'disable' : 'enable'} in popup`, async t => {
+      const view = mount(t, true, true)
+      view.props.automationId = feature
+      await settle()
+      view.finish(0, page(), { ...automation(feature), source: 'system', canToggle: true, enabled, configuredEnabled: enabled, editable: true } as ReturnType<typeof automation>)
+      await settle()
+      assert.match(view.text(), enabled ? /Disable/ : /Enable/)
+      const sidebar = readFileSync(new URL('./components/AutomationSidebar.vue', import.meta.url), 'utf8')
+      assert.match(sidebar, /toggle\(job.id, job.toggleId \?\? job.id, !preference\(job\)\)/)
+      assert.doesNotMatch(sidebar, /job.source !== 'system'/)
+    })
+  }
+}
+test('disabled topic organization prevents dashboard dispatch and offers stable feature settings', () => {
+  const source = readFileSync(new URL('./components/ProjectWorkbench.vue', import.meta.url), 'utf8')
+  assert.match(source, /if \(organizationDisabled.value \|\| organizationBusy.value \|\| !canWrite.value\) return/)
+  assert.equal((source.match(/:disabled="organizationBusy \|\| organizationDisabled"/g) ?? []).length, 2)
+  assert.match(source, /automationChatLocation\(projectId, 'system:work-organizer'\)/)
 })

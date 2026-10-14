@@ -36,7 +36,7 @@ export async function applyHumanWorkAction(sessions: SessionManager, body: z.inf
 export function projectWorkOverview(sessions: SessionManager, github: Record<string, ProjectWorkItem['github']> = {}, observer?: ProjectWorkOverview['observer']): ProjectWorkOverview {
   const alignment = sessions.alignment
   if (!alignment) throw new WorkConflict('Work is unavailable.')
-  const states = sessions.listSessions().filter(state => state.agentType !== 'work-observer')
+  const states = sessions.listSessions().filter(state => state.agentType !== 'work-organizer' && state.agentType !== 'work-observer')
   const records = alignment.store.workRecords()
   return projectWorkOverviewSchema.parse({
     observer,
@@ -95,7 +95,7 @@ export function projectWorkOverview(sessions: SessionManager, github: Record<str
 export function projectWorkPlugin(sessions: SessionManager, authorize: (request: Request) => boolean | Promise<boolean>,
   github: () => Record<string, ProjectWorkItem['github']> = () => ({}),
   observer?: () => ProjectWorkOverview['observer'],
-  organize?: (signal: AbortSignal) => Promise<void>): GatewayPlugin {
+  organize?: (signal: AbortSignal, mode?: "full"|"delta") => Promise<void>): GatewayPlugin {
   return app => {
     const diagnostics = new WeakMap<Request, string>()
     app.use('/api/work/organize', async (c, next) => {
@@ -151,15 +151,16 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
         console.error('[work-organization]', diagnostic('availability', 'organization_unavailable'))
         return c.json({ error: 'organization_unavailable', stage: 'availability', correlationId }, 501)
       }
-      try { z.object({}).strict().parse(await c.req.json()) }
+      let mode: "full"|"delta" = "full"
+      try { mode = z.object({mode:z.enum(["full","delta"]).default("full")}).strict().parse(await c.req.json()).mode }
       catch {
         console.error('[work-organization]', diagnostic('validation', 'invalid_request'))
-        return c.json({ error: 'invalid_request', stage: 'validation', correlationId, message: 'Send an empty JSON object.' }, 400)
+        return c.json({ error: 'invalid_request', stage: 'validation', correlationId, message: 'Send {mode: full|delta}, or an empty JSON object for full.' }, 400)
       }
       let stage = 'organization'
       try {
         console.info('[work-organization]', diagnostic(stage, 'organization_started'))
-        await organize(c.req.raw.signal)
+        await organize(c.req.raw.signal,mode)
         stage = 'overview'
         const overview = projectWorkOverview(sessions, github(), observer?.())
         console.info('[work-organization]', diagnostic('complete', 'organization_succeeded'))
@@ -168,7 +169,7 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
         if (error instanceof WorkConflict) {
           const code = error instanceof OrganizationConflict ? error.code : 'work_conflict'
           console.error('[work-organization]', diagnostic(stage, code))
-          return c.json({ error: code, stage, correlationId, message: 'Organization is unavailable, already queued, or has no recorded topics. Previous results were kept.' }, 409)
+          return c.json({ error: code, stage, correlationId, message: 'Organization is unavailable, already queued, or has no recorded topics. Previously saved results and valid partial patches were kept.' }, 409)
         }
         const code = stage === 'overview' ? 'organization_refresh_failed'
           : error instanceof ObserverOutputError ? error.code

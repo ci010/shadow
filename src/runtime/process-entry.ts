@@ -8,6 +8,7 @@ import {
 } from './runtime-cli.ts'
 
 export interface ProcessEntryDependencies {
+  readonly prepareMainData?: (dataDir: string) => Promise<void>
   readonly loadConfig: (configPath?: string) => Promise<Config>
   readonly startMainRuntime: (
     config: Config,
@@ -49,6 +50,7 @@ export async function runProcessEntry(
   const result = await dispatch(args, {
     ...dependencies.runtime,
     mainFactory: async (plan, paths, context) => {
+      await dependencies.prepareMainData?.(paths.dataDir)
       const config = await dependencies.loadConfig(
         paths.mutableAgentConfigPath,
       )

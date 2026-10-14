@@ -1,7 +1,7 @@
 import { t } from './i18n.ts'
 import { parseSessionRecovery, type SessionRecovery } from '../../src/sessions/session-store.ts'
 
-export type SessionStage = 'idle' | 'llm' | 'tool' | 'waiting' | 'waiting-for-call' | 'inactive' | 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type SessionStage = 'idle' | 'llm' | 'tool' | 'waiting' | 'rate-limit' | 'waiting-for-call' | 'inactive' | 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 export type WorkingStage = 'llm' | 'tool' | 'waiting' | 'waiting-for-call' | 'running'
 
 /** Active computation, unlike a request paused for user input or a child call. */
@@ -10,11 +10,11 @@ export function isAnimatingStage(stage: unknown): boolean {
 }
 
 export function isWaitingStage(stage: unknown): boolean {
-  return stage === 'waiting' || stage === 'waiting-for-call'
+  return stage === 'waiting' || stage === 'rate-limit' || stage === 'waiting-for-call'
 }
 
 export function isWorkingStage(stage: unknown): stage is WorkingStage {
-  return stage === 'llm' || stage === 'tool' || stage === 'waiting' || stage === 'waiting-for-call' || stage === 'running'
+  return stage === 'llm' || stage === 'tool' || stage === 'waiting' || stage === 'rate-limit' || stage === 'waiting-for-call' || stage === 'running'
 }
 
 export function prominentWorkingStage(stages: readonly (string | undefined)[]): WorkingStage | undefined {
@@ -25,6 +25,7 @@ export function sessionActivity(stage: unknown) {
   switch (stage) {
     case 'llm': return { kind: stage, label: t('Thinking'), working: true }
     case 'tool': return { kind: stage, label: t('Using tools'), working: true }
+    case 'rate-limit': return { kind: stage, label: t('Waiting for model rate limit (automatic retry)'), working: true }
     case 'waiting': return { kind: stage, label: t('Waiting for a response'), working: true }
     case 'waiting-for-call': return { kind: stage, label: t('Waiting for call'), working: true }
     case 'idle': return { kind: stage, label: t('Ready'), working: false }

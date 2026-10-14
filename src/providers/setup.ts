@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { RuntimeDiagnosticLog, ReadinessResult } from '../runtime/diagnostic-log.ts'
 import { normalizeCopilotHost } from '../shared/copilot-host.ts'
 import { z } from 'zod'
 import type { GatewayPlugin } from '../gateway/types.ts'
@@ -90,6 +91,7 @@ interface Flow {
 }
 
 interface SetupOptions {
+  diagnostics?: RuntimeDiagnosticLog
   getConfig: () => Config
   store: ConfigStore
   auth?: CopilotAuthenticator
@@ -217,6 +219,11 @@ export class ProviderSetup {
     if (!status.baseUrl) return { ...status, reason: 'missing_base_url' }
     if (!settings.apiKey && settings.authMode === 'api-key') return { ...status, reason: 'missing_credentials' }
     if (settings.authMode === 'none') return { ...status, ready: true }
+    let httpStatus: number | undefined
+    const finish = (result: ReadinessResult): ProviderSetupStatus => {
+      this.options.diagnostics?.providerReadiness(provider, httpStatus, result)
+      return result === 'ready' ? { ...status, ready: true } : { ...status, reason: result }
+    }
     try {
       const headers: Record<string, string> = provider === 'anthropic'
         ? { 'x-api-key': settings.apiKey, 'anthropic-version': '2023-06-01' }
@@ -225,12 +232,16 @@ export class ProviderSetup {
         headers, redirect: 'error',
         signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
       })
+      httpStatus = response.status
       await response.body?.cancel()
-      if (response.status === 401 || response.status === 403) return { ...status, reason: 'invalid_credentials' }
-      if (!response.ok && response.status !== 404 && response.status !== 405) return { ...status, reason: 'network_error' }
-      return { ...status, ready: true }
+      if (response.status === 401) return finish('invalid_credentials')
+      // Agnes account/API-key permissions can deny access without rejecting the key.
+      // Do not present a forbidden model listing as proof that credentials are wrong.
+      if (response.status === 403) return finish(provider === 'agnes' ? 'permission_denied' : 'invalid_credentials')
+      if (!response.ok && response.status !== 404 && response.status !== 405) return finish('network_error')
+      return finish('ready')
     } catch {
-      return { ...status, reason: signal.aborted ? 'cancelled_error' : 'network_error' }
+      return finish(signal.aborted ? 'cancelled_error' : 'network_error')
     }
   }
 

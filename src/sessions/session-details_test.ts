@@ -352,6 +352,53 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
+  test(`${Store.name}: reported cache-read tokens survive the session usage total`, async () => {
+    await withTempWorkspace(async (workspace) => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const cached = { promptTokens: 100, completionTokens: 5, totalTokens: 105, cachedTokens: 80 }
+      const zeroHits = { promptTokens: 20, completionTokens: 2, totalTokens: 22, cachedTokens: 0 }
+      try {
+        await store.saveState('web:cache', { sessionId: 'web:cache', segmentIndex: 0 })
+        await store.createSessionLog(newPhysicalSessionId('web:cache', 0, 1), [
+          { type: 'model_usage', sessionId: 'web:cache', id: 'cache-hit', usage: cached },
+          { type: 'model_usage', sessionId: 'web:cache', id: 'cache-miss', usage: zeroHits },
+        ])
+        const sessions = makeManager(workspace, store)
+        await sessions.start()
+        try {
+          const details = await sessions.getSessionDetails('web:cache')
+          deepEqual(details?.usage, {
+            promptTokens: 120, completionTokens: 7, totalTokens: 127, cachedTokens: 80,
+          })
+          deepEqual(details?.subagentUsage, { promptTokens: 0, completionTokens: 0, totalTokens: 0 })
+          equal(details?.usageIncomplete, false)
+        } finally {
+          await sessions.stop()
+        }
+
+        // A call that never reported cache usage leaves the total unreported
+        // instead of silently reporting zero hits.
+        await store.createSessionLog(newPhysicalSessionId('web:mixed', 0, 1), [
+          { type: 'model_usage', sessionId: 'web:mixed', id: 'reported', usage: cached },
+          { type: 'model_usage', sessionId: 'web:mixed', id: 'unreported', usage: { promptTokens: 10, completionTokens: 1, totalTokens: 11 } },
+        ])
+        await store.saveState('web:mixed', { sessionId: 'web:mixed', segmentIndex: 0 })
+        const mixed = makeManager(workspace, store)
+        await mixed.start()
+        try {
+          const details = await mixed.getSessionDetails('web:mixed')
+          deepEqual(details?.usage, { promptTokens: 110, completionTokens: 6, totalTokens: 116 })
+          equal(details?.usageIncomplete, false)
+        } finally {
+          await mixed.stop()
+        }
+      } finally {
+        store.close?.()
+      }
+    })
+  })
+
   test(`${Store.name}: details are read-only, preserve selected context and flag incomplete legacy usage`, async () => {
     await withTempWorkspace(async (workspace) => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

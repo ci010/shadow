@@ -1,4 +1,5 @@
 import type { Hono } from 'hono'
+import type { RuntimeDiagnosticLog } from '../runtime/diagnostic-log.ts'
 import type { MainCluster } from '../cluster/main-cluster.ts'
 import type { Config } from '../config/schema.ts'
 import type { ProjectScope } from './scope.ts'
@@ -11,6 +12,7 @@ import type { ChromePortAllocator } from '../browser/chrome-manager.ts'
 import type { RealtimeHub } from '../realtime/hub.ts'
 
 export interface ProjectRuntimeDependencies {
+  diagnostics?: RuntimeDiagnosticLog
   /** Omission preserves legacy/test callers. False selects the coordinator tool profile. */
   localExecutor?: boolean
   project: ProjectRecord

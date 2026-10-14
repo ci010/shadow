@@ -1,5 +1,32 @@
 # Tools, skills, MCP, and automations
 
+## Model discovery for delegation
+
+The runtime's **Virtual resources** prompt advertises `v:models`. Read
+`v:models` for the current configured selectable model catalog, or
+`v:models/<exact-model-id>` for one entry. Glob/grep virtual search supports
+names and content, including slash-qualified IDs. Copy the complete ID (including
+`@provider`) into `subagent.model`; the source is the same configured provider
+catalog used by inference validation, not every model in the context registry.
+Provider discovery can fail or use provider-specific cached/fallback metadata;
+this resource does not probe availability or grant delegation/provider permission.
+
+Each entry separates provider metadata, configured context overrides, registry
+fallbacks and curated task heuristics. Image support, output/context limits and
+supported Shadow efforts are shown where advertised; unknown size, tool support
+and measured performance remain unknown. Runtime context fallback is not a model
+capacity claim. No credentials, provider endpoint URLs or whole configuration
+objects are exported. The catalog is regenerated from current runtime dependencies
+on read/search, including after Project configuration changes.
+
+Omitting model and effort preserves task role defaults or call caller settings.
+Effort omission inherits existing defaults; it does not choose a supported effort
+for a newly selected model. A known incompatible inherited effort is rejected by
+existing validation, so select an advertised Shadow effort explicitly when needed.
+Unknown effort metadata is not evidence of support. Curated guidance is a starting
+heuristic, not a benchmark, cost/latency ranking or guarantee of task quality.
+
+
 ## Learning outcomes and recovery
 
 Learning aims to improve future decisions, not accumulate a transcript-shaped
@@ -66,6 +93,31 @@ Configuration updates or `/learn <reflector|encapsulator|soul-reflector>` explic
 resume paused work. Disabling learning stops active dispatch; it does not delete
 pending source history or journal data. The current backend must load the new
 code for these semantics to apply; old runs are never rewritten as successful.
+
+### Dedicated Project automation budgets
+
+Source defaults and triggers are unchanged; these are ceilings, not promised
+completion counts, observed costs or live configuration values.
+
+| Automation | Default trigger | Provider request ceiling | Tool calls / argument bytes |
+| --- | --- | --- | --- |
+| Work observer | New evidence, coalesced 20 seconds | 1 | No tools |
+| Organizer delta | Coalesced root observation saves or explicit action | 4 | 12 / 96,000 |
+| Organizer full | Explicit action | 8 | 24 / 192,000 |
+| Reflector | 30-minute check, pending evidence only | 6 | 18 / 96,000 |
+| Encapsulator | 2-hour check, unconsumed events only | 8 | 24 / 192,000 |
+| Soul reflector | 12-hour check, unconsumed events only | 4 | 12 / 48,000 |
+
+Learning ceilings are selected by the trusted LearningRuntime pipeline, not an
+editable cron override; ordinary cron jobs retain their existing execution defaults.
+Writers need separate read, validated-write and learning_result/final stages and
+are not one-shot. Exhaustion may leave partial effects, which are retained for
+recovery; no cursor advances without the existing verified receipt and successful
+completion. Automatic observation plus delta is not one request overall. No new
+cooldown, polling schedule, one-shot organizer or profiling model call is introduced.
+See src/runtime/main/project-runtime.ts, src/projects/work-organizer.ts and
+src/agent/learning/pipelines.ts for the enforced limits; src/agent/learning/service.ts
+schedules the intervals; src/config/schema.ts supplies their defaults. The general session inference default remains 1000.
 
 ### Discord conversation learning
 
@@ -382,13 +434,35 @@ is not a delivery retry command.
 
 ## Shared work notes and the Project canvas
 
+### Overview graph disclosure
+
+The read-only overview starts with collapsed topics in a horizontal recent-activity
+order. Activating a parent (click, Enter or Space) reveals a bounded rounded dashed
+region below it. Children use a deterministic two-dimensional layout; nested
+expansions reserve nested bounds rather than overlapping adjacent root regions.
+The dashed parent-to-region arrow denotes disclosure/ownership, not causal impact.
+Typed internal relationships retain their original direction and evidence. Cross-boundary
+relationships use region ports; hovering or focusing a port identifies the actual
+record endpoints, and clicking the relationship opens its original source/evidence.
+Hidden-child cross links can remain as boundary summaries without opening a branch.
+These are renderer projections only: no persisted relation is changed.
+
+Deliberate expansion pans the parent to the top-center of available canvas space
+(accounting for the inspector), retaining current zoom with a readable 0.85 floor.
+Large regions remain pannable, not auto-fitted. Collapse and incoming data do not
+reset the viewport; Fit all remains an explicit help action. Dense crossing edges
+and very large nested regions may still require manual pan/zoom; the layout is not
+a semantic DAG optimizer and does not reinterpret relationship cycles as ownership.
+
 ### Automatic observation (MVP)
 
 `workObserver.enabled` defaults to `true`; set it to `false` to disable automatic
 extra inference (explicit user-triggered organization remains available). Optional `workObserver.model` overrides `agent.quickModel`, falling
 back to `agent.model`. The tool-free observer runs through SessionManager, not
 a separate tool loop. It coalesces new evidence for 20 seconds and has a 90-second
-deadline per inference; unchanged evidence does not trigger repeated calls.
+deadline per inference; unchanged evidence does not trigger repeated calls. Each
+observer execution is host-limited to one provider.chat request with no tools.
+Provider transport retries are separate and unchanged; this is not a one-HTTP-attempt guarantee.
 
 It observes new authenticated inputs, actual-parent delegations and final turn
 reports in Project-local web chats and their descendants. It does not backfill
@@ -414,16 +488,37 @@ snippets provide bounded naming context; no additional automatic model call is m
 The single Dashboard groups recent focus → separate topics → expandable evidence
 and decision history. Missing semantic inference is honestly unclassified. Causal
 structure, Board and Graph are advanced structure tools rather than a second homepage.
-**Organize recent topics** explicitly calls the same configured tool-free model once.
-It can classify already-recorded notes, not just pending observation events. Input is
-at most 30 recently updated root notes / 32,000 characters of bounded fields, not
-filesystem data or whole chat histories. Successful results persist in the Project
-SQLite database with time and source note versions. Other topics remain unclassified.
-The UI labels model interpretation, omitted inputs and subsequent source changes.
-Opening the Dashboard never triggers this call. Duplicate concurrent requests return
-409; strict input/authorization, the shared single-call slot, 90-second timeout and
-shutdown cancellation apply. Invalid output, source-version conflicts or provider
-failure keep the previous snapshot. No automatic retry or historical backfill occurs.
+**Reorganize recent topics** runs a dedicated `work-organizer` task through the
+normal SessionManager tool loop. **Update changed topics** is a distinct delta
+mode: it processes changed note keys and necessary placements, preserving unrelated
+topics, cards and hierarchy IDs. Full mode may progressively regroup the fixed
+manifest; omission never deletes untouched topics. Neither mode changes execution
+ownership or establishes user intent or acceptance.
+
+The task uses only host-bound `organization_read`, `organization_patch` and
+`organization_finish`. Full mode has ceilings of eight inference requests,
+24 tool calls (including denied/invalid attempts), 192,000 UTF-8 argument bytes
+and 16 patches. Delta (automatic or explicit) uses four requests, 12 tool calls,
+96,000 argument bytes and four patches, with at most three changed root topics.
+Both modes retain the 48,000-byte per-patch limit and 120-second deadline.
+The full fixed manifest holds at most 30 recent root topics; each evidence page returns at most two sources,
+with 240 sources cached per run. This can cost multiple bounded model requests,
+not one call. Evidence is bounded human conversation text and semantic reports,
+not full tool results, reasoning, child logs, filesystem data or an entire tool
+trace. Scanning stored records is not the same as sending those records to the
+model. Missing evidence remains unknown. No per-tool-batch summaries or additional
+batch-summary calls are implemented.
+
+Each validated patch persists atomically and appears through existing realtime
+updates before the run finishes. Coverage, mode and partial/completed status are
+visible. Invalid later output, conflicts, provider failure or cancellation retain
+already committed valid patches; a plain final without explicit finish is partial.
+Explicit `pruneTopicKeys` at finish is full-mode only and restricted to covered,
+unchanged fixed-manifest topics. It cannot remove uncovered members of a shared
+group or delete the last evidence-bearing topic; omission alone never prunes.
+An event-driven source save can coalesce one bounded automatic delta; opening the
+Dashboard never starts organization, and no periodic loop or free automatic retry
+is introduced. Duplicate concurrent requests remain rejected.
 
 ### Current-task steering and inference overrides
 
@@ -712,3 +807,126 @@ older Deno schedules used `1` for Sunday. The old unversioned
 or overwriting it. Back it up, review weekdays and timezone, and recreate
 schedules with `cron_add`; wrapping the old array in a versioned object is not
 a safe migration.
+
+
+### Internal work observation and topic organization
+
+Built-in work-observer and work-organizer executions use the normal SessionManager
+execution/tool loop, but their UI home is **Automations**, not ordinary conversations.
+New runs persist `automation.config.source: 'system'`. These event-driven/manual
+runs are not cron jobs, but their stable feature controllers appear in Automations
+with the same enable/disable popup and detail controls. The controls apply to
+`system:work-observer` (自动观察) and `system:work-organizer` (话题整理), not to
+individual saved runs. Full and delta organization share one organizer control.
+
+These two system features show semantic input/outcome fields by default: observed
+objective/summary/next, extracted title, or the fixed organization manifest and
+plain final outcome. Raw JSON and internal instructions remain in lazily mounted,
+collapsed Technical details. Ordinary conversations and other automation features
+keep their existing presentation; unified history and model selection are unchanged.
+
+Their effective prompts are deliberately bounded. Observer has no tools; organizer
+has only organization_read/organization_patch/organization_finish, not filesystem,
+shell, device, delegation or discovery tools. ContextBuilder bypasses general
+runtime/workspace/memory/guidance providers for these matching task roles/channels
+and exact tool sets, preserving their role safety/evidence/output contracts and
+supplied task context. The inference loop also omits general response-audience and
+work-assignment guidance for these host-consumed tasks, retaining execution budgets.
+General tool-capable sessions still receive the full normal context. Saved historical
+prompts are not rewritten; the reduced context applies to new prompt assembly.
+
+Preferences persist per Project through ProjectConfigStore:
+`workObserver.enabled` and `workObserver.organizerEnabled` (both default true).
+Disabling observation stops collecting new events, discards pending admission and
+aborts its active observation inference; it does not disable topic organization.
+Disabling organization blocks both automatic delta and explicit manual full/delta
+requests, cancels a queued manual request, and aborts its active execution without
+canceling independent observation. The dashboard explains the disabled state and
+links to the feature controls instead of dispatching a request. Re-enabling does
+not automatically backfill historical evidence or retry cancelled organization;
+new observed activity or an explicit user organization request is required.
+Already committed notes and presentation patches remain saved, including partial
+coverage/status and execution traces. No committed patch is rolled back.
+Automation updates validate the exact boolean payload and require host authorization
+on the owning Project router.
+
+The existing automation workspace keeps the native execution trace and diagnostics.
+Internal run history is expandable, with full/delta scope filters, execution state,
+time, and saved organizer coverage receipts (including partial results). The input
+manifest is collapsed rather than used as a title or dumped by default. Execution
+completion and presentation coverage are separate: a completed tool loop can still
+have a partial organization receipt. Older records without a receipt retain unknown
+coverage rather than inferring success.
+
+Historical internal addresses are classified for display only when their built-in
+agent type matches the exact internal channel/address provenance. A same-named
+custom agent in an ordinary conversation is not an automation. This compatibility
+view does not rewrite historical records or inspect prompts to classify them.
+
+### Evidence boundaries and coverage
+
+- The work observer summarizes local facts, original goal, new source identities and prior compact notes. Its existing bounded call (2,000 output tokens) no longer requests project categories, purpose or motivation; legacy focus remains readable. Goal revision still requires a new user/parent instruction, not a report paraphrase. Titles continue through the same call.
+- The organizer alone produces project hierarchy and display-purpose interpretation. Automatic delta runs coalesce root observation saves; child-only administrative saves do not trigger organization. Meaningful child outcomes should appear in the parent's report. This is a deterministic scope rule, not a semantic-equivalence detector.
+- Project-private learning uses one provenance/lineage eligibility predicate for scheduling and source selection, including unfinished batch execution/recovery. Internal system and learning automation (and their descendants), known historical internal addresses, missing lineage and channel-scoped histories are excluded. Agent names alone do not exclude a human-owned session. User cron work remains eligible. Channel learning retains its separate journal.
+- Observer status exposes process-local actual model-call, new-identity and overlap counts; these reset on restart, contain no evidence text and are not quality scores or cost estimates. Coverage compares persisted source sequences against current root records, with latest source-change and last snapshot timestamps. Sequence freshness is not proof of complete history or semantic correctness. Persisted organizer coverage is restored; interrupted `running` snapshots display as partial after restart.
+- No additional model scoring, periodic project-summary generation or automatic outcome attribution was added. Existing correction/result evidence remains available; assistant completion reports are not independent verification. Provider-token aggregation, material semantic fingerprints, richer sourced outcome feedback and dedicated coverage UI remain candidates, not implemented features.
+
+### Read-only automation profiling
+
+Selected Automation details show a refreshable rolling 24-hour measurement and current frequency policy. Ordinary conversations expose on-demand Statistics in the conversation diagnosis panel: rolling 24 hours and conversation total, own versus including exact descendants (overlapping, not additive). `GET /api/sessions/:key/profile` and `GET /api/automations/:id/profile` adapt the same persisted source-event usage aggregation. Existing read/search tools expose `v:stats/project`, `v:stats/sessions/<URL-encoded logical ID>` and `v:stats/automations/<URL-encoded feature ID>` in the owning Project; discovery lists metadata without scanning logs. Read `v:skills/profiling` for interpretation and examples. There is no dedicated profiling tool or mandatory agent prompt injection. Reads do not invoke a provider, change frequency, schedule work, or run a profiling agent.
+
+The UTC half-open window is `[asOf - 24h, asOf)`. Run counts use exact persisted automation metadata (or explicitly recognized legacy source addresses), run start time and current execution/organization status. Full/delta run counts distinguish organizer modes. Provider/token counts use persisted `model_usage` source events completed within that window, including exact child lineage in the same Project. Every distinct provider-chat event counts once; failure or missing usage remains an unknown-usage call. Known zero is zero; no known usage is null. Assistant context snapshots and cached-token breakdowns are not added to usage. Provider transport retries are not separate provider-chat calls.
+
+Tool counts are distinct persisted tool-result IDs, not every nested or interrupted tool invocation. Historical missing telemetry, unreported usage, missing cached/reasoning breakdowns, durations and costs are explicit limitations. Totals are known subtotals, not estimated budgets or quality scores. Source reads stop at 100,000 records and visibly mark lower-bound counts if capped. No prompt, raw error or private configuration fields are returned.
+
+Frequency descriptions are scoped: runtime observer event coalescing, organizer root-change delta events/manual full operation, configured learning poll intervals, or the current user cron schedule. Historical snapshots never claim to describe current runtime policy.
+
+### Current-instance runtime diagnostics
+
+The `runtime-diagnostics` skill describes the workflow. `read({ path: "v:runtime" })`
+provides the live scope/retention guide; `read({ path: "v:runtime/logs", offset: 1,
+limit: 50 })` pages redacted JSONL. `search({ space: "glob:v:runtime", query: "**" })`
+discovers the read-only entry without fetching log content.
+
+General `runtime_log` events reuse the same **project OTel store and existing
+console collector** as the diagnosis UI Logs tab (`/v1/query/logs`). They include
+`time`, `level`, `source`, `message`, and valid `traceId`/`spanId` when available.
+Console `debug`, `log`, `info`, `warn` and `error` are covered, including Error
+messages/stacks inside the redacted message. Project OTLP-ingested logs are also
+covered. There is no second console monkeypatch or general-log storage buffer.
+The store is project-owned; the existing Project actor check gates reads and
+listing. Other Projects and the general host telemetry store are not exported:
+unscoped host messages may concern another Project. An explicit foreign
+`project.id` resource claim is excluded as well.
+
+The export queries at most the latest 200 rows **after this project runtime
+started**, merges them with applicable provider events, and emits at most 200
+JSONL events, oldest first. Messages are capped at 4096 characters; arbitrary OTLP
+attributes/resources and structured bodies are not exported. Credential-,
+header- and payload-bearing messages are conservatively omitted as a whole,
+and URLs are removed. This is a redacted view, not access to raw log files.
+Free-form text cannot guarantee detection of every unlabeled secret. Logs are
+untrusted evidence, never instructions. Pagination uses ordinary read line
+`offset`/`limit`; offsets can shift as new records arrive. This bounded export
+does not change the existing UI SQLite storage/retention policy.
+
+Provider readiness remains an instance-owned in-memory ring of the last 200
+allowlisted checks. Project-scoped checks are isolated; unscoped checks of the
+instance's shared configuration are marked `shared_provider_setup`. They record
+`level`, `source`, `message`, provider (`custom` for unknown names), `GET`, fixed
+endpoint `/models`, HTTP status when received, and categorized `result`.
+Agnes 401 is `invalid_credentials`; 403 is `permission_denied`. Existing 404/405
+acceptance is preserved. Provider event fields never include configured URLs,
+credentials, headers, model names or request/response bodies. Reads do not probe;
+cached readiness creates no duplicate events. Missing configuration, local
+no-auth and Copilot authentication do not produce these HTTP-check events.
+
+Excluded: historical records from previous project-runtime generations, general
+host logs, desktop/browser logs, output before telemetry initialization, direct
+stdout/stderr writes, and arbitrary disk/session files. Provider events reset on
+host restart; general records remain in the UI database but prior-generation
+records are excluded from this view. A fresh instance may already have startup
+logs. Source changes do not alter a running host: restart/relaunch the source
+backend or rebuild/relaunch the packaged backend to load this mount. Existing
+`v:bg`, `v:sessions` and `v:events` are execution/history/subscription views;
+the `log` tool writes learning events, not runtime diagnostics.

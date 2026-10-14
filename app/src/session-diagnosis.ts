@@ -18,12 +18,23 @@ export interface DiagnosisEvent {
   callId?: string
   toolCall?: string
   toolCalls?: string
+  /** Identity and ordinal of the original assistant record, before any filtering. */
+  batchId?: string
+  batchNumber?: number
+  batchSize?: number
   inputMessageCount?: number
   arguments?: string
   result?: string
   images?: string[]
   reasoning?: string
   usage?: string
+}
+
+/** Segment-local ordinal selects a finite palette before any view filtering. */
+export function diagnosisBatchColor(event: Pick<DiagnosisEvent, 'batchId' | 'batchNumber'>): string | undefined {
+  const number = event.batchNumber
+  return event.batchId && Number.isSafeInteger(number) && number! > 0
+    ? `batch-color-${(number! - 1) % 5}` : undefined
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -138,6 +149,7 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
   const modelResponses: DiagnosisEvent[] = []
   const calls = new Map<string, DiagnosisEvent>()
   let turn = 0
+  let batchNumber = 0
   for (const [index, message] of value.messages.entries()) {
     if (!record(message) || typeof message.role !== 'string') throw new Error(t('Invalid session history message.'))
     const parts = Array.isArray(message.content) ? message.content : undefined
@@ -170,7 +182,14 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
       : message.role === 'assistant' ? 'ASSISTANT'
       : sessionMessage ? 'SESSION'
       : message.role === 'user' ? 'USER' : 'CONTEXT'
+    const batch = message.role === 'assistant' ? {
+      batchId: `${value.currentPhysicalId ?? 'segment'}:message-${index}`,
+      batchNumber: ++batchNumber,
+      batchSize: (content || message.reasoning_content || message.reasoning_text ? 1 : 0)
+        + (Array.isArray(message.tool_calls) ? message.tool_calls.length : 0),
+    } : {}
     const response: DiagnosisEvent = {
+      ...batch,
       id: `message-${index}`, kind, turn,
       title: sessionMessage ? sessionMessageTitle(sessionMessage.sessionSource)
         : kind === 'CONTEXT' ? (message.name === '__compaction_summary__' ? t('Compaction context')
@@ -197,6 +216,7 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
         || typeof call.function.name !== 'string') throw new Error(t('Invalid tool call in history.'))
       const args = detailText(call.function.arguments)
       const event: DiagnosisEvent = {
+        ...batch,
         id: `message-${index}-call-${callIndex}`, kind: 'TOOL', turn,
         title: call.function.name, content: args, arguments: args, timestamp: time, callId: call.id, toolCall: detailText(call),
       }

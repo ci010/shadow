@@ -1,4 +1,4 @@
-import { withProviderRetry } from './retry.ts'
+import { withProviderRetry, providerRetryScope } from './retry.ts'
 import { ProviderHttpError, providerTransportFailure } from './provider.ts'
 import type {
   ChatMessage,
@@ -135,8 +135,15 @@ export class AnthropicProvider implements LLMProvider {
         phase = 'response'
         if (!res.ok) {
           if (res.status === 413) throw new ProviderHttpError(413, 'Anthropic chat failed: request payload too large')
-          const text = await res.text()
-          throw new ProviderHttpError(res.status, `Anthropic chat failed: ${res.status} ${text}`)
+          const text = await res.text().catch(() => {
+            options.signal?.throwIfAborted()
+            throw new ProviderHttpError(res.status, `Provider rejected request (HTTP ${res.status})`, undefined,
+              { retryAfter: res.headers.get('retry-after'), rejectedRequest: true })
+          })
+          let code: string | undefined
+          try { const error = JSON.parse(text)?.error; code = typeof error?.code === 'string' && error.code ? error.code : typeof error?.type === 'string' ? error.type : undefined } catch { /* Status remains authoritative. */ }
+          throw new ProviderHttpError(res.status, `Anthropic chat failed: ${res.status} ${text}`, code,
+            { retryAfter: res.headers.get('retry-after'), rejectedRequest: true })
         }
 
         const json = (await res.json()) as any
@@ -162,16 +169,17 @@ export class AnthropicProvider implements LLMProvider {
           model: json.model ?? model,
           usage: json.usage
             ? {
-              promptTokens: json.usage.input_tokens,
+              promptTokens: json.usage.input_tokens + (json.usage.cache_read_input_tokens ?? 0) + (json.usage.cache_creation_input_tokens ?? 0),
               completionTokens: json.usage.output_tokens,
-              totalTokens: json.usage.input_tokens + json.usage.output_tokens,
+              totalTokens: json.usage.input_tokens + (json.usage.cache_read_input_tokens ?? 0) + (json.usage.cache_creation_input_tokens ?? 0) + json.usage.output_tokens,
+              ...(json.usage.cache_read_input_tokens != null ? { cachedTokens: json.usage.cache_read_input_tokens } : {}),
             }
             : undefined,
         }
       } catch (error) {
         throw providerTransportFailure(error, phase, options.signal)
       }
-    }, options.signal)
+    }, options.signal, { scope: providerRetryScope(this.baseUrl, this.apiKey), provider: this.name, model })
   }
 
   listModels(): string[] {

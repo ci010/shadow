@@ -7,6 +7,16 @@ execution spans, not a complete reconstruction of every historical model
 request. A partial export is labelled as such; missing tool results in a page
 are not evidence of successful or failed execution.
 
+In the event list, a narrow colored marker links assistant text/reasoning and
+tool calls from the same persisted model response. A five-color, theme-aware
+palette cycles by stable segment-local batch number, unchanged by search or
+filtering; adjacent batches differ, but distant batches may reuse a color.
+The header tooltip and screen-reader description include **Batch N · M items**
+and explain that the items came from one LLM call, so color is not the only
+available identifier. User/context entries and orphan tool results have no marker.
+Tool results stay attached by call ID. This works with older JSONL and SQLite records without a storage migration;
+it does not infer a common call for orphan results or separate assistant records.
+
 An authorized client can request the same collector at
 `GET /projects/<id>/api/sessions/<encoded-logical-session-id>/diagnosis`.
 Use `view=summary` (default) for previews or `view=full` for longer text and
@@ -94,3 +104,15 @@ session-memory files. Mentioning the unsupported `v:wiki` alias in explanatory
 text is allowed; addressing it in a tool call is not. Calls and elapsed time
 are bounded, and absent credentials or provider failures fail the live test
 instead of silently substituting a scripted provider.
+
+### Organization output limits
+
+Manual organization has a 16,384-token output ceiling for its bounded topic/card/hierarchy response. Automatic compact work observations retain the builtin observer's 2,000-token ceiling. These are ceilings, not fixed token consumption, and incomplete provider output is never retried automatically. A captured Responses `max_output_tokens` incomplete failure becomes the safe `model_output_limit` organization diagnostic; no partial JSON or invented citations are accepted. Existing results remain intact. Unknown provider errors remain generic so provider content does not leak into HTTP responses or structured organization logs.
+
+### Profile UI and URL boundaries
+
+Automation profiles use the same Project-preserving `apiUrl` join as other gateway reads. A Project base ends in `/`; concatenating another `/api/...` produces a double slash inside the Project route and does not match the profile endpoint. `app/src/profile-api.ts` normalizes this boundary while preserving encoded feature/session IDs. The mounted-gateway regression in `src/cron/profile_test.ts` covers both base forms, colon IDs and the old 404 path; it does not establish the cause of every live profile failure.
+
+Automation statistics show recorded input/output tokens and provider/tool counts in a compact strip. Null usage remains unknown, zero remains zero, and known/unknown calls plus untracked sessions remain visible. Window, frequency scope, lower-bound warnings and measurement limitations are retained in the disclosure. HTTP failures show localized recovery guidance and status codes, never response bodies. Conversation statistics reuse the same metric presentation and remain on demand, with own/inclusive scopes explicitly non-additive.
+
+Execution history is collapsed by default, shows six loaded rows per UI page, uses the shared scope selector and localized times (full local time in a tooltip), and scrolls within a bounded region. This is presentation pagination, not a change to backend history paging or totals. Internal execution input/output is a lazy, collapsed technical disclosure using the existing bounded payload renderer; switching run sessions resets its open state. The ordinary conversation trace and heading/navigation remain the workspace rather than a separate runs explorer.

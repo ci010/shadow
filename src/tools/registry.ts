@@ -283,6 +283,14 @@ export class Tools {
  * Lookup order: dynamic layer first, then base registry.
  */
 export class SessionTools extends Tools {
+  inferenceRequestLimit?: number
+  private trustedLimits?: { allowedTools: readonly string[]; toolCalls: number; argumentBytes: number }
+  private trustedCalls = 0
+  private trustedBytes = 0
+  setTrustedLimits(limits: { allowedTools: readonly string[]; inferenceRequests: number; toolCalls: number; argumentBytes: number }): void {
+    this.trustedLimits = { ...limits, allowedTools: [...limits.allowedTools] }
+    this.inferenceRequestLimit = limits.inferenceRequests
+  }
   override getExecutionPolicy(): ToolExecutionPolicy | undefined { return super.getExecutionPolicy() ?? this.base.getExecutionPolicy() }
   private askAvailable = true
 
@@ -504,6 +512,7 @@ export class SessionTools extends Tools {
   }
 
   executionDenial(name: string, args: Record<string, unknown>): string | undefined {
+    if (this.trustedLimits && !this.trustedLimits.allowedTools.includes(name)) return this.rejectExecution("Tool is outside the trusted one-shot allowlist.")
     if (name === 'ask' && !this.askAvailable) return this.rejectExecution(CHAT_QUESTION_GUIDANCE)
     if (name === 'invoke_tool' && typeof args.name === 'string') {
       return this.executionDenial(args.name, typeof args.args === 'object' && args.args !== null ? args.args as Record<string, unknown> : {})
@@ -655,6 +664,11 @@ export class SessionTools extends Tools {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
+    if (this.trustedLimits) {
+      this.trustedCalls++
+      this.trustedBytes += Buffer.byteLength(JSON.stringify(args), "utf8")
+      if (this.trustedCalls > this.trustedLimits.toolCalls || this.trustedBytes > this.trustedLimits.argumentBytes) throw new Error("One-shot tool budget exhausted")
+    }
     const denial = this.executionDenial(name, args)
     if (denial) return denial
     if (!this.isToolAllowed(name)) {

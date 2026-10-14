@@ -47,7 +47,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
   assert.ok(skeleton, 'Use the actual loading condition and activity binding')
   const continuityStart = template.indexOf('<details v-if="unlinkedExecutions.length"')
   assert(continuityStart >= 0 && continuityStart < start)
-  const segmentNavigation = template.match(/<SegmentNavigation[\s\S]*?\/>/)?.[0]
+  const segmentNavigation = template.match(/<SegmentNavigation[\s\S]*?<\/SegmentNavigation>/)?.[0].replace(/<ConversationHistoryMenu[\s\S]*?\/>/, '')
   assert.ok(segmentNavigation)
   const compiled = compileTemplate({
     source: `<div :class="{ 'mobile-chat': mobileLayout }">
@@ -109,7 +109,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
           const state = reactive({ loadingHistory:true, messages:[], visible:true, conversationDocumentVisible:true,
             readingLayout:false, mobileLayout:false,
             activePanel:'conversation', route:{name:'chat'}, viewingPhysicalId:null, activeSessionId:'web:owner',
-            streaming:false, streamContent:'', streamMedia:[], streamTimestamp:null, streamResponseContext:undefined, isDirectChat:true, requestBusy:false, currentRecovery:null,
+            streaming:false, streamPhase:undefined, streamContent:'', streamMedia:[], streamTimestamp:null, streamResponseContext:undefined, isDirectChat:true, requestBusy:false, currentRecovery:null,
             embedded:false, enableChildPane:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]},
             compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[], childSessionId:null,
             executionFixtures:{11:{mode:'task',label:'Compile and finish native helper',agentType:'sub',

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { LearningRunError, LearningRuntime, learningTask } from './pipelines.ts'
+import { LearningRunError, LearningRuntime, learningTask, LEARNING_LIMITS } from './pipelines.ts'
 import { LearningLedger } from './ledger.ts'
 import { LearningTools } from './tools.ts'
 import { fakeSessions } from './test-fixtures.ts'
@@ -54,6 +54,7 @@ test('verified no-change advances bounded cursors; legacy history is not replaye
     })
     const id = await f.runtime.run('reflector', signal())
     assert.equal(f.runtime.ledger.outcome(String(id))?.status, 'no_change')
+    assert.deepEqual((f.started[0] as unknown as { executionLimits: unknown }).executionLimits, LEARNING_LIMITS.reflector)
     const restarted = new LearningRuntime(f.sessions, 'a')
     assert.equal((await restarted.sources(signal()))[0].offset, 103)
     assert.equal(restarted.ledger.outcome('historical-run'), undefined)
@@ -363,3 +364,37 @@ test('empty or oversized diagnostics still persist a blocked outcome without adv
     }
   })
 })
+
+
+test('source scanning and legacy retry exclude internal automation without consuming its cursor', async () => withTempWorkspace(async workspace => {
+  const f = fakeSessions(workspace, ['root', 'internal', 'internal-child', 'cron-work'].map(sessionId => ({ sessionId, segmentIndex: 0, total: 3 })))
+  const automation = (source: 'system' | 'cron') => ({ jobId: source, name: source, runId: source, startedAt: new Date(0).toISOString(), contextMode: 'fresh' as const, config: { source, schedule: 'manual' } })
+  f.records.get('internal')!.automation = automation('system')
+  f.records.get('internal-child')!.parentSessionId = 'internal'
+  f.records.get('cron-work')!.automation = automation('cron')
+  const runtime = new LearningRuntime(f.sessions, 'a')
+  assert.deepEqual((await runtime.sources(signal())).map(source => source.sessionId), ['root', 'cron-work'])
+  const identity = { sessionId: 'internal', physicalId: physicalSessionId(f.records.get('internal')!), segmentIndex: 0 }
+  runtime.ledger.create('reflector', [{ ...identity, offset: 0, end: 3 }], [])
+  await assert.rejects(runtime.run('reflector', signal()), /ineligible sources/)
+  assert.equal(f.started.length, 0)
+  assert.equal(runtime.ledger.cursor(identity), 0)
+}))
+
+test('batch instructions mention only pipeline-specific mutation tools', async () => withTempWorkspace(async workspace => {
+  const ledger = new LearningLedger(workspace, 'a')
+  for (const pipeline of ['reflector', 'encapsulator', 'soulReflector'] as const) {
+    const prompt = learningTask(ledger.create(pipeline, [], []))
+    assert.match(prompt, /learning_result/)
+    if (pipeline === 'soulReflector') {
+      assert.match(prompt, /learning_soul/)
+      assert.doesNotMatch(prompt, /learning_memory|learned_skill/)
+    } else {
+      assert.match(prompt, /learning_memory/)
+      assert.doesNotMatch(prompt, /learning_soul/)
+      if (pipeline === 'reflector') assert.doesNotMatch(prompt, /learned_skill/)
+      else assert.match(prompt, /learned_skill/)
+    }
+    assert.equal(LEARNING_LIMITS[pipeline].inferenceRequests, pipeline === 'reflector' ? 6 : pipeline === 'encapsulator' ? 8 : 4)
+  }
+}))

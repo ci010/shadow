@@ -2,7 +2,20 @@ import type { ProjectWorkItem, ProjectWorkOverview } from '../../src/projects/wo
 import { workRoots, workCanvasRows } from './project-work.ts'
 
 /** Only persisted work links group conversations. Session lineage is not topic segmentation. */
-export function projectTopics(data: ProjectWorkOverview) {
+export type ProjectTopic = { key: string; title: string; root: ProjectWorkItem | undefined; items: ProjectWorkItem[]; sessions: ProjectWorkOverview['sessions']; changedAt: string; fallback: boolean }
+export function projectTopics(data: ProjectWorkOverview): ProjectTopic[] {
+  if (data.focus?.presentationVersion === 1 || data.focus?.result.groups.some(group => group.cards !== undefined)) {
+    const presented = data.focus.result.groups.flatMap((group, index) => {
+    const items = data.items.filter(item => group.topicKeys.includes(item.key))
+    const ids = new Set((group.cards ?? []).flatMap(card => card.sources.map(source => source.sessionId)))
+    return [{ key: `presentation:${index}`, title: group.category, root: undefined as ProjectWorkItem | undefined,
+      items, sessions: data.sessions.filter(session => !session.parentSessionId && ids.has(session.sessionId)),
+      changedAt: [...items.map(item => item.changedAt), ...data.sessions.filter(session => ids.has(session.sessionId)).map(session => session.lastActivityAt ?? '')].filter(at => Number.isFinite(Date.parse(at))).sort().at(-1) ?? data.focus!.inferredAt, fallback: false }]
+    })
+    const cited = new Set(data.focus.result.groups.flatMap(group => group.topicKeys))
+    const sessions = new Set(data.focus.result.groups.flatMap(group => group.cards?.flatMap(card => card.sources.map(source => source.sessionId)) ?? []))
+    return [...presented, ...projectTopics({ ...data, focus: undefined }).filter(topic => !cited.has(topic.key) && !(topic.fallback && topic.sessions.some(session => sessions.has(session.sessionId))))]
+  }
   const roots = workRoots(data.items)
   const represented = new Set<string>()
   const topics = data.items.filter(item => roots.get(item.key) === item.key).map(root => {
@@ -26,14 +39,32 @@ export function projectTopics(data: ProjectWorkOverview) {
 
 /** Tentative display grouping only: never writes work links or merges conversations. */
 export function projectFocusGroups(topics: ReturnType<typeof projectTopics>, snapshot?: ProjectWorkOverview['focus']) {
+  if (snapshot?.result.hierarchy) {
+    const hierarchy = snapshot.result.hierarchy
+    const descendants = (id: string): typeof hierarchy => hierarchy.filter(node => node.parentId === id).flatMap(node => [node, ...descendants(node.id)])
+    const assigned = new Set<string>()
+    const groups = hierarchy.filter(node => !node.parentId).map(node => {
+      const indexes = [node, ...descendants(node.id)].flatMap(child => child.groupIndexes)
+      const members = topics.filter(topic => indexes.some(index => topic.key === `presentation:${index}` || snapshot.result.groups[index]?.topicKeys.includes(topic.key)))
+      members.forEach(topic => assigned.add(topic.key))
+      return { key: `organized-hierarchy:${node.id}`, title: node.title, purpose: node.purpose, motivation: '', inferred: true,
+        changedAt: members.map(topic => topic.changedAt).sort().at(-1) ?? '', topics: members,
+        stale: members.some(topic => topic.items.some(item => snapshot.sources.find(source => source.key === item.key)?.sequence !== item.sequence)) }
+    })
+    const unclassified = topics.filter(topic => !assigned.has(topic.key))
+    if (unclassified.length) groups.push({ key: 'organized:unclassified', title: '', purpose: '', motivation: '', inferred: false, changedAt: '', topics: unclassified, stale: false })
+    return groups.sort((a, b) => b.changedAt.localeCompare(a.changedAt))
+  }
   if (snapshot) {
     const assigned = new Set<string>()
     const groups = snapshot.result.groups.map((group, index) => {
-      const members = topics.filter(topic => group.topicKeys.includes(topic.key))
+      const members = topics.filter(topic => group.topicKeys.includes(topic.key) || group.cards !== undefined && topic.key === `presentation:${index}`)
       members.forEach(topic => assigned.add(topic.key))
       return { key: `organized:${index}`, title: group.category, purpose: group.purpose,
         motivation: group.motivation, inferred: true, changedAt: snapshot.inferredAt, topics: members,
-        stale: members.some(topic => snapshot.sources.find(source => source.key === topic.key)?.sequence !== topic.root?.sequence) }
+        stale: members.some(topic => group.cards !== undefined
+          ? topic.items.some(item => snapshot.sources.find(source => source.key === item.key)?.sequence !== item.sequence)
+          : snapshot.sources.find(source => source.key === topic.key)?.sequence !== topic.root?.sequence) }
     }).filter(group => group.topics.length)
     const unclassified = topics.filter(topic => !assigned.has(topic.key))
     if (unclassified.length) groups.push({ key: 'unclassified', title: '', purpose: '', motivation: '', inferred: false,

@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { rm } from 'node:fs/promises'
+import { bundleBackend } from './backend-bundle.ts'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { pnpmInvocation, runPnpm } from './processes.ts'
@@ -25,11 +25,9 @@ if (mode !== 'package') {
 
 if (target) {
   if (mode !== 'package') await runPnpm(['build:app'])
-  await rm('desktop/backend', { recursive: true, force: true })
-  await runPnpm([
-    '--filter', '@shadow/shadow', 'deploy', '--prod',
-    '--node-linker', 'hoisted', 'desktop/backend',
-  ])
+  // Vite bundles the checked backend and independent workers; only WASM codec
+  // packages and their tiny runtime dependency closure remain external.
+  await bundleBackend(process.cwd(), resolve('desktop/backend'))
   const electronDist = await prepareReleaseDownloads(process.cwd(), process.env, target)
   await verifyAria2Package(process.cwd(), target)
   await prepareAria2Signing(process.cwd(), target)

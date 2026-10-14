@@ -85,6 +85,7 @@ function overlayEnv(raw: Record<string, unknown>): void {
     OPENAI_API_KEY: 'openai',
     ANTHROPIC_API_KEY: 'anthropic',
     DEEPSEEK_API_KEY: 'deepseek',
+    AGNES_API_KEY: 'agnes',
     OPENROUTER_API_KEY: 'openrouter',
     GEMINI_API_KEY: 'gemini',
     GROQ_API_KEY: 'groq',

@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 /** Safe error labels only: provider output and validation values can contain private evidence. */
 export class ObserverOutputError extends Error {
-  constructor(readonly code: 'model_json_invalid' | 'model_schema_invalid') {
+  constructor(readonly code: 'model_json_invalid' | 'model_schema_invalid' | 'model_output_limit') {
     super(code)
     this.name = 'ObserverOutputError'
   }
@@ -18,4 +18,10 @@ export function parseObserverOutput<T>(text: string, schema: z.ZodType<T>): T {
   const parsed = schema.safeParse(value)
   if (!parsed.success) throw new ObserverOutputError('model_schema_invalid')
   return parsed.data
+}
+
+/** Execution results cross persistence: classify only exact known safe failure strings. */
+export function observerExecutionError(message?: string): Error {
+  if (message === 'Responses request incomplete: max_output_tokens') return new ObserverOutputError('model_output_limit')
+  return new Error('Work observation did not complete.')
 }

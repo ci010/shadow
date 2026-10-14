@@ -16,7 +16,7 @@ const record = (value: unknown): value is Raw => !!value && typeof value === 'ob
 function withProjectLearning(config: Config, raw: Raw): Config {
   const value = record(raw.learning) ? raw.learning : {}
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean') throw new TypeError('Learning enabled must be a boolean')
-  for (const interval of Object.values(config.learning)) {
+  for (const interval of [config.learning.reflectIntervalMs, config.learning.encapsulateIntervalMs, config.learning.soulIntervalMs]) {
     if (!Number.isInteger(interval) || interval < 1 || interval > 2_147_483_647) throw new TypeError('Learning intervals must be positive timer intervals')
   }
   const learning = { ...config.learning, enabled: value.enabled !== false }

@@ -129,6 +129,9 @@ export class Session extends BaseSession {
     }
 
     if (msg.kind === 'control') {
+      if (this.rateLimitWait && msg.command.type !== 'cancel' && msg.command.type !== 'compact') {
+        throw new SessionResumeError('The model is automatically waiting for a rate limit. Cancel the current request before continuing.')
+      }
       if (msg.command.type === 'cancel') {
         this.cancel()
         this.scheduleSleepCheck(llm)

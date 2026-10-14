@@ -37,6 +37,7 @@ export const providerPresets = [
   { id: 'openai', name: 'OpenAI', model: 'gpt-4.1' },
   { id: 'anthropic', name: 'Anthropic', model: 'claude-sonnet-4-6' },
   { id: 'deepseek', name: 'DeepSeek', model: 'deepseek-flash' },
+  { id: 'agnes', name: 'Agnes AI', model: 'agnes-3.0-flash' },
   { id: 'openrouter', name: 'OpenRouter', model: 'anthropic/claude-sonnet-4.6' },
   { id: 'gemini', name: 'Google Gemini', model: 'gemini-2.5-pro' },
   { id: 'groq', name: 'Groq', model: 'llama-3.3-70b-versatile' },

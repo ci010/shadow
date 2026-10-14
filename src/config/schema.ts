@@ -229,6 +229,8 @@ export const ToolsSchema = z.object({
 // ── Learning config ────────────────────────────────────────────────────────
 
 export const LearningSchema = z.object({
+  /** Project-owned automatic scheduling preferences; omitted items default on. */
+  pipelines: z.object({ reflector: z.boolean().optional(), encapsulator: z.boolean().optional(), soulReflector: z.boolean().optional() }).strict().optional(),
   /** Interval for reflector poll (default 30 minutes). */
   reflectIntervalMs: z.number().default(30 * 60 * 1000),
   /** Interval for encapsulator poll (default 2 hours). */

@@ -1,5 +1,5 @@
 /** Deliberate surface opt-ins, never generic borders or large panels. */
-const MESSAGE_TARGETS = '.chat-bubble.chat-user, .chat-bubble.chat-assistant, .message-preview-card'
+const MESSAGE_TARGETS = '.chat-bubble.chat-user, .chat-bubble.chat-assistant, .message-preview-card, .input-question'
 export const REVEAL_TARGETS = `.reveal-border, .provider-card, .work-item-card, .composer-box, .chat-working, .context-chip, .session-work-triggers > button, ${MESSAGE_TARGETS}`
 export const REVEAL_REACH = 72
 const EXCLUDED = ':focus-within, :disabled, [aria-disabled="true"], [aria-invalid="true"], [aria-selected="true"], [aria-current], .selected, .execution-selected, .event-selected, .active, [aria-expanded="true"], .waiting, .error, .is-error, .invalid, .attachment-drop-target, .composer-answering, .composer-working, :has([aria-invalid="true"]), :has(.composer-control[aria-expanded="true"]), [data-reveal-disabled]'

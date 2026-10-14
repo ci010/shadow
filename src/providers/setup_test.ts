@@ -729,3 +729,62 @@ test('cached-credential login cannot report success after sign-out during activa
   assert.equal(f.setup.get(id)?.state, 'cancelled')
   assert.equal(f.auth.auth.hasValidApiKey(), false)
 })
+
+
+test('Agnes setup saves both documented Flash IDs using the built-in endpoint and keeps credentials private', async (t) => {
+  let requests = 0
+  const f = fixture(t, { agent: { model: 'gpt-4o' } }, undefined, (async (url, init) => {
+    requests++
+    assert.equal(String(url), 'https://apihub.agnes-ai.com/v1/models')
+    assert.equal(init?.method ?? 'GET', 'GET')
+    assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer synthetic-agnes-key')
+    assert.equal(init?.redirect, 'error')
+    assert.equal(init?.body, undefined, 'Setup must not send an inference request')
+    return Response.json({ data: [] })
+  }) as typeof fetch)
+  for (const model of ['agnes-3.0-flash', 'agnes-2.5-flash']) {
+    const response = await f.app.request('/api/provider/setup', {
+      method: 'POST', body: JSON.stringify({ provider: 'agnes', model, apiKey: 'synthetic-agnes-key' }),
+    })
+    assert.equal(response.status, 200)
+    const status = await response.json()
+    assert.equal(status.ready, true)
+    assert.equal(status.baseUrl, 'https://apihub.agnes-ai.com/v1')
+    assert.equal(f.active().agent.model, `${model}@agnes`)
+    assert.equal(f.active().providers.agnes.apiKey, 'synthetic-agnes-key')
+    assert.doesNotMatch(JSON.stringify(status), /synthetic-agnes-key/)
+    const inventory = await (await f.app.request('/api/provider/configured')).json()
+    assert.ok(inventory.providers.some((item: any) => item.provider === 'agnes' && item.selected))
+    assert.doesNotMatch(JSON.stringify(inventory), /synthetic-agnes-key/)
+  }
+  assert.equal(requests, 2)
+})
+
+test('Agnes rejected credentials and denied permissions block saving without leaking upstream responses', async (t) => {
+  for (const [code, reason] of [[401, 'invalid_credentials'], [403, 'permission_denied'], [503, 'network_error']] as const) {
+    let requests = 0
+    const f = fixture(t, { agent: { model: 'gpt-4o' }, providers: { openai: { apiKey: '' } } }, undefined,
+      (async (url, init) => {
+        requests++
+        assert.equal(String(url), 'https://apihub.agnes-ai.com/v1/models')
+        assert.equal(init?.method ?? 'GET', 'GET')
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer synthetic-rejected-key')
+        assert.equal(init?.body, undefined)
+        return new Response('synthetic-private-upstream-response', { status: code })
+      }) as typeof fetch)
+    const before = readFileSync(f.path, 'utf8')
+    const active = f.active()
+    const response = await f.app.request('/api/provider/setup', {
+      method: 'POST', body: JSON.stringify({ provider: 'agnes', model: 'agnes-3.0-flash', apiKey: 'synthetic-rejected-key' }),
+    })
+    assert.equal(response.status, 200)
+    const status = await response.json()
+    assert.equal(status.ready, false)
+    assert.equal(status.reason, reason)
+    assert.doesNotMatch(JSON.stringify(status), /synthetic-/)
+    assert.equal(requests, 1, 'No billable inference or credential-validation fallback')
+    assert.equal(readFileSync(f.path, 'utf8'), before)
+    assert.equal(f.active(), active)
+    assert.equal(f.applyCount(), 0)
+  }
+})

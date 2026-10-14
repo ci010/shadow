@@ -52,8 +52,11 @@
       <button type="button" class="image-annotation-retry" :disabled="busy || (!loadError && !canEdit)"
         @click="retry">{{ loadError ? t('Retry image') : t('Retry marked image') }}</button>
     </div>
-    <div v-show="loaded" class="image-annotation-stage">
+    <div ref="stage" v-show="loaded" class="image-annotation-stage" :class="{ 'is-pan-ready': spaceHeld, 'is-panning': panning }"
+      @wheel="zoomWheel" @pointerdown.capture="panDown" @pointermove.capture="panMove" @pointerup.capture="panUp"
+      @pointercancel.capture="panUp" @lostpointercapture="panLostCapture" @auxclick.middle.prevent>
       <canvas ref="canvas" class="image-annotation-canvas" :class="{ 'is-readonly': !editable || !!sourceError, 'is-drag-ready': dragReady }"
+        :style="zoomSize ? { width: `${zoomSize.width}px`, height: `${zoomSize.height}px`, maxWidth: 'none', maxHeight: 'none' } : undefined"
         :draggable="dragReady" :aria-label="`${name}. ${editable && !sourceError ? t('Hold the pointer and draw to mark the image.') : t('Read-only image preview.')}`"
         role="img" tabindex="0" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"
         @pointercancel="pointerCancel" @lostpointercapture="lostPointerCapture"
@@ -75,7 +78,7 @@ import HoverInfo from '../HoverInfo.vue'
 import { imageSourcePath, startImageReferenceDrag, type ImageContextBusy, type ImageContextUpdate } from '../../image-context.ts'
 import { AnnotationLoadError, AnnotationPointer, annotationLoadErrorMessage, annotationPoint, annotationSizeError, drawAnnotationStroke, isAnnotationUndo, markedImageName, type AnnotationPoint, type AnnotationStroke } from '../../image-annotation.ts'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   src: string
   localFile?: File
   name: string
@@ -84,7 +87,7 @@ const props = defineProps<{
   active: boolean
   editable: boolean
   keyboardActive?: boolean
-}>()
+}>(), { keyboardActive: true })
 const emit = defineEmits<{
   'image-context': [payload: ImageContextUpdate]
   'image-busy': [payload: ImageContextBusy]
@@ -96,6 +99,47 @@ const palette = [
 ]
 const canvas = ref<HTMLCanvasElement>()
 const preview = ref<HTMLElement>()
+const stage = ref<HTMLElement>()
+const spaceHeld = ref(false)
+const panning = ref(false)
+let pan: { id: number; x: number; y: number; left: number; top: number; button: number } | undefined
+function stopPan() {
+  const id = pan?.id
+  pan = undefined
+  panning.value = false
+  if (id !== undefined && stage.value?.hasPointerCapture(id)) stage.value.releasePointerCapture(id)
+}
+function panDown(event: PointerEvent) {
+  if (!props.active || !loaded.value || drawing.value || pan || !event.isPrimary
+    || !(event.button === 1 || (event.button === 0 && spaceHeld.value))) return
+  const target = stage.value
+  if (!target) return
+  event.preventDefault()
+  event.stopPropagation()
+  try { target.setPointerCapture(event.pointerId) } catch { return }
+  pan = { id: event.pointerId, x: event.clientX, y: event.clientY, left: target.scrollLeft, top: target.scrollTop, button: event.button }
+  panning.value = true
+  canvas.value?.focus({ preventScroll: true })
+}
+function panMove(event: PointerEvent) {
+  if (!pan || pan.id !== event.pointerId) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (!(event.buttons & (pan.button === 1 ? 4 : 1))) { stopPan(); return }
+  if (stage.value) {
+    stage.value.scrollLeft = pan.left - (event.clientX - pan.x)
+    stage.value.scrollTop = pan.top - (event.clientY - pan.y)
+  }
+}
+function panUp(event: PointerEvent) {
+  if (!pan || pan.id !== event.pointerId) return
+  event.preventDefault()
+  event.stopPropagation()
+  stopPan()
+}
+function panLostCapture(event: PointerEvent) {
+  if (pan?.id === event.pointerId) stopPan()
+}
 const color = ref(palette[0]!.color)
 const tool = ref<'freehand' | 'line'>('freehand')
 let strokeIsLine = false
@@ -109,9 +153,26 @@ const loadError = ref('')
 const exportError = ref('')
 const sourceError = ref('')
 const controlHeld = ref(false)
+const zoom = ref(1)
+const zoomSize = ref<{ width: number; height: number }>()
+function zoomWheel(event: WheelEvent) {
+  if (!event.ctrlKey || !props.active || !loaded.value) return
+  // This is an image-view operation, never browser/page zoom or a bitmap resize.
+  event.preventDefault()
+  event.stopPropagation()
+  if (drawing.value || panning.value || !canvas.value || !event.deltaY) return
+  const rect = canvas.value.getBoundingClientRect()
+  if (!rect.width || !rect.height) return
+  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 240 : 1)
+  const next = Math.min(4, Math.max(0.25, zoom.value * Math.exp(-Math.max(-240, Math.min(240, delta)) * 0.002)))
+  const ratio = next / zoom.value
+  const currentSize = zoomSize.value ?? rect
+  zoomSize.value = { width: currentSize.width * ratio, height: currentSize.height * ratio }
+  zoom.value = next
+}
 const canEdit = computed(() => props.active && props.editable && loaded.value && !busy.value && !sourceError.value)
 const canUndo = computed(() => props.active && props.editable && loaded.value && hasMarks.value && !sourceError.value)
-const dragReady = computed(() => props.active && loaded.value && !props.localFile && controlHeld.value && !busy.value && !exportError.value && !sourceError.value)
+const dragReady = computed(() => props.active && loaded.value && !spaceHeld.value && !panning.value && !props.localFile && controlHeld.value && !busy.value && !exportError.value && !sourceError.value)
 const pointer = new AnnotationPointer()
 let lastPoint: AnnotationPoint | null = null
 let strokeColor = ''
@@ -147,6 +208,8 @@ function releasePointer() {
   if (id !== null && canvas.value?.hasPointerCapture(id)) canvas.value.releasePointerCapture(id)
 }
 function cancelPending(message = '') {
+  stopPan()
+  spaceHeld.value = false
   ++exportGeneration
   releasePointer()
   if (busy.value) {
@@ -172,6 +235,8 @@ async function loadImage() {
   dragEnd()
   disposeImage()
   loaded.value = false
+  zoom.value = 1
+  zoomSize.value = undefined
   loading.value = true
   hasMarks.value = false
   strokes.length = 0
@@ -402,15 +467,33 @@ function dragEnd() { releaseDrag?.(); releaseDrag = undefined }
 function contextMenu(event: MouseEvent) { if (drawing.value) event.preventDefault() }
 function keyChange(event: KeyboardEvent) {
   controlHeld.value = event.ctrlKey
-  if (!isAnnotationUndo(event) || props.keyboardActive === false || !canUndo.value) return
+  if (event.type === 'keyup' && (event.code === 'Space' || event.key === ' ')) {
+    spaceHeld.value = false
+    if (pan?.button === 0) stopPan()
+    return
+  }
+  if (props.keyboardActive === false || !props.active) return
   const target = document.activeElement
-  if (!(target instanceof Element) || !preview.value?.contains(target)
+  const root = preview.value
+  // Attachment editing lives in a modal: its header/viewport focus also belongs to this editor.
+  const scope = props.localFile ? root?.closest('dialog[open]') ?? root : root
+  if (!(target instanceof Element) || !scope?.contains(target)
     || target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
+  if (event.type === 'keydown' && (event.code === 'Space' || event.key === ' ')
+    && !event.ctrlKey && !event.metaKey && !event.altKey && !event.isComposing && !event.defaultPrevented) {
+    event.preventDefault()
+    event.stopPropagation()
+    spaceHeld.value = true
+    return
+  }
+  if (!isAnnotationUndo(event) || !canUndo.value) return
   event.preventDefault()
   event.stopPropagation()
   undoStroke()
 }
 function windowBlur() {
+  stopPan()
+  spaceHeld.value = false
   controlHeld.value = false
   if (pointer.active) cancelPending(t('Drawing was interrupted. Retry marked image to attach the visible marks.'))
 }
@@ -424,13 +507,15 @@ watch(() => props.editable, (editable) => {
 })
 watch(() => props.active, (active) => {
   if (!active) {
+    stopPan()
+    spaceHeld.value = false
     controlHeld.value = false
     if (pointer.active) finishStroke()
   }
 })
 onMounted(() => {
-  window.addEventListener('keydown', keyChange)
-  window.addEventListener('keyup', keyChange)
+  window.addEventListener('keydown', keyChange, true)
+  window.addEventListener('keyup', keyChange, true)
   window.addEventListener('blur', windowBlur)
   void loadImage()
 })
@@ -440,8 +525,8 @@ onBeforeUnmount(() => {
   ++loadGeneration
   disposeImage()
   dragEnd()
-  window.removeEventListener('keydown', keyChange)
-  window.removeEventListener('keyup', keyChange)
+  window.removeEventListener('keydown', keyChange, true)
+  window.removeEventListener('keyup', keyChange, true)
   window.removeEventListener('blur', windowBlur)
 })
 </script>
@@ -464,11 +549,14 @@ onBeforeUnmount(() => {
 .image-annotation-preview button:focus-visible, .image-annotation-custom input:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 2px; }
 .image-annotation-preview button:disabled, .image-annotation-custom input:disabled { opacity: .45; cursor: not-allowed; }
 .image-annotation-hint, .image-annotation-status { margin: 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
-.image-annotation-stage { display: flex; justify-content: center; align-items: flex-start; width: 100%; min-width: 0; }
+.image-annotation-stage { width: 100%; min-width: 0; max-height: 60vh; overflow: auto; overscroll-behavior: contain; }
+.image-annotation-stage canvas { margin-inline: auto; }
 .image-annotation-canvas { display: block; width: auto; height: auto; max-width: 100%; max-height: 60vh; object-fit: contain; touch-action: none; cursor: crosshair; }
 .image-annotation-canvas.is-readonly { cursor: default; touch-action: pan-y; }
 .image-annotation-canvas:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .image-annotation-canvas.is-drag-ready { cursor: grab; }
+.image-annotation-stage.is-pan-ready, .image-annotation-stage.is-pan-ready canvas { cursor: grab; }
+.image-annotation-stage.is-panning, .image-annotation-stage.is-panning canvas { cursor: grabbing; user-select: none; }
 .image-annotation-error { color: var(--c-error); font-size: 12px; line-height: 1.5; }
 .image-annotation-error p { margin: 0 0 8px; max-width: 65ch; }
 @media (pointer: coarse) {

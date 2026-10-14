@@ -1,18 +1,19 @@
 <template>
-  <details v-disclosure-motion class="tool-group tool-activity" :open="groupOpen" @toggle.self="groupOpen = isOpen($event)">
-    <summary class="tool-activity-summary trace-header" :title="summaryTitle" @click="emit('interact')">
+  <details v-if="batch.entries.length" v-disclosure-motion class="tool-group tool-activity" :open="groupOpen" @toggle.self="onGroupToggle">
+    <summary class="tool-activity-summary trace-header" :title="summaryTitle" @click="chooseGroup">
       <span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />
       <span v-if="batch.files" class="activity-icon i-lucide-file-diff" aria-hidden="true" />
       <span class="activity-title">{{ summaryTitle }}</span>
       <LineChangeCounts v-if="batch.changes" :changes="batch.changes" :partial="batch.incomplete" />
       <span v-else-if="batch.files" class="activity-status">{{ t('Line counts unavailable') }}</span>
+      <span v-if="hasFailure" class="activity-failed">{{ t('Failed') }}</span>
       <span v-if="running" class="activity-status">{{ t('Running') }}</span>
     </summary>
     <div class="activity-list trace-guide">
-      <details v-for="entry in batch.entries" :key="entry.index" v-disclosure-motion class="tool-entry" @toggle.self="setExpanded(entry.index, $event)">
-        <summary class="tool-call-header" :title="entry.summary || entry.title" @click="emit('interact')">
+      <details v-for="entry in batch.entries" :key="entry.index" v-disclosure-motion class="tool-entry" :data-msg-idx="entry.index" :open="expanded.has(entry.index)" @toggle.self="setExpanded(entry.index, $event)">
+        <summary class="tool-call-header" :title="entry.summary || entry.title" @click="chooseEntry">
           <span class="tool-disclosure-icon" aria-hidden="true">
-            <span class="tool-icon activity-icon" :class="entry.path ? (matchedFileIcon(entry.path) ?? icons[entry.icon]) : icons[entry.icon]" />
+            <span class="tool-icon activity-icon" :class="entry.reasoning !== undefined ? 'i-lucide-brain' : entry.path ? (matchedFileIcon(entry.path) ?? icons[entry.icon]) : icons[entry.icon]" />
             <span class="activity-chevron i-lucide-chevron-right" />
           </span>
           <span class="tool-name">{{ entry.title }}</span>
@@ -22,6 +23,7 @@
           <span v-if="entry.summary && !entry.file" class="tool-args-summary">{{ entry.summary }}</span>
         </summary>
         <div v-if="groupOpen && expanded.has(entry.index)" class="tool-entry-content">
+          <div v-if="entry.reasoning" class="thinking-content prose" v-html="renderContent?.(entry.reasoning)" />
           <ToolFileDiffPreview v-if="entry.file && entry.toolCallId && apiBase !== undefined && sessionId"
             :api-base="apiBase" :session-id="sessionId" :tool-call-id="entry.toolCallId" :path="entry.path" />
           <p v-else-if="entry.file" class="activity-status">{{ t('No historical file diff is available for this tool call.') }}</p>
@@ -36,11 +38,15 @@
               <ToolPayload v-if="!closedResults.has(entry.index)" boxed class="tool-result-content" :source="entry.result || t('(Empty result)')" :images="entry.images" :file-path="entry.readPath" :line-numbers="entry.lineNumbers" :search-result="entry.grep" />
             </details>
             <p v-if="entry.usage" class="activity-usage">{{ t('{prompt} prompt · {completion} completion · {total} total tokens', { prompt: formatNumber(entry.usage.promptTokens), completion: formatNumber(entry.usage.completionTokens), total: formatNumber(entry.usage.totalTokens) }) }}</p>
-            <p v-if="entry.result === undefined" class="activity-status">{{ running ? t('Waiting for result…') : t('No result recorded') }}</p>
+            <p v-if="entry.reasoning === undefined && entry.result === undefined" class="activity-status">{{ running ? t('Waiting for result…') : t('No result recorded') }}</p>
           </component>
         </div>
       </details>
     </div>
+    <details v-if="batch.usages?.length" v-disclosure-motion class="activity-round-details">
+      <summary class="tool-details-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Details') }}</summary>
+      <p v-for="round in batch.usages" :key="round.index" :data-msg-idx="round.index" class="activity-usage">{{ t('{prompt} prompt · {completion} completion · {total} total tokens', { prompt: formatNumber(round.usage.promptTokens), completion: formatNumber(round.usage.completionTokens), total: formatNumber(round.usage.totalTokens) }) }}</p>
+    </details>
   </details>
 </template>
 
@@ -53,18 +59,44 @@ import { vDisclosureMotion } from '../disclosure-motion.ts'
 import LineChangeCounts from './LineChangeCounts.vue'
 import ToolPayload from './ToolPayload.vue'
 import ToolFileDiffPreview from './ToolFileDiffPreview.vue'
-const props = defineProps<{ batch: ToolActivityBatch; defaultOpen?: boolean; running?: boolean; apiBase?: string; sessionId?: string }>()
+const props = defineProps<{ batch: ToolActivityBatch; renderContent?: (text: string) => string; defaultOpen?: boolean; running?: boolean; apiBase?: string; sessionId?: string }>()
 const emit = defineEmits<{ interact: [] }>()
 const summaryTitle = computed(() => {
-  const { entries, files } = props.batch
-  const title = files ? t('{count} files edited', { count: files }, files) : entries[0].title
-  const others = files ? entries.filter(entry => !entry.file).length : entries.length - 1
-  return others ? t('{title} and {count} other tool calls', { title, count: others }, others) : title
+  const count = props.batch.entries.filter(entry => entry.reasoning === undefined).length
+  return count ? t('Execution process · {count} tool calls', { count }) : t('Execution process')
 })
 const groupOpen = ref(!!props.defaultOpen)
-// Preserve manual toggles while the group remains at the same conversation position.
-watch(() => props.defaultOpen, open => { groupOpen.value = !!open })
+const manualOpen = ref<boolean>()
+const hasFailure = computed(() => props.batch.entries.some(entry => entry.failed))
+function chooseGroup() {
+  emit('interact')
+  manualOpen.value = !groupOpen.value
+}
+function onGroupToggle(event: Event) {
+  groupOpen.value = isOpen(event)
+}
+watch([() => props.defaultOpen, hasFailure], ([open, failed], previous) => {
+  // Surface a new failure once, without preventing subsequent manual collapse.
+  if (failed && !previous?.[1]) {
+    manualOpen.value = undefined
+    groupOpen.value = true
+  } else {
+    groupOpen.value = manualOpen.value ?? (failed || !!open)
+  }
+}, { immediate: true })
 const expanded = reactive(new Set<number>())
+const revealedFailures = new Set<number>()
+function chooseEntry() {
+  emit('interact')
+}
+watch(() => props.batch.entries, entries => {
+  for (const entry of entries) {
+    if (entry.failed && !revealedFailures.has(entry.index)) {
+      revealedFailures.add(entry.index)
+      expanded.add(entry.index)
+    }
+  }
+}, { immediate: true })
 const closedResults = reactive(new Set<number>())
 function isOpen(event: Event): boolean {
   return event.currentTarget instanceof HTMLDetailsElement && event.currentTarget.open

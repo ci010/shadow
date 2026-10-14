@@ -591,3 +591,22 @@ test('HTTP 413 keeps its typed status across proxy body formats without retry', 
     error instanceof ProviderHttpError && error.status === 413)
   assert.equal(calls.length, 3)
 })
+
+for (const transport of ['json', 'sse'] as const) test(`${transport}: text third in a mixed output is returned with both ordered calls`, async t => {
+  const output: ResponsesOutputItem[] = [call, { ...call, id: 'fc_2', call_id: 'call_2' }, message('Third output text')]
+  harness(t, [transport === 'json' ? Response.json(completed(output))
+    : sseText(`data: ${JSON.stringify({ type: 'response.completed', response: completed(output) })}\n\n`)])
+  const response = await openaiResponses(defaults)
+  assert.equal(response.content, 'Third output text')
+  assert.deepEqual(response.toolCalls.map(item => item.id), ['call_1', 'call_2'])
+  assert.deepEqual(response.providerState?.outputItems, output)
+})
+
+test('Responses cache-read input usage is retained including explicit zero', async t => {
+  harness(t, [Response.json({ ...completed([message('Done')]), usage: {
+    input_tokens: 10, output_tokens: 4, total_tokens: 14, input_tokens_details: { cached_tokens: 0 },
+  } })])
+  assert.deepEqual((await openaiResponses(defaults)).usage, {
+    promptTokens: 10, completionTokens: 4, totalTokens: 14, cachedTokens: 0,
+  })
+})

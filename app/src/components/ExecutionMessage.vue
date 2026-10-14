@@ -1,5 +1,5 @@
 <template>
-  <MessagePreviewCard class="execution-card" :class="{ 'execution-selected': !!execution.sessionId && selected }" :label="execution.label" :collapsible="!!(execution.output || execution.partialWork)"
+  <MessagePreviewCard class="execution-card" :class="{ 'execution-selected': !!execution.sessionId && selected, 'execution-working': !execution.blocked && isAnimatingStage(execution.stage), 'execution-completed': !execution.blocked && execution.stage === 'completed', 'execution-failed': execution.stage === 'failed' }" :label="execution.label" :collapsible="!!(execution.output || execution.partialWork)"
     :data-execution-id="execution.sessionId" :data-execution-mode="execution.mode" @interact="emit('interact')">
     <template #heading>
       <button class="execution-inspect trace-header" :disabled="!execution.sessionId" :aria-pressed="execution.sessionId ? !!selected : undefined"
@@ -31,6 +31,7 @@
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import { ref } from 'vue'
+import { isAnimatingStage } from '../session-activity.ts'
 import type { InlineExecution } from '../execution-messages.ts'
 import { vDisclosureMotion } from '../disclosure-motion.ts'
 import SessionActivity from './SessionActivity.vue'
@@ -48,6 +49,12 @@ function inspect() {
 .execution-card { min-width: 0; }
 .execution-inspect { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--c-text); font: inherit; text-align: left; cursor: pointer; }
 .execution-selected { border-color: var(--c-selection-border); }
+.execution-card.execution-working { animation: input-breathe 9s ease-in-out infinite; }
+.execution-card.execution-completed { border-color: color-mix(in srgb, var(--c-success) 35%, var(--c-chat-border)); }
+.execution-card.execution-failed { border-color: var(--c-error); }
+@media (prefers-reduced-motion: reduce) {
+  .execution-card.execution-working { animation: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-primary) 20%, transparent); }
+}
 .execution-inspect:hover:not(:disabled) { background: transparent; }
 .execution-inspect:hover:not(:disabled) .execution-copy strong,
 .execution-inspect[aria-pressed="true"] .execution-copy strong { color: var(--c-primary); }

@@ -91,3 +91,12 @@ test('working animations distinguish computation from waiting and terminal state
     assert.equal(isAnimatingStage(stage), false)
   }
 })
+
+test('rate-limit waiting remains cancellable working status without spinning or Continue', () => {
+  assert.equal(isWorkingStage('rate-limit'), true)
+  assert.equal(isAnimatingStage('rate-limit'), false)
+  assert.equal(sessionActivity('rate-limit').label, 'Waiting for model rate limit (automatic retry)')
+  const stages = { chat: 'rate-limit' as const }
+  assert.deepEqual(parseSessionStages({ stages }), stages)
+  assert.deepEqual(displayedSessionStages(stages, 'chat', true, 'llm'), stages)
+})

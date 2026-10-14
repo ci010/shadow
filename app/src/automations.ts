@@ -1,3 +1,4 @@
+import { parseOrganizationOutcome, type OrganizationOutcome } from '../../src/cron/contracts.ts'
 import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 import { projectChatLocation } from './projects.ts'
@@ -9,12 +10,18 @@ export function automationChatLocation(projectId: string, id: string, sessionId 
 export interface AutomationSummary {
   id: string
   name: string
-  source: 'cron' | 'learning'
+  source: 'cron' | 'learning' | 'system'
   session: 'fresh'
   schedule: string
   task?: string
   agentType?: string
   enabled: boolean
+  configuredEnabled?: boolean
+  editable?: boolean
+  canToggle?: boolean
+  toggleId?: string
+  toggleEnabled?: boolean
+  disabledByGlobal?: boolean
   notice?: string
 }
 export interface LearningOutcome {
@@ -31,6 +38,9 @@ export interface AutomationRunSummary {
   startedAt: string
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'
   title?: string
+  scope?: 'full' | 'delta'
+  organizationProblem?: 'execution_failed' | 'unfinished'
+  organization?: OrganizationOutcome
   learning?: LearningOutcome
 }
 
@@ -67,6 +77,10 @@ function learningOutcome(value: unknown): LearningOutcome | undefined {
     || !count(value.artifacts) || !count(value.events) || !count(value.evaluated)) throw invalid()
   return { status: value.status as LearningOutcome['status'], summary: value.summary,
     artifacts: value.artifacts, events: value.events, evaluated: value.evaluated }
+}
+
+function organizationOutcome(value: unknown): OrganizationOutcome | undefined {
+  try { return parseOrganizationOutcome(value) } catch { throw invalid() }
 }
 
 function timestamp(value: unknown): value is string {
@@ -110,13 +124,22 @@ export async function fetchAutomations(
     const ids = new Set<string>()
     return value.automations.map((item: unknown): AutomationSummary => {
       if (!record(item) || !identifier(item.id) || ids.has(item.id) || typeof item.name !== 'string' || !item.name.trim()
-        || (item.source !== 'cron' && item.source !== 'learning') || item.session !== 'fresh'
+        || (item.source !== 'cron' && item.source !== 'learning' && item.source !== 'system') || item.session !== 'fresh'
         || typeof item.schedule !== 'string' || !item.schedule.trim() || typeof item.enabled !== 'boolean'
+        || ['configuredEnabled', 'editable', 'canToggle', 'toggleEnabled', 'disabledByGlobal'].some(key => item[key] !== undefined && typeof item[key] !== 'boolean')
+        || (item.toggleId !== undefined && !identifier(item.toggleId))
         || !optionalText(item.task) || !optionalText(item.agentType) || !optionalText(item.notice)) throw invalid()
       ids.add(item.id)
       return {
         id: item.id, name: item.name, source: item.source, session: 'fresh', schedule: item.schedule,
-        enabled: item.enabled, ...(item.task !== undefined ? { task: item.task as string } : {}),
+        enabled: item.enabled,
+        ...(item.configuredEnabled !== undefined ? { configuredEnabled: item.configuredEnabled as boolean } : {}),
+        ...(item.editable !== undefined ? { editable: item.editable as boolean } : {}),
+        ...(item.toggleId !== undefined ? { toggleId: item.toggleId as string } : {}),
+        ...(item.toggleEnabled !== undefined ? { toggleEnabled: item.toggleEnabled as boolean } : {}),
+        ...(item.canToggle !== undefined ? { canToggle: item.canToggle as boolean } : {}),
+        ...(item.disabledByGlobal !== undefined ? { disabledByGlobal: item.disabledByGlobal as boolean } : {}),
+        ...(item.task !== undefined ? { task: item.task as string } : {}),
         ...(item.agentType !== undefined ? { agentType: item.agentType as string } : {}),
         ...(item.notice !== undefined ? { notice: item.notice as string } : {}),
       }
@@ -138,7 +161,8 @@ export async function fetchAutomationRuns(
     const runs = value.runs.map((item: unknown): AutomationRunSummary => {
       if (!record(item) || !identifier(item.id) || ids.has(item.id) || !identifier(item.sessionId) || sessions.has(item.sessionId)
         || !timestamp(item.startedAt) || !['running', 'completed', 'failed', 'cancelled', 'unknown'].includes(item.status as string)
-        || !optionalText(item.title)) throw invalid()
+        || (item.organizationProblem !== undefined && item.organizationProblem !== 'execution_failed' && item.organizationProblem !== 'unfinished')
+        || !optionalText(item.title) || (item.scope !== undefined && item.scope !== 'full' && item.scope !== 'delta')) throw invalid()
       ids.add(item.id)
       sessions.add(item.sessionId)
       return {
@@ -146,9 +170,25 @@ export async function fetchAutomationRuns(
         status: item.status as AutomationRunSummary['status'],
         ...(item.title !== undefined ? { title: item.title as string } : {}),
         ...(item.learning !== undefined ? { learning: learningOutcome(item.learning) } : {}),
+        ...(item.organizationProblem !== undefined ? { organizationProblem: item.organizationProblem as 'execution_failed' | 'unfinished' } : {}),
+        ...(item.scope !== undefined ? { scope: item.scope as 'full' | 'delta' } : {}),
+        ...(item.organization !== undefined ? { organization: organizationOutcome(item.organization) } : {}),
       }
     })
     runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
     return { runs, total: value.total, offset }
   }, request)
+}
+
+/** Changes the stable automation feature; saved run history is never deleted. */
+export async function setAutomationEnabled(base: string, id: string, enabled: boolean, signal: AbortSignal, request: typeof fetch = fetch): Promise<void> {
+  if (!identifier(id) || typeof enabled !== 'boolean') throw invalid()
+  await read(apiUrl(base, `/api/automations/${encodeURIComponent(id)}`), signal, value => {
+    if (!record(value) || !record(value.automation) || value.automation.id !== id) throw invalid()
+  }, (url, init) => request(url, { ...init, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }))
+}
+
+/** Feature admission is independent of whether its saved job definition is editable. */
+export function canToggleAutomation(job: AutomationSummary): boolean {
+  return job.canToggle ?? (job.source !== 'system' && job.editable === true)
 }

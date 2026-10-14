@@ -9,6 +9,7 @@ import { resolveUiDistDirectory } from './paths.ts'
 import type { Config } from '../../config/schema.ts'
 import { CopilotAuthenticator } from '../../providers/copilot.ts'
 import { ProviderSetup } from '../../providers/setup.ts'
+import { RuntimeDiagnosticLog } from '../diagnostic-log.ts'
 import { createAggregatedProvider } from '../../providers/factory.ts'
 import { providerPlugin } from '../../providers/routes.ts'
 import { createMainCluster, MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS } from '../../cluster/main-cluster.ts'
@@ -161,7 +162,8 @@ export async function startProjectHost(
     },
   })
   if (options.configPath) await sharedConfigStore.read()
-  const providerSetup = new ProviderSetup({ store: sharedConfigStore, getConfig: () => activeConfig, auth: copilotAuth })
+  const diagnostics = new RuntimeDiagnosticLog()
+  const providerSetup = new ProviderSetup({ diagnostics, store: sharedConfigStore, getConfig: () => activeConfig, auth: copilotAuth })
   cleanup.push(() => providerSetup.dispose())
   const start = (id: string): Promise<void> => {
     if (stopping) return Promise.reject(new Error('Project host is stopping'))
@@ -184,7 +186,7 @@ export async function startProjectHost(
         const projectStartup = new StartupTimings('project', id)
         const projectConfig = await projectStartup.measure('config', () => store.init())
         runtime = await scope.run(() => factory(projectConfig, {
-          project, home: paths.home, scope, catalog, configStore: store,
+          project, home: paths.home, scope, catalog, configStore: store, diagnostics,
           mainCluster, copilotAuth, chromePortAllocator, authorize, realtimeHub,
           localExecutor: options.localExecutor !== false,
         }))

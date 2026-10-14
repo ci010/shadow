@@ -1,3 +1,4 @@
+import { SessionProfileService } from './profile.ts'
 import type { Hono } from 'hono'
 import { channelAddressFromSessionId } from '../bus/events.ts'
 import { delegationOwner } from './execution-scope.ts'
@@ -287,11 +288,12 @@ export function sessionsApiPlugin(
             inferenceDefaults = null
           }
         }
+        const automation = state ? resolveAutomationSession(state) : undefined
         enrichedSessions.push({
           ...session,
           ...execution,
-          automation: state ? resolveAutomationSession(state) : undefined,
-          title: state?.name ?? state?.topic?.title ?? state?.generatedTitle ?? state?.chatName ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
+          automation,
+          title: automation?.config?.source === 'system' ? automation.name : state?.name ?? state?.topic?.title ?? state?.generatedTitle ?? state?.chatName ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,
           inferenceDefaults,
@@ -329,6 +331,14 @@ export function sessionsApiPlugin(
       if (!query.success) return c.json({ error: 'invalid_file_changes_query', message: 'Use a nonnegative offset, a limit between 1 and 30, and a nonempty toolCallId of at most 4096 characters when filtering.' }, 400)
       const page = await sessions.getFileChanges(c.req.param('key'), query.data.offset, query.data.limit, c.req.raw.signal, query.data.toolCallId)
       return page ? c.json(page) : c.json({ error: 'session_not_found' }, 404)
+    })
+
+    app.get('/api/sessions/:key/profile', async c => {
+      c.header('Cache-Control', 'no-store')
+      if (options.authorizeContext && !await options.authorizeContext(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
+      if (!sessions?.projectId) return c.json({ error: 'session_not_found' }, 404)
+      const profile = await new SessionProfileService(sessions, sessions.projectId).query(c.req.param('key'), c.req.raw.signal)
+      return profile ? c.json(profile) : c.json({ error: 'session_not_found' }, 404)
     })
 
     app.get('/api/sessions/:key/details', async (c) => {
@@ -886,14 +896,14 @@ export function sessionsApiPlugin(
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
       const list = await sessions.listSessions()
-      const stages: Record<string, 'idle' | 'llm' | 'tool' | 'inactive' | 'waiting'> = {}
+      const stages: Record<string, 'idle' | 'llm' | 'tool' | 'inactive' | 'waiting' | 'rate-limit'> = {}
       const waitingForCalls: Record<string, boolean> = {}
       const activeRequestIds: Record<string, string> = {}
       const recoveries: Record<string, SessionRecovery> = {}
       for (const s of list) {
         const active = sessions.getActiveSession(s.sessionId)
         waitingForCalls[s.sessionId] = !!sessions.isWaitingForCall?.(s.sessionId)
-        stages[s.sessionId] = waitingForCalls[s.sessionId] || sessions.yields.get(s.sessionId) || sessions.inputs.get(s.sessionId) ? 'waiting' : active ? active.phase : 'inactive'
+        stages[s.sessionId] = waitingForCalls[s.sessionId] || sessions.yields.get(s.sessionId) || sessions.inputs.get(s.sessionId) ? 'waiting' : active?.rateLimitWait ? 'rate-limit' : active ? active.phase : 'inactive'
         if (active && active.phase !== 'idle' && 'activeRequestId' in active && typeof active.activeRequestId === 'string') {
           activeRequestIds[s.sessionId] = active.activeRequestId
         }
@@ -912,7 +922,7 @@ export function sessionsApiPlugin(
       if (sessions.yields.get(key) || sessions.inputs.get(key)) return c.json({ stage: 'waiting' })
       const active = sessions.getActiveSession(key)
       if (active) {
-        return c.json({ stage: active.phase })
+        return c.json({ stage: active.rateLimitWait ? 'rate-limit' : active.phase, rateLimitWait: active.rateLimitWait })
       }
       // Check if session exists but is not in memory
       const state = await sessions.getSessionState(key)

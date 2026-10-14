@@ -114,3 +114,13 @@ test('token totals reject unsafe accumulation instead of silently rounding', () 
   const first = { promptTokens: Number.MAX_SAFE_INTEGER, completionTokens: 0, totalTokens: Number.MAX_SAFE_INTEGER }
   assert.throws(() => addTokenUsage(first, { promptTokens: 1, completionTokens: 0, totalTokens: 1 }), /supported range/)
 })
+
+test('cache totals require complete reports and retain explicit zero', async () => {
+  const { addTokenUsage, parseTokenUsage } = await import('./usage.ts')
+  const usage = { promptTokens: 100, completionTokens: 20, totalTokens: 120 }
+  assert.deepEqual(parseTokenUsage({ ...usage, cachedTokens: 0 }), { ...usage, cachedTokens: 0 })
+  assert.equal(parseTokenUsage({ ...usage, cachedTokens: 101 }), null)
+  assert.equal(addTokenUsage({ ...usage, cachedTokens: 80 }, { ...usage, cachedTokens: 20 })?.cachedTokens, 100)
+  assert.equal(addTokenUsage({ ...usage, cachedTokens: 80 }, usage)?.cachedTokens, undefined)
+  assert.equal(addTokenUsage(usage, { ...usage, cachedTokens: 80 })?.cachedTokens, undefined)
+})

@@ -184,6 +184,10 @@ export async function dispatchRuntimeCli(
     lifecycle = await factory(plan, paths, context)
   } catch (cause) {
     if (cause instanceof Error) {
+      if ('code' in cause && cause.code === 'DATA_LAYOUT_NOT_READY') {
+        console.error(cause.message)
+        throw new RuntimeCliError('factory_failed', cause.message)
+      }
       const code = 'code' in cause && typeof cause.code === 'string'
         && /^(?:SYSTEM_PROXY_UNAVAILABLE|ENOENT|EACCES|EPERM|ERR_MODULE_NOT_FOUND|ERR_INVALID_ARG_TYPE)$/.test(cause.code)
         ? cause.code : undefined

@@ -1,10 +1,11 @@
+import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { test } from 'node:test'
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile, open, utimes } from 'node:fs/promises'
 import { join, resolve, toNamespacedPath } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { copyDataMigration, planDataMigration } from './data-migration.ts'
+import { copyDataMigration, planDataMigration, rollbackDataMigration } from './data-migration.ts'
 
 const p = (path: string) => toNamespacedPath(path)
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
@@ -42,7 +43,7 @@ test('canonical mapping, opaque revisions, unknown Home workdirs, JSONL, config 
   assert.deepEqual(await readdir(f.root), tree)
   assert.equal((await copyDataMigration(f.root, { offline: true })).status, 'copied')
   assert.equal(await f.text('config/bot.config.json'), before)
-  assert.equal(await f.text(f.home + '.sessions/session/history.jsonl'), jsonl)
+  await assert.rejects(lstat(join(f.root, f.home, '.sessions')), { code: 'ENOENT' })
   assert.equal(await f.text('projects/default/state/sessions/session/history.jsonl'), jsonl)
   assert.equal(await f.text('projects/default/state/io/revisions/token'), 'opaque-io')
   assert.equal(await f.text('projects/default/state/microapps/bundle/v1.js'), 'opaque-bundle')
@@ -221,4 +222,121 @@ test('ambiguous duplicate configuration keys fail before canonical publication',
   await f.put('config/bot.config.json', '{"agent":{"workspace":"old"},"opaque":{"id":1,"id":2}}')
   await assert.rejects(copyDataMigration(f.root, { offline: true }), /Duplicate config JSON property/)
   await assert.rejects(lstat(join(f.root, 'app.json')), { code: 'ENOENT' })
+})
+
+
+test('10GiB sparse bulk tree is renamed without copying/hashing its content', async t => {
+  const f = await fixture(t)
+  await f.put(f.home + 'bulk/large.bin', '')
+  const old = join(f.root, f.home, 'bulk/large.bin')
+  const file = await open(p(old), 'r+')
+  try { await file.truncate(10 * 1024 ** 3) } finally { await file.close() }
+  const before = await lstat(p(old))
+  await copyDataMigration(f.root, { offline: true })
+  const after = await lstat(p(join(f.root, 'projects/default/workdirs/bulk/large.bin')))
+  assert.equal(after.ino, before.ino)
+  assert.equal(after.size, before.size)
+  await assert.rejects(lstat(p(old)), { code: 'ENOENT' })
+  const receipt = JSON.parse(await f.text('.layout-migration/receipt.json'))
+  assert.equal(receipt.version, 2)
+  assert.equal(receipt.target[join('projects/default/workdirs/bulk/large.bin')].hash, undefined)
+})
+
+test('failure restores moved bulk data; publication diagnostic identifies differing file', async t => {
+  const f = await fixture(t)
+  await f.put(f.home + 'bulk/data', 'original bytes')
+  const old = join(f.root, f.home, 'bulk/data')
+  const before = await lstat(old)
+  await assert.rejects(copyDataMigration(f.root, { offline: true, onPhase: async phase => {
+    if (phase === 'published') await f.put('app.json', '{}')
+  } }), /Published target changed.*app.json.*expected.*actual/)
+  assert.equal(await f.text(f.home + 'bulk/data'), 'original bytes')
+  assert.equal((await lstat(old)).ino, before.ino)
+  await assert.rejects(lstat(join(f.root, 'projects')), { code: 'ENOENT' })
+})
+
+test('directory timestamps are not a publication integrity signal (Windows normalization)', async t => {
+  const f = await fixture(t)
+  await f.put(f.home + 'bulk/data', 'bytes')
+  await copyDataMigration(f.root, { offline: true, onPhase: async phase => {
+    if (phase === 'published') await utimes(join(f.root, 'projects/default/workdirs/bulk'), 1, 1)
+  } })
+  assert.equal(await f.text('projects/default/workdirs/bulk/data'), 'bytes')
+})
+
+for (const phase of ['staged', 'published']) test(`explicit offline rollback recovers process interruption at ${phase}`, async t => {
+  const f = await fixture(t)
+  await f.put(f.home + 'bulk/data', 'recover me')
+  const before = await lstat(join(f.root, f.home, 'bulk/data'))
+  const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+    import { copyDataMigration } from './src/storage/data-migration.ts';
+    await copyDataMigration(process.argv[1], { offline: true, onPhase: p => { if (p === '${phase}') process.exit(79) } });
+  `, f.root], { cwd: resolve('.'), encoding: 'utf8' })
+  assert.equal(child.status, 79, child.stderr)
+  await assert.rejects(rollbackDataMigration(f.root), /offline/)
+  assert.equal((await rollbackDataMigration(f.root, { offline: true })).status, 'rolled-back')
+  assert.equal(await f.text(f.home + 'bulk/data'), 'recover me')
+  assert.equal((await lstat(join(f.root, f.home, 'bulk/data'))).ino, before.ino)
+  await assert.rejects(lstat(join(f.root, '.layout-migration/copy.lock')), { code: 'ENOENT' })
+  await assert.rejects(lstat(join(f.root, 'app.json')), { code: 'ENOENT' })
+  assert.equal((await copyDataMigration(f.root, { offline: true })).status, 'copied')
+})
+
+
+test('existing v1 hash receipts remain idempotent and fail closed on edited bytes', async t => {
+  const f = await fixture(t)
+  await f.put('app.json', '{}')
+  await f.put('projects.json', '{"version":2,"projects":[{"id":"default"}]}')
+  async function capture(entries: string[]) {
+    const result: Record<string, unknown> = {}
+    async function visit(relative: string) {
+      const path = join(f.root, relative), info = await lstat(path)
+      result[relative] = { kind: info.isDirectory() ? 'directory' : 'file', mode: info.mode & 0o777,
+        size: info.isDirectory() ? 0 : info.size, mtime: info.mtimeMs,
+        ...(info.isFile() ? { hash: createHash('sha256').update(await readFile(path)).digest('hex') } : {}) }
+      if (info.isDirectory()) for (const child of (await readdir(path)).sort()) await visit(join(relative, child))
+    }
+    for (const entry of entries) await visit(entry)
+    return result
+  }
+  await f.put('.layout-migration/receipt.json', JSON.stringify({ version: 1, root: f.root,
+    source: await capture(['config', 'workspace', 'workspace.projects']), target: await capture(['app.json', 'projects.json']) }))
+  assert.equal((await copyDataMigration(f.root, { offline: true })).status, 'already-copied')
+  await f.put('app.json', '[]')
+  await assert.rejects(copyDataMigration(f.root, { offline: true }), /Target since receipt changed.*app.json/)
+})
+
+test('structured progress is ordered and observer failures cannot change commit', async t => {
+  const f = await fixture(t)
+  await f.put(f.home + 'bulk/data', 'bytes')
+  const phases: string[] = []
+  await copyDataMigration(f.root, { offline: true, onProgress: event => {
+    phases.push(event.phase)
+    if (event.phase === 'complete') throw new Error('broken observer')
+  } })
+  assert.equal(phases[0], 'inventory')
+  assert.ok(phases.includes('staging'))
+  assert.ok(phases.includes('publishing'))
+  assert.equal(phases.at(-1), 'complete')
+  assert.equal((await copyDataMigration(f.root, { offline: true })).status, 'already-copied')
+})
+
+
+test('rollback conflict retains journal/staging and never deletes moved original data', async t => {
+  const f = await fixture(t)
+  await f.put(f.home + 'bulk/data', 'original')
+  await assert.rejects(copyDataMigration(f.root, { offline: true, onPhase: async phase => {
+    if (phase === 'staged') {
+      await f.put(f.home + 'bulk/data', 'foreign')
+      throw new Error('injected conflict')
+    }
+  } }), /rollback incomplete/)
+  assert.equal(await f.text(f.home + 'bulk/data'), 'foreign')
+  const stage = (await readdir(join(f.root, '.layout-migration'))).find(n => n.startsWith('stage-'))!
+  assert.equal(await f.text(`.layout-migration/${stage}/projects/default/workdirs/bulk/data`), 'original')
+  await assert.rejects(rollbackDataMigration(f.root, { offline: true }), /Rollback source conflict/)
+  assert.equal(await f.text(`.layout-migration/${stage}/projects/default/workdirs/bulk/data`), 'original')
+  await rm(join(f.root, f.home, 'bulk'), { recursive: true })
+  await rollbackDataMigration(f.root, { offline: true })
+  assert.equal(await f.text(f.home + 'bulk/data'), 'original')
 })

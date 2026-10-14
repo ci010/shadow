@@ -83,7 +83,9 @@
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
           <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="!!previousPhysicalId || !!automationConversation?.hasPrevious.value"
             :historical="!!viewingPhysicalId || !!automationConversation?.historical.value" :busy="loadingHistory || !!automationConversation?.loading.value" @previous="viewPreviousSegment"
-            @next="viewNextSegment" @current="goBackToCurrentSegment" />
+            @next="viewNextSegment" @current="goBackToCurrentSegment">
+            <ConversationHistoryMenu :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId" :automation="automationConversation" @select="selectHistorySegment" />
+          </SegmentNavigation>
           <button ref="actionsTrigger" data-actions-trigger class="conversation-actions" type="button" :aria-expanded="actionsOpen" @click="toggleActions">{{ t('Actions') }}</button>
           <button class="conversation-find" type="button" :aria-label="t('Search conversation')" aria-keyshortcuts="Control+F Meta+F"
             :title="t('Search conversation (Ctrl+F / Cmd+F)')" @click="conversationSearch?.show()">
@@ -130,8 +132,9 @@
               :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
           </div>
           <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
-          <div class="chat-message-entry" :data-search-message-idx="idx">
-            <CommandResult v-if="msg.commandReceipt" :receipt="msg.commandReceipt">
+          <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx">
+            <AutomationPayload v-if="automationConversation?.automation.value?.source === 'system' && (msg.role === 'user' || (msg.role === 'assistant' && !msg.event && !!msg.content))" :source="msg.content" :input="msg.role === 'user'" :automation-id="automationConversation?.automation.value?.id" />
+            <CommandResult v-else-if="msg.commandReceipt" :receipt="msg.commandReceipt">
               <div class="prose" v-html="renderMarkdown(msg.content)" />
             </CommandResult>
             <ExecutionMessage v-else-if="inlineExecutions.entries.has(idx)" :execution="inlineExecutions.entries.get(idx)!"
@@ -149,12 +152,12 @@
             <YieldDecision v-else-if="yieldDecisions.entries.has(idx)" :decision="yieldDecisions.entries.get(idx)!"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :api-base="apiBase" :data-msg-idx="idx" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
-            <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!"
+            <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!" :render-content="renderMarkdown"
               :api-base="apiBase" :session-id="activeSessionId"
-              :default-open="!streamContent && toolActivity.get(idx)!.end === displayMessages.length"
+              :default-open="streaming && !viewingPhysicalId && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
               :running="streaming && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
               @interact="clearSelection" />
-            <template v-else-if="msg.event === 'tool_call' || msg.event === 'tool_result'" />
+            <template v-else-if="msg.event === 'tool_call' || msg.event === 'tool_result' || (msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !msg.isError && !msg.isSummary && !msg.sessionSource)" />
             <!-- System event (not a user message) -->
             <ConversationEvent v-else-if="msg.role === 'user' && msg.isSystemEvent && msg.eventMeta"
               :data-msg-idx="idx" :current-session-id="activeSessionId"
@@ -202,9 +205,9 @@
               <MessageAttachments :paths="msg.attachmentBody.paths"               :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />
               <div class="chat-footer">
               <div v-if="msg.usage" class="usage-info">
-                <span class="usage-badge">{{ formatNumber(msg.usage.promptTokens) }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ formatNumber(usageDelta(idx)!.prompt) }})</span> {{ t('prompt') }}</span>
-                <span class="usage-badge">{{ formatNumber(msg.usage.completionTokens) }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ formatNumber(usageDelta(idx)!.completion) }})</span> {{ t('completion') }}</span>
-                <span class="usage-badge total">{{ formatNumber(msg.usage.totalTokens) }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ formatNumber(usageDelta(idx)!.total) }})</span> {{ t('total') }}</span>
+                <span class="usage-badge">{{ formatNumber(msg.usage.promptTokens) }} {{ t('prompt') }}</span>
+                <span class="usage-badge">{{ formatNumber(msg.usage.completionTokens) }} {{ t('completion') }}</span>
+                <span class="usage-badge total">{{ formatNumber(msg.usage.totalTokens) }} {{ t('total') }}</span>
               </div>
               <MessageTimestamp v-if="!msg.sessionSource" :timestamp="msg.timestamp" />
               </div>
@@ -259,12 +262,12 @@
           <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="`work-controls:${activeSessionId}`"
             :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'"
             :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
-          <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" role="status" aria-live="polite">
+          <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" :class="{ 'work-chip-active': composerWorking }" role="status" aria-live="polite">
             <SessionActivity :stage="sessionStage" :hide-symbol="!isWaitingStage(sessionStage)" />
             <span class="chat-working-detail">{{ isCall ? t('Call · inherited context · blocking') : t('Task · fresh context · async') }} {{ t('· Read-only trace') }}</span>
             <WorkingWave v-if="composerWorking" />
           </div>
-          <div v-else-if="(sessionWorking || activeSubagents.length) && !viewingPhysicalId" class="chat-working" :class="[sessionStage, { 'has-subagents': activeSubagents.length }]" role="status" aria-live="polite"
+          <div v-else-if="(sessionWorking || activeSubagents.length) && !viewingPhysicalId" class="chat-working" :class="[sessionStage, { 'has-subagents': activeSubagents.length, 'work-chip-active': composerWorking }]" role="status" aria-live="polite"
             :title="sessionStage === 'tool' ? (streamingToolCallData?.name || t('Running a tool call')) : undefined">
             <SessionActivity v-if="sessionWorking" :stage="sessionStage" :hide-symbol="!isWaitingStage(sessionStage)" />
             <span v-if="sessionWorking && !isWaitingStage(sessionStage) && !activeSubagents.length" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || t('Running a tool call')) : t('The agent is working on your request') }}</span>
@@ -294,14 +297,15 @@
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
 
-        <div v-if="channelConversation && !viewingPhysicalId" class="channel-conversation-settings" :aria-label="t('This conversation')">
+        <div v-if="(channelConversation || automationConversation) && !viewingPhysicalId" class="channel-conversation-settings" :aria-label="t('This conversation')">
           <div class="channel-settings-row">
-            <ModelSelector :key="activeSessionId" :settings="reasoningSettings" conversation-defaults
+            <ModelSelector :key="activeSessionId" :settings="reasoningSettings"
+              :conversation-defaults="channelConversation"
               :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
-            <span class="channel-settings-scope">{{ t('This conversation only · Applies to new turns') }}</span>
+            <span class="channel-settings-scope">{{ t(channelConversation ? 'This conversation only · Applies to new turns' : 'This automation conversation · Applies to new turns') }}</span>
           </div>
           <p v-if="savingSettings" class="channel-settings-note" role="status">{{ t('Saving conversation settings...') }}</p>
-          <p v-if="!activeSession?.inferenceDefaults" class="composer-error" role="alert">{{ t('Conversation defaults are unavailable. Refresh or check the published Agent configuration.') }}</p>
+          <p v-if="channelConversation && !activeSession?.inferenceDefaults" class="composer-error" role="alert">{{ t('Conversation defaults are unavailable. Refresh or check the published Agent configuration.') }}</p>
           <p v-if="settingsError" class="composer-error" role="alert">{{ settingsError }}</p>
           <p v-if="modelSelection?.error.value" class="composer-error" role="alert">{{ modelSelection.error.value }}</p>
         </div>
@@ -336,7 +340,7 @@
           <div v-if="canResend" class="resend-bar">
             <button class="resend-btn" :disabled="!!providerNotice" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> {{ t('Resend last message') }}</button>
           </div>
-          <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget, 'composer-dual-actions': requestBusy && showComposerSend, 'composer-answering': answeringQuestion, 'composer-working': composerWorking }"
+          <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget, 'composer-dual-actions': requestBusy && showComposerSend, 'composer-answering': answeringQuestion }"
             @dragover="handleAttachmentDragOver" @dragleave="handleAttachmentDragLeave" @drop="handleAttachmentDrop">
           <p v-if="answeringQuestion" :id="domId('reply-context')" class="composer-reply-context">
             <span class="i-lucide-message-circle-reply w-4 h-4" aria-hidden="true" />
@@ -426,7 +430,7 @@
                 :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
             <div class="composer-submit">
-            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? t('Stopping current request; waiting for Main...') : preparingSend ? t('Starting conversation...') : submittingMessage ? t('Sending...') : pastingFiles ? t('Reading copied files...') : queueModifier ? t('Ctrl+Enter to add to queue') : answeringQuestion ? t('Enter to answer · Shift+Enter for a new line') : imageEditsBusy.size ? t('Preparing marked image...') : attachmentDropTarget ? t('Drop files to attach') : savingSettings ? t('Saving conversation settings...') : pickingContext ? t('Choosing context...') : requestBusy ? t('Enter for guidance · Ctrl+Enter to queue') : t('Enter to send · Ctrl+Enter to queue') }}</span>
+            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? t('Stopping current request; waiting for Main...') : preparingSend ? t('Starting conversation...') : submittingMessage ? t('Sending...') : pastingFiles ? t('Reading copied files...') : queueModifier ? t('Ctrl+Enter to add to queue') : answeringQuestion ? t('Enter to answer · Shift+Enter for a new line') : imageEditsBusy.size ? t('Preparing marked image...') : attachmentDropTarget ? t('Drop files to attach') : savingSettings ? t('Saving conversation settings...') : pickingContext ? t('Choosing context...') : sessionStage === 'rate-limit' ? t('Waiting for model rate limit (automatic retry)') : requestBusy ? t('Enter for guidance · Ctrl+Enter to queue') : t('Enter to send · Ctrl+Enter to queue') }}</span>
             <button
               v-if="requestBusy"
               class="composer-send composer-stop"
@@ -513,6 +517,7 @@ import { insertQuote } from '../selection-actions.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import SessionActivity from './SessionActivity.vue'
 import SegmentNavigation from './SegmentNavigation.vue'
+import ConversationHistoryMenu from './ConversationHistoryMenu.vue'
 import WorkingWave from './WorkingWave.vue'
 import YieldQuestion from './YieldQuestion.vue'
 import InputQuestion from './InputQuestion.vue'
@@ -555,6 +560,7 @@ import { addChatContext, chatContextName, composeChatMessage, type ChatContextIt
 import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
 import { createFolderChatDraft, createRemoteChatDraft } from '../remote-conversations.ts'
 import { createExecutionLocationDraft, type ExecutionLocation } from '../execution-locations.ts'
+import AutomationPayload from './AutomationPayload.vue'
 import type { SessionDetails } from '../session-details.ts'
 import { appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasFileReference, readFileReference } from '../file-reference-drag.ts'
@@ -1285,7 +1291,7 @@ async function refreshDecisionRecords() {
 }
 const toolActivity = computed(() => groupToolActivity(displayMessages.value, new Set([
   ...inlineExecutions.value.excluded, ...messageActions.value.excluded, ...yieldDecisions.value.excluded, ...inputQuestions.value.excluded,
-])))
+]), new Set([...yieldDecisions.value.after.keys(), ...ioAfter.value.keys()])))
 const allSessions = ref<SidebarSession[]>([])
 const sessionsLoading = ref(false)
 const sessionsError = ref('')
@@ -1331,7 +1337,7 @@ const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation
 const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
 const workbench = ref<InstanceType<typeof FileWorkbench>>()
 const automationConversation = useAutomationConversation(() => activeSessionId.value, () => !!props.automationRun)
-const conversationTitle = computed(() => automationConversation.value?.automation.value?.name || activeSessionName.value)
+const conversationTitle = computed(() => (automationConversation.value?.automation.value?.source === 'system' ? automationConversation.value?.run.value?.title : undefined) || automationConversation.value?.automation.value?.name || activeSessionName.value)
 watch(() => [props.automationRun, props.visible] as const, ([run, visible]) => {
   if (run && visible) {
     void nextTick(() => workbench.value?.showConversation())
@@ -1459,6 +1465,9 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
             if (cur.reasoning_content) entry.reasoningContent = cur.reasoning_content
             if (cur.reasoning_text) entry.reasoningText = cur.reasoning_text
             out.push(entry)
+          } else if (cur.reasoning_content || cur.reasoning_text || cur.usage) {
+            out.push({ role: 'assistant', content: '', timestamp: cur.timestamp,
+              reasoningContent: cur.reasoning_content || undefined, reasoningText: cur.reasoning_text || undefined, usage: cur.usage })
           }
           if (cur.tool_calls?.length) {
             // Look ahead to collect tool results keyed by tool_call_id
@@ -1503,10 +1512,6 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
                   event: 'tool_result',
                   toolName: result.name,
                   toolCallId: tc.id,
-                }
-                // Attach usage to the last tool_result when assistant had no text content
-                if (cur.usage && !rawText && j === cur.tool_calls.length - 1) {
-                  entry.usage = cur.usage
                 }
                 out.push(entry)
               }
@@ -2040,6 +2045,13 @@ async function loadReadonlySession(background = false): Promise<void> {
 
 // ── Segment navigation ───────────────────────────────────────────────────────
 
+async function selectHistorySegment(id: string | null, newer: (string | null)[]): Promise<void> {
+  if (loadingHistory.value) return
+  if (!id) { await loadCurrentSession(); return }
+  await loadHistoricalSegment(id, 'next')
+  if (viewingPhysicalId.value === id) physicalIdStack.value = newer.map(value => value ?? '')
+}
+
 async function viewPreviousSegment(): Promise<void> {
   if (loadingHistory.value) return
   if (previousPhysicalId.value) await loadHistoricalSegment(previousPhysicalId.value, 'previous')
@@ -2132,7 +2144,7 @@ function searchEntries(segment: SearchSegment): ConversationSearchEntry[] {
     if (msg.event === 'tool_call' || msg.event === 'tool_result' || decisions.entries.has(messageIndex)) return []
     const content = executions.entries.has(messageIndex) ? executions.entries.get(messageIndex)!.output ?? ''
       : actions.entries.get(messageIndex)?.content ?? msg.attachmentBody.text
-    const document = new DOMParser().parseFromString(renderMarkdown(content), 'text/html')
+    const document = new DOMParser().parseFromString(renderMarkdown([msg.reasoningContent || msg.reasoningText, content].filter(Boolean).join('\n\n')), 'text/html')
     return [{ segmentId: segment.id, messageIndex, blocks: searchTextBlocks(document.body).map(block => block.text) }]
   })
 }
@@ -2206,6 +2218,12 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   await nextTick()
   signal.throwIfAborted()
   const wrapper = messagesContainer.value?.querySelector<HTMLElement>(`[data-search-message-idx="${match.entry.messageIndex}"]`)
+  const processNode = messagesContainer.value?.querySelector<HTMLElement>(`.tool-entry[data-msg-idx="${match.entry.messageIndex}"]`)
+  if (processNode) {
+    for (let parent: HTMLElement | null = processNode; parent && parent !== messagesContainer.value; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true
+    }
+  }
   if (!wrapper) throw new Error(t('This message changed while searching. Retry search.'))
   for (let parent = wrapper.parentElement; parent && parent !== messagesContainer.value; parent = parent.parentElement) {
     if (parent instanceof HTMLDetailsElement) parent.open = true
@@ -2216,7 +2234,7 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   await new Promise<void>(resolve => setTimeout(resolve, 0))
   await nextTick()
   signal.throwIfAborted()
-  const blocks = visibleSearchBlocks(wrapper)
+  const blocks = visibleSearchBlocks(processNode ?? wrapper)
   const expected = match.entry.blocks[match.blockIndex]
   const block = blocks[match.blockIndex]?.text === expected ? blocks[match.blockIndex] : blocks.find(item => item.text === expected)
   const range = block && searchRange(block, match.start, match.end)
@@ -2234,7 +2252,7 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
 }
 function visibleSearchBlocks(root: HTMLElement) {
   return Array.from(root.querySelectorAll<HTMLElement>('.prose, .chat-content'))
-    .filter(element => !element.closest('.thinking-block') && !element.parentElement?.closest('.prose, .chat-content'))
+    .filter(element => !element.parentElement?.closest('.prose, .chat-content'))
     .flatMap(searchTextBlocks)
 }
 function paintSearchHighlights(query: string, active: Range) {
@@ -2679,12 +2697,21 @@ function flushStreamingTool(): void {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// A newly loaded pane may have been hidden when its history finished loading.
+// Retry once it can be laid out, but retain intentional history/search positions.
+watch(() => props.visible && conversationDocumentVisible.value && activePanel.value === 'conversation', visible => {
+  if (visible) scrollToBottom()
+})
+
 function browseHistory(): void {
   historyBrowsing = true
   historyLeftBottom = false
 }
 
 function trackHistoryScroll(): void {
+  // Replacing the loading skeleton/history can emit scroll events before the
+  // final bottom jump. Those layout events are not deliberate history browsing.
+  if (loadingHistory.value) return
   const container = messagesContainer.value
   if (!container) return
   const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 32
@@ -2702,23 +2729,6 @@ function scrollToBottom(): void {
     const el = messagesContainer.value
     if (el) el.scrollTop = el.scrollHeight
   })
-}
-
-/** Compute token delta from previous assistant message with usage. */
-function usageDelta(idx: number): { prompt: number; completion: number; total: number } | null {
-  const cur = messages.value[idx]?.usage
-  if (!cur) return null
-  for (let i = idx - 1; i >= 0; i--) {
-    const prev = messages.value[i].usage
-    if (prev) {
-      return {
-        prompt: cur.promptTokens - prev.promptTokens,
-        completion: cur.completionTokens - prev.completionTokens,
-        total: cur.totalTokens - prev.totalTokens,
-      }
-    }
-  }
-  return null
 }
 
 function preprocessCustomXml(text: string): string {
@@ -3032,10 +3042,6 @@ function resendLastMessage() {
 .chat-working :deep(.working-wave) { flex: 0 0 auto; }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: var(--conversation-max-width); margin: 12px auto 16px; }
 .composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
-.composer-box.composer-working { animation: input-breathe 9s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) {
-  .composer-box.composer-working { animation: none; box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-primary) 20%, transparent); }
-}
 .composer-box:focus-within, .composer-box:has(.composer-control[aria-expanded="true"]) { border-color: var(--c-blue); }
 .composer-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .composer-input { display: flex; min-width: 0; }

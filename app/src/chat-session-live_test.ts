@@ -380,6 +380,7 @@ test('live peer messages render like persisted history without becoming human pr
 
 test('history navigation cancels queued bottom jumps and resumes following only after returning to the bottom', async t => {
   const state = fixture(t).mount('a').state()
+  state.loadingHistory = false
   const container = { scrollTop: 1500, scrollHeight: 2000, clientHeight: 500 }
   state.messagesContainer = container
   state.scrollToBottom()
@@ -474,4 +475,63 @@ test('filetree drops add deduplicated references without upload or draft changes
   assert.equal(state.contextItems.length, 1)
   assert.match(state.composerError, /file tree again/)
   other()
+})
+
+test('text after two live tool calls is presented without waiting for either result', t => {
+  const state = fixture(t).mount('a').state()
+  state.messages = []
+  const stream = { accumulated: '' }
+  for (const id of ['first', 'second']) state.applyStreamPayload({ event: 'tool_call', toolCallId: id,
+    toolCall: { name: 'read', arguments: {} }, content: 'read' }, stream)
+  state.applyStreamPayload({ event: 'response', content: 'Third output text', done: false }, stream)
+  assert.equal(state.streamContent, 'Third output text')
+  assert.deepEqual(state.messages.map((message: { event?: string }) => message.event), ['tool_call', 'tool_call'])
+  state.applyStreamPayload({ event: 'tool_result', toolCallId: 'first', content: 'result' }, stream)
+  assert.equal(state.streamContent, 'Third output text', 'a tool result must not suppress the live text')
+})
+
+
+test('first history load ignores layout scroll events and opens at the latest message', async t => {
+  const f = fixture(t)
+  const state = f.mount('a').state()
+  const container = { scrollTop: 0, scrollHeight: 2400, clientHeight: 500 }
+  state.messagesContainer = container
+  const loading = state.loadDirectChat()
+  const history = f.requests.find(request => request.path === '/projects/a/api/chat/session')!
+  assert.ok(history)
+  history.finish({ history: [{ role: 'assistant', content: 'Latest message' }] })
+  await settle()
+  // The messages have rendered, but segment metadata is still loading.
+  state.trackHistoryScroll()
+  const segment = f.requests.find(request => request.path === `/projects/a/api/sessions/${encodeURIComponent(root)}`)!
+  assert.ok(segment)
+  segment.finish({ previousPhysicalId: null })
+  await loading
+  await Vue.nextTick()
+  assert.equal(container.scrollTop, 2400)
+})
+
+test('history loaded in a hidden conversation follows the bottom when opened without resetting a browsing position', async t => {
+  const view = fixture(t).mount('a')
+  const state = view.state()
+  const container = { scrollTop: 0, scrollHeight: 2400, clientHeight: 500 }
+  state.messagesContainer = container
+  view.props.visible = false
+  await Vue.nextTick()
+  state.scrollToBottom()
+  await Vue.nextTick()
+  assert.equal(container.scrollTop, 0)
+  view.props.visible = true
+  await Vue.nextTick()
+  await Vue.nextTick()
+  assert.equal(container.scrollTop, 2400)
+  container.scrollTop = 100
+  state.browseHistory()
+  state.trackHistoryScroll()
+  view.props.visible = false
+  await Vue.nextTick()
+  view.props.visible = true
+  await Vue.nextTick()
+  await Vue.nextTick()
+  assert.equal(container.scrollTop, 100)
 })

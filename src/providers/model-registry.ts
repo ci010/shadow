@@ -79,6 +79,9 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'deepseek-v4-flash-vision-exp': 1_000_000,
   'deepseek-v4-pro': 1_000_000,
 
+  'agnes-3.0-flash': 512_000,
+  'agnes-2.5-flash': 512_000,
+
   // ── Groq / Llama ─────────────────────────────────────────────────
   'llama-3.1-8b-instant': 128_000,
   'llama-3.1-70b-versatile': 128_000,

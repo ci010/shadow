@@ -1,4 +1,4 @@
-import { withProviderRetry } from './retry.ts'
+import { withProviderRetry, providerRetryScope } from './retry.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { isGptModel, type ReasoningEffort, type ThinkingConfig } from '../agent/llm-config.ts'
 import { spanAttributes } from '../otel/tracing.ts'
@@ -66,7 +66,10 @@ export async function openaiChat(params: {
 
   const body: Record<string, unknown> = {
     model: params.model,
-    messages: sanitizeOutboundMessages(params.messages),
+    messages: sanitizeOutboundMessages(params.providerName === 'agnes'
+      // Agnes documents thinking requests, but no Chat reasoning replay contract.
+      ? params.messages.map(({ reasoning_content: _reasoning, ...message }) => message)
+      : params.messages),
     ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
   }
 
@@ -82,13 +85,16 @@ export async function openaiChat(params: {
   const gpt = isGptModel(params.model)
   const openaiThinkingDisabled = thinkingDisabled &&
     (gpt || params.providerName === 'openai' || params.providerName === 'copilot')
-  if (params.thinking && !gpt && !openaiThinkingDisabled) {
+  if (params.providerName === 'agnes') {
+    body.chat_template_kwargs = { enable_thinking: !thinkingDisabled }
+  }
+  if (params.thinking && params.providerName !== 'agnes' && !gpt && !openaiThinkingDisabled) {
     body.thinking = params.thinking
   }
   // Native OpenAI uses effort for opt-out; other compatible APIs retain their thinking switch.
   if (openaiThinkingDisabled) {
     body.reasoning_effort = 'none'
-  } else if (params.reasoningEffort && !thinkingDisabled) {
+  } else if (params.reasoningEffort && !thinkingDisabled && params.providerName !== 'agnes') {
     body.reasoning_effort = params.reasoningEffort
   }
 
@@ -113,12 +119,17 @@ export async function openaiChat(params: {
         // A proxy may reject by size without a readable JSON error body.
         if (res.status === 413) throw new ProviderHttpError(413,
           `${params.providerName ?? 'LLM'} chat failed: request payload too large`)
-        const text = await res.text()
+        const text = await res.text().catch(() => {
+          params.signal?.throwIfAborted()
+          throw new ProviderHttpError(res.status, `Provider rejected request (HTTP ${res.status})`, undefined,
+            { retryAfter: res.headers.get('retry-after'), rejectedRequest: true })
+        })
         let code: string | undefined
         // Detect token-limit errors so the agent loop can trigger a forced handoff
         try {
           const errJson = JSON.parse(text)
-          if (typeof errJson?.error?.code === 'string') code = errJson.error.code
+          if (typeof errJson?.error?.code === 'string' && errJson.error.code) code = errJson.error.code
+          else if (typeof errJson?.error?.type === 'string') code = errJson.error.type
           if (errJson?.error?.code === 'model_max_prompt_tokens_exceeded') {
             throw new TokenLimitExceededError(
               `${
@@ -132,6 +143,7 @@ export async function openaiChat(params: {
         throw new ProviderHttpError(res.status,
           `${params.providerName ?? 'LLM'} chat failed: ${res.status} ${text}`,
           code,
+          { retryAfter: res.headers.get('retry-after'), rejectedRequest: true },
         )
       }
 
@@ -149,7 +161,8 @@ export async function openaiChat(params: {
         // Round-trippable reasoning (DeepSeek/OpenRouter)
         const msg = choice.message ?? {}
         if (msg.reasoning_content) {
-          reasoningContent = msg.reasoning_content
+          if (params.providerName === 'agnes') reasoningText = msg.reasoning_content
+          else reasoningContent = msg.reasoning_content
         }
         // Display-only reasoning narration (Copilot `reasoning_text`,
         // OpenAI o-series `reasoning`). Must NOT be echoed back to the
@@ -181,13 +194,15 @@ export async function openaiChat(params: {
             promptTokens: json.usage.prompt_tokens,
             completionTokens: json.usage.completion_tokens,
             totalTokens: json.usage.total_tokens,
+            ...((json.usage.prompt_tokens_details?.cached_tokens ?? json.usage.prompt_cache_hit_tokens) != null
+              ? { cachedTokens: json.usage.prompt_tokens_details?.cached_tokens ?? json.usage.prompt_cache_hit_tokens } : {}),
           }
           : undefined,
       }
     } catch (err) {
       throw providerTransportFailure(err, phase, params.signal)
     }
-  }, params.signal)
+  }, params.signal, { scope: providerRetryScope(params.url, params.apiKey), provider: params.providerName, model: params.model })
 }
 
 // ---------------------------------------------------------------------------

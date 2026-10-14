@@ -17,7 +17,7 @@
         </button>
       </template>
     </HoverInfo>
-    <HoverInfo text="View next session">
+    <HoverInfo :text="t('View next session')">
       <template #default="{ triggerProps }">
         <button v-bind="triggerProps" type="button" class="segment-nav-btn" :aria-label="t('View next session')"
           :disabled="busy || !historical" @click="$emit('next')">
@@ -25,6 +25,7 @@
         </button>
       </template>
     </HoverInfo>
+    <slot />
   </nav>
 </template>
 

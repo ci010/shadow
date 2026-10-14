@@ -1,3 +1,4 @@
+import { withRateLimitWaiting, type RateLimitWait } from '../providers/retry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { withCurrentWork } from '../agent/context/builder.ts'
@@ -57,6 +58,8 @@ export abstract class BaseSession {
   protected usage: LLMResponseUsage | undefined
   protected responseContext: ResponseContext | undefined
   private providerFailure?: ProviderFailureKind
+  private providerWaiting?: RateLimitWait
+  get rateLimitWait(): RateLimitWait | undefined { return this.providerWaiting }
 
   constructor(
     protected readonly workspace: string,
@@ -223,7 +226,7 @@ export abstract class BaseSession {
     const reasoningEffort = executionContext.reasoningEffort ??
       llm.reasoningEffort
     executionContext = { ...executionContext, model, temperature, maxTokens, thinking, reasoningEffort }
-    const budget = new InferenceBudget()
+    const budget = new InferenceBudget(this.tools.inferenceRequestLimit)
     let contextRecoveryAttempted = false
     executionContext.infer = createNodeInference({
       provider: this.provider, budget,
@@ -252,7 +255,10 @@ export abstract class BaseSession {
         ? { ...this.responseContext, responseId: `${turnId}:${i}` } : undefined
       const workGuard = this.tools.getWorkGuard()
       executionContext = { ...executionContext, workStamps: workGuard?.snapshot(this.id) }
-      let workPrompt = workGuard?.prompt(this.id, executionContext)
+      const boundedSystemTask = this.state.mode === 'task' &&
+        this.state.agentType === executionContext.channel &&
+        (this.state.agentType === 'work-observer' || this.state.agentType === 'work-organizer')
+      let workPrompt = boundedSystemTask ? undefined : workGuard?.prompt(this.id, executionContext)
       if (workPrompt && this.tools.has('work') && workGuard?.required?.(this.id) !== false) {
         const receipts = this.messages.filter(message => message.role === 'tool' && message.tool_call_id && message.name !== 'work')
           .slice(-8).map(message => ({ id: message.tool_call_id, tool: message.name }))
@@ -266,7 +272,7 @@ export abstract class BaseSession {
           : [{ role: 'system', content: workPrompt }, ...this.messages]
         : this.messages
       const inferenceMessages = withExecutionBudget(withResponseAudience(
-        modelMessages(workMessages, executionContext.channel === 'qq'), responseContext,
+        modelMessages(workMessages, executionContext.channel === 'qq'), boundedSystemTask ? undefined : responseContext,
       ), budget.remaining, 'turn')
       await this.tools.boundary?.beforeInference(signal)
       if (this.tools.boundary) await this.store.saveState(this.id, this.state)
@@ -294,14 +300,18 @@ export abstract class BaseSession {
           if (captureId) chatSpan.setAttribute('prompt.capture.request_id', captureId)
           budget.take()
           this.providerFailure = undefined
-          const response = await this.provider.chat(inferenceMessages, toolDefs, {
+          const response = await withRateLimitWaiting(wait => {
+            this.providerWaiting = wait
+            this.activityChanged()
+            this.bus.emit('session.provider.waiting', { sessionId: this.id, wait })
+          }, () => this.provider.chat(inferenceMessages, toolDefs, {
             model,
             maxTokens,
             temperature,
             signal,
             thinking,
             reasoningEffort,
-          }).catch(error => {
+          })).catch(error => {
             this.providerFailure = providerFailureKind(error)
             throw error
           })

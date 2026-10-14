@@ -204,3 +204,53 @@ for (const host of ['github.com', 'msft.ghe.com']) {
     }
   })
 }
+
+
+for (const provider of ['agnes', 'deepseek', 'openai', 'anthropic', 'openrouter', 'gemini', 'groq']) {
+  test(`${provider} built-in connection hides URL and leaves endpoint selection to Main`, async t => {
+    let body: Record<string, unknown> | undefined
+    t.mock.method(globalThis, 'fetch', async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return Response.json({ provider, authMode: 'api-key', ready: true, hasApiKey: true, model: 'fixture-model' })
+    })
+    const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'edit', status: {
+      provider, authMode: 'api-key', ready: true, hasApiKey: true, model: 'fixture-model',
+      baseUrl: 'https://existing-gateway.invalid/v1',
+    } })
+    assert.ok(!view.nodes().some(node => node.tag === 'input' && node.props.type === 'url'))
+    const form = view.nodes().find(node => node.tag === 'form')!
+    await (form.props.onSubmit as (event: unknown) => Promise<void>)({ preventDefault() {} })
+    assert.equal(body?.provider, provider)
+    assert.ok(body && !('baseUrl' in body), 'omitting the endpoint preserves an existing override and uses defaults for new connections')
+  })
+}
+
+test('custom connection still exposes and submits its required endpoint', async t => {
+  let body: Record<string, unknown> | undefined
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    body = JSON.parse(String(init?.body))
+    return Response.json({ provider: 'local', authMode: 'none', ready: true, hasApiKey: false, model: 'local-model' })
+  })
+  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'edit', status: {
+    provider: 'local', authMode: 'none', ready: true, hasApiKey: false, model: 'local-model', baseUrl: 'http://127.0.0.1:11434/v1',
+  } })
+  const input = view.nodes().find(node => node.tag === 'input' && node.props.type === 'url')!
+  assert.ok(input)
+  assert.equal(input.props.required, true)
+  const form = view.nodes().find(node => node.tag === 'form')!
+  await (form.props.onSubmit as (event: unknown) => Promise<void>)({ preventDefault() {} })
+  assert.equal(body?.baseUrl, 'http://127.0.0.1:11434/v1')
+})
+
+
+test('Agnes permission denial is distinct from invalid credentials in the save failure', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ provider: 'agnes', authMode: 'api-key', ready: false, hasApiKey: true, model: 'agnes-3.0-flash', reason: 'permission_denied' }))
+  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'edit', status: {
+    provider: 'agnes', authMode: 'api-key', ready: true, hasApiKey: true, model: 'agnes-3.0-flash',
+  } })
+  const form = view.nodes().find(node => node.tag === 'form')!
+  await (form.props.onSubmit as (event: unknown) => Promise<void>)({ preventDefault() {} })
+  await nextTick()
+  assert.match(view.text(), /provider denied access/i)
+  assert.doesNotMatch(view.text(), /Credentials were rejected/)
+})

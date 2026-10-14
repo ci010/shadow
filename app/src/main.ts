@@ -6,6 +6,7 @@ import App from './App.vue'
 import router from './router.ts'
 import { createInstallationContextProvider } from './composables/useInstallationContext.ts'
 import { createLocalMainAdminContext } from './installation-context.ts'
+import DataLayoutUpgrade from './DataLayoutUpgrade.vue'
 import FirstRunWizard from './FirstRunWizard.vue'
 import RuntimeRecovery from './RuntimeRecovery.vue'
 import DesktopFrame from './DesktopFrame.vue'
@@ -58,6 +59,15 @@ function mountMainApp(installationContext: InstallationContextV1): void {
 function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapOutcome): void {
 	if (outcome.view === 'app') {
 		mountMainApp(outcome.context)
+		return
+	}
+
+	if (outcome.view === 'data-upgrade') {
+		const upgrade = createApp(desktopRoot(DataLayoutUpgrade, {
+			api, initialLayout: outcome.layout,
+			onComplete: async () => { upgrade.unmount(); await api.bootstrap.retryRuntime?.(); await startDesktopApp(api) },
+		}))
+		upgrade.use(i18n).mount('#app')
 		return
 	}
 

@@ -3,9 +3,10 @@ import { StartupTimings } from '../runtime/startup-timings.ts'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from './session-name.ts'
 import { parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
 import { readSessionFileChanges } from './file-changes.ts'
+import { readPresentationEvidence } from './presentation-evidence.ts'
 import { mkdir } from 'node:fs/promises'
 import { isCommandReceipt, type CommandReceipt } from '../slash-commands/receipt.ts'
-import { parseAutomationSessionRef, resolveAutomationSession, type AutomationSessionRef } from '../cron/contracts.ts'
+import { parseAutomationSessionRef, parseOrganizationOutcome, resolveAutomationSession, type OrganizationOutcome, type AutomationSessionRef } from '../cron/contracts.ts'
 import { parseInitiativeId } from './initiative-metadata.ts'
 import type { Hono } from 'hono'
 import type { AgentTypesManager } from '../agent/types/manager.ts'
@@ -180,6 +181,10 @@ export interface StartSessionOptions {
   chatId?: string
   /** Model override for this session. */
   model?: string
+  /** Trusted internal caller output ceiling; persisted with this execution, not a provider retry. */
+  maxTokens?: number
+  /** Host-only one-shot ceilings, never accepted from model arguments or persisted settings. */
+  executionLimits?: { allowedTools: readonly string[]; inferenceRequests: number; toolCalls: number; argumentBytes: number }
   /** Additional context appended to the task. */
   context?: string
 }
@@ -218,6 +223,7 @@ interface BlockingCallFrame {
 }
 
 export class SessionManager {
+  private readonly executionLimits = new Map<string, NonNullable<StartSessionOptions["executionLimits"]>>()
   alignment?: WorkAlignment
   readonly yields: YieldManager
   readonly inputs: InputRequests
@@ -1015,7 +1021,8 @@ ${JSON.stringify(request)}`,
     await startup.measure('session-migrate', async () => {
       for (const state of Object.values(this.sessionStates)) {
         const persisted = JSON.stringify(state)
-        state.automation ??= resolveAutomationSession(state)
+        const historicalAutomation = resolveAutomationSession(state)
+        if (historicalAutomation?.config?.source !== 'system') state.automation ??= historicalAutomation
         state.automationVersion = 1
         if (this.deps.projectId) {
           const address = channelAddressFromSessionId(state.sessionId)
@@ -1430,6 +1437,7 @@ ${JSON.stringify(request)}`,
     if (this.stopped) throw new Error('Session manager stopped')
     const onStopped = (id: string) => {
       delete this.sessions[id]
+      this.executionLimits.delete(id)
       if (ctx.state.mode !== 'session') {
         this.yields.cancelSession(id, 'The one-shot parent finished before answering.')
         this.inputs.cancelSession(id)
@@ -1729,7 +1737,18 @@ ${JSON.stringify(request)}`,
    * propagate cancellation with waitForCompletion. No transcript is inherited.
    * @returns sessionId, or null if the agent type is unknown.
    */
+  /** Internal receipt only; does not alter execution controls or replay the task. */
+  async updateAutomationOrganization(sessionId: string, outcome: OrganizationOutcome | undefined, problem?: 'execution_failed' | 'unfinished'): Promise<void> {
+    const state = this.sessionStates[sessionId]
+    if (!state?.automation || state.automation.config?.source !== 'system' || state.agentType !== 'work-organizer') return
+    state.automation = { ...state.automation, organization: parseOrganizationOutcome(outcome), organizationProblem: problem }
+    await this.saveState(sessionId, state)
+  }
+
   async startSession(opts: StartSessionOptions): Promise<string | null> {
+    if (opts.maxTokens !== undefined && (!Number.isSafeInteger(opts.maxTokens) || opts.maxTokens <= 0)) {
+      throw new Error('Session output ceiling must be a positive safe integer.')
+    }
     opts.signal?.throwIfAborted()
     if (this.stopped) throw new Error('Session manager stopped')
     const agentType = this.deps.agentTypes.resolve(opts.agentType)
@@ -1743,11 +1762,17 @@ ${JSON.stringify(request)}`,
       `${opts.agentType}-${Date.now()}`
     const sessionId = `${channel}:${chatId}`
 
+    if (opts.executionLimits) {
+      if (opts.mode !== "task" || Object.values(opts.executionLimits).filter(v => typeof v === "number").some(v => !Number.isSafeInteger(v) || (v as number) < 1)) throw new Error("Invalid one-shot execution limits")
+      this.executionLimits.set(sessionId, { ...opts.executionLimits, allowedTools: [...opts.executionLimits.allowedTools] })
+    }
+
     // Create prototype and state so dispatch() picks up the agent type
     await this.buildSession(
       sessionId,
       undefined,
-      { ...opts.locality, agentType: opts.agentType, model: opts.model, automation: opts.automation, mode: opts.mode },
+      { ...opts.locality, agentType: opts.agentType, model: opts.model, automation: opts.automation, mode: opts.mode,
+        ...(opts.maxTokens !== undefined ? { config: { maxTokens: opts.maxTokens } } : {}) },
     )
     if (opts.signal?.aborted) {
       const state = this.sessionStates[sessionId]
@@ -2148,7 +2173,8 @@ ${JSON.stringify(request)}`,
       }
     }
     const own = await readTokenUsage(this.store, state)
-    let subagentUsage: LLMResponseUsage | null = queue.length > 1 ? null : { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+    const hasDelegates = queue.length > 1
+    let subagentUsage: LLMResponseUsage | null = hasDelegates ? null : { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
     let usageIncomplete = own.incomplete
     for (const child of queue.slice(1)) {
       const result = await readTokenUsage(this.store, child)
@@ -2189,7 +2215,10 @@ ${JSON.stringify(request)}`,
         available: workdir.available,
         availability: workdir.available ? 'available' as const : workdir.reason,
       },
-      usage: own.usage === null && queue.length === 1 ? null : addTokenUsage(own.usage, subagentUsage),
+      // A session without delegates has no subagent total to fold in. Adding the
+      // empty placeholder would erase cache-read tokens the model did report,
+      // because a missing count is "not reported" rather than zero.
+      usage: hasDelegates ? addTokenUsage(own.usage, subagentUsage) : own.usage,
       subagentUsage,
       usageIncomplete,
       usageScope: 'session' as const,
@@ -2404,6 +2433,33 @@ ${JSON.stringify(request)}`,
       sessionKind: s.sessionKind === 'orchestrator' ? 'orchestrator' : undefined,
       createdBySessionId: s.createdBySessionId,
     }))
+  }
+
+  /** Bounded presentation evidence with exact own-log provenance; no model/history fork replay. */
+  async getPresentationEvidence(sessionId: string, signal: AbortSignal) {
+    const state = this.getSessionState(sessionId)
+    if (!state || state.projectId !== this.deps.projectId || !sessionId.startsWith('web:chat-') || state.mode && state.mode !== 'session') return { sources: [], partial: true }
+    return readPresentationEvidence(this.store, state, signal)
+  }
+
+  /** Aggregate persisted source events; caller cannot select another Project. Includes exact child lineage. */
+  async getAutomationUsage(sessionIds: string[], from: number, asOf: number, signal?: AbortSignal) {
+    return this.getProfileUsage(sessionIds, from, asOf, signal)
+  }
+
+  async getProfileUsage(sessionIds: string[], from: number, asOf: number, signal?: AbortSignal, includeDescendants = true) {
+    const { readAutomationUsage } = await import('./automation-usage.ts')
+    const selected = new Set(sessionIds)
+    const states = this.listSessions().map(row => this.getSessionState(row.sessionId))
+      .filter((state): state is SessionState => !!state && state.projectId === this.deps.projectId)
+    let changed = true
+    while (changed && includeDescendants) {
+      changed = false
+      for (const state of states) if (state.parentSessionId && selected.has(state.parentSessionId) && !selected.has(state.sessionId)) {
+        selected.add(state.sessionId); changed = true
+      }
+    }
+    return readAutomationUsage(this.store, states.filter(state => selected.has(state.sessionId)), from, asOf, signal)
   }
 
   /** Get the first user message content for a session (used as title). */
@@ -2659,6 +2715,10 @@ ${JSON.stringify(request)}`,
     if (name === 'work-observer') {
       return { agentType: { ...resolved, allowedTools: [], blockedTools: undefined, soul: false, skills: false }, allowedTools: [] }
     }
+    if (name === 'work-organizer') {
+      const allowedTools = ['organization_read', 'organization_patch', 'organization_finish']
+      return { agentType: { ...resolved, allowedTools, blockedTools: undefined, soul: false, skills: false }, allowedTools }
+    }
     if (name === 'orchestrator' || sessionKind === 'orchestrator') {
       const allowedTools = ['read', 'search', 'session', 'message', 'work', 'sql', 'project_config', 'authoring_change', 'channel_config', 'skill_read', 'skill_save', 'ask', 'reply']
       return {
@@ -2875,10 +2935,12 @@ ${JSON.stringify(request)}`,
       : this.calls.get(sessionId)?.tools ?? new SessionTools(
       this.deps.tools,
       this.deps.workspace,
-      allowedTools,
+      this.executionLimits.get(sessionId)?.allowedTools ? [...this.executionLimits.get(sessionId)!.allowedTools] : allowedTools,
       blockedTools,
       resolvedAgentType.allowedModules,
     )
+    const limits = this.executionLimits.get(sessionId)
+    if (limits) sessionTools.setTrustedLimits(limits)
     if (!conversationPolicy && !this.calls.has(sessionId)) sessionTools.setExecutionScope(state.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
     const executionPolicy = this.deps.tools.getExecutionPolicy()
     if (executionPolicy) sessionTools.setExecutionPolicy(executionPolicy)

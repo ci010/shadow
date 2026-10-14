@@ -88,6 +88,8 @@ export interface LLMResponse {
 }
 
 export interface LLMResponseUsage {
+  /** Cache-read input tokens; absent when not reported. */
+  cachedTokens?: number
   promptTokens: number
   completionTokens: number
   totalTokens: number
@@ -182,6 +184,8 @@ export interface ModelInfo {
   vision?: boolean
   /** Maximum context window in tokens, if known. */
   contextWindow?: number
+  /** Maximum generated output tokens, if documented by the provider. */
+  maxOutputTokens?: number
   /** Explicit API paths advertised by the provider; absent for legacy metadata. */
   supportedEndpoints?: string[]
   reasoningEfforts?: string[]
@@ -230,9 +234,15 @@ export class TokenLimitExceededError extends Error {
 }
 
 export class ProviderHttpError extends Error {
-  constructor(readonly status: number, message: string, readonly code?: string) {
+  readonly retryAfter?: string | null
+  readonly rejectedRequest: boolean
+  constructor(readonly status: number, message: string, readonly code?: string,
+    metadata?: { retryAfter?: string | null; rejectedRequest?: boolean }) {
     super(message)
     this.name = 'ProviderHttpError'
+    this.retryAfter = metadata?.retryAfter
+    // Only adapters observing a non-success HTTP response may authorize replay.
+    this.rejectedRequest = metadata?.rejectedRequest === true
   }
 
 }

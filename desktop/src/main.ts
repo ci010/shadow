@@ -33,6 +33,9 @@ import {
   launchProfilePath,
 } from './bootstrap/launch-profile.js'
 import { AtomicMainAgentConfigInitializer } from './bootstrap/main-agent-config.js'
+import { DataLayoutController } from './bootstrap/data-layout-controller.js'
+import { createDataLayoutCommand } from './bootstrap/data-layout-command.js'
+import { detectDataLayout } from './bootstrap/data-layout-startup.js'
 import { BootstrapCoordinator } from './bootstrap/coordinator.js'
 import { RuntimeStartup } from './bootstrap/runtime-startup.js'
 import { createUtilityProcessSpawn } from './sidecar/utility-process.js'
@@ -128,6 +131,16 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: 
       throw new Error('Bootstrap commands require the desktop main frame')
     }
   }
+  ipcMain.handle(IPC_CHANNELS.dataLayoutStatus, (event, ...args: unknown[]) => {
+    assertBootstrapSender(event)
+    parseNoArguments(args)
+    return coordinator.dataLayoutStatus()
+  })
+  ipcMain.handle(IPC_CHANNELS.upgradeDataLayout, (event, ...args: unknown[]) => {
+    assertBootstrapSender(event)
+    parseNoArguments(args)
+    return coordinator.upgradeDataLayout()
+  })
   ipcMain.handle(IPC_CHANNELS.childSetup, (event, ...args: unknown[]) => {
     assertBootstrapSender(event)
     parseNoArguments(args)
@@ -326,6 +339,10 @@ async function start(): Promise<void> {
     executablePath: process.execPath, appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath, userDataPath, packaged: app.isPackaged,
   })
+  const dataLayoutCommand = createDataLayoutCommand({
+    executablePath: process.execPath, appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath, userDataPath, packaged: app.isPackaged,
+  })
   const coordinator = new BootstrapCoordinator(
     storage,
     new AtomicRuntimeConfigWriter(configPath),
@@ -339,6 +356,7 @@ async function start(): Promise<void> {
       process.env.SHADOW_DESKTOP_DEV_MAIN_DIRECTORY,
     ),
     new FileChildBootstrap(configPath, childPairingCommand),
+    new DataLayoutController(detectDataLayout, dataLayoutCommand),
   )
   if (managedDeployment) {
     const state = await coordinator.load()
@@ -349,7 +367,7 @@ async function start(): Promise<void> {
     stop: async () => {
       try {
         await microApps?.shutdown()
-        await Promise.all([runtimeHost.stop(), childPairingCommand.stop()])
+        await Promise.all([runtimeHost.stop(), childPairingCommand.stop(), dataLayoutCommand.stop()])
       } finally { await publication.close() }
     },
   })

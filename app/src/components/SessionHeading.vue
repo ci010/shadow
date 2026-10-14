@@ -53,13 +53,12 @@
                 <dt>{{ column.label }}</dt>
                 <dd v-if="column.usage" class="token-counts">
                   <span :title="t('{value1} input tokens', { value1: formatNumber(column.usage.promptTokens) })"><span class="i-lucide-arrow-up" aria-hidden="true" />{{ formatTokenCount(column.usage.promptTokens) }} <small>{{ t('input') }}</small></span>
+                  <span :title="t('Cache-read tokens / input tokens')"><span class="i-lucide-database" aria-hidden="true" /><span :title="column.usage.cachedTokens === undefined ? undefined : formatNumber(column.usage.cachedTokens)">{{ column.usage.cachedTokens === undefined ? t('Not reported') : formatTokenCount(column.usage.cachedTokens) }}</span> <small :aria-label="t('Cache rate')">({{ cacheRate(column.usage) === null ? t('Not reported') : `${cacheRate(column.usage)}%` }})</small> <small>{{ t('cache') }}</small></span>
                   <span :title="t('{value1} output tokens', { value1: formatNumber(column.usage.completionTokens) })"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ formatTokenCount(column.usage.completionTokens) }} <small>{{ t('output') }}</small></span>
                 </dd>
                 <dd v-else>{{ t('Not reported') }}</dd>
               </div>
             </dl>
-            <p class="details-note">{{ t('Total includes this conversation and all nested task/call agents. Subagents are part of the total.') }}</p>
-            <p v-if="details?.usageIncomplete" class="details-note">{{ t('Partial usage: older history or some model calls lack distinct token records.') }}</p>
             <div class="context-heading"><span>{{ t('Context') }}</span><span v-if="percent !== null">{{ percent }}%</span></div>
             <div class="context-counts">
               <span>{{ details?.context.usedTokens != null ? formatTokenCount(details.context.usedTokens) : t('Not reported') }}</span>
@@ -77,12 +76,9 @@
               <li><span class="context-swatch remaining" aria-hidden="true" />{{ capacity.remainingTokens === null ? t('Remaining unknown') : t('{value1} remaining', { value1: formatTokenCount(capacity.remainingTokens) }) }}</li>
             </ul>
             <p v-if="capacity.overflowTokens" class="details-note">{{ t('{value1} over capacity', { value1: formatTokenCount(capacity.overflowTokens) }) }}</p>
-            <p v-if="details?.context.handoff" class="details-note">{{ details.context.handoff.enabled ? t('Auto handoff enabled') : t('Auto handoff disabled') }}</p>
             <ul v-if="capacity.markers.length" class="context-legend">
               <li v-for="marker in capacity.markers" :key="marker.kind"><span class="context-swatch" :class="marker.kind" aria-hidden="true" />{{ marker.kind === 'low' ? t('Low (between turns)') : t('High (during turn)') }}: {{ Math.round(marker.ratio * 1000) / 10 }}% · {{ formatTokenCount(marker.tokens) }}</li>
             </ul>
-            <p class="details-note">{{ t('Prompt includes instructions, messages and tools; separate token counts are not reported.') }}</p>
-            <p class="details-note">{{ t('Last reported context, not a live draft estimate.') }}</p>
           </div>
         </div>
       </template>
@@ -99,7 +95,7 @@ import ComposerPopover from './ComposerPopover.vue'
 import CopyableId from './CopyableId.vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { chatContextName } from '../chat-draft.ts'
-import { contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
+import { cacheRate, contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
 import { ORCHESTRATOR_SESSION_ID, type TopicMetadata } from '../project-coordination.ts'
 
 const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; topic?: TopicMetadata; physicalId: string | null; revision: number; active: boolean; canRename?: boolean }>()
@@ -273,7 +269,7 @@ onUnmounted(() => { cancel(); stopRename() })
 .token-column dt { margin-bottom: 6px; }
 .token-counts { display: flex; flex-direction: column; gap: 3px; font-variant-numeric: tabular-nums; }
 .token-counts > span { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.token-counts > span > span { flex: 0 0 14px; width: 14px; height: 14px; }
+.token-counts > span > span[aria-hidden="true"] { flex: 0 0 14px; width: 14px; height: 14px; }
 .token-counts small, .details-note { color: var(--c-text-secondary); font-size: 12px; }
 .context-heading, .context-counts { display: flex; justify-content: space-between; gap: 12px; }
 .context-heading { margin-top: 18px; }

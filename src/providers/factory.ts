@@ -5,6 +5,7 @@ import { OpenAICompatibleProvider } from './openai-compatible.ts'
 import { AnthropicProvider } from './anthropic.ts'
 import { CopilotProvider, type CopilotAuthenticator } from './copilot.ts'
 import { DeepSeekProvider } from './deepseek.ts'
+import { AgnesProvider } from './agnes.ts'
 import { AggregatedProvider, parseModelSpec } from './aggregated.ts'
 
 /**
@@ -30,6 +31,7 @@ const PROVIDER_DEFAULTS: Record<string, {
     baseUrl: 'https://api.deepseek.com',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
   },
+  agnes: { baseUrl: 'https://apihub.agnes-ai.com/v1', apiKeyEnv: 'AGNES_API_KEY' },
   openrouter: {
     baseUrl: 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',
@@ -71,6 +73,7 @@ export function detectProvider(model: string): string {
   if (/^(gpt-|o[134]-|o[134]$)/.test(model)) return 'openai'
   // DeepSeek
   if (model.startsWith('deepseek-')) return 'deepseek'
+  if (model.startsWith('agnes-')) return 'agnes'
   // Google Gemini
   if (model.startsWith('gemini-')) return 'gemini'
   // Groq-hosted open models
@@ -139,6 +142,8 @@ export function createProvider(
   if (name === 'deepseek') {
     return new DeepSeekProvider(model, { apiKey, baseUrl })
   }
+
+  if (name === 'agnes') return new AgnesProvider(model, { apiKey, baseUrl })
 
   // --- All other OpenAI-compatible providers ---
   if (!baseUrl) {

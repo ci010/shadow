@@ -13,6 +13,6 @@ test('perimeter proximity includes outside edges/corners and excludes distant ce
 })
 
 test('only deliberate card and input-region classes opt in', () => {
-  assert.equal(REVEAL_TARGETS, '.reveal-border, .provider-card, .work-item-card, .composer-box, .chat-working, .context-chip, .session-work-triggers > button, .chat-bubble.chat-user, .chat-bubble.chat-assistant, .message-preview-card')
-  assert.doesNotMatch(REVEAL_TARGETS, /panel|\[class|input/)
+  assert.equal(REVEAL_TARGETS, '.reveal-border, .provider-card, .work-item-card, .composer-box, .chat-working, .context-chip, .session-work-triggers > button, .chat-bubble.chat-user, .chat-bubble.chat-assistant, .message-preview-card, .input-question')
+  assert.doesNotMatch(REVEAL_TARGETS, /panel|\[class|(?:^|,\s*)input(?:\b|$)/)
 })

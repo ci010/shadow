@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { DataLayoutController } from './data-layout-controller.js'
 import test from 'node:test'
 import type { BootstrapStateStorage } from './storage.js'
 import type { RuntimeConfigWriter } from './runtime-config.js'
@@ -458,4 +459,38 @@ test('provider preparation cannot bypass durable profile failures or overwrite a
     assert.deepEqual(await storage.load(), state)
   }
   assert.deepEqual(await createCoordinator(new MemoryStorage(mainProviderState())).ensureRuntime(), { ok: false, code: 'profile-missing' })
+})
+
+
+test('selected legacy directory is gated before config or initialization writes and continues after explicit upgrade', async () => {
+  let ready = false, writes = 0, initialized = 0, starts = 0
+  const roots: string[] = []
+  const gate = new DataLayoutController(async root => { roots.push(root); return { status: ready ? 'ready' : 'migration-required' } }, async root => { assert.equal(root, 'C:\\legacy'); ready = true })
+  const coordinator = new BootstrapCoordinator(new MemoryStorage(mainDirectoryState()),
+    { writeMain: async () => { writes++ } }, { initialize: async () => { initialized++ } },
+    { start: async () => { starts++; return { phase: 'ready' } } }, new MemoryLaunchProfiles(), readyReader, () => 'C:\\default', undefined, gate)
+  coordinator.registerDirectorySelection('legacy', 'C:\\legacy')
+  assert.equal((await coordinator.commitMainDirectory('legacy')).ok, false)
+  assert.equal(writes + initialized + starts, 0)
+  assert.equal((await coordinator.dataLayoutStatus())?.dataDir, 'C:\\legacy')
+  assert.equal((await coordinator.upgradeDataLayout()).status, 'ready')
+  assert.equal((await coordinator.commitMainDirectory('legacy')).ok, true)
+  assert.equal((await coordinator.initializeMain()).ok, true)
+  assert.equal(writes, 1)
+  assert.equal(initialized, 1)
+  assert.ok(roots.every(root => root === 'C:\\legacy'))
+})
+
+test('complete legacy profile is detected before backend starts; upgraded profile continues', async () => {
+  let ready = false, starts = 0
+  const state = transitionWizard(mainLaunchState(), { type: 'sidecar-ready' })
+  const gate = new DataLayoutController(async () => ({ status: ready ? 'ready' : 'migration-required' }), async () => { ready = true })
+  const coordinator = new BootstrapCoordinator(new MemoryStorage(state), { writeMain: async () => { throw Error('unexpected write') } }, readyInitializer,
+    { start: async () => { starts++; return { phase: 'ready', apiBase: 'http://127.0.0.1:43123' } } },
+    new MemoryLaunchProfiles({ version: 1, role: 'main', port: 43123, localExecutor: true }), readyReader, undefined, undefined, gate)
+  assert.equal((await coordinator.ensureRuntime()).ok, false)
+  assert.equal(starts, 0)
+  await coordinator.upgradeDataLayout()
+  assert.equal((await coordinator.ensureRuntime()).ok, true)
+  assert.equal(starts, 1)
 })

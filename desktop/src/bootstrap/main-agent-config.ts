@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { assertDataLayoutReady } from './data-layout-startup.js'
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 
@@ -34,6 +35,7 @@ export class AtomicMainAgentConfigInitializer implements MainAgentConfigInitiali
       JSON.parse(await readFile(this.runtimeConfigFilePath, 'utf8')),
     )
     const dataDir = resolve(runtimeConfig.dataDir)
+    await assertDataLayoutReady(dataDir)
     const workspace = dataDir
     const configFilePath = join(dataDir, 'app.json')
     const config: MainAgentConfig = {

@@ -133,10 +133,15 @@ export class InitiativeStore {
     }, undefined, true)
   }
 
-  saveProjectFocus(value: ProjectFocusSnapshot): void {
+  saveProjectFocus(value: ProjectFocusSnapshot, impactedKeys?: readonly string[], expectedRevision?: number, validatedSources?: readonly {key:string;sequence:number}[]): void {
     const snapshot = projectFocusSnapshotSchema.parse(value)
     this.#transaction('work-observer', () => {
-      for (const source of snapshot.sources) {
+      if (expectedRevision !== undefined) {
+        const current = this.#one('project_focus_summary', 'current')
+        const revision = current ? (JSON.parse(String(current.data)).revision ?? 0) : 0
+        if (revision !== expectedRevision) throw new WorkConflict('Presentation revision changed.')
+      }
+      for (const source of validatedSources ?? snapshot.sources.filter(source => !impactedKeys || impactedKeys.includes(source.key))) {
         const row = this.#one('work_contracts', source.key)
         if (Number(row?.sequence) !== source.sequence) throw new WorkConflict('Topics changed during organization; retry with current notes.')
       }

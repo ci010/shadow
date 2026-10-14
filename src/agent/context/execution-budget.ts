@@ -27,7 +27,7 @@ export function withExecutionBudget(messages: ChatMessage[], remaining: number, 
   const guidance = `## Remaining execution budget\n${remaining} inference requests including this one remain for ${boundary}.` +
     (remainingMs === undefined ? '' : `\nThe enforced deadline is in ${Math.ceil(remainingMs / 1000)} seconds, including operator waiting. The request count is only an upper bound; expiry may interrupt a request.`) +
     (remaining <= 20 || remainingMs !== undefined && remainingMs <= 5 * 60_000
-      ? '\nPrioritize a reviewable deliverable and the acceptance record over optional polish. Reserve calls for publication and, only after approval, runtime testing and reporting. Save incomplete/blocked checks honestly; do not bypass review, fabricate passes or assume more calls.'
+      ? '\nPrioritize the required outcome and reserve requests for necessary tools and the final result. Report incomplete or blocked work honestly; do not fabricate success or assume more calls.'
       : '')
   return messages[0]?.role === 'system' && typeof messages[0].content === 'string'
     ? messages.map((message, index) => index === 0 ? { ...message, content: `${message.content}\n\n${guidance}` } : message)

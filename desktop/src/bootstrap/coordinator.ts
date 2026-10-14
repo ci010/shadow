@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { DataLayoutController, DataLayoutView } from './data-layout-controller.js'
 import { basename } from 'node:path'
 import type { BootstrapStateStorage } from './storage.js'
 import { isMissingRuntimeConfig, normalizeMainDirectoryPath, type RuntimeConfigReader, type RuntimeConfigWriter } from './runtime-config.js'
@@ -36,7 +37,7 @@ export interface MainRuntimeHost {
 
 export type BootstrapCommandResult =
   | { readonly ok: true; readonly state: WizardState }
-  | { readonly ok: false; readonly code: 'invalid-state' | 'invalid-selection' | 'write-failed' | 'launch-failed'; readonly state: WizardState }
+  | { readonly ok: false; readonly code: 'invalid-state' | 'invalid-selection' | 'write-failed' | 'launch-failed' | 'migration-required'; readonly state: WizardState }
 
 export interface MainRuntimeContext {
   readonly version: 1
@@ -94,7 +95,30 @@ export class BootstrapCoordinator {
     private readonly configReader: RuntimeConfigReader,
     private readonly getDefaultDirectory: () => string = defaultMainDirectory,
     private readonly childBootstrap?: ChildBootstrap,
+    private readonly dataLayout?: DataLayoutController,
   ) {}
+
+  async dataLayoutStatus(): Promise<DataLayoutView | null> {
+    if (!this.dataLayout || (await this.load()).mode !== 'main') return null
+    let root = this.selectedDirectory
+    if (!root) {
+      try { root = (await this.configReader.readMain()).dataDir }
+      catch (error) { if (!isMissingRuntimeConfig(error)) throw error; root = this.getDefaultDirectory() }
+    }
+    return this.dataLayout.inspect(root)
+  }
+
+  async upgradeDataLayout(): Promise<DataLayoutView> {
+    if (!this.dataLayout || (await this.load()).mode !== 'main') throw new Error('Main upgrade is unavailable')
+    if (!this.dataLayout.current()) await this.dataLayoutStatus()
+    return this.dataLayout.start()
+  }
+
+  private async layoutReady(root?: string): Promise<boolean> {
+    if (!this.dataLayout) return true
+    const view = root ? await this.dataLayout.inspect(root) : await this.dataLayoutStatus()
+    return !view || view.status === 'ready' && !view.running
+  }
 
   registerDirectorySelection(selectionId: string, absolutePath: string): void {
     this.selections.set(selectionId, absolutePath)
@@ -156,6 +180,8 @@ export class BootstrapCoordinator {
 
   clear(): Promise<void> {
     return this.serialize(async () => {
+      const layout = await this.dataLayoutStatus()
+      if (layout && (layout.status !== 'ready' || layout.running)) throw new Error('Recover the data-layout migration instead of resetting setup')
       if ((await this.load()).mode === 'child') throw new Error('Child identity is retained; retry setup or runtime instead of resetting')
       await this.storage.clear()
     })
@@ -192,13 +218,18 @@ export class BootstrapCoordinator {
       if (dataDir === undefined) {
         return { ok: false, code: 'invalid-selection', state: current }
       }
+      if (!await this.layoutReady(dataDir)) return { ok: false, code: 'migration-required', state: current }
       this.selections.delete(selectionId)
       try {
         await this.configWriter.writeMain(dataDir)
         const next = transitionWizard(current, { type: 'data-directory-selected' })
         await this.storage.save(next)
         return { ok: true, state: next }
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'DATA_LAYOUT_NOT_READY') {
+          console.error(error.message)
+          return { ok: false, code: 'migration-required', state: current }
+        }
         return { ok: false, code: 'write-failed', state: current }
       }
     })
@@ -211,11 +242,16 @@ export class BootstrapCoordinator {
         return { ok: false, code: 'invalid-state', state: current }
       }
       try {
+        if (!await this.layoutReady()) return { ok: false, code: 'migration-required', state: current }
         await this.mainAgentConfigInitializer.initialize()
         const next = transitionWizard(current, { type: 'main-initialized' })
         await this.storage.save(next)
         return { ok: true, state: next }
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'DATA_LAYOUT_NOT_READY') {
+          console.error(error.message)
+          return { ok: false, code: 'migration-required', state: current }
+        }
         return { ok: false, code: 'write-failed', state: current }
       }
     })
@@ -228,6 +264,7 @@ export class BootstrapCoordinator {
       if (current.mode !== 'main' || (current.step !== 'configure-provider' && current.step !== 'launch-main')) {
         return { ok: false, code: 'invalid-state' }
       }
+      if (!await this.layoutReady()) return { ok: false, code: 'runtime-unavailable' }
       try {
         const launchOptions = await this.mainLaunchOptions(current, options)
         await this.launchProfiles.save({ version: 1, role: 'main', ...launchOptions })
@@ -257,6 +294,7 @@ export class BootstrapCoordinator {
       if (current.mode !== 'main' || current.step !== 'launch-main') {
         return { ok: false, code: 'invalid-state', state: current }
       }
+      if (!await this.layoutReady()) return { ok: false, code: 'migration-required', state: current }
       try {
         const launchOptions = await this.mainLaunchOptions(current, options)
         await this.launchProfiles.save({ version: 1, role: 'main', ...launchOptions })
@@ -295,6 +333,7 @@ export class BootstrapCoordinator {
         ? await this.childBootstrap?.readConfig()
         : await this.configReader.readMain()
       if (!config) return { ok: false, code: 'runtime-unavailable' }
+      if (current.mode === 'main' && !await this.layoutReady()) return { ok: false, code: 'runtime-unavailable' }
       const status = await this.runtimeHost.start(profile)
       if (status.phase !== 'ready' || status.apiBase === undefined) {
         const failure = startupFailure(status)

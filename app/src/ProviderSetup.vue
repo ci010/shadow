@@ -66,7 +66,7 @@
         <input v-model="customProvider" required pattern="[a-z][a-z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'">
       </label>
       <label>{{ t('Connection model') }} <input v-model="model" required :placeholder="t('Model ID from your provider')" :disabled="saving"></label>
-      <label>{{ t('API base URL') }} <input v-model="baseUrl" type="url" :required="provider === 'custom'" :placeholder="t('Provider default, or http://127.0.0.1:11434/v1')" :disabled="saving"></label>
+      <label v-if="provider === 'custom'">{{ t('API base URL') }} <input v-model="baseUrl" type="url" :required="provider === 'custom'" :placeholder="t('Provider default, or http://127.0.0.1:11434/v1')" :disabled="saving"></label>
       <label>{{ t('API key') }} <input v-model="apiKey" type="password" autocomplete="off" spellcheck="false" :disabled="saving"
         :required="provider !== 'custom' && !hasSavedKey" :placeholder="hasSavedKey ? t('Leave blank to keep the saved key') : provider === 'custom' ? t('Optional for local endpoints') : t('Enter your provider API key')"></label>
       <p class="help">{{ t('Keys are saved by Main in this installation\'s configuration, never in browser storage. Keyless local endpoints do not require a key.') }}</p>
@@ -147,6 +147,7 @@ const hasSavedKey = computed(() => props.status?.provider === (provider.value ==
 const readinessMessages: Record<string, string> = {
   get missing_credentials() { return t('Add credentials or choose another provider.') },
   get invalid_credentials() { return t('Credentials were rejected. Update them or sign in again.') },
+  get permission_denied() { return t('The provider denied access. Check your API key and account permissions.') },
   get network_error() { return providerFailureMessage('network') },
   get proxy_error() { return copilotFailureMessage('proxy') },
   get storage_error() { return copilotFailureMessage('storage') },
@@ -181,7 +182,7 @@ async function saveProvider() {
       provider: name,
       model: model.value.trim(),
       ...(apiKey.value ? { apiKey: apiKey.value } : {}),
-      baseUrl: baseUrl.value.trim(),
+      ...(provider.value === 'custom' ? { baseUrl: baseUrl.value.trim() } : {}),
     })
     apiKey.value = ''
     if (result.ready) emit('configured')

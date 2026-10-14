@@ -10,7 +10,7 @@ export interface SessionDetails {
   name: string | null
   description?: string
   workdir: { kind: 'local' | 'remote'; displayPath: string | null; nodeId?: string; nodeName?: string; displayName?: string; available?: boolean }
-  usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null
+  usage: { cachedTokens?: number; promptTokens: number; completionTokens: number; totalTokens: number } | null
   subagentUsage?: SessionDetails['usage']
   usageIncomplete?: boolean
   usageScope: 'session' | 'segment' | 'latest-call'
@@ -32,7 +32,9 @@ function parseUsage(value: unknown): SessionDetails['usage'] {
   if (!isRecord(value)) throw invalid()
   const { promptTokens, completionTokens, totalTokens } = value
   if (!tokenCount(promptTokens) || !tokenCount(completionTokens) || !tokenCount(totalTokens)) throw invalid()
-  return { promptTokens, completionTokens, totalTokens }
+  const cachedTokens = value.cachedTokens
+  if (cachedTokens !== undefined && (!tokenCount(cachedTokens) || cachedTokens > promptTokens)) throw invalid()
+  return { promptTokens, completionTokens, totalTokens, ...(cachedTokens !== undefined ? { cachedTokens } : {}) }
 }
 
 export function parseSessionDetails(value: unknown, sessionId: string): SessionDetails {
@@ -99,4 +101,10 @@ export function contextCapacity(context: SessionDetails['context']) {
       percent: Math.min(100, handoff[kind] * handoff.windowTokens / window * 100),
     })) : [],
   }
+}
+
+/** Aggregate cache-read tokens divided by input tokens, not a mean of call rates. */
+export function cacheRate(usage: SessionDetails["usage"]): number | null {
+  return usage?.cachedTokens === undefined || usage.promptTokens === 0
+    ? null : Math.round(usage.cachedTokens / usage.promptTokens * 1000) / 10
 }

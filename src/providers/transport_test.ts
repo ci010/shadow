@@ -56,13 +56,28 @@ for (const [name, chat] of [['chat', openaiChat], ['responses', openaiResponses]
     assert.equal(fetch.mock.callCount(), 1)
   })
 
-  test(`${name}: HTTP failures never retry`, async t => {
-    for (const status of [401, 413, 429, 500, 503]) {
+  test(`${name}: non-rate-limit HTTP failures never retry`, async t => {
+    for (const status of [401, 413, 500, 503]) {
       const fetch = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status }))
       await assert.rejects(chat(options))
       assert.equal(fetch.mock.callCount(), 1)
       fetch.mock.restore()
     }
+  })
+
+  test(`${name}: rejected HTTP 429 retries but structured quota exhaustion does not`, async t => {
+    let calls = 0
+    const complete = name === 'responses'
+      ? { status: 'completed', output: [] }
+      : name === 'anthropic' ? { content: [] } : { choices: [] }
+    const fetch = t.mock.method(globalThis, 'fetch', async () => ++calls === 1
+      ? new Response('{}', { status: 429, headers: { 'Retry-After': '0' } }) : Response.json(complete))
+    await chat(options)
+    assert.equal(calls, 2)
+    fetch.mock.restore()
+    const quota = t.mock.method(globalThis, 'fetch', async () => Response.json({ error: { code: 'insufficient_quota' } }, { status: 429 }))
+    await assert.rejects(chat(options))
+    assert.equal(quota.mock.callCount(), 1)
   })
 
   test(`${name}: a safe connection failure retries to a complete response`, async t => {

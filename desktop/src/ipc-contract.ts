@@ -1,3 +1,4 @@
+import type { DataLayoutView } from './bootstrap/data-layout-controller.js'
 import type { WizardEvent, WizardState } from './wizard/state-machine.js'
 import type { BootstrapCommandResult } from './bootstrap/coordinator.js'
 import type { EnsureRuntimeResult } from './bootstrap/coordinator.js'
@@ -12,6 +13,8 @@ import type { DesktopTaskNotificationsApi } from './task-notifications-contract.
 import type { DesktopFileExplorerApi } from './file-explorer-contract.js'
 
 export const IPC_CHANNELS = {
+  dataLayoutStatus: 'shadow:bootstrap:data-layout-status',
+  upgradeDataLayout: 'shadow:bootstrap:upgrade-data-layout',
   loadWizard: 'shadow:bootstrap:load',
   dispatchWizard: 'shadow:bootstrap:dispatch',
   clearWizard: 'shadow:bootstrap:clear',
@@ -82,6 +85,8 @@ export interface ShadowDesktopApi {
     readonly selectFolders: () => Promise<string[]>
   }
   readonly bootstrap: {
+    dataLayoutStatus(): Promise<DataLayoutView | null>
+    upgradeDataLayout(): Promise<DataLayoutView>
     load(): Promise<WizardState>
     dispatch(event: WizardEvent): Promise<WizardState>
     clear(): Promise<void>

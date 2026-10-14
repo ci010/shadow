@@ -223,3 +223,35 @@ test('recovery gates timers; retries back off across restart, pause after three 
     } finally { await service.stop(); scope.close() }
   })
 })
+
+test('per-item automatic preferences are independent, survive the master switch, and retain manual override', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const scope = createProjectScope('preferences')
+  const cron = new CronService('.', 'UTC', scope)
+  const calls: string[] = []
+  const service = new LearningService(new Bus(), scope, {
+    async reflector() { calls.push('reflector'); return true },
+    async encapsulator() { calls.push('encapsulator'); return true },
+    async soulReflector() { calls.push('soulReflector'); return true },
+  }, config, cron)
+  const preferences = { ...config, pipelines: { reflector: false } }
+  try {
+    service.update(config)
+    service.update(preferences)
+    t.mock.timers.tick(30); await tick()
+    assert.deepEqual(calls, ['encapsulator', 'soulReflector'])
+    service.update({ ...preferences, enabled: false })
+    t.mock.timers.tick(60); await tick()
+    assert.equal(calls.length, 2)
+    service.update({ ...preferences, enabled: true })
+    assert.equal(cron.listJobs().find(job => job.id === 'learning:reflector')!.enabled, false)
+    t.mock.timers.tick(30); await tick()
+    assert.deepEqual(calls, ['encapsulator', 'soulReflector', 'encapsulator', 'soulReflector'])
+    service.update({ ...preferences, pipelines: { reflector: true } })
+    t.mock.timers.tick(10); await tick()
+    assert.equal(calls.at(-1), 'reflector')
+    service.update({ ...preferences, enabled: false })
+    await service.trigger('reflector')
+    assert.equal(calls.at(-1), 'reflector')
+  } finally { await service.stop(); await cron.stop(); scope.close() }
+})

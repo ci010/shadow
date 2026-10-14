@@ -11,7 +11,7 @@
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
       </button>
       <button v-if="subagents?.length || expanded === 'subagents'" :id="`${id}-subagents`" ref="subagentsTrigger"
-        type="button" data-session-work="subagents" :aria-expanded="expanded === 'subagents'" :aria-controls="`${id}-panel`"
+        type="button" :class="{ 'work-chip-active': subagentStatus.running > 0 }" data-session-work="subagents" :aria-expanded="expanded === 'subagents'" :aria-controls="`${id}-panel`"
         aria-haspopup="dialog" :title="subagentActivityLabel(subagentStatus)" @click="toggle('subagents')">
         <span class="i-lucide-git-branch work-icon" aria-hidden="true" />
         <span>{{ t('Subagents') }}</span><span>{{ subagents?.length ?? 0 }}</span>
@@ -20,7 +20,7 @@
     </div>
     <Teleport to="body">
       <OverlayTransition @after-leave="shownPanel = null">
-      <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" :class="{ 'subagent-panel': shownPanel === 'subagents' }" role="dialog" tabindex="-1"
+      <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" :class="{ 'subagent-panel': shownPanel === 'subagents', 'work-chip-active work-popup-active': shownPanel === 'subagents' && subagentStatus.running > 0 }" role="dialog" tabindex="-1"
         :aria-labelledby="`${id}-${shownPanel || 'background'}`" :style="position" @keydown="popupKeydown">
         <div v-show="shownPanel === 'background'">
           <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />

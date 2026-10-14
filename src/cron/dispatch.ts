@@ -10,7 +10,7 @@ export class CronDispatcher {
     private changed: (sessionId?: string) => void = () => {},
   ) {}
 
-  async dispatch(job: CronJob, signal: AbortSignal, task = job.task ?? '', onAccepted?: (sessionId: string) => void): Promise<string> {
+  async dispatch(job: CronJob, signal: AbortSignal, task = job.task ?? '', onAccepted?: (sessionId: string) => void, executionLimits?: NonNullable<Parameters<SessionManager['startSession']>[0]['executionLimits']>): Promise<string> {
     signal.throwIfAborted()
     const mode = cronContextMode(job)
     if (mode === 'existing') {
@@ -38,7 +38,7 @@ export class CronDispatcher {
       const started = await this.sessions.startSession({
         channel: 'cron', chatId: runId, agentType: job.agentType ?? 'general',
         task, signal, mode: 'task', automation, waitForCompletion: true,
-        onAccepted,
+        onAccepted, executionLimits,
         locality: {
           folderId: job.folderId, initiativeId: job.initiativeId,
           workspaceRoot: job.workspaceRoot, workdir: job.workdir,
