@@ -103,7 +103,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
           import { inlineMessageActions } from '/src/message-actions.ts';
           import { groupToolActivity } from '/src/tool-activity.ts';
           import { messageAttachments } from '/src/message-attachments.ts';
-          import { sessionMessageTitle } from '/src/message-author.ts';
+          import { sessionMessageTitle, sessionMessageSourceLabel } from '/src/message-author.ts';
           import { useConversationNavigation } from '/src/composables/useConversationNavigation.ts';
           import { render } from '/conversation-rows.js';
           const state = reactive({ loadingHistory:true, messages:[], visible:true, conversationDocumentVisible:true,
@@ -274,7 +274,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
                   mode:meta.type === 'exec-complete' || meta.attrs['source-session-id'] === 'web:owner' ? 'session' : 'task',
                   label:meta.attrs['source-label'] || sessions[0].label,
                 }) : undefined,
-                eventSourceSession:meta => meta.attrs['source-session-id'], clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle,
+                eventSourceSession:meta => meta.attrs['source-session-id'], clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle, sessionMessageSourceLabel, allSessions:sessions,
                 viewPreviousSegment(){ state.viewingPhysicalId = state.previousPhysicalId },
                 goBackToCurrentSegment(){ state.viewingPhysicalId = null },
                 viewNextSegment(){ state.viewingPhysicalId = null },

@@ -1,3 +1,5 @@
+import { finishStartupProfile, profileStartupPhase, startupProjectOrdinal } from './startup-profile.ts'
+
 export type StartupPhase = 'catalog' | 'ownership' | 'cluster' | 'gateway' | 'projects'
   | 'config' | 'events' | 'folders' | 'sessions' | 'io' | 'channels' | 'agent' | 'cron' | 'recovery' | 'ready'
   | 'agent-mcp' | 'agent-skills' | 'agent-types' | 'agent-watchers' | 'agent-sessions'
@@ -7,7 +9,9 @@ export type StartupPhase = 'catalog' | 'ownership' | 'cluster' | 'gateway' | 'pr
 export class StartupTimings {
   private readonly started = performance.now()
 
-  constructor(private readonly component: 'host' | 'project', private readonly projectId?: string) {}
+  constructor(private readonly component: 'host' | 'project', private readonly projectId?: string) {
+    if (component === 'host') profileStartupPhase('bootstrap', 'completed')
+  }
 
   async measure<T>(phase: StartupPhase, operation: () => T | Promise<T>): Promise<T> {
     const started = performance.now()
@@ -22,9 +26,15 @@ export class StartupTimings {
     }
   }
 
-  ready(): void { this.emit('ready', 'completed') }
+  ready(): void {
+    this.emit('ready', 'completed')
+    if (this.component === 'host') finishStartupProfile()
+  }
 
   private emit(phase: StartupPhase, status: 'started' | 'completed' | 'failed', durationMs?: number): void {
+    profileStartupPhase(`${this.component}-${phase}`, status, {
+      ...(this.projectId === undefined ? {} : { projectOrdinal: startupProjectOrdinal(this.projectId) }),
+    })
     console.info('[startup] ' + JSON.stringify({
       version: 1, component: this.component,
       ...(this.projectId === undefined ? {} : { projectId: this.projectId }),

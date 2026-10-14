@@ -1,6 +1,3 @@
-import type { ChatMessage } from '../src/providers/provider.ts'
-import { withExecutionBudget } from '../src/agent/context/execution-budget.ts'
-
 export const ACCEPTANCE_PHASE_MS = {
   creation: 30 * 60_000,
   review: 5 * 60_000,
@@ -70,15 +67,6 @@ export class AcceptanceTimeline {
     const combined = AbortSignal.any([this.controller.signal, timeout.signal, ...(signal ? [signal] : [])])
     try { combined.throwIfAborted(); return await run(combined) }
     finally { clearTimeout(timer) }
-  }
-  prompt(messages: ChatMessage[], remaining: number) {
-    const { remainingMs } = this.snapshot()
-    const result = withExecutionBudget(messages, remaining, 'evaluation', remainingMs)
-    const guidance = this.phase === 'creation'
-      ? 'The deadline above ends CREATION (including feedback and clarification), not the protected review/testing windows. Publish a reviewable exact revision before it; stop optional implementation early enough to publish and explain unverified checks. After creation, the operator has up to 5 separate minutes for source review. No model requests run during review. Only exact-version owner approval starts up to 10 separate minutes for author testing, including the existing 60-second testing question. All phases share the same request cap; keep calls for testing. Time reservation never grants approval or guarantees a pass.'
-      : 'The deadline above ends AUTHOR TESTING, including confirmation waiting, dependency preparation and reporting. Exercise the approved version and save honest version-bound results before it. Prioritize startup, persistence, recovery and reopen over new features or polish. Revisions, repeat approvals, follow-ups and runtime restarts do not reset this deadline or the shared request cap. A new revision still needs its own owner review; record blocked/not_tested rather than bypassing it.'
-    const first = result[0]
-    return [{ ...first, content: `${first.content}\n${guidance}` }, ...result.slice(1)]
   }
 }
 

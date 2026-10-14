@@ -246,7 +246,7 @@ test('disposing while status is in flight ignores its late authenticated respons
   assert.notEqual(session.view.value, 'authenticated')
 })
 
-test('temporary startup 503 remains gated and retries; expired-session 401 returns to pairing', async t => {
+test('temporary startup 503 remains gated and automatically retries; expired-session 401 returns to pairing', async t => {
   const responses = [
     new Response('', { status: 503 }),
     Response.json(paired),
@@ -254,12 +254,75 @@ test('temporary startup 503 remains gated and retries; expired-session 401 retur
   ]
   const session = createBrowserSession('http://fixture', { now, fetch: async () => responses.shift()! })
   t.after(() => session.dispose())
-  await session.refresh()
-  assert.equal(session.view.value, 'error')
-  assert.match(session.error.value, /HTTP 503/)
-  await session.retry()
+  const checking = session.refresh()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(session.view.value, 'checking')
+  assert.equal(session.busy.value, true)
+  assert.equal(session.error.value, '')
+  await checking
   assert.equal(session.view.value, 'authenticated')
   await session.refresh()
   assert.equal(session.view.value, 'pairing')
   assert.equal(session.status.value?.authenticated, false)
+})
+
+test('startup 503 retries stay within one timeout and stop on disposal or logout', async () => {
+  for (const action of ['timeout', 'dispose', 'logout'] as const) {
+    const timers = new Map<ReturnType<typeof setTimeout>, { callback: () => void; delay: number }>()
+    let timerId = 0
+    const methods: string[] = []
+    const session = createBrowserSession('http://fixture', {
+      fetch: async (_url, init) => {
+        methods.push(init!.method!)
+        return init!.method === 'DELETE' ? Response.json(unpaired) : new Response('', { status: 503 })
+      },
+      setTimer: (callback, delay) => {
+        const id = ++timerId as unknown as ReturnType<typeof setTimeout>
+        timers.set(id, { callback, delay })
+        return id
+      },
+      clearTimer: id => { timers.delete(id) },
+    })
+    const pending = session.refresh()
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(session.view.value, 'checking')
+    await session.refresh()
+    assert.deepEqual(methods, ['GET'], 'Duplicate checks must not start another retry loop')
+    assert.deepEqual([...timers.values()].map(timer => timer.delay).sort((a, b) => a - b), [1_000, 15_000])
+    const deadline = [...timers.values()].find(timer => timer.delay === 15_000)!
+    const [retryId, retry] = [...timers].find(([, timer]) => timer.delay === 1_000)!
+    timers.delete(retryId)
+    retry.callback()
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(methods, ['GET', 'GET'])
+    assert.equal([...timers.values()].find(timer => timer.delay === 15_000), deadline,
+      'Retries must not reset the overall startup deadline')
+    if (action === 'timeout') {
+      deadline.callback()
+    } else if (action === 'dispose') session.dispose()
+    else await session.logout()
+    await pending
+    assert.equal(timers.size, 0)
+    if (action === 'timeout') {
+      assert.equal(session.view.value, 'error')
+      assert.match(session.error.value, /did not respond in time/)
+    } else if (action === 'logout') {
+      assert.deepEqual(methods, ['GET', 'GET', 'DELETE'])
+      assert.equal(session.view.value, 'pairing')
+    } else assert.notEqual(session.view.value, 'authenticated')
+    session.dispose()
+  }
+})
+
+test('503 pairing submissions are never automatically replayed', async t => {
+  let calls = 0
+  const session = createBrowserSession('http://fixture', { fetch: async () => {
+    calls++
+    return new Response('', { status: 503 })
+  } })
+  t.after(() => session.dispose())
+  await session.pair('synthetic-single-use-code')
+  assert.equal(calls, 1)
+  assert.equal(session.view.value, 'pairing')
+  assert.match(session.error.value, /HTTP 503/)
 })

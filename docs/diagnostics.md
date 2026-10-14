@@ -59,20 +59,20 @@ current prompt and tools. `source: active-history` uses in-memory state;
 `source: preview` rebuilds from current configuration. Neither is a
 historical model-request snapshot.
 
-For actual session-loop provider inputs, enable the development-only,
-in-memory capture **before** starting the backend:
+Actual session-loop provider inputs are captured in bounded memory by default
+when `NODE_ENV=development`. `pnpm dev` supplies this default to the desktop
+and backend; no `SHADOW_DEBUG_PROMPTS` flag is needed. Production defaults to
+o capture and rejects explicit enablement. Unset/other environments default
+to no capture; `SHADOW_DEBUG_PROMPTS=1` can enable it outside production.
 
-```powershell
-$env:SHADOW_DEBUG_PROMPTS = '1'
-pnpm dev
-```
-
-Query the context endpoint with `?view=captured`. Captures are taken before
-adapter transformations, routing, and retries; they do not include every
-auxiliary provider call. Capture is disabled by default, rejected in
-production, and cleared on shutdown. Keep the development gateway on
-loopback: system prompts can contain private memory and identity. Unset the
-variable (or set it to `0`) and restart to disable capture.
+Query the context endpoint with `?view=captured`, or read
+`v:runtime/current/captures` / `v:runtime/current/tools`. Use
+`v:runtime/sessions` to discover other sessions, subagents and cron targets.
+Captures are taken before adapter transformations, routing, and retries;
+they do not include every auxiliary provider call and are cleared on shutdown.
+Keep the development gateway on loopback: system prompts can contain private
+memory and identity. Set `SHADOW_DEBUG_PROMPTS=0` and restart to disable capture
+in development. Reads never turn capture on.
 
 ## Wiki alias regression
 

@@ -127,11 +127,11 @@ function remoteFilesystemStatus(error: RemoteFilesystemError): 400 | 404 | 503 {
   return 503
 }
 
-function sessionFileBase(
+async function sessionFileBase(
   sessions: SessionManager,
   key: string,
-): WorkdirResolution & { scope?: 'home' } {
-  const state = sessions.getSessionState(key)
+): Promise<WorkdirResolution & { scope?: 'home' }> {
+  const state = await sessions.readSessionState(key)
   const base = resolveSessionFileBase(
     sessions.workspace,
     key,
@@ -143,7 +143,7 @@ function sessionFileBase(
   let ancestor: string | undefined = key
   while (ancestor && !visited.has(ancestor)) {
     visited.add(ancestor)
-    const ancestorState = sessions.getSessionState(ancestor)
+    const ancestorState = await sessions.readSessionState(ancestor)
     if (!ancestorState) break
     if ((ancestor === key && ancestorState.sessionKind === 'orchestrator') ||
       isLearningAutomationSession(ancestorState)) {
@@ -199,13 +199,15 @@ export function sessionsApiPlugin(
         }
       }
       if (!c.req.path.slice('/api/sessions/'.length).includes('/')) return next()
-      if (sessions?.projectId && !sessions.getSessionState(c.req.param('key') ?? '')) {
+      const key = c.req.param('key') ?? ''
+      const historicalRead = c.req.method === 'GET' || c.req.method === 'HEAD'
+      if (sessions?.projectId && !(historicalRead ? await sessions.readSessionState(key) : sessions.getSessionState(key))) {
         return c.json({ error: 'session_not_found' }, 404)
       }
       const suffix = c.req.path.slice('/api/sessions/'.length)
       if (sessions && (/\/(?:files|raw|preview|static|git)(?:\/|$)/.test(suffix) ||
         c.req.method !== 'GET' || suffix.endsWith('/context'))) {
-        try { sessions.assertFolderAccess?.(c.req.param('key') ?? '') }
+        try { if (historicalRead) await sessions.assertHistoricalFolderAccess(key); else sessions.assertFolderAccess?.(key) }
         catch (error) {
           if (error instanceof FolderError) return c.json({ error: error.code, message: error.message }, error.status)
           throw error
@@ -217,7 +219,7 @@ export function sessionsApiPlugin(
       app.get(`/api/sessions/:key/git/${operation}`, async c => {
         if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
         const key = c.req.param('key')
-        const base = sessionFileBase(sessions, key)
+        const base = await sessionFileBase(sessions, key)
         if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
         if (base.locality === 'remote') {
           if (!sessions.remoteExecutor) return operation === 'status'
@@ -235,7 +237,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const list = (await sessions.listSessions()).filter(session => session.agentType !== 'work-observer')
+      const list = (await sessions.listHistorySessions()).filter(session => session.agentType !== 'work-observer')
       return c.json({ sessions: list })
     })
 
@@ -243,7 +245,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const list = (await sessions.listSessions()).filter(session => session.agentType !== 'work-observer')
+      const list = (await sessions.listHistorySessions()).filter(session => session.agentType !== 'work-observer')
 
       const nodes: Array<{
         projectId?: string
@@ -263,7 +265,7 @@ export function sessionsApiPlugin(
 
       const enrichedSessions = []
       for (const session of list) {
-        const state = sessions.getSessionState(session.sessionId)
+        const state = await sessions.readSessionState(session.sessionId)
         const execution = {
           mode: state?.mode ?? 'session',
           agentType: state?.agentType ?? 'general',
@@ -394,18 +396,18 @@ export function sessionsApiPlugin(
       }
     })
 
-    app.get('/api/sessions/:key/ask', (c) => {
+    app.get('/api/sessions/:key/ask', async (c) => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
       const key = c.req.param('key')
-      if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
+      if (!await sessions.readSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
       return c.json({ request: sessions.inputs.get(key) ?? sessions.yields.get(key) })
     })
 
-    app.get('/api/sessions/:key/work', c => {
+    app.get('/api/sessions/:key/work', async c => {
       if (!sessions?.alignment) return c.json({ error: 'work_unavailable' }, 501)
       const id = c.req.param('key')
-      if (!sessions.getSessionState(id)) return c.json({ error: 'session_not_found' }, 404)
-      sessions.assertFolderAccess(id)
+      if (!await sessions.readSessionState(id)) return c.json({ error: 'session_not_found' }, 404)
+      await sessions.assertHistoricalFolderAccess(id)
       return c.json(sessions.alignment.context(id, undefined, c.req.query('history') === '1'))
     })
 
@@ -665,7 +667,7 @@ export function sessionsApiPlugin(
       try {
         if (view === 'captured') {
           if (!options.authorizeContext) return c.json({ error: 'prompt_capture_authorization_unavailable' }, 403)
-          if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
+          if (!await sessions.readSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
           const captures = sessions.getPromptCaptures(key)
           if (!captures) return c.json({ error: 'prompt_capture_disabled' }, 404)
           return c.json({
@@ -674,6 +676,8 @@ export function sessionsApiPlugin(
             note: 'Captured system messages and tools at session provider calls, before adapter transformations; not HTTP wire payloads. Empty means no retained capture.',
           })
         }
+        if (!sessions.getSessionState(key)) return c.json({ error: 'archived_context_unavailable', key,
+          message: 'Archived executions have no live prompt context. Read their persisted history or retained captures.' }, 409)
         const result = await sessions.getContext({ sessionId: key, preview: view === 'preview' })
         if (!result) {
           return c.json({ error: 'session_not_found', key }, 404)
@@ -702,7 +706,7 @@ export function sessionsApiPlugin(
       const key = c.req.param('key')
       const query = fileSearchQuery(c)
       if (!query) return c.json({ error: 'invalid_query' }, 400)
-      const base = sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key)
       if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
       if (base.locality === 'local') return serveLocalFileSearch(c, base.path)
       if (!sessions.remoteExecutor) return c.json(remoteWorkdirRequiresExecutorApiResult(key, base), 501)
@@ -731,7 +735,7 @@ export function sessionsApiPlugin(
       }
       const key = c.req.param('key')
       const relPath = c.req.query('path') ?? ''
-      const base = sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key)
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
@@ -801,7 +805,7 @@ export function sessionsApiPlugin(
       }
       const key = c.req.param('key')
       const relPath = c.req.query('path') ?? ''
-      const base = sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key)
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
@@ -821,7 +825,7 @@ export function sessionsApiPlugin(
       const key = c.req.param('key')
       const relPath = staticFilePath(c)
       if (relPath === null) return c.json({ error: 'invalid_path' }, 400)
-      const base = sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key)
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
@@ -841,7 +845,7 @@ export function sessionsApiPlugin(
       const key = c.req.param('key')
       const relPath = c.req.query('path') ?? ''
       const maxBytes = filePreviewLimit(c.req.query('maxBytes'))
-      const base = sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key)
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
@@ -925,7 +929,7 @@ export function sessionsApiPlugin(
         return c.json({ stage: active.rateLimitWait ? 'rate-limit' : active.phase, rateLimitWait: active.rateLimitWait })
       }
       // Check if session exists but is not in memory
-      const state = await sessions.getSessionState(key)
+      const state = await sessions.readSessionState(key)
       if (state) {
         return c.json({ stage: 'inactive' })
       }
@@ -965,7 +969,7 @@ export function sessionsApiPlugin(
       const shallow = url.searchParams.get('shallow') === 'true'
 
       // Try as logical key first
-      const chain = await sessions.listSessions()
+      const chain = await sessions.listHistorySessions()
       const isLogicalKey = chain.some((s) => s.sessionId === key)
 
       if (isLogicalKey) {
@@ -974,7 +978,7 @@ export function sessionsApiPlugin(
           { offset, pageSize, shallow },
         )
         // Include segment info so the UI can navigate to previous segments
-        const state = sessions.getSessionState(key)
+        const state = await sessions.readSessionState(key)
         const segmentIndex = state?.segmentIndex ?? 0
         const currentPhysicalId = physicalSessionId(state ?? { sessionId: key, segmentIndex })
         let previousPhysicalId: string | null = null
@@ -1007,8 +1011,7 @@ export function sessionsApiPlugin(
             previousPhysicalId = String(firstRecord.previous_physical_id)
           }
         } catch { /* ignore */ }
-        const owner = chain.find(item => {
-          const state = sessions.getSessionState(item.sessionId)
+        const owner = (await sessions.listHistoryStates()).find(state => {
           return state && Array.from({ length: state.segmentIndex + 1 }, (_, index) => physicalSessionId(state, index)).includes(key)
         })
         return c.json({

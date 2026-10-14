@@ -7,7 +7,7 @@ import { createBackendPairingCommand, FileChildBootstrap, parseChildPairInput, t
 import { AtomicLaunchProfileStore } from './launch-profile.js'
 import { AtomicFileBootstrapStateStorage } from './storage.js'
 import { BootstrapCoordinator } from './coordinator.js'
-import { handlePairChild } from '../ipc-contract.js'
+import { handlePairChild } from '../ipc-main-handlers.js'
 
 const root = resolve('.test-child-bootstrap')
 function input(path = root): ChildPairInput {

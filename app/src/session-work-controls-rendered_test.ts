@@ -31,12 +31,20 @@ test('subagent popup has separate consistent gutters, square rows, focus and ins
         if (id !== normalizePath(resolve(directory, 'fixture.vue'))) return
         return `<script setup>
           import SessionWorkControls from '/src/components/SessionWorkControls.vue';
+          import SessionActivity from '/src/components/SessionActivity.vue';
           window.__inspected = null;
           const inspect = id => { window.__inspected = id };
         </script><template><main style="position:fixed;left:24px;bottom:24px">
           <SessionWorkControls api-base="" session-id="" can-write :active="true"
             :subagents="[{sessionId:'worker',label:'测试 worker',mode:'task',executionStatus:'running'}]"
             @inspect="inspect" />
+          <div id="activity-fixture">
+            <SessionActivity stage="running" compact icon-only />
+            <SessionActivity stage="running" status-icons />
+            <SessionActivity stage="running" />
+            <SessionActivity stage="tool" compact icon-only />
+            <SessionActivity stage="tool" />
+          </div>
         </main></template>`
       },
       configureServer(server) {
@@ -60,6 +68,17 @@ test('subagent popup has separate consistent gutters, square rows, focus and ins
       await win.loadURL(${JSON.stringify(new URL('__popup', server.resolvedUrls!.local[0]).href)});
       const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');
       for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('[data-session-work="subagents"]')))break;await new Promise(r=>setTimeout(r,50));}
+      const activities=await run(()=>[...document.querySelectorAll('#activity-fixture .session-activity')].map(item=>({
+        wave:!!item.querySelector('.working-wave'),
+        dot:getComputedStyle(item.querySelector('.activity-symbol'),'::after').content,
+        bars:item.querySelectorAll('.working-wave i').length,
+      })));
+      assert.equal(activities.length,5);
+      for(const item of activities.slice(0,3)){
+        assert.equal(item.wave,true);assert.equal(item.bars,3);assert.equal(item.dot,'none');
+      }
+      assert.equal(activities[3].dot,'none');
+      assert.equal(activities[4].dot,'""');
       for(const width of [900,390]){
         win.setSize(width,700);
         await run(()=>document.querySelector('[data-session-work="subagents"]').click());

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { i18n, t } from './i18n.ts'
-import { groupSenderNames, messageEnvelope, messageRoleLabel, parseSessionMessage, sessionMessageTitle } from './message-author.ts'
+import { groupSenderNames, messageEnvelope, messageRoleLabel, parseSessionMessage, sessionMessageTitle, sessionMessageSourceLabel } from './message-author.ts'
 
 test('received intents and outgoing actions explicitly distinguish direction in both languages', () => {
   const previousLocale = i18n.global.locale.value
@@ -109,4 +109,18 @@ test('group name fallback decodes only the metadata envelope and renders as plai
     { role: 'user', content: '<sender chat="group" />Hello' },
     { role: 'assistant', content: '<sender name="Not a human" chat="group" />Hello' },
   ]), ['A & B <img> "quoted" &lt;', 'two', 'Unknown sender', undefined])
+})
+
+ test('received source displays current session title before envelope name or ID', () => {
+  const id = 'virtual:sub-9f2b1a50236545e7'
+  const source = { id, name: 'Old title' }
+  const sessions = [{ sessionId: id, label: 'Actual task title' }]
+  assert.equal(sessionMessageSourceLabel(source, sessions), 'Actual task title')
+  assert.equal(sessionMessageSourceLabel({ id }, sessions), 'Actual task title')
+  assert.equal(sessionMessageSourceLabel(source, []), 'Old title')
+  assert.equal(sessionMessageSourceLabel({ id }, []), id)
+  assert.equal(sessionMessageSourceLabel({}, []), t('Unknown session'))
+  sessions[0].label = 'Renamed task'
+  assert.equal(sessionMessageSourceLabel(source, sessions), 'Renamed task')
+  assert.equal(source.id, id, 'Navigation still uses the stable ID')
 })

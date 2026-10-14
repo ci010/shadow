@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist/src"
+    "dist"
   ],
   "packageManager": "pnpm@12.3.1",
   "engines": {
@@ -66,6 +66,7 @@
     "@electron/asar": "^4.0.1",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "vite": "8.2.2"

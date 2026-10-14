@@ -131,6 +131,7 @@ test('normalized Project organization URL reaches organization once; legacy doub
     const sessions = {
       alignment: { store: { workRecords: () => [], workEffects: () => [], projectFocus: () => undefined } },
       listSessions: () => [],
+      listHistoryStates: async () => [],
     } as unknown as import('../sessions/session-manager.ts').SessionManager
     const target = new Hono()
     projectWorkPlugin(sessions, request => request.headers.get('authorization') === 'Bearer fixture-token',

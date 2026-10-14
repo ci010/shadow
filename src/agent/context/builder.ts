@@ -73,15 +73,6 @@ export interface SystemPromptSection {
   characters: number
 }
 
-/** Keep per-inference agreements ahead of cached task metadata and history. */
-export function withCurrentWork(systemPrompt: string, work: string): string {
-  const boundary = '\n\n---\n\n'
-  const first = systemPrompt.indexOf(boundary)
-  return first < 0
-    ? `${work}${boundary}${systemPrompt}`
-    : `${systemPrompt.slice(0, first)}${boundary}${work}${systemPrompt.slice(first)}`
-}
-
 /**
  * Assembles the full system prompt from registered providers.
  *

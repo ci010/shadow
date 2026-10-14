@@ -1,3 +1,4 @@
+import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { DatabaseSync as Database } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -212,7 +213,16 @@ export class SqliteSessionStore implements SessionStore {
   private stmtCountLog: ReturnType<Database['prepare']>
   private stmtReadFirstLog: ReturnType<Database['prepare']>
 
+  private readonly fresh: FreshAutomationStateStore
+  readArchivedState = (id: string) => this.fresh.archived(id)
+  queryArchivedStates = (query?: import('./session-store.ts').ArchivedStateQuery) => this.fresh.query(query)
+  countArchivedStates = (query?: import('./session-store.ts').ArchivedStateQuery) => this.fresh.count(query)
+  archiveFeatureStates = (projectId?: string) => this.fresh.features(projectId)
+  archiveState = (state: SessionState) => this.fresh.archive(state)
+  listArchiveReferences = () => this.fresh.references()
+
   constructor(sessionsDir: string, options: { readOnly?: boolean } = {}) {
+    this.fresh = new FreshAutomationStateStore(sessionsDir, 'sqlite', options.readOnly)
     const dbPath = join(sessionsDir, 'sessions.db')
     const dir = dirname(dbPath)
     if (!options.readOnly && dir && dir !== '.') mkdirSync(dir, { recursive: true })
@@ -351,6 +361,8 @@ export class SqliteSessionStore implements SessionStore {
   }
 
   async getState(sessionKey: string): Promise<SessionState | null> {
+    const active = await this.fresh.getActive(sessionKey)
+    if (active) return active
     const row = this.stmtGetState.get(sessionKey) as
       | {
         key: string
@@ -365,6 +377,12 @@ export class SqliteSessionStore implements SessionStore {
   }
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
+    if (state.statePersistence) {
+      if (sessionKey !== state.sessionId) throw new Error('Fresh automation key mismatch')
+      if (this.stmtGetState.get(sessionKey)) throw new Error('Existing legacy state cannot opt into fresh automation persistence')
+      return this.fresh.save(state)
+    }
+    if (await this.fresh.has(sessionKey)) throw new Error('Fresh automation policy cannot be removed')
     validateOwnership({ ...state, ownershipVersion: state.ownershipVersion ?? 2 })
     const prototype: SessionPrototypeV1 = {
       version: PROTOTYPE_VERSION,
@@ -436,7 +454,7 @@ export class SqliteSessionStore implements SessionStore {
       last_known_tokens: number | null
       prototype: string | null
     }>
-    return rows.map(r => {
+    const result = rows.map(r => {
       const state = this.parseRow(r)
       return {
         sessionId: r.key,
@@ -447,6 +465,7 @@ export class SqliteSessionStore implements SessionStore {
         ...parseTopicSessionFields(state),
       }
     })
+    return [...result, ...await this.fresh.summaries()]
   }
 
   async listAllStates(): Promise<Record<string, SessionState>> {
@@ -461,10 +480,12 @@ export class SqliteSessionStore implements SessionStore {
     for (const row of rows) {
       result[row.key] = this.parseRow(row)
     }
+    Object.assign(result, await this.fresh.listActive())
     return result
   }
 
   async deleteState(sessionKey: string): Promise<void> {
+    if (await this.fresh.has(sessionKey)) throw new Error('Fresh automation history deletion is not supported')
     await withRetry('deleteState', () => this.stmtDeleteState.run(sessionKey))
     this.prototypeMetadataExtras.delete(sessionKey)
   }
@@ -543,6 +564,7 @@ export class SqliteSessionStore implements SessionStore {
   }
 
   close(): void {
+    this.fresh.close()
     this.db.close()
   }
 }

@@ -71,7 +71,7 @@ export function createA2aRuntime(options: {
   const config = options.config
   if (!config) {
     registerA2aRoutes(app, undefined, () => undefined)
-    return { tools: [], sessions: undefined, authorize: () => false, validate: () => {}, close: async () => {} }
+    return { tools: [], sessions: undefined, hasPendingOwner: (_id: string) => false, authorize: () => false, validate: () => {}, close: async () => {} }
   }
   const store = new A2aStore(projectStoragePath(workspace, '.a2a'))
   store.init()
@@ -111,6 +111,8 @@ export function createA2aRuntime(options: {
   })
   return {
     tools: client.tools().filter(tool => tool.name !== 'reply'),
+    hasPendingOwner: (id: string) => [...store.outbound.values()].some(call => call.owner === id &&
+      (!['completed', 'failed', 'cancelled', 'rejected'].includes(call.status) || call.notification !== 'delivered')),
     sessions: remoteSessions,
     validate: () => {
       try {

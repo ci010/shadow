@@ -11,7 +11,7 @@ function fixture() {
   const states = [{ sessionId: 'web:root', projectId: 'p', segmentIndex: 1 }, { sessionId: 'child', projectId: 'p', segmentIndex: 0, parentSessionId: 'web:root' }, { sessionId: 'foreign', projectId: 'q', segmentIndex: 0, parentSessionId: 'web:root' }]
   let reads = 0
   const manager = Object.create(SessionManager.prototype) as SessionManager
-  Object.assign(manager, { listSessions: () => states, getSessionState: (id: string) => states.find(state => state.sessionId === id), deps: { projectId: 'p', store: { async *readSessionLog(id: string) {
+  Object.assign(manager, { sessionStates: Object.fromEntries(states.map(state => [state.sessionId, state])), listSessions: () => states, getSessionState: (id: string) => states.find(state => state.sessionId === id), deps: { projectId: 'p', store: { async *readSessionLog(id: string) {
     reads++
     const owner = id.startsWith('web_root') ? 'web:root' : id.startsWith('child') ? 'child' : 'foreign'
     yield { type: 'model_usage', sessionId: owner, id: 'dedup', timestamp: '2026-10-10T12:00:00Z', usage: { promptTokens: 4, completionTokens: 2, totalTokens: 6 } }

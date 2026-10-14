@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import test from 'node:test'
+import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { NodeSidecarSupervisor } from './supervisor.js'
 import { createUtilityProcessSpawn } from './utility-process.js'
 
 for (const role of ['server', 'child']) {
@@ -45,4 +48,50 @@ test('utility fork failures propagate to the supervisor', () => {
   const spawn = createUtilityProcessSpawn(() => { throw new Error('fork failed') })
   assert.throws(() => spawn('unused', ['backend.js'], {}), /fork failed/)
   assert.throws(() => spawn('unused', [], {}), /entry path/)
+})
+
+for (const role of ['main', 'child'] as const) {
+  for (const armed of [false, true]) {
+    test(`composed supervisor utility fork: ${role}, profiling=${armed}`, async () => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 12345, stdout: new PassThrough(), stderr: new PassThrough(),
+        kill: () => { queueMicrotask(() => child.emit('exit', 0)); return true },
+      })
+      const entryPath = join(process.cwd(), 'synthetic backend', 'index.js')
+      let forks = 0
+      const supervisor = new NodeSidecarSupervisor({
+        environment: { SHADOW_DESKTOP_DEV_IPC: '1', ...(armed ? { SHADOW_STARTUP_PROFILE_DIR: 'synthetic profiles' } : {}) },
+        readinessProbe: async () => ({ ready: true }),
+        spawn: createUtilityProcessSpawn((entry, argv, options) => {
+          forks++
+          assert.equal(entry, armed ? fileURLToPath(new URL('./utility-profile-bootstrap.js', import.meta.url)) : entryPath)
+          const preload = pathToFileURL(join(process.cwd(), 'synthetic backend', 'runtime', 'startup-profile-preload.js')).href
+          if (armed) assert.deepEqual(argv.splice(0, 2), [JSON.stringify([preload]), entryPath])
+          assert.deepEqual(argv, [role === 'main' ? 'server' : 'child', 'start', '--config', 'synthetic config.json', ...(role === 'main' ? ['--local-executor'] : [])])
+          assert.equal(options.execArgv, undefined)
+          assert.equal((options.env as NodeJS.ProcessEnv | undefined)?.ELECTRON_RUN_AS_NODE, undefined)
+          return child
+        }),
+      })
+      assert.equal((await supervisor.start({ role, executablePath: 'unused', entryPath, configPath: 'synthetic config.json', launchToken: 'synthetic', port: 43123, localExecutor: role === 'main' })).phase, 'ready')
+      assert.equal(forks, 1)
+      await supervisor.stop()
+    })
+  }
+}
+
+test('utility preload prefix validates values and preserves application flags', () => {
+  let forks = 0
+  const spawn = createUtilityProcessSpawn((entry, argv, options) => {
+    forks++
+    assert.equal(entry, fileURLToPath(new URL('./utility-profile-bootstrap.js', import.meta.url)))
+    assert.deepEqual(argv, [JSON.stringify(['file:///preload.js']), 'entry.js', '--import', 'application-value'])
+    assert.equal(options.execArgv, undefined)
+    return Object.assign(new EventEmitter(), { pid: undefined, stdout: null, stderr: null, kill: () => true })
+  })
+  for (const args of [['--import'], ['--import', '--bad'], ['--import', 'file:///preload.js'], ['--unsupported', 'entry.js']]) {
+    assert.throws(() => spawn('unused', args, {}), /path is required/)
+  }
+  spawn('unused', ['--import', 'file:///preload.js', 'entry.js', '--import', 'application-value'], {})
+  assert.equal(forks, 1)
 })

@@ -1,3 +1,4 @@
+import { measureStartupProfile, startupProjectOrdinal } from '../startup-profile.ts'
 import { appProxyPlugin } from '../../config/proxy-routes.ts'
 import { updateBackendNetwork } from '../../execution/network/backend.ts'
 import { Hono } from 'hono'
@@ -27,7 +28,7 @@ import { appWebSearchPlugin } from '../../config/web-search-routes.ts'
 import { projectPaths, projectBasePath } from '../../projects/contracts.ts'
 import { registerProjectGateway } from '../../projects/gateway.ts'
 import type { ProjectRuntime, ProjectRuntimeFactory } from '../../projects/runtime.ts'
-import { reserveRemoteSessionWorkdirs } from '../../projects/session-ownership.ts'
+import { reserveRemoteSessionWorkdirs, type StartupOwnershipStates } from '../../projects/session-ownership.ts'
 import { OtelStore } from '../../otel/store.ts'
 import { initializeNodeTelemetry } from '../../otel/runtime.ts'
 import { otelPlugin } from '../../otel/routes.ts'
@@ -57,10 +58,15 @@ export async function startProjectHost(
       catch (error) { console.error(`[projects:${project.id}] Pending deletion could not finish; retry from the project catalog`, error) }
     }
   }
+  const startupSessionStates = new Map<string, StartupOwnershipStates>()
   await startup.measure('ownership', async () => {
     for (const project of catalog.list()) {
       if (catalog.isDeleting(project.id)) continue
-      await reserveRemoteSessionWorkdirs(projectPaths(hostHome, project.id).home, catalog, project.id)
+      const snapshot: StartupOwnershipStates = {}
+      startupSessionStates.set(project.id, snapshot)
+      await measureStartupProfile('ownership-project', () =>
+        reserveRemoteSessionWorkdirs(projectPaths(hostHome, project.id).home, catalog, project.id, snapshot),
+      { projectOrdinal: startupProjectOrdinal(project.id) })
     }
   })
 
@@ -72,6 +78,8 @@ export async function startProjectHost(
       try { await close() } catch (cleanupError) { console.error('[projects] Host startup cleanup failed', cleanupError) }
     }
     throw error
+  } finally {
+    startupSessionStates.clear()
   }
 
   async function startHostServices(): Promise<MainRuntimeHandle> {
@@ -184,8 +192,11 @@ export async function startProjectHost(
       let runtime: ProjectRuntime | undefined
       try {
         const projectStartup = new StartupTimings('project', id)
+        const startupStates = startupSessionStates.get(id)
+        startupSessionStates.delete(id) // Retries must read current state, never reuse failed boot data.
         const projectConfig = await projectStartup.measure('config', () => store.init())
         runtime = await scope.run(() => factory(projectConfig, {
+          startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
           mainCluster, copilotAuth, chromePortAllocator, authorize, realtimeHub,
           localExecutor: options.localExecutor !== false,
@@ -318,6 +329,7 @@ export async function startProjectHost(
       }
       await Promise.all(Array.from({ length: Math.min(3, catalog.list().length) }, worker))
     })
+    startupSessionStates.clear()
     localControl.markReady()
     startup.ready()
   } catch (error) {

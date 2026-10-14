@@ -13,6 +13,7 @@ export class YieldRecords {
     private readonly getState: (id: string) => SessionState | null | undefined,
     private readonly workValidity?: (request: YieldRequest) => string | undefined,
     private readonly customAnswer?: (record: YieldDecisionRecord) => void,
+    private readonly readState?: (id: string) => Promise<SessionState | null>,
   ) {}
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -31,8 +32,18 @@ export class YieldRecords {
     return selected
   }
 
+  private async historySegment(sessionId: string, physicalId?: string): Promise<string> {
+    const state = this.getState(sessionId) ?? await this.readState?.(sessionId)
+    if (!state) throw new YieldError('not_found', 'Decision session not found.')
+    const selected = physicalId ?? physicalSessionId(state)
+    if (!Array.from({ length: state.segmentIndex + 1 }, (_, index) => physicalSessionId(state, index)).includes(selected)) {
+      throw new YieldError('not_found', 'Decision segment does not belong to this session.')
+    }
+    return selected
+  }
+
   private async readSegment(sessionId: string, physicalId?: string): Promise<YieldDecisionRecord[]> {
-    const selected = this.segment(sessionId, physicalId)
+    const selected = await this.historySegment(sessionId, physicalId)
     const records = new Map<string, YieldDecisionRecord>()
     const invalidations = new Map<string, DecisionInvalidation>()
     for await (const event of this.store.readSessionLog(selected)) {
@@ -74,7 +85,7 @@ export class YieldRecords {
       if (!cache.has(key)) cache.set(key, this.readSegment(id, segment))
       return cache.get(key)!
     }
-    const records = await load(sessionId, this.segment(sessionId, physicalId))
+    const records = await load(sessionId, await this.historySegment(sessionId, physicalId))
     for (const record of records) {
       const queue = [...(record.request.sources ?? [])]
       const seen = new Set<string>()
@@ -119,7 +130,7 @@ export class YieldRecords {
   }
 
   async evidence(source: DecisionEvidence): Promise<void> {
-    const segment = this.segment(source.sessionId, source.physicalId)
+    const segment = await this.historySegment(source.sessionId, source.physicalId)
     for await (const event of this.store.readSessionLog(segment)) {
       if (source.kind === 'user') {
         const input = event.decision_input

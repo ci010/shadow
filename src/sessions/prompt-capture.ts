@@ -21,7 +21,7 @@ export interface PromptCapture {
   tools?: ToolDefinition[]
 }
 
-/** Project-local, opt-in memory only. Never records headers or conversation bodies. */
+/** Project-local, bounded memory only; enabled by default in development. Never records headers or conversation bodies. */
 export class PromptCaptureStore {
   private entries: PromptCapture[] = []
   private bytes = 0
@@ -100,8 +100,8 @@ export function createPromptCaptureStore(
   env: NodeJS.ProcessEnv = process.env,
 ): PromptCaptureStore | undefined {
   const flag = env.SHADOW_DEBUG_PROMPTS
-  if (flag === undefined || flag === '0') return undefined
-  if (flag !== '1') throw new Error('SHADOW_DEBUG_PROMPTS must be 0 or 1')
+  if (flag !== undefined && flag !== '0' && flag !== '1') throw new Error('SHADOW_DEBUG_PROMPTS must be 0 or 1')
+  if (flag === '0' || (flag === undefined && env.NODE_ENV !== 'development')) return undefined
   if (env.NODE_ENV === 'production') throw new Error('Prompt capture is unavailable in production')
   return new PromptCaptureStore(projectId)
 }

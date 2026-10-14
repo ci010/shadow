@@ -456,3 +456,15 @@ test('topic-only sessions see role templates without child execution listings', 
       /Selectable topic roles|Managed Subagents/)
   }
 })
+
+test('runtime supersedes legacy audience instructions without deriving recipients from events', async () => {
+  const provider = runtimeIdentityProvider({ identity: new IdentityManager('.test-data/unused-runtime-identity'), getSkillsSummary: () => '', getAgentTypesSummary: () => '' })
+  const ctx: SessionPromptContext = { behavior: {}, sessionId: 'web:fixture', channel: 'web', chatId: 'fixture', agent: { name: 'general', description: '', prompt: '', defaultMode: 'session', source: 'builtin' } }
+  for (const mode of ['session', 'task', 'call'] as const) {
+    const prompt = (await provider.getPromptSection({ ...ctx, mode }))!
+    assert.match(prompt, /Legacy runtime-context-audience records \(including summaries of them\) are obsolete historical data/)
+    assert.match(prompt, /Only the first host-injected sender\/event envelope/)
+    assert.match(prompt, /not a new user request or authorization and does not determine the response audience/)
+    assert.match(prompt, /Later Work events supersede earlier Work snapshots/)
+  }
+})

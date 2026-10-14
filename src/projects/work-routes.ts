@@ -33,10 +33,10 @@ export async function applyHumanWorkAction(sessions: SessionManager, body: z.inf
   }
 }
 
-export function projectWorkOverview(sessions: SessionManager, github: Record<string, ProjectWorkItem['github']> = {}, observer?: ProjectWorkOverview['observer']): ProjectWorkOverview {
+export async function projectWorkOverview(sessions: SessionManager, github: Record<string, ProjectWorkItem['github']> = {}, observer?: ProjectWorkOverview['observer']): Promise<ProjectWorkOverview> {
   const alignment = sessions.alignment
   if (!alignment) throw new WorkConflict('Work is unavailable.')
-  const states = sessions.listSessions().filter(state => state.agentType !== 'work-organizer' && state.agentType !== 'work-observer')
+  const states = (await sessions.listHistoryStates()).filter(state => state.agentType !== 'work-organizer' && state.agentType !== 'work-observer')
   const records = alignment.store.workRecords()
   return projectWorkOverviewSchema.parse({
     observer,
@@ -62,10 +62,10 @@ export function projectWorkOverview(sessions: SessionManager, github: Record<str
       }
     }),
     sessions: states.map(state => {
-      const full = sessions.getSessionState(state.sessionId)
+      const full = state
       const temporary = state.mode === 'task' || state.mode === 'call'
       const observed = records.find(record => record.observation?.sessionId === state.sessionId)
-      return { sessionId: state.sessionId, title: state.name || state.description || observed?.workflow?.title || state.sessionId,
+      return { sessionId: state.sessionId, title: state.name || state.topic?.title || state.generatedTitle || state.chatName || state.description || observed?.workflow?.title || state.sessionId,
         assignable: !temporary, parentSessionId: full?.parentSessionId ?? null, lastActivityAt: state.lastActivityAt,
         workKey: alignment.decisionContext(state.sessionId)?.originKey ?? observed?.key,
         activity: sessions.inputs.get(state.sessionId) || sessions.yields.get(state.sessionId) ? 'waiting'
@@ -126,7 +126,7 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
       if (!sessions.alignment) return c.json({ error: 'work_unavailable' }, 501)
       return next()
     })
-    app.get('/api/work', c => c.json(projectWorkOverview(sessions, github(), observer?.())))
+    app.get('/api/work', async c => c.json(await projectWorkOverview(sessions, github(), observer?.())))
     // Historical decisions are read on expansion, not on every live overview refresh.
     app.get('/api/work-history', async c => {
       if (!diagnostics.has(c.req.raw) && !await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
@@ -162,7 +162,7 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
         console.info('[work-organization]', diagnostic(stage, 'organization_started'))
         await organize(c.req.raw.signal,mode)
         stage = 'overview'
-        const overview = projectWorkOverview(sessions, github(), observer?.())
+        const overview = await projectWorkOverview(sessions, github(), observer?.())
         console.info('[work-organization]', diagnostic('complete', 'organization_succeeded'))
         return c.json(overview)
       } catch (error) {

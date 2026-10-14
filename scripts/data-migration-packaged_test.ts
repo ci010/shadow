@@ -1,20 +1,19 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import { createRequire } from 'node:module'
+import { bundleBackend } from './backend-bundle.ts'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
 
 test('compiled root entry reaches migration with bundled-runtime argument shapes, no tsx', async () => {
   await withTempWorkspace(async root => {
     const repository = fileURLToPath(new URL('..', import.meta.url))
-    const output = join(root, 'dist/src')
+    const output = join(root, 'backend/dist/src')
     await writeFile(join(root, 'package.json'), '{"type":"module"}')
-    execFileSync(process.execPath, [fileURLToPath(import.meta.resolve('typescript/bin/tsc')),
-      '-p', join(repository, 'tsconfig.build.json'), '--outDir', output], { cwd: repository, stdio: 'pipe' })
-    await cp(join(repository, 'src'), output, { recursive: true, filter: path => !path.endsWith('.ts') && !/[\\/](__snapshots__|testing)([\\/]|$)/.test(path) })
+    await bundleBackend(repository, join(root, 'backend'))
     const data = join(root, 'synthetic-data')
     await mkdir(join(data, 'config'), { recursive: true })
     await mkdir(join(data, 'workspace.projects/projects/default/workspace'), { recursive: true })
@@ -41,7 +40,7 @@ test('compiled root entry reaches migration with bundled-runtime argument shapes
     assert.ok(await readFile(join(data, '.layout-migration/receipt.json'), 'utf8'))
     assert.match(run(['--copy', '--offline']), /"status":"already-copied"/)
     // Some packaged launchers omit the script slot in argv.
-    const cli = join(output, 'runtime/main/cli.js')
+    const cli = entry
     const result = execFileSync(process.execPath, ['--input-type=module', '-e',
       `import { runRootProcessEntry } from ${JSON.stringify(pathToFileURL(cli).href)};\n` +
       `const result = await runRootProcessEntry({argv:['exe','data-migration','--data-dir',${JSON.stringify(data)},'--plan'],on(){},off(){},exit(){throw Error('unexpected exit')}});\n` +

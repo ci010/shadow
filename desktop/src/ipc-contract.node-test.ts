@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   handleGetMainDirectorySelection,
-  handleSelectMainDirectoryPath,
   handleInitializeMain,
   handlePrepareProvider,
   IPC_CHANNELS,
@@ -13,6 +12,7 @@ import {
   parseSelectionId,
   handleEnsureRuntime,
 } from './ipc-contract.js'
+import { handleSelectMainDirectoryPath } from './ipc-main-handlers.js'
 
 test('bootstrap command IPC accepts only the public command inputs', () => {
   assert.equal(parseNoArguments([]), undefined)

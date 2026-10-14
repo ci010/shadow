@@ -9,7 +9,7 @@ import { ProjectConfigStore } from '../projects/config-store.ts'
 import { ConfigSchema } from '../config/schema.ts'
 import { join } from 'node:path'
 
-const sessions = { listSessions: () => [] } as unknown as SessionManager
+const sessions = { querySessionHistoryStates: async () => ({ states: [], total: 0 }), automationFeatureStates: async () => [], listHistoryStates: async () => [], listSessions: () => [] } as unknown as SessionManager
 
 test('persisted cron controls reject invalid/unknown jobs, isolate items and restore disabled preferences', async () => {
   await withTempWorkspace(async workspace => {
@@ -122,7 +122,7 @@ test('historical system snapshots expose authorized controller capability withou
     { sessionId: 'history', automation: { jobId: 'old-organizer', name: 'Old organizer', runId: 'history', startedAt: '2026-01-01T00:00:00Z', contextMode: 'fresh', config: { source: 'system', schedule: 'Historical', agentType: 'work-organizer' } } },
     { sessionId: 'custom', automation: { jobId: 'custom-organizer', name: '话题整理', runId: 'custom', startedAt: '2026-01-01T00:00:00Z', contextMode: 'fresh', config: { source: 'cron', schedule: 'Historical', agentType: 'work-organizer' } } },
   ]
-  const history = { listSessions: () => states, getSessionState: (id: string) => states.find(state => state.sessionId === id) } as unknown as SessionManager
+  const history = { automationFeatureStates: async () => states, listHistoryStates: async () => states, listSessions: () => states, getSessionState: (id: string) => states.find(state => state.sessionId === id) } as unknown as SessionManager
   const app = new Hono()
   registerAutomationRoutes(app, { listJobs: () => [] } as unknown as CronService, history, 'fixture', undefined, undefined, undefined, {
     authorize: request => request.headers.get('x-owner') === 'yes', preference: () => true, update: async () => {},

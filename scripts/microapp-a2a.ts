@@ -221,8 +221,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
     try {
       if (!timeline) throw new Error('Acceptance creation has not started')
       const active = timeline
-      return await active.model(signal => chat(tools.length
-        ? active.prompt(messages, maxCalls - calls + 1) : messages, tools, { ...options, signal }), options.signal)
+      return await active.model(signal => chat(messages, tools, { ...options, signal }), options.signal)
     }
     catch (error) {
       await artifact('provider-failure.json', { call: calls, at: new Date().toISOString(), ...acceptanceProviderFailure(error) })

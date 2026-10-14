@@ -1,6 +1,7 @@
 import type { ExecutionMode } from './execution-mode.ts'
 import type { InputSource } from './input.ts'
 import type { ChatMessage } from '../providers/provider.ts'
+import { isRuntimeContextEvent } from './runtime-context-contract.ts'
 
 /** Display provenance for conversational responses, never routing or authority. */
 export interface ResponseContext {
@@ -33,13 +34,13 @@ export function createResponseContext(
   return { version: 1, turnId, responseId: `${turnId}:0`, source: origin, userInvolved: source.kind === 'user' }
 }
 
-/** Prompt participation only: an event-triggered response still addresses the conversation reader.
+/** Display participation only: an event-triggered response still addresses the conversation reader.
  * Never use this predicate to classify the recipient or fold assistant output. */
 export function hasNoAdmittedUserInput(context: ResponseContext | undefined): boolean {
   return !!context && !context.userInvolved && context.source.kind !== 'user'
 }
 
-/** Restore audience continuity across interrupted tool loops without rewriting stored records. */
+/** Restore user participation across interrupted tool loops without rewriting stored records. */
 export function reconcileResponseContinuity(messages: ChatMessage[]): {
   messages: ChatMessage[]
   unfinishedUserResponse: boolean
@@ -57,13 +58,13 @@ export function reconcileResponseContinuity(messages: ChatMessage[]): {
   return { messages: normalized, unfinishedUserResponse }
 }
 
-/** Recover the audience of an unfinished turn from its most recent persisted input or response. */
+/** Recover user participation in an unfinished turn from its persisted input or response. */
 export function continuedUserInvolvement(messages: ChatMessage[]): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (message.role === 'assistant' && message.responseContext) return message.responseContext.userInvolved
     if (message.role !== 'user') continue
-    if (message.name === '__work_realignment__') continue
+    if (message.name === '__work_realignment__' || isRuntimeContextEvent(message)) continue
     const tag = Array.isArray(message.content) ? message.content[0] : undefined
     return tag?.type === 'text' && /^<sender id="[^"]*" name="[^"]*" chat="(?:direct|group)"(?: platform-[a-z-]+="[^"]*")*\s*\/>$/.test(tag.text)
   }

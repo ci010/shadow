@@ -12,6 +12,7 @@
 | [Project conventions](project-conventions.md) | Project SQL, attributable rule changes, Work queries, decisions and personal memory boundaries |
 | [GitHub collaboration](github.md) | Project Issue/PR links, confirmed writes, cached evidence, explicit follow-up and uncertain outcome recovery |
 | [Session diagnosis](diagnostics.md) | Read-only export/API/CLI and development-only prompt capture |
+| [Startup profiling](startup-profiling.md) | One-shot dev startup CPU/resource capture, timeout survival, local output and disable controls |
 | [Live event-wait acceptance](event-wait-acceptance.md) | Real-model simulated and real GitHub CI/CD runs, mid-run URL deadline, observed wait strategies and integration limits |
 | [Desktop release verification](release.md) | Native Windows/macOS/Linux build gates, Actions artifacts, package identity and installation acceptance boundaries |
 | [Mobile client](mobile.md) | Capacitor client architecture, HTTPS gateway, pairing/revocation, native release and operational boundaries |

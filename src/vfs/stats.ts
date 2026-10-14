@@ -11,17 +11,17 @@ export function createStatsHandler(sessions: SessionManager, topics: () => Topic
     if (context.projectId !== profiles.projectId) throw new Error('Stats belong to the current Project.')
     context.signal.throwIfAborted()
   }
-  const entries = () => {
-    const rows = sessions.listSessions().filter(row => sessions.getSessionState(row.sessionId)?.projectId === profiles.projectId)
-    const ids = new Set(automations.featureIds())
-    for (const row of rows) { const state = sessions.getSessionState(row.sessionId); const automation = state && resolveAutomationSession(state); if (automation) ids.add(automation.jobId) }
+  const entries = async () => {
+    const rows = (await sessions.listHistoryStates()).filter(row => row.projectId === profiles.projectId)
+    const ids = new Set(await automations.featureIds())
+    for (const row of rows) { const state = row; const automation = state && resolveAutomationSession(state); if (automation) ids.add(automation.jobId) }
     return [{ name: 'project', content: 'Current Project aggregate usage: rolling 24h and total.' }, ...rows.map(row => ({ name: `sessions/${encodeURIComponent(row.sessionId)}`, content: 'Logical conversation usage: own and including descendants, rolling 24h and total.' })), ...[...ids].map(id => ({ name: `automations/${encodeURIComponent(id)}`, content: 'Automation feature aggregate, rolling 24h.' }))]
   }
   return {
     list: (context) => { authorize(context); return entries() },
     read: async (path, context) => {
       authorize(context)
-      if (!path) return 'On-demand aggregate statistics. Read v:stats/project, v:stats/sessions/<URL-encoded logical ID>, or v:stats/automations/<URL-encoded feature ID>. Search lists metadata only; read computes bounded statistics.\n' + entries().map(entry => `v:stats/${entry.name}`).join('\n')
+      if (!path) return 'On-demand aggregate statistics. Read v:stats/project, v:stats/sessions/<URL-encoded logical ID>, or v:stats/automations/<URL-encoded feature ID>. Search lists metadata only; read computes bounded statistics.\n' + (await entries()).map(entry => `v:stats/${entry.name}`).join('\n')
       if (path === 'project') return JSON.stringify(await profiles.project(context.signal), null, 2)
       const match = /^(sessions|automations)\/([^/]+)$/.exec(path)
       if (!match) throw new Error('Invalid stats path.')

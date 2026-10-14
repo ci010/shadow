@@ -256,7 +256,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const provider: LLMProvider = {
       name: 'fixture',
       listModels: () => ['fixture'],
-      chat: async (messages) => messages.at(-1)?.role === 'tool'
+      chat: async (messages) => messages.filter(message => message.name !== 'runtime-context').at(-1)?.role === 'tool'
         ? { content: 'Done', toolCalls: [] }
         : {
           content: null,
@@ -375,7 +375,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             prompt: 'Compacted folder fixture',
           }),
         } as unknown as HandoffManager,
-        () => stopped.resolve(), undefined, undefined, undefined, lookup,
+        () => stopped.resolve(), undefined, undefined, lookup,
       )
       const timeout = setTimeout(() => persisted.reject(new Error('Compaction did not persist')), 5_000)
       try {

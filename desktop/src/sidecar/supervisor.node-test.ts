@@ -566,3 +566,25 @@ for (const occupied of [false, true]) {
     assert.deepEqual(supervisor.status, { phase: 'stopped' })
   })
 }
+
+
+test('armed development capture preloads before the entrypoint without a network inspector', async () => {
+  for (const enabled of [false, true]) {
+    const child = new FakeChild()
+    let actualArgs: readonly string[] = []
+    const supervisor = new NodeSidecarSupervisor({
+      environment: { SHADOW_DESKTOP_DEV_IPC: enabled ? '1' : '0', SHADOW_STARTUP_PROFILE_DIR: 'local-profile-directory' },
+      spawn: (_executable, args) => { actualArgs = args; return child },
+      readinessProbe: async () => ({ ready: true }),
+    })
+    assert.equal((await supervisor.start(request)).phase, 'ready')
+    if (enabled) {
+      assert.equal(actualArgs[0], '--import')
+      assert.ok(actualArgs[1])
+      assert.match(actualArgs[1], /startup-profile-preload\.js$/)
+      assert.equal(actualArgs[2], request.entryPath)
+    } else assert.equal(actualArgs[0], request.entryPath)
+    assert.ok(!actualArgs.some(arg => arg.startsWith('--inspect')))
+    await supervisor.stop()
+  }
+})

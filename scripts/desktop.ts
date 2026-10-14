@@ -1,5 +1,6 @@
+import { consumeStartupProfileArm } from './startup-profile.ts'
 import { createRequire } from 'node:module'
-import { bundleBackend } from './backend-bundle.ts'
+import { stageBackend } from './backend-bundle.ts'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { pnpmInvocation, runPnpm } from './processes.ts'
@@ -25,9 +26,8 @@ if (mode !== 'package') {
 
 if (target) {
   if (mode !== 'package') await runPnpm(['build:app'])
-  // Vite bundles the checked backend and independent workers; only WASM codec
-  // packages and their tiny runtime dependency closure remain external.
-  await bundleBackend(process.cwd(), resolve('desktop/backend'))
+  // Reuse the same checked Vite output as development (or the verified prepared build).
+  await stageBackend(process.cwd(), resolve('desktop/backend'))
   const electronDist = await prepareReleaseDownloads(process.cwd(), process.env, target)
   await verifyAria2Package(process.cwd(), target)
   await prepareAria2Signing(process.cwd(), target)
@@ -49,9 +49,14 @@ if (target) {
   const require = createRequire(new URL('../desktop/package.json', import.meta.url))
   const executable: string = require('electron')
   const environment: NodeJS.ProcessEnv = {
-    ...process.env, VITE_DEV_URL: url, SHADOW_DESKTOP_DEV_IPC: '1',
+    ...process.env, NODE_ENV: process.env.NODE_ENV ?? 'development', VITE_DEV_URL: url, SHADOW_DESKTOP_DEV_IPC: '1',
     SHADOW_BROWSER_PIN_FILE: resolve(process.env.SHADOW_BROWSER_PIN_FILE ?? '.pin'),
   }
+  // Consume a local one-shot marker only on a fresh manual dev launch.
+  // A failed first sidecar and its retry share this bounded diagnostic launch.
+  delete environment.SHADOW_STARTUP_PROFILE_DIR
+  const startupProfileDirectory = consumeStartupProfileArm(process.cwd(), process.env)
+  if (startupProfileDirectory) environment.SHADOW_STARTUP_PROFILE_DIR = startupProfileDirectory
   delete environment.ELECTRON_RUN_AS_NODE
   await superviseDesktopDevelopment({
     vite,

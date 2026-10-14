@@ -122,6 +122,11 @@ current task's explicit ownership.
 - Separate prompt conventions from enforced controls. Tool filtering, local
   filesystem checks, gateway authorization, and Child capability approvals have
   different scopes; none implies a universal sandbox.
+- Model-context updates must be append-only history events. Do not use `with*`
+  prompt/context wrappers to rewrite the system prompt or attach disposable
+  Work/audience suffixes for each inference. Deduplicate unchanged snapshots;
+  retain old events at their original positions. Execution budgets remain host
+  enforcement, not per-inference model-visible countdowns.
 
 ## Data and security precautions
 

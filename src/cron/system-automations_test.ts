@@ -42,6 +42,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
       const historical = { ...old, sessionId: organizerId.replace('11111111', 'aaaaaaaa'), projectId: 'fixture', segmentIndex: 0, mode: 'task', executionStatus: 'completed' } as SessionState
       const states = [state!, historical]
       const manager = {
+        querySessionHistoryStates: async (query: { jobId: string; offset: number; limit: number }) => { const selected = states.filter(state => resolveAutomationSession(state)?.jobId === query.jobId).reverse(); return { states: selected.slice(query.offset, query.offset + query.limit), total: selected.length } },
+        automationFeatureStates: async () => states, listHistoryStates: async () => states,
+        listHistorySessions: async () => states,
+        readSessionState: async (id: string) => states.find(s => s.sessionId === id),
         listSessions: () => states.map(s => ({ sessionId: s.sessionId })),
         getSessionState: (id: string) => states.find(s => s.sessionId === id),
         getFirstUserMessage: () => { throw new Error('System prompt must not become the title') },

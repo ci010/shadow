@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createContext, runInContext, type Context } from 'node:vm'
-import { createProgram, ModuleKind, ModuleResolutionKind, ScriptTarget } from 'typescript'
+import { compileBackend } from './backend-bundle.ts'
 import {
   assertMacIconEncoding, assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded, isolatedEnvironment,
   killPosixTree, nodeModeProbe, packagedEvalCommand, parsePosixProcesses, prepareRendererSmoke, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, serviceEnvironment, startProcess, terminateProcess,
@@ -377,16 +377,7 @@ test('packaged eval invokes the compiled runtime/worker API on Node and Electron
   const backend = join(root, target.resourcesRelativePath, 'backend')
   await mkdir(backend, { recursive: true })
   try {
-    const program = createProgram({
-      rootNames: ['runtime.ts', 'worker.ts'].map(name => fileURLToPath(new URL(`../src/script-runtime/${name}`, import.meta.url))),
-      options: {
-        target: ScriptTarget.ESNext, module: ModuleKind.NodeNext, moduleResolution: ModuleResolutionKind.NodeNext,
-        rewriteRelativeImportExtensions: true,
-        rootDir: fileURLToPath(new URL('../src', import.meta.url)), outDir: join(backend, 'dist', 'src'),
-        noCheck: true, types: [],
-      },
-    })
-    assert.equal(program.emit().emitSkipped, false)
+    await compileBackend(process.cwd(), join(backend, 'dist'), ['script-runtime/runtime', 'script-runtime/worker'])
     await writeFile(join(backend, 'package.json'), '{"type":"module"}')
     await writeFile(join(scratch, 'value.ts'), 'export enum Value { Answer = 42 }\n')
     const script = join(scratch, 'eval-fixture.ts')

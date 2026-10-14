@@ -26,6 +26,21 @@ export function assertOwnedExecution(sessions: ExecutionAccess, executionId: str
   return state
 }
 
+/** Historical receipt access never grants live cancellation or message admission. */
+export async function assertOwnedHistoricalExecution(
+  sessions: ExecutionAccess & Partial<Pick<SessionManager, 'readSessionState' | 'assertHistoricalFolderAccess'>>,
+  executionId: string, context: ExecutionContext,
+): Promise<SessionState> {
+  assertExecutionActor(sessions, context)
+  const state = sessions.readSessionState ? await sessions.readSessionState(executionId) : sessions.getSessionState(executionId)
+  if (!state || state.projectId !== context.projectId || delegationOwner(state) !== context.sessionId || (state.mode !== 'task' && state.mode !== 'call')) {
+    throw new Error('Execution not found or access denied: only the execution owner in this Project can access it. Use the full executionId returned by the tool (including bg: for background work); read v:bg to list owned executions.')
+  }
+  if (sessions.assertHistoricalFolderAccess) await sessions.assertHistoricalFolderAccess(executionId)
+  else sessions.assertFolderAccess(executionId)
+  return state
+}
+
 /** Indexed parent history is a context fork, not delegation ownership. */
 export function delegationOwner(state: SessionState | null | undefined): string | undefined {
   if (!state) return undefined

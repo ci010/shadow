@@ -17,15 +17,14 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
     const profile = await profiler.query(id)
     return profile ? c.json({ profile }) : c.json({ error: 'automation_not_found' }, 404)
   })
-  const records = () => sessions.listSessions().flatMap(row => {
-    const state = sessions.getSessionState(row.sessionId)
+  const records = async () => (await sessions.automationFeatureStates()).flatMap(state => {
     if (!state || state.projectId && state.projectId !== projectId) return []
     const automation = resolveAutomationSession(state)
     return automation ? [{ state, automation }] : []
   })
-  const summaries = (authorized = false): AutomationSummary[] => {
+  const summaries = async (authorized = false): Promise<AutomationSummary[]> => {
     const jobs = new Map<string, AutomationSummary>()
-    for (const { automation } of records().sort((a, b) => a.automation.startedAt.localeCompare(b.automation.startedAt))) {
+    for (const { automation } of (await records()).sort((a, b) => a.automation.startedAt.localeCompare(b.automation.startedAt))) {
       jobs.set(automation.jobId, {
         id: automation.jobId, name: Object.values(SYSTEM_AUTOMATIONS).find(job => job.id === automation.jobId)?.name ?? automation.name, source: automation.config?.source ?? 'cron',
         session: 'fresh', schedule: automation.config?.schedule ?? 'Historical schedule unavailable',
@@ -61,7 +60,7 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
     }
     return [...jobs.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
   }
-  app.get('/api/automations', async c => c.json({ automations: summaries(!!systemControls && await systemControls.authorize(c.req.raw)) }))
+  app.get('/api/automations', async c => c.json({ automations: await summaries(!!systemControls && await systemControls.authorize(c.req.raw)) }))
   app.patch('/api/automations/:id', async c => {
     const id = c.req.param('id')
     if (systemControls && !await systemControls.authorize(c.req.raw)) return c.json({ error: 'forbidden' }, 403)
@@ -75,20 +74,22 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
     if (system) await systemControls!.update(id, body.enabled)
     else if (job!.source === 'learning') await learningControls!.update(id, body.enabled)
     else if (!await cron.setJobEnabled(id, body.enabled)) return c.json({ error: 'automation_not_found' }, 404)
-    return c.json({ automation: summaries(true).find(job => job.id === id) })
+    return c.json({ automation: (await summaries(true)).find(job => job.id === id) })
   })
   app.get('/api/automations/:id/runs', async c => {
     const id = c.req.param('id')
-    if (!summaries().some(job => job.id === id)) return c.json({ error: 'automation_not_found' }, 404)
+    if (!(await summaries()).some(job => job.id === id)) return c.json({ error: 'automation_not_found' }, 404)
     const offset = Number(c.req.query('offset') ?? 0)
     const limit = Number(c.req.query('limit') ?? 30)
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       return c.json({ error: 'invalid_pagination' }, 400)
     }
-    const all = records().filter(record => record.automation.jobId === id)
-      .sort((a, b) => b.automation.startedAt.localeCompare(a.automation.startedAt)
-        || b.automation.runId.localeCompare(a.automation.runId))
-    const runs: AutomationRunSummary[] = await Promise.all(all.slice(offset, offset + limit).map(async ({ state, automation }) => {
+    const page = await sessions.querySessionHistoryStates({ projectId, jobId: id, offset, limit })
+    const all = page.states.flatMap(state => {
+      const automation = resolveAutomationSession(state)
+      return automation ? [{ state, automation }] : []
+    })
+    const runs: AutomationRunSummary[] = await Promise.all(all.map(async ({ state, automation }) => {
       const status = state.executionStatus
       return {
         id: automation.runId, sessionId: state.sessionId, startedAt: automation.startedAt,
@@ -103,6 +104,6 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
           ? { learning: learningOutcome(state.sessionId) } : {}),
       }
     }))
-    return c.json({ runs, total: all.length, offset })
+    return c.json({ runs, total: page.total, offset })
   })
 }

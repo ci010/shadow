@@ -2,6 +2,9 @@ import type { BrowserWindowConstructorOptions, WebPreferences } from 'electron'
 import { join } from 'node:path'
 import { IPC_CHANNELS, type DesktopWindowState } from './ipc-contract.js'
 
+// Main-window features each own a one-shot close cleanup; the default 10 is too small.
+export const MAIN_WINDOW_MAX_LISTENERS = 20
+
 export function desktopIconPath(platform = process.platform): string {
   return join(import.meta.dirname, '..', 'assets', platform === 'win32' ? 'icon.ico' : 'icon.png')
 }

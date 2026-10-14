@@ -46,6 +46,23 @@ test('infer sends only explicit context without tools and validates typed values
     required: ['ok'], additionalProperties: false } }, signal(), origin), { ok: true })
 })
 
+test('infer request context stays identical as the enforced budget decreases', async () => {
+  const budget = new InferenceBudget(3)
+  const calls: Array<Parameters<LLMProvider['chat']>> = []
+  const infer = capability(async (...args) => { calls.push(args); return response() }, budget)
+  await infer(request, signal(), origin)
+  await infer(request, signal(), origin)
+  assert.equal(budget.remaining, 1)
+  assert.deepEqual(calls[0][0], [
+    { role: 'system', content: `${INFER_SYSTEM_PROMPT}\n\nInstructions:\n${request.instructions}\n\nJSON schema:\n${JSON.stringify(request.schema)}` },
+    { role: 'user', content: JSON.stringify(request.input) },
+  ])
+  assert.deepEqual(calls[1][0], calls[0][0])
+  await assert.rejects(infer(request, signal(), origin), /exhausted/)
+  assert.equal(calls.length, 2)
+  assert.equal(budget.remaining, 1)
+})
+
 test('infer rejects invalid inputs and schemas before spending shared request budget', async () => {
   const budget = new InferenceBudget()
   let calls = 0

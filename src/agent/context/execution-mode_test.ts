@@ -264,3 +264,22 @@ test('soul and memory role policy is independent of invocation lifetime', async 
     }
   })
 })
+
+test('delivery guidance is stable by execution mode, never by triggering sender', async () => {
+  const agent = (await getBuiltinAgentTypes()).find(role => role.name === 'general')!
+  for (const mode of EXECUTION_MODES) {
+    const context: SessionPromptContext = { behavior: {}, sessionId: 'web:fixture', channel: 'web', chatId: 'fixture', agent, mode }
+    const prompt = executionModeGuideline(context)
+    for (const inputSource of ['user', 'session', 'event'] as const) {
+      assert.equal(executionModeGuideline({ ...context, inputSource }), prompt)
+    }
+    if (mode === 'session') {
+      assert.match(prompt, /delivered to the reader of this conversation/)
+      assert.match(prompt, /Final text does not answer pending requests/)
+      assert.match(prompt, /return no user-facing text/)
+    } else {
+      assert.doesNotMatch(prompt, /delivered to the reader of this conversation/)
+      assert.match(prompt, mode === 'call' ? /original tool result/ : /final response ends the task and is reported/)
+    }
+  }
+})

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { ContextBuilder, withCurrentWork, type SessionPromptContext } from './builder.ts'
+import { ContextBuilder, type SessionPromptContext } from './builder.ts'
+import { runtimeContextEvent } from '../../sessions/runtime-context-event.ts'
+import { contentText } from '../../providers/provider.ts'
 import { executionContractProvider, guidelineProvider } from './guideline.ts'
 import { runtimeDiscoveryProvider, runtimeIdentityProvider, type RuntimeProviderDeps } from './runtime.ts'
 import { workspaceProvider } from './workspace.ts'
@@ -55,9 +57,14 @@ test('assembled prompt separates current identity, work, environment, guidance, 
       'guideline', 'capability-discovery', 'memory',
     ])
     const work = '# Current work contracts (runtime facts)\nRevision 2: current human-confirmed outcome. Boundary: No external publication.'
-    const prompt = withCurrentWork(built.systemPrompt, work)
-    const order = ['# Runtime', work, 'Execution Contract:', '# Initiative Context',
-      '# Current environment', '# Agent Guideline', '# Capability discovery', '# Historical reference']
+    const messages = [{ role: 'system' as const, content: built.systemPrompt }, { role: 'user' as const, content: 'Task history' }]
+    const composed = [...messages, (await runtimeContextEvent(messages, 'work', work, home))!]
+    assert.deepEqual(composed.slice(0, -1), messages)
+    assert.equal(composed.at(-1)!.role, 'user')
+    assert.match(contentText(composed.at(-1)!.content), /Revision 2: current human-confirmed outcome/)
+    const prompt = composed.map(message => contentText(message.content)).join('\n\n')
+    const order = ['# Runtime', 'Execution Contract:', '# Initiative Context',
+      '# Current environment', '# Agent Guideline', '# Capability discovery', '# Historical reference', work]
       .map(text => prompt.indexOf(text))
     assert(order.every((position, index) => position >= 0 && (!index || position > order[index - 1])))
     assert.equal(prompt.match(/\*\*Working directory\*\*:/g)?.length, 1)
@@ -73,10 +80,12 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     assert.equal(await readFile(summaryPath, 'utf8'), oldSummary, 'Presentation must not rewrite or discard historical evidence')
     assert(!built.sections[0].content.includes('DISCOVER_SKILLS'))
     assert(built.sections.find(section => section.name === 'capability-discovery')!.content.includes('DISCOVER_SKILLS'))
-    const next = withCurrentWork(built.systemPrompt, work.replace('Revision 2', 'Revision 3'))
-    assert(!next.includes('Revision 2'))
-    assert(next.includes('Revision 3'))
-    assert(withCurrentWork('Legacy system context', work).startsWith(work))
+    const update = (await runtimeContextEvent(composed, 'work', work.replace('Revision 2', 'Revision 3'), home))!
+    const next = [...composed, update]
+    assert.deepEqual(next.slice(0, -1), composed)
+    assert(contentText(composed.at(-1)!.content).includes('Revision 2'))
+    assert(contentText(update.content).includes('Revision 3'))
+    assert.equal(update.role, 'user')
   })
 })
 

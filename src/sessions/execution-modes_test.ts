@@ -668,7 +668,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.deepEqual(request.recipient, { kind: 'parent', sessionId: 'web:root' })
         decision.resolve(invoke('reply', { request_id: request.id, text: 'B' }))
         const resumed = await f.next(child)
-        assert.equal(JSON.parse(String(resumed.messages.at(-1)?.content)).option, 'B')
+        assert.equal(JSON.parse(String(resumed.messages.filter(message => message.name !== 'runtime-context').at(-1)?.content)).option, 'B')
         assert.equal(f.sessions.yields.get(child), null)
         ;(await f.next('web:root')).resolve(done())
         resumed.resolve(done('Task complete'))
@@ -1021,7 +1021,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal(graph.sessions.find((state: any) => state.sessionId === 'web:worker').waitingForCall, true)
           leaf.resolve({ ...invoke('invoke_tool', { name: 'borrowed', args: {} }), content: 'PRIVATE LEAF TRACE' })
           const afterTool = await f.next(child)
-          assert.equal(afterTool.messages.at(-1)?.content, 'Borrowed tool works')
+          assert.equal(afterTool.messages.filter(message => message.role === 'tool').at(-1)?.content, 'Borrowed tool works')
           assert.equal(disconnects, 0)
           const finalResult = `Final leaf result ${'x'.repeat(12_500)}`
           afterTool.resolve(done(finalResult))
@@ -1439,7 +1439,7 @@ for(const Store of [JsonlSessionStore,SqliteSessionStore]) {
         const task=organizer.begin(id,'full',controller.signal)
         const job=f.sessions.startSession({agentType:'work-organizer',mode:'task',channel:'work-organizer',chatId,task,signal:controller.signal,waitForCompletion:true,maxTokens:6000,executionLimits:{allowedTools:ORGANIZATION_TOOLS,inferenceRequests:8,toolCalls:24,argumentBytes:192000}})
         const first=await f.next(id);assert.deepEqual(first.names,[...ORGANIZATION_TOOLS]);first.resolve(invoke('organization_read',{key:organizerRecord(1).key}))
-        const second=await f.next(id);assert(String(second.messages.at(-1)?.content).includes('Human goal 1'))
+        const second=await f.next(id);assert(String(second.messages.filter(message => message.role === 'tool').at(-1)?.content).includes('Human goal 1'))
         second.resolve(invoke('organization_patch',organizerPatch(1,initiatives.projectFocus()?.revision??0)))
         const paused=await f.next(id)
         assert.equal(initiatives.projectFocus()?.result.groups[0]?.cards?.[0]?.id,'card-1','UI snapshot available while provider awaits next iteration')
@@ -1483,9 +1483,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const job = f.sessions.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', chatId: 'one', task: 'Return JSON', waitForCompletion: true,
         executionLimits: { allowedTools: [], inferenceRequests: 1, toolCalls: 1, argumentBytes: 1 } })
       const request = await f.next(id); assert.deepEqual(request.names, [])
+      assert.doesNotMatch(JSON.stringify(request.messages), /runtime-context-audience/)
       assert.doesNotMatch(String(request.messages[0]?.content), /Current Turn: Response Audience|Use message|Address the conversation's user/,
         'Host-consumed JSON is not a user conversation or a peer message')
-      assert.match(String(request.messages[0]?.content), /inference/i, 'Retain the actual per-inference execution budget')
+      assert.doesNotMatch(JSON.stringify(request.messages), /inference requests including this one remain|Remaining execution budget/,
+        'Execution budgets are enforced by the host, not exposed in model-visible context')
       request.resolve(invoke('read', { path: 'not-allowed' }))
       await job
       assert.equal(f.requests.filter(r => r.sessionId === id).length, 1)

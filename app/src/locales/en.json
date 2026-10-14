@@ -3572,6 +3572,8 @@
   "Items with the same batch number came from one LLM call.": "Items with the same batch number came from one LLM call.",
   "Cache-read tokens / input tokens": "Cache-read tokens / input tokens",
   "Cache rate": "Cache rate",
+  "Partial cache report: {reported} / {total} input tokens. Rate covers reported inputs only.": "Partial cache report: {reported} / {total} input tokens. Rate covers reported inputs only.",
+  "Token totals are partial; some calls have no reported usage.": "Token totals are partial; some calls have no reported usage.",
   "cache": "cache",
   "Upgrade your data folder": "Upgrade your data folder",
   "Shadow detected an older data layout. The backend stays stopped until the upgrade finishes.": "Shadow detected an older data layout. The backend stays stopped until the upgrade finishes.",

@@ -39,11 +39,16 @@ test('isolated Node-only fixture reaches separate review and timed author confir
       const tools = (...items: Array<{ name: string; arguments: Record<string, unknown> }>): LLMResponse => ({
         content: null, toolCalls: items.map((item, index) => ({ id: `timeline-${calls}-${index}`, ...item })),
       })
-      if (policy.includes('ends AUTHOR TESTING')) {
+      assert.doesNotMatch(policy, /Execution Budget|ends CREATION|ends AUTHOR TESTING/)
+      const testingReady = messages.some(message => message.role === 'user' &&
+        String(message.content).includes('The post-review testing question selected continue'))
+      if (testingReady) {
         assert.equal(calls, 8)
         return { content: 'Synthetic author turn ended without tests. No runtime pass or report is claimed.', toolCalls: [] }
       }
-      assert.match(policy, /ends CREATION/)
+      assert.ok(calls <= 7, 'Author testing requires the real post-approval input event')
+      assert.ok(messages.some(message => message.role === 'user' &&
+        String(message.content).includes('Publish only the inert synthetic fixture.')))
       if (calls === 1) return tools({ name: 'work', arguments: { action: 'create', data: {
         title: 'Timeline fixture', reason: 'Synthetic lifecycle check',
         definition: { objective: 'Publish inert fixture', acceptance: ['Report honest test status'], boundaries: ['No devices'], evidence: [] },

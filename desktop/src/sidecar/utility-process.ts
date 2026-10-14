@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'node:events'
 import type { ForkOptions } from 'electron'
 import type { SidecarChildProcess, SidecarSpawn } from './supervisor.js'
@@ -19,11 +20,23 @@ export function createUtilityProcessSpawn(
   forceKill: (pid: number) => boolean = pid => process.kill(pid, 'SIGKILL'),
 ): SidecarSpawn {
   return (_executablePath, args, options) => {
-    const [entry, ...argv] = args
-    if (!entry) throw new Error('Backend entry path is required')
+    // Electron utility processes ignore Node preload execArgv. Use an explicit
+    // bootstrap only for the supervisor's profiling prefix; normal launches
+    // retain their original entry and application arguments.
+    const argv = [...args]
+    const preloads: string[] = []
+    while (argv[0] === '--import') {
+      argv.shift()
+      const preload = argv.shift()
+      if (!preload || preload.startsWith('-')) throw new Error('Backend preload path is required')
+      preloads.push(preload)
+    }
+    const entry = argv.shift()
+    if (!entry || entry.startsWith('-')) throw new Error('Backend entry path is required')
     const env = { ...options.env }
     delete env.ELECTRON_RUN_AS_NODE
-    const child = fork(entry, argv, {
+    const child = fork(preloads.length ? fileURLToPath(new URL('./utility-profile-bootstrap.js', import.meta.url)) : entry,
+      preloads.length ? [JSON.stringify(preloads), entry, ...argv] : argv, {
       env,
       stdio: 'pipe',
       serviceName: 'Shadow Backend',

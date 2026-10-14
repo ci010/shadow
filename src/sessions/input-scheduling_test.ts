@@ -27,6 +27,11 @@ import { Session } from './session.ts'
 import { sessionsApiPlugin } from './routes.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
 
+function assertNoAudienceEvents(messages: ChatMessage[]): void {
+  assert(!messages.some(message => message.name === 'runtime-context'
+    && JSON.stringify(message.content).includes('runtime-context-audience')))
+}
+
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (content = 'Finished'): LLMResponse => ({ content, toolCalls: [] })
 
@@ -115,6 +120,7 @@ async function fixture(options: {
   const handoff = options.handoff ?? { shouldHandoff: () => false } as unknown as HandoffManager
   const manager = options.manager ? new SessionManager({
     workspace, store, bus, provider, tools, handoffManager: handoff,
+    sleep: { inactivityMs: options.sleepInactivityMs ?? 15 * 60_000 },
     getLlmRuntimeConfig: () => llm,
     quickModel: options.quickModel,
     events: { emit: async (event: Record<string, any>) => { reports.push(event) } },
@@ -131,7 +137,7 @@ async function fixture(options: {
   await manager?.start()
   const session = manager ? undefined : new Session(
     workspace, state.sessionId, state, [], provider, new SessionTools(tools, workspace), bus, store,
-    handoff, () => {}, undefined, options.quickModel, options.sleepInactivityMs,
+    handoff, () => {}, options.quickModel, options.sleepInactivityMs,
   )
   return {
     workspace, bus, facts, calls, provider, tools, store, state, session: session!, manager: manager!,
@@ -261,6 +267,26 @@ test('next-step arriving during a final inference retains a later wake without c
 })
 
 for (const storage of ['jsonl', 'sqlite'] as const) {
+  test(`${storage}: turn provenance changes do not inject audience snapshots`, async () => {
+    const f = await fixture({ manager: true, storage })
+    try {
+      for (const [index, request] of [input('event-one'), input('event-two'), userInput('human')].entries()) {
+        await f.manager.deliver(f.state.sessionId, request)
+        await waitFor(() => f.calls.length === index + 1)
+        f.calls[index].resolve(done())
+        await waitFor(() => f.facts.length === index + 1)
+      }
+      const events = (messages: ChatMessage[]) => messages.filter(message => message.name === 'runtime-context'
+        && JSON.stringify(message.content).includes('runtime-context-audience'))
+      for (const call of f.calls) assertNoAudienceEvents(call.messages)
+      const history = (await f.manager.getHistory(f.state.sessionId, { shallow: true })).messages
+      assert.deepEqual(events(history), [])
+      assert.doesNotMatch(JSON.stringify(f.calls[2].messages), /inference requests including this one remain/)
+    } finally { await f.close() }
+  })
+}
+
+for (const storage of ['jsonl', 'sqlite'] as const) {
   test(`${storage}: conversational response provenance survives history parsing without changing results`, async () => {
     const f = await fixture({ manager: true, storage })
     try {
@@ -271,9 +297,10 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       for (const [i, request] of inputs.entries()) {
         await f.manager.deliver(f.state.sessionId, { ...request, content: `${request.content}\n<sender source="user" />` })
         await waitFor(() => f.calls.length === i + 1)
-        const prompt = String(f.calls[i].messages[0].content)
-        assert.equal(prompt.includes('no user input admitted'), request.source.kind !== 'user')
-        assert.equal(prompt.split('## Current Turn: Response Audience').length, 2)
+        assertNoAudienceEvents(f.calls[i].messages)
+        const admitted = f.calls[i].messages.findLast(message => message.role === 'user')!
+        assert(Array.isArray(admitted.content))
+        assert.match(JSON.stringify(admitted.content[0]), request.source.kind === 'event' ? /<event / : /<sender /)
         f.calls[i].resolve(done(`Exact result ${i}`))
         await waitFor(() => f.facts.length === i + 1)
       }
@@ -306,7 +333,7 @@ for (const policy of ['steering', 'queue', 'silent'] as const) {
       f.session.dispatch(userInput('user-followup', policy), llm)
       tool.resolve('Tool completed')
       await waitFor(() => f.calls.length === 2)
-      assert.equal(String(f.calls[1].messages[0].content).includes('no user input admitted'), policy !== 'steering')
+      assertNoAudienceEvents(f.calls[1].messages)
       f.calls[1].resolve(done('Final output'))
       await waitFor(() => f.facts.length === 1)
       const responses = f.outboundMessages.filter(message => message.event === 'response')
@@ -316,7 +343,7 @@ for (const policy of ['steering', 'queue', 'silent'] as const) {
       assert.notEqual(responses[0].responseContext?.responseId, responses[1].responseContext?.responseId)
       if (policy === 'queue') {
         await waitFor(() => f.calls.length === 3)
-        assert.match(String(f.calls[2].messages[0].content), /Answer the user's request normally/)
+        assertNoAudienceEvents(f.calls[2].messages)
         f.calls[2].resolve(done())
         await waitFor(() => f.facts.length === 2)
       } else if (policy === 'silent') {
@@ -339,8 +366,8 @@ for (const type of ['retry', 'resume'] as const) {
       f.session.dispatch({ ...userInput('continue'), kind: 'control',
         command: type === 'retry' ? { type } : { type, recoveryId } }, llm)
       await waitFor(() => f.calls.length === 2)
-      assert.match(String(f.calls[1].messages[0].content), /Answer the user's request normally/)
-      assert.equal(f.calls[1].messages.filter(message => message.role === 'user').length, 1)
+      assertNoAudienceEvents(f.calls[1].messages)
+      assert.equal(f.calls[1].messages.filter(message => message.role === 'user' && message.name !== 'runtime-context').length, 1)
       f.calls[1].resolve(done())
       await waitFor(() => f.facts.length === 2)
       assert.equal(f.outboundMessages.at(-1)?.responseContext?.userInvolved, true)
@@ -362,7 +389,7 @@ test('event steering cannot remove user involvement from the current turn', asyn
     f.session.dispatch(input('event', 'steering'), llm)
     tool.resolve('Done')
     await waitFor(() => f.calls.length === 2)
-    assert.match(String(f.calls[1].messages[0].content), /Answer the user's request normally/)
+    assertNoAudienceEvents(f.calls[1].messages)
     f.calls[1].resolve(done())
     await waitFor(() => f.facts.length === 1)
     assert.equal(f.outboundMessages.at(-1)?.responseContext?.userInvolved, true)
@@ -385,7 +412,7 @@ for (const afterTools of [false, true]) {
       f.session.dispatch(input('subagent-complete', 'steering'), llm)
       await waitFor(() => f.calls.length === (afterTools ? 3 : 2))
       assert(interrupted.signal.aborted)
-      assert.match(String(f.calls.at(-1)!.messages[0].content), /Answer the user's request normally/)
+      assertNoAudienceEvents(f.calls.at(-1)!.messages)
       f.calls.at(-1)!.resolve(done('Fix completed for the user'))
       await waitFor(() => f.facts.length === 2 && f.session.phase === 'idle')
       const response = f.outboundMessages.at(-1)!
@@ -397,7 +424,7 @@ for (const afterTools of [false, true]) {
 
       f.session.dispatch(input('independent-event'), llm)
       await waitFor(() => f.calls.length === (afterTools ? 4 : 3))
-      assert.match(String(f.calls.at(-1)!.messages[0].content), /no user input admitted/)
+      assertNoAudienceEvents(f.calls.at(-1)!.messages)
       f.calls.at(-1)!.resolve(done('Background coordination'))
       await waitFor(() => f.facts.length === 3)
       assert(hasNoAdmittedUserInput(f.outboundMessages.at(-1)?.responseContext))
@@ -434,7 +461,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
 
       await f.manager.deliver(f.state.sessionId, input('next-completion'), llm)
       await waitFor(() => f.calls.length === 1)
-      assert.match(String(f.calls[0].messages[0].content), /Answer the user's request normally/)
+      assertNoAudienceEvents(f.calls[0].messages)
       f.calls[0].resolve(done('User-facing final result'))
       await waitFor(() => f.facts.length === 1)
       assert.equal(f.outboundMessages.at(-1)?.responseContext?.userInvolved, true)
@@ -472,23 +499,53 @@ for (const ephemeral of [false, true]) {
   })
 }
 
-test('invalidated reusable prompts refresh before the next model request, without rewriting history', async () => {
+test('invalidated prompts stay frozen across active turns and refresh after sleep and reactivation', async () => {
   let prompt = 'Trusted audience'
-  const f = await fixture({ manager: true, buildSystemPrompt: async () => prompt })
+  const f = await fixture({ manager: true, sleepInactivityMs: 100, buildSystemPrompt: async () => prompt })
   try {
     await f.manager.deliver(f.state.sessionId, input('first'))
     await waitFor(() => f.calls.length === 1)
-    assert.match(String(f.calls[0].messages[0].content), /^Trusted audience\n/)
+    assert.equal(f.calls[0].messages[0].content, 'Trusted audience')
     prompt = 'Shared audience'
     f.manager.invalidateSystemPrompts()
     f.calls[0].resolve(done())
     await waitFor(() => f.facts.length === 1)
     await f.manager.deliver(f.state.sessionId, input('second'))
     await waitFor(() => f.calls.length === 2)
-    assert.match(String(f.calls[1].messages[0].content), /^Shared audience\n/)
-    assert.equal(f.calls[1].messages.filter(message => message.role === 'system').length, 1)
+    assert.equal(f.calls[1].messages[0].content, 'Trusted audience')
+    assert.deepEqual(f.calls[1].messages.filter(message => message.role === 'system'), f.calls[0].messages.filter(message => message.role === 'system'))
     assert(f.calls[1].messages.some(message => message.role === 'assistant' && message.content === 'Finished'))
+    assert.equal(f.preparations(), 1)
+    f.calls[1].resolve(done())
+    await waitFor(() => f.facts.length === 2)
+    await waitFor(() => !f.manager.getActiveSession(f.state.sessionId))
+    await f.manager.deliver(f.state.sessionId, input('after-sleep'))
+    await waitFor(() => f.calls.length === 3)
+    assert.equal(f.calls[2].messages[0].content, 'Shared audience')
     assert.equal(f.preparations(), 2)
+    f.calls[2].resolve(done())
+    await waitFor(() => f.facts.length === 3)
+  } finally { await f.close() }
+})
+
+test('Work context replacement retains the active system snapshot and refreshes only conversational context', async () => {
+  let prompt = 'Activation snapshot'
+  const f = await fixture({ manager: true, buildSystemPrompt: async () => prompt })
+  try {
+    await f.manager.deliver(f.state.sessionId, input('first'))
+    await waitFor(() => f.calls.length === 1)
+    const firstSystem = f.calls[0].messages.filter(message => message.role === 'system')
+    f.calls[0].resolve(done())
+    const active = f.manager.getActiveSession(f.state.sessionId) as Session
+    await waitFor(() => active.quiescent)
+    prompt = 'Configuration changed while active'
+    f.manager.invalidateSystemPrompts()
+    await active.replaceWorkContext('Current Work replacement', 'fixture-transition')
+    await f.manager.deliver(f.state.sessionId, input('second'))
+    await waitFor(() => f.calls.length === 2)
+    assert.deepEqual(f.calls[1].messages.filter(message => message.role === 'system'), firstSystem)
+    assert(f.calls[1].messages.some(message => message.name === '__work_handoff__' && message.content === 'Current Work replacement'))
+    assert.equal(f.preparations(), 1)
     f.calls[1].resolve(done())
     await waitFor(() => f.facts.length === 2)
   } finally { await f.close() }
@@ -511,14 +568,14 @@ test('audience invalidation during prompt preparation cannot install a stale pro
     gate.resolve()
     await admitted
     await waitFor(() => f.calls.length === 1)
-    assert.match(String(f.calls[0].messages[0].content), /^Shared audience\n/)
+    assert.equal(f.calls[0].messages[0].content, 'Shared audience')
     assert.equal(builds, 2)
     f.calls[0].resolve(done())
     await waitFor(() => f.facts.length === 1)
   } finally { gate.resolve(); await f.close() }
 })
 
-test('audience changes during tool execution refresh the next request and preserve tool pairing', async () => {
+test('prompt invalidation during tool execution preserves the activation snapshot and tool pairing', async () => {
   let prompt = 'Trusted audience'
   const gate = Promise.withResolvers<string>()
   const started = Promise.withResolvers<void>()
@@ -536,14 +593,15 @@ test('audience changes during tool execution refresh the next request and preser
     f.manager.invalidateSystemPrompts()
     gate.resolve('Completed tool')
     await waitFor(() => f.calls.length === 2)
-    assert.match(String(f.calls[1].messages[0].content), /^Shared audience\n/)
+    assert.equal(f.calls[1].messages[0].content, 'Trusted audience')
+    assert.deepEqual(f.calls[1].messages.filter(message => message.role === 'system'), f.calls[0].messages.filter(message => message.role === 'system'))
     assert.equal(f.calls[1].messages.filter(message => message.tool_call_id === 'audience-tool').length, 1)
     f.calls[1].resolve(done())
     await waitFor(() => f.facts.length === 1)
   } finally { gate.resolve('cleanup'); await f.close() }
 })
 
-test('failed prompt refresh reports failure rather than sending stale audience context', async () => {
+test('prompt rebuild failures affect reactivation, never mutate an active system snapshot', async () => {
   let fail = false
   const f = await fixture({ manager: true, buildSystemPrompt: async () => {
     if (fail) throw new Error('Audience context unavailable')
@@ -557,15 +615,20 @@ test('failed prompt refresh reports failure rather than sending stale audience c
     fail = true
     f.manager.invalidateSystemPrompts()
     await f.manager.deliver(f.state.sessionId, input('second'))
+    await waitFor(() => f.calls.length === 2)
+    assert.equal(f.calls[1].messages[0].content, 'Current audience')
+    f.calls[1].resolve(done())
     await waitFor(() => f.facts.length === 2)
-    assert.equal(f.facts[1].status, 'failed')
-    assert.match(f.facts[1].error!, /Audience context unavailable/)
-    assert.equal(f.calls.length, 1)
+    const active = f.manager.getActiveSession(f.state.sessionId)!
+    active.stop()
+    await active.completion
+    await assert.rejects(f.manager.deliver(f.state.sessionId, input('failed-activation')), /Audience context unavailable/)
+    assert.equal(f.calls.length, 2)
     fail = false
     await f.manager.deliver(f.state.sessionId, input('third'))
-    await waitFor(() => f.calls.length === 2)
-    assert.match(String(f.calls[1].messages[0].content), /^Current audience\n/)
-    f.calls[1].resolve(done())
+    await waitFor(() => f.calls.length === 3)
+    assert.equal(f.calls[2].messages[0].content, 'Current audience')
+    f.calls[2].resolve(done())
     await waitFor(() => f.facts.length === 3)
   } finally { await f.close() }
 })
@@ -672,7 +735,7 @@ for (const policy of ['queue', 'silent', 'interactive', 'steering'] as const) {
       tool.resolve('Tool done')
       await waitFor(() => f.calls.length === 2)
       const steered = policy === 'interactive' || policy === 'steering'
-      assert.equal(f.calls[1].messages.some((m) => m.role === 'user' && JSON.stringify(m.content).includes('next')), steered)
+      assert.equal(f.calls[1].messages.some((m) => m.role === 'user' && m.name !== 'runtime-context' && JSON.stringify(m.content).includes('next')), steered)
       assert.equal(f.calls[1].messages.filter((m) => m.tool_call_id === 'tool-1').length, 1)
       f.calls[1].resolve(done())
       if (policy === 'queue') {
@@ -946,7 +1009,7 @@ test('silent records have no model turn; retry reuses the original prompt', asyn
     assert.match(f.outbound[0], /Request failed/)
     f.session.dispatch(control('retry', 'retry'), llm)
     await waitFor(() => f.calls.length === 2)
-    assert.equal(f.calls[1].messages.filter((m) => m.role === 'user').length, 2)
+    assert.equal(f.calls[1].messages.filter((m) => m.role === 'user' && m.name !== 'runtime-context').length, 2)
     f.calls[1].resolve(done())
     await waitFor(() => f.facts.length === 2)
     assert.equal(f.facts[1].inputId, 'retry')
@@ -965,7 +1028,7 @@ test('retry aborts the active provider and replays history without another promp
     assert.equal(f.calls[0].signal.aborted, true)
     await waitFor(() => f.calls.length === 2)
     assert.equal(f.facts[0].status, 'cancelled')
-    assert.equal(f.calls[1].messages.filter((message) => message.role === 'user').length, 1)
+    assert.equal(f.calls[1].messages.filter((message) => message.role === 'user' && message.name !== 'runtime-context').length, 1)
     assert.match(JSON.stringify(f.calls[1].messages.find(message => message.role === 'user')?.content), /original/)
     assert(!JSON.stringify(f.calls[1].messages).includes('Must not append this fallback'))
     f.calls[1].resolve(done())
@@ -994,10 +1057,10 @@ test('retry during a tool waits for paired results rather than becoming a steera
     assert.equal(f.calls.length, 1)
     tool.resolve('tool completed')
     await waitFor(() => f.calls.length === 2)
-    assert.equal(f.calls[1].messages.at(-1)?.tool_call_id, 'wait')
+    assert.equal(f.calls[1].messages.filter(message => message.role === 'tool').at(-1)?.tool_call_id, 'wait')
     f.calls[1].resolve(done())
     await waitFor(() => f.calls.length === 3)
-    assert.equal(f.calls[2].messages.filter((message) => message.role === 'user').length, 1)
+    assert.equal(f.calls[2].messages.filter((message) => message.role === 'user' && message.name !== 'runtime-context').length, 1)
     f.calls[2].resolve(done())
     await waitFor(() => f.facts.length === 2)
     assert.equal(f.facts[1].inputId, 'retry')
@@ -1157,7 +1220,7 @@ for (const ephemeral of [false]) {
       for (let i = 0; i < 3; i++) {
         await waitFor(() => f.calls.length === i + 1)
         assert.equal(f.calls[i].model, 'fixture')
-        assert.match(JSON.stringify(f.calls[i].messages.at(-1)?.content), new RegExp(receipts[i].inputId))
+        assert.match(JSON.stringify(f.calls[i].messages.filter(message => message.name !== 'runtime-context').at(-1)?.content), new RegExp(receipts[i].inputId))
         f.calls[i].resolve(done())
         await waitFor(() => f.facts.length === i + 1)
       }
@@ -1645,7 +1708,7 @@ describe('session lifecycle edge cases', () => {
         assert.equal(f.calls[0].signal.aborted, intent === 'abort')
         tool.resolve('tool finished')
         await waitFor(() => f.calls.length === 3)
-        assert(JSON.stringify(f.calls[2].messages.at(-1)?.content).includes('next'))
+        assert(JSON.stringify(f.calls[2].messages.filter(message => message.name !== 'runtime-context').at(-1)?.content).includes('next'))
         f.calls[2].resolve(done())
         await waitFor(() => f.facts.length === (intent === 'abort' ? 2 : 1))
         assert.deepEqual(f.facts.map((fact) => fact.status),
@@ -1697,7 +1760,7 @@ describe('session lifecycle edge cases', () => {
         command: { type: 'retry', fallbackContent: 'Recovered original prompt' },
       }, llm)
       await waitFor(() => f.calls.length === 1)
-      assert.equal(f.calls[0].messages.filter(message => message.role !== 'system').length, 1)
+      assert.equal(f.calls[0].messages.filter(message => message.role !== 'system' && message.name !== 'runtime-context').length, 1)
       assert.match(JSON.stringify(f.calls[0].messages.find(message => message.role === 'user')?.content), /Recovered original prompt/)
       f.calls[0].resolve(done())
       await waitFor(() => f.facts.length === 2)
@@ -1825,7 +1888,7 @@ describe('session lifecycle edge cases', () => {
       release.resolve()
       await waitFor(() => f.calls.length === 2)
       assert.equal(f.session.accepting, true)
-      assert.match(JSON.stringify(f.calls[1].messages.at(-1)?.content), /wake/)
+      assert.match(JSON.stringify(f.calls[1].messages.filter(message => message.name !== 'runtime-context').at(-1)?.content), /wake/)
       f.calls[1].resolve(done())
       await waitFor(() => f.facts.length === 2)
       assert.equal(f.facts[1].inputId, 'wake')

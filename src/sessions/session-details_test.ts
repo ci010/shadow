@@ -352,6 +352,32 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
+  test(`${Store.name}: missing delegate cache reports preserve parent hits and independent coverage`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const sessions = makeManager(workspace, store)
+      try {
+        for (const state of [
+          { sessionId: 'web:cache-parent', mode: 'session' as const, segmentIndex: 0 },
+          { sessionId: 'cache-child', mode: 'task' as const, parentSessionId: 'web:cache-parent', segmentIndex: 0 },
+        ]) {
+          await store.saveState(state.sessionId, state)
+          const tokens = { promptTokens: 100, completionTokens: 10, totalTokens: 110 }
+          await store.createSessionLog(newPhysicalSessionId(state.sessionId, 0, 1), [
+            { type: 'model_usage', sessionId: state.sessionId, id: state.sessionId,
+              usage: state.mode === 'session' ? { ...tokens, cachedTokens: 80 } : tokens },
+          ])
+        }
+        await sessions.start()
+        const details = await sessions.getSessionDetails('web:cache-parent')
+        deepEqual(details?.usage, { promptTokens: 200, completionTokens: 20, totalTokens: 220,
+          cachedTokens: 80, cacheReportedPromptTokens: 100 })
+        deepEqual(details?.subagentUsage, { promptTokens: 100, completionTokens: 10, totalTokens: 110 })
+      } finally { await sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: reported cache-read tokens survive the session usage total`, async () => {
     await withTempWorkspace(async (workspace) => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -377,8 +403,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           await sessions.stop()
         }
 
-        // A call that never reported cache usage leaves the total unreported
-        // instead of silently reporting zero hits.
+        // Missing reports must not erase known hits or count unknown inputs as misses.
         await store.createSessionLog(newPhysicalSessionId('web:mixed', 0, 1), [
           { type: 'model_usage', sessionId: 'web:mixed', id: 'reported', usage: cached },
           { type: 'model_usage', sessionId: 'web:mixed', id: 'unreported', usage: { promptTokens: 10, completionTokens: 1, totalTokens: 11 } },
@@ -388,7 +413,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await mixed.start()
         try {
           const details = await mixed.getSessionDetails('web:mixed')
-          deepEqual(details?.usage, { promptTokens: 110, completionTokens: 6, totalTokens: 116 })
+          deepEqual(details?.usage, { promptTokens: 110, completionTokens: 6, totalTokens: 116,
+            cachedTokens: 80, cacheReportedPromptTokens: 100 })
           equal(details?.usageIncomplete, false)
         } finally {
           await mixed.stop()

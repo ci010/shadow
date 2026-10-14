@@ -10,6 +10,32 @@ import type { SessionState, SessionStore } from './session-store.ts'
 import { HandoffManager } from './handoff/manager.ts'
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: partial cache coverage survives segments, restart and duplicate usage events`, async () => {
+    await withTempWorkspace(async workspace => {
+      const directory = join(workspace, 'sessions')
+      let store: SessionStore = new Store(directory)
+      await store.init()
+      const state: SessionState = { sessionId: 'web:cache-coverage', segmentIndex: 1, physicalIdVersion: 2 }
+      try {
+        await store.createSessionLog(physicalSessionId({ ...state, segmentIndex: 0 }), [
+          { role: 'assistant', usage: { promptTokens: 10, completionTokens: 1, totalTokens: 11 },
+            responseContext: { responseId: 'legacy' } },
+        ])
+        const event = { type: 'model_usage', sessionId: state.sessionId, id: 'known',
+          usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110, cachedTokens: 80 } }
+        await store.createSessionLog(physicalSessionId(state), [event, event,
+          { type: 'model_usage', sessionId: state.sessionId, id: 'zero',
+            usage: { promptTokens: 20, completionTokens: 2, totalTokens: 22, cachedTokens: 0 } }])
+        store.close?.()
+        store = new Store(directory)
+        await store.init()
+        assert.deepEqual(await readTokenUsage(store, state), { usage: {
+          promptTokens: 130, completionTokens: 13, totalTokens: 143, cachedTokens: 80, cacheReportedPromptTokens: 120,
+        }, incomplete: false })
+      } finally { store.close?.() }
+    })
+  })
+
   test(`${Store.name}: real compaction charges its source physical segment, including versioned identities`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -115,12 +141,25 @@ test('token totals reject unsafe accumulation instead of silently rounding', () 
   assert.throws(() => addTokenUsage(first, { promptTokens: 1, completionTokens: 0, totalTokens: 1 }), /supported range/)
 })
 
-test('cache totals require complete reports and retain explicit zero', async () => {
+test('cache totals retain partial reports, their covered inputs and explicit zero', async () => {
   const { addTokenUsage, parseTokenUsage } = await import('./usage.ts')
   const usage = { promptTokens: 100, completionTokens: 20, totalTokens: 120 }
   assert.deepEqual(parseTokenUsage({ ...usage, cachedTokens: 0 }), { ...usage, cachedTokens: 0 })
   assert.equal(parseTokenUsage({ ...usage, cachedTokens: 101 }), null)
   assert.equal(addTokenUsage({ ...usage, cachedTokens: 80 }, { ...usage, cachedTokens: 20 })?.cachedTokens, 100)
-  assert.equal(addTokenUsage({ ...usage, cachedTokens: 80 }, usage)?.cachedTokens, undefined)
-  assert.equal(addTokenUsage(usage, { ...usage, cachedTokens: 80 })?.cachedTokens, undefined)
+  const partial = { promptTokens: 200, completionTokens: 40, totalTokens: 240, cachedTokens: 80, cacheReportedPromptTokens: 100 }
+  assert.deepEqual(addTokenUsage({ ...usage, cachedTokens: 80 }, usage), partial)
+  assert.deepEqual(addTokenUsage(usage, { ...usage, cachedTokens: 80 }), partial)
+  assert.deepEqual(addTokenUsage(partial, { ...usage, cachedTokens: 0 }), {
+    promptTokens: 300, completionTokens: 60, totalTokens: 360, cachedTokens: 80, cacheReportedPromptTokens: 200,
+  })
+  assert.deepEqual(addTokenUsage(usage, usage), { promptTokens: 200, completionTokens: 40, totalTokens: 240 })
+  assert.equal(addTokenUsage(usage, { ...usage, cachedTokens: 0 })?.cachedTokens, 0)
+  assert.deepEqual(addTokenUsage({ ...usage, cachedTokens: 80 }, { promptTokens: 0, completionTokens: 0, totalTokens: 0 }),
+    { ...usage, cachedTokens: 80 })
+  assert.deepEqual(parseTokenUsage(partial), partial)
+  for (const cacheReportedPromptTokens of [-1, 79, 201, NaN, 0.5, '100']) {
+    assert.equal(parseTokenUsage({ ...partial, cacheReportedPromptTokens }), null)
+  }
+  assert.equal(parseTokenUsage({ ...usage, cacheReportedPromptTokens: 100 }), null)
 })

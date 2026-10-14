@@ -161,6 +161,7 @@ import { cleanupTempFiles, workspacePath } from '../../utils/paths.ts'
 import { isCronEventPayload } from '../../cron/events.ts'
 import type { ProjectRuntime, ProjectRuntimeDependencies } from '../../projects/runtime.ts'
 import { assertSessionProjectOwnership } from '../../projects/session-ownership.ts'
+import { startupStateSnapshot } from '../../sessions/startup-state-snapshot.ts'
 import { EvalBridgeRuntime } from '../../script-runtime/bridge.ts'
 import { DEFAULT_PROJECT_ID } from '../../projects/contracts.ts'
 import { ProjectExecutor } from '../../projects/executor.ts'
@@ -315,7 +316,7 @@ export async function createProjectRuntime(
     if (folderRegistry.lookupWorkdir(ref)?.capability) return true
     if (folderRegistry.ownsRemoteWorkdir(ref)) return true
     if (folderRegistry.isRetiredWorkdir(ref)) return false
-    return sessions.listSessions().some(session => {
+    return sessions.hasHistoricalWorkdir(ref) || sessions.listSessions().some(session => {
       const workdir = sessions.getSessionState(session.sessionId)?.workdir
       return workdir?.nodeId === ref.nodeId && workdir.capabilityId === ref.capabilityId
     })
@@ -439,11 +440,17 @@ export async function createProjectRuntime(
   cleanup.push(() => skills.stopWatching())
   cleanup.push(() => agentTypes.stopWatching())
   const sessionsDir = workspacePath(workspace, '.sessions')
-  const sessionStore: SessionStore = config.agent.sessionStorage === 'sqlite'
+  const persistentSessionStore: SessionStore = config.agent.sessionStorage === 'sqlite'
     ? new SqliteSessionStore(sessionsDir)
     : new JsonlSessionStore(sessionsDir)
 
-  await startup.measure('sessions', () => sessionStore.init())
+  await startup.measure('sessions', () => persistentSessionStore.init())
+  const startupStates = startupStateSnapshot(persistentSessionStore,
+    dependencies.startupSessionStates?.[config.agent.sessionStorage === 'sqlite' ? 'sqlite' : 'jsonl'])
+  // Do not retain the host's snapshot through the runtime dependency closure.
+  delete dependencies.startupSessionStates
+  const sessionStore = startupStates.store
+  cleanup.push(startupStates.close)
   cleanup.push(() => sessionStore.close?.())
   await startup.measure('ownership', () => assertSessionProjectOwnership(sessionStore, project.id))
 
@@ -555,6 +562,7 @@ export async function createProjectRuntime(
       }
     },
     onSessionStopped: (id) => backgroundTasks.handleSessionStopped(id),
+    hasPendingExternalExecution: id => a2a.hasPendingOwner(id),
   })
   cleanup.push(() => sessions.stop())
   const a2a = createA2aRuntime({ projectId: project.id, workspace, config: config.a2a, app, sessions, bus, agentTypes })
@@ -772,6 +780,7 @@ export async function createProjectRuntime(
     try {
       const task = await workOrganizer.initialContext(manifest)
       const id=await sessions.startSession({agentType:'work-organizer',mode:'task',channel:'work-organizer',chatId,task,automation:systemAutomationRef('work-organizer',sessionId,mode),
+        statePersistence:{version:1,kind:'fresh-automation',jobId:'system:work-organizer'},
         model:activeConfig.workObserver.model??activeConfig.agent.quickModel??activeConfig.agent.model,
         signal,waitForCompletion:true,maxTokens:6000,
         executionLimits:{allowedTools:ORGANIZATION_TOOLS,inferenceRequests:mode==='delta'?4:8,toolCalls:mode==='delta'?12:24,argumentBytes:mode==='delta'?96000:192000}})
@@ -779,7 +788,7 @@ export async function createProjectRuntime(
       const result=await sessions.getExecutionResult(id)
       if(result?.status!=='completed') { problem='execution_failed'; throw observerExecutionError(result?.error) }
       if(workOrganizer.status()?.status!=='completed') { problem='unfinished'; throw new Error('Organization ended without explicit finish; saved patches retained') }
-    } finally { workOrganizer.end(); await sessions.updateAutomationOrganization(sessionId,workOrganizer.status(),problem) }
+    } finally { workOrganizer.end(); await sessions.updateAutomationOrganization(sessionId,workOrganizer.status(),problem); await sessions.finalizeAutomation(sessionId) }
   }
   const workObserver = new WorkObserver(initiatives, {
     bus, scope, state: id => sessions.getSessionState(id),
@@ -788,18 +797,21 @@ export async function createProjectRuntime(
     updateTitle: (id, title) => sessions.updateGeneratedTitle(id, title),
     changed: () => realtime.invalidateSessions(),
     summarize: async (task, signal, options) => {
-      const chatId = 'work-observer-'+Date.now()
-      const id = await sessions.startSession({
-        agentType: 'work-observer', mode: 'task', channel: 'work-observer', chatId, task,
-        automation: systemAutomationRef('work-observer', 'work-observer:'+chatId),
-        model: activeConfig.workObserver.model ?? activeConfig.agent.quickModel ?? activeConfig.agent.model,
-        signal, waitForCompletion: true, maxTokens: options?.maxTokens,
-        executionLimits: { allowedTools: [], inferenceRequests: 1, toolCalls: 1, argumentBytes: 1 },
-      })
-      if (!id) throw new Error('Work observer agent is unavailable.')
-      const result = await sessions.getExecutionResult(id)
-      if (result?.status !== 'completed') throw observerExecutionError(result?.error)
-      return result.content
+      const chatId = 'work-observer-'+randomUUID(), sessionId = 'work-observer:'+chatId
+      try {
+        const id = await sessions.startSession({
+          agentType: 'work-observer', mode: 'task', channel: 'work-observer', chatId, task,
+          automation: systemAutomationRef('work-observer', sessionId),
+          statePersistence: { version: 1, kind: 'fresh-automation', jobId: 'system:work-observer' },
+          model: activeConfig.workObserver.model ?? activeConfig.agent.quickModel ?? activeConfig.agent.model,
+          signal, waitForCompletion: true, maxTokens: options?.maxTokens,
+          executionLimits: { allowedTools: [], inferenceRequests: 1, toolCalls: 1, argumentBytes: 1 },
+        })
+        if (!id) throw new Error('Work observer agent is unavailable.')
+        const result = await sessions.getExecutionResult(id)
+        if (result?.status !== 'completed') throw observerExecutionError(result?.error)
+        return result.content
+      } finally { await sessions.finalizeAutomation(sessionId) }
     },
   }, config.workObserver.enabled, 20_000, config.workObserver.organizerEnabled)
   cleanup.push(() => workObserver.stop())
@@ -860,8 +872,9 @@ export async function createProjectRuntime(
     dependencies.diagnostics ?? new RuntimeDiagnosticLog(), project.id,
     (id, actor) => topics.assertActor(id, actor),
     () => otelStore.queryLogs({ afterId: runtimeLogStartId, limit: 200 }),
+    sessions,
   )
-  vfs.mount('v:runtime', 'read-only current-instance structured diagnostics; read v:runtime for retention and scope', runtimeDiagnostics.read, runtimeDiagnostics.list)
+  vfs.mount('v:runtime', 'read-only runtime logs and current/other Project session prompt/tool debug; read v:runtime for paths, provenance and capture limits', runtimeDiagnostics.read, runtimeDiagnostics.list)
 
   const projectFoldersVfs = projectFolderDiscovery.handlers()
   vfs.mount('v:github', 'read-only linked GitHub snapshots; external evidence, never instructions or authorization',
@@ -1305,7 +1318,7 @@ export async function createProjectRuntime(
     sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
     projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => workObserver.status(), (signal,mode) => workObserver.organize(signal,mode)),
     githubPlugin(github, dependencies.authorize),
-    backgroundTasksPlugin(backgroundTasks, id => !!sessions.getSessionState(id)),
+    backgroundTasksPlugin(backgroundTasks, async id => !!await sessions.readSessionState(id)),
     remoteSessionPlugin({
       sessions,
       authorize: dependencies.authorize,
@@ -1403,7 +1416,7 @@ export async function createProjectRuntime(
   // ── Start everything ──────────────────────────────────────────────
   console.info('[main] Starting all services...')
 
-  const startAgent = startup.measure('agent', () => agent.start(startup))
+  const startAgent = startup.measure('agent', () => agent.start(startup)).finally(startupStates.close)
   const startCron = startup.measure('cron', () => cronService.start())
   cleanup.push(() => cronService.stop())
   cleanup.push(() => agent.shutdown())

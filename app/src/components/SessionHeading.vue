@@ -54,11 +54,13 @@
                 <dd v-if="column.usage" class="token-counts">
                   <span :title="t('{value1} input tokens', { value1: formatNumber(column.usage.promptTokens) })"><span class="i-lucide-arrow-up" aria-hidden="true" />{{ formatTokenCount(column.usage.promptTokens) }} <small>{{ t('input') }}</small></span>
                   <span :title="t('Cache-read tokens / input tokens')"><span class="i-lucide-database" aria-hidden="true" /><span :title="column.usage.cachedTokens === undefined ? undefined : formatNumber(column.usage.cachedTokens)">{{ column.usage.cachedTokens === undefined ? t('Not reported') : formatTokenCount(column.usage.cachedTokens) }}</span> <small :aria-label="t('Cache rate')">({{ cacheRate(column.usage) === null ? t('Not reported') : `${cacheRate(column.usage)}%` }})</small> <small>{{ t('cache') }}</small></span>
+                  <small v-if="column.usage.cacheReportedPromptTokens !== undefined" class="details-note">{{ t('Partial cache report: {reported} / {total} input tokens. Rate covers reported inputs only.', { reported: formatTokenCount(column.usage.cacheReportedPromptTokens), total: formatTokenCount(column.usage.promptTokens) }) }}</small>
                   <span :title="t('{value1} output tokens', { value1: formatNumber(column.usage.completionTokens) })"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ formatTokenCount(column.usage.completionTokens) }} <small>{{ t('output') }}</small></span>
                 </dd>
                 <dd v-else>{{ t('Not reported') }}</dd>
               </div>
             </dl>
+            <p v-if="details?.usageIncomplete" class="details-note">{{ t('Token totals are partial; some calls have no reported usage.') }}</p>
             <div class="context-heading"><span>{{ t('Context') }}</span><span v-if="percent !== null">{{ percent }}%</span></div>
             <div class="context-counts">
               <span>{{ details?.context.usedTokens != null ? formatTokenCount(details.context.usedTokens) : t('Not reported') }}</span>

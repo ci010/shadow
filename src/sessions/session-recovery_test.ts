@@ -5,7 +5,6 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { Hono } from 'hono'
 import { Bus } from '../bus/bus.ts'
 import { ContextBuilder } from '../agent/context/builder.ts'
-import { SESSION_ITERATION_LIMIT } from '../agent/context/execution-budget.ts'
 import { HandoffManager } from './handoff/manager.ts'
 import { Tools } from '../tools/registry.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
@@ -22,6 +21,11 @@ import { ProviderTransportError } from '../providers/provider.ts'
 import { CopilotAuthError } from '../providers/copilot.ts'
 import { parseSessionRecovery } from './session-store.ts'
 import { ToolOutcomeUnknownError } from '../tools/tool.ts'
+
+function assertNoAudienceEvents(messages: ChatMessage[]): void {
+  assert(!messages.some(message => message.name === 'runtime-context'
+    && JSON.stringify(message.content).includes('runtime-context-audience')))
+}
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (): LLMResponse => ({ content: 'Finished', toolCalls: [] })
@@ -211,8 +215,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal(recovery.userInvolved, source.kind === 'user')
           assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
           await waitFor(() => f.calls.length === index + 2)
-          assert.equal(String(f.calls[index + 1].messages[0].content).includes('Answer the user\'s request normally'),
-            source.kind === 'user')
+          assertNoAudienceEvents(f.calls[index + 1].messages)
           f.calls[index + 1].resolve(done())
           await waitFor(() => f.facts.length === (index + 2))
           const history = (await f.sessions.getHistory(id, { shallow: true })).messages
@@ -241,7 +244,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.sessions.getSessionRecovery(id)?.userInvolved, undefined)
         assert.equal((await post(f.app, id, 'resume', { recoveryId: 'legacy-recovery' })).status, 202)
         await waitFor(() => f.calls.length === 1)
-        assert.match(String(f.calls[0].messages[0].content), /Answer the user's request normally/)
+        assertNoAudienceEvents(f.calls[0].messages)
         f.calls[0].resolve(done())
         await waitFor(() => f.facts.length === 1)
         const reply = (await f.sessions.getHistory(id, { shallow: true })).messages.filter(message => message.role === 'assistant').at(-1)!
@@ -280,14 +283,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(history.filter(message => JSON.stringify(message.content).includes('Perform original request')).length, 1)
         assert.equal(history.filter(message => message.tool_call_id === 'effect-one').length, 1)
         const previous = f.calls[1].messages
-        const previousPrompt = String(previous[0].content)
-        const previousBudget = `\n${SESSION_ITERATION_LIMIT - 1} inference requests including this one remain for this turn;`
-        assert.ok(previousPrompt.includes(previousBudget))
-        assert.deepEqual(history, [
-          { ...previous[0], content: previousPrompt.replace(previousBudget,
-            `\n${SESSION_ITERATION_LIMIT} inference requests including this one remain for this turn;`) },
-          ...previous.slice(1),
-        ], 'Continue preserves the exact prior context except for the refreshed turn budget')
+        assert.deepEqual(history, previous, 'Continue preserves the exact prior context')
         assert.equal(effects, 1)
         const accepted = await results.find(result => result.status === 202)!.json()
         const resumedActivity = await (await f.app.request('/api/sessions/stages')).json()
@@ -375,11 +371,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           restored.failPreparation(false)
           assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id, acknowledgeToolReplay: true })).status, 202)
           await waitFor(() => restored.calls.length === 1)
-          assert.match(String(restored.calls[0].messages[0].content), /Answer the user's request normally/)
+          assertNoAudienceEvents(restored.calls[0].messages)
           assert.deepEqual(restored.calls[0].messages.filter(message => message.role === 'tool').map(message => message.tool_call_id), ['known', 'unknown'])
-          assert.equal(restored.calls[0].messages.at(-1)!.content, 'Recovered result')
+          assert.equal(restored.calls[0].messages.filter(message => message.name !== 'runtime-context').at(-1)!.content, 'Recovered result')
           assert.deepEqual(executions, ['unknown'])
-          assert.equal(restored.calls[0].messages.filter(message => message.role === 'user').length, 1)
+          assert.equal(restored.calls[0].messages.filter(message => message.role === 'user' && message.name !== 'runtime-context').length, 1)
           assert.equal(restored.calls[0].messages.filter(message => message.role === 'assistant').length, 1)
           assert.deepEqual(restored.calls[0].messages.find(message => message.role === 'assistant')?.provider_state, continuity)
           assert.equal(restored.calls[0].messages.find(message => message.role === 'assistant')?.reasoning_content, 'Original reasoning')
@@ -459,7 +455,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.deepEqual(executed, ['first', 'second'])
         assert.deepEqual(f.calls[1].messages.filter(message => message.role === 'tool').map(message => [message.tool_call_id, message.content]),
           [['first', 'Committed receipt after cancellation'], ['second', 'Read receipt']])
-        assert.equal(f.calls[1].messages.filter(message => message.role === 'user').length, 1)
+        assert.equal(f.calls[1].messages.filter(message => message.role === 'user' && message.name !== 'runtime-context').length, 1)
         f.calls[1].resolve(done())
         await waitFor(() => f.facts.length === 2)
       } finally { release.resolve('cleanup'); await f.sessions.stop(); store.close?.() }
@@ -497,7 +493,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await post(f.app, id, 'resume', { recoveryId: recovery.id, acknowledgeToolReplay: true })
         await waitFor(() => f.calls.length === 2)
         assert.deepEqual(executions, ['original-call', 'original-call'])
-        assert.deepEqual(f.calls[1].messages.map(message => message.role), ['system', 'user', 'assistant', 'tool'])
+        assert.deepEqual(f.calls[1].messages.filter(message => message.name !== 'runtime-context').map(message => message.role), ['system', 'user', 'assistant', 'tool'])
         assert.equal(f.calls[1].messages.at(-1)?.content, 'Resumed real result')
         f.calls[1].resolve(done())
         await waitFor(() => f.facts.length === 2)

@@ -2,37 +2,41 @@ import { builtinModules, createRequire } from 'node:module'
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { build, type Plugin } from 'vite'
+import { transform } from 'esbuild'
 
 // Keep every out-of-graph process entry: Node cannot discover these from imports.
 export const backendEntries = [
   'index', 'a2a/mcp-cli', 'script-runtime/worker', 'channels/feishu-worker',
   'execution/processes/guardian-worker', 'execution/processes/posix-controller',
   'execution/network/proxy-preload', 'utils/image-codec-worker',
+  'runtime/startup-profile-preload', 'script-runtime/runtime', 'channels/feishu-transport',
 ]
 // Browser-oriented WASM loaders resolve adjacent binaries and choose SIMD loaders at runtime.
 export const backendExternals = ['@jsquash/png', '@jsquash/webp']
 
-/** Bundle the checked Node build into a self-contained desktop resource directory. */
-export async function bundleBackend(root: string, target: string, source = join(root, 'dist')): Promise<void> {
+/** Compile direct TS entries into the same relocatable layout used in dev and production.
+ * Additional entries are useful for native-Node integration tests of exported APIs.
+ */
+export async function compileBackend(root: string, output: string, entries = backendEntries): Promise<void> {
   root = resolve(root)
-  target = resolve(target)
-  source = resolve(source)
-  if (target === source || target === root || source.startsWith(target + sep) || root.startsWith(target + sep)) {
-    throw new Error('Bundle output must be separate from the checked build')
+  output = resolve(output)
+  if (output === root || root.startsWith(output + sep) || output === join(root, 'src')
+    || output.startsWith(join(root, 'src') + sep)) {
+    throw new Error('Bundle output must be separate from the source tree')
   }
-  await rm(target, { recursive: true, force: true })
-  await mkdir(target, { recursive: true })
-  const src = join(source, 'src')
+  const src = join(root, 'src')
   const packageDirectories = new Set<string>()
   const locations: Plugin = {
     name: 'shadow-module-locations',
+    // Vite must erase TS before the JS AST parser sees type annotations.
+    enforce: 'post',
     transform(code, id) {
       const normalized = id.replaceAll('\\', '/')
       for (const match of normalized.matchAll(/\/node_modules\/((?:@[^/]+\/)?[^/.][^/]*)\//g)) {
         packageDirectories.add(normalized.slice(0, match.index! + match[0].length - 1))
       }
       if (!id.replaceAll('\\', '/').startsWith(src.replaceAll('\\', '/') + '/')) return
-      const path = relative(source, id).replaceAll('\\', '/')
+      const path = relative(root, id).replaceAll('\\', '/').replace(/\.ts$/, '.js')
       // Bundled code still locates assets/child entries as if at its original compiled path.
       const changes: Array<{ start: number; end: number; text: string }> = []
       // Parse rather than replacing text inside comments or user-script strings.
@@ -82,13 +86,24 @@ export async function bundleBackend(root: string, target: string, source = join(
     },
   }
   await build({
-    configFile: false, publicDir: false, plugins: [locations],
+    root, configFile: false, publicDir: false,
+    plugins: [{
+      name: 'shadow-typescript-decorators',
+      enforce: 'pre',
+      // Oxc currently preserves standard decorators, which Node cannot execute.
+      // Lower them in Vite's source pipeline without a tsc emit stage.
+      async transform(code, id) {
+        if (id.endsWith('.ts') && id.replaceAll('\\', '/').startsWith(src.replaceAll('\\', '/') + '/')) {
+          return transform(code, { loader: 'ts', sourcefile: id, target: 'node24', format: 'esm', sourcemap: false })
+        }
+      },
+    }, locations],
     build: {
-      ssr: true, target: 'node24', outDir: join(target, 'dist'), emptyOutDir: true,
+      ssr: true, target: 'node24', outDir: output, emptyOutDir: true,
       minify: false, sourcemap: false,
       rollupOptions: {
-        input: Object.fromEntries(backendEntries.map(name => ['src/' + name,
-          join(name === 'utils/image-codec-worker' ? join(root, 'src') : src, name + '.js')])),
+        input: Object.fromEntries(entries.map(name => ['src/' + name,
+          join(src, name + (name === 'utils/image-codec-worker' ? '.js' : '.ts'))])),
         external: id => id.startsWith('node:') || builtinModules.includes(id)
           || backendExternals.some(name => id === name || id.startsWith(name + '/')),
         output: { format: 'es', entryFileNames: '[name].js', chunkFileNames: '_chunks/[name]-[hash].js' },
@@ -100,7 +115,7 @@ export async function bundleBackend(root: string, target: string, source = join(
     },
     ssr: { noExternal: true },
   })
-  await copyAssets(join(root, 'src'), join(target, 'dist/src'))
+  await copyAssets(join(root, 'src'), join(output, 'src'))
   const copied = new Map<string, string>()
   async function copyPackage(name: string, from: string): Promise<void> {
     const manifest = createRequire(join(from, 'package.json')).resolve(name + '/package.json')
@@ -111,11 +126,38 @@ export async function bundleBackend(root: string, target: string, source = join(
     }
     copied.set(name, metadata.version)
     const packageRoot = dirname(manifest)
-    await cp(packageRoot, join(target, 'node_modules', name), { recursive: true, dereference: true })
+    await cp(packageRoot, join(output, 'node_modules', name), { recursive: true, dereference: true })
     for (const dependency of Object.keys(metadata.dependencies ?? {})) await copyPackage(dependency, packageRoot)
   }
   for (const name of backendExternals) await copyPackage(name, root)
-  await writeFile(join(target, 'package.json'), JSON.stringify({ name: '@shadow/backend-bundle', private: true, type: 'module' }, null, 2) + '\n')
+  await writeFile(join(output, 'package.json'), JSON.stringify({ name: '@shadow/backend-bundle', private: true, type: 'module' }, null, 2) + '\n')
+}
+
+/** Build a standalone resource directly from TS (also used by relocated integration tests). */
+export async function bundleBackend(root: string, target: string): Promise<void> {
+  assertResourceTarget(root, target)
+  await rm(target, { recursive: true, force: true })
+  await compileBackend(root, join(target, 'dist'))
+}
+
+/** Packaging reuses exactly the checked dev/prepared output, never recompiles it. */
+export async function stageBackend(root: string, target: string): Promise<void> {
+  assertResourceTarget(root, target)
+  // Check before deleting a previous staged resource.
+  await readFile(join(root, 'dist/src/index.js'))
+  await rm(target, { recursive: true, force: true })
+  await cp(join(root, 'dist'), join(target, 'dist'), { recursive: true })
+}
+
+function assertResourceTarget(root: string, target: string): void {
+  root = resolve(root)
+  target = resolve(target)
+  const source = join(root, 'dist')
+  if (target === root || root.startsWith(target + sep) || target === source
+    || source.startsWith(target + sep) || target.startsWith(source + sep)
+    || target === join(root, 'src') || target.startsWith(join(root, 'src') + sep)) {
+    throw new Error('Bundle output must be separate from the source tree and prepared output')
+  }
 }
 
 async function copyAssets(source: string, target: string): Promise<void> {

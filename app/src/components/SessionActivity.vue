@@ -1,9 +1,9 @@
 <template>
   <span class="session-activity" :class="[activity.kind, { working: activity.working, compact, 'icon-only': iconOnly, 'status-icons': statusIcons }]" :title="label" :aria-label="compact ? label : undefined" :role="compact ? 'img' : undefined">
     <span v-if="!hideSymbol && (iconOnly || stage || !delegatedLabel)" class="activity-symbol" aria-hidden="true">
-      <span v-if="compact || statusIcons" :class="statusIcon" class="status-icon" />
+      <WorkingWave v-if="activity.kind === 'running'" />
+      <span v-else-if="compact || statusIcons" :class="statusIcon" class="status-icon" />
       <span v-else-if="activity.kind === 'waiting'" class="i-lucide-message-circle-question attention-icon" />
-      <WorkingWave v-else-if="activity.kind === 'running'" />
       <span v-else-if="activity.working && !isWaitingStage(activity.kind)" class="activity-spinner" />
       <span v-else class="activity-dot" />
     </span>
@@ -56,7 +56,7 @@ const label = computed(() => [props.stage || !delegatedLabel.value ? activity.va
 .activity-spinner { box-sizing: border-box; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-bottom-color: transparent; border-radius: 50%; animation: activity-spin .8s linear infinite; }
 .activity-dot { width: 6px; height: 6px; border: 1px solid currentColor; border-radius: var(--radius-circle); }
 .idle .activity-dot { background: currentColor; }
-.working:not(.status-icons):not(.waiting):not(.waiting-for-call):not(.running) .activity-symbol::after { content: ''; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .7; }
+.activity-symbol:has(> .activity-spinner)::after { content: ''; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .7; }
 .activity-label { font-weight: 500; white-space: nowrap; }
 .compact { padding: 3px; }
 .session-activity.compact.icon-only { width: 16px; height: 16px; gap: 0; padding: 0; border: 0; background: transparent; }

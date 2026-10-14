@@ -1,3 +1,4 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -69,7 +70,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
     },
   }
   const manager = new SessionManager({
-    workspace, store, bus, provider, tools,
+    workspace, store, bus, provider, tools, backgroundTasks: { listTasks: () => [] },
     projectId: 'org-a', ownsFolder: (id: string) => id === 'folder-a',
     ownsWorkdir: (ref: { capabilityId: string }) => ref.capabilityId !== 'foreign',
     workdirCapabilityLookup: () => ({ node: settings.remoteOnline === false ? 'offline' : 'online', capability: { kind: 'workdir', online: true } }),
@@ -78,7 +79,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
       ? { name, description: '', prompt: '', source: 'builtin', defaultMode: 'session',
         ...(settings.learningReceipt && name !== 'general' ? { allowedTools: ['learning_result', ...(settings.failedLearningWrite ? ['write'] : [])] } : {}),
         ...(name === 'reader' ? { allowedTools: ['read'] } : {}) } : undefined },
-    handoffManager: { shouldHandoff: () => false },
+    handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
     context: { buildSystemPrompt: async (ctx: unknown) => JSON.stringify(ctx) },
     getLlmRuntimeConfig: () => ({ model: 'fixture', contextWindow: 128000, temperature: 0 }),
   } as unknown as SessionManagerDeps)
@@ -134,8 +135,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           }
         }
         assert.deepEqual(f.events, ['web:origin', 'web:peer', 'web:origin', 'web:peer'])
-        const fresh = f.manager.listSessions().map(row => f.manager.getSessionState(row.sessionId)!).filter(s => s.automation)
+        const fresh = (await f.manager.listHistoryStates()).filter(s => s.automation)
         assert.equal(fresh.length, 2)
+        assert.equal(f.manager.listSessions().filter(row => row.automation).length, 0)
+        assert.equal(f.manager.getSessionState(fresh[0].sessionId), null)
+        await assert.rejects(f.manager.deliver(fresh[0].sessionId, input('Must not revive')), /Archived execution|not.*[Pp]roject|closed/)
+        assert.equal((await store.listAllStates())[fresh[0].sessionId], undefined)
         assert.notEqual(fresh[0].automation!.runId, fresh[1].automation!.runId)
         for (const state of fresh) {
           assert.equal(state.sessionId, `cron:${state.automation!.runId}`)
@@ -151,7 +156,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           const request = f.requests.find(r => r.sessionId === state.sessionId)!
           assert.equal(JSON.stringify(request.messages).includes('PARENT TRANSCRIPT SENTINEL'), false)
           assert.deepEqual(JSON.parse(String(request.messages[0].content).split('\n')[0]).workdir, workdir)
-          assert.deepEqual((await store.getState(state.sessionId))!.automation, state.automation)
+          assert.deepEqual((await store.readArchivedState!(state.sessionId))!.automation, state.automation)
         }
         const peerRequests = f.requests.filter(r => r.sessionId === 'web:peer')
         assert(peerRequests[1].messages.some(m => m.role === 'assistant'))
@@ -170,7 +175,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.manager.stop()
         await f.manager.start()
         await f.cron.start()
-        assert.deepEqual(f.manager.getSessionState(fresh[0].sessionId)!.automation, fresh[0].automation)
+        assert.deepEqual((await f.manager.readSessionState(fresh[0].sessionId))!.automation, fresh[0].automation)
         assert.equal(f.cron.listJobs()[1].target!.sessionId, 'web:peer')
         assert.equal(f.cron.listJobs()[2].session, 'fresh')
         await f.cron.runNow(jobs[1].id)
@@ -240,7 +245,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.cron.listJobs().length, 0)
         assert(f.manager.getSessionState('web:target'))
         await f.cron.flush()
-        assert.deepEqual(JSON.parse(await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')).jobs, [])
+        assert.deepEqual(JSON.parse(await readFile(join(projectStoragePath(workspace, '.cron'), 'jobs.json'), 'utf8')).jobs, [])
       } finally { tools.resetDynamic(); await f.cron.stop(); await f.manager.stop(); store.close?.() }
     })
   })
@@ -363,7 +368,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(historical.runs[0].status, 'unknown')
         const other = new Hono()
         registerAutomationRoutes(other, new CronService(workspace), {
-          listSessions: () => f.manager.listSessions(), getSessionState: (id: string) => f.manager.getSessionState(id),
+          automationFeatureStates: () => f.manager.automationFeatureStates(), querySessionHistoryStates: (query: Parameters<SessionManager['querySessionHistoryStates']>[0]) => f.manager.querySessionHistoryStates(query), listHistoryStates: () => f.manager.listHistoryStates(), listSessions: () => f.manager.listSessions(), getSessionState: (id: string) => f.manager.getSessionState(id),
         } as SessionManager, 'org-b')
         assert.deepEqual(await (await other.request('/api/automations')).json(), { automations: [] })
         assert.equal((await other.request(`/api/automations/${jobId}/runs`)).status, 404)
@@ -389,7 +394,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await Promise.all([run, repeated])
         assert.equal(f.requests.length, 1)
         assert.equal(f.requests[0].signal.aborted, true)
-        assert.equal(f.manager.getSessionState(f.requests[0].sessionId)!.executionStatus, 'cancelled')
+        assert.equal((await f.manager.readSessionState(f.requests[0].sessionId))!.executionStatus, 'cancelled')
         const ended = await (await f.app.request(`/api/automations/${id}/runs`)).json()
         assert.equal(ended.runs[0].status, 'cancelled')
       } finally { await f.cron.stop(); await f.manager.stop(); store.close?.() }
@@ -415,7 +420,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const runs = await (await f.app.request(`/api/automations/${job.id}/runs`)).json()
         assert.equal(runs.runs[0].status, 'failed')
         assert.equal(f.requests.length, 0)
-        assert.equal(f.manager.getSessionState(runs.runs[0].sessionId)!.workdir!.nodeId, 'remote-a')
+        assert.equal((await f.manager.readSessionState(runs.runs[0].sessionId))!.workdir!.nodeId, 'remote-a')
         assert.match(await tool.execute({ schedule: 'every 1h', task: 'foreign', session: 'fresh' },
           { sessionId: 'foreign:origin' } as ExecutionContext), /originating session is unavailable/)
       } finally { await f.cron.stop(); await f.manager.stop(); store.close?.() }
@@ -425,8 +430,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
 
 test('invalid modes and incompatible arguments are rejected before persistence', async () => {
   await withTempWorkspace(async workspace => {
-    await mkdir(join(workspace, '.cron'))
-    await writeFile(join(workspace, '.cron', 'jobs.json'), JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [
+    await mkdir(projectStoragePath(workspace, '.cron'), { recursive: true })
+    await writeFile(join(projectStoragePath(workspace, '.cron'), 'jobs.json'), JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [
     ] }))
     const cron = new CronService(workspace)
     try {
@@ -448,7 +453,7 @@ test('invalid modes and incompatible arguments are rejected before persistence',
       assert.match(await tool.execute({ ...add, agentType: 'general' }, ctx), /only for fresh/)
       assert.match(await tool.execute(add, ctx), /scheduling is unavailable/)
       assert.match(await tool.execute({ schedule: 'every 1h', task: 'x', session: 'fresh', agentType: 'missing' }, ctx), /unknown agent type/)
-      assert.equal(JSON.parse(await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')).jobs.length, 0)
+      assert.equal(JSON.parse(await readFile(join(projectStoragePath(workspace, '.cron'), 'jobs.json'), 'utf8')).jobs.length, 0)
     } finally { await cron.stop() }
   })
 })
@@ -579,7 +584,7 @@ test('manual learning returns a live run link on admission, joins an existing ru
         assert.equal(f.manager.getSessionState(f.requests[0].sessionId)!.executionStatus, 'running')
         await learning.stop()
         assert.equal(f.requests[0].signal.aborted, true)
-        assert.equal(f.manager.getSessionState(f.requests[0].sessionId)!.executionStatus, 'cancelled')
+        assert.equal((await f.manager.readSessionState(f.requests[0].sessionId))!.executionStatus, 'cancelled')
       } finally { await learning.stop(); await f.cron.stop(); await f.manager.stop(); scope.close() }
   })
 })

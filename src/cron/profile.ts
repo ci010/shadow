@@ -8,10 +8,9 @@ export class AutomationProfileService {
   constructor(private cron: CronService, private sessions: SessionManager, readonly projectId: string,
     private policy?: AutomationProfilePolicy, private now: () => number = Date.now,
     private learningOutcome?: (sessionId: string) => LearningOutcome | undefined) {}
-  featureIds(): string[] {
+  async featureIds(): Promise<string[]> {
     const ids = new Set([...this.cron.listJobs().map(job => job.id), ...Object.values(SYSTEM_AUTOMATIONS).map(job => job.id)])
-    for (const row of this.sessions.listSessions()) {
-      const state = this.sessions.getSessionState(row.sessionId)
+    for (const state of await this.sessions.automationFeatureStates()) {
       const automation = state?.projectId === this.projectId ? resolveAutomationSession(state) : undefined
       if (automation) ids.add(automation.jobId)
     }
@@ -19,8 +18,7 @@ export class AutomationProfileService {
   }
   async query(featureId: string, signal?: AbortSignal): Promise<AutomationProfile | undefined> {
     if (typeof featureId !== 'string' || !featureId.trim() || featureId.length > 128) throw new TypeError('Invalid automation feature')
-    const records = this.sessions.listSessions().flatMap(row => {
-      const state = this.sessions.getSessionState(row.sessionId)
+    const records = (await this.sessions.listHistoryStates({ jobId: featureId })).flatMap(state => {
       if (!state || state.projectId !== this.projectId) return []
       const automation = resolveAutomationSession(state)
       return automation?.jobId === featureId ? [{ state, automation }] : []

@@ -38,7 +38,7 @@ test('canonical service exact provenance, Project isolation, policy', async () =
   const ref = { jobId: 'system:work-organizer', name: 'Organizer', runId: 'run', startedAt: new Date(asOf - 1).toISOString(), contextMode: 'fresh', config: { source: 'system', schedule: 'old', organizationMode: 'delta' }, organization: { status: 'partial' } }
   const states = [{ sessionId: 'run', projectId: 'project', automation: ref }, { sessionId: 'foreign', projectId: 'other', automation: ref }, { sessionId: 'unmarked', projectId: 'project', agentType: 'work-organizer' }]
   let selected: string[] = []
-  const sessions = { listSessions: () => states, getSessionState: (id: string) => states.find(state => state.sessionId === id), getAutomationUsage: async (ids: string[]) => { selected = ids; return { providerCalls: 3, knownUsageCalls: 0, unknownUsageCalls: 3, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 1, untrackedSessions: 0 } } } as unknown as SessionManager
+  const sessions = { automationFeatureStates: async () => states, listHistoryStates: async () => states, listSessions: () => states, getSessionState: (id: string) => states.find(state => state.sessionId === id), getAutomationUsage: async (ids: string[]) => { selected = ids; return { providerCalls: 3, knownUsageCalls: 0, unknownUsageCalls: 3, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 1, untrackedSessions: 0 } } } as unknown as SessionManager
   const service = new AutomationProfileService({ listJobs: () => [] } as unknown as CronService, sessions, 'project', () => ({ kind: 'event', scope: 'current_runtime', description: 'After root changes, delta event; full manual' }), () => asOf)
   const profile = await service.query('system:work-organizer')
   assert.deepEqual(selected, ['run']); assert.equal(profile?.runs.partial, 1); assert.equal(profile?.runs.delta, 1); assert.equal(profile?.usage.providerCalls, 3)
@@ -50,7 +50,7 @@ test('profile HTTP reads only mounted Project feature and returns sanitized aggr
   const { Hono } = await import('hono')
   const { registerAutomationRoutes } = await import('./routes.ts')
   const app = new Hono()
-  const sessions = { listSessions: () => [], getAutomationUsage: async () => ({ providerCalls: 0, knownUsageCalls: 0, unknownUsageCalls: 0, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 0, untrackedSessions: 0 }) } as unknown as SessionManager
+  const sessions = { automationFeatureStates: async () => [], listHistoryStates: async () => [], listSessions: () => [], getAutomationUsage: async () => ({ providerCalls: 0, knownUsageCalls: 0, unknownUsageCalls: 0, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 0, untrackedSessions: 0 }) } as unknown as SessionManager
   const cron = { listJobs: () => [] } as unknown as CronService
   registerAutomationRoutes(app, cron, sessions, 'project')
   const response = await app.request('/api/automations/system%3Awork-observer/profile')
@@ -70,7 +70,7 @@ test('foreground source scan is bounded and exposes lower-bound telemetry', asyn
 test('learning ledger partial is counted; absent outcome is unknown, never invented completion', async () => {
   const asOf = Date.parse('2026-10-11T00:00:00Z')
   const states = ['partial', 'missing'].map(id => ({ sessionId: id, projectId: 'project', executionStatus: 'completed', automation: { jobId: 'learning:reflector', name: 'Reflection', runId: id, startedAt: new Date(asOf - 1).toISOString(), contextMode: 'fresh', config: { source: 'learning', schedule: 'every 30m' } } }))
-  const sessions = { listSessions: () => states, getSessionState: (id: string) => states.find(state => state.sessionId === id), getAutomationUsage: async () => ({ providerCalls: 0, knownUsageCalls: 0, unknownUsageCalls: 0, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 0, untrackedSessions: 2 }) } as unknown as SessionManager
+  const sessions = { automationFeatureStates: async () => states, listHistoryStates: async () => states, listSessions: () => states, getSessionState: (id: string) => states.find(state => state.sessionId === id), getAutomationUsage: async () => ({ providerCalls: 0, knownUsageCalls: 0, unknownUsageCalls: 0, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 0, untrackedSessions: 2 }) } as unknown as SessionManager
   const service = new AutomationProfileService({ listJobs: () => [] } as unknown as CronService, sessions, 'project', undefined, () => asOf, id => id === 'partial' ? { status: 'partial', summary: '', artifacts: 0, events: 0, evaluated: 0 } : undefined)
   const profile = await service.query('learning:reflector')
   assert.equal(profile?.runs.partial, 1); assert.equal(profile?.runs.unknown, 1); assert.equal(profile?.runs.completed, 0)
@@ -82,7 +82,7 @@ test('Project-mounted profile URLs normalize trailing slash and preserve encoded
   const { automationProfileUrl, sessionProfileUrl } = await import('../../app/src/profile-api.ts')
   const { projectBase } = await import('../../app/src/api-url.ts')
   const project = new Hono(), gateway = new Hono()
-  const sessions = { listSessions: () => [], getAutomationUsage: async () => ({ providerCalls: 0, knownUsageCalls: 0, unknownUsageCalls: 0, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 0, untrackedSessions: 0 }) } as unknown as SessionManager
+  const sessions = { automationFeatureStates: async () => [], listHistoryStates: async () => [], listSessions: () => [], getAutomationUsage: async () => ({ providerCalls: 0, knownUsageCalls: 0, unknownUsageCalls: 0, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 0, untrackedSessions: 0 }) } as unknown as SessionManager
   registerAutomationRoutes(project, { listJobs: () => [] } as unknown as CronService, sessions, 'project')
   gateway.route('/projects/project', project)
   const base = projectBase('http://localhost:3000/', 'project')

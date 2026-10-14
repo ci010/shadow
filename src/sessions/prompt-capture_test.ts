@@ -30,7 +30,11 @@ const definition: ToolDefinition = {
   function: { name: 'example', description: 'Example', parameters: { type: 'object', properties: {} } },
 }
 
-test('capture is opt-in and rejects production and invalid flags', () => {
+test('capture defaults on in development, off elsewhere, and respects explicit flags', () => {
+  assert.ok(createPromptCaptureStore('p', { NODE_ENV: 'development' }))
+  assert.equal(createPromptCaptureStore('p', { NODE_ENV: 'development', SHADOW_DEBUG_PROMPTS: '0' }), undefined)
+  assert.equal(createPromptCaptureStore('p', { NODE_ENV: 'production' }), undefined)
+  assert.equal(createPromptCaptureStore('p', { NODE_ENV: 'test' }), undefined)
   assert.equal(createPromptCaptureStore('p', {}), undefined)
   assert.equal(createPromptCaptureStore('p', { SHADOW_DEBUG_PROMPTS: '0' }), undefined)
   assert.ok(createPromptCaptureStore('p', { SHADOW_DEBUG_PROMPTS: '1' }))
@@ -168,16 +172,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await finished.promise
         prompt = 'New preview, not sent'
         assert.equal((await sessions.getContext({ sessionId: 'web:one' })).source, 'active-history')
-        assert.equal((await sessions.getContext({ sessionId: 'web:one' })).systemPrompt, 'Updated before next iteration')
+        assert.equal((await sessions.getContext({ sessionId: 'web:one' })).systemPrompt, 'First actual prompt')
         assert.equal((await sessions.getContext({ sessionId: 'web:one', preview: true })).systemPrompt, prompt)
         const captured = await app.request(`${endpoint}?view=captured`)
         assert.equal(captured.headers.get('Cache-Control'), 'no-store')
         const body = await captured.json()
         assert.equal(body.captures.length, 2)
-        assert.match(body.captures[0].systemMessages[0].content, /99 inference requests including this one/)
-        assert.match(body.captures[1].systemMessages[0].content, /1000 inference requests including this one/)
-        assert.match(body.captures[0].systemMessages[0].content, /^Updated before next iteration\n/)
-        assert.match(body.captures[1].systemMessages[0].content, /^First actual prompt\n/)
+        assert.deepEqual(body.captures[0].systemMessages, [{ role: 'system', content: 'First actual prompt' }])
+        assert.deepEqual(body.captures[1].systemMessages, body.captures[0].systemMessages)
         assert.equal(body.captures[0].iteration, 1)
         assert.equal(body.captures[1].iteration, 0)
         assert.equal(body.captures[0].turnId, body.captures[1].turnId)
@@ -214,7 +216,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         })
         assert.equal(sessions.getSessionState('web:task')?.executionStatus, 'failed')
         assert.equal(sessions.getActiveSession('web:task'), undefined)
-        assert.ok(String(captures.list('web:task')[0].systemMessages?.[0].content).startsWith(`${prompt}\n`))
+        assert.equal(captures.list('web:task')[0].systemMessages?.[0].content, prompt)
         const retained = await app.request('/api/sessions/web%3Atask/context?view=captured')
         assert.equal(retained.status, 200)
         assert.equal((await retained.json()).captures.length, 1)

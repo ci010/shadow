@@ -10,20 +10,31 @@ export function parseTokenUsage(value: unknown): LLMResponseUsage | null {
   if (typeof promptTokens !== 'number' || typeof completionTokens !== 'number' || typeof totalTokens !== 'number'
     || ![promptTokens, completionTokens, totalTokens].every(token => Number.isSafeInteger(token) && token >= 0)) return null
   const cachedTokens = "cachedTokens" in value ? value.cachedTokens : undefined
+  const cacheReportedPromptTokens = "cacheReportedPromptTokens" in value ? value.cacheReportedPromptTokens : undefined
+  if (cacheReportedPromptTokens !== undefined && (cachedTokens === undefined
+    || typeof cacheReportedPromptTokens !== 'number' || !Number.isSafeInteger(cacheReportedPromptTokens)
+    || cacheReportedPromptTokens < 0 || cacheReportedPromptTokens > promptTokens)) return null
   if (cachedTokens !== undefined && (typeof cachedTokens !== "number" || !Number.isSafeInteger(cachedTokens)
-    || cachedTokens < 0 || cachedTokens > promptTokens)) return null
-  return { promptTokens, completionTokens, totalTokens, ...(cachedTokens !== undefined ? { cachedTokens } : {}) }
+    || cachedTokens < 0 || cachedTokens > (cacheReportedPromptTokens ?? promptTokens))) return null
+  return { promptTokens, completionTokens, totalTokens, ...(cachedTokens !== undefined ? { cachedTokens } : {}),
+    ...(cacheReportedPromptTokens !== undefined ? { cacheReportedPromptTokens } : {}) }
 }
 
 export function addTokenUsage(first: LLMResponseUsage | null, second: LLMResponseUsage | null): LLMResponseUsage | null {
   if (!second) return first
   if (!first) return { ...second }
+  const promptTokens = first.promptTokens + second.promptTokens
+  const hasCacheReport = first.cachedTokens !== undefined || second.cachedTokens !== undefined
+  const reportedPromptTokens = (first.cachedTokens === undefined ? 0 : first.cacheReportedPromptTokens ?? first.promptTokens)
+    + (second.cachedTokens === undefined ? 0 : second.cacheReportedPromptTokens ?? second.promptTokens)
   const result = {
-    promptTokens: first.promptTokens + second.promptTokens,
+    promptTokens,
     completionTokens: first.completionTokens + second.completionTokens,
     totalTokens: first.totalTokens + second.totalTokens,
-    ...(first.cachedTokens !== undefined && second.cachedTokens !== undefined
-      ? { cachedTokens: first.cachedTokens + second.cachedTokens } : {}),
+    ...(hasCacheReport ? {
+      cachedTokens: (first.cachedTokens ?? 0) + (second.cachedTokens ?? 0),
+      ...(reportedPromptTokens < promptTokens ? { cacheReportedPromptTokens: reportedPromptTokens } : {}),
+    } : {}),
   }
   if (!parseTokenUsage(result)) throw new Error('Session token totals exceed the supported range.')
   return result

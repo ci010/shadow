@@ -1,3 +1,5 @@
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process'
 import type { StartupDiagnosticEntry } from './startup-diagnostics.js'
 import { backendStartupError, BackendStartupDiagnostics, type BackendStartupTiming } from './backend-startup-diagnostics.js'
@@ -175,6 +177,8 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     }
 
     const args = [
+      ...(this.environment.SHADOW_DESKTOP_DEV_IPC === '1' && this.environment.SHADOW_STARTUP_PROFILE_DIR
+        ? ['--import', pathToFileURL(join(dirname(request.entryPath), 'runtime', 'startup-profile-preload.js')).href] : []),
       request.entryPath,
       request.role === 'main' ? 'server' : 'child',
       'start',

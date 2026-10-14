@@ -5,7 +5,8 @@ import { createTempWorkspace } from '../testing/workspace.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionStore } from './session-store.ts'
-import { withResponseAudience } from '../agent/context/response-audience.ts'
+import { SESSION_RESPONSE_GUIDANCE } from '../agent/context/response-audience.ts'
+import { runtimeContextEvent } from './runtime-context-event.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import type { InputSource } from './input.ts'
 import { continuedUserInvolvement, createResponseContext, hasNoAdmittedUserInput, parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
@@ -129,30 +130,29 @@ test('legacy and malformed response metadata remain visible with a diagnostic fo
 })
 
 test('task/call, legacy unknown modes and A2A retain their existing prompts and result contracts', () => {
-  const messages: ChatMessage[] = [{ role: 'system', content: 'Return the complete caller result' }]
   for (const mode of ['task', 'call', undefined] as const) {
     const context = createResponseContext('turn', event, mode, 'web')
     assert.equal(context, undefined)
-    assert.equal(withResponseAudience(messages, context), messages)
   }
   assert.equal(createResponseContext('turn', user, 'session', 'a2a'), undefined)
   assert.equal(createResponseContext('turn', { kind: 'user', sender: { ...user.sender, channel: 'a2a' } }, 'session', 'system'), undefined)
 })
 
-test('per-inference audience guidance neither mutates reusable prompts nor accumulates across turns', () => {
-  const messages: ChatMessage[] = [{ role: 'system', content: 'Reusable role and work constraints' }]
-  const background = createResponseContext('event-turn', event, 'session', 'web')!
-  const first = withResponseAudience(messages, background)
-  assert.match(String(first[0].content), /no user input admitted/)
-  assert.match(String(first[0].content), /not as a new user request/)
-  assert.match(String(first[0].content), /provenance, not the response audience/)
-  assert.match(String(first[0].content), /including asynchronous work/)
-  assert.match(String(first[0].content), /Do not force a short background summary/)
-  assert.match(String(first[0].content), /return no user-facing text instead of another acknowledgement/)
-  const mixed = withResponseAudience(messages, { ...background, userInvolved: true })
-  assert.match(String(mixed[0].content), /Answer the user's request normally/)
-  assert.doesNotMatch(String(mixed[0].content), /no user input admitted/)
-  assert.doesNotMatch(String(mixed[0].content), /return no user-facing text/)
-  assert.equal(messages[0].content, 'Reusable role and work constraints')
-  assert.equal(mixed.filter(message => message.role === 'system').length, 1)
+test('session delivery guidance is static and allows substantive asynchronous answers', () => {
+  assert.match(SESSION_RESPONSE_GUIDANCE, /not as a new user request/)
+  assert.match(SESSION_RESPONSE_GUIDANCE, /including\n?asynchronous work/)
+  assert.match(SESSION_RESPONSE_GUIDANCE, /return no user-facing text/)
+  assert.match(SESSION_RESPONSE_GUIDANCE, /pending request/)
+})
+
+test('persisted context events do not hide user continuity when interrupted before the first response', async () => {
+  const input: ChatMessage = { role: 'user', content: [{ type: 'text', text: '<sender id="owner" name="owner" chat="direct" />' }, { type: 'text', text: 'Task' }] }
+  const history = [input]
+  history.push((await runtimeContextEvent(history, 'work', 'Work A', '.'))!)
+  history.push({ role: 'user', name: 'runtime-context', content: [
+    { type: 'text', text: '<event type="runtime-context-audience" source="runtime-context" event-id="12345678-1234-4123-8123-123456789abc" />' },
+    { type: 'text', text: 'Legacy audience snapshot' },
+  ] })
+  assert(continuedUserInvolvement(history))
+  assert(continuedUserInvolvement(JSON.parse(JSON.stringify(history))))
 })

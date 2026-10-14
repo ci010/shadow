@@ -1,3 +1,4 @@
+import { delegationOwner } from '../sessions/execution-scope.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { TopicService } from '../sessions/topics.ts'
@@ -6,7 +7,7 @@ import {
   backgroundTaskId,
   type BackgroundTaskManager,
 } from '../agent/background-task.ts'
-import { assertExecutionActor, assertOwnedExecution } from '../sessions/execution-scope.ts'
+import { assertExecutionActor, assertOwnedExecution, assertOwnedHistoricalExecution } from '../sessions/execution-scope.ts'
 import type { Skill, SkillsManager } from '../skills/loader.ts'
 import { loadSingleSkill } from '../skills/parse.ts'
 import type { ExecutionContext } from '../tools/context.ts'
@@ -73,7 +74,7 @@ function formatSessionHistory(messages: ChatMessage[]): string {
 // ── Sessions ─────────────────────────────────────────────────────────────
 
 export function createSessionsHandler(
-  sessions: Pick<SessionManager, 'listSessions' | 'getSessionState' | 'getHistory'>,
+  sessions: Pick<SessionManager, 'listSessions' | 'getSessionState' | 'getHistory'> & Partial<Pick<SessionManager, 'listHistorySessions' | 'readSessionState'>>,
   topics?: () => TopicService,
   remote?: Pick<A2aSessions, 'read' | 'entries' | 'canDiscover'>,
 ): {
@@ -93,7 +94,7 @@ export function createSessionsHandler(
       return JSON.stringify(summary, null, 2)
     }
     if (!subpath) {
-      const allList = await sessions.listSessions()
+      const allList = await (sessions.listHistorySessions?.() ?? sessions.listSessions())
       // Hide internal pipeline sessions (heartbeat:*) from the default listing.
       // They can still be read directly by ID (e.g. v:sessions/heartbeat:reflector-...).
       const list = allList.filter((s) => !s.sessionId.startsWith('heartbeat:'))
@@ -102,7 +103,7 @@ export function createSessionsHandler(
       if (list.length === 0 && external.length === 0) return 'No sessions.'
       const lines: string[] = [`Sessions (${list.length + external.length}):`]
       for (const s of list) {
-        const state = await sessions.getSessionState(s.sessionId)
+        const state = await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(s.sessionId)
         const parts = [`- ${s.sessionId}`]
         if (state?.originUser) parts.push(`(by ${state.originUser})`)
         if (state?.parent?.id) parts.push(`←parent: ${state.parent.id}`)
@@ -136,7 +137,7 @@ export function createSessionsHandler(
 
     const state = isPhysicalId
       ? undefined
-      : (await sessions.getSessionState(sessionKey))
+      : (await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(sessionKey))
     const physicalId = isPhysicalId
       ? sessionKey
       : state
@@ -151,7 +152,7 @@ export function createSessionsHandler(
     }
 
     if (physicalId) {
-      const sessionState = await sessions.getSessionState(sessionKey)
+      const sessionState = await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(sessionKey)
       const originUser = sessionState?.originUser
       const parentId = sessionState?.parent?.id
       if (originUser || parentId) {
@@ -212,7 +213,7 @@ export function createSessionsHandler(
   const list: VirtualFsListHandler = async (context, options) => {
     topics?.().assertActor(context.projectId, context.sessionId)
     context.signal.throwIfAborted()
-    const all = await sessions.listSessions()
+    const all = await (sessions.listHistorySessions?.() ?? sessions.listSessions())
     const entries = []
     const subpath = options?.subpath
     const selected = (name: string) => !subpath || name === subpath || name.startsWith(`${subpath}/`)
@@ -247,7 +248,7 @@ export function createSessionsHandler(
         entries.push({ name: s.sessionId, content: '' })
         continue
       }
-      const state = await sessions.getSessionState(s.sessionId)
+      const state = await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(s.sessionId)
       const parts = [s.sessionId]
       if (state?.originUser) parts.push(`by=${state.originUser}`)
       if (state?.parent?.id) parts.push(`parent=${state.parent.id}`)
@@ -275,7 +276,7 @@ export function createSessionsHandler(
 
 export function createBgTasksHandler(
   backgroundTasks: BackgroundTaskManager,
-  sessions: Pick<SessionManager, 'listSessions' | 'getSessionState' | 'getDelegationOwner' | 'assertFolderAccess' | 'getHistory'>,
+  sessions: Pick<SessionManager, 'listSessions' | 'getSessionState' | 'getDelegationOwner' | 'assertFolderAccess' | 'getHistory'> & Partial<Pick<SessionManager, 'readSessionState' | 'assertHistoricalFolderAccess' | 'listHistoryStates' | 'listHistorySessions'>>,
   remote?: Pick<A2aSessions, 'read' | 'entries' | 'canDiscover'>,
 ): {
   read: VirtualFsHandler
@@ -283,8 +284,8 @@ export function createBgTasksHandler(
 } {
   const history = createSessionsHandler(sessions)
   const isRemoteExecution = (path: string) => /^remote:[^/]+\/executions\/[^/]+$/.test(path)
-  const localSummary = (executionId: string, ctx: ExecutionContext) => {
-    const state = assertOwnedExecution(sessions, executionId, ctx)
+  const localSummary = async (executionId: string, ctx: ExecutionContext) => {
+    const state = await assertOwnedHistoricalExecution(sessions, executionId, ctx)
     return {
       executionId, sessionId: state.sessionId, ownerSessionId: ctx.sessionId,
       kind: 'local', mode: state.mode, agentType: state.agentType,
@@ -292,7 +293,7 @@ export function createBgTasksHandler(
       history: `v:sessions/${state.sessionId}`,
     }
   }
-  const list: VirtualFsListHandler = (ctx, options) => {
+  const list: VirtualFsListHandler = async (ctx, options) => {
     assertExecutionActor(sessions, ctx)
     backgroundTasks.assertOwner(ctx)
     const selected = (name: string) => !options?.subpath || name === options.subpath || name.startsWith(`${options.subpath}/`)
@@ -301,11 +302,13 @@ export function createBgTasksHandler(
       name: backgroundExecutionId(task.id),
       content: content({ ...task, executionId: backgroundExecutionId(task.id), ownerSessionId: task.sessionId }),
     }))
-    for (const state of sessions.listSessions()) {
+    for (const state of await (sessions.listHistoryStates?.() ?? sessions.listSessions())) {
       if ((state.mode !== 'task' && state.mode !== 'call') || state.projectId !== ctx.projectId ||
-        sessions.getDelegationOwner(state.sessionId) !== ctx.sessionId || !selected(state.sessionId)) continue
+        !selected(state.sessionId)) continue
+      const full = await (sessions.readSessionState?.(state.sessionId) ?? sessions.getSessionState(state.sessionId))
+      if (delegationOwner(full) !== ctx.sessionId) continue
       ctx.signal.throwIfAborted()
-      entries.push({ name: state.sessionId, content: content(localSummary(state.sessionId, ctx)) })
+      entries.push({ name: state.sessionId, content: content(await localSummary(state.sessionId, ctx)) })
     }
     if (options?.subpath?.startsWith('remote:') || remote?.canDiscover(ctx)) {
       if (!remote) throw new Error('A2A is not configured in this Project.')
@@ -333,9 +336,9 @@ export function createBgTasksHandler(
       return output
     }
     const executionId = subpath.split('?')[0]
-    assertOwnedExecution(sessions, executionId, ctx)
+    await assertOwnedHistoricalExecution(sessions, executionId, ctx)
     const output = await history.read(subpath, ctx)
-    const summary = localSummary(executionId, ctx)
+    const summary = await localSummary(executionId, ctx)
     return `${JSON.stringify(summary, null, 2)}\n\n${output}`
   }
 

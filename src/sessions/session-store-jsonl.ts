@@ -1,4 +1,6 @@
+import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { join } from 'node:path'
+import { readStatePool } from './state-read-pool.ts'
 import { appendFile, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { parseSessionName, SessionNameError } from './session-name.ts'
 import type {
@@ -27,7 +29,15 @@ import { parseChannelBoundary, ChannelBoundaryMetadataError } from '../channels/
 export class JsonlSessionStore implements SessionStore {
   private readonly stateWrites = new Map<string, Promise<void>>()
 
-  constructor(private sessionsDir: string) {}
+  private readonly fresh: FreshAutomationStateStore
+  constructor(private sessionsDir: string) { this.fresh = new FreshAutomationStateStore(sessionsDir, 'jsonl') }
+  readArchivedState = (id: string) => this.fresh.archived(id)
+  queryArchivedStates = (query?: import('./session-store.ts').ArchivedStateQuery) => this.fresh.query(query)
+  countArchivedStates = (query?: import('./session-store.ts').ArchivedStateQuery) => this.fresh.count(query)
+  archiveFeatureStates = (projectId?: string) => this.fresh.features(projectId)
+  archiveState = (state: SessionState) => this.fresh.archive(state)
+  listArchiveReferences = () => this.fresh.references()
+  close(): void { this.fresh.close() }
 
   async init(): Promise<void> {
     await mkdir(this.sessionsDir, { recursive: true })
@@ -36,6 +46,8 @@ export class JsonlSessionStore implements SessionStore {
   // ── State management ────────────────────────────────────────────────────
 
   async getState(sessionKey: string): Promise<SessionState | null> {
+    const active = await this.fresh.getActive(sessionKey)
+    if (active) return active
     const raw = await readFileIfExists(this.statePath(sessionKey))
     if (!raw) return null
 
@@ -60,6 +72,12 @@ export class JsonlSessionStore implements SessionStore {
   }
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
+    if (state.statePersistence) {
+      if (sessionKey !== state.sessionId) throw new Error('Fresh automation key mismatch')
+      if (await readFileIfExists(this.statePath(sessionKey))) throw new Error('Existing legacy state cannot opt into fresh automation persistence')
+      return this.fresh.save(state)
+    }
+    if (await this.fresh.has(sessionKey)) throw new Error('Fresh automation policy cannot be removed')
     if (state.generatedTitle !== undefined) state = { ...state, generatedTitle: parseSessionName(state.generatedTitle) }
     if (state.name !== undefined) state = { ...state, name: parseSessionName(state.name) }
     if (state.chatName !== undefined) state = { ...state, chatName: parseSessionName(state.chatName) }
@@ -111,9 +129,16 @@ export class JsonlSessionStore implements SessionStore {
       }
     > = []
     try {
-      for (const entry of await readdir(this.sessionsDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith('.json')) continue
-        const raw = await readFileIfExists(join(this.sessionsDir, entry.name))
+      const entries = (await readdir(this.sessionsDir, { withFileTypes: true }))
+        .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+      const reads = await readStatePool(entries, async entry => {
+        try { return { raw: await readFileIfExists(join(this.sessionsDir, entry.name)) } }
+        catch (error) { return { error } }
+      })
+      for (const read of reads) {
+        // Apply I/O and validation errors in directory order, as in the serial reader.
+        if ('error' in read) throw read.error
+        const raw = read.raw
         if (!raw) continue
         try {
           const parsed = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
@@ -136,15 +161,23 @@ export class JsonlSessionStore implements SessionStore {
         } catch (error) { if (error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    results.push(...await this.fresh.summaries())
     return results
   }
 
   async listAllStates(): Promise<Record<string, SessionState>> {
     const result: Record<string, SessionState> = {}
     try {
-      for (const entry of await readdir(this.sessionsDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith('.json')) continue
-        const raw = await readFileIfExists(join(this.sessionsDir, entry.name))
+      const entries = (await readdir(this.sessionsDir, { withFileTypes: true }))
+        .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+      const reads = await readStatePool(entries, async entry => {
+        try { return { raw: await readFileIfExists(join(this.sessionsDir, entry.name)) } }
+        catch (error) { return { error } }
+      })
+      for (const read of reads) {
+        // Apply I/O and validation errors in directory order, as in the serial reader.
+        if ('error' in read) throw read.error
+        const raw = read.raw
         if (!raw) continue
         try {
           const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
@@ -162,10 +195,12 @@ export class JsonlSessionStore implements SessionStore {
         } catch (error) { if (error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    Object.assign(result, await this.fresh.listActive())
     return result
   }
 
   async deleteState(sessionKey: string): Promise<void> {
+    if (await this.fresh.has(sessionKey)) throw new Error('Fresh automation history deletion is not supported')
     await this.queueStateWrite(sessionKey, async () => {
       await rm(this.statePath(sessionKey), { force: true })
     })

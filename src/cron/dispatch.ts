@@ -38,6 +38,7 @@ export class CronDispatcher {
       const started = await this.sessions.startSession({
         channel: 'cron', chatId: runId, agentType: job.agentType ?? 'general',
         task, signal, mode: 'task', automation, waitForCompletion: true,
+        ...(job.source !== 'learning' ? { statePersistence: { version: 1 as const, kind: 'fresh-automation' as const, jobId: job.id } } : {}),
         onAccepted, executionLimits,
         locality: {
           folderId: job.folderId, initiativeId: job.initiativeId,
@@ -48,6 +49,9 @@ export class CronDispatcher {
       const status = this.sessions.getSessionState(started)?.executionStatus
       if (status === 'failed' || status === 'cancelled') throw new Error(`Automation execution ${status}: ${started}`)
       return started
-    } finally { this.changed(sessionId) }
+    } finally {
+      try { if (job.source !== 'learning') await this.sessions.finalizeAutomation(sessionId) }
+      finally { this.changed(sessionId) }
+    }
   }
 }

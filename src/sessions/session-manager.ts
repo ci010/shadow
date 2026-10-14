@@ -1,8 +1,10 @@
+import { validateFreshAutomationState } from './fresh-automation-state.ts'
 import { trace } from '@opentelemetry/api'
 import { StartupTimings } from '../runtime/startup-timings.ts'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from './session-name.ts'
 import { parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
 import { readSessionFileChanges } from './file-changes.ts'
+import { readAutomationUsage } from './automation-usage.ts'
 import { readPresentationEvidence } from './presentation-evidence.ts'
 import { mkdir } from 'node:fs/promises'
 import { isCommandReceipt, type CommandReceipt } from '../slash-commands/receipt.ts'
@@ -161,10 +163,12 @@ export interface SessionManagerDeps {
   getKnownContextWindow?: (model: string) => number | null
   /** Called when a session stops (idle timeout, crash, or explicit stop). */
   onSessionStopped?: (sessionId: string) => void
+  hasPendingExternalExecution?: (sessionId: string) => boolean
   sleep?: SleepConfig
 }
 
 export interface StartSessionOptions {
+  statePersistence?: SessionState['statePersistence']
   automation?: AutomationSessionRef
   locality?: Pick<SessionState, 'workspaceRoot' | 'workdir' | 'folderId' | 'initiativeId'>
   mode?: ExecutionMode
@@ -245,6 +249,10 @@ export class SessionManager {
   private readonly deleting = new Set<string>()
   private readonly calls = new Map<string, BlockingCallFrame>()
   private readonly stateCreations = new Map<string, Promise<unknown>>()
+  private readonly automationFinalizers = new Set<Promise<void>>()
+  private archivedWorkdirs = new Set<string>()
+  hasHistoricalWorkdir(ref: WorkdirRefV1): boolean { return this.archivedWorkdirs.has(JSON.stringify([ref.nodeId, ref.capabilityId])) }
+
   private readonly ownedCreations = new Map<string, Set<Promise<void>>>()
 
   acquireFolderAccess(): () => void {
@@ -536,6 +544,7 @@ export class SessionManager {
     if (existing) return existing
     const work = Promise.resolve().then(async () => {
       const state = Object.values(this.sessionStates).find(state => state.executionKey === key)
+        ?? (await this.store.queryArchivedStates?.({ projectId: this.deps.projectId, executionKey: key, limit: 1 }))?.[0]
       if (state) return this.executionReceipt(state.sessionId)
       return operation()
     })
@@ -548,7 +557,8 @@ export class SessionManager {
   }
 
   private async executionReceipt(sessionId: string): Promise<string> {
-    const state = this.sessionStates[sessionId]
+    const state = await this.readSessionState(sessionId)
+    if (!state) throw new Error('Execution receipt state missing')
     if (state.mode === 'call') {
       let result: unknown
       for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
@@ -654,7 +664,7 @@ export class SessionManager {
       }
     }, record => {
       if (record.answer) this.alignment?.reviewAnswer(record.request.sessionId, record.answer.option, record.request.id, record.request.workStamps ?? [])
-    })
+    }, id => this.readSessionState(id))
     this.decisionRecords = decisionRecords
     this.yields = new YieldManager({
       current: request => !request.workContext || this.alignment?.currentDecision(request) === true,
@@ -1011,8 +1021,15 @@ ${JSON.stringify(request)}`,
     this.yields.start()
     this.inputs.start()
     this.yieldDiscussions.startRuntime()
+    this.archivedWorkdirs = new Set((await this.store.listArchiveReferences?.() ?? []).flatMap(ref => {
+      if (ref.projectId !== this.deps.projectId) throw new Error('Archived ownership project mismatch')
+      return ref.workdir ? [JSON.stringify([ref.workdir.nodeId, ref.workdir.capabilityId])] : []
+    }))
     // Load all session states into memory cache
     this.sessionStates = await startup.measure('session-load', () => this.store.listAllStates())
+    for (const state of Object.values(this.sessionStates)) {
+      if (state.statePersistence && state.automationCallerSettled) await this.finalizeAutomation(state.sessionId)
+    }
     for (const state of Object.values(this.sessionStates)) {
       if (this.historyConflict(state.sessionId)) {
         console.error(`[session-manager] Session ${state.sessionId} has potentially shared legacy history; automatic continuation is blocked pending explicit repair.`)
@@ -1061,7 +1078,8 @@ ${JSON.stringify(request)}`,
     await startup.measure('session-lineage', async () => {
       for (const state of Object.values(this.sessionStates)) {
         if (!state.children) continue
-        const children = state.children.filter(id => delegationOwner(this.sessionStates[id]) === state.sessionId)
+        const children: string[] = []
+        for (const id of state.children) if (delegationOwner(await this.readSessionState(id)) === state.sessionId) children.push(id)
         if (children.length !== state.children.length) {
           state.children = children
           await this.store.saveState(state.sessionId, state)
@@ -1113,6 +1131,7 @@ ${JSON.stringify(request)}`,
       }
     })
     await startup.measure('session-recovery', () => this.recoverIncompleteSessions())
+    for (const state of Object.values(this.sessionStates)) if (state.statePersistence && state.automationCallerSettled) await this.finalizeAutomation(state.sessionId)
   }
 
   private reportCompletion(fact: SessionTurnFact): Promise<void> {
@@ -1149,15 +1168,13 @@ ${JSON.stringify(request)}`,
     })
     this.reporting.set(key, report)
     const cleanup = () => { if (this.reporting.get(key) === report) this.reporting.delete(key) }
+    void report.then(() => { cleanup(); this.retrySettledAutomations() }, () => {})
     void report.then(cleanup, cleanup)
     return report
   }
 
   invalidateSystemPrompts(): void {
     this.promptRevision++
-    for (const session of Object.values(this.sessions)) {
-      if (session instanceof Session) session.invalidateSystemPrompt()
-    }
   }
 
   /** Stops admissions immediately; resolves after active work and preparation quiesce. */
@@ -1190,6 +1207,7 @@ ${JSON.stringify(request)}`,
         if (result.status === 'rejected') errors.push(result.reason)
       }
       await Promise.allSettled(this.reporting.values())
+      await Promise.allSettled(this.automationFinalizers)
       this.deps.promptCaptures?.clear()
       if (errors.length) throw new AggregateError(errors, 'Session shutdown failed')
     })
@@ -1432,10 +1450,23 @@ ${JSON.stringify(request)}`,
   }
 
   private async createActiveSession(sessionId: string, input: SessionInput): Promise<Session | EphemeralSession> {
-    const promptRevision = this.promptRevision
+    let promptRevision = this.promptRevision
     const ctx = await this.prepareSessionContext(input, sessionId)
+    // Finish invalidated preparation before activation; active snapshots never rebuild.
+    while (promptRevision !== this.promptRevision) {
+      promptRevision = this.promptRevision
+      const content = ctx.state.channelBoundary && ctx.conversationPolicy
+        ? this.deps.conversationPolicies!.prompt(ctx.conversationPolicy, sessionId, ctx.state).systemPrompt
+        : await this.decisionSystemPrompt(sessionId, ctx.conversationPolicy
+          ? this.deps.conversationPolicies!.prompt(ctx.conversationPolicy, sessionId, ctx.state).systemPrompt
+          : this.deps.context.buildSystemPrompt(ctx.promptCtx))
+      const message: ChatMessage = { role: 'system', content }
+      if (ctx.messages[0]?.role === 'system') ctx.messages[0] = message
+      else ctx.messages.unshift(message)
+    }
     if (this.stopped) throw new Error('Session manager stopped')
     const onStopped = (id: string) => {
+      const completion = this.sessions[id]?.completion
       delete this.sessions[id]
       this.executionLimits.delete(id)
       if (ctx.state.mode !== 'session') {
@@ -1444,6 +1475,7 @@ ${JSON.stringify(request)}`,
       }
       this.deps.bus.emit('session.ended', { sessionId: id, agentType: ctx.state.agentType })
       this.deps.onSessionStopped?.(id)
+      this.retrySettledAutomations(completion)
     }
 
     if (ctx.state.mode !== 'session') {
@@ -1478,11 +1510,6 @@ ${JSON.stringify(request)}`,
         this.deps.store,
         this.deps.handoffManager,
         onStopped,
-        () => ctx.state.channelBoundary && ctx.conversationPolicy
-          ? Promise.resolve(this.deps.conversationPolicies!.prompt(ctx.conversationPolicy, sessionId, ctx.state).systemPrompt)
-          : this.decisionSystemPrompt(sessionId, ctx.conversationPolicy
-          ? Promise.resolve(this.deps.conversationPolicies!.prompt(ctx.conversationPolicy, sessionId, ctx.state).systemPrompt)
-          : this.deps.context.buildSystemPrompt(ctx.promptCtx)),
         this.deps.quickModel,
         this.sleepInactivityMs,
         this.deps.workdirCapabilityLookup,
@@ -1490,7 +1517,6 @@ ${JSON.stringify(request)}`,
         this.deps.evalBridge,
         this.deps.promptCaptures,
       )
-      if (promptRevision !== this.promptRevision) sess.invalidateSystemPrompt()
       this.sessions[sessionId] = sess
       for (const record of this.alignment?.records(sessionId, true) ?? []) {
         if (record.transition?.status === 'pending' && record.transition.sessionId === sessionId) {
@@ -1551,6 +1577,7 @@ ${JSON.stringify(request)}`,
       executionKey?: string
       parentToolCallId?: string
       config?: SessionConfig
+      statePersistence?: SessionState['statePersistence']
       automation?: AutomationSessionRef
       sessionKind?: 'topic' | 'orchestrator'
       topic?: TopicMetadata
@@ -1589,7 +1616,7 @@ ${JSON.stringify(request)}`,
     })
     if (initiativeId) this.assertInitiativeAccess(initiativeId)
     this.deps.assertSessionFolder?.({ sessionId, segmentIndex: 0, folderId: stateFields?.folderId, workdir: stateFields?.workdir })
-    const existing = this.sessionStates[sessionId]
+    const existing = this.sessionStates[sessionId] ?? await this.store.readArchivedState?.(sessionId)
     if (existing) {
       throw new TypeError(
         `[session-manager] buildSession called for existing session "${sessionId}"`,
@@ -1690,6 +1717,7 @@ ${JSON.stringify(request)}`,
       mode: stateFields?.mode ?? agent.defaultMode ?? 'session',
       workPolicy,
       automation,
+      statePersistence: stateFields?.statePersistence,
       automationVersion: 1,
       executionStatus: 'pending',
       parentSessionId: ownerId ?? null,
@@ -1711,6 +1739,10 @@ ${JSON.stringify(request)}`,
       preloadTools: stateFields?.preloadTools,
     }
     if (state.mode !== 'session') state.executionId = sessionId
+    if (state.statePersistence) {
+      if (!this.store.archiveState) throw new Error('Store does not support fresh automation persistence')
+      validateFreshAutomationState(state)
+    }
 
     const settled = Promise.withResolvers<void>()
     const pending = ownerId ? this.ownedCreations.get(ownerId) ?? new Set<Promise<void>>() : undefined
@@ -1771,7 +1803,7 @@ ${JSON.stringify(request)}`,
     await this.buildSession(
       sessionId,
       undefined,
-      { ...opts.locality, agentType: opts.agentType, model: opts.model, automation: opts.automation, mode: opts.mode,
+      { ...opts.locality, agentType: opts.agentType, model: opts.model, automation: opts.automation, statePersistence: opts.statePersistence, mode: opts.mode,
         ...(opts.maxTokens !== undefined ? { config: { maxTokens: opts.maxTokens } } : {}) },
     )
     if (opts.signal?.aborted) {
@@ -1870,14 +1902,14 @@ ${JSON.stringify(request)}`,
       description: string
     }>
   > {
-    const state = this.sessionStates[parentSessionId]
+    const state = await this.readSessionState(parentSessionId)
     if (!state?.children?.length) return []
 
     const results: Array<
       { sessionId: string; agentType: string; description: string }
     > = []
     for (const childId of state.children) {
-      const childState = this.sessionStates[childId]
+      const childState = await this.readSessionState(childId)
       if (!childState || delegationOwner(childState) !== parentSessionId) continue
       results.push({
         sessionId: childId,
@@ -2044,27 +2076,44 @@ ${JSON.stringify(request)}`,
    * @returns The list of session IDs that were deleted.
    */
   async deleteSession(sessionId: string): Promise<string[]> {
-    await this.stateCreations.get(sessionId)?.catch(() => {})
+    if (this.deleting.has(sessionId)) return []
+    const reserved = new Set<string>()
     const deleted: string[] = []
-    await this._deleteSessionRecursive(sessionId, deleted)
-    return deleted
+    try {
+      // Reserve the whole ownership tree before cancellation or deletion.
+      // Archive-only descendants are still owned history, even without children indexes.
+      const preflight = async (id: string): Promise<void> => {
+        if (reserved.has(id)) return
+        if (this.deleting.has(id)) throw new Error('Session is being deleted')
+        await this.stateCreations.get(id)?.catch(() => {})
+        if (this.deleting.has(id)) throw new Error('Session is being deleted')
+        this.deleting.add(id)
+        reserved.add(id)
+        await Promise.all(this.ownedCreations.get(id) ?? [])
+        const state = await this.readSessionState(id)
+        if (state?.statePersistence) throw new Error('Fresh automation history deletion is not supported')
+        for (const child of await this.historyChildren(id)) await preflight(child.sessionId)
+      }
+      await preflight(sessionId)
+      await this._deleteSessionRecursive(sessionId, deleted)
+      return deleted
+    } finally {
+      for (const id of reserved) this.deleting.delete(id)
+    }
   }
 
   private async _deleteSessionRecursive(
     sessionId: string,
     deleted: string[],
+    visited = new Set<string>(),
   ): Promise<void> {
     const state = this.sessionStates[sessionId]
-    if (!state || this.deleting.has(sessionId)) return
-    this.deleting.add(sessionId)
-    try {
-      await this.deleteSessionState(sessionId, state, deleted)
-    } finally {
-      this.deleting.delete(sessionId)
-    }
+    if (!state || visited.has(sessionId)) return
+    visited.add(sessionId)
+    await this.deleteSessionState(sessionId, state, deleted, visited)
   }
 
-  private async deleteSessionState(sessionId: string, state: SessionState, deleted: string[]): Promise<void> {
+  private async deleteSessionState(sessionId: string, state: SessionState, deleted: string[], visited: Set<string>): Promise<void> {
     await this.yieldDiscussions.cancelSession(sessionId)
     this.yields.cancelSession(sessionId, 'Session deleted.')
     this.inputs.cancelSession(sessionId)
@@ -2087,7 +2136,7 @@ ${JSON.stringify(request)}`,
     // The optional children index omits one-shot tasks/calls. Persisted ownership
     // is authoritative; drain creators and final receipts before removing traces.
     for (const child of Object.values(this.sessionStates)) {
-      if (delegationOwner(child) === sessionId) await this._deleteSessionRecursive(child.sessionId, deleted)
+      if (delegationOwner(child) === sessionId) await this._deleteSessionRecursive(child.sessionId, deleted, visited)
     }
 
     // Ephemeral children may not be in state.children, but cannot keep waiting
@@ -2125,12 +2174,147 @@ ${JSON.stringify(request)}`,
     return this.sessionStates[sessionId] ?? null
   }
 
+  /** History only: never inserts into live maps or grants execution admission. */
+  async readSessionState(sessionId: string): Promise<SessionState | null> {
+    const state = this.getSessionState(sessionId) ?? await this.store.readArchivedState?.(sessionId) ?? null
+    if (state && this.deps.projectId && state.projectId !== this.deps.projectId) return null
+    return state
+  }
+
+  /** Explicit history enumeration. Startup and live controllers must use listSessions. */
+  async listHistoryStates(query: { jobId?: string } = {}): Promise<SessionState[]> {
+    const states = new Map(Object.values(this.sessionStates).filter(state => !query.jobId || resolveAutomationSession(state)?.jobId === query.jobId).map(state => [state.sessionId, state]))
+    if (this.store.queryArchivedStates) for (let offset = 0; ; offset += 1000) {
+      const page = await this.store.queryArchivedStates({ ...query, projectId: this.deps.projectId, offset, limit: 1000 })
+      for (const state of page) if (!states.has(state.sessionId)) states.set(state.sessionId, state)
+      if (page.length < 1000) break
+    }
+    return [...states.values()]
+  }
+
+  async assertHistoricalFolderAccess(sessionId: string): Promise<void> {
+    const state = await this.readSessionState(sessionId)
+    if (!state) throw new Error('Historical session not found')
+    const visited = new Set<string>()
+    let current: SessionState | null = state
+    while (current && !visited.has(current.sessionId)) {
+      visited.add(current.sessionId)
+      this.deps.assertSessionFolder?.(current)
+      const owner = delegationOwner(current)
+      current = owner ? await this.readSessionState(owner) : null
+    }
+  }
+
+  private async historyChildren(parentId: string): Promise<SessionState[]> {
+    const states = new Map(Object.values(this.sessionStates).filter(state => delegationOwner(state) === parentId).map(state => [state.sessionId, state]))
+    if (this.store.queryArchivedStates) for (let offset = 0; ; offset += 1000) {
+      const page = await this.store.queryArchivedStates({ projectId: this.deps.projectId, parentId, offset, limit: 1000 })
+      for (const state of page) if (!states.has(state.sessionId)) states.set(state.sessionId, state)
+      if (page.length < 1000) break
+    }
+    return [...states.values()]
+  }
+
+  /** One archived representative per feature; deleted jobs remain discoverable. */
+  async automationFeatureStates(): Promise<SessionState[]> {
+    return [...Object.values(this.sessionStates), ...await this.store.archiveFeatureStates?.(this.deps.projectId) ?? []]
+  }
+
+  /** Indexed archive page merged with already-live legacy/unsettled metadata. */
+  async querySessionHistoryStates(query: import('./session-store.ts').ArchivedStateQuery = {}) {
+    if (query.projectId && this.deps.projectId && query.projectId !== this.deps.projectId) throw new Error('History project mismatch')
+    const projectId = this.deps.projectId ?? query.projectId
+    const limit = query.limit ?? 100, offset = query.offset ?? 0
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000 || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid history page')
+    const live = Object.values(this.sessionStates).filter(state => (!projectId || state.projectId === projectId)
+      && (!query.jobId || resolveAutomationSession(state)?.jobId === query.jobId)
+      && (!query.parentId || delegationOwner(state) === query.parentId)
+      && (!query.executionKey || state.executionKey === query.executionKey)
+      && (!query.from || (resolveAutomationSession(state)?.startedAt ?? '') >= query.from)
+      && (!query.before || (resolveAutomationSession(state)?.startedAt ?? '') < query.before))
+    const known = new Set(live.map(state => state.sessionId))
+    const archived: SessionState[] = []
+    const selection = { ...query, projectId }
+    let duplicates = 0
+    for (const state of live) if (state.statePersistence && await this.store.readArchivedState?.(state.sessionId)) duplicates++
+    const total = live.length + (await this.store.countArchivedStates?.(selection) ?? 0) - duplicates
+    if (this.store.queryArchivedStates) for (let cursor = 0; archived.length < offset + limit;) {
+      const count = Math.min(1000, offset + limit - archived.length)
+      const page = await this.store.queryArchivedStates({ ...selection, offset: cursor, limit: count })
+      for (const state of page) if (!known.has(state.sessionId)) archived.push(state)
+      cursor += page.length
+      if (page.length < count) break
+    }
+    // SQLite uses BINARY (UTF-8 byte) ordering, not locale-dependent collation.
+    const descending = (a: string, b: string) => Buffer.compare(Buffer.from(b), Buffer.from(a))
+    const states = [...live, ...archived].sort((a, b) => descending(
+      resolveAutomationSession(a)?.startedAt ?? a.lastActivityAt ?? '',
+      resolveAutomationSession(b)?.startedAt ?? b.lastActivityAt ?? '') || descending(a.sessionId, b.sessionId))
+    return { states: states.slice(offset, offset + limit), total }
+  }
+
+  async listHistorySessions(): Promise<ReturnType<SessionManager['listSessions']>> {
+    return (await this.listHistoryStates()).map(state => ({
+      ...(state.projectId ? { projectId: state.projectId } : {}),
+      sessionId: state.sessionId,
+      name: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName,
+      description: state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
+      segmentIndex: state.segmentIndex, lastActivityAt: state.lastActivityAt,
+      folderId: state.folderId, initiativeId: state.initiativeId, automation: state.automation,
+      agentType: state.agentType, mode: state.mode, executionStatus: state.executionStatus,
+      sessionKind: state.sessionKind === 'orchestrator' ? 'orchestrator' : undefined,
+      createdBySessionId: state.createdBySessionId,
+    }))
+  }
+
+  private retrySettledAutomations(after?: Promise<unknown>): void {
+    if (this.stopped) return
+    const work = Promise.resolve(after).then(async () => {
+      if (this.stopped) return
+      for (const state of Object.values(this.sessionStates)) {
+        if (state.statePersistence && state.automationCallerSettled) await this.finalizeAutomation(state.sessionId)
+      }
+    })
+    this.automationFinalizers.add(work)
+    void work.then(() => this.automationFinalizers.delete(work), error => {
+      this.automationFinalizers.delete(work)
+      console.error('[session-manager] Automation finalization retained for recovery', error)
+    })
+  }
+
+  /** Caller has durably consumed status/outcome. Pending callbacks keep the pointer live. */
+  async finalizeAutomation(sessionId: string): Promise<boolean> {
+    await this.sessions[sessionId]?.completion
+    await this.reporting.get(sessionId)
+    return this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state?.statePersistence) return false
+      if (!state.automationCallerSettled) {
+        state.automationCallerSettled = true
+        await this.store.saveState(sessionId, state)
+      }
+      if (this.sessions[sessionId] || this.deps.hasPendingExternalExecution?.(sessionId) || this.ownedCreations.get(sessionId)?.size || state.recovery
+        || !['completed', 'failed', 'cancelled'].includes(state.executionStatus ?? '')
+        || state.reportTo && !state.completionReported || this.reporting.has(sessionId)
+        || this.yields.get(sessionId) || this.inputs.get(sessionId) || Object.values(this.sessionStates).some(child =>
+          delegationOwner(child) === sessionId && (!['completed', 'failed', 'cancelled'].includes(child.executionStatus ?? '')
+            || child.reportTo && !child.completionReported || child.recovery))) return false
+      if (this.deps.backgroundTasks.listTasks(sessionId).some(task => task.status === 'running' || task.status === 'cancelling')) return false
+      await this.store.archiveState!(state)
+      if (state.workdir) this.archivedWorkdirs.add(JSON.stringify([state.workdir.nodeId, state.workdir.capabilityId]))
+      delete this.sessionStates[sessionId]
+      this.acceptedInputs.delete(sessionId)
+      this.deps.bus.emit('session.changed', { sessionId })
+      return true
+    })
+  }
+
   async getYieldRecords(sessionId: string, physicalId?: string) {
     return this.decisionRecords.read(sessionId, physicalId)
   }
 
   async getFileChanges(sessionId: string, offset: number, limit: number, signal: AbortSignal, toolCallId?: string) {
-    const state = this.getSessionState(sessionId)
+    const state = await this.readSessionState(sessionId)
     if (!state) return null
     return readSessionFileChanges(this.store, state, offset, limit, signal, toolCallId)
   }
@@ -2143,7 +2327,7 @@ ${JSON.stringify(request)}`,
   }
 
   async getSessionDetails(sessionId: string, physicalId?: string) {
-    const state = this.getSessionState(sessionId)
+    const state = await this.readSessionState(sessionId)
     if (!state) return null
     const segments = Array.from({ length: state.segmentIndex + 1 }, (_, index) =>
       physicalSessionId(state, index))
@@ -2157,19 +2341,10 @@ ${JSON.stringify(request)}`,
       if (value) usedTokens = value.promptTokens
     }
     const included = new Set([sessionId])
-    const children = new Map<string, SessionState[]>()
-    for (const candidate of Object.values(this.sessionStates)) {
-      const owner = delegationOwner(candidate)
-      if (owner && candidate.projectId === state.projectId) {
-        const siblings = children.get(owner) ?? []
-        siblings.push(candidate)
-        children.set(owner, siblings)
-      }
-    }
     const queue = [state]
     for (let index = 0; index < queue.length; index++) {
-      for (const child of children.get(queue[index]!.sessionId) ?? []) {
-        if (!included.has(child.sessionId)) { included.add(child.sessionId); queue.push(child) }
+      for (const child of await this.historyChildren(queue[index]!.sessionId)) {
+        if (child.projectId === state.projectId && !included.has(child.sessionId)) { included.add(child.sessionId); queue.push(child) }
       }
     }
     const own = await readTokenUsage(this.store, state)
@@ -2184,7 +2359,7 @@ ${JSON.stringify(request)}`,
     let workdir = resolveSessionLocations(
       this.workspace, state, undefined, this.workdirCapabilityLookup,
     ).workdir
-    try { this.assertFolderAccess(sessionId) }
+    try { await this.assertHistoricalFolderAccess(sessionId) }
     catch { workdir = { available: false, workdir: workdir.workdir, reason: 'capability-revoked' } }
     const remote = workdir.workdir.nodeId !== LOCAL_NODE_ID
     const node = this.getNodeInventory()?.nodes.find(node =>
@@ -2215,9 +2390,7 @@ ${JSON.stringify(request)}`,
         available: workdir.available,
         availability: workdir.available ? 'available' as const : workdir.reason,
       },
-      // A session without delegates has no subagent total to fold in. Adding the
-      // empty placeholder would erase cache-read tokens the model did report,
-      // because a missing count is "not reported" rather than zero.
+      // Do not fold a display-only empty delegate placeholder into session usage.
       usage: hasDelegates ? addTokenUsage(own.usage, subagentUsage) : own.usage,
       subagentUsage,
       usageIncomplete,
@@ -2234,8 +2407,8 @@ ${JSON.stringify(request)}`,
     return this.sessions[sessionId]
   }
 
-  validateWorkEvidence(source: import('./decision-brief.ts').DecisionEvidence): Promise<void> {
-    this.assertFolderAccess(source.sessionId)
+  async validateWorkEvidence(source: import('./decision-brief.ts').DecisionEvidence): Promise<void> {
+    await this.assertHistoricalFolderAccess(source.sessionId)
     return this.decisionRecords.evidence(source)
   }
 
@@ -2448,23 +2621,23 @@ ${JSON.stringify(request)}`,
   }
 
   async getProfileUsage(sessionIds: string[], from: number, asOf: number, signal?: AbortSignal, includeDescendants = true) {
-    const { readAutomationUsage } = await import('./automation-usage.ts')
-    const selected = new Set(sessionIds)
-    const states = this.listSessions().map(row => this.getSessionState(row.sessionId))
-      .filter((state): state is SessionState => !!state && state.projectId === this.deps.projectId)
-    let changed = true
-    while (changed && includeDescendants) {
-      changed = false
-      for (const state of states) if (state.parentSessionId && selected.has(state.parentSessionId) && !selected.has(state.sessionId)) {
-        selected.add(state.sessionId); changed = true
+    const selected = new Set<string>()
+    const states: SessionState[] = []
+    for (const id of sessionIds) {
+      const state = await this.readSessionState(id)
+      if (state && state.projectId === this.deps.projectId && !selected.has(id)) { states.push(state); selected.add(id) }
+    }
+    if (includeDescendants) for (let index = 0; index < states.length; index++) {
+      for (const child of await this.historyChildren(states[index]!.sessionId)) {
+        if (child.projectId === this.deps.projectId && !selected.has(child.sessionId)) { states.push(child); selected.add(child.sessionId) }
       }
     }
-    return readAutomationUsage(this.store, states.filter(state => selected.has(state.sessionId)), from, asOf, signal)
+    return readAutomationUsage(this.store, states, from, asOf, signal)
   }
 
   /** Get the first user message content for a session (used as title). */
   async getFirstUserMessage(sessionId: string): Promise<string | null> {
-    const state = this.sessionStates[sessionId]
+    const state = await this.readSessionState(sessionId)
     if (!state) return null
     const physicalId = physicalSessionId(state, 0)
     for await (const parsed of this.store.readSessionLog(physicalId)) {
@@ -2497,7 +2670,7 @@ ${JSON.stringify(request)}`,
   /** Last persisted execution receipt, shared by the JSONL and SQLite stores. */
   @Span('session.getExecutionResult')
   async getExecutionResult(sessionId: string): Promise<SessionTurnFact | undefined> {
-    const state = this.getSessionState(sessionId)
+    const state = await this.readSessionState(sessionId)
     if (!state) return undefined
     let result: SessionTurnFact | undefined
     for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
@@ -2523,13 +2696,23 @@ ${JSON.stringify(request)}`,
       query ?? {}
     let messages: ChatMessage[]
 
+    if (physicalId && this.deps.projectId) {
+      const supplied = await this.readSessionState(sessionId)
+      const first = supplied ? undefined : await this.store.readFirstRecord(physicalId)
+      let owner = supplied ?? (typeof first?.sessionId === 'string' ? await this.readSessionState(first.sessionId) : null)
+      if (!owner) owner = (await this.listHistoryStates()).find(state =>
+        Array.from({ length: state.segmentIndex + 1 }, (_, index) => physicalSessionId(state, index)).includes(physicalId)) ?? null
+      if (!owner || !Array.from({ length: owner.segmentIndex + 1 }, (_, index) => physicalSessionId(owner, index)).includes(physicalId)) {
+        throw new Error('Physical history does not belong to this Project session')
+      }
+    }
     if (physicalId) {
       // Physical segment — parse that single segment, no chain traversal
       const raw = await this.parseSessionLog(physicalId)
       messages = sanitizeToolPairs(raw)
     } else if (shallow) {
       // Shallow — current physical segment only (no parent/fork chain)
-      const state = this.sessionStates[sessionId]
+      const state = await this.readSessionState(sessionId)
       if (!state) return { messages: [], total: 0 }
       const raw = await this.parseSessionLog(
         SessionManager.currentPhysicalId(state),
@@ -2541,7 +2724,7 @@ ${JSON.stringify(request)}`,
       if (sess) {
         messages = sess.history
       } else {
-        const state = this.sessionStates[sessionId]
+        const state = await this.readSessionState(sessionId)
         if (!state) return { messages: [], total: 0 }
         const forkInfo = state.segmentIndex === 0 && state.parent?.physicalId && state.parent.index
           ? {
@@ -2749,8 +2932,9 @@ ${JSON.stringify(request)}`,
       if (state.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
       state.projectId = this.deps.projectId
     }
-    this.sessionStates[sessionId] = state
     await this.store.saveState(sessionId, state)
+    // A finalizer may have removed this live entry while a queued write settled.
+    if (!state.statePersistence || this.sessionStates[sessionId]) this.sessionStates[sessionId] = state
     this.deps.bus.emit('session.changed', { sessionId })
   }
 
@@ -2801,7 +2985,7 @@ ${JSON.stringify(request)}`,
 
   /** Receipts belong to this segment, not inherited/forked model history. */
   async getCommandResults(sessionId: string, physicalId?: string): Promise<CommandReceipt[]> {
-    const state = this.sessionStates[sessionId]
+    const state = await this.readSessionState(sessionId)
     const id = physicalId ?? (state ? SessionManager.currentPhysicalId(state) : undefined)
     if (!id) return []
     const receipts = new Map<string, CommandReceipt>()
@@ -2838,6 +3022,7 @@ ${JSON.stringify(request)}`,
     if (this.deps.projectId && address && address.projectId !== this.deps.projectId) throw new Error('Bot session project mismatch')
     const existing = this.sessionStates[sessionId]
     if (existing) return existing
+    if (await this.store.readArchivedState?.(sessionId)) throw new Error('Archived execution cannot be resumed')
     if (sessionId === 'web:orchestrator') throw new Error('The Project orchestrator must be created through its canonical configuration')
 
     const ts = new Date().toISOString()

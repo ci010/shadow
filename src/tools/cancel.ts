@@ -1,6 +1,6 @@
 import type { A2aSessions } from '../a2a/sessions.ts'
 import { backgroundTaskId, type BackgroundTaskManager } from '../agent/background-task.ts'
-import { assertExecutionActor, assertOwnedExecution } from '../sessions/execution-scope.ts'
+import { assertExecutionActor, assertOwnedHistoricalExecution } from '../sessions/execution-scope.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
@@ -17,7 +17,7 @@ export class CancelTool implements Tool {
   }
 
   constructor(
-    private readonly sessions: Pick<SessionManager, 'getSessionState' | 'getDelegationOwner' | 'assertFolderAccess' | 'getActiveSession'>,
+    private readonly sessions: Pick<SessionManager, 'getSessionState' | 'getDelegationOwner' | 'assertFolderAccess' | 'getActiveSession'> & Partial<Pick<SessionManager, 'readSessionState' | 'assertHistoricalFolderAccess'>>,
     private readonly remote?: Pick<A2aSessions, 'cancel'>,
     private readonly background?: Pick<BackgroundTaskManager, 'cancelTask'>,
   ) {}
@@ -40,7 +40,7 @@ export class CancelTool implements Tool {
       const status = await this.background.cancelTask(backgroundTaskId(executionId), context)
       return JSON.stringify({ executionId, status })
     }
-    const state = assertOwnedExecution(this.sessions, executionId, context)
+    const state = await assertOwnedHistoricalExecution(this.sessions, executionId, context)
     if (state.executionStatus && ['completed', 'failed', 'cancelled'].includes(state.executionStatus)) {
       return JSON.stringify({ executionId, status: state.executionStatus })
     }

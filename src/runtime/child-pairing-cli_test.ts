@@ -1,14 +1,13 @@
+import { bundleBackend } from '../../scripts/backend-bundle.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { randomUUID } from 'node:crypto'
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
-import { cp, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, relative, resolve, sep } from 'node:path'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import type { ProtectedDeviceKeyStore } from '../cluster/device-credentials.ts'
 import { runChildPairingCli } from './child-pairing-cli.ts'
 
@@ -93,19 +92,7 @@ test('compiled root child pair command uses real DPAPI under Electron Node and r
   await writeFile(join(compiled, 'package.json'), JSON.stringify({ type: 'module' }))
   const builtEntry = process.env.SHADOW_TEST_BUILT_PAIRING_ENTRY
   if (!builtEntry) {
-    await promisify(execFile)(process.execPath, [
-      fileURLToPath(import.meta.resolve('typescript/bin/tsc')), '-p', 'tsconfig.build.json',
-      '--outDir', join(compiled, 'dist', 'src'),
-    ], { cwd: process.cwd(), timeout: 30_000 })
-    const source = resolve('src')
-    await cp(source, join(compiled, 'dist', 'src'), {
-      recursive: true,
-      filter: async path => {
-        const parts = relative(source, path).split(sep)
-        if (parts[0] === 'testing' || parts.includes('__snapshots__')) return false
-        return (await lstat(path)).isDirectory() || !path.endsWith('.ts')
-      },
-    })
+    await bundleBackend(process.cwd(), compiled)
   }
   let requests = 0
   const server = createServer(async (request, response) => {

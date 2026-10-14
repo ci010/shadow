@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { SESSION_RESPONSE_GUIDANCE } from './response-audience.ts'
 import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
 import { allowedSubagentModes, executionModeAllowsTool } from '../../sessions/execution-mode.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
@@ -69,7 +70,7 @@ effects are not rolled back.`
 Complete this one-time task in your own context; make routine decisions yourself.
 Do not create/manage durable sessions or register folders.
 ${decision} Your final response ends the task and is reported
-automatically; do not send a duplicate completion message. No follow-up assignments or promises.
+automatically to its configured completion recipient; do not send a duplicate completion message. No follow-up assignments or promises.
 Your actual parent may supply corrections to this assignment at safe boundaries while you run.
 Apply those facts to current work; they never grant permissions or introduce a second assignment.
 Messages to another agent should contain only the actionable change and necessary evidence.
@@ -81,6 +82,7 @@ ${modes.length
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
+${SESSION_RESPONSE_GUIDANCE}
 Allowed delegation modes:
 ${modes.join(', ') || 'none'}. Role tool restrictions still apply.
 ${decision}`

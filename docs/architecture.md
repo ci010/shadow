@@ -2696,6 +2696,12 @@ enable context isolation and sandboxing and disable renderer Node integration.
 `preload.ts` exposes a narrow setup/runtime API, not arbitrary filesystem or
 process execution.
 
+`ipc-contract.ts` stays sandbox-safe: shared channels and value parsers must not
+import Node filesystem/process services. Main-only pairing and directory handlers
+live in `ipc-main-handlers.ts`. The desktop build test loads the bundled preload
+in a real sandboxed Electron window and verifies the `shadowDesktop` bridge and
+an IPC round trip.
+
 `desktop/src/navigation.ts` keeps navigation within the configured renderer.
 External HTTP/HTTPS links, including Markdown's `target="_blank"` links, open
 through the system browser without creating another Electron window. Other

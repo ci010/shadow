@@ -4,6 +4,7 @@ import type {
   LLMResponseUsage,
 } from '../../providers/provider.ts'
 import { contentText, isContextSizeError } from '../../providers/provider.ts'
+import { isRuntimeContextEvent } from '../runtime-context-event.ts'
 import { workspacePath } from '../../utils/paths.ts'
 import { dirname } from 'node:path'
 import { readFileSync } from 'node:fs'
@@ -327,7 +328,7 @@ export class HandoffManager {
 
     const currentObjective = [...nonSystem].reverse()
       .find((m) =>
-        m.role === 'user' && contentText(m.content).trim().length > 0
+        m.role === 'user' && !isRuntimeContextEvent(m) && contentText(m.content).trim().length > 0
       )
       ?.content
     const currentObjectiveText = (contentText(currentObjective).trim() ||

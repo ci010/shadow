@@ -48,6 +48,22 @@ export function createBrowserSession(apiBase: string, options: {
     expiration = undefined
   }
 
+  function waitForBackend(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted()
+    return new Promise((resolve, reject) => {
+      const abort = () => {
+        clearTimer(timer)
+        signal.removeEventListener('abort', abort)
+        reject(signal.reason)
+      }
+      const timer = setTimer(() => {
+        signal.removeEventListener('abort', abort)
+        resolve()
+      }, 1_000)
+      signal.addEventListener('abort', abort, { once: true })
+    })
+  }
+
   function accept(next: WebAuthStatus) {
     clearExpiration()
     status.value = next
@@ -81,13 +97,26 @@ export function createBrowserSession(apiBase: string, options: {
     }
     const timeout = setTimer(() => controller.abort(), 15_000)
     try {
-      const response = await request(new URL(action === 'pair' ? '/api/web-auth/pair' : '/api/web-auth/session', apiBase), {
+      const url = new URL(action === 'pair' ? '/api/web-auth/pair' : '/api/web-auth/session', apiBase)
+      const init: RequestInit = {
         method: action === 'pair' ? 'POST' : action === 'logout' ? 'DELETE' : 'GET',
         credentials: 'same-origin',
         cache: 'no-store',
         signal: controller.signal,
         ...(action === 'pair' ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(usePin ? { pin: code } : { code }) } : {}),
-      })
+      }
+      let response: Response
+      while (true) {
+        controller.signal.throwIfAborted()
+        response = await request(url, init)
+        if (ownGeneration !== generation || disposed) return
+        if (action !== 'check' || response.status !== 503) break
+        // Vite gates requests until Electron publishes the backend endpoint.
+        clearExpiration()
+        view.value = 'checking'
+        await response.body?.cancel()
+        await waitForBackend(controller.signal)
+      }
       if (!response.ok) {
         if (action === 'check' && response.status === 401) {
           if (ownGeneration === generation && !disposed) accept({ version: 1, required: true, authenticated: false })

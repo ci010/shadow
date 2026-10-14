@@ -4,10 +4,11 @@ import { basename, join } from 'node:path'
 import { Hono } from 'hono'
 import { CopilotAuthenticator, CopilotProvider, copilotModelEndpoint } from './copilot.ts'
 import { AggregatedProvider } from './aggregated.ts'
-import { ProviderHttpError, type ModelInfo } from './provider.ts'
+import { ProviderHttpError, type ChatMessage, type ModelInfo } from './provider.ts'
 import { providerPlugin } from './routes.ts'
 import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 import { ConfigSchema } from '../config/schema.ts'
+import { runtimeContextEvent } from '../sessions/runtime-context-event.ts'
 
 const astra = {
   id: 'gpt-6-astra',
@@ -52,6 +53,7 @@ function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, ca
       modelReads++
       return modelResponse instanceof Response ? modelResponse.clone() : Response.json(modelResponse)
     }
+
     assert.equal(init?.method, 'POST')
     posts.push({ path, body: JSON.parse(String(init.body)) })
     if (postResponse) return postResponse.clone()
@@ -67,6 +69,45 @@ function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, ca
     reply: (value: Response) => { postResponse = value },
   }
 }
+
+for (const model of [astra.id, dual.id]) test(`${model}: persisted runtime events preserve the complete prior wire prefix and cache reports`, async t => {
+  const f = fixture(t)
+  const history: ChatMessage[] = [
+    { role: 'system', content: 'Stable policy. Current runtime contracts remain authoritative.' },
+    { role: 'user', content: 'Synthetic task' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'first', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'first', content: 'First result' },
+  ]
+  const original = structuredClone(history)
+  for (let iteration = 0; iteration < 2; iteration++) {
+    const usage = model === astra.id
+      ? { input_tokens: 100, output_tokens: 10, total_tokens: 110, input_tokens_details: { cached_tokens: iteration ? 80 : 0 } }
+      : { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, prompt_tokens_details: { cached_tokens: iteration ? 80 : 0 } }
+    f.reply(Response.json(model === astra.id ? { ...responsesReply, usage } : { ...chatReply, usage }))
+    history.push((await runtimeContextEvent(history, 'work', `Current contract revision ${iteration}`, '.'))!)
+    const messages = history
+    assert.deepEqual(messages.filter(message => message.role === 'system'), [original[0]])
+    const result = await f.provider.chat(messages, [], { model })
+    assert.equal(result.usage?.cachedTokens, iteration ? 80 : 0)
+    if (!iteration) history.push(
+      { role: 'assistant', content: null, tool_calls: [{ id: 'second', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'second', content: 'Second result' },
+    )
+  }
+  assert(f.posts.every(post => !('prompt_cache_key' in post.body)))
+  const field = model === astra.id ? 'input' : 'messages'
+  const first = f.posts[0].body[field] as unknown[]
+  const second = f.posts[1].body[field] as unknown[]
+  assert.deepEqual(second.slice(0, first.length), first)
+  assert.match(JSON.stringify(first), /revision 0/)
+  assert.match(JSON.stringify(second), /revision 0/)
+  assert.match(JSON.stringify(second), /revision 1/)
+  assert.doesNotMatch(JSON.stringify(second), /Remaining execution budget|inference requests including this one/)
+  assert.deepEqual(history.slice(0, original.length), original)
+  assert.match(JSON.stringify(history), /runtime-context-work/)
+  assert.doesNotMatch(JSON.stringify(history), /runtime-context-audience/)
+  assert.doesNotMatch(JSON.stringify(history), /Remaining execution budget/)
+})
 
 test('default model and provider fallback both send Astra with configured medium effort', async t => {
   const f = fixture(t)

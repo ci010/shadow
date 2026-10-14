@@ -173,7 +173,7 @@
             <component v-else :is="msg.sessionSource ? SessionMessageDisclosure : 'div'"
               v-bind="msg.sessionSource ? {
                 title: sessionMessageTitle(msg.sessionSource),
-                recipient: msg.sessionSource.id || msg.sessionSource.name || t('Unknown session'),
+                recipient: sessionMessageSourceLabel(msg.sessionSource, allSessions),
                 sessionId: msg.sessionSource.id,
                 timestamp: msg.timestamp,
               } : {}"
@@ -183,7 +183,7 @@
               ]"
               @inspect="inspectExecution" @interact="clearSelection"
               :role="msg.sessionSource ? undefined : 'article'"
-              :aria-label="msg.sessionSource ? t('{value1} from {value2}', { value1: sessionMessageTitle(msg.sessionSource), value2: msg.sessionSource.id || msg.sessionSource.name || t('unknown session') }) : msg.role === 'user' ? (msg.senderName ? t('Message from {senderName}', { senderName: msg.senderName }) : t('User message')) : t('Assistant message')"
+              :aria-label="msg.sessionSource ? t('{value1} from {value2}', { value1: sessionMessageTitle(msg.sessionSource), value2: sessionMessageSourceLabel(msg.sessionSource, allSessions) }) : msg.role === 'user' ? (msg.senderName ? t('Message from {senderName}', { senderName: msg.senderName }) : t('User message')) : t('Assistant message')"
             >
               <div v-if="!msg.sessionSource && msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
               <!-- Reasoning / thinking content (collapsible) -->
@@ -573,7 +573,7 @@ import { isCommandReceipt, type CommandReceipt } from '../../../src/slash-comman
 import { displayedSessionStages as resolveDisplayedStages, isAnimatingStage, isWaitingStage, isWorkingStage, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
 import type { SessionRecovery } from '../../../src/sessions/session-store.ts'
 import { canRedirectComposerKey, isComposerFocusKey } from '../composer-autofocus.ts'
-import { groupSenderNames, parseSessionMessage, sessionMessageTitle, type SessionMessageSource } from '../message-author.ts'
+import { groupSenderNames, parseSessionMessage, sessionMessageTitle, sessionMessageSourceLabel, type SessionMessageSource } from '../message-author.ts'
 import SessionHeading from './SessionHeading.vue'
 import IoRequestCard from './io/IoRequestCard.vue'
 import { useIoConversation } from '../io/conversation.ts'

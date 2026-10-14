@@ -16,7 +16,10 @@ export async function buildDesktop(root: string, output = join(root, 'desktop/di
     build: {
       ssr: true, target: 'node24', outDir: output, emptyOutDir: true, minify: false,
       rollupOptions: {
-        input: { main: join(root, 'desktop/src/main.ts') }, external,
+        input: {
+          main: join(root, 'desktop/src/main.ts'),
+          'utility-profile-bootstrap': join(root, 'desktop/src/sidecar/utility-profile-bootstrap.ts'),
+        }, external,
         output: { format: 'es', entryFileNames: '[name].js', chunkFileNames: '_chunks/[name]-[hash].js' },
       },
     }, ssr: { noExternal: true },

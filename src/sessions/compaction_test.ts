@@ -91,7 +91,7 @@ for (const [name, createStore] of stores) {
         name: 'fixture', listModels: () => ['fixture'],
         async chat(messages, tools) {
           if (tools?.some(tool => tool.function.name === 'handoff_summary')) {
-            return messages.at(-1)?.role === 'tool'
+            return messages.filter(message => message.name !== 'runtime-context').at(-1)?.role === 'tool'
               ? { content: 'Summary saved.', toolCalls: [] }
               : { content: null, toolCalls: [{ id: 'summary-call', name: 'handoff_summary', arguments: continuation }] }
           }
@@ -214,7 +214,7 @@ for (const [name, createStore] of stores) {
     store: SessionStore
     bus: Bus
     tools: Tools
-  }) => Promise<void>, rebuild?: () => Promise<string>): Promise<void> {
+  }) => Promise<void>): Promise<void> {
     await withTempWorkspace(async workspace => {
       const store = createStore(join(workspace, 'sessions'))
       await store.init()
@@ -229,7 +229,7 @@ for (const [name, createStore] of stores) {
       const tools = new Tools(workspace)
       const session = new TestSession(
         workspace, state.sessionId, state, [], provider,
-        new SessionTools(tools, workspace), bus, store, handoff, () => {}, rebuild,
+        new SessionTools(tools, workspace), bus, store, handoff, () => {},
       )
       try {
         await run({ session, handoff, store, bus, tools })
@@ -252,8 +252,7 @@ for (const [name, createStore] of stores) {
     })
   })
 
-  for (const fallback of ['no rebuilder', 'failed rebuild'] as const) {
-    test(`${name}: compaction with ${fallback} never caches a per-inference work agreement`, async () => {
+    test(`${name}: compaction retains the activation system snapshot without caching dynamic Work context`, async () => {
       await fixture(async ({ session, handoff, tools }) => {
         const base = '# Runtime\nIdentity\n\n---\n\n# Historical reference\n> Old notes'
         let work = '# Current work contracts\nRevision 1'
@@ -263,19 +262,20 @@ for (const [name, createStore] of stores) {
         })
         await session.append({ role: 'system', content: base })
         await session.forceCompact()
-        const first = String(handoff.inputs[0][0].content)
-        assert.equal(first, '# Runtime\nIdentity\n\n---\n\n' + work + '\n\n---\n\n# Historical reference\n> Old notes')
+        assert.equal(handoff.inputs[0][0].content, base)
+        const first = JSON.stringify(handoff.inputs[0].at(-1)!.content)
+        assert.match(first, /Revision 1/)
+        assert.equal(handoff.inputs[0].at(-1)!.role, 'user')
         assert.equal(session.history[0].content, base)
         work = '# Current work contracts\nRevision 2'
         await session.forceCompact()
-        const second = String(handoff.inputs[1][0].content)
+        const second = JSON.stringify(handoff.inputs[1].at(-1)!.content)
         assert.match(second, /Revision 2/)
         assert.doesNotMatch(second, /Revision 1/)
         assert.equal(second.match(/# Current work contracts/g)?.length, 1)
         assert.equal(session.history[0].content, base)
-      }, fallback === 'failed rebuild' ? async () => { throw new Error('Synthetic rebuild failure') } : undefined)
+      })
     })
-  }
 
   test(`${name}: hot compaction does not reuse the previous segment's usage`, async () => {
     await fixture(async ({ session, handoff, store }) => {

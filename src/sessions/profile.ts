@@ -12,7 +12,7 @@ export const PROFILE_LIMITATIONS = [
 export class SessionProfileService {
   constructor(private sessions: SessionManager, readonly projectId: string, private now: () => number = Date.now) {}
   async query(sessionId: string, signal?: AbortSignal): Promise<SessionProfile | undefined> {
-    const state = this.sessions.getSessionState(sessionId)
+    const state = await this.sessions.readSessionState(sessionId)
     if (!state || state.projectId !== this.projectId) return undefined
     const asOf = this.now()
     const read = (from: number, inclusive: boolean) => this.sessions.getProfileUsage([sessionId], from, asOf, signal, inclusive)
@@ -21,7 +21,7 @@ export class SessionProfileService {
   }
   async project(signal?: AbortSignal) {
     const asOf = this.now()
-    const ids = this.sessions.listSessions().filter(row => this.sessions.getSessionState(row.sessionId)?.projectId === this.projectId).map(row => row.sessionId)
+    const ids = (await this.sessions.listHistoryStates()).filter(row => row.projectId === this.projectId).map(row => row.sessionId)
     return { projectId: this.projectId, asOf: new Date(asOf).toISOString(), window: { from: new Date(asOf - 86_400_000).toISOString(), semantics: '[from, asOf), UTC; completed source events' }, rolling24h: await this.sessions.getProfileUsage(ids, asOf - 86_400_000, asOf, signal), total: await this.sessions.getProfileUsage(ids, -Infinity, asOf, signal), limitations: PROFILE_LIMITATIONS }
   }
 }

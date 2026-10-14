@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { resolveStartupProfileEnvironment } from './startup-profile-arm.js'
 import { isLoopbackPortOccupied } from './port-preflight.js'
 import { join } from 'node:path'
 import { StartupDiagnosticsLog, startupLogPath } from './startup-diagnostics.js'
@@ -215,6 +216,9 @@ export function createProductionRuntimeHost(
   onAuthorizationChanged: RuntimeAuthorizationChanged,
   spawn: SidecarSpawn,
 ): RuntimeHost {
+  // Resolve at Electron startup, not in the long-lived development launcher.
+  // Every supervisor created after a failed start reuses this same environment.
+  const environment = resolveStartupProfileEnvironment(paths, process.env)
   const authenticatedShutdownRequest = createAuthenticatedShutdownRequest()
   const diagnostics = new StartupDiagnosticsLog(startupLogPath(paths.userDataPath))
   return new RuntimeHost({
@@ -227,7 +231,7 @@ export function createProductionRuntimeHost(
         diagnosticSink: (entry) => diagnostics.write(entry),
         authenticatedShutdownRequest,
         environment: {
-          ...process.env,
+          ...environment,
           GITHUB_COPILOT_TOKEN_DIR: join(paths.userDataPath, 'auth', 'copilot'),
           GITHUB_COPILOT_ACCESS_TOKEN_FILE: 'access-token',
           GITHUB_COPILOT_API_KEY_FILE: 'api-key.json',

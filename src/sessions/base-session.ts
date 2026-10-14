@@ -1,9 +1,8 @@
 import { withRateLimitWaiting, type RateLimitWait } from '../providers/retry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
-import { withCurrentWork } from '../agent/context/builder.ts'
-import { withResponseAudience } from '../agent/context/response-audience.ts'
-import { InferenceBudget, withExecutionBudget } from '../agent/context/execution-budget.ts'
+import { InferenceBudget } from '../agent/context/execution-budget.ts'
+import { runtimeContextEvent } from './runtime-context-event.ts'
 import { createNodeInference } from '../script-runtime/infer.ts'
 import { continuedUserInvolvement, createResponseContext, reconcileResponseContinuity, type ResponseContext } from './response-context.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
@@ -211,6 +210,21 @@ export abstract class BaseSession {
     this.bus.emit('message.outbound', this.tools.boundary?.stamp(message) ?? message)
   }
 
+  /** Persist snapshots before use. Fail closed rather than send an event absent from recovery history. */
+  protected async recordContextEvent(kind: 'work', content: string): Promise<void> {
+    const event = await runtimeContextEvent(this.messages, kind, content, this.workspace)
+    if (!event) return
+    const timestamp = new Date().toISOString()
+    const message = { ...event, timestamp }
+    await this.store.appendMessages(this.physicalSessionId, [{
+      role: message.role, content: message.content, name: message.name, timestamp,
+    }])
+    this.messages.push(message)
+    this.bus.emit('session.message.appended', {
+      sessionId: this.id, physicalSessionId: this.physicalSessionId, message,
+    })
+  }
+
   // ── Core LLM ↔ tool loop ───────────────────────────────────────────────
 
   protected async runLlmLoop(
@@ -258,22 +272,8 @@ export abstract class BaseSession {
       const boundedSystemTask = this.state.mode === 'task' &&
         this.state.agentType === executionContext.channel &&
         (this.state.agentType === 'work-observer' || this.state.agentType === 'work-organizer')
-      let workPrompt = boundedSystemTask ? undefined : workGuard?.prompt(this.id, executionContext)
-      if (workPrompt && this.tools.has('work') && workGuard?.required?.(this.id) !== false) {
-        const receipts = this.messages.filter(message => message.role === 'tool' && message.tool_call_id && message.name !== 'work')
-          .slice(-8).map(message => ({ id: message.tool_call_id, tool: message.name }))
-        if (receipts.length) workPrompt += '\n# Recent tool receipt IDs\n' +
-          'For work progress result.sources, copy an id below, not a tool name. Quote exact text from the original tool result, not this index. A reference alone does not prove acceptance.\n' +
-          JSON.stringify(receipts)
-      }
-      const workMessages: ChatMessage[] = workPrompt
-        ? this.messages[0]?.role === 'system' ? this.messages.map((message, index) => index === 0
-          ? { ...message, content: withCurrentWork(String(message.content ?? ''), workPrompt) } : message)
-          : [{ role: 'system', content: workPrompt }, ...this.messages]
-        : this.messages
-      const inferenceMessages = withExecutionBudget(withResponseAudience(
-        modelMessages(workMessages, executionContext.channel === 'qq'), boundedSystemTask ? undefined : responseContext,
-      ), budget.remaining, 'turn')
+      await this.recordContextEvent('work', boundedSystemTask ? '' : workGuard?.prompt(this.id, executionContext) ?? '')
+      const inferenceMessages = modelMessages(this.messages, executionContext.channel === 'qq')
       await this.tools.boundary?.beforeInference(signal)
       if (this.tools.boundary) await this.store.saveState(this.id, this.state)
 

@@ -52,6 +52,14 @@ export function parseSessionMessage(message: unknown) {
   return { content: envelope.content, timestamp: envelope.timestamp, sessionSource }
 }
 
+/** Resolve presentation titles without changing the source ID used for navigation. */
+export function sessionMessageSourceLabel(
+  source: SessionMessageSource, sessions: readonly { sessionId: string; label?: string }[],
+): string {
+  return (source.id && sessions.find(session => session.sessionId === source.id)?.label?.trim())
+    || source.name?.trim() || source.id || t('Unknown session')
+}
+
 export function sessionMessageTitle(source: SessionMessageSource): string {
   const labels: Record<string, string> = {
     request: t('Received request'), question: t('Received question'), progress: t('Received progress update'),

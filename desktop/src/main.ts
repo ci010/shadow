@@ -40,14 +40,13 @@ import { BootstrapCoordinator } from './bootstrap/coordinator.js'
 import { RuntimeStartup } from './bootstrap/runtime-startup.js'
 import { createUtilityProcessSpawn } from './sidecar/utility-process.js'
 import { createBackendPairingCommand, FileChildBootstrap } from './bootstrap/child.js'
+import { handlePairChild, handleSelectMainDirectoryPath } from './ipc-main-handlers.js'
 import {
   handleEnsureRuntime,
-  handlePairChild,
   handleGetMainDirectorySelection,
   handleInitializeMain,
   handlePrepareProvider,
   handleOpenCopilotLogin,
-  handleSelectMainDirectoryPath,
   IPC_CHANNELS,
   parseLaunchMainOptions,
   parseSelectionId,
@@ -66,7 +65,7 @@ import {
 import { installRuntimeRequestAuthorization, type RuntimeAuthorization } from './runtime-authorization.js'
 import { parseWizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
-import { desktopIconPath, desktopTrayIconPath, framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
+import { desktopIconPath, desktopTrayIconPath, framelessWindowOptions, installWindowControls, MAIN_WINDOW_MAX_LISTENERS, removeNativeMenus } from './window-controls.js'
 import { installTrayMenu } from './tray.js'
 import { createDevelopmentRestart } from './development-restart.js'
 import { installBackgroundWindow } from './background-window.js'
@@ -237,6 +236,7 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: 
 
 export function createMainWindow(target: RendererTarget, showOnReady = true): BrowserWindow {
   const window = new BrowserWindow(framelessWindowOptions(join(import.meta.dirname, 'preload.cjs')))
+  window.setMaxListeners(MAIN_WINDOW_MAX_LISTENERS)
   installMediaPermissions(ipcMain, window, target, {
     getDisplaySources: () => desktopCapturer.getSources({
       types: ['screen', 'window'],

@@ -2,11 +2,9 @@ import type { DataLayoutView } from './bootstrap/data-layout-controller.js'
 import type { WizardEvent, WizardState } from './wizard/state-machine.js'
 import type { BootstrapCommandResult } from './bootstrap/coordinator.js'
 import type { EnsureRuntimeResult } from './bootstrap/coordinator.js'
-import { normalizeMainDirectoryPath } from './bootstrap/runtime-config.js'
 import type { DesktopMediaCaptureApi } from './media-capture-contract.js'
 import type { DesktopWebPairingApi } from './web-pairing-contract.js'
 import type { ChildPairInput, ChildSetupInfo } from './bootstrap/child.js'
-import { parseChildPairInput } from './bootstrap/child.js'
 import type { DesktopMicroAppsApi } from './micro-app-contract.js'
 import type { DesktopClipboardFilesApi } from './clipboard-files-contract.js'
 import type { DesktopTaskNotificationsApi } from './task-notifications-contract.js'
@@ -108,14 +106,6 @@ export interface ShadowDesktopApi {
   openCopilotLogin(verificationUri: string): Promise<void>
 }
 
-export function handlePairChild(
-  coordinator: { pairChild(input: ChildPairInput): Promise<BootstrapCommandResult> },
-  rawArguments: readonly unknown[],
-): Promise<BootstrapCommandResult> {
-  if (rawArguments.length !== 1) throw new TypeError('Child pairing requires one options object')
-  return coordinator.pairChild(parseChildPairInput(rawArguments[0]))
-}
-
 export function parseDesktopWindowState(value: unknown): DesktopWindowState {
   if (
     typeof value !== 'object'
@@ -149,14 +139,6 @@ export function handleGetMainDirectorySelection(
 ): Promise<NativeDirectorySelection> {
   parseNoArguments(rawArguments)
   return coordinator.getMainDirectorySelection()
-}
-
-export function handleSelectMainDirectoryPath(
-  coordinator: MainDirectorySelector,
-  rawArguments: readonly unknown[],
-): Promise<NativeDirectorySelection> {
-  if (rawArguments.length !== 1) throw new TypeError('Main directory selection requires one absolute path')
-  return coordinator.selectMainDirectoryPath(normalizeMainDirectoryPath(rawArguments[0]))
 }
 
 export function handleInitializeMain(

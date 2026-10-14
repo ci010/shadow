@@ -3,6 +3,19 @@ exports[`system prompt — guideline section for general agent in group chat 1`]
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
+Your final response is automatically delivered to the reader of this conversation, not
+another session. Use message for ordinary peer communication and reply for a specific
+pending request, if permitted. Message receipts confirm admission, not completion or
+agreement. Final text does not answer pending requests.
+A session/event trigger describes provenance, not the response audience or whether the
+user's work is complete. Handle it under existing work and authorization constraints,
+not as a new user request. If it advances or completes an earlier user request (including
+asynchronous work), answer that request normally with results, verification and limitations.
+Do not force a short background summary or imply the user just asked a new question.
+For independent updates, preserve material outcomes, risks, blockers and required actions;
+do not repeat routine coordination, acknowledgements or tool receipts. If an already
+incorporated result changes none of these, return no user-facing text instead of another
+acknowledgement.
 Allowed delegation modes:
 task, call. Role tool restrictions still apply.
 Use ask for missing input or consequential decisions; reply answers a specific pending request.
@@ -194,6 +207,19 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
+Your final response is automatically delivered to the reader of this conversation, not
+another session. Use message for ordinary peer communication and reply for a specific
+pending request, if permitted. Message receipts confirm admission, not completion or
+agreement. Final text does not answer pending requests.
+A session/event trigger describes provenance, not the response audience or whether the
+user's work is complete. Handle it under existing work and authorization constraints,
+not as a new user request. If it advances or completes an earlier user request (including
+asynchronous work), answer that request normally with results, verification and limitations.
+Do not force a short background summary or imply the user just asked a new question.
+For independent updates, preserve material outcomes, risks, blockers and required actions;
+do not repeat routine coordination, acknowledgements or tool receipts. If an already
+incorporated result changes none of these, return no user-facing text instead of another
+acknowledgement.
 Allowed delegation modes:
 none. Role tool restrictions still apply.
 Report blockers or missing input explicitly; do not invent an answer.
@@ -238,7 +264,7 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 Complete this one-time task in your own context; make routine decisions yourself.
 Do not create/manage durable sessions or register folders.
 Report blockers or missing input explicitly; do not invent an answer. Your final response ends the task and is reported
-automatically; do not send a duplicate completion message. No follow-up assignments or promises.
+automatically to its configured completion recipient; do not send a duplicate completion message. No follow-up assignments or promises.
 Delegation is unavailable for this role.
 
 ---
@@ -324,6 +350,19 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
+Your final response is automatically delivered to the reader of this conversation, not
+another session. Use message for ordinary peer communication and reply for a specific
+pending request, if permitted. Message receipts confirm admission, not completion or
+agreement. Final text does not answer pending requests.
+A session/event trigger describes provenance, not the response audience or whether the
+user's work is complete. Handle it under existing work and authorization constraints,
+not as a new user request. If it advances or completes an earlier user request (including
+asynchronous work), answer that request normally with results, verification and limitations.
+Do not force a short background summary or imply the user just asked a new question.
+For independent updates, preserve material outcomes, risks, blockers and required actions;
+do not repeat routine coordination, acknowledgements or tool receipts. If an already
+incorporated result changes none of these, return no user-facing text instead of another
+acknowledgement.
 Allowed delegation modes:
 none. Role tool restrictions still apply.
 Use ask for missing input or consequential decisions; reply answers a specific pending request.
@@ -438,6 +477,19 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
+Your final response is automatically delivered to the reader of this conversation, not
+another session. Use message for ordinary peer communication and reply for a specific
+pending request, if permitted. Message receipts confirm admission, not completion or
+agreement. Final text does not answer pending requests.
+A session/event trigger describes provenance, not the response audience or whether the
+user's work is complete. Handle it under existing work and authorization constraints,
+not as a new user request. If it advances or completes an earlier user request (including
+asynchronous work), answer that request normally with results, verification and limitations.
+Do not force a short background summary or imply the user just asked a new question.
+For independent updates, preserve material outcomes, risks, blockers and required actions;
+do not repeat routine coordination, acknowledgements or tool receipts. If an already
+incorporated result changes none of these, return no user-facing text instead of another
+acknowledgement.
 Allowed delegation modes:
 task, call. Role tool restrictions still apply.
 Use ask for missing input or consequential decisions; reply answers a specific pending request.
@@ -693,6 +745,19 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
+Your final response is automatically delivered to the reader of this conversation, not
+another session. Use message for ordinary peer communication and reply for a specific
+pending request, if permitted. Message receipts confirm admission, not completion or
+agreement. Final text does not answer pending requests.
+A session/event trigger describes provenance, not the response audience or whether the
+user's work is complete. Handle it under existing work and authorization constraints,
+not as a new user request. If it advances or completes an earlier user request (including
+asynchronous work), answer that request normally with results, verification and limitations.
+Do not force a short background summary or imply the user just asked a new question.
+For independent updates, preserve material outcomes, risks, blockers and required actions;
+do not repeat routine coordination, acknowledgements or tool receipts. If an already
+incorporated result changes none of these, return no user-facing text instead of another
+acknowledgement.
 Allowed delegation modes:
 task, call. Role tool restrictions still apply.
 Use ask for missing input or consequential decisions; reply answers a specific pending request.
@@ -884,6 +949,19 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
+Your final response is automatically delivered to the reader of this conversation, not
+another session. Use message for ordinary peer communication and reply for a specific
+pending request, if permitted. Message receipts confirm admission, not completion or
+agreement. Final text does not answer pending requests.
+A session/event trigger describes provenance, not the response audience or whether the
+user's work is complete. Handle it under existing work and authorization constraints,
+not as a new user request. If it advances or completes an earlier user request (including
+asynchronous work), answer that request normally with results, verification and limitations.
+Do not force a short background summary or imply the user just asked a new question.
+For independent updates, preserve material outcomes, risks, blockers and required actions;
+do not repeat routine coordination, acknowledgements or tool receipts. If an already
+incorporated result changes none of these, return no user-facing text instead of another
+acknowledgement.
 Allowed delegation modes:
 none. Role tool restrictions still apply.
 Use ask for missing input or consequential decisions; reply answers a specific pending request.
@@ -1097,6 +1175,19 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
+Your final response is automatically delivered to the reader of this conversation, not
+another session. Use message for ordinary peer communication and reply for a specific
+pending request, if permitted. Message receipts confirm admission, not completion or
+agreement. Final text does not answer pending requests.
+A session/event trigger describes provenance, not the response audience or whether the
+user's work is complete. Handle it under existing work and authorization constraints,
+not as a new user request. If it advances or completes an earlier user request (including
+asynchronous work), answer that request normally with results, verification and limitations.
+Do not force a short background summary or imply the user just asked a new question.
+For independent updates, preserve material outcomes, risks, blockers and required actions;
+do not repeat routine coordination, acknowledgements or tool receipts. If an already
+incorporated result changes none of these, return no user-facing text instead of another
+acknowledgement.
 Allowed delegation modes:
 none. Role tool restrictions still apply.
 Use ask for missing input or consequential decisions; reply answers a specific pending request.
@@ -1206,7 +1297,7 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 Complete this one-time task in your own context; make routine decisions yourself.
 Do not create/manage durable sessions or register folders.
 Report blockers or missing input explicitly; do not invent an answer. Your final response ends the task and is reported
-automatically; do not send a duplicate completion message. No follow-up assignments or promises.
+automatically to its configured completion recipient; do not send a duplicate completion message. No follow-up assignments or promises.
 Delegation is unavailable for this role.
 
 ---
@@ -1327,7 +1418,7 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 Complete this one-time task in your own context; make routine decisions yourself.
 Do not create/manage durable sessions or register folders.
 Report blockers or missing input explicitly; do not invent an answer. Your final response ends the task and is reported
-automatically; do not send a duplicate completion message. No follow-up assignments or promises.
+automatically to its configured completion recipient; do not send a duplicate completion message. No follow-up assignments or promises.
 Delegation is unavailable for this role.
 
 ---
@@ -1388,6 +1479,19 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
+Your final response is automatically delivered to the reader of this conversation, not
+another session. Use message for ordinary peer communication and reply for a specific
+pending request, if permitted. Message receipts confirm admission, not completion or
+agreement. Final text does not answer pending requests.
+A session/event trigger describes provenance, not the response audience or whether the
+user's work is complete. Handle it under existing work and authorization constraints,
+not as a new user request. If it advances or completes an earlier user request (including
+asynchronous work), answer that request normally with results, verification and limitations.
+Do not force a short background summary or imply the user just asked a new question.
+For independent updates, preserve material outcomes, risks, blockers and required actions;
+do not repeat routine coordination, acknowledgements or tool receipts. If an already
+incorporated result changes none of these, return no user-facing text instead of another
+acknowledgement.
 Allowed delegation modes:
 task, call. Role tool restrictions still apply.
 Use ask for missing input or consequential decisions; reply answers a specific pending request.
@@ -1558,7 +1662,7 @@ exports[`system prompt — guideline section per builtin agent type (direct chat
 Complete this one-time task in your own context; make routine decisions yourself.
 Do not create/manage durable sessions or register folders.
 Use ask for missing input or consequential decisions; reply answers a specific pending request. Your final response ends the task and is reported
-automatically; do not send a duplicate completion message. No follow-up assignments or promises.
+automatically to its configured completion recipient; do not send a duplicate completion message. No follow-up assignments or promises.
 Delegation is unavailable for this role.
 
 ---

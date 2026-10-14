@@ -94,7 +94,23 @@ export interface SessionParent {
   index?: number
 }
 
+export interface ArchivedStateQuery {
+  projectId?: string
+  jobId?: string
+  parentId?: string
+  executionKey?: string
+  from?: string
+  before?: string
+  offset?: number
+  limit?: number
+}
+export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV1 }
+
 export interface SessionState {
+  /** Future-only opt-in. Never inferred from historical agent names or addresses. */
+  statePersistence?: import('./fresh-automation-state.ts').FreshAutomationPolicy
+  /** Durable caller-side outcome barrier; execution completion alone is insufficient. */
+  automationCallerSettled?: boolean
   /** A persisted scope reference, never a live authorization lease. */
   channelBoundary?: import('../channels/integration-contract.ts').ChannelBoundary
   /** Execution enforcement, independent of Work tool availability. Absent on legacy records. */
@@ -217,6 +233,12 @@ export interface SessionStore {
 
   // ── State management ──────────────────────────────────────────────────
 
+  readArchivedState?(sessionKey: string): Promise<SessionState | null>
+  queryArchivedStates?(query?: ArchivedStateQuery): Promise<SessionState[]>
+  countArchivedStates?(query?: ArchivedStateQuery): Promise<number>
+  archiveFeatureStates?(projectId?: string): Promise<SessionState[]>
+  archiveState?(state: SessionState): Promise<void>
+  listArchiveReferences?(): Promise<ArchiveReference[]>
   getState(sessionKey: string): Promise<SessionState | null>
   saveState(sessionKey: string, state: SessionState): Promise<void>
   /** Load all session states into a record keyed by sessionId. */

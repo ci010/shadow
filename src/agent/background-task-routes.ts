@@ -3,13 +3,13 @@ import type { GatewayPlugin } from '../gateway/types.ts'
 
 export function backgroundTasksPlugin(
   tasks: Pick<BackgroundTaskManager, 'listTasks'>,
-  sessionExists: (sessionId: string) => boolean,
+  sessionExists: (sessionId: string) => boolean | Promise<boolean>,
 ): GatewayPlugin {
   return app => {
-    app.get('/api/sessions/:key/background-tasks', c => {
+    app.get('/api/sessions/:key/background-tasks', async c => {
       c.header('Cache-Control', 'no-store')
       const sessionId = c.req.param('key')
-      if (!sessionId.trim() || !sessionExists(sessionId)) return c.json({ error: 'session_not_found' }, 404)
+      if (!sessionId.trim() || !await sessionExists(sessionId)) return c.json({ error: 'session_not_found' }, 404)
       const active = tasks.listTasks(sessionId).filter(task => task.status === 'running' || task.status === 'cancelling')
       return c.json({
         sessionId, total: active.length,

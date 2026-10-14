@@ -114,3 +114,15 @@ test('cache usage preserves unknown versus zero and uses input-token denominator
     assert.throws(() => parseSessionDetails({ ...details, usage: { ...usage, cachedTokens } }, details.sessionId))
   }
 })
+
+test('partial cache rates use covered inputs and reject malformed coverage', () => {
+  const usage = { promptTokens: 1000, completionTokens: 100, totalTokens: 1100,
+    cachedTokens: 400, cacheReportedPromptTokens: 500 }
+  assert.deepEqual(parseSessionDetails({ ...details, usage }, details.sessionId).usage, usage)
+  assert.equal(cacheRate(usage), 80)
+  assert.equal(cacheRate({ ...usage, cachedTokens: 0, cacheReportedPromptTokens: 0 }), null)
+  for (const cacheReportedPromptTokens of [-1, 399, 1001, 0.5, NaN, '500']) {
+    assert.throws(() => parseSessionDetails({ ...details, usage: { ...usage, cacheReportedPromptTokens } }, details.sessionId))
+  }
+  assert.throws(() => parseSessionDetails({ ...details, usage: { ...details.usage, cacheReportedPromptTokens: 10 } }, details.sessionId))
+})

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { ChatMessage } from '../src/providers/provider.ts'
 import { ACCEPTANCE_PHASE_MS, AcceptanceTimeline, stopAcceptanceCreation } from './microapp-acceptance-timeline.ts'
 import { acceptanceBudgetError, acceptanceRequestRejection } from './microapp-a2a.ts'
 
@@ -118,30 +117,6 @@ test('phase deadline and caller cancellation propagate to the provider signal', 
   let called = false
   await assert.rejects(timeline.model(async () => { called = true }, controller.signal), /owner cancelled/)
   assert.equal(called, false)
-})
-
-test('phase guidance preserves transcript and pairing while distinguishing creation from testing', () => {
-  const { timeline, at } = fixture()
-  const messages: ChatMessage[] = [
-    { role: 'system', content: 'Existing policy' },
-    { role: 'assistant', content: null, tool_calls: [{ id: 'one', type: 'function', function: { name: 'read', arguments: '{}' } }] },
-    { role: 'tool', tool_call_id: 'one', content: 'Recorded result' },
-  ]
-  const before = structuredClone(messages)
-  const creation = timeline.prompt(messages, 70)
-  assert.match(String(creation[0].content), /CREATION/)
-  assert.match(String(creation[0].content), /5 separate minutes/)
-  assert.match(String(creation[0].content), /10 separate minutes/)
-  assert.match(String(creation[0].content), /same request cap/)
-  assert.deepEqual(creation.slice(1), messages.slice(1))
-  at(100)
-  timeline.review()
-  timeline.approved(new Date(100).toISOString())
-  const testing = timeline.prompt(messages, 20)
-  assert.match(String(testing[0].content), /AUTHOR TESTING/)
-  assert.match(String(testing[0].content), /do not reset/)
-  assert.match(String(testing[0].content), /blocked\/not_tested/)
-  assert.deepEqual(messages, before)
 })
 
 test('creation cutoff waits for the real task outcome and preserves cancellation failures', async t => {

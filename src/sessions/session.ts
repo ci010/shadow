@@ -10,7 +10,6 @@ import { errDetail, errMsg } from '../utils/truncate.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { CompactResult, HandoffManager } from './handoff/manager.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
-import { withCurrentWork } from '../agent/context/builder.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import type { SessionStore } from './session-store.ts'
 import type { SessionStartEvent, SessionState } from './session-store.ts'
@@ -47,8 +46,6 @@ export class Session extends BaseSession {
   private inboxWaiter: ((event: LoopEvent) => void) | null = null
   private stopController = new AbortController()
   private readonly stopped: Promise<void>
-  private promptRevision = 0
-  private builtPromptRevision = 0
 
   get completion(): Promise<void> { return this.stopped }
   get accepting(): boolean { return !this.stopController.signal.aborted }
@@ -71,7 +68,6 @@ export class Session extends BaseSession {
     store: SessionStore,
     private readonly handoffManager: HandoffManager,
     private readonly onStopped: (sessionId: string) => void,
-    private readonly rebuildSystemPrompt?: () => Promise<string>,
     private readonly quickModel?: string,
     private readonly sleepInactivityMs?: number,
     workdirCapabilityLookup?: WorkdirCapabilityLookup,
@@ -100,10 +96,6 @@ export class Session extends BaseSession {
   }
 
   // ── Public API ──────────────────────────────────────────────────────────
-
-  invalidateSystemPrompt(): void {
-    this.promptRevision++
-  }
 
   /** Current turn phase: idle (no turn), llm (waiting on LLM), or tool (executing tools). */
   get phase(): 'idle' | 'llm' | 'tool' {
@@ -281,9 +273,8 @@ export class Session extends BaseSession {
     const next = { ...this.state, segmentIndex: this.state.segmentIndex + 1, contextResetAt: timestamp,
       lastKnownTokens: 0, lastActivityAt: timestamp, recovery: undefined, preloadTools: undefined }
     const target = physicalSessionId(next)
-    const system = this.rebuildSystemPrompt ? await this.rebuildSystemPrompt()
-      : this.messages.find(message => message.role === 'system')?.content
-    if (typeof system !== 'string') throw new Error('Cannot rebuild the work context.')
+    const system = this.messages.find(message => message.role === 'system')?.content
+    if (typeof system !== 'string') throw new Error('Cannot retain the activation system prompt.')
     await this.store.createSessionLog(target, [{
       sessionId: this.id, physicalIdVersion: next.physicalIdVersion, previous_physical_id: previous,
       timestamp, context_reset: true, work_transition_id: transitionId, summary_context: prompt,
@@ -466,14 +457,6 @@ export class Session extends BaseSession {
         this.responseContext = { ...this.responseContext, userInvolved: true }
       }
     }
-    while (this.rebuildSystemPrompt && this.builtPromptRevision !== this.promptRevision) {
-      const revision = this.promptRevision
-      const content = await this.rebuildSystemPrompt()
-      const message: ChatMessage = { role: 'system', content }
-      if (this.messages[0]?.role === 'system') this.messages[0] = message
-      else this.messages.unshift(message)
-      this.builtPromptRevision = revision
-    }
   }
 
   protected override onToolPhaseStart(): void {
@@ -631,9 +614,8 @@ export class Session extends BaseSession {
     await this.tools.boundary?.beforeInference(this.stopController.signal)
     const sessionId = this.id
     const state = this.state
-    const work = this.tools.getWorkGuard()?.prompt(this.id)
-    const messages = work ? this.messages.map((message, index) => index === 0 && message.role === 'system'
-      ? { ...message, content: withCurrentWork(String(message.content ?? ''), work) } : message) : this.messages
+    await this.recordContextEvent('work', this.tools.getWorkGuard()?.prompt(this.id) ?? '')
+    const messages = this.messages
 
     const sourcePhysicalId = physicalSessionId(state)
     const targetPhysicalId = physicalSessionId(state, state.segmentIndex + 1)
@@ -659,25 +641,9 @@ export class Session extends BaseSession {
     await this.store.createSessionLog(targetPhysicalId, [startEvent])
 
     this.state.segmentIndex++
-    // Regenerate system prompt so it reflects current time/context
     const newMessages: ChatMessage[] = []
-    if (this.rebuildSystemPrompt) {
-      try {
-        const systemPrompt = await this.rebuildSystemPrompt()
-        newMessages.push({ role: 'system', content: systemPrompt })
-      } catch (err) {
-        if (this.tools.boundary) throw err
-        // Fall back to preserving the existing system prompt
-        const existing = this.messages.find((m) => m.role === 'system')
-        if (existing) newMessages.push(existing)
-        console.warn(
-          `[session] Failed to rebuild system prompt: ${errMsg(err)}`,
-        )
-      }
-    } else {
-      const existing = this.messages.find((m) => m.role === 'system')
-      if (existing) newMessages.push(existing)
-    }
+    const existing = this.messages.find((m) => m.role === 'system')
+    if (existing) newMessages.push(existing)
     newMessages.push({ role: 'user', content: handoff.prompt })
     this.messages = newMessages
     // Previous usage describes the old segment, not the continuation prompt.

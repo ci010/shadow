@@ -90,6 +90,8 @@ export interface LLMResponse {
 export interface LLMResponseUsage {
   /** Cache-read input tokens; absent when not reported. */
   cachedTokens?: number
+  /** Input tokens covered by cache reports in a partial aggregate; omitted for complete reports. */
+  cacheReportedPromptTokens?: number
   promptTokens: number
   completionTokens: number
   totalTokens: number

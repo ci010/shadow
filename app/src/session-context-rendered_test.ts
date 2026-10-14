@@ -120,3 +120,24 @@ test('heading displays cache tokens and independently weighted rates for total a
   assert.equal(cacheRows.length, 2)
   assert.ok(cacheRows.every(node => node.children.some(child => child.props['aria-label'] === 'Cache rate')))
 })
+
+test('heading distinguishes partial cache reports, explicit zero and unreported calls', async t => {
+  let usage = { promptTokens: 1000, completionTokens: 100, totalTokens: 1100, cachedTokens: 400, cacheReportedPromptTokens: 500 }
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    sessionId: 'web:partial', name: 'Partial cache', workdir: { kind: 'local', displayPath: '/fixture' },
+    usage, subagentUsage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 },
+    usageIncomplete: true, usageScope: 'session', context: { usedTokens: null, windowTokens: null },
+  }))
+  const view = mount(t, 'SessionHeading.vue', { apiBase: 'http://fixture', sessionId: 'web:partial',
+    name: 'Partial cache', physicalId: null, revision: 0, active: true })
+  await settle()
+  assert.match(view.text(), /400\s+\(80%\)\s+cache/)
+  assert.match(view.text(), /Partial cache report: 500 \/ 1K input tokens. Rate covers reported inputs only./)
+  assert.match(view.text(), /Token totals are partial; some calls have no reported usage./)
+  assert.match(view.text(), /Not reported\s+\(Not reported\)\s+cache/)
+  usage = { ...usage, cachedTokens: 0 }
+  view.state.revision = 1
+  await settle(); await settle()
+  assert.match(view.text(), /0\s+\(0%\)\s+cache/)
+  assert.match(view.text(), /Partial cache report:/)
+})

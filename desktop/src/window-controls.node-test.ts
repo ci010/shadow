@@ -7,6 +7,7 @@ import {
   framelessWindowOptions,
   desktopIconPath,
   installWindowControls,
+  MAIN_WINDOW_MAX_LISTENERS,
   removeNativeMenus,
   type WindowControlTarget,
   type WindowControlsIpc,
@@ -43,6 +44,22 @@ class FakeIpc implements WindowControlsIpc {
     }, ...args)
   }
 }
+
+test('Main window allows independent feature cleanup without disabling listener limits', () => {
+  const window = new FakeWindow()
+  window.setMaxListeners(MAIN_WINDOW_MAX_LISTENERS)
+  assert.equal(window.getMaxListeners(), 20)
+  let cleaned = 0
+  for (let index = 0; index < 14; index += 1) {
+    window.once('closed', () => { cleaned += 1 })
+  }
+  assert(window.listenerCount('closed') < window.getMaxListeners())
+  window.emit('closed')
+  assert.equal(cleaned, 14)
+  assert.equal(window.listenerCount('closed'), 0)
+  window.emit('closed')
+  assert.equal(cleaned, 14)
+})
 
 test('desktop windows are frameless with no overlay or native application menu', () => {
   const options = framelessWindowOptions('C:\\test\\preload.cjs')

@@ -12,6 +12,8 @@ import type { ChromePortAllocator } from '../browser/chrome-manager.ts'
 import type { RealtimeHub } from '../realtime/hub.ts'
 
 export interface ProjectRuntimeDependencies {
+  /** Single-use ownership scan, only during the initial host boot. */
+  startupSessionStates?: import('./session-ownership.ts').StartupOwnershipStates
   diagnostics?: RuntimeDiagnosticLog
   /** Omission preserves legacy/test callers. False selects the coordinator tool profile. */
   localExecutor?: boolean

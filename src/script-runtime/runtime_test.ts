@@ -6,9 +6,8 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { createProgram, ModuleKind, ModuleResolutionKind, ScriptTarget } from 'typescript'
+import { compileBackend } from '../../scripts/backend-bundle.ts'
 import { executeScript, ScriptCallError, startScript, type ScriptOptions } from './runtime.ts'
 import { encodeJson } from './json-boundary.ts'
 import { assertImportPolicy, importedModules } from './module-policy.ts'
@@ -425,20 +424,11 @@ test('compiled worker runs without tsx on plain Node and Electron RUN_AS_NODE', 
   const directory = join(process.cwd(), '.script-runtime-compiled-' + randomUUID())
   await mkdir(directory)
   try {
-    const sourceRoot = fileURLToPath(new URL('../', import.meta.url))
-    const program = createProgram({
-      rootNames: ['runtime.ts', 'worker.ts'].map(name => fileURLToPath(new URL(name, import.meta.url))),
-      options: {
-        target: ScriptTarget.ESNext, module: ModuleKind.NodeNext, moduleResolution: ModuleResolutionKind.NodeNext,
-        rewriteRelativeImportExtensions: true, rootDir: sourceRoot, outDir: join(directory, 'compiled'),
-        noCheck: true, types: [],
-      },
-    })
-    assert.equal(program.emit().emitSkipped, false)
+    await compileBackend(process.cwd(), join(directory, 'compiled'), ['script-runtime/runtime', 'script-runtime/worker'])
     await writeFile(join(directory, 'package.json'), JSON.stringify({ type: 'module' }))
     await writeFile(join(directory, 'helper.ts'), 'export const value: number = 7')
     await writeFile(join(directory, 'smoke.mjs'), `
-      import { executeScript } from './compiled/script-runtime/runtime.js';
+      import { executeScript } from './compiled/src/script-runtime/runtime.js';
       const signal = new AbortController().signal;
       const restricted = await executeScript({
         code: "import path from 'node:path'; import call from '@shadow/lookup'; export const run = () => call({value: path.basename('/a/b')})",
