@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { BaseSession } from './base-session.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
@@ -14,7 +14,7 @@ import { Tools, SessionTools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { pngFixture } from '../testing/image.ts'
-import { toolResultText } from '../tools/tool.ts'
+import { toolResultText, transientToolResult } from '../tools/tool.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 class ImageSession extends BaseSession {
@@ -22,6 +22,62 @@ class ImageSession extends BaseSession {
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: private observations reach only the next inference, never persisted images or history`, async () => withTempWorkspace(async home => {
+    const store: SessionStore = new Store(join(home, '.sessions'))
+    await store.init()
+    try {
+      const bytes = pngFixture(16, 16)
+      const raw = 'PRIVATE-DESKTOP-CONTENT-' + 'x'.repeat(40_000)
+      const tools = new Tools(home)
+      const hookResults: string[] = []
+      tools.addHook({ name: 'private-observation-fixture', async afterExecute(_name, _args, result) {
+        hookResults.push(result)
+        return result
+      } })
+      tools.register({
+        name: 'private_observe', description: 'Synthetic private observation', parameters: { type: 'object', properties: {} },
+        async execute() { return transientToolResult([
+          { type: 'text', text: raw },
+          { type: 'image_url', image_url: { url: `data:image/png;base64,${bytes.toString('base64')}` } },
+        ], 'Private observation omitted; observe again.') },
+      })
+      tools.register({ name: 'next_step', description: 'Synthetic next step', parameters: { type: 'object', properties: {} }, async execute() { return 'done' } })
+      const sessionTools = new SessionTools(tools, home)
+      const inputs: ChatMessage[][] = []
+      const provider: LLMProvider = {
+        name: 'fixture', listModels: () => ['fixture'],
+        async chat(messages) {
+          inputs.push(structuredClone(messages))
+          return inputs.length <= 2 ? {
+            content: null, toolCalls: [{ id: `step-${inputs.length}`, name: inputs.length === 1 ? 'private_observe' : 'next_step', arguments: {} }],
+          } : { content: 'Finished', toolCalls: [] }
+        },
+      }
+      const bus = new Bus()
+      const outputs: OutboundMessage[] = []
+      bus.on('message.outbound', message => { outputs.push(message) })
+      const sessionId = 'web:private-images'
+      const session = new ImageSession(home, sessionId, { sessionId, segmentIndex: 0, mode: 'session' },
+        [{ role: 'user', content: 'Observe the synthetic fixture' }], provider, sessionTools, bus, store)
+      await session.run({
+        sessionId, physicalSessionId: session.physicalSessionId, channel: 'web', chatId: 'fixture',
+        senderId: 'fixture', messageId: 'fixture', tools: sessionTools, signal: new AbortController().signal,
+      })
+      const observed = inputs[1].find(message => message.tool_call_id === 'step-1')!
+      assert.ok(Array.isArray(observed.content))
+      assert.ok(observed.content.some(part => part.type === 'image_url'))
+      assert.equal(observed.content.find(part => part.type === 'text')?.text, raw)
+      assert.doesNotMatch(JSON.stringify(inputs[2]), /PRIVATE-DESKTOP-CONTENT|base64,/)
+      const records = await Array.fromAsync(store.readSessionLog(session.physicalSessionId))
+      assert.doesNotMatch(JSON.stringify(records), /PRIVATE-DESKTOP-CONTENT|base64,|Image snapshots/)
+      assert.match(JSON.stringify(records), /Private observation omitted/)
+      assert.doesNotMatch(JSON.stringify(outputs), /PRIVATE-DESKTOP-CONTENT|base64,|Image snapshots/)
+      assert.equal(outputs.some(output => output.media?.length), false)
+      assert.doesNotMatch(JSON.stringify(hookResults), /PRIVATE-DESKTOP-CONTENT|base64,/)
+      const files = await readdir(home, { recursive: true })
+      assert.equal(files.some(path => path.endsWith('.png') || path.includes('tool-result-')), false)
+    } finally { store.close?.() }
+  }))
   test(`${Store.name}: tool image reaches the next inference, survives restart and can be reread from an immutable snapshot`, async () => withTempWorkspace(async home => {
     let store: SessionStore = new Store(join(home, '.sessions'))
     await store.init()

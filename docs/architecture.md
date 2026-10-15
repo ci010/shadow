@@ -43,6 +43,7 @@ current references from historical proposals.
 | Skills and agent types | Built-in definitions plus watched workspace overrides; progressive skill disclosure and per-type tool filtering |
 | Channels | Web plus project-owned Discord, Feishu, and QQ bot instances; legacy WeChat/iLink implementation is not started by project runtimes |
 | Browser automation | Lazy Chrome DevTools MCP with session-local launch/attach instances; requires a usable browser/CDP target and MCP process |
+| Windows computer use | Opt-in local window; UIA first, separately enabled guarded foreground keyboard/mouse, window-only screenshots, single-use owner approvals and transient observations; no automatic fallback or remote desktop |
 | Web application | Vue chat/session/files UI, agent views, logs and traces; Nodes reads device/capability inventory and provides Main desktop pairing controls; paired nodes execute without operation approvals |
 | Electron | Main/Child bootstrap, persisted launch profile, backend supervision, narrow preload API and renderer setup/recovery; separate-device/native-platform acceptance remains required |
 | Device execution | Explicit trusted-network device listener, pairing/challenge/WebSocket and bounded remote workdir operations; full remote tools, artifacts, revocation UI and release hardening remain WIP |
@@ -2618,6 +2619,19 @@ approval. Device revocation UI and complete multi-device release acceptance
 remain outside this slice.
 
 ## Programmable browser I/O
+
+For operating Windows applications rather than capturing browser inputs, see
+[Windows computer use](computer-use.md). Its `src/computer/` service is shared at
+Main-host scope, so concurrent Projects cannot write to the same desktop.
+Project routes and tool adapters enforce the owning local web conversation;
+the Windows UIA helper is an isolated, lazily started stdio process, with an
+independent foreground-input guard that releases its own held input on
+cancellation/host loss. The existing
+Session loop consumes observations for one inference and persists only their
+summary. The renderer supplies explicit grants/decisions and stop controls,
+not another agent engine. Coordinate approval frames are short-lived,
+owner/request-scoped in-memory images, not durable chat attachments.
+Local-executor disablement also disables this capability.
 
 `src/io/` connects first-party browser input and interaction to an agent-started
 local backend. The agent uses existing execution tools to start that backend in

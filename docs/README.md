@@ -22,6 +22,7 @@
 | [Visual design system](../DESIGN.md) | Quiet Workbench light/dark color roles, message hierarchy, components, and implementation guardrails |
 | [Shared live transport](realtime-protocol.md) | Multiplexed SSE, topic ownership, replay/reset, reconnect recovery, and resource limits |
 | [Frontend I/O](io.md) | Browser capture panels, adhoc backend connection protocol, controls, and verification limits |
+| [Windows computer use](computer-use.md) | UIA-first shared windows, opt-in guarded keyboard/mouse, exact-action reviews, transient observations and limits |
 | [Conventional audio setup](audio-setup.md) | First-use local/remote chooser, Agent-managed verified audio.cpp installation, model assessment and explicit API routes |
 | [Project Quick Actions](quick-actions.md) | Chat command buttons, dashboard pins, direct runs, and stable Search overlays |
 | [Inline visual answers](inline-visual-answers.md) | Native Markdown + safe HTML explanatory layouts inside web messages; no iframe or separate app |

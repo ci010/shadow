@@ -54,6 +54,23 @@ stage checks the provider connection instead of treating the former information
 page as completed authentication. An older Desktop without the provider-setup
 runtime command must be updated; setup does not silently skip the connection.
 
+## Windows computer use
+
+In a local Main conversation, open **Computer use** above the composer, refresh
+available windows, and explicitly share one already-open application. Sharing
+lasts up to 10 minutes; every modification requires its own **Approve once**
+decision. **Stop all desktop access** revokes the host-wide lease without closing
+the application. Browser work continues to use the existing browser tools.
+
+This first version prefers Windows accessibility controls and window-only
+screenshots. **Allow foreground keyboard and mouse** is a separate, default-off
+sharing option; each input still needs approval, and coordinate reviews show
+the exact screenshot. Foreground actions briefly activate the window; taking
+over stops further input, not input already delivered. Elevated applications
+and remote desktops remain unsupported. Window contents go to the configured model.
+Read [computer use](computer-use.md) for privacy, recovery and compatibility
+boundaries before sharing sensitive applications.
+
 ## Language
 
 Choose **English**, **Simplified Chinese**, or **System language** using the

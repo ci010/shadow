@@ -17,13 +17,14 @@ import {
 } from './input.ts'
 import {
   type ChatMessage,
+  type ContentPart,
   type LLMProvider,
   type LLMResponseUsage,
   type ToolCall,
   isContextSizeError,
 } from '../providers/provider.ts'
 import type { SessionTools } from '../tools/registry.ts'
-import { toolResultText, type ToolDefinition, type ToolResult } from '../tools/tool.ts'
+import { toolResultText, transientToolSummary, type ToolDefinition, type ToolResult } from '../tools/tool.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import { activeSpan, Span, spanAttributes, uspan } from '../otel/tracing.ts'
 import { physicalSessionId } from './session-identity.ts'
@@ -242,6 +243,7 @@ export abstract class BaseSession {
     executionContext = { ...executionContext, model, temperature, maxTokens, thinking, reasoningEffort }
     const budget = new InferenceBudget(this.tools.inferenceRequestLimit)
     let contextRecoveryAttempted = false
+    const transientResults = new Map<string, ContentPart[]>()
     executionContext.infer = createNodeInference({
       provider: this.provider, budget,
       llm: { model, temperature, maxTokens, thinking, reasoningEffort },
@@ -256,7 +258,7 @@ export abstract class BaseSession {
           throw new Error(`Saved tool call ${call.id} has invalid arguments`)
         }
         return { id: call.id, name: call.function.name, arguments: args as Record<string, unknown> }
-      }), { ...executionContext, recoveringToolCall: true }, llm, signal)
+      }), { ...executionContext, recoveringToolCall: true }, llm, signal, transientResults)
     }
 
     for (let i = 0; budget.remaining > 0; i++) {
@@ -273,7 +275,12 @@ export abstract class BaseSession {
         this.state.agentType === executionContext.channel &&
         (this.state.agentType === 'work-observer' || this.state.agentType === 'work-organizer')
       await this.recordContextEvent('work', boundedSystemTask ? '' : workGuard?.prompt(this.id, executionContext) ?? '')
-      const inferenceMessages = modelMessages(this.messages, executionContext.channel === 'qq')
+      const durableMessages = modelMessages(this.messages, executionContext.channel === 'qq')
+      const inferenceMessages = transientResults.size ? modelMessages(this.messages.map(message =>
+        message.role === 'tool' && message.tool_call_id && transientResults.has(message.tool_call_id)
+          ? { ...message, content: transientResults.get(message.tool_call_id)! } : message,
+      ), executionContext.channel === 'qq') : durableMessages
+      transientResults.clear()
       await this.tools.boundary?.beforeInference(signal)
       if (this.tools.boundary) await this.store.saveState(this.id, this.state)
 
@@ -296,7 +303,7 @@ export abstract class BaseSession {
             turnId,
             iteration: i,
             provider: this.provider.name,
-          }, inferenceMessages, toolDefs, { model, maxTokens, temperature, thinking, reasoningEffort })
+          }, durableMessages, toolDefs, { model, maxTokens, temperature, thinking, reasoningEffort })
           if (captureId) chatSpan.setAttribute('prompt.capture.request_id', captureId)
           budget.take()
           this.providerFailure = undefined
@@ -423,7 +430,7 @@ export abstract class BaseSession {
         return response.content ?? ''
       }
 
-      const terminal = await this.executeToolCalls(response.toolCalls, executionContext, llm, signal)
+      const terminal = await this.executeToolCalls(response.toolCalls, executionContext, llm, signal, transientResults)
       if (terminal !== undefined) return terminal
     }
     throw new Error('Session turn exceeded the maximum number of iterations')
@@ -434,6 +441,7 @@ export abstract class BaseSession {
     executionContext: ExecutionContext,
     llm: LlmRuntimeConfig,
     signal: AbortSignal,
+    transientResults: Map<string, ContentPart[]>,
   ): Promise<string | undefined> {
     let terminal: string | undefined
     const groups = groupTools(calls, this.tools)
@@ -450,15 +458,17 @@ export abstract class BaseSession {
           if (receipt.status === 'completed' || receipt.status === 'partial') terminal = result
         } catch { /* Tool errors are not terminal receipts. */ }
       }
-      const media = typeof result === 'string' ? [] : await saveToolImages(
+      const transient = transientToolSummary(result)
+      const media = typeof result === 'string' || transient !== undefined ? [] : await saveToolImages(
         resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).sessionDataDir,
         result.content, signal,
       )
       const snapshotText = media.length ? '\nImage snapshots (read these paths to view the same images again):\n' + media.map(path => JSON.stringify(path)).join('\n') : ''
-      const content = typeof result === 'string' ? result : [
+      const content = transient ?? (typeof result === 'string' ? result : [
         ...result.content, ...(snapshotText ? [{ type: 'text' as const, text: snapshotText }] : []),
-      ]
+      ])
       await this.appendMessages(llm, { role: 'tool', content, tool_call_id: call.id, name: call.name })
+      if (transient !== undefined && typeof result !== 'string') transientResults.set(call.id, result.content)
       pendingResults.delete(call.id)
       await this.tools.boundary?.beforeOutput(signal)
       this.emitOutbound({
@@ -467,7 +477,7 @@ export abstract class BaseSession {
         chatId: executionContext.chatId,
         channelAddress: executionContext.channelAddress,
         replyTo: executionContext.platformMessageId,
-        content: toolResultText(result) + snapshotText,
+        content: transient ?? toolResultText(result) + snapshotText,
         media: media.length ? media : undefined,
         toolCallId: call.id,
         toolName: call.name,

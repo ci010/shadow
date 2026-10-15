@@ -10,6 +10,7 @@ import type { ProjectConfigStore } from './config-store.ts'
 import type { ProjectRecord } from './contracts.ts'
 import type { ChromePortAllocator } from '../browser/chrome-manager.ts'
 import type { RealtimeHub } from '../realtime/hub.ts'
+import type { ComputerService } from '../computer/service.ts'
 
 export interface ProjectRuntimeDependencies {
   /** Single-use ownership scan, only during the initial host boot. */
@@ -27,6 +28,9 @@ export interface ProjectRuntimeDependencies {
   chromePortAllocator: ChromePortAllocator
   authorize: (request: Request) => boolean | Promise<boolean>
   realtimeHub?: RealtimeHub
+  computer?: ComputerService
+  /** Desktop grants require a local owner, not mobile/device credentials. */
+  authorizeComputer?: (request: Request) => boolean | Promise<boolean>
 }
 
 export interface ProjectRuntime {

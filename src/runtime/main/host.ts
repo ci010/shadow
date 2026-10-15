@@ -15,7 +15,7 @@ import { createAggregatedProvider } from '../../providers/factory.ts'
 import { providerPlugin } from '../../providers/routes.ts'
 import { createMainCluster, MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS } from '../../cluster/main-cluster.ts'
 import { AtomicFileRegistrySnapshotAdapter } from '../../cluster/persistence.ts'
-import { GatewayClientAddressRegistry, registerGatewayRoutes, resolveLaunchCredential, serveGateway, validateLaunchCredential } from '../../gateway/server.ts'
+import { GatewayClientAddressRegistry, isLoopbackGatewayRequest, registerGatewayRoutes, resolveLaunchCredential, serveGateway, validateLaunchCredential } from '../../gateway/server.ts'
 import { authorizeMainNodeInventory, mainLocalNodeInventory } from '../node-inventory.ts'
 import { LocalRuntimeControl } from '../local-control.ts'
 import { devProxyPlugin } from '../../gateway/dev-proxy.ts'
@@ -40,6 +40,8 @@ import { MainDeviceNetwork } from './device-network.ts'
 import { MobileAccess, mobileGatewayConfig } from '../../gateway/mobile-access.ts'
 import { a2aRequestProject } from '../../a2a/config.ts'
 import { FolderError } from '../../folders/registry.ts'
+import { ComputerService } from '../../computer/service.ts'
+import { WindowsComputerDesktop } from '../../execution/computer/windows.ts'
 
 export async function startProjectHost(
   config: Config,
@@ -115,6 +117,10 @@ export async function startProjectHost(
   let activeConfig = config
   const copilotAuth = new CopilotAuthenticator()
   const chromePortAllocator = new ChromePortAllocator()
+  const computer = new ComputerService(new WindowsComputerDesktop(), { enabled: options.localExecutor !== false })
+  cleanup.push(() => computer.close())
+  const authorizeComputer = async (request: Request) => isLoopbackGatewayRequest(request, clientAddresses)
+    && !mobileAccess?.authorizeMain(request) && !!await authorize(request)
   let provider = createAggregatedProvider(config, copilotAuth)
   const mainCluster = await startup.measure('cluster', () => createMainCluster({
     authorizeInventory: authorize,
@@ -198,7 +204,7 @@ export async function startProjectHost(
         runtime = await scope.run(() => factory(projectConfig, {
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
-          mainCluster, copilotAuth, chromePortAllocator, authorize, realtimeHub,
+          mainCluster, copilotAuth, chromePortAllocator, authorize, realtimeHub, computer, authorizeComputer,
           localExecutor: options.localExecutor !== false,
         }))
         await runtime.ready
@@ -308,6 +314,7 @@ export async function startProjectHost(
     }
     runtimes.clear()
     stores.clear()
+    await clean(() => computer.close())
     await clean(() => providerSetup.dispose())
     await clean(() => deviceNetwork.shutdown())
     await clean(() => mainCluster.closeNodeConnections())

@@ -293,6 +293,10 @@
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
+        <ComputerControl v-if="isDirectChat && !isCall && !remoteConversation && !embedded" :api-base="apiBase"
+          :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
+          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
+          :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
         <PublicationRequest :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
@@ -541,6 +545,7 @@ import type { YieldRequest, YieldDecisionRecord } from '../../../src/sessions/yi
 import { isInputRequest, MAX_YIELD_CUSTOM_TEXT_LENGTH, type AskRequest } from '../yield-requests.ts'
 import { MAX_ANSWER_ATTACHMENTS } from '../../../src/sessions/answer-media.ts'
 import CredentialRequest from './CredentialRequest.vue'
+import ComputerControl from './ComputerControl.vue'
 import PublicationRequest from './PublicationRequest.vue'
 import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
 import ExecutionMessage from './ExecutionMessage.vue'

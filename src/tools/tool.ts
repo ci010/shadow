@@ -9,6 +9,16 @@ export class ToolNoEffectError extends Error {}
 export class ToolOutcomeUnknownError extends Error {}
 
 const completedResults = new WeakSet<object>()
+const transientSummaries = new WeakMap<object, string>()
+/** Only trusted tool implementations can keep observations out of durable history. */
+export function transientToolResult(content: ContentPart[], summary: string): ToolResult {
+  const result = { content }
+  transientSummaries.set(result, summary)
+  return result
+}
+export function transientToolSummary(result: ToolResult): string | undefined {
+  return typeof result === 'string' ? undefined : transientSummaries.get(result)
+}
 /** A native execution returned an error, not a lost execution. Partial effects are not rolled back. */
 export function completedToolFailure(result: Exclude<ToolResult, string>): ToolResult {
   completedResults.add(result)

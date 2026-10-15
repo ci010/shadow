@@ -62,6 +62,7 @@ function createToolBinding(
           signal: AbortSignal.any([signal, callSignal]),
           toolCallId: crypto.randomUUID(),
           toolCallName: name,
+          scriptInvocation: true,
         }
         const result = await run(() => {
           if (options.dynamic && context.tools.hasDynamic(name)) {

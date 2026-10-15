@@ -41,6 +41,7 @@ test('direct bindings preserve project scope, session filtering and unique tool-
     assert.equal(seen.length, 2)
     assert(seen.every(call => call.sessionId === 'logical' && call.physicalSessionId === 'physical' && call.toolCallName === 'allowed'))
     assert(seen.every(call => call.toolCallId !== 'outer'))
+    assert(seen.every(call => call.scriptInvocation === true))
     assert.notEqual(seen[0].toolCallId, seen[1].toolCallId)
     assert.throws(() => other.run(() => bindScriptTools(ctx)), /binding mismatch/)
     await assert.rejects(other.run(() => binding.call('allowed', {}, ctx.signal)), /binding mismatch/)
@@ -134,6 +135,7 @@ test('dynamic opt-in resolves lazy siblings through invoke_tool and validates ac
     assert.deepEqual(imported, ['sibling'])
     assert.equal(seen.length, 2)
     assert(seen.every(call => call.toolCallName === 'sibling' && call.toolCallId !== 'outer'))
+    assert(seen.every(call => call.scriptInvocation === true))
     assert.notEqual(seen[0].toolCallId, seen[1].toolCallId)
     const denied = bindScriptTools(context(new SessionTools(base, '.', ['base_tool'])), { dynamic: true })
     try {

@@ -43,6 +43,8 @@ export interface ExecutionContext extends MessageContext {
   recoveringToolCall?: boolean
   /** Provider-facing tool name; nested script invocations are separate admissions. */
   toolCallName?: string
+  /** Host-stamped nested script RPC; never accepted as a model tool argument. */
+  scriptInvocation?: boolean
   /** Persist observed writes immediately, including nested script calls that outlive cancellation. */
   recordFileChange?: (change: import('../sessions/file-change-contract.ts').RecordedFileChange) => Promise<void>
   /** Read only this logical session's own recorded edits, across its physical segments. */

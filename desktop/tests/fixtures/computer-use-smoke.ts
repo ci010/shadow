@@ -1,0 +1,85 @@
+import assert from 'node:assert/strict'
+import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
+import { app, BrowserWindow } from 'electron'
+app.setPath('userData', join(process.cwd(), 'profile'))
+app.on('window-all-closed', () => {})
+async function main() {
+  await app.whenReady()
+  const window = new BrowserWindow({ show: false, width: 1100, height: 900,
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
+  const execute = (code: string) => window.webContents.executeJavaScript(code)
+  const wait = async (code: string) => {
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline) { if (await execute(code)) return; await delay(40) }
+    throw new Error(`Timed out: ${code}`)
+  }
+  try {
+    await window.loadURL(new URL('__computer', process.env.COMPUTER_SMOKE_URL).href)
+    await wait(`document.querySelector('.computer-disclosure')`)
+    assert.equal(await execute(`window.fixture.requests.some(r=>r.method==='POST')`), false)
+    await execute(`document.querySelector('.computer-disclosure').click()`)
+    await wait(`document.body.innerText.includes('Refresh available windows')`)
+    await execute(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('Refresh available windows')).click()`)
+    await wait(`document.querySelector('.ui-select-native option[value="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]')`)
+    assert.equal(await execute(`document.querySelector('[role="combobox"]').labels.length`), 1)
+    assert.equal(await execute(`document.querySelector('.computer-permission input').checked`), false)
+    assert.equal(await execute(`document.querySelector('.computer-permission input').disabled`), true)
+    await execute(`const select=document.querySelector('.ui-select-native');select.value='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';select.dispatchEvent(new Event('change',{bubbles:true}))`)
+    await wait(`!document.querySelector('.computer-primary').disabled`)
+    await execute(`document.querySelector('.computer-permission input').click()`)
+    await execute(`document.querySelector('.computer-primary').click()`)
+    await wait(`document.querySelector('.computer-target')`)
+    assert.equal(await execute(`document.querySelectorAll('.computer-control img').length`), 0, 'Window titles must not become HTML')
+    assert.deepEqual(await execute('window.fixture.shares'), [{ windowId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', foregroundInput: true }])
+    await execute(`window.fixture.state.pending={id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',targetId:window.fixture.state.grant.target.id,observationId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',expiresAt:new Date(Date.now()+60000).toISOString(),action:{kind:'set_value',elementId:'0',value:'Synthetic value\\nwith a second line'},element:{name:'Fixture input',role:'ControlType.Edit'}}`)
+    await wait(`document.body.innerText.includes('Approve this action once?')`)
+    for (const width of [1100, 390]) {
+      window.setContentSize(width, 900)
+      await execute('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+      assert.equal(await execute('document.documentElement.scrollWidth <= innerWidth'), true)
+      assert.equal(await execute(`document.querySelector('.computer-stop').disabled`), false)
+      assert.equal(await execute(`document.querySelector('.computer-body pre').textContent`), 'Synthetic value\nwith a second line')
+    }
+    await execute(`document.querySelector('.computer-actions .computer-primary').click()`)
+    await wait(`window.fixture.decisions.length===1`)
+    assert.deepEqual(await execute('window.fixture.decisions'), [{ approved: true }])
+    await execute(`window.fixture.state.pending={id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',targetId:window.fixture.state.grant.target.id,observationId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',expiresAt:new Date(Date.now()+60000).toISOString(),action:{kind:'drag',x:80,y:70,toX:300,toY:230,durationMs:300,modifiers:['SHIFT']},element:null,frame:{width:400,height:300}}`)
+    await wait(`document.querySelector('.computer-markers') && !document.querySelector('.computer-actions .computer-primary').disabled`)
+    for (const locale of ['en', 'zh-CN']) {
+      await execute(`window.fixture.setLocalePreference('${locale}')`)
+      for (const width of [1100, 390]) {
+        window.setContentSize(width, 900)
+        await execute('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+        assert.equal(await execute('document.documentElement.scrollWidth <= innerWidth'), true)
+        assert.equal(await execute(`document.querySelector('.computer-stop').disabled`), false)
+        assert.equal(await execute(`document.querySelector('.computer-frame img').naturalWidth`), 400)
+        assert.equal(await execute(`document.querySelector('.computer-frame img').src.startsWith('blob:')`), true)
+        assert.equal(await execute(`document.querySelector('.computer-markers').getAttribute('viewBox')`), '0 0 400 300')
+        assert.equal(await execute(`document.querySelector('.computer-markers circle').getAttribute('cx')`), '80.5')
+        assert.equal(await execute(`document.querySelector('.computer-markers line').getAttribute('x2')`), '300.5')
+        assert.equal(await execute(`document.querySelector('.computer-body kbd').textContent`), 'SHIFT')
+        assert.equal(await execute(`Math.abs(document.querySelector('.computer-frame img').getBoundingClientRect().width-document.querySelector('.computer-markers').getBoundingClientRect().width)<0.1`), true)
+      }
+    }
+    await execute(`document.querySelector('.computer-actions button:not(.computer-primary)').click()`)
+    await wait(`window.fixture.decisions.length===2 && !document.querySelector('.computer-frame')`)
+    await execute(`window.fixture.setLocalePreference('en');window.fixture.frameMode='error';window.fixture.state.pending={id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',targetId:window.fixture.state.grant.target.id,observationId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',expiresAt:new Date(Date.now()+60000).toISOString(),action:{kind:'move',x:20,y:30},element:null,frame:{width:400,height:300}}`)
+    await wait(`document.body.innerText.includes('The review screenshot could not be loaded.')`)
+    assert.equal(await execute(`document.querySelector('.computer-actions .computer-primary').disabled`), true)
+    assert.equal(await execute(`document.querySelector('.computer-actions button:not(.computer-primary)').disabled`), false)
+    await execute(`document.querySelector('.computer-actions button:not(.computer-primary)').click()`)
+    await wait(`window.fixture.decisions.length===3`)
+    await execute(`window.fixture.state.pending={id:'ffffffff-ffff-4fff-8fff-ffffffffffff',targetId:window.fixture.state.grant.target.id,observationId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',expiresAt:new Date(Date.now()+60000).toISOString(),action:{kind:'press_key',elementId:'0',key:'ARROW_LEFT',modifiers:['CTRL','SHIFT']},element:{name:'Fixture input',role:'ControlType.Edit'}}`)
+    await wait(`document.querySelector('.computer-body kbd')?.textContent==='CTRL + SHIFT + ARROW_LEFT'`)
+    assert.equal(await execute(`document.querySelectorAll('.computer-frame').length`), 0)
+    assert.equal(await execute(`document.querySelector('.computer-actions .computer-primary').disabled`), false)
+    await execute(`window.fixture.setLocalePreference('zh-CN')`)
+    await wait(`document.body.innerText.includes('电脑操作')`)
+    assert.equal(await execute(`document.body.innerText.includes('立即停止桌面访问')`), true)
+    await execute(`document.querySelector('.computer-stop').click()`)
+    await wait(`window.fixture.stops===1 && !document.querySelector('.computer-target')`)
+    console.log('COMPUTER_SMOKE_OK')
+  } finally { window.destroy() }
+}
+main().then(() => app.exit(0), error => { console.error(error); app.exit(1) })

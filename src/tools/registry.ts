@@ -2,7 +2,7 @@ import { projectStoragePath } from '../utils/data-paths.ts'
 import { trace } from '@opentelemetry/api'
 import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { ToolNoEffectError, ToolOutcomeUnknownError, isCompletedToolFailure, toolResultText, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
+import { ToolNoEffectError, ToolOutcomeUnknownError, isCompletedToolFailure, toolResultText, transientToolResult, transientToolSummary, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
 import { imageFromDataUrl, MAX_TOOL_IMAGES } from '../utils/image-input.ts'
 import type { ExecutionContext } from './context.ts'
 import type { McpConnection } from '../mcp/client.ts'
@@ -136,11 +136,17 @@ export class Tools {
       let text = toolResultText(result)
       const failed = typeof result !== 'string' && result.isError !== undefined
         ? result.isError : /^(Error|Blocked):/.test(text)
-      text += receipt?.finish(failed || context.signal.aborted,
+      const receiptText = receipt?.finish(failed || context.signal.aborted,
         !context.signal.aborted && isCompletedToolFailure(result) ? 'returned' : undefined) ?? ''
+      text += receiptText
       const images = typeof result === 'string' ? [] : result.content.filter(part => part.type === 'image_url')
       if (images.length > MAX_TOOL_IMAGES) throw new Error(`A tool result supports at most ${MAX_TOOL_IMAGES} images. Request fewer images.`)
       for (const image of images) imageFromDataUrl(image.image_url.url)
+      const transient = transientToolSummary(result)
+      if (transient !== undefined) {
+        const summary = await this.onAfter(name, args, transient + receiptText, context)
+        return transientToolResult([{ type: 'text', text }, ...images], summary)
+      }
       // Run post-execution hooks
       text = await this.onAfter(name, args, text, context)
 

@@ -21,7 +21,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
     const previousCwd = process.cwd()
     const environmentKeys = ['GITHUB_COPILOT_TOKEN_DIR', 'GITHUB_COPILOT_ACCESS_TOKEN_FILE',
       'GITHUB_COPILOT_API_KEY_FILE', 'GITHUB_COPILOT_MODELS_CACHE_FILE', 'OTEL_DB_PATH', 'VITE_DEV_URL', 'UI_DIST_DIR',
-      'SHADOW_A2A_MISSING_STARTUP_TEST_TOKEN']
+      'SHADOW_A2A_MISSING_STARTUP_TEST_TOKEN', 'SHADOW_MOBILE_ORIGIN', 'SHADOW_MOBILE_PORT']
     const previousEnvironment = new Map(environmentKeys.map(key => [key, process.env[key]]))
     let runtime: MainRuntimeHandle | undefined
     try {
@@ -39,12 +39,19 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       await writeFile(join(home, 'unknown-user-file.bin'), Buffer.from([0, 41, 255]))
       await writeFile(join(pathA, 'sentinel.txt'), 'A file only')
       await writeFile(join(pathB, 'sentinel.txt'), 'B file only')
-      const reservation = createServer().listen(0, '127.0.0.1')
-      await once(reservation, 'listening')
-      const address = reservation.address()
-      assert(address && typeof address !== 'string')
-      const port = address.port
-      await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+      async function availablePort() {
+        const reservation = createServer().listen(0, '127.0.0.1')
+        await once(reservation, 'listening')
+        const address = reservation.address()
+        assert(address && typeof address !== 'string')
+        const port = address.port
+        await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+        return port
+      }
+      const port = await availablePort()
+      const mobilePort = await availablePort()
+      process.env.SHADOW_MOBILE_ORIGIN = 'https://mobile.fixture.test'
+      process.env.SHADOW_MOBILE_PORT = String(mobilePort)
       const rawConfig = {
         agent: { workspace: home, model: 'fixture@openai', sessionStorage: 'sqlite' },
         providers: { openai: { apiKey: 'synthetic-unused-key', baseUrl: 'http://127.0.0.1:1/v1' } },
@@ -213,6 +220,31 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const sessionB = await json<{ sessionId: string }>(b + `/api/folders/${folderB.id}/sessions`, 'POST', {})
       const aSession = a + `/api/sessions/${encodeURIComponent(sessionA.sessionId)}`
       const bSession = b + `/api/sessions/${encodeURIComponent(sessionB.sessionId)}`
+      const computerPath = a + `/api/computer/${encodeURIComponent(sessionA.sessionId)}`
+      assert.equal((await fetch(base + computerPath)).status, 401)
+      const computer = await json<{ projectId: string; sessionId: string; available: boolean; grant: unknown }>(computerPath)
+      assert.equal(computer.projectId, 'default')
+      assert.equal(computer.sessionId, sessionA.sessionId)
+      assert.equal(computer.available, process.platform === 'win32')
+      assert.equal(computer.grant, null)
+      assert.equal((await request(computerPath)).headers.get('cache-control'), 'no-store')
+      assert.equal((await fetch(base + computerPath, { headers: browserHeaders })).status, 200)
+      assert.equal((await request(b + `/api/computer/${encodeURIComponent(sessionA.sessionId)}`)).status, 403)
+      assert.equal((await fetch(base + a + '/api/computer/stop', { method: 'POST' })).status, 401)
+      assert.deepEqual(await json(a + '/api/computer/stop', 'POST'), { stopped: true })
+      const mobileOffer = await json<{ code: string }>('/local/v1/mobile-pairing', 'POST')
+      const mobileLogin = await fetch(`http://127.0.0.1:${mobilePort}/mobile/v1/pair`, {
+        method: 'POST', headers: { origin: 'capacitor://localhost', 'content-type': 'application/json' },
+        body: JSON.stringify({ code: mobileOffer.code }),
+      })
+      assert.equal(mobileLogin.status, 200)
+      const mobileToken = (await mobileLogin.json()).accessToken
+      const mobileHeaders = { origin: 'capacitor://localhost', authorization: `Bearer ${mobileToken}` }
+      assert.equal((await fetch(`http://127.0.0.1:${mobilePort}/api/projects`, { headers: mobileHeaders })).status, 200)
+      for (const [path, method] of [[computerPath, 'GET'], [a + '/api/computer/stop', 'POST'],
+        [computerPath + '/windows', 'POST'], [computerPath + '/share', 'POST']]) {
+        assert.equal((await fetch(`http://127.0.0.1:${mobilePort}${path}`, { method, headers: mobileHeaders })).status, 401)
+      }
       assert.equal((await fetch(base + aSession + '/context', { headers: browserHeaders })).status, 200)
       assert.equal((await fetch(base + b + '/api/config/model-defaults', {
         method: 'PATCH', headers: browserHeaders, body: JSON.stringify({ model: null }),
