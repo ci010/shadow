@@ -6,7 +6,6 @@ import { DEFAULT_AGENT_MODEL } from './defaults.ts'
 import { WebSearchSelectionSchema } from './web-search.ts'
 import { A2aConfigSchema } from '../a2a/config.ts'
 import { workObserverConfigSchema } from '../projects/work-observer.ts'
-import { retirementConfigSchema } from '../sessions/retirement-contract.ts'
 
 // ── Provider configs ────────────────────────────────────────────────────────
 
@@ -273,7 +272,6 @@ export const ConfigSchema = z.object({
   tools: ToolsSchema.default({}),
   learning: LearningSchema.default({}),
   workObserver: workObserverConfigSchema.default({}),
-  sessionRetirement: retirementConfigSchema.default({}),
   cron: CronConfigSchema.default({}),
   tunnel: TunnelSchema.default({}),
   voice: z.never().optional(),

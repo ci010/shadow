@@ -39,7 +39,7 @@ export class CronDispatcher {
         channel: 'cron', chatId: runId, agentType: job.agentType ?? 'general',
         task, signal, mode: 'task', automation, waitForCompletion: true,
         ...(job.source !== 'learning' ? { statePersistence: { version: 1 as const, kind: 'fresh-automation' as const, jobId: job.id } } : {}),
-        onAccepted, executionLimits,
+        onAccepted, executionLimits: executionLimits ?? job.executionLimits,
         locality: {
           folderId: job.folderId, initiativeId: job.initiativeId,
           workspaceRoot: job.workspaceRoot, workdir: job.workdir,

@@ -83,6 +83,8 @@ export interface Tool<Result extends ToolResult = string> {
   readonly supportsRemoteWorkdir?: boolean
   /** If true, this tool is opt-in only — hidden unless explicitly listed in allowedTools. */
   readonly optIn?: boolean
+  /** Trusted, bounded evidence/receipt outputs must not be truncated before model inspection. */
+  readonly preserveOutput?: boolean
 
   /**
    * System-provided execution context.

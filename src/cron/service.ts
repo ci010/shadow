@@ -16,6 +16,8 @@ import {
 const JOBS_FILE = '.cron/jobs.json'
 
 export interface CronJobDef {
+  /** Host-configured tool/budget ceiling for fresh agent executions. */
+  executionLimits?: { allowedTools: string[]; inferenceRequests: number; toolCalls: number; argumentBytes: number }
   name?: string
   session?: CronContextMode
   agentType?: string
@@ -53,6 +55,14 @@ function isCronJob(value: unknown): value is CronJob {
   if ('target' in value && value.target !== undefined && !isCronEventTarget(value.target)) return false
   if ('event' in value && value.event !== undefined && !isCronEventPayload(value.event)) return false
   const v = value as Record<string, unknown>
+  if (v.executionLimits !== undefined) {
+    const limits = v.executionLimits as CronJobDef['executionLimits']
+    if (!limits || typeof limits !== 'object' || !Array.isArray(limits.allowedTools) ||
+      limits.allowedTools.some(name => typeof name !== 'string' || !name) ||
+      ![limits.inferenceRequests, limits.toolCalls, limits.argumentBytes].every(n => Number.isSafeInteger(n) && n > 0) ||
+      Object.keys(limits).some(key => !['allowedTools', 'inferenceRequests', 'toolCalls', 'argumentBytes'].includes(key)) ||
+      v.session !== 'fresh') return false
+  }
   parseInitiativeId(v)
   if (v.session !== undefined && v.session !== 'existing' && v.session !== 'fresh') return false
   if (v.session === 'fresh' ? v.target !== undefined : !isCronEventTarget(v.target)) return false
@@ -98,6 +108,7 @@ export class CronService {
   private intervals = new Map<string, ReturnType<typeof setInterval>>()
   private executing = new Map<string, Promise<void>>()
   private onChanged?: () => void
+  private initializedDefaults = new Set<string>()
 
   constructor(
     private workspace: string,
@@ -178,9 +189,30 @@ export class CronService {
       }, signal)
       return this.scope ? this.scope.run(run) : run()
     }
+
     const job = this.managed.get(id)?.job ?? this.jobs.get(id)
     if (!job) return Promise.reject(new Error(`Unknown cron job: ${id}`))
     return this.scope ? this.scope.run(() => this.runJob(job, signal)) : this.runJob(job, signal)
+  }
+
+  /** Cancellation is independent of enablement: disabling only prevents future timer admissions. */
+  async cancelRun(id: string): Promise<boolean> {
+    const pending = this.executing.get(id)
+    if (!pending) return false
+    this.running.get(pending)?.abort(new Error('Automation cancelled'))
+    await Promise.allSettled([pending])
+    return true
+  }
+
+  /** Install a normal persisted default once; user removal and preferences survive reload. */
+  async ensureDefaultJob(key: string, def: CronJobDef): Promise<void> {
+    if (!key || key.length > 100) throw new TypeError('Invalid automation default key')
+    if (this.initializedDefaults.has(key)) return
+    // A stable installation identity also deduplicates a restart between the job and marker writes.
+    const id = `default:${key}`
+    if (!this.jobs.has(id)) this.addJob(def, id)
+    this.initializedDefaults.add(key)
+    await this.saveJobs()
   }
 
   /**
@@ -218,9 +250,9 @@ export class CronService {
     console.info('[cron] Cron service stopped')
   }
 
-  addJob(def: CronJobDef): string {
+  addJob(def: CronJobDef, id = globalThis.crypto.randomUUID().slice(0, 8)): string {
     if (this.stopped) throw new Error('CronService is stopped')
-    const id = globalThis.crypto.randomUUID().slice(0, 8)
+    if (this.jobs.has(id) || this.managed.has(id) || this.maintenance.has(id)) throw new TypeError('Duplicate cron job ID')
     const job: CronJob = {
       ...structuredClone(def),
       id,
@@ -387,6 +419,8 @@ export class CronService {
       throw new TypeError(`[cron] Expected { version: 1, jobs: [...] } in ${this.jobsPath}`)
     }
     const jobs = new Map<string, CronJob>()
+    const defaults = 'initializedDefaults' in store ? store.initializedDefaults : []
+    if (!Array.isArray(defaults) || defaults.some(key => typeof key !== 'string' || !key)) throw new TypeError('Invalid automation defaults')
     if (!('ownershipVersion' in store) || store.ownershipVersion !== 2) throw new TypeError('Unsupported cron ownership version')
     for (const raw of store.jobs) {
       if (!raw || typeof raw !== 'object') throw new TypeError('Invalid cron job')
@@ -400,6 +434,7 @@ export class CronService {
       jobs.set(job.id, job)
     }
     this.jobs = jobs
+    this.initializedDefaults = new Set(defaults)
   }
 
   async flush(): Promise<void> {
@@ -412,7 +447,9 @@ export class CronService {
   }
 
   private saveJobs(): Promise<void> {
-    const contents = JSON.stringify({ version: 1, ownershipVersion: 2, jobs: Array.from(this.jobs.values()) }, null, 2)
+    const contents = JSON.stringify({ version: 1, ownershipVersion: 2,
+      ...(this.initializedDefaults.size ? { initializedDefaults: [...this.initializedDefaults] } : {}),
+      jobs: Array.from(this.jobs.values()) }, null, 2)
     const pending = this.persistenceTail.then(async () => {
       await mkdir(workspacePath(this.workspace, '.cron'), { recursive: true })
       await writeFile(this.jobsPath, contents)

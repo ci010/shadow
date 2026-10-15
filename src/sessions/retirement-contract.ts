@@ -1,9 +1,6 @@
 import { z } from 'zod'
 
-export const retirementConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  inactivityDays: z.number().int().min(1).max(3650).default(5),
-})
+export const RETIREMENT_INACTIVITY_DAYS = 5
 
 export const retirementReceiptSchema = z.object({
   retiredAt: z.string().datetime(),

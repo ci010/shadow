@@ -312,6 +312,18 @@ delivery. This is prompt guidance, not an automatic export, retention guarantee,
 or change to session directory creation/deletion. Internal uploads and drafts
 remain in session-managed storage.
 
+Recoverable [session cleanup](session-retirement.md) is an ordinary disabled
+fresh automation installed once in the Project's persisted cron jobs, not a
+dedicated runtime scheduler or config lifecycle. It uses the normal automation
+inventory, enablement, manual execution/cancellation, `CronDispatcher`,
+`SessionManager` agent/tool loop and JSONL/SQLite run history. Generic persisted
+execution ceilings grant its imported `session_retirement` tool; that tool owns
+only domain inspection, freshness/ownership checks and verified preservation
+before writing a recoverable retirement receipt. Five-day user inactivity is
+eligibility, not evidence of completion. There is no startup scan or physical
+purge. Legacy retirement config is inert; upgrading requires explicit opt-in to
+the ordinary automation.
+
 Migration is explicit and offline; see [data migration](data-migration.md).
 Startup refuses an active/interrupted migration lock or detectable unmigrated
 legacy catalog instead of silently creating an empty Default. The copy tool

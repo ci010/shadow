@@ -52,7 +52,8 @@ import { McpManager } from '../../mcp/manager.ts'
 import { ConversationContextsBusyError, SessionManager } from '../../sessions/session-manager.ts'
 import { SessionRetirement } from '../../sessions/retirement.ts'
 import { registerRetirementRoutes } from '../../sessions/retirement-routes.ts'
-import { scheduleSessionRetirement } from './session-retirement.ts'
+import { SessionRetirementTool } from '../../tools/session-retirement.ts'
+import { SESSION_CLEANUP_AUTOMATION, SESSION_CLEANUP_DEFAULT_KEY } from '../../cron/defaults.ts'
 import { WorkObserver } from '../../projects/work-observer.ts'
 import { physicalSessionId } from '../../sessions/session-identity.ts'
 import { WorkOrganizer, ORGANIZATION_TOOLS } from '../../projects/work-organizer.ts'
@@ -1173,7 +1174,6 @@ export async function createProjectRuntime(
   cleanup.push(() => knowledgeSchedule.stop())
   const retirement = new SessionRetirement({
     sessions, workspace,
-    config: () => configStore.current().sessionRetirement,
     folderPath: state => {
       const folder = state.folderId ? folderRegistry.get(state.folderId) : undefined
       return folder && folder.kind !== 'remote' ? folder.path : undefined
@@ -1185,15 +1185,9 @@ export async function createProjectRuntime(
       cronService.listJobs().some(job => job.enabled !== false &&
         (job.target?.sessionId === id || job.originSessionId === id || job.workspaceRoot === id)),
   })
-  let retirementReady = false
-  const retirementSchedule = scheduleSessionRetirement(cronService, retirement)
-  const stopRetirement = async () => {
-    retirementReady = false
-    await retirementSchedule.stop()
-  }
-  cleanup.push(stopRetirement)
+  importTool.registerBuiltin('session_retirement', new SessionRetirementTool(retirement, sessions, cronService))
   registerRetirementRoutes(app, {
-    sessions, retirement, ready: () => retirementReady, authorize: dependencies.authorize,
+    sessions, authorize: dependencies.authorize,
   })
   const cronDispatcher = new CronDispatcher(sessions, async (job, targetSessionId, signal) => {
     signal.throwIfAborted()
@@ -1462,7 +1456,6 @@ export async function createProjectRuntime(
       () => io.shutdown(),
       () => microApps.shutdown(),
       () => knowledgeSchedule.stop(),
-      stopRetirement,
       () => knowledgeMaintenance.stop(),
       () => pollingSources.stop(),
       () => github.stop(),
@@ -1516,13 +1509,12 @@ export async function createProjectRuntime(
     workObserver.start()
   })
   await ready
+  await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
   pollingSources.start()
   events.registerManagedSource({ source: 'github', kind: 'custom', description: 'Explicit Project GitHub resource subscriptions' })
   github.start()
   a2a.validate()
   void knowledgeSchedule.start().catch(error => console.error('[knowledge] Scheduled scan failed', error))
-  retirementReady = true
-  void retirementSchedule.start().catch(error => console.error('[retirement] Startup scan failed', error))
   resumeApprovedPublications()
   publicationRetryTimer = setInterval(resumeApprovedPublications, 2000)
   publicationRetryTimer.unref()

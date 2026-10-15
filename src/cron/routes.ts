@@ -83,6 +83,17 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
     else if (!await cron.setJobEnabled(id, body.enabled)) return c.json({ error: 'automation_not_found' }, 404)
     return c.json({ automation: (await summaries(true)).find(job => job.id === id) })
   })
+  for (const action of ['run', 'cancel'] as const) app.post(`/api/automations/:id/${action}`, async c => {
+    if (systemControls && !await systemControls.authorize(c.req.raw)) return c.json({ error: 'forbidden' }, 403)
+    const id = c.req.param('id')
+    // Managed/event-driven controllers retain their own admission policy.
+    const job = cron.listJobs().find(job => job.id === id && cronContextMode(job) === 'fresh' && job.source !== 'learning')
+    if (!job) return c.json({ error: 'automation_not_found' }, 404)
+    if (action === 'cancel') return c.json({ cancelled: await cron.cancelRun(id) })
+    // Like CronService.runNow, explicit manual execution is allowed while the timer is disabled.
+    void cron.runNow(id).catch(error => console.error('[automation] Manual run failed', error))
+    return c.json({ accepted: true }, 202)
+  })
   app.get('/api/automations/:id/runs', async c => {
     const id = c.req.param('id')
     if (!(await summaries()).some(job => job.id === id)) return c.json({ error: 'automation_not_found' }, 404)

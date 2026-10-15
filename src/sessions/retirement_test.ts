@@ -19,7 +19,7 @@ import { SqliteSessionStore } from './session-store-sqlite.ts'
 import { physicalSessionId } from './session-identity.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
 import { inside, inspectDrafts, safeDeliveryName, SessionRetirement } from './retirement.ts'
-import { retirementConfigSchema } from './retirement-contract.ts'
+import { RETIREMENT_INACTIVITY_DAYS } from './retirement-contract.ts'
 import { Hono } from 'hono'
 import { registerRetirementRoutes } from './retirement-routes.ts'
 
@@ -40,7 +40,7 @@ async function fixture(workspace: string, store: SessionStore, answer: () => Pro
   const provider: LLMProvider = {
     name: 'fixture', listModels: () => ['fixture'],
     async chat(_messages, tools) {
-      assert.equal(tools?.length ?? 0, 0, 'Closeout assessment must not have executable tools')
+      assert.equal(tools?.length ?? 0, 0, 'This domain fixture does not register tools')
       return { content: JSON.stringify(await answer()), toolCalls: [] }
     },
   }
@@ -58,16 +58,26 @@ async function fixture(workspace: string, store: SessionStore, answer: () => Pro
     getLlmRuntimeConfig: () => llm,
   })
   await sessions.start()
-  return { sessions, state: sessions.getSessionState(id)!, async close() {
+  return { sessions, assess: answer, state: sessions.getSessionState(id)!, async close() {
     await sessions.stop(); await backgroundTasks.stop(); await events.stop(); store.close?.()
   } }
 }
 
-test('retirement is opt-in with a validated five-day default', () => {
-  assert.deepEqual(retirementConfigSchema.parse({}), { enabled: false, inactivityDays: 5 })
-  assert.throws(() => retirementConfigSchema.parse({ inactivityDays: 0 }))
+test('retirement eligibility uses five days; enablement belongs to automation', () => {
+  assert.equal(RETIREMENT_INACTIVITY_DAYS, 5)
 })
 
+async function assess(service: SessionRetirement, f: Awaited<ReturnType<typeof fixture>>) {
+  const signal = new AbortController().signal
+  const results: string[] = []
+  for (const sessionId of await service.candidates(signal)) {
+    try {
+      const inspection = await service.inspect(sessionId, 'cron:fixture', signal)
+      results.push(await service.apply(inspection.token, await f.assess(), 'cron:fixture', signal))
+    } catch (error) { results.push(String(error)) }
+  }
+  return results
+}
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: recent assistant activity does not reset human inactivity; stale proposals blocked`, async () => {
     await withTempWorkspace(async workspace => {
@@ -135,16 +145,16 @@ test('agent assessment blocks unresolved work; cron gates suppress assessment', 
     })
     let protectedByCron = true
     const service = new SessionRetirement({ sessions: f.sessions, workspace,
-      config: () => ({ enabled: true }), protected: () => protectedByCron, folderPath: () => undefined })
+      protected: () => protectedByCron, folderPath: () => undefined })
     try {
-      await service.scan()
+      await assess(service, f)
       assert.equal(assessed, 0)
       protectedByCron = false
-      await service.scan()
+      const results = await assess(service, f)
       assert.equal(assessed, 1)
-      assert.match(service.status.results[0]?.status ?? '', /Unfinished user request/)
+      assert.match(results[0] ?? '', /Unfinished user request/)
       assert.equal(f.state.retirement, undefined)
-    } finally { await service.stop(); await f.close() }
+    } finally { await f.close() }
   })
 })
 
@@ -160,18 +170,18 @@ test('draft inventory rejects traversal and linked paths; safe copies are verifi
     const f = await fixture(workspace, new JsonlSessionStore(join(workspace, 'sessions')), async () => ({
       ...completed, files: [{ source: 'result.txt', destination: output }],
     }))
-    const service = new SessionRetirement({ sessions: f.sessions, workspace, config: () => ({ enabled: true }),
+    const service = new SessionRetirement({ sessions: f.sessions, workspace,
       protected: () => false, folderPath: () => destination })
     try {
       assert.equal(inside(root, join(root, '..', 'escape')), false)
       assert.equal(inside(root, join(root, 'result.txt')), true)
       for (const name of ['CON.txt', 'result.txt:stream', '../escape', 'trailing.', 'LPT1.md']) assert.equal(safeDeliveryName(name), false)
       await writeFile(output, 'existing file')
-      await service.scan()
+      await assess(service, f)
       assert.equal(await readFile(output, 'utf8'), 'existing file')
       assert.equal(f.sessions.getSessionState(id)?.retirement, undefined)
       await rm(output)
-      await service.scan()
+      await assess(service, f)
       assert.equal(await readFile(output, 'utf8'), 'valuable output')
       assert.ok(f.sessions.getSessionState(id)?.retirement)
       assert.equal(await readFile(join(root, 'result.txt'), 'utf8'), 'valuable output')
@@ -181,7 +191,7 @@ test('draft inventory rejects traversal and linked paths; safe copies are verifi
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error
       }
-    } finally { await service.stop(); await f.close(); await rm(destination, { recursive: true }) }
+    } finally { await f.close(); await rm(destination, { recursive: true }) }
   })
 
 })
@@ -193,18 +203,19 @@ test('selective knowledge is saved as discoverable wiki, not compaction; API req
         knowledgeEntries: [{ name: 'fixture-topic.md', content: '# Fixture topic\n\nA useful verified fact. Source: web:chat-retirement-fixture.' }],
       }))
       const service = new SessionRetirement({ sessions: f.sessions, workspace,
-        config: () => ({ enabled: true }), protected: () => false, folderPath: () => undefined })
+        protected: () => false, folderPath: () => undefined })
       let authorized = false
       const app = new Hono()
-      registerRetirementRoutes(app, { sessions: f.sessions, retirement: service, ready: () => true, authorize: () => authorized })
+      registerRetirementRoutes(app, { sessions: f.sessions, authorize: () => authorized })
       try {
         assert.equal((await app.request('/api/session-retirement')).status, 401)
         assert.equal((await app.request('/api/session-retirement/scan', { method: 'POST' })).status, 401)
-        await service.scan()
+        await assess(service, f)
         assert.ok(f.sessions.getSessionState(id)?.retirement)
         assert.match(await readFile(join(workspace, 'memory', 'retirement', 'fixture-topic.md'), 'utf8'), /useful verified fact/)
         assert.equal((await f.sessions.listHistorySessions()).some(state => state.sessionId === id), false)
         authorized = true
+        assert.equal((await app.request('/api/session-retirement/scan', { method: 'POST' })).status, 404)
         const status = await app.request('/api/session-retirement')
         assert.equal(status.status, 200)
         assert.equal((await status.json()).recentlyDeleted.length, 1)
@@ -212,7 +223,7 @@ test('selective knowledge is saved as discoverable wiki, not compaction; API req
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: id }),
         })).status, 200)
         assert.equal(f.sessions.getSessionState(id)?.retirement, undefined)
-      } finally { await service.stop(); await f.close() }
+      } finally { await f.close() }
     })
   })
 
@@ -224,12 +235,12 @@ test('a cron/activity change while the agent assesses blocks retirement', async 
         return completed
       })
       const service = new SessionRetirement({ sessions: f.sessions, workspace,
-        config: () => ({ enabled: true }), protected: () => blocked, folderPath: () => undefined })
+        protected: () => blocked, folderPath: () => undefined })
       try {
-        await service.scan()
+        const results = await assess(service, f)
         assert.equal(f.sessions.getSessionState(id)?.retirement, undefined)
-        assert.match(service.status.results[0]?.status ?? '', /gates changed/)
-      } finally { await service.stop(); await f.close() }
+        assert.match(results[0] ?? '', /gates changed/)
+      } finally { await f.close() }
     })
   })
 
@@ -274,6 +285,26 @@ await withTempWorkspace(async workspace => {
 })
 })
 
+test('inspection tokens are single-use, execution-owned and revoked by cancellation; stale evidence fails closed', async () => {
+  await withTempWorkspace(async workspace => {
+    const f = await fixture(workspace, new JsonlSessionStore(join(workspace, 'sessions')))
+    const service = new SessionRetirement({ sessions: f.sessions, workspace, protected: () => false, folderPath: () => undefined })
+    try {
+      const controller = new AbortController()
+      const inspected = await service.inspect(id, 'cron:owner', controller.signal)
+      await assert.rejects(service.apply(inspected.token, completed, 'cron:other', controller.signal), /another execution/)
+      controller.abort()
+      await assert.rejects(service.apply(inspected.token, completed, 'cron:owner', new AbortController().signal), /missing/)
+      const signal = new AbortController().signal
+      const next = await service.inspect(id, 'cron:owner', signal)
+      f.state.lastUserMessageAt = new Date().toISOString()
+      await assert.rejects(service.apply(next.token, completed, 'cron:owner', signal), /stale/)
+      await assert.rejects(service.apply(next.token, completed, 'cron:owner', signal), /missing/)
+      assert.equal(f.state.retirement, undefined)
+    } finally { await f.close() }
+  })
+})
+
 test('continuation must name an existing durable same-Project session explicitly present in source history', async () => {
 await withTempWorkspace(async workspace => {
   const store = new JsonlSessionStore(join(workspace, 'sessions'))
@@ -282,11 +313,11 @@ await withTempWorkspace(async workspace => {
     ...completed, outcome: 'continued', continuationSessionId: target,
   }))
   const service = new SessionRetirement({ sessions: f.sessions, workspace,
-    config: () => ({ enabled: true }), protected: () => false, folderPath: () => undefined })
+    protected: () => false, folderPath: () => undefined })
   try {
-    await service.scan()
+    const results = await assess(service, f)
     assert.equal(f.sessions.getSessionState(id)?.retirement, undefined)
-    assert.match(service.status.results[0]?.status ?? '', /Unverified continuation/)
+    assert.match(results[0] ?? '', /Unverified continuation/)
     await f.sessions.buildSession(target, undefined, { agentType: 'general', mode: 'session' })
     await store.appendRawEvents(physicalSessionId(f.sessions.getSessionState(target)!), [{
       role: 'user', content: `Continue the remaining task from ${id}. Context: fixture task.`, timestamp: old,
@@ -294,9 +325,9 @@ await withTempWorkspace(async workspace => {
     await store.appendRawEvents(physicalSessionId(f.state), [{
       role: 'assistant', content: `The remaining work explicitly continues in ${target}.`, timestamp: old,
     }])
-    await service.scan()
+    await assess(service, f)
     assert.ok(f.sessions.getSessionState(id)?.retirement)
     assert.ok(f.sessions.getSessionState(target))
-  } finally { await service.stop(); await f.close() }
+  } finally { await f.close() }
 })
 })

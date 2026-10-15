@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { Cron } from 'croner'
 import { withTempWorkspace } from '../testing/workspace.ts'
+import { workspacePath } from '../utils/paths.ts'
 import { CronService } from './service.ts'
 import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
@@ -16,8 +17,8 @@ const mondayJob = {
 }
 
 async function writeStore(workspace: string, content: string): Promise<string> {
-  await mkdir(join(workspace, '.cron'), { recursive: true })
-  const path = join(workspace, '.cron', 'jobs.json')
+  await mkdir(workspacePath(workspace, '.cron'), { recursive: true })
+  const path = workspacePath(workspace, '.cron', 'jobs.json')
   await writeFile(path, content)
   return path
 }
@@ -96,7 +97,7 @@ test('new cron jobs persist the format version and can be reloaded', async (t) =
       await service.start()
       const id = service.addJob({ schedule: '0 9 * * SUN', task: 'Sunday task', target: { sessionId: 'web:test' } })
       await t.waitFor(async () => {
-        const raw = await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')
+        const raw = await readFile(workspacePath(workspace, '.cron', 'jobs.json'), 'utf8')
         assert.deepEqual(JSON.parse(raw), { version: 1, ownershipVersion: 2, jobs: service.listJobs() })
         return true
       })
@@ -107,7 +108,7 @@ test('new cron jobs persist the format version and can be reloaded', async (t) =
       assert.equal(reloaded.listJobs()[0]?.schedule, '0 9 * * SUN')
       assert.equal(reloaded.removeJob(id), true)
       await t.waitFor(async () => {
-        const raw = await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')
+        const raw = await readFile(workspacePath(workspace, '.cron', 'jobs.json'), 'utf8')
         assert.deepEqual(JSON.parse(raw), { version: 1, ownershipVersion: 2, jobs: [] })
         return true
       })
@@ -163,8 +164,8 @@ test('same-name cron jobs bind runtime scope and stopping one drains only its ow
       assert.deepEqual(calls, [1, 2])
       services[1].addJob({ schedule: '0 10 * * MON', task: 'B only', target: { sessionId: 'web:test' } })
       await services[1].stop()
-      const a = JSON.parse(await readFile(join(homes[0], '.cron', 'jobs.json'), 'utf8'))
-      const b = JSON.parse(await readFile(join(homes[1], '.cron', 'jobs.json'), 'utf8'))
+      const a = JSON.parse(await readFile(workspacePath(homes[0], '.cron', 'jobs.json'), 'utf8'))
+      const b = JSON.parse(await readFile(workspacePath(homes[1], '.cron', 'jobs.json'), 'utf8'))
       assert.equal(a.jobs.length, 1)
       assert.equal(b.jobs.length, 2)
       assert.equal(b.jobs[1].task, 'B only')

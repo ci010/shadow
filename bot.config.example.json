@@ -15,10 +15,6 @@
     "restrictToWorkspace": true,
     "yield": {
       "timeoutMs": null
-    },
-    "sessionRetirement": {
-      "enabled": false,
-      "inactivityDays": 5
     }
   }
 }

@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
+import { workspacePath } from '../utils/paths.ts'
 import { CronService } from './service.ts'
 
 test('cron restores legacy Initiative linkage independently from its folder', async () => {
   await withTempWorkspace(async home => {
-    await mkdir(join(home, '.cron'))
-    await writeFile(join(home, '.cron', 'jobs.json'), JSON.stringify({
+    await mkdir(workspacePath(home, '.cron'), { recursive: true })
+    await writeFile(workspacePath(home, '.cron', 'jobs.json'), JSON.stringify({
       version: 1,
       ownershipVersion: 2,
       jobs: [{

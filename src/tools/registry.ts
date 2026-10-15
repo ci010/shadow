@@ -152,7 +152,7 @@ export class Tools {
 
       if (
         text.length > this.truncationThreshold &&
-        !EXEMPT_TOOLS.has(name) &&
+        !EXEMPT_TOOLS.has(name) && !tool.preserveOutput &&
         !(name === 'search' && typeof args.space === 'string' && (
           /^(?:glob|grep):[\\/]*v:/.test(args.space) ||
           /^(?:glob|grep)(?::.*)?$/.test(args.space) && typeof args.path === 'string' && isVirtualPath(args.path) ||
@@ -519,6 +519,12 @@ export class SessionTools extends Tools {
 
   executionDenial(name: string, args: Record<string, unknown>): string | undefined {
     if (this.trustedLimits && !this.trustedLimits.allowedTools.includes(name)) return this.rejectExecution("Tool is outside the trusted one-shot allowlist.")
+    if (this.trustedLimits && name === 'import_tool' &&
+      (typeof args.source !== 'string' || !args.source.startsWith('v:tools/') ||
+        !this.trustedLimits.allowedTools.includes(args.source.slice('v:tools/'.length)) ||
+        args.args !== undefined || args.server !== undefined)) {
+      return this.rejectExecution('Trusted executions may import only explicitly granted catalog sources without extra arguments.')
+    }
     if (name === 'ask' && !this.askAvailable) return this.rejectExecution(CHAT_QUESTION_GUIDANCE)
     if (name === 'invoke_tool' && typeof args.name === 'string') {
       return this.executionDenial(args.name, typeof args.args === 'object' && args.args !== null ? args.args as Record<string, unknown> : {})
