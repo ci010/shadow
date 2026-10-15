@@ -302,6 +302,16 @@ Project configuration. Registered external repositories and remote capabilities
 are not moved. Browser profiles, I/O artifacts, Micro Apps, and learning state
 are durable data, not disposable caches.
 
+The workspace system prompt distinguishes session draft storage from durable
+file delivery. An explicit user destination wins; otherwise finished files go
+to the selected Folder, or, for chats without a Folder, a `Shadow` subfolder
+of the appropriate OS user directory (Documents, Pictures, Videos, Music or
+Downloads). Desktop is opt-in. Agents must discover actual paths on the execution
+device, respect permissions and existing files, and verify saving before claiming
+delivery. This is prompt guidance, not an automatic export, retention guarantee,
+or change to session directory creation/deletion. Internal uploads and drafts
+remain in session-managed storage.
+
 Migration is explicit and offline; see [data migration](data-migration.md).
 Startup refuses an active/interrupted migration lock or detectable unmigrated
 legacy catalog instead of silently creating an empty Default. The copy tool

@@ -1,4 +1,5 @@
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
+import { retirementReceiptSchema } from './retirement-contract.ts'
 import { DatabaseSync as Database } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -37,6 +38,8 @@ interface SessionPrototypeV1 {
 }
 
 const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
+  'lastUserMessageAt',
+  'retirement',
   'channelBoundary',
   'workPolicy',
   'name',
@@ -100,6 +103,8 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (!isRecord(value)) return null
 
   const metadata: SessionMetadata = { ownershipVersion: 2, ...parseTopicSessionFields(value) }
+  if (value.lastUserMessageAt !== undefined) metadata.lastUserMessageAt = parseContextResetAt(value.lastUserMessageAt)
+  if (value.retirement !== undefined) metadata.retirement = retirementReceiptSchema.parse(value.retirement)
   if (value.channelBoundary !== undefined) metadata.channelBoundary = parseChannelBoundary(value.channelBoundary)
   if (value.workPolicy !== undefined) metadata.workPolicy = parseWorkPolicy(value.workPolicy)
   if (value.name !== undefined) metadata.name = parseSessionName(value.name)
@@ -388,6 +393,8 @@ export class SqliteSessionStore implements SessionStore {
       version: PROTOTYPE_VERSION,
       metadata: {
         ...this.prototypeMetadataExtras.get(sessionKey),
+        lastUserMessageAt: parseContextResetAt(state.lastUserMessageAt),
+        retirement: state.retirement === undefined ? undefined : retirementReceiptSchema.parse(state.retirement),
         workPolicy: parseWorkPolicy(state.workPolicy),
         name: state.name === undefined ? undefined : parseSessionName(state.name),
         generatedTitle: state.generatedTitle === undefined ? undefined : parseSessionName(state.generatedTitle),

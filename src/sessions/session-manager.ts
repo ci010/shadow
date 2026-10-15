@@ -1,4 +1,6 @@
 import { validateFreshAutomationState } from './fresh-automation-state.ts'
+import { createHash } from 'node:crypto'
+import { retirementReceiptSchema, type RetirementReceipt } from './retirement-contract.ts'
 import { trace } from '@opentelemetry/api'
 import { StartupTimings } from '../runtime/startup-timings.ts'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from './session-name.ts'
@@ -1232,6 +1234,10 @@ ${JSON.stringify(request)}`,
       this.assertFolderAccess(sessionId)
       this.assertHistoryWritable(sessionId)
       const state = this.sessionStates[sessionId]
+      if (state?.retirement) {
+        if (input.source.kind !== 'user') throw new Error('Session is retired; restore it before automated delivery.')
+        await this.saveState(sessionId, { ...state, retirement: undefined })
+      }
       const resume = input.kind === 'control' && input.command.type === 'resume' ? input.command : undefined
       if (resume && (state?.mode !== 'session' || state.recovery?.id !== resume.recoveryId)) {
         throw new SessionResumeError('This recovery is no longer current. Refresh the conversation.')
@@ -1338,6 +1344,11 @@ ${JSON.stringify(request)}`,
         this.deps.conversationPolicies?.authorize(sessionId, input)
         if (input.source.kind === 'user') {
           await this.updateChannelConversationName(sessionId, input.source.sender)
+          if (input.kind === 'message') {
+            const current = this.sessionStates[sessionId]
+            current.lastUserMessageAt = new Date().toISOString()
+            await this.store.saveState(sessionId, current)
+          }
         }
         if (state?.mode === 'task' && this.acceptedInputs.has(sessionId) && deliveryInput.kind === 'message') {
           await this.store.appendRawEvents(SessionManager.currentPhysicalId(state), [{
@@ -2070,6 +2081,89 @@ ${JSON.stringify(request)}`,
 
   // ── Deletion ──────────────────────────────────────────────────────
 
+  private retirementProtected(state: SessionState): boolean {
+    const id = state.sessionId
+    return !!(state.retirement || !/^web:chat-/.test(id) || state.channelBoundary
+      || state.sessionKind === 'orchestrator' || state.agentType === 'orchestrator' || state.automation || state.statePersistence || state.initiativeId
+      || state.mode && state.mode !== 'session' || state.recovery
+      || ['pending', 'running', 'waiting'].includes(state.executionStatus ?? '')
+      || this.sessions[id] || this.calls.has(id) || this.reporting.has(id)
+      || this.stateCreations.has(id) || (this.ownedCreations.get(id)?.size ?? 0) > 0
+      || this.deleting.has(id) || this.inputs.get(id, true) || this.yields.get(id)
+      || this.deps.hasPendingExternalExecution?.(id)
+      || this.deps.backgroundTasks.listTasks().some(task =>
+        (task.status === 'running' || task.status === 'cancelling') &&
+        task.sessionId === id)
+      || Object.values(this.sessionStates).some(other => other.sessionId !== id &&
+        (other.parent?.id === id || other.parentSessionId === id || other.reportTo === id
+          || other.workspaceRoot === id || other.decisionOwnerSessionId === id))
+      || state.workspaceRoot && state.workspaceRoot !== id
+      || state.parent || state.parentSessionId || state.reportTo || state.decisionOwnerSessionId)
+  }
+
+  /** Unknown legacy user timing is protected; role=user also contains system events. */
+  async retirementSnapshot(sessionId: string, inactivityDays: number, locked = false) {
+    const state = this.sessionStates[sessionId]
+    if (!state || this.retirementProtected(state) || !locked && this.preparations.has(sessionId)) return null
+    const locations = resolveSessionLocations(this.deps.workspace, state, LOCAL_NODE_ID, this.deps.workdirCapabilityLookup)
+    if (!locations.workdir.available || locations.workdir.locality !== 'local') return null
+    for (const other of await this.listHistoryStates()) {
+      if (other.sessionId === sessionId) continue
+      if (other.parent?.id === sessionId || other.parentSessionId === sessionId ||
+        other.workspaceRoot === sessionId || other.reportTo === sessionId ||
+        resolveSessionLocations(this.deps.workspace, other, LOCAL_NODE_ID, this.deps.workdirCapabilityLookup).sessionDataDir === locations.sessionDataDir) return null
+    }
+    const records: Record<string, unknown>[] = []
+    const hash = createHash('sha256').update(JSON.stringify(state))
+    let lastUser = state.lastUserMessageAt ? Date.parse(state.lastUserMessageAt) : NaN
+    let size = 0
+    for (let segment = 0; segment <= state.segmentIndex; segment++) {
+      for await (const record of this.store.readSessionLog(physicalSessionId(state, segment))) {
+        const text = JSON.stringify(record)
+        size += text.length
+        if (size > 120_000) return null
+        hash.update(text).update('\n')
+        records.push(record)
+        const decision = record.decision_input as { at?: unknown } | undefined
+        if (typeof decision?.at === 'string' && Number.isFinite(Date.parse(decision.at))) {
+          lastUser = Math.max(Number.isFinite(lastUser) ? lastUser : 0, Date.parse(decision.at))
+        }
+      }
+    }
+    if (!Number.isFinite(lastUser) || Date.now() - lastUser < inactivityDays * 86_400_000) return null
+    return { state: structuredClone(state), fingerprint: hash.digest('hex'), records }
+  }
+
+  async retireSession(sessionId: string, fingerprint: string, inactivityDays: number,
+    receipt: RetirementReceipt, verify: () => Promise<void | (() => void)>): Promise<void> {
+    if (receipt.fingerprint !== fingerprint) throw new Error('Retirement receipt does not match proposal')
+    await this.withSessionPreparation(sessionId, async () => {
+      const snapshot = await this.retirementSnapshot(sessionId, inactivityDays, true)
+      if (!snapshot || snapshot.fingerprint !== fingerprint) throw new Error('Stale retirement proposal')
+      const recheck = await verify()
+      // No admission can cross this preparation lock; catch metadata/history changes during file checks too.
+      const final = await this.retirementSnapshot(sessionId, inactivityDays, true)
+      if (!final || final.fingerprint !== fingerprint) throw new Error('Session changed during retirement verification')
+      recheck?.()
+      const next = { ...this.sessionStates[sessionId], retirement: retirementReceiptSchema.parse(receipt) }
+      await this.saveState(sessionId, next)
+      this.deps.bus.emit('session.changed', { sessionId })
+    })
+  }
+
+  listRetiredSessions(): SessionState[] {
+    return Object.values(this.sessionStates).filter(state => state.retirement).map(state => structuredClone(state))
+  }
+
+  async restoreRetiredSession(sessionId: string): Promise<void> {
+    await this.withSessionPreparation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state?.retirement) throw new Error('Retired session not found')
+      await this.saveState(sessionId, { ...state, retirement: undefined })
+      this.deps.bus.emit('session.changed', { sessionId })
+    })
+  }
+
   /**
    * Delete a session and its owned children, retaining shared or ambiguous logs.
    *
@@ -2254,7 +2348,7 @@ ${JSON.stringify(request)}`,
   }
 
   async listHistorySessions(): Promise<ReturnType<SessionManager['listSessions']>> {
-    return (await this.listHistoryStates()).map(state => ({
+    return (await this.listHistoryStates()).filter(state => !state.retirement).map(state => ({
       ...(state.projectId ? { projectId: state.projectId } : {}),
       sessionId: state.sessionId,
       name: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName,
@@ -2593,7 +2687,7 @@ ${JSON.stringify(request)}`,
     Pick<SessionState, 'projectId' | 'sessionId' | 'name' | 'description' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'createdBySessionId'
       | 'initiativeId' | 'automation' | 'agentType' | 'mode' | 'executionStatus'>
   > {
-    return Object.values(this.sessionStates).map((s) => ({
+    return Object.values(this.sessionStates).filter(s => !s.retirement).map((s) => ({
       ...(s.projectId ? { projectId: s.projectId } : {}),
       sessionId: s.sessionId,
       name: s.name ?? s.topic?.title ?? s.generatedTitle ?? s.chatName,

@@ -50,6 +50,9 @@ import type { Config } from '../../config/schema.ts'
 import { HandoffManager } from '../../sessions/handoff/manager.ts'
 import { McpManager } from '../../mcp/manager.ts'
 import { ConversationContextsBusyError, SessionManager } from '../../sessions/session-manager.ts'
+import { SessionRetirement } from '../../sessions/retirement.ts'
+import { registerRetirementRoutes } from '../../sessions/retirement-routes.ts'
+import { scheduleSessionRetirement } from './session-retirement.ts'
 import { WorkObserver } from '../../projects/work-observer.ts'
 import { physicalSessionId } from '../../sessions/session-identity.ts'
 import { WorkOrganizer, ORGANIZATION_TOOLS } from '../../projects/work-organizer.ts'
@@ -1168,6 +1171,30 @@ export async function createProjectRuntime(
   const cronService = new CronService(workspace, config.cron.timezone)
   const knowledgeSchedule = scheduleKnowledgeMaintenance(cronService, knowledgeMaintenance)
   cleanup.push(() => knowledgeSchedule.stop())
+  const retirement = new SessionRetirement({
+    sessions, workspace,
+    config: () => configStore.current().sessionRetirement,
+    folderPath: state => {
+      const folder = state.folderId ? folderRegistry.get(state.folderId) : undefined
+      return folder && folder.kind !== 'remote' ? folder.path : undefined
+    },
+    protected: id => backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs ||
+      processManager.list().some(process => !process.exitedAt) ||
+      !!credentialRequests.pending() || !!publicationRequests.pending() ||
+      probeRequests.list().some(request => request.status === 'pending' || request.status === 'running') ||
+      cronService.listJobs().some(job => job.enabled !== false &&
+        (job.target?.sessionId === id || job.originSessionId === id || job.workspaceRoot === id)),
+  })
+  let retirementReady = false
+  const retirementSchedule = scheduleSessionRetirement(cronService, retirement)
+  const stopRetirement = async () => {
+    retirementReady = false
+    await retirementSchedule.stop()
+  }
+  cleanup.push(stopRetirement)
+  registerRetirementRoutes(app, {
+    sessions, retirement, ready: () => retirementReady, authorize: dependencies.authorize,
+  })
   const cronDispatcher = new CronDispatcher(sessions, async (job, targetSessionId, signal) => {
     signal.throwIfAborted()
     const event = isCronEventPayload(job.event) ? job.event : {
@@ -1435,6 +1462,7 @@ export async function createProjectRuntime(
       () => io.shutdown(),
       () => microApps.shutdown(),
       () => knowledgeSchedule.stop(),
+      stopRetirement,
       () => knowledgeMaintenance.stop(),
       () => pollingSources.stop(),
       () => github.stop(),
@@ -1493,6 +1521,8 @@ export async function createProjectRuntime(
   github.start()
   a2a.validate()
   void knowledgeSchedule.start().catch(error => console.error('[knowledge] Scheduled scan failed', error))
+  retirementReady = true
+  void retirementSchedule.start().catch(error => console.error('[retirement] Startup scan failed', error))
   resumeApprovedPublications()
   publicationRetryTimer = setInterval(resumeApprovedPublications, 2000)
   publicationRetryTimer.unref()

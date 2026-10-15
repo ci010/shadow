@@ -61,6 +61,38 @@ test('folder workspace prompt distinguishes actual cwd from private uploads', as
   assert(prompt?.includes('not the registered folder'))
 })
 
+test('file delivery guidance separates durable outputs from session drafts for every locality and role', async () => {
+  for (const name of ['general', 'orchestrator']) {
+    for (const kind of ['managed', 'folder', 'remote', 'unavailable'] as const) {
+      const prompt = (await workspaceProvider(resolve('main'), new VirtualFs(), () => ({
+        node: kind === 'unavailable' ? 'offline' : 'online',
+        capability: { kind: 'workdir', online: true, path: resolve('selected-folder') },
+      })).getPromptSection(context({
+        agent: { ...agent, name },
+        folderId: kind === 'folder' ? 'folder' : undefined,
+        workdir: kind === 'managed' ? undefined : kind === 'folder'
+          ? localFolderWorkdirRef('folder')
+          : { version: 1, nodeId: 'child', capabilityId: 'remote-folder' },
+      })))!
+      assert.match(prompt, /Session-managed directories are draft spaces/)
+      assert.match(prompt, /honor the user's explicit destination first/)
+      assert.match(prompt, /when a Folder is selected, put finished deliverables in that Folder/)
+      assert.match(prompt, /Documents, images in Pictures, videos in Videos, audio in Music/)
+      assert.match(prompt, /downloaded files in Downloads/)
+      assert.match(prompt, /Use a Shadow subfolder/)
+      assert.match(prompt, /Use Desktop only when the user requests it/)
+      assert.match(prompt, /localization and redirected or cloud-backed folders/)
+      assert.match(prompt, /do not silently use session storage as final delivery/)
+      assert.match(prompt, /Never remove user files or overwrite an existing destination without authorization/)
+      assert.match(prompt, /verify that the final file was successfully saved/)
+      assert.match(prompt, /must not be removed as part of session cleanup/)
+      assert.match(prompt, /this guidance grants no additional access/)
+      assert.match(prompt, /do not.*use Main user-folder paths for a remote device/i)
+      if (name === 'orchestrator') assert.match(prompt, /carry these destination rules into the task/)
+    }
+  }
+})
+
 test('workspace prompt reports unavailable capability without a local path', async () => {
   const workspace = resolve('workspace')
   const ctx = context({

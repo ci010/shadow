@@ -1,4 +1,5 @@
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
+import { retirementReceiptSchema } from './retirement-contract.ts'
 import { join } from 'node:path'
 import { readStatePool } from './state-read-pool.ts'
 import { appendFile, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
@@ -59,6 +60,8 @@ export class JsonlSessionStore implements SessionStore {
       if (state.chatName !== undefined) state.chatName = parseSessionName(state.chatName)
       parsePhysicalIdVersion(state.physicalIdVersion)
       parseContextResetAt(state.contextResetAt)
+      parseContextResetAt(state.lastUserMessageAt)
+      if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
       parseChannelBoundary(state.channelBoundary)
       parseDecisionOwner(state.decisionOwnerSessionId)
       if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
@@ -85,6 +88,8 @@ export class JsonlSessionStore implements SessionStore {
     parseAutomationSessionRef(state.automation)
     parsePhysicalIdVersion(state.physicalIdVersion)
     parseContextResetAt(state.contextResetAt)
+    parseContextResetAt(state.lastUserMessageAt)
+    if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
     parseChannelBoundary(state.channelBoundary)
     parseDecisionOwner(state.decisionOwnerSessionId)
     state = { ...state, workPolicy: parseWorkPolicy(state.workPolicy) }

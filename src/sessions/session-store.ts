@@ -107,6 +107,10 @@ export interface ArchivedStateQuery {
 export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV1 }
 
 export interface SessionState {
+  /** Human input admission time, independent of assistant/event activity. Legacy unknown is protected. */
+  lastUserMessageAt?: string
+  /** Recoverable retirement only: logs and directories remain intact. */
+  retirement?: import('./retirement-contract.ts').RetirementReceipt
   /** Future-only opt-in. Never inferred from historical agent names or addresses. */
   statePersistence?: import('./fresh-automation-state.ts').FreshAutomationPolicy
   /** Durable caller-side outcome barrier; execution completion alone is insufficient. */
