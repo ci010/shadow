@@ -78,7 +78,7 @@
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <SessionHeading v-show="!mobileLayout" ref="sessionHeading" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
-            :name="activeSessionName" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
+            :name="conversationTitle" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :can-rename="installation.uiScopes.includes('chat:write')" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
           <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="!!previousPhysicalId || !!automationConversation?.hasPrevious.value"
@@ -133,18 +133,23 @@
           </div>
           <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
           <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx">
-            <AutomationPayload v-if="automationConversation?.automation.value?.source === 'system' && (msg.role === 'user' || (msg.role === 'assistant' && !msg.event && !!msg.content))" :source="msg.content" :input="msg.role === 'user'" :automation-id="automationConversation?.automation.value?.id" />
+            <div v-if="automationConversation?.automation.value?.source === 'system' && (msg.role === 'user' || (msg.role === 'assistant' && !msg.event && !!msg.content))"
+              class="chat-bubble automation-bubble" :class="msg.role === 'user' ? 'chat-user' : 'chat-assistant'" :data-msg-idx="idx"
+              role="article" :aria-label="t(msg.role === 'user' ? 'User message' : 'Assistant message')">
+              <AutomationPayload class="chat-content" :source="msg.content" :input="msg.role === 'user'" :automation-id="automationConversation?.automation.value?.id" />
+              <div class="chat-footer"><MessageTimestamp :timestamp="msg.timestamp" /></div>
+            </div>
             <CommandResult v-else-if="msg.commandReceipt" :receipt="msg.commandReceipt">
-              <div class="prose" v-html="renderMarkdown(msg.content)" />
+              <div class="prose" v-answer-html v-html="renderMarkdown(msg.content)" />
             </CommandResult>
             <ExecutionMessage v-else-if="inlineExecutions.entries.has(idx)" :execution="inlineExecutions.entries.get(idx)!"
               :selected="childSessionId === inlineExecutions.entries.get(idx)!.sessionId"
               @inspect="inspectExecution" @interact="clearSelection">
-              <div v-if="inlineExecutions.entries.get(idx)!.output" class="chat-content prose" v-html="renderMarkdown(inlineExecutions.entries.get(idx)!.output!)" />
+              <div v-if="inlineExecutions.entries.get(idx)!.output" class="chat-content prose" v-answer-html v-html="renderMarkdown(inlineExecutions.entries.get(idx)!.output!)" />
             </ExecutionMessage>
             <MessageAction v-else-if="messageActions.entries.has(idx)" :message="messageActions.entries.get(idx)!"
               :running="streaming && !viewingPhysicalId" @inspect="inspectExecution" @interact="clearSelection">
-              <div class="chat-content prose" v-html="renderMarkdown(messageActions.entries.get(idx)!.content)" />
+              <div class="chat-content prose" v-answer-html v-html="renderMarkdown(messageActions.entries.get(idx)!.content)" />
             </MessageAction>
             <InputQuestion v-else-if="inputQuestions.entries.has(idx)" :entry="inputQuestions.entries.get(idx)!"
               :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" :data-msg-idx="idx"
@@ -164,7 +169,7 @@
               :meta="msg.eventMeta" :content="msg.content" :timestamp="msg.timestamp" :source="sourceForEvent(msg.eventMeta)"
               :selected="childSessionId === eventSourceSession(msg.eventMeta)"
               @inspect="inspectExecution" @interact="clearSelection">
-              <div v-if="msg.content" class="chat-content prose" v-html="renderMarkdown(msg.content)" />
+              <div v-if="msg.content" class="chat-content prose" v-answer-html v-html="renderMarkdown(msg.content)" />
             </ConversationEvent>
             <!-- Compaction summary (previous conversation context) -->
             <ConversationSummary v-else-if="msg.isSummary" :content="msg.content"
@@ -193,9 +198,9 @@
                   <span class="thinking-label">{{ t('Thinking') }}</span>
                   <span class="thinking-toggle w-3 h-3" :class="expandedThinking.has(idx) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" aria-hidden="true" />
                 </div>
-                <div v-if="expandedThinking.has(idx)" class="thinking-content prose" v-html="renderMarkdown(msg.reasoningContent || msg.reasoningText || '')" />
+                <div v-if="expandedThinking.has(idx)" class="thinking-content prose" v-answer-html v-html="renderMarkdown(msg.reasoningContent || msg.reasoningText || '')" />
               </div>
-              <div v-if="msg.attachmentBody.text" class="chat-content prose" v-html="renderMarkdown(msg.attachmentBody.text)" />
+              <div v-if="msg.attachmentBody.text" class="chat-content prose" v-answer-html v-html="renderMarkdown(msg.attachmentBody.text)" />
               <div
                 v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
                 class="retry-row"
@@ -297,7 +302,9 @@
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
 
-        <div v-if="(channelConversation || automationConversation) && !viewingPhysicalId" class="channel-conversation-settings" :aria-label="t('This conversation')">
+        <AutomationConversationSettings v-if="automationConversation?.automation.value"
+          :key="automationConversation.automation.value.id" :api-base="apiBase" :job="automationConversation.automation.value" :active="paneActive" @saved="automationConversation.refresh()" />
+        <div v-if="channelConversation && !viewingPhysicalId" class="channel-conversation-settings" :aria-label="t('This conversation')">
           <div class="channel-settings-row">
             <ModelSelector :key="activeSessionId" :settings="reasoningSettings"
               :conversation-defaults="channelConversation"
@@ -490,6 +497,7 @@ import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
 import { Marked } from 'marked'
+import { answerHtmlExtension, sanitizeAnswerHtmlRoots, vAnswerHtml } from '../answer-html'
 import { paddedStrongCompatibility } from '../markdown-strong-compat.ts'
 import katex from 'katex'
 import MessageAttachments from './MessageAttachments.vue'
@@ -546,6 +554,7 @@ import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatE
 import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl, hostBase } from '../api-url.ts'
+import AutomationConversationSettings from './AutomationConversationSettings.vue'
 import { automationChatLocation } from '../automations.ts'
 import { useAutomationConversation } from '../composables/useAutomationConversation.ts'
 import AutomationConversationInfo from './AutomationConversationInfo.vue'
@@ -561,6 +570,7 @@ import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
 import { createFolderChatDraft, createRemoteChatDraft } from '../remote-conversations.ts'
 import { createExecutionLocationDraft, type ExecutionLocation } from '../execution-locations.ts'
 import AutomationPayload from './AutomationPayload.vue'
+import { readableAutomationTitle } from '../automation-presentation.ts'
 import type { SessionDetails } from '../session-details.ts'
 import { appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasFileReference, readFileReference } from '../file-reference-drag.ts'
@@ -625,6 +635,7 @@ function openConversationLink(event: MouseEvent) {
 
 const marked = new Marked({ breaks: true })
 marked.use(paddedStrongCompatibility())
+marked.use(answerHtmlExtension())
 marked.use({
   renderer: {
     link({ href, title, text }) {
@@ -1337,7 +1348,7 @@ const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation
 const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
 const workbench = ref<InstanceType<typeof FileWorkbench>>()
 const automationConversation = useAutomationConversation(() => activeSessionId.value, () => !!props.automationRun)
-const conversationTitle = computed(() => (automationConversation.value?.automation.value?.source === 'system' ? automationConversation.value?.run.value?.title : undefined) || automationConversation.value?.automation.value?.name || activeSessionName.value)
+const conversationTitle = computed(() => (automationConversation.value?.automation.value?.source === 'system' ? readableAutomationTitle(automationConversation.value?.run.value?.title) : undefined) || automationConversation.value?.automation.value?.name || activeSessionName.value)
 watch(() => [props.automationRun, props.visible] as const, ([run, visible]) => {
   if (run && visible) {
     void nextTick(() => workbench.value?.showConversation())
@@ -2800,7 +2811,7 @@ function renderMarkdown(text: string): string {
   // Restore rendered math blocks
   html = html.replace(/\x00MATH(\d+)\x00/g, (_, i) => mathBlocks[parseInt(i)])
 
-  return imagePreviewMarkup(mobileResources.html(DOMPurify.sanitize(html, {
+  return imagePreviewMarkup(mobileResources.html(DOMPurify.sanitize(sanitizeAnswerHtmlRoots(html), {
     ADD_TAGS: [...KATEX_TAGS, 'img'],
     ADD_ATTR: [...KATEX_ATTRS, 'target', 'rel', 'src', 'alt', 'loading', 'class'],
   })))
@@ -3290,6 +3301,9 @@ function resendLastMessage() {
   line-height: 1.5;
   border: 1px solid var(--c-chat-border);
 }
+
+.automation-bubble.chat-user { --automation-bubble-bg: var(--c-chat-user-bg); }
+.automation-bubble.chat-assistant { --automation-bubble-bg: var(--c-chat-assistant-bg); }
 
 .chat-user {
   box-sizing: border-box;

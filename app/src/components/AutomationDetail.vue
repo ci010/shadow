@@ -10,8 +10,8 @@
       <p v-else>{{ t('No saved runs yet. The conversation will appear after the first run.') }}</p>
       <AutomationConversationInfo v-if="automation && !error && !history.error" :conversation="conversation" />
     </div>
-    <AutomationProfile v-if="automation && enabled" :api-base="apiBase" :feature-id="automationId" :active="active && enabled" />
     <slot />
+    <AutomationConversationSettings v-if="automation && enabled && !selectedSessionId" :api-base="apiBase" :job="automation" :active="active && enabled" @saved="catalog.refresh()" />
   </section>
 </template>
 
@@ -24,7 +24,7 @@ import { createAutomationConversation, automationRunPosition } from '../automati
 import { createAutomationRunHistory, emptyAutomationRunHistory } from '../automation-run-history.ts'
 import { useAutomationCatalog } from '../composables/useAutomationCatalog.ts'
 import AutomationConversationInfo from './AutomationConversationInfo.vue'
-import AutomationProfile from './AutomationProfile.vue'
+import AutomationConversationSettings from './AutomationConversationSettings.vue'
 
 const props = withDefaults(defineProps<{ apiBase: string; automationId: string; active: boolean; enabled?: boolean; selectedSessionId?: string }>(), { enabled: true })
 const emit = defineEmits<{ open: [sessionId: string, replace: boolean] }>()

@@ -46,11 +46,23 @@ import { computed } from 'vue'
 import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
-import { marked } from 'marked'
+import { Marked } from 'marked'
 import katex from 'katex'
 import { useTextCopy } from '../composables/useTextCopy.ts'
 
-marked.setOptions({ breaks: true })
+// Prompt HTML is documentation, not executable markup. Disable both block and
+// inline HTML tokenization so an unclosed raw-text tag cannot consume the tail.
+const marked = new Marked({
+  breaks: true,
+  tokenizer: {
+    html() { return undefined },
+    tag() { return undefined },
+  },
+})
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
 
 const KATEX_TAGS = [
   'math', 'semantics', 'annotation', 'mrow', 'mi', 'mo', 'mn', 'ms', 'mtext',
@@ -79,7 +91,7 @@ const collapsed = defineModel<boolean>('collapsed', { default: false })
 
 const { copied, busy: copyBusy, error: copyError, copy } = useTextCopy(() => props.prompt)
 
-function preprocessCustomXml(text: string): string {
+function preprocessCustomXml(text: string, fragments: string[]): string {
   text = text.replace(
     /<available_skills>\s*([\s\S]*?)\s*<\/available_skills>/g,
     (_match, inner: string) => {
@@ -93,7 +105,9 @@ function preprocessCustomXml(text: string): string {
       if (categories.length > 0) {
         for (const [, catName, count, skillNames, desc] of categories) {
           lines.push(`- **${catName}** (${count}) — ${desc.trim()}`)
-          lines.push(`  <sub>${skillNames}</sub>`)
+          // Only this generated wrapper is HTML; category content stays literal.
+          const idx = fragments.push(`<sub>${escapeHtml(skillNames)}</sub>`) - 1
+          lines.push(`  \x00FRAGMENT${idx}\x00`)
         }
       }
       return '### Available Skills\n\n' + lines.join('\n')
@@ -114,7 +128,8 @@ function preprocessCustomXml(text: string): string {
 function renderMarkdown(text: string): string {
   if (!text) return ''
   const mathBlocks: string[] = []
-  let src = preprocessCustomXml(text)
+  const fragments: string[] = []
+  let src = preprocessCustomXml(text, fragments)
 
   src = src.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
     const idx = mathBlocks.length
@@ -134,6 +149,7 @@ function renderMarkdown(text: string): string {
 
   let html = marked.parse(src, { async: false }) as string
   html = html.replace(/\x00MATH(\d+)\x00/g, (_, i) => mathBlocks[parseInt(i)])
+  html = html.replace(/\x00FRAGMENT(\d+)\x00/g, (_, i) => fragments[parseInt(i)])
 
   return mobileResources.html(DOMPurify.sanitize(html, {
     ADD_TAGS: KATEX_TAGS,

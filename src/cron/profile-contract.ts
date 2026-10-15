@@ -14,6 +14,9 @@ export interface AutomationProfile {
   frequency: AutomationFrequency
   runs: { total: number; completed: number; failed: number; partial: number; cancelled: number; running: number; unknown: number; full: number; delta: number }
   usage: AutomationUsageMetrics
+  /** Independent of execution failure/cancellation; committed progress is never a success-rate rewrite. */
+  executionOutcomes?: { completed:number; failed:number; cancelled:number; running:number; unknown:number }
+  organizationOutcomes?: { completed:number; partial:number; running:number; unknown:number; committedRuns:number; patches:number; coveredCount:number }
   organizationScopes?: Partial<Record<'full' | 'delta', AutomationUsageMetrics>>
   coverage: 'complete' | 'partial' | 'unknown'
   limitations: string[]

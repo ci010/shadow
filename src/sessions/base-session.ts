@@ -423,7 +423,8 @@ export abstract class BaseSession {
         return response.content ?? ''
       }
 
-      await this.executeToolCalls(response.toolCalls, executionContext, llm, signal)
+      const terminal = await this.executeToolCalls(response.toolCalls, executionContext, llm, signal)
+      if (terminal !== undefined) return terminal
     }
     throw new Error('Session turn exceeded the maximum number of iterations')
   }
@@ -433,12 +434,22 @@ export abstract class BaseSession {
     executionContext: ExecutionContext,
     llm: LlmRuntimeConfig,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
+    let terminal: string | undefined
     const groups = groupTools(calls, this.tools)
     const pendingResults = new Map(calls.map(call => [call.id, call]))
     const traceAttributes = { sessionId: this.id, physicalSessionId: this.physicalSessionId }
     using span = uspan('agent.tools', { attributes: traceAttributes })
     const recordResult = async (call: ToolCall, result: ToolResult) => {
+      // Only the host-bounded dedicated organizer terminates on its finish receipt.
+      if (this.state.mode === 'task' && this.state.agentType === 'work-organizer'
+        && executionContext.channel === 'work-organizer' && this.tools.inferenceRequestLimit !== undefined
+        && call.name === 'organization_finish' && typeof result === 'string') {
+        try {
+          const receipt = JSON.parse(result)
+          if (receipt.status === 'completed' || receipt.status === 'partial') terminal = result
+        } catch { /* Tool errors are not terminal receipts. */ }
+      }
       const media = typeof result === 'string' ? [] : await saveToolImages(
         resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).sessionDataDir,
         result.content, signal,
@@ -532,6 +543,7 @@ export abstract class BaseSession {
     } finally {
       this.onToolPhaseEnd()
     }
+    return terminal
   }
 
   // ── Shared message processing ──────────────────────────────────────────

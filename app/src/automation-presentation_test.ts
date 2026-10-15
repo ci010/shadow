@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { automationPresentation } from './automation-presentation.ts'
+import { automationPresentation, readableAutomationTitle } from './automation-presentation.ts'
 
 test('observer semantic input/output never promotes prompts', () => {
   const input = automationPresentation(JSON.stringify({ instruction: 'SECRET PROMPT', originalGoal: { text: 'Fix navigation' }, previous: { summary: 'Tests passing', next: 'Review' }, events: [{ text: 'raw trace' }] }), true, 'system:work-observer')
@@ -16,4 +16,9 @@ test('organizer manifest and plain finish remain readable while arbitrary payloa
   assert.deepEqual(automationPresentation('{broken', false, 'system:work-organizer'), [])
   assert.deepEqual(automationPresentation('{"summary":"custom"}', false, 'custom-job'), [])
   assert.deepEqual(automationPresentation('{"prompt":"SECRET"}', true, 'system:work-organizer'), [])
+})
+
+test('structured run titles fall back to the automation name', () => {
+  for (const title of ['{"events":[]}', '[{"text":"evidence"}]', '```json', '  ']) assert.equal(readableAutomationTitle(title), undefined)
+  assert.equal(readableAutomationTitle('  Navigation\ninternal details'), 'Navigation')
 })

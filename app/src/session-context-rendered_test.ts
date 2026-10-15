@@ -87,6 +87,7 @@ test('heading renders accessible capacity, actual low/high thresholds and unknow
   const view = mount(t, 'SessionHeading.vue', { apiBase: 'http://fixture', sessionId: 'web:one',
     name: 'Fixture', physicalId: null, revision: 0, active: true })
   await settle()
+  assert.doesNotMatch(view.text(), /Subagents/)
   assert.match(view.text(), /400K limit/)
   assert.match(view.text(), /300K remaining/)
   assert.match(view.text(), /60%.*240K/)

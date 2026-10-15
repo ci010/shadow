@@ -7,14 +7,13 @@
       <p>{{ conversation.historyError.value }}</p><button class="btn btn-sm" :disabled="conversation.loading.value" @click="conversation.retry()">{{ t('Retry history') }}</button>
     </div>
     <p v-if="automation?.notice" class="automation-note" role="status">{{ automation.notice }}</p>
+    <p v-if="run?.organizationProblem" class="automation-note" role="alert">{{ run.organizationProblem === 'unfinished' ? t('Organization ended without finishing. Saved patches remain available.') : t('Organization execution failed. Open diagnostics or the trace for details.') }}</p>
+    <MessagePreviewCard class="automation-info" :label="t('Automation details')">
+      <template #heading><span>{{ t('Automation details') }}</span><span v-if="run" class="run-time">{{ started(run.startedAt) }}</span></template>
+      <div class="automation-info-body">
     <div v-if="run?.organization" class="learning-outcome" role="status">
-      <strong>{{ run.title }}</strong>
       <p>{{ t('Execution:') }} {{ statusLabel(run.status) }} · {{ t(run.organization.status === 'partial' ? 'Partial' : run.organization.status === 'completed' ? 'Completed' : 'Running') }} · {{ run.organization.coveredCount }}/{{ run.organization.manifestCount }} {{ t('Coverage') }} · {{ run.organization.patches }} {{ t('Saved patches') }}</p>
     </div>
-    <p v-if="run?.organizationProblem" class="automation-note" role="alert">{{ run.organizationProblem === 'unfinished' ? t('Organization ended without finishing. Saved patches remain available.') : t('Organization execution failed. Open diagnostics or the trace for details.') }}</p>
-    <details class="automation-info">
-      <summary>{{ t('Automation details') }}<span v-if="run" class="run-time">{{ started(run.startedAt) }}</span></summary>
-      <div class="automation-info-body">
         <template v-if="automation">
           <dl>
             <dt>{{ automation.source !== 'cron' ? t('Check frequency') : t('Schedule') }}</dt><dd><code>{{ automation.schedule }}</code></dd>
@@ -33,7 +32,6 @@
         <p v-if="run">{{ t('Execution:') }} {{ statusLabel(run.status) }}</p>
         <button class="btn btn-sm" :disabled="conversation.loading.value" @click="conversation.refresh()">{{ t('Refresh history') }}</button>
       </div>
-    </details>
     <div v-if="run && automation?.source === 'learning'" class="learning-outcome" role="status">
       <template v-if="run.learning">
         <strong>{{ learningOutcomeLabel(run.learning) }}</strong>
@@ -42,10 +40,12 @@
       </template>
       <p v-else>{{ run.status === 'running' ? t('Learning is in progress. Its outcome has not been verified.') : t('No verified learning receipt is available for this run. Execution status alone does not confirm learning.') }}</p>
     </div>
+    </MessagePreviewCard>
   </div>
 </template>
 
 <script setup lang="ts">
+import MessagePreviewCard from './MessagePreviewCard.vue'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed } from 'vue'
 import type { AutomationConversation } from '../composables/useAutomationConversation.ts'
@@ -61,19 +61,16 @@ const started = (value: string) => formatDateTime(new Date(value), { month: 'sho
 </script>
 
 <style scoped>
-.automation-context { flex: 0 0 auto; max-height: 30%; overflow: auto; padding: 0 16px; font-size: 13px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+.automation-context { flex: 0 0 auto; max-height: 30%; overflow: auto; padding: 8px 16px; font-size: 13px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
 .automation-note { margin: 8px 0; }
 .automation-note p { margin: 0 0 8px; }
-.automation-info summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 36px; cursor: pointer; }
-.automation-info summary::before { content: '›'; }
-.automation-info[open] summary::before { transform: rotate(90deg); }
-.automation-info summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .run-time { margin-inline-start: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
 .automation-info-body { padding: 4px 0 12px; }
+.automation-info-body dd { min-width: 0; }
 .automation-info-body dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; margin: 0; }
 .automation-info-body dd { margin: 0; color: var(--c-text); white-space: pre-wrap; }
 .learning-outcome { padding: 8px 0 12px; color: var(--c-text); }
 .learning-outcome p { margin: 4px 0; white-space: pre-wrap; }
 .learning-outcome small { color: var(--c-text-secondary); }
-@media (max-width: 700px), (pointer: coarse) { .automation-info summary { min-height: 44px; } }
+@media (max-width: 700px) { .automation-info-body dl { grid-template-columns: minmax(0, 1fr); gap: 4px; } .automation-info-body dd { margin-bottom: 8px; } }
 </style>

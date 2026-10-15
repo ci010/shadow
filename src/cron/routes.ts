@@ -9,7 +9,7 @@ import { SYSTEM_AUTOMATIONS, resolveAutomationSession, type AutomationSummary, t
 export function registerAutomationRoutes(app: Hono, cron: CronService, sessions: SessionManager, projectId: string,
   learningOutcome?: (sessionId: string) => LearningOutcome | undefined, learningNotice?: (jobId: string) => string | undefined,
   learningControls?: { preference: (jobId: string) => boolean; globallyEnabled: () => boolean; update: (jobId: string, enabled: boolean) => Promise<void> },
-  systemControls?: { preference: (jobId: string) => boolean; update: (jobId: string, enabled: boolean) => Promise<void>; authorize: (request: Request) => boolean | Promise<boolean> }, profileService?: AutomationProfileService): void {
+  systemControls?: { preference: (jobId: string) => boolean; update: (jobId: string, enabled: boolean) => Promise<void>; authorize: (request: Request) => boolean | Promise<boolean>; modelSettings?: (jobId: string) => { model?: string; defaultModel: string }; updateModel?: (jobId: string, model: string | null) => Promise<void> }, profileService?: AutomationProfileService): void {
   const profiler = profileService ?? new AutomationProfileService(cron, sessions, projectId)
   app.get('/api/automations/:id/profile', async c => {
     const id = c.req.param('id')
@@ -45,6 +45,7 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
     }
     if (systemControls) for (const job of Object.values(SYSTEM_AUTOMATIONS)) jobs.set(job.id, {
       id: job.id, name: job.name, source: 'system', session: 'fresh', schedule: 'Event-driven / manual',
+      ...(systemControls.modelSettings?.(job.id) ?? {}), canConfigureModel: authorized && !!systemControls.updateModel,
       agentType: job.agentType, enabled: systemControls.preference(job.id), configuredEnabled: systemControls.preference(job.id), editable: false, canToggle: authorized,
     })
     for (const summary of jobs.values()) {
@@ -69,6 +70,12 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
     if (!system && (!job || job.source === 'learning' && !learningControls)) return c.json({ error: 'automation_not_found' }, 404)
     let body: unknown
     try { body = await c.req.json() } catch { return c.json({ error: 'invalid_automation_update' }, 400) }
+    if (system && body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 1 && 'model' in body) {
+      if (!systemControls!.updateModel) return c.json({ error: 'model_settings_unavailable' }, 400)
+      if (body.model !== null && (typeof body.model !== 'string' || !body.model.trim() || body.model.length > 512)) return c.json({ error: 'invalid_automation_update' }, 400)
+      await systemControls!.updateModel(id, typeof body.model === 'string' ? body.model.trim() : null)
+      return c.json({ automation: (await summaries(true)).find(job => job.id === id) })
+    }
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 1
       || !('enabled' in body) || typeof body.enabled !== 'boolean') return c.json({ error: 'invalid_automation_update' }, 400)
     if (system) await systemControls!.update(id, body.enabled)

@@ -18,6 +18,9 @@ export interface AutomationSummary {
   enabled: boolean
   configuredEnabled?: boolean
   editable?: boolean
+  model?: string
+  defaultModel?: string
+  canConfigureModel?: boolean
   canToggle?: boolean
   toggleId?: string
   toggleEnabled?: boolean
@@ -126,13 +129,17 @@ export async function fetchAutomations(
       if (!record(item) || !identifier(item.id) || ids.has(item.id) || typeof item.name !== 'string' || !item.name.trim()
         || (item.source !== 'cron' && item.source !== 'learning' && item.source !== 'system') || item.session !== 'fresh'
         || typeof item.schedule !== 'string' || !item.schedule.trim() || typeof item.enabled !== 'boolean'
-        || ['configuredEnabled', 'editable', 'canToggle', 'toggleEnabled', 'disabledByGlobal'].some(key => item[key] !== undefined && typeof item[key] !== 'boolean')
+        || !optionalText(item.model) || !optionalText(item.defaultModel)
+        || ['canConfigureModel', 'configuredEnabled', 'editable', 'canToggle', 'toggleEnabled', 'disabledByGlobal'].some(key => item[key] !== undefined && typeof item[key] !== 'boolean')
         || (item.toggleId !== undefined && !identifier(item.toggleId))
         || !optionalText(item.task) || !optionalText(item.agentType) || !optionalText(item.notice)) throw invalid()
       ids.add(item.id)
       return {
         id: item.id, name: item.name, source: item.source, session: 'fresh', schedule: item.schedule,
         enabled: item.enabled,
+        ...(item.model !== undefined ? { model: item.model as string } : {}),
+        ...(item.defaultModel !== undefined ? { defaultModel: item.defaultModel as string } : {}),
+        ...(item.canConfigureModel !== undefined ? { canConfigureModel: item.canConfigureModel as boolean } : {}),
         ...(item.configuredEnabled !== undefined ? { configuredEnabled: item.configuredEnabled as boolean } : {}),
         ...(item.editable !== undefined ? { editable: item.editable as boolean } : {}),
         ...(item.toggleId !== undefined ? { toggleId: item.toggleId as string } : {}),
@@ -191,4 +198,12 @@ export async function setAutomationEnabled(base: string, id: string, enabled: bo
 /** Feature admission is independent of whether its saved job definition is editable. */
 export function canToggleAutomation(job: AutomationSummary): boolean {
   return job.canToggle ?? (job.source !== 'system' && job.editable === true)
+}
+
+/** Changes dispatch configuration, never the selected read-only run. Null restores its configured fallback. */
+export async function setAutomationModel(base: string, id: string, model: string | null, signal: AbortSignal, request: typeof fetch = fetch): Promise<void> {
+  if (!identifier(id) || model !== null && (!model.trim() || model.length > 512)) throw invalid()
+  await read(apiUrl(base, `/api/automations/${encodeURIComponent(id)}`), signal, value => {
+    if (!record(value) || !record(value.automation) || value.automation.id !== id) throw invalid()
+  }, (url, init) => request(url, { ...init, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) }))
 }

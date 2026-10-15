@@ -48,29 +48,16 @@ ${mode === 'call'
   if (mode !== 'call' && channelSupportsAsk(ctx.channel, ctx.sessionId) && allows('ask')) {
     sections.push(`### Questions and decisions
 
-- **\`ask\`** — \`kind: "input"\` needs only a question for missing text, never authorization. \`kind: "decision"\` handles consequential decisions, not routine choices.
-  Verify premises and alternatives. Distinguish user constraints, facts, assumptions and proposals; a worker recommendation is not a user requirement.
-  Resolve implementation choices yourself; escalate unresolved goal/acceptance, budget, permission or material-risk changes, not raw worker questions.
-  Ask at the abstraction level of the choice: desired outcome, consequence, recommendation and what can continue.
-  Set \`workKey\` to the originating branch and \`decisionKey\` to the ancestor this choice changes. The host attaches the goal path.
-  Do not repeat the path in prose. Translate technical choices into effects on the goal.
-  Explain technical labels by their effect on the outcome.
-  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
-  \`brief\` is optional evidence. Read \`action: "context"\` only for needed schemas or references.
-  \`approved: false\` means investigate/defer; continue only authorized unaffected work and retain assignments.
-  Invalidate disproven decisions with \`action: "invalidate"\`, \`reference\`, \`reason\`; ask again using \`reconsiders\`, not obsolete \`sources\`.
-  Invoke directly, never inside exec/scripts: \`kind: "decision"\`, \`question\`,
-  two distinct suggested \`options\`, \`default_option\` matching one.
-  The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
-  \`custom: true\` returns human text in \`option\`; respect it, review corrected scope,
-  and never force it into a preset or assume approval of the original framing.
-  A reply is not approval for protected actions; use their dedicated owner approval flow.
-  Custom answers may correct goals. Update the rationale, retire obsolete questions, and never restore rejected prerequisites.
-  Your request goes to ${ctx.channel === 'a2a' ? 'the authenticated A2A caller for input; local human decisions are unavailable' : ctx.parentSessionId ? 'your actual parent' : 'the human'}, regardless of completion routing.
-  Wait for the result; the default is not permission to proceed early.
-  Session/global configuration controls waiting, not model arguments.
+Resolve routine implementation choices yourself. Use ask(kind=input) for missing information, never permission; use ask(kind=decision) for unresolved outcome, scope, budget, permission, or material-risk choices.
+
+Verify the premise, explain the user-facing consequence, and recommend an option. For decisions, offer two distinct choices and a matching default, then wait. A default is not permission to proceed early; approved:false allows only investigation and authorized unaffected work.
+
+When using Work, ask at the affected goal: workKey identifies where the issue arose; decisionKey identifies the ancestor whose outcome changes.
+
+Respect custom answers without treating them as approval of the original proposal. If a recorded premise becomes false, invalidate the decision and reassess dependent choices; use reconsiders when asking again.
+
 ${allows('reply')
-    ? '- Answer pending requests with `reply({request_id, text})`: exact option for a child decision, requested text for input. Message/final text does not resume them. Only the stored parent or remote owner may reply.'
+    ? 'Use reply with the exact request_id to answer a pending request. Only its parent or owner may answer; decision replies must match an offered option. Messages and final responses do not resolve pending requests.'
     : ''}`.trim())
   }
 

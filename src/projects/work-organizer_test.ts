@@ -63,7 +63,10 @@ test('evidence, physical identity, versions, hierarchy injection and prune scope
   await assert.rejects(organizer.patch(organizerPatch(1,0),ctx),/returned/)
   await organizer.read({key:organizerRecord(1).key},ctx)
   activity='v2';await assert.rejects(organizer.patch(organizerPatch(1,0),ctx),/changed/);activity='v1'
+  await assert.rejects(organizer.read({key:organizerRecord(1).key},ctx),/Already invalidated/)
+  organizer.end();organizer.begin(ctx.sessionId,'full',ctx.signal);await organizer.read({key:organizerRecord(1).key},ctx)
   evidenceText='rewritten';await assert.rejects(organizer.patch(organizerPatch(1,0),ctx),/changed/);evidenceText='Human goal 1'
+  organizer.end();organizer.begin(ctx.sessionId,'full',ctx.signal);await organizer.read({key:organizerRecord(1).key},ctx)
   const forged=organizerPatch(1,0);forged.groups[0]!.cards[0]!.sources[0]!.physicalId='forged'
   await assert.rejects(organizer.patch(forged,ctx),/returned/)
   await organizer.patch(organizerPatch(1,0),ctx)
@@ -179,7 +182,11 @@ test('host preload authorizes patch and finish without reads; activity changes s
     assert.equal(initial.evidence[0].activityVersion,'v1')
     assert.equal(initial.evidence[0].sources[0].id,organizerSource(1).id)
     activity='v2';await assert.rejects(organizer.patch(organizerPatch(1,0),ctx),/changed/)
-    activity='v1';await organizer.patch(organizerPatch(1,0),ctx)
+    activity='v1';await assert.rejects(organizer.patch(organizerPatch(1,0),ctx),/Already invalidated/)
+    await organizer.finish({partial:true},ctx)
+    assert.equal(organizer.status()?.coveredCount,0)
+    organizer.end();await organizer.initialContext(organizer.begin(ctx.sessionId,'delta',ctx.signal))
+    await organizer.patch(organizerPatch(1,0),ctx)
     await organizer.finish({},ctx)
     assert.equal(organizer.status()?.status,'completed')
   }finally{organizer.end();store.close()}
@@ -259,5 +266,51 @@ test('preload detects evidence changes before task delivery and placement fallba
     const last=JSON.parse(await organizer.read(first.groups[0].membership.next,ctx))
     assert.equal(last.groups[0].membership.next,null)
     assert.deepEqual([...first.groups[0].topicKeys,...last.groups[0].topicKeys],patch.groups[0]!.topicKeys)
+  }finally{organizer.end();store.close()}
+}))
+
+
+test('provider schema derives exact nested Zod bounds without narrowing evidence IDs or enum values',()=>{
+  const organizer=new WorkOrganizer({} as InitiativeStore,{projectId:'fixture',activity:()=>'',evidence:async()=>({sources:[],partial:false}),changed(){}})
+  const [read,patch,finish]=organizer.tools().map(tool=>tool.parameters as any)
+  assert.equal(read.properties.key.maxLength,undefined)
+  assert.equal(read.properties.offset.minimum,0)
+  assert.equal(patch.properties.expectedRevision.type,'integer')
+  assert.equal(patch.properties.groups.minItems,1)
+  assert.equal(patch.properties.groups.maxItems,30)
+  const group=patch.properties.groups.items.properties,card=group.cards.items.properties
+  assert.equal(group.id.maxLength,120)
+  assert.equal(group.topicKeys.items.maxLength,600)
+  assert.equal(card.sources.items.properties.id.maxLength,600)
+  assert.equal(card.state.minLength,undefined)
+  assert.equal(card.state.maxLength,undefined)
+  assert.equal(card.markdown.maxLength,4000)
+  assert.equal(card.stateSources.minItems,1)
+  assert.equal(patch.properties.hierarchy.items.properties.groupIds.maxItems,200)
+  assert.equal(patch.properties.hierarchy.items.properties.groupIds.items.maxLength,120)
+  assert.equal(finish.properties.pruneTopicKeys.maxItems,30)
+})
+
+test('stale topic is isolated: partial finish preserves real coverage and rejects deletion',async()=>withTempWorkspace(async home=>{
+  const store=new InitiativeStore(home)
+  for(let i=1;i<=2;i++)store.saveWork(organizerRecord(i),0,'fixture','created')
+  let version='v1'
+  const organizer=new WorkOrganizer(store,{projectId:'fixture',activity:id=>id.endsWith('2')?version:'v1',evidence:async id=>({sources:[organizerSource(Number(id.split('-').at(-1)))],partial:false}),changed(){}})
+  const ctx=context(new SessionTools(new Tools(home),home))
+  try{
+    await organizer.initialContext(organizer.begin(ctx.sessionId,'full',ctx.signal))
+    await organizer.patch(organizerPatch(1,0),ctx)
+    version='v2'
+    await assert.rejects(organizer.patch(organizerPatch(2,1),ctx),/ORGANIZATION_STALE_TOPIC/)
+    version='v1'
+    await assert.rejects(organizer.read({key:organizerRecord(2).key},ctx),/Already invalidated/)
+    await assert.rejects(organizer.finish({},ctx),/coverage/)
+    await assert.rejects(organizer.finish({partial:true,pruneTopicKeys:[organizerRecord(1).key]},ctx),/cannot prune/)
+    const result=JSON.parse(await organizer.finish({partial:true},ctx))
+    assert.equal(result.coveredCount,1)
+    assert.deepEqual(result.staleTopicKeys,[organizerRecord(2).key])
+    assert.equal(store.projectFocus()?.organization?.status,'partial')
+    assert.equal(store.projectFocus()?.sources.length,1)
+    assert.equal(store.projectFocus()?.result.groups[0]?.id,'group-1')
   }finally{organizer.end();store.close()}
 }))

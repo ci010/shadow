@@ -1,6 +1,6 @@
 <template>
   <section class="automation-profile" :aria-label="t('Automation statistics')" :aria-busy="loading">
-    <header><strong>{{ t('Rolling 24h') }}</strong><span v-if="profile" class="frequency">{{ profile.frequency.description }}</span><button class="btn btn-sm" type="button" :disabled="loading || !active" @click="refresh">{{ t(error ? 'Retry' : 'Refresh') }}</button></header>
+    <header><strong>{{ t('Rolling 24h') }}</strong><button class="btn btn-sm" type="button" :disabled="loading || !active" @click="refresh">{{ t(error ? 'Retry' : 'Refresh') }}</button></header>
     <p v-if="error" class="profile-error" role="alert">{{ error }}</p>
     <p v-else-if="!profile" role="status">{{ t(loading ? 'Loading metrics…' : 'No metrics available.') }}</p>
     <template v-if="profile">
@@ -50,9 +50,16 @@ watch(() => [props.apiBase, props.featureId, props.active], () => { controller?.
 onUnmounted(() => controller?.abort())
 </script>
 <style scoped>
-.automation-profile { flex: 0 0 auto; padding: 8px 16px; font-size: 12px; border-bottom: 1px solid var(--c-border-soft); min-width: 0; max-height: 180px; overflow: auto; }
-header { display: flex; gap: 12px; align-items: center; } header strong { font-weight: 500; } header button { margin-inline-start: auto; } .frequency { color: var(--c-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.automation-profile { flex: 0 0 auto; padding: 8px 16px; font-size: 12px; border-top: 1px solid var(--c-border-soft); min-width: 0; max-height: 180px; overflow: auto; }
+header { display: flex; gap: 12px; align-items: center; justify-content: space-between; min-width: 0; }
+header strong { flex: 0 0 auto; font-weight: 500; white-space: nowrap; color: var(--c-text-secondary); }
+header button { flex: 0 0 auto; white-space: nowrap; min-width: 48px; }
+.automation-profile :deep(.profile-metrics) { margin: 12px 0 10px; gap: 16px; }
+.automation-profile :deep(.profile-metrics > div) { border-inline-start: 0; padding-inline-start: 0; }
+.automation-profile :deep(.profile-metrics dt) { font-size: 12px; line-height: 1.5; }
+.automation-profile :deep(.profile-metrics dd) { margin-top: 4px; font-size: 18px; line-height: 1.3; font-weight: 600; }
+.automation-profile :deep(.profile-coverage) { font-size: 11px; line-height: 1.6; }
 p { margin: 4px 0; color: var(--c-text-secondary); } .profile-error { color: var(--c-error); overflow-wrap: anywhere; }
 .measurement summary { cursor: pointer; color: var(--c-text-secondary); padding: 4px 0; } .measurement-body { max-height: 160px; overflow: auto; overflow-wrap: anywhere; }
-@media (max-width: 700px) { .frequency { display: none; } .automation-profile { padding-inline: 12px; max-height: 180px; } }
+@media (max-width: 700px) { .automation-profile { padding-inline: 12px; max-height: 220px; } .automation-profile :deep(.profile-metrics) { gap: 12px 16px; } }
 </style>

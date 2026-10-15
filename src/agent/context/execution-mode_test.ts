@@ -126,13 +126,13 @@ test('prompt guides expose only current delegation modes and permitted coordinat
   assert.match(root, /mode: "task"/)
   assert.match(root, /mode: "call"/)
   assert.match(root, /Omitted `mode` defaults to `task`, independent of the selected role default/)
-  assert.match(root, /request goes to the human/)
+  assert.match(root, /Resolve routine implementation choices yourself/)
 
   const sub = (await provider.getPromptSection({ ...ctx, parentSessionId: 'fixture:root' }))!
   assert.doesNotMatch(sub, /mode: "session"/)
   assert.match(sub, /mode: "task"/)
   assert.match(sub, /mode: "call"/)
-  assert.match(sub, /request goes to your actual parent/)
+  assert.match(sub, /Only its parent or owner may answer/)
 
   const task = (await provider.getPromptSection({ ...ctx, mode: 'task', parentSessionId: 'fixture:root' }))!
   assert.doesNotMatch(task, /mode: "session"|mode: "task"|Asynchronous creation|`report_to` redirects/)
@@ -175,7 +175,7 @@ test('coordinator guidance cannot advertise worker tools even with broad role me
   assert.match(normalized, /Do not bypass this boundary through skills, discovery, events, URLs or other tools/)
   assert.match(prompt, /Allowed delegation modes:\nnone/)
   assert.match(prompt, /### Questions and decisions/)
-  assert.match(prompt, /a worker recommendation is not a user requirement/)
+  assert.match(prompt, /Verify the premise, explain the user-facing consequence/)
   assert.doesNotMatch(prompt, /### Shell|### Delegation|### Environment|Configure MCP|Activate skill tools|Skill Tools and External MCP Tools/)
   assert.doesNotMatch(prompt, /invoke_tool\(\{|shell: "node"|vm\.SourceTextModule/)
   assert.match(prompt, /initialMessageStatus.*accepted.*not_requested.*not_replayed/)
@@ -196,19 +196,13 @@ test('compact coordination guidance retains decision and completion routing prot
         behavior: {}, sessionId: 'fixture:coordination', channel: 'fixture', chatId: 'coordination',
         agent: general, mode, parentSessionId,
       }))!.replace(/\s+/g, ' ')
-      assert.match(prompt, /Invoke directly, never inside exec\/scripts/)
-      assert.match(prompt, /kind: "input".*only a question.*never authorization/)
-      assert.match(prompt, /kind: "decision".*question.*two distinct suggested `options`, `default_option` matching one/)
-      assert.match(prompt, /UI always adds a custom-response entry/)
-      assert.match(prompt, /Wait for the result; the default is not permission to proceed early/)
-      assert.match(prompt, /Session\/global configuration controls waiting, not model arguments/)
-      assert.match(prompt, /Verify premises and alternatives/)
-      assert.match(prompt, /Distinguish user constraints, facts, assumptions and proposals/)
-      assert.match(prompt, /a worker recommendation is not a user requirement/)
-      assert.match(prompt, /Questions must stand alone/)
-      assert.match(prompt, /why the human must decide/)
-      assert.match(prompt, /what waits and what can continue/)
-      assert.match(prompt, /do not reuse an old answer for a changed scope/)
+      assert.match(prompt, /ask\(kind=input\).*never permission/)
+      assert.match(prompt, /ask\(kind=decision\).*scope, budget, permission/)
+      assert.match(prompt, /two distinct choices and a matching default, then wait/)
+      assert.match(prompt, /A default is not permission to proceed early/)
+      assert.match(prompt, /approved:false allows only investigation and authorized unaffected work/)
+      assert.match(prompt, /Respect custom answers without treating them as approval/)
+      assert.match(prompt, /invalidate the decision and reassess dependent choices; use reconsiders/)
       assert.match(prompt, /Default delivery is `next-step`.*without aborting tools/)
       assert.match(prompt, /delivery: "next-step".*running task's correction/)
       assert.match(prompt, /delivery: "silent".*without a response, active-context injection or wakeup/)
@@ -219,8 +213,8 @@ test('compact coordination guidance retains decision and completion routing prot
       assert.match(prompt, /attention: "blocker".*these cannot be silent/)
       assert.match(prompt, /completion routing does not grant messaging permission/)
       if (mode === 'session') {
-        assert.match(prompt, /reply\(\{request_id, text\}\).*exact option for a child decision/)
-        assert.match(prompt, /Message\/final text does not resume them/)
+        assert.match(prompt, /Use reply with the exact request_id/)
+        assert.match(prompt, /decision replies must match an offered option/)
         assert.match(prompt, /Asynchronous creation admits an ID, not a result/)
         assert.match(prompt, /report_to.*not ownership or decisions, and grants no messaging permission/)
         assert.match(prompt, /do not sleep or poll/)
@@ -274,11 +268,11 @@ test('delivery guidance is stable by execution mode, never by triggering sender'
       assert.equal(executionModeGuideline({ ...context, inputSource }), prompt)
     }
     if (mode === 'session') {
-      assert.match(prompt, /delivered to the reader of this conversation/)
-      assert.match(prompt, /Final text does not answer pending requests/)
-      assert.match(prompt, /return no user-facing text/)
+      assert.match(prompt, /delivered to this conversation's reader/)
+      assert.match(prompt, /Neither a message receipt nor a final response resolves a pending request/)
+      assert.match(prompt, /Do not repeat routine coordination or already-reported results/)
     } else {
-      assert.doesNotMatch(prompt, /delivered to the reader of this conversation/)
+      assert.doesNotMatch(prompt, /delivered to this conversation's reader/)
       assert.match(prompt, mode === 'call' ? /original tool result/ : /final response ends the task and is reported/)
     }
   }

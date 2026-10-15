@@ -185,7 +185,8 @@ const capacity = computed(() => contextCapacity(details.value?.context ?? { used
 const percent = computed(() => details.value ? contextPercent(details.value.context) : null)
 const tokenColumns = computed(() => [
   { label: t('Total'), usage: details.value?.usage },
-  { label: t('Subagents'), usage: details.value?.subagentUsage },
+  ...(details.value?.subagentUsage !== undefined
+    ? [{ label: t('Subagents'), usage: details.value.subagentUsage }] : []),
 ])
 let request: AbortController | undefined
 

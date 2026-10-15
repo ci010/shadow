@@ -1,0 +1,11 @@
+exports[`compact runtime metadata preserves destination topology and human identity provenance 1`] = `
+## Current Session
+
+- **Channel**: web
+- **Chat ID**: metadata
+- **Agent Role**: general
+- **Execution Mode**: session
+- **Allowed Delegation Modes**: task, call
+- **Current User ID**: alice
+- **Audience**: Direct conversation; normal assistant behavior.
+`;

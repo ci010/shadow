@@ -25,7 +25,13 @@ test('identity keeps default legacy profiles and confirmations, but never assign
   const target = { ...requester, botInstanceId: 'legacy-qq', platform: 'qq' }
   await identity.observeInboundAccount('discord', 'alice', 'room', 'New Name', requester)
   await identity.observeInboundAccount('qq', 'bob', 'room', 'New Name', target)
-  assert.match((await identity.lookupByAccount('discord', 'alice', requester)).personContext, /profile for Alice/)
+  const profile = (await identity.lookupByAccount('discord', 'alice', requester)).personContext
+  assert.match(profile, /Profile path: .*Alice\.md/)
+  assert.doesNotMatch(profile, /System found user profile/)
+  assert.match(profile, /memory continuity/)
+  assert.match(profile, /stable personal preferences here with source\/context/)
+  assert.match(profile, /distinguish explicit statements from observations/)
+  assert.match(profile, /Project practices and Work constraints do not belong in a personal profile/)
   await assert.rejects(identity.confirmLink('qq', 'bob', 'LEGACY', { ...target, botInstanceId: 'new', legacySessionId: false }), /Legacy confirmation/)
   await identity.confirmLink('qq', 'bob', 'LEGACY', target)
   const challenge = await identity.createLinkChallenge('discord', 'alice', 'qq', 'bob', { requesterAddress: requester })

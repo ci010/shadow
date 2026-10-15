@@ -43,6 +43,24 @@ const invalidConfigs = [
 ]
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: leaf calls omit the inapplicable subagent usage column`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const sessions = makeManager(workspace, store)
+      try {
+        await store.saveState('web:leaf', { sessionId: 'web:leaf', segmentIndex: 0, mode: 'call' })
+        await store.createSessionLog(newPhysicalSessionId('web:leaf', 0, 1), [{ role: 'assistant', usage }])
+        await sessions.start()
+        const details = await sessions.getSessionDetails('web:leaf')
+        equal(details?.usage?.totalTokens, 150)
+        equal(Object.hasOwn(details!, 'subagentUsage'), false)
+      } finally {
+        await sessions.stop()
+        store.close?.()
+      }
+    })
+  })
   test(`${Store.name}: details use runtime budget and actual handoff policy, not catalog limits`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

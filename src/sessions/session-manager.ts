@@ -2349,6 +2349,9 @@ ${JSON.stringify(request)}`,
     }
     const own = await readTokenUsage(this.store, state)
     const hasDelegates = queue.length > 1
+    const role = this.resolveAgentTypeTools(state.agentType, state.sessionKind)
+    const canDelegate = this.getAllowedSubagentModes(sessionId).length > 0 &&
+      (role.allowedTools !== undefined ? role.allowedTools.includes('subagent') : !role.blockedTools?.includes('subagent'))
     let subagentUsage: LLMResponseUsage | null = hasDelegates ? null : { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
     let usageIncomplete = own.incomplete
     for (const child of queue.slice(1)) {
@@ -2392,7 +2395,7 @@ ${JSON.stringify(request)}`,
       },
       // Do not fold a display-only empty delegate placeholder into session usage.
       usage: hasDelegates ? addTokenUsage(own.usage, subagentUsage) : own.usage,
-      subagentUsage,
+      ...(hasDelegates || canDelegate ? { subagentUsage } : {}),
       usageIncomplete,
       usageScope: 'session' as const,
       context: {

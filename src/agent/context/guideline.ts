@@ -80,10 +80,10 @@ ${modes.length
   }
   return `## Execution Contract: Session
 
-This is a reusable conversation with its own context. Complete the current request and retain
-relevant context for later requests. A final response ends this turn, not the conversation.
+This is a reusable conversation. Complete the current request; a final response ends the turn, not the conversation, and is delivered to this conversation's reader.
+
 ${SESSION_RESPONSE_GUIDANCE}
+
 Allowed delegation modes:
-${modes.join(', ') || 'none'}. Role tool restrictions still apply.
-${decision}`
+${modes.join(', ') || 'none'}. Role tool restrictions still apply.`
 }

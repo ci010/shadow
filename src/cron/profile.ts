@@ -28,10 +28,21 @@ export class AutomationProfileService {
     if (!job && !system && !records.length) return undefined
     const asOf = this.now(), from = asOf - 86_400_000
     const runs: AutomationProfile['runs'] = { total: 0, completed: 0, failed: 0, partial: 0, cancelled: 0, running: 0, unknown: 0, full: 0, delta: 0 }
+    const executionOutcomes:NonNullable<AutomationProfile['executionOutcomes']>={completed:0,failed:0,cancelled:0,running:0,unknown:0}
+    const organizationOutcomes:AutomationProfile['organizationOutcomes']=featureId===SYSTEM_AUTOMATIONS.organizer.id?{completed:0,partial:0,running:0,unknown:0,committedRuns:0,patches:0,coveredCount:0}:undefined
     for (const { state, automation } of records) {
       const started = Date.parse(automation.startedAt)
       if (!(started >= from && started < asOf)) continue
       runs.total++
+      const execution=state.executionStatus
+      if(execution==='completed'||execution==='failed'||execution==='cancelled')executionOutcomes[execution]++
+      else if(['running','waiting','pending'].includes(execution??''))executionOutcomes.running++
+      else executionOutcomes.unknown++
+      if(organizationOutcomes){
+        const outcome=automation.organization
+        organizationOutcomes[outcome?.status??'unknown']++
+        if(outcome){organizationOutcomes.patches+=outcome.patches;organizationOutcomes.coveredCount+=outcome.coveredCount;if(outcome.patches>0)organizationOutcomes.committedRuns++}
+      }
       if (automation.config?.organizationMode) runs[automation.config.organizationMode]++
       if (automation.legacy) runs.unknown++
       else if (state.executionStatus === 'failed' || state.executionStatus === 'cancelled') runs[state.executionStatus]++
@@ -50,7 +61,7 @@ export class AutomationProfileService {
     }
     const frequency = this.policy?.(featureId) ?? (job ? { kind: 'schedule' as const, description: job.schedule, scope: 'configured_job' as const, schedule: job.schedule }
       : { kind: 'unknown' as const, description: 'Current runtime policy unavailable; historical snapshots are not current frequency.', scope: 'historical_unknown' as const })
-    return { featureId, window: { from: new Date(from).toISOString(), asOf: new Date(asOf).toISOString(), timezone: 'UTC', semantics: 'events_completed_in_window_runs_started_in_window' }, frequency, runs, usage, ...(organizationScopes ? { organizationScopes } : {}),
+    return { featureId, window: { from: new Date(from).toISOString(), asOf: new Date(asOf).toISOString(), timezone: 'UTC', semantics: 'events_completed_in_window_runs_started_in_window' }, frequency, runs, usage, executionOutcomes, ...(organizationOutcomes?{organizationOutcomes}:{}), ...(organizationScopes ? { organizationScopes } : {}),
       coverage: usage.scanLimitReached || usage.untrackedSessions || usage.unknownUsageCalls ? 'partial' : usage.trackedSessions ? 'complete' : 'unknown',
       limitations: [...(usage.scanLimitReached ? ['Source scan capped at 100,000 records; all displayed counts and known tokens are lower bounds.'] : []), 'Provider calls are persisted provider.chat completions, including failures; transport retries are not separate calls.',
         'Tool calls count distinct persisted tool result IDs; interrupted calls without a result and nested direct tool invocations may be absent.',

@@ -173,7 +173,7 @@ test('ordinary and formerly managed sessions receive the same optional notebook 
   assert.doesNotMatch(ordinary, /### Work alignment|Adopt bound Work before effects/)
   assert.match(ordinary, /### Shared work notes/)
   assert.match(ordinary, /No adopt\/checkpoint\/settle protocol/)
-  assert.match(ordinary, /decisionKey.*ancestor this choice changes/)
+  assert.match(ordinary, /decisionKey.*ancestor whose outcome changes/)
   assert.match(ordinary, /not every request or tool call|not every action/)
   const managed = (await provider.getPromptSection({ ...makeContext(general, false), workRequired: true }))!
   assert.equal(managed, ordinary)

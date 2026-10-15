@@ -14,6 +14,7 @@ export const workObserverConfigSchema = z.object({
   enabled: z.boolean().default(true),
   organizerEnabled: z.boolean().default(true),
   model: z.string().trim().min(1).max(512).optional(),
+  organizerModel: z.string().trim().min(1).max(512).optional(),
 })
 export const observedWorkSchema = z.discriminatedUnion('track', [
   z.object({ track: z.literal(false) }).strict(),

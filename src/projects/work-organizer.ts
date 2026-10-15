@@ -10,6 +10,8 @@ import type { Tool } from '../tools/tool.ts'
 
 export type OrganizationMode = 'full' | 'delta'
 export const ORGANIZATION_TOOLS = ['organization_read', 'organization_patch', 'organization_finish'] as const
+const readSchema=z.object({key:z.string().optional(),offset:z.number().int().min(0).optional(),memberOffset:z.number().int().min(0).optional()}).strict()
+const finishSchema=z.object({partial:z.boolean().optional(),pruneTopicKeys:z.array(z.string().min(1).max(600)).max(30).default([])}).strict()
 const id = z.string().trim().min(1).max(120)
 const patchSchema = z.object({
   patchId: id, expectedRevision: z.number().int().nonnegative(),
@@ -29,7 +31,7 @@ const stableId = (keys: string[]) => `topic-${createHash('sha256').update([...ke
  * Evidence contains own human/semantic reports, never tools or child traces.
  */
 export class WorkOrganizer {
-  private run?: { sessionId: string; signal: AbortSignal; mode: OrganizationMode; manifest: WorkRecord[]; candidates: number; evidence: Map<string,PresentationSource[]>; omissions: Map<string,{historyPartial:boolean;available:number;retained:number;textTruncated:number}>; read: Map<string,PresentationSource>; covered: Set<string>; versions: Map<string,string>; receipts: Map<string,{body:string;revision:number}>; patches:number; finished:boolean; bytes:number }
+  private run?: { sessionId: string; signal: AbortSignal; mode: OrganizationMode; manifest: WorkRecord[]; candidates: number; stale: Set<string>; evidence: Map<string,PresentationSource[]>; omissions: Map<string,{historyPartial:boolean;available:number;retained:number;textTruncated:number}>; read: Map<string,PresentationSource>; covered: Set<string>; versions: Map<string,string>; receipts: Map<string,{body:string;revision:number}>; patches:number; finished:boolean; bytes:number }
   private last?: { mode:OrganizationMode; status:'running'|'completed'|'partial'; coveredCount:number; manifestCount:number; patches:number }
   constructor(private store: Pick<InitiativeStore,'workRecords'|'workObservations'|'projectFocus'|'saveProjectFocus'>, private deps: {
     projectId:string; evidence(id:string,signal:AbortSignal):Promise<{sources:PresentationSource[];partial:boolean}>;
@@ -49,7 +51,7 @@ export class WorkOrganizer {
       .sort((a,b)=>b.changedAt.localeCompare(a.changedAt)||a.key.localeCompare(b.key))
     const eligible=mode==='full'?candidates:candidates.filter(r=>previous?.sources.find(s=>s.key===r.key)?.sequence!==r.sequence)
     const manifest=eligible.slice(0,mode==='delta'?3:30)
-    this.run={sessionId,signal,mode,manifest,candidates:candidates.length,evidence:new Map(),omissions:new Map(),read:new Map(),covered:new Set(),versions:new Map(),receipts:new Map(),patches:0,finished:false,bytes:0}
+    this.run={sessionId,signal,mode,manifest,candidates:candidates.length,stale:new Set(),evidence:new Map(),omissions:new Map(),read:new Map(),covered:new Set(),versions:new Map(),receipts:new Map(),patches:0,finished:false,bytes:0}
     this.last={mode,status:'running',coveredCount:0,manifestCount:manifest.length,patches:0};this.deps.changed()
     return JSON.stringify({mode,manifest:manifest.map(r=>({key:r.key,sequence:r.sequence,title:r.workflow?.title,objective:r.definition.objective.slice(0,800),summary:r.notes?.summary?.slice(0,800)})),revision:previous?.revision??0,
       instruction:'Read bounded evidence, then commit valid small patches immediately. Do not wait for a complete project response. Finish explicitly. Manifest is fixed; omission is not deletion. Delta only reclassifies manifest keys, preserving unrelated groups/cards/hierarchy identities. Existing hierarchy is display interpretation, never authority.'})
@@ -65,13 +67,20 @@ export class WorkOrganizer {
     const nodes:Node[]=(snapshot?.result.hierarchy??groups.map((g,index)=>({id:`root-${g.id}`,title:g.category,purpose:g.purpose,groupIndexes:[index]}))).map(n=>({id:n.id,title:n.title,purpose:n.purpose,...('parentId' in n&&typeof n.parentId==='string'?{parentId:n.parentId}:{}),groupIds:n.groupIndexes.map(i=>groups[i]!.id)}))
     return {snapshot,groups,nodes}
   }
+  private stale(key:string,reason:string):never {
+    this.run!.stale.add(key)
+    throw new WorkConflict(JSON.stringify({code:'ORGANIZATION_STALE_TOPIC',key,reason,retryable:false,action:'Skip topic in this run; finish with partial:true to preserve committed progress.'}))
+  }
   private async loadEvidence(record:WorkRecord) {
     const run=this.run!
+    if(run.stale.has(record.key))this.stale(record.key,'Already invalidated')
+    const known=record.observation?.sessionId
+    if(known&&run.versions.has(known)&&this.deps.activity(known)!==run.versions.get(known))this.stale(record.key,'Conversation changed')
     if(run.evidence.has(record.key))return
     const sessionId=record.observation?.sessionId, activity=sessionId?this.deps.activity(sessionId):''
     const history=sessionId?await this.deps.evidence(sessionId,run.signal):{sources:[],partial:true}
     run.signal.throwIfAborted()
-    if(sessionId && this.deps.activity(sessionId)!==activity)throw new WorkConflict('Conversation changed while reading')
+    if(sessionId && this.deps.activity(sessionId)!==activity)this.stale(record.key,'Conversation changed while reading')
     if(sessionId)run.versions.set(sessionId,activity)
     // Latest semantic evidence first, but never lose the original human goal.
     const original=history.sources.find(s=>s.kind==='human')
@@ -115,7 +124,7 @@ export class WorkOrganizer {
   }
   async read(args:Record<string,unknown>,context:ExecutionContext):Promise<string> {
     const run=this.bound(context)
-    const input=z.object({key:z.string().optional(),offset:z.number().int().min(0).optional(),memberOffset:z.number().int().min(0).optional()}).strict().parse(args)
+    const input=readSchema.parse(args)
     const keyed=this.keyed()
     if(!input.key) {
       const page=z.number().int().min(0).parse(input.offset??0)
@@ -152,9 +161,10 @@ export class WorkOrganizer {
     validatePresentation(patch.groups,[...run.read.values()])
     for(const group of patch.groups){const sessions=new Set(run.manifest.filter(r=>group.topicKeys.includes(r.key)).map(r=>r.observation?.sessionId));if((group.cards??[]).some(c=>c.sources.some(s=>!sessions.has(s.sessionId))))throw new Error('Card cites another topic conversation')}
     for(const key of impacted){const record=run.manifest.find(r=>r.key===key)!;const sessionId=record.observation?.sessionId
+      if(run.stale.has(key))this.stale(key,'Already invalidated')
       if(!run.evidence.has(key))throw new Error('Read topic evidence before patching')
-      if(sessionId && this.deps.activity(sessionId)!==run.versions.get(sessionId))throw new WorkConflict('Impacted conversation changed')
-      if(sessionId){const current=await this.deps.evidence(sessionId,run.signal);for(const ref of cited){const source=run.read.get(ref)!;if(source.sessionId===sessionId&&!current.sources.some(s=>sourceIdentity(s)===ref&&s.text.slice(0,4000)===source.text&&s.kind===source.kind))throw new WorkConflict('Evidence changed')}}
+      if(sessionId && this.deps.activity(sessionId)!==run.versions.get(sessionId))this.stale(key,'Impacted conversation changed')
+      if(sessionId){const current=await this.deps.evidence(sessionId,run.signal);for(const ref of cited){const source=run.read.get(ref)!;if(source.sessionId===sessionId&&!current.sources.some(s=>sourceIdentity(s)===ref&&s.text.slice(0,4000)===source.text&&s.kind===source.kind))this.stale(key,'Evidence changed')}}
     }
     const impactedSessions=new Set(run.manifest.filter(r=>impacted.includes(r.key)).map(r=>r.observation?.sessionId))
     const retained=groups.map(g=>({...g,topicKeys:g.topicKeys.filter(k=>!impacted.includes(k)),cards:g.topicKeys.some(k=>impacted.includes(k))?(g.cards??[]).filter(c=>c.sources.some(s=>!impactedSessions.has(s.sessionId))):g.cards})).filter(g=>g.topicKeys.length)
@@ -178,7 +188,7 @@ export class WorkOrganizer {
     run.signal.throwIfAborted()
     for(const key of impacted) {
       const sessionId=run.manifest.find(r=>r.key===key)!.observation?.sessionId
-      if(sessionId && this.deps.activity(sessionId)!==run.versions.get(sessionId))throw new WorkConflict('Impacted conversation changed while validating')
+      if(sessionId && this.deps.activity(sessionId)!==run.versions.get(sessionId))this.stale(key,'Impacted conversation changed while validating')
     }
     this.store.saveProjectFocus(value,impacted,revision)
     run.covered=covered;run.patches++;run.bytes+=Buffer.byteLength(body);run.receipts.set(patch.patchId,{body,revision:revision+1})
@@ -186,9 +196,10 @@ export class WorkOrganizer {
   }
   async finish(args:Record<string,unknown>,context:ExecutionContext):Promise<string> {
     const run=this.bound(context)
-    const {pruneTopicKeys}=z.object({pruneTopicKeys:z.array(z.string().min(1).max(600)).max(30).default([])}).strict().parse(args)
+    const {pruneTopicKeys,partial}=finishSchema.parse(args)
     if(pruneTopicKeys.length && (run.mode!=="full" || pruneTopicKeys.some(key=>!run.covered.has(key)||!run.manifest.some(r=>r.key===key))))throw new Error("Pruning requires full mode and explicitly covered manifest sources")
-    if(run.covered.size!==run.manifest.length)throw new Error('Finish requires coverage of every manifest topic; no pruning by omission')
+    if(!partial && run.covered.size!==run.manifest.length)throw new Error('Finish requires coverage of every manifest topic; no pruning by omission')
+    if(partial && pruneTopicKeys.length)throw new Error('Partial finish cannot prune')
     if(pruneTopicKeys.length) {
       for(const key of pruneTopicKeys) {
         const sessionId=run.manifest.find(r=>r.key===key)!.observation?.sessionId
@@ -208,7 +219,8 @@ export class WorkOrganizer {
       this.store.saveProjectFocus(value,pruneTopicKeys,snapshot.revision??0,validated)
       this.deps.changed()
     }
-    this.persistStatus('completed');run.finished=true;return JSON.stringify({status:'completed',patches:run.patches,coveredCount:run.covered.size})
+    const status=partial?'partial':'completed'
+    this.persistStatus(status);run.finished=true;return JSON.stringify({status,patches:run.patches,coveredCount:run.covered.size,staleTopicKeys:[...run.stale]})
   }
   private persistStatus(status:'completed'|'partial'){
     const run=this.run!;this.last={mode:run.mode,status,coveredCount:run.covered.size,manifestCount:run.manifest.length,patches:run.patches}
@@ -216,8 +228,33 @@ export class WorkOrganizer {
     this.deps.changed()
   }
   end(){if(!this.run)return;try{if(!this.run.finished)this.persistStatus('partial')}finally{this.run=undefined}}
-  tools():Tool[]{return ORGANIZATION_TOOLS.map(name=>({name,optIn:true,description:name==='organization_read'?'Fallback for omitted fixed manifest semantic evidence (two sources per page) or placement; initial context sources already authorize citations. No tool traces.':name==='organization_patch'?'Atomically save a small validated keyed presentation patch; citations must be supplied by initial context or fallback read.':'Explicitly finish and lock writes after covering manifest; omission never deletes.',parameters:name==='organization_read'?{type:'object',properties:{key:{type:'string'},offset:{type:'number'},memberOffset:{type:'number'}},additionalProperties:false}:name==='organization_patch'?patchParameters:{type:'object',properties:{pruneTopicKeys:{type:'array',items:{type:'string'}}},additionalProperties:false},execute:(args,context)=>name==='organization_read'?this.read(args,context):name==='organization_patch'?this.patch(args,context):this.finish(args,context)}))}
+  tools():Tool[]{return ORGANIZATION_TOOLS.map<Tool>(name=>({name,optIn:true,description:name==='organization_read'?'Fallback for omitted fixed manifest semantic evidence (two sources per page) or placement; initial context sources already authorize citations. No tool traces.':name==='organization_patch'?'Atomically save a small validated keyed presentation patch; citations must be supplied by initial context or fallback read.':'Explicitly finish and lock writes after covering manifest; omission never deletes.',parameters:name==='organization_read'?readParameters:name==='organization_patch'?patchParameters:finishParameters,execute:(args,context)=>name==='organization_read'?this.read(args,context):name==='organization_patch'?this.patch(args,context):this.finish(args,context)}))}
 }
 
-const refParameters = {type:'object',properties:{sessionId:{type:'string'},physicalId:{type:'string'},id:{type:'string'}},required:['sessionId','physicalId','id'],additionalProperties:false}
-const patchParameters: Tool['parameters'] = {type:'object',properties:{patchId:{type:'string'},expectedRevision:{type:'number'},groups:{type:'array',items:{type:'object',properties:{id:{type:'string'},category:{type:'string'},purpose:{type:'string'},motivation:{type:'string'},topicKeys:{type:'array',items:{type:'string'}},cards:{type:'array',items:{type:'object',properties:{id:{type:'string'},title:{type:'string'},state:{type:'string',enum:['planned','in_progress','completed','reported_complete','deferred','abandoned','unknown']},markdown:{type:'string'},sources:{type:'array',items:refParameters},stateSources:{type:'array',items:refParameters}},required:['id','title','state','markdown','sources','stateSources'],additionalProperties:false}}},required:['id','category','purpose','motivation','topicKeys'],additionalProperties:false}},hierarchy:{type:'array',items:{type:'object',properties:{id:{type:'string'},title:{type:'string'},purpose:{type:'string'},parentId:{type:'string'},groupIds:{type:'array',items:{type:'string'}}},required:['id','title','purpose','groupIds'],additionalProperties:false}}},required:['patchId','expectedRevision','groups','hierarchy'],additionalProperties:false} as Tool['parameters']
+/** Structural provider schema is derived from execution validation, never field-name guesses. */
+function parameters(schema: z.ZodTypeAny): Tool['parameters'] {
+  const convert = (value: z.ZodTypeAny): Record<string, unknown> => {
+    if (value instanceof z.ZodOptional || value instanceof z.ZodDefault) return convert(value._def.innerType)
+    if (value instanceof z.ZodObject) {
+      const shape = value.shape as Record<string, z.ZodTypeAny>
+      return { type:'object', properties:Object.fromEntries(Object.entries(shape).map(([key, child])=>[key,convert(child)])),
+        required:Object.entries(shape).filter(([,child])=>!child.isOptional()).map(([key])=>key), additionalProperties:false }
+    }
+    if (value instanceof z.ZodArray) return { type:'array', items:convert(value.element),
+      ...(value._def.minLength ? {minItems:value._def.minLength.value}:{}),
+      ...(value._def.maxLength ? {maxItems:value._def.maxLength.value}:{}) }
+    if (value instanceof z.ZodString) return { type:'string',
+      ...(value.minLength !== null ? {minLength:value.minLength}:{}),
+      ...(value.maxLength !== null ? {maxLength:value.maxLength}:{}) }
+    if (value instanceof z.ZodNumber) return { type:value.isInt?'integer':'number',
+      ...(value.minValue !== null ? {minimum:value.minValue}:{}),
+      ...(value.maxValue !== null ? {maximum:value.maxValue}:{}) }
+    if (value instanceof z.ZodBoolean) return {type:'boolean'}
+    if (value instanceof z.ZodEnum) return {type:'string',enum:value.options}
+    throw new Error('Unsupported organizer parameter schema')
+  }
+  return convert(schema) as Tool['parameters']
+}
+const readParameters = parameters(readSchema)
+const patchParameters = parameters(patchSchema)
+const finishParameters = parameters(finishSchema)

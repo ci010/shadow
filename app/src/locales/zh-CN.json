@@ -2806,6 +2806,8 @@
   "This Child could not reach Main. Check that Main is running and reachable.": "此子节点无法连接主节点。请检查主节点是否正在运行且可访问。",
   "This app opens in its own desktop window, not inside the workbench.": "此应用在独立桌面窗口中打开，不在工作台内运行。",
   "This approval expired. Reload to check for a new request.": "此审批已过期。请重新加载以检查新请求。",
+  "For future runs": "用于后续执行",
+  "This automation · Applies to future runs": "此自动化 · 后续执行生效",
   "This automation conversation · Applies to new turns": "此自动化对话 · 后续轮次生效",
   "This automation is no longer available. Saved conversations can still be viewed.": "此自动化已不可用。仍可查看已保存的会话。",
   "This backend did not return device inventory. Restart Shadow after updating the backend.": "此后端未返回设备清单。请更新后端并重启 Shadow。",

@@ -23,7 +23,7 @@
         <button v-if="settings" type="button" class="model-menu-back" :aria-label="t('Back to model settings')" @click="back">
           <span class="model-chevron i-lucide-chevron-left" aria-hidden="true" /><span>{{ page === 'model' ? t('Model') : page === 'context' ? t('Context window') : t('Effort') }}</span>
         </button>
-        <span v-else>{{ t('Model') }}</span><span class="model-scope">{{ page === 'model' ? t('For new turns') : t('This conversation') }}</span>
+        <span v-else>{{ t('Model') }}</span><span class="model-scope">{{ page === 'model' ? t(futureRuns ? 'For future runs' : 'For new turns') : t('This conversation') }}</span>
       </div>
       <template v-if="page === 'model'">
       <input ref="search" v-model="query" class="model-search" type="search" :placeholder="t('Search models...')" :aria-label="t('Search models')" />
@@ -59,7 +59,7 @@ import ReasoningControls from './ReasoningControls.vue'
 import { filterModelOptions, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
 import { contextWindowLabel, currentEffort, effortOptions, type ReasoningSettings } from '../session-settings.ts'
 
-const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean; conversationDefaults?: boolean }>()
+const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean; conversationDefaults?: boolean; futureRuns?: boolean }>()
 const emit = defineEmits<{ 'change-settings': [patch: ReasoningSettings] }>()
 const selection = useModelSelection()
 const query = ref('')

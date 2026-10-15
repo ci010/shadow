@@ -1,3 +1,4 @@
+import { automationDispatchModel, automationModelSettings } from './automation-model.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Hono } from 'hono'
@@ -138,3 +139,35 @@ test('historical system snapshots expose authorized controller capability withou
   const denied = (await (await app.request('/api/automations')).json()).automations
   for (const job of denied) { assert.equal(job.canToggle, false); assert.equal(job.toggleId, undefined); assert.equal(job.toggleEnabled, undefined) }
 })
+
+ test('automation model API persists dispatch overrides and resets without editing saved runs', async () => withTempWorkspace(async workspace => {
+  const options = { configPath: join(workspace, 'project.json'), home: workspace, getSharedConfig: () => ConfigSchema.parse({}) }
+  const store = new ProjectConfigStore(options); await store.init()
+  const app = new Hono(), cron = new CronService(workspace)
+  registerAutomationRoutes(app, cron, sessions, 'fixture', undefined, undefined, undefined, {
+    authorize: request => request.headers.get('x-owner') === 'yes', preference: () => true, update: async () => {},
+    modelSettings: id => automationModelSettings(store.current(), id),
+    updateModel: async (id, model) => { await store.update(raw => {
+      const workObserver = { ...(raw.workObserver as Record<string, unknown>) }
+      const key = id === 'system:work-observer' ? 'model' : 'organizerModel'
+      if (model === null) delete workObserver[key]; else workObserver[key] = model
+      return { ...raw, workObserver }
+    }) },
+  })
+  const patch = (id: string, model: unknown, owner = 'yes') => app.request('/api/automations/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'x-owner': owner }, body: JSON.stringify({ model }) })
+  assert.equal((await patch('system:work-observer', 'chosen', 'no')).status, 403)
+  for (const model of ['', '   ', 2, 'x'.repeat(513)]) assert.equal((await patch('system:work-observer', model)).status, 400)
+  assert.equal((await patch('system:work-observer', 'observer@provider')).status, 200)
+  const result = await patch('system:work-organizer', 'organizer@provider')
+  assert.equal(result.status, 200)
+  assert.equal((await result.json()).automation.model, 'organizer@provider')
+  const restored = new ProjectConfigStore(options); await restored.init()
+  assert.equal(automationDispatchModel(restored.current(), 'system:work-observer'), 'observer@provider')
+  assert.equal(automationDispatchModel(restored.current(), 'system:work-organizer'), 'organizer@provider')
+  assert.equal((await patch('system:work-organizer', null)).status, 200)
+  assert.equal(automationDispatchModel(store.current(), 'system:work-organizer'), 'observer@provider')
+  assert.equal((await patch('system:work-observer', null)).status, 200)
+  assert.equal(automationDispatchModel(store.current(), 'system:work-observer'), store.current().agent.quickModel ?? store.current().agent.model)
+  const publicJobs = (await (await app.request('/api/automations')).json()).automations
+  assert.equal(publicJobs.find((job: { id: string }) => job.id === 'system:work-organizer').canConfigureModel, false)
+}))

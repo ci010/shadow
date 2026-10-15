@@ -1495,3 +1495,48 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     } finally { await f.sessions.stop(); await store.close?.() }
   }))
 }
+
+for(const Store of [JsonlSessionStore,SqliteSessionStore]) {
+  test(Store.name+': dedicated organizer finish is terminal at exactly four requests',async()=>withTempWorkspace(async workspace=>{
+    const {WorkOrganizer,ORGANIZATION_TOOLS}=await import('../projects/work-organizer.ts')
+    const {organizerRecord,organizerSource,organizerPatch}=await import('../testing/work-organization.ts')
+    const store:SessionStore=new Store(join(workspace,'sessions'));await store.init()
+    const f=fixture(workspace,store,{projectId:'fixture'}),initiatives=new InitiativeStore(workspace)
+    for(let i=1;i<=3;i++)initiatives.saveWork(organizerRecord(i),0,'fixture','created')
+    const organizer=new WorkOrganizer(initiatives,{projectId:'fixture',activity:()=>'',physical:id=>{const state=f.sessions.getSessionState(id);return state?physicalSessionId(state):undefined},evidence:async id=>({sources:[organizerSource(Number(id.split('-').at(-1)))],partial:false}),changed(){}})
+    for(const tool of organizer.tools())f.tools.register(tool)
+    try {
+      await f.sessions.start()
+      const controller=new AbortController(),id='work-organizer:finish-boundary'
+      const task=await organizer.initialContext(organizer.begin(id,'delta',controller.signal))
+      const job=f.sessions.startSession({agentType:'work-organizer',mode:'task',channel:'work-organizer',chatId:'finish-boundary',task,waitForCompletion:true,executionLimits:{allowedTools:ORGANIZATION_TOOLS,inferenceRequests:4,toolCalls:12,argumentBytes:96000}})
+      for(let i=1;i<=3;i++)(await f.next(id)).resolve(invoke('organization_patch',organizerPatch(i,initiatives.projectFocus()?.revision??0)))
+      ;(await f.next(id)).resolve(invoke('organization_finish',{}))
+      await job
+      assert.equal(f.requests.filter(r=>r.sessionId===id).length,4)
+      assert.equal((await f.sessions.getExecutionResult(id))?.status,'completed')
+      assert.equal(initiatives.projectFocus()?.organization?.status,'completed')
+      assert.equal(initiatives.projectFocus()?.organization?.coveredCount,3)
+    } finally {organizer.end();await f.sessions.stop();initiatives.close();await store.close?.()}
+  }))
+}
+
+
+for(const Store of [JsonlSessionStore,SqliteSessionStore]) {
+  test(Store.name+': ordinary bounded task does not terminate on a finish-shaped tool result',async()=>withTempWorkspace(async workspace=>{
+    const store:SessionStore=new Store(join(workspace,'sessions'));await store.init()
+    const f=fixture(workspace,store)
+    f.tools.register({name:'organization_finish',description:'Synthetic ordinary tool',parameters:{type:'object',properties:{}},execute:async()=>JSON.stringify({status:'completed'})})
+    try{
+      await f.sessions.start()
+      const id='virtual:ordinary-finish'
+      const job=f.sessions.startSession({agentType:'general',mode:'task',channel:'virtual',chatId:'ordinary-finish',task:'Synthetic test',waitForCompletion:true,
+        executionLimits:{allowedTools:['organization_finish'],inferenceRequests:2,toolCalls:2,argumentBytes:1000}})
+      ;(await f.next(id)).resolve(invoke('organization_finish',{}))
+      ;(await f.next(id)).resolve({content:'Ordinary final',toolCalls:[]})
+      await job
+      assert.equal(f.requests.filter(r=>r.sessionId===id).length,2)
+      assert.equal((await f.sessions.getExecutionResult(id))?.status,'completed')
+    }finally{await f.sessions.stop();await store.close?.()}
+  }))
+}

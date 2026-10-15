@@ -1,6 +1,8 @@
 :root {
   color-scheme: light;
-  font-family: 'Inter', system-ui, sans-serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-sans);
   cursor: crosshair;
 
   /* App UI uses square corners, including controls and status indicators. */
@@ -415,7 +417,7 @@ input:not([type]), textarea {
 }
 
 .mono {
-  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .overlay-enter-active { transition: opacity var(--overlay-enter-duration) var(--overlay-easing); }
@@ -579,3 +581,48 @@ input:not([type]), textarea {
     0 0 22px color-mix(in srgb, var(--work-glow) 32%, transparent);
 }
 .work-popup-active::before { content: none; }
+/* Public visual-answer theme API. Rebind on .dark so aliases resolve against
+   that theme, not the already-computed light values inherited from :root.
+   Isolated answer-html styles consume these tokens; CSS validation and Shadow
+   DOM containment are enforced by answer-html.ts, not by these aliases. */
+:root, .dark {
+  --answer-bg: var(--c-bg);
+  --answer-surface: var(--c-bg-card);
+  --answer-surface-soft: var(--c-bg-soft);
+  --answer-surface-muted: var(--c-bg-muted);
+  --answer-code-bg: var(--c-bg-code);
+  --answer-code-inline-bg: var(--c-bg-code-inline);
+  --answer-border: var(--c-border);
+  --answer-border-soft: var(--c-border-soft);
+  --answer-border-strong: var(--c-control-border);
+  --answer-border-hover: var(--c-border-hover);
+  --answer-text: var(--c-text);
+  --answer-text-body: var(--c-text-body);
+  --answer-text-secondary: var(--c-text-secondary);
+  --answer-text-muted: var(--c-text-muted);
+  --answer-text-faint: var(--c-text-faint);
+  --answer-text-on-dark: var(--c-text-on-dark);
+  --answer-text-on-accent: var(--c-text-on-primary);
+  --answer-accent: var(--c-primary);
+  --answer-accent-hover: var(--c-primary-hover);
+  --answer-accent-bg: var(--c-primary-bg);
+  --answer-accent-bg-hover: var(--c-primary-bg-hover);
+  --answer-info: var(--c-info);
+  --answer-info-bg: var(--c-info-bg);
+  --answer-success: var(--c-success);
+  --answer-success-bg: var(--c-success-bg);
+  --answer-warning: var(--c-warn);
+  --answer-warning-bg: var(--c-warn-bg);
+  --answer-danger: var(--c-error);
+  --answer-danger-bg: var(--c-error-bg);
+  --answer-selection-bg: var(--c-selection-bg);
+  --answer-selection-border: var(--c-selection-border);
+  --answer-radius-sm: var(--radius-sm);
+  --answer-radius: var(--radius-surface);
+  --answer-radius-control: var(--radius-control);
+  --answer-radius-overlay: var(--radius-overlay);
+  --answer-shadow-color: var(--c-shadow);
+  --answer-shadow-soft-color: var(--c-shadow-soft);
+  --answer-font: var(--font-sans);
+  --answer-font-mono: var(--font-mono);
+}

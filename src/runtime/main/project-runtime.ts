@@ -1,3 +1,4 @@
+import { automationModelSettings, automationDispatchModel } from '../../cron/automation-model.ts'
 import { isLearningSourceEligible } from '../../agent/learning/source-eligibility.ts'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -781,7 +782,7 @@ export async function createProjectRuntime(
       const task = await workOrganizer.initialContext(manifest)
       const id=await sessions.startSession({agentType:'work-organizer',mode:'task',channel:'work-organizer',chatId,task,automation:systemAutomationRef('work-organizer',sessionId,mode),
         statePersistence:{version:1,kind:'fresh-automation',jobId:'system:work-organizer'},
-        model:activeConfig.workObserver.model??activeConfig.agent.quickModel??activeConfig.agent.model,
+        model:automationDispatchModel(activeConfig, 'system:work-organizer'),
         signal,waitForCompletion:true,maxTokens:6000,
         executionLimits:{allowedTools:ORGANIZATION_TOOLS,inferenceRequests:mode==='delta'?4:8,toolCalls:mode==='delta'?12:24,argumentBytes:mode==='delta'?96000:192000}})
       if(!id) throw new Error('Work organizer unavailable')
@@ -803,7 +804,7 @@ export async function createProjectRuntime(
           agentType: 'work-observer', mode: 'task', channel: 'work-observer', chatId, task,
           automation: systemAutomationRef('work-observer', sessionId),
           statePersistence: { version: 1, kind: 'fresh-automation', jobId: 'system:work-observer' },
-          model: activeConfig.workObserver.model ?? activeConfig.agent.quickModel ?? activeConfig.agent.model,
+          model: automationDispatchModel(activeConfig, 'system:work-observer'),
           signal, waitForCompletion: true, maxTokens: options?.maxTokens,
           executionLimits: { allowedTools: [], inferenceRequests: 1, toolCalls: 1, argumentBytes: 1 },
         })
@@ -1187,6 +1188,16 @@ export async function createProjectRuntime(
     },
   }, {
     authorize: dependencies.authorize,
+    modelSettings: id => automationModelSettings(configStore.current(), id),
+    updateModel: async (id, model) => {
+      await configStore.update(raw => {
+        const workObserver = { ...(raw.workObserver as Record<string, unknown>) }
+        const key = id === 'system:work-observer' ? 'model' : 'organizerModel'
+        if (model === null) delete workObserver[key]
+        else workObserver[key] = model
+        return { ...raw, workObserver }
+      })
+    },
     preference: id => id === 'system:work-observer' ? configStore.current().workObserver.enabled : configStore.current().workObserver.organizerEnabled,
     update: async (id, enabled) => {
       await configStore.update(raw => ({ ...raw, workObserver: { ...(raw.workObserver as object),

@@ -2777,6 +2777,8 @@
   "This Child could not reach Main. Check that Main is running and reachable.": "This Child could not reach Main. Check that Main is running and reachable.",
   "This app opens in its own desktop window, not inside the workbench.": "This app opens in its own desktop window, not inside the workbench.",
   "This approval expired. Reload to check for a new request.": "This approval expired. Reload to check for a new request.",
+  "For future runs": "For future runs",
+  "This automation · Applies to future runs": "This automation · Applies to future runs",
   "This automation conversation · Applies to new turns": "This automation conversation · Applies to new turns",
   "This automation is no longer available. Saved conversations can still be viewed.": "This automation is no longer available. Saved conversations can still be viewed.",
   "This backend did not return device inventory. Restart Shadow after updating the backend.": "This backend did not return device inventory. Restart Shadow after updating the backend.",

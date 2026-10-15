@@ -98,3 +98,18 @@ test('Project-mounted profile URLs normalize trailing slash and preserve encoded
     assert.equal((await gateway.request(automationProfileUrl(candidate, 'foreign:feature').toString())).status, 404)
   }
 })
+
+
+test('organizer business progress and execution failure remain independent aggregates',async()=>{
+  const asOf=Date.parse('2026-10-11T00:00:00Z')
+  const states=['failed','cancelled','completed'].map((executionStatus,i)=>({sessionId:'axis-'+i,projectId:'project',executionStatus,
+    automation:{jobId:'system:work-organizer',name:'Organizer',runId:'axis-'+i,startedAt:new Date(asOf-1).toISOString(),contextMode:'fresh',
+      config:{source:'system',schedule:'event',organizationMode:'delta'},
+      ...(i<2?{organization:{mode:'delta',status:'partial',patches:1,coveredCount:1,manifestCount:3}}:{})}}))
+  const sessions={listHistoryStates:async()=>states,getAutomationUsage:async()=>({providerCalls:0,knownUsageCalls:0,unknownUsageCalls:0,inputTokens:null,outputTokens:null,totalTokens:null,toolCalls:0,trackedSessions:0,untrackedSessions:0})} as unknown as SessionManager
+  const profile=await new AutomationProfileService({listJobs:()=>[]} as unknown as CronService,sessions,'project',undefined,()=>asOf).query('system:work-organizer')
+  assert.deepEqual(profile?.executionOutcomes,{failed:1,cancelled:1,completed:1,running:0,unknown:0})
+  assert.deepEqual(profile?.organizationOutcomes,{completed:0,partial:2,running:0,unknown:1,committedRuns:2,patches:2,coveredCount:2})
+  assert.equal(profile?.runs.failed,1)
+  assert.equal(profile?.runs.cancelled,1)
+})

@@ -40,3 +40,10 @@ export function automationPresentation(source: string, input: boolean, id?: stri
   }
   return fields
 }
+
+/** Run titles may be the first line of a structured prompt rather than a human title. */
+export function readableAutomationTitle(title?: string): string | undefined {
+  const value = title?.trim()
+  if (!value || /^[\[{`]/.test(value)) return undefined
+  return value.split('\n')[0]!.slice(0, 160)
+}

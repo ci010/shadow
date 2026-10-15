@@ -30,6 +30,9 @@ export interface AutomationSummary {
   enabled: boolean
   configuredEnabled?: boolean
   editable?: boolean
+  model?: string
+  defaultModel?: string
+  canConfigureModel?: boolean
   canToggle?: boolean
   toggleId?: string
   toggleEnabled?: boolean
