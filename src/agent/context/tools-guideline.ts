@@ -71,6 +71,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
     const lines = [
       '### Delegation',
       '',
+      '- Task title and description belong to the parent: supply both explicitly (legacy title omission uses description). The child cannot rename itself or redefine its responsibility; call metadata is unchanged.',
       '- **`subagent`** — `agent_type` selects expertise/tool constraints; independently choose `mode` for lifecycle, context, communication and return behavior.',
       '- Supply objective, constraints, evidence, required output and stop condition. Optional `work:{key}` links a shared note and contextual questions; an unambiguous parent focus is inherited. No adoption protocol. Modes never widen permissions.',
     ]
@@ -96,13 +97,15 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
     sections.push(lines.join('\n'))
   }
 
+  if (mode === 'task' && allows('session')) sections.push('- `session action=update_self` accepts only completed:true to mark resolved or completed:false to reopen. Title and description are parent-owned.')
   if (mode === 'session' && allows('session')) {
     sections.push(`### Peer conversations
 
 - Reuse peers: discover \`grep:v:sessions\`; \`v:sessions/<id>/brief\` gives metadata and conversation URL, not work scope.
+- \`session action=update_self\`: set only title/description/completed for yourself. Sessions are discoverable topics without registration or Work; formal goals/boundaries belong in Work. completed:true ends your responsibility, not Work; completed:false reopens it, independent of inferred running/waiting activity. No sessionId or topic parameter.
 - \`session action=create\`: title; description is metadata, initialMessage is the request. Optional \`work:{key}\` links an unassigned note before kickoff.
 - Retry with the same \`requestId\`; kickoff is not replayed. \`initialMessageStatus\`: \`accepted\`, \`not_requested\`, \`not_replayed\`. Admission is not completion.
-- \`work assign\` sets responsibility; directories and creator provenance are not ownership. Metadata never revises work.
+- \`work assign\` sets responsibility; directories and creator provenance are not ownership. Metadata never revises work. Work create associates this session; work link key associates existing Work without changing select focus.
 - Read \`v:project/folders\` for registered resources; never resolve remote display paths on Main.
 - The coordinator routes work, not the structural parent of peer conversations.`)
   }

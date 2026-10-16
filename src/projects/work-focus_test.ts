@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Hono } from 'hono'
-import { Bus } from '../bus/bus.ts'
 import { InitiativeStore } from '../initiatives/store.ts'
 import { workRecordSchema } from '../initiatives/work-contract.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
@@ -9,7 +8,7 @@ import { createProjectScope } from './scope.ts'
 import { WorkOrganizer } from './work-organizer.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
-import { WorkObserver, observedWorkSchema, recentFocusContext } from './work-observer.ts'
+import { OrganizationController } from './organization-controller.ts'
 import { projectWorkPlugin } from './work-routes.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 
@@ -28,19 +27,15 @@ test('inference schema is optional for old JSON records and evidence is validate
   assert.equal(workRecordSchema.parse(JSON.parse(JSON.stringify(old))).observation?.focus, undefined)
   assert.deepEqual(workRecordSchema.parse(JSON.parse(JSON.stringify(record(1)))).observation?.focus, focus)
   assert.throws(() => workRecordSchema.parse({ ...record(1), observation: { ...record(1).observation, focus: { ...focus, evidence: [{ ...source, id: 'invented' }] } } }))
-  assert(observedWorkSchema.safeParse({ track: true, title: 'x', objective: 'x', summary: '', next: '' }).success)
-  const context = recentFocusContext(Array.from({ length: 12 }, (_, i) => record(i)), 'web:chat-1')
-  assert.equal(context.length, 8)
-  assert.deepEqual(Object.keys(context[0]!).sort(), ['category', 'purpose'])
 })
 
 test('explicit organization dispatches bounded tool organization, persists safely and rejects concurrent/stale runs', async () => withTempWorkspace(async home => {
   let store = new InitiativeStore(home)
-  const scope = createProjectScope('fixture'), bus = new Bus()
+  const scope = createProjectScope('fixture')
   for (let i = 0; i < 35; i++) store.saveWork(record(i), 0, 'fixture', 'created')
   let calls = 0, mode = 'success', input = ''
   const gate = Promise.withResolvers<void>()
-  const observer = new WorkObserver(store, { scope, bus, state: () => null, changed() {}, summarize: async () => { throw new Error('Automatic summarizer must not organize') }, organize: async (runMode,signal) => {
+  const controller = new OrganizationController({ scope, changed() {}, organize: async (runMode,signal) => {
     calls++
     const organizer = new WorkOrganizer(store,{projectId:'fixture',evidence:async()=>({sources:[],partial:true}),activity:()=>'',changed(){}})
     const ctx = {sessionId:'fixture:organizer',physicalSessionId:'physical',projectId:'fixture',signal,tools:new SessionTools(new Tools(home),home)} as ExecutionContext
@@ -54,10 +49,10 @@ test('explicit organization dispatches bounded tool organization, persists safel
       await organizer.patch({patchId:'bounded-patch',expectedRevision:store.projectFocus()?.revision??0,groups,hierarchy:[0,1,2].map(index=>({id:'purpose-'+index,title:'Shared purpose '+index,purpose:focus.purpose,groupIds:groups.slice(index*10,index*10+10).map(g=>g.id)}))},ctx)
       await organizer.finish({},ctx)
     }finally{organizer.end()}
-  } }, false)
+  } })
   try {
     assert.equal(calls, 0)
-    await observer.organize(new AbortController().signal)
+    await controller.organize(new AbortController().signal)
     assert.equal(calls, 1)
     assert.equal(JSON.parse(input).manifest.length, 30)
     assert.equal(store.projectFocus()?.omittedCount, 5)
@@ -66,21 +61,21 @@ test('explicit organization dispatches bounded tool organization, persists safel
     assert.equal(store.projectFocus()?.origin, 'model_interpretation')
     const saved = store.projectFocus()
     mode = 'fail'
-    await assert.rejects(observer.organize(new AbortController().signal), /Provider/)
+    await assert.rejects(controller.organize(new AbortController().signal), /Provider/)
     assert.deepEqual(store.projectFocus(), saved)
     mode = 'wait'
-    const running = observer.organize(new AbortController().signal)
-    await assert.rejects(observer.organize(new AbortController().signal), /already running/)
+    const running = controller.organize(new AbortController().signal)
+    await assert.rejects(controller.organize(new AbortController().signal), /already running/)
     const key = JSON.parse(input).manifest[0].key
     const prior = store.workRecords().find(value => value.key === key)!
     store.saveWork({ ...prior, sequence: 2 }, 1, 'human', 'note')
     gate.resolve()
     await assert.rejects(running, /Topics changed/)
     assert.deepEqual(store.projectFocus(), saved)
-    await observer.stop(); store.close()
+    await controller.stop(); store.close()
     store = new InitiativeStore(home)
     assert.deepEqual(store.projectFocus(), saved, 'SQLite reopen retains inference without replay')
-  } finally { await observer.stop(); store.close(); scope.close() }
+  } finally { await controller.stop(); store.close(); scope.close() }
 }))
 
 test('organization endpoint enforces authorization and strict empty input before model execution', async () => {
@@ -119,9 +114,9 @@ test('dedicated patches reject malformed structures, invented keys and unknown a
 }))
 
 test('organization route does not call model failures invalid requests and distinguishes overview failure', async () => {
-  const { ObserverOutputError } = await import('./observer-output.ts')
+  const { OrganizationOutputError } = await import('./organization-output.ts')
   const sessions = { alignment: {} } as unknown as SessionManager
-  for (const [error, code] of [[new SyntaxError('private model text'), 'organization_failed'], [new ObserverOutputError('model_json_invalid'), 'model_json_invalid'], [new ObserverOutputError('model_schema_invalid'), 'model_schema_invalid'], [undefined, 'organization_refresh_failed']] as const) {
+  for (const [error, code] of [[new SyntaxError('private model text'), 'organization_failed'], [new OrganizationOutputError('model_json_invalid'), 'model_json_invalid'], [new OrganizationOutputError('model_schema_invalid'), 'model_schema_invalid'], [undefined, 'organization_refresh_failed']] as const) {
     const app = new Hono()
     projectWorkPlugin(sessions, () => true, undefined, undefined, async () => { if (error) throw error })(app)
     const response = await app.request('/api/work/organize', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })

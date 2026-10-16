@@ -1,3 +1,5 @@
+> Historical implementation notes: automatic title/goal observation has been removed. Only independent organization and explicit session metadata remain active; observer references below describe retired behavior, not supported configuration or entrypoints.
+
 # Fresh automation state/archive — original plan and audit inventory
 
 Status: the future-only implementation is now present in the worktree for review. See [current persistence behavior](../fresh-automation-state.md) for the implemented APIs, storage layout, conservative settlement behavior and learning exclusion. The original proposal and caller inventory below are retained as design history, not a claim that every proposed mechanism was implemented verbatim. No production automation states have been converted, deleted or archived during development. Startup snapshot reuse and bounded JSON reads remain separate optimizations.

@@ -31,6 +31,7 @@ export interface SidebarSession {
   depth: number
   mode?: 'session' | 'task' | 'call'
   agentType?: string
+  completed?: boolean
   executionStatus?: ExecutionStatus
   waitingForCall?: boolean
   parentToolCallId?: string
@@ -167,6 +168,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       depth: 0,
       mode: session.mode as SidebarSession['mode'],
       agentType: session.agentType as string | undefined,
+      completed: session.completed === true,
       executionStatus: session.executionStatus as ExecutionStatus | undefined,
       waitingForCall: session.waitingForCall as boolean | undefined,
       parentToolCallId: session.parentToolCallId as string | undefined,

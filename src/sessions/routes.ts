@@ -295,6 +295,7 @@ export function sessionsApiPlugin(
           ...session,
           ...execution,
           automation,
+          completed: state?.completed ?? false,
           title: automation?.config?.source === 'system' ? automation.name : state?.name ?? state?.topic?.title ?? state?.generatedTitle ?? state?.chatName ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,

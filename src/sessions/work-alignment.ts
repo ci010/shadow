@@ -54,6 +54,7 @@ export const WORK_HELP = {
   review: { conclusion: 'Coordinator interpretation of a reported impact; does not approve operations' },
   discovery: { query: 'Optional text filter for list/tree', limit: '1-20; defaults to 5', offset: 'Defaults to 0; use nextOffset' },
   version: 'Read the current note version before update, assign or review; send only changed fields. Goal revisions change only for semantic changes.',
+  link: 'Associate this session with an existing key; does not select focus, assign responsibility, or complete Work.',
   select: 'Select an assigned key for focus; omit key to clear focus. This does not restrict tool execution.',
 }
 
@@ -569,6 +570,7 @@ export class WorkAlignment implements WorkToolGuard {
           assignee, assignmentRevision: 1, status: 'pending', dependencies: [] },
       }
       this.store.saveWork(record, 0, this.actorName(actor), 'created')
+      if (actor.kind === 'session') this.store.linkWorkSession(actor.sessionId, record.key)
       if (assignee && (actor.kind === 'user' || assignee === actor.sessionId)) this.store.setWorkFocus(assignee, record.key)
       await this.publishNote(record)
       return record
@@ -578,6 +580,15 @@ export class WorkAlignment implements WorkToolGuard {
       const request = z.object({ proposalId: z.string().uuid() }).strict().parse(data)
       if (!key) throw new WorkConflict('A work key is required.')
       return this.applyProposal(key, request.proposalId)
+    }
+    if (action === 'link') {
+      if (actor.kind !== 'session' || (this.deps.state(actor.sessionId)?.mode ?? 'session') !== 'session') throw new WorkConflict('Only ordinary durable sessions may associate Work.')
+      this.requireSession(actor.sessionId)
+      if (!key) throw new WorkConflict('Provide an existing Work key.')
+      this.get(key)
+      this.store.linkWorkSession(actor.sessionId, key)
+      await this.publishNote(this.get(key), this.get(key))
+      return { key, sessionId: actor.sessionId, selected: this.store.workFocus(actor.sessionId) ?? null, notice: 'Historical association only; focus, assignment, authority and completion are unchanged.' }
     }
     if (action === 'select') {
       if (actor.kind !== 'session' || this.deps.state(actor.sessionId)?.mode !== 'session') throw new WorkConflict('Only a durable executor may select its own work scope.')

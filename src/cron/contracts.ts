@@ -59,10 +59,10 @@ export interface OrganizationOutcome {
 }
 export const SYSTEM_AUTOMATIONS = {
   organizer: { id: 'system:work-organizer', name: '话题整理', agentType: 'work-organizer' },
-  observer: { id: 'system:work-observer', name: '自动观察', agentType: 'work-observer' },
 } as const
-export function systemAutomationRef(agentType: 'work-organizer' | 'work-observer', sessionId: string, mode?: 'full' | 'delta'): AutomationSessionRef {
-  const job = Object.values(SYSTEM_AUTOMATIONS).find(job => job.agentType === agentType)!
+export function systemAutomationRef(agentType: 'work-organizer', sessionId: string, mode?: 'full' | 'delta'): AutomationSessionRef {
+  if (agentType !== 'work-organizer') throw new Error('Unknown system automation')
+  const job = SYSTEM_AUTOMATIONS.organizer
   return { jobId: job.id, name: mode === 'full' ? '话题全量重整' : mode === 'delta' ? '话题增量整理' : job.name,
     runId: sessionId, startedAt: new Date().toISOString(), contextMode: 'fresh',
     config: { source: 'system', schedule: 'Event-driven / manual', agentType, ...(mode ? { organizationMode: mode } : {}) } }
@@ -124,7 +124,10 @@ export function resolveAutomationSession(state: {
   const internal = /^(work-organizer|work-observer):(.+)$/.exec(state.sessionId)
   if (internal && state.agentType === internal[1] && !state.parentSessionId
     && (internal[1] === 'work-organizer' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(internal[2]!) : /^work-observer-\d{13}$/.test(internal[2]!))) {
-    const ref = systemAutomationRef(internal[1] as 'work-organizer' | 'work-observer', state.sessionId)
+    const ref: AutomationSessionRef = internal[1] === 'work-organizer' ? systemAutomationRef('work-organizer', state.sessionId) : {
+      jobId: 'system:work-observer', name: 'Retired automatic observation', runId: state.sessionId,
+      startedAt: '', contextMode: 'fresh', config: { source: 'system', schedule: 'Retired', agentType: 'work-observer' },
+    }
     ref.startedAt = state.lastActivityAt && Number.isFinite(Date.parse(state.lastActivityAt)) ? state.lastActivityAt : new Date(Number(/(\d{13})$/.exec(internal[2]!)?.[1] ?? 0)).toISOString()
     ref.legacy = true
     return ref

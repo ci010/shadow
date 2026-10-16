@@ -39,7 +39,7 @@ test('canonical service exact provenance, Project isolation, policy', async () =
   const states = [{ sessionId: 'run', projectId: 'project', automation: ref }, { sessionId: 'foreign', projectId: 'other', automation: ref }, { sessionId: 'unmarked', projectId: 'project', agentType: 'work-organizer' }]
   let selected: string[] = []
   const sessions = { automationFeatureStates: async () => states, listHistoryStates: async () => states, listSessions: () => states, getSessionState: (id: string) => states.find(state => state.sessionId === id), getAutomationUsage: async (ids: string[]) => { selected = ids; return { providerCalls: 3, knownUsageCalls: 0, unknownUsageCalls: 3, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 1, untrackedSessions: 0 } } } as unknown as SessionManager
-  const service = new AutomationProfileService({ listJobs: () => [] } as unknown as CronService, sessions, 'project', () => ({ kind: 'event', scope: 'current_runtime', description: 'After root changes, delta event; full manual' }), () => asOf)
+  const service = new AutomationProfileService({ listJobs: () => [] } as unknown as CronService, sessions, 'project', () => ({ kind: 'event', scope: 'current_runtime', description: 'Explicit full or delta organization' }), () => asOf)
   const profile = await service.query('system:work-organizer')
   assert.deepEqual(selected, ['run']); assert.equal(profile?.runs.partial, 1); assert.equal(profile?.runs.delta, 1); assert.equal(profile?.usage.providerCalls, 3)
   assert.equal(profile?.frequency.kind, 'event'); assert.equal(profile?.coverage, 'partial')
@@ -53,7 +53,7 @@ test('profile HTTP reads only mounted Project feature and returns sanitized aggr
   const sessions = { automationFeatureStates: async () => [], listHistoryStates: async () => [], listSessions: () => [], getAutomationUsage: async () => ({ providerCalls: 0, knownUsageCalls: 0, unknownUsageCalls: 0, inputTokens: null, outputTokens: null, totalTokens: null, toolCalls: 0, trackedSessions: 0, untrackedSessions: 0 }) } as unknown as SessionManager
   const cron = { listJobs: () => [] } as unknown as CronService
   registerAutomationRoutes(app, cron, sessions, 'project')
-  const response = await app.request('/api/automations/system%3Awork-observer/profile')
+  const response = await app.request('/api/automations/system%3Awork-organizer/profile')
   assert.equal(response.status, 200)
   const body = await response.json()
   assert.equal(body.profile.coverage, 'unknown'); assert.equal(body.profile.usage.inputTokens, null)
@@ -87,13 +87,13 @@ test('Project-mounted profile URLs normalize trailing slash and preserve encoded
   gateway.route('/projects/project', project)
   const base = projectBase('http://localhost:3000/', 'project')
   // The former template-string join inserts a double slash and misses the mounted route.
-  assert.equal((await gateway.request(`${base}/api/automations/system%3Awork-observer/profile`)).status, 404)
+  assert.equal((await gateway.request(`${base}/api/automations/system%3Awork-organizer/profile`)).status, 404)
   for (const candidate of [base, base.replace(/\/$/, '')]) {
-    const url = automationProfileUrl(candidate, 'system:work-observer')
-    assert.equal(url.pathname, '/projects/project/api/automations/system%3Awork-observer/profile')
+    const url = automationProfileUrl(candidate, 'system:work-organizer')
+    assert.equal(url.pathname, '/projects/project/api/automations/system%3Awork-organizer/profile')
     const response = await gateway.request(url.toString())
     assert.equal(response.status, 200)
-    assert.equal((await response.json()).profile.featureId, 'system:work-observer')
+    assert.equal((await response.json()).profile.featureId, 'system:work-organizer')
     assert.equal(sessionProfileUrl(candidate, 'web:root').pathname, '/projects/project/api/sessions/web%3Aroot/profile')
     assert.equal((await gateway.request(automationProfileUrl(candidate, 'foreign:feature').toString())).status, 404)
   }

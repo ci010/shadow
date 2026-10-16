@@ -4,14 +4,6 @@
       <h2>{{ t('Project goal map') }}</h2>
       <p>{{ t('Follow a branch for context, notes and decisions.') }}</p>
     </header>
-    <p v-if="data.observer?.running || data.observer?.pending" class="observer-status" role="status">{{ t('Organizing observed work…') }}</p>
-    <p v-if="data.observer && !data.observer.enabled" class="observer-status">{{ t('Automatic work observation is disabled. Execution activity remains available.') }}</p>
-    <div v-if="data.observer?.error || data.observer?.errors.length" class="impact-pending" role="status">
-      <strong>{{ t('Automatic work observation needs attention') }}</strong>
-      <p>{{ t('Existing notes are retained. New evidence or re-enabling observation retries the update.') }}</p>
-      <p v-if="data.observer.error">{{ data.observer.error }}</p>
-      <p v-for="failure in data.observer.errors" :key="failure.sessionId"><button @click="emit('session', failure.sessionId)">{{ sessionTitle(failure.sessionId) }}</button>: {{ failure.error }}</p>
-    </div>
     <p v-if="!data.items.length" class="canvas-empty">{{ t('There is no goal map yet. Conversations and questions still appear below; tracking is optional.') }}</p>
     <p v-else-if="!rows.length" class="canvas-empty">{{ t('No matching work') }}</p>
     <article v-for="row in rows" :key="row.item.key" :data-work-key="row.item.key"
@@ -112,7 +104,7 @@ const anchored = computed(() => {
 const unanchored = computed(() => props.data.requests.filter(request => !request.context
   || !props.data.items.some(item => item.key === request.context?.decisionKey)))
 const unlinkedSessions = computed(() => props.data.sessions.filter(session =>
-  !props.data.items.some(item => item.assignee === session.sessionId || item.key === session.workKey))
+  !props.data.items.some(item => item.assignee === session.sessionId || item.key === session.workKey || session.workKeys?.includes(item.key)))
   .sort((a, b) => Number(isWorkingStage(b.activity)) - Number(isWorkingStage(a.activity))))
 const sessionTitle = (id: string) => props.data.sessions.find(session => session.sessionId === id)?.title ?? id
 const activityRows = computed(() => {
@@ -129,7 +121,7 @@ const activityRows = computed(() => {
   for (const session of sessions) add(session)
   return result
 })
-const linkedSessions = (item: ProjectWorkItem) => props.data.sessions.filter(session => session.sessionId === item.assignee || session.workKey === item.key)
+const linkedSessions = (item: ProjectWorkItem) => props.data.sessions.filter(session => session.sessionId === item.assignee || session.workKey === item.key || session.workKeys?.includes(item.key))
 function toggle(key: string) { const next = new Set(expanded.value); next.has(key) ? next.delete(key) : next.add(key); expanded.value = next }
 function toggleDetails(key: string) { const next = new Set(details.value); next.has(key) ? next.delete(key) : next.add(key); details.value = next }
 function reveal(key: string) {
@@ -212,7 +204,7 @@ button:hover { background: var(--c-bg-muted); }
 button:focus-visible, .context-canvas:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .context-canvas:focus-visible { outline-offset: -2px; }
 .canvas-empty { padding-block: 20px; color: var(--c-text-secondary); }
-.observer-status, .observation-source { color: var(--c-text-secondary); font-size: 12px; }
+.observation-source { color: var(--c-text-secondary); font-size: 12px; }
 .observation-source summary { cursor: pointer; padding-block: 6px; }
 .observation-source time { margin-inline-start: 8px; }
 .observation-source code { overflow-wrap: anywhere; }

@@ -537,6 +537,10 @@ export class SessionTools extends Tools {
     if (!executionModeAllowsTool(this.scope?.mode, name)) {
       return this.rejectExecution(`${name} is unavailable in ${this.scope?.mode} mode; return to the parent for durable coordination or deferred work.`)
     }
+    if (this.scope?.mode === 'task' && name === 'session'
+      && (args.action !== 'update_self' || Object.keys(args).some(key => !['action', 'completed'].includes(key)))) {
+      return this.rejectExecution('Task session access is limited to update_self with completed; title, description and topic are parent-owned.')
+    }
     if (name === 'subagent' && this.scope && !this.scope.modes.includes('task') && args.mode === undefined) {
       return `Error: mode is required in this scope; choose ${this.scope.modes.join(', ')}.`
     }

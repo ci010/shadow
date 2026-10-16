@@ -1234,6 +1234,7 @@ ${JSON.stringify(request)}`,
       this.assertFolderAccess(sessionId)
       this.assertHistoryWritable(sessionId)
       const state = this.sessionStates[sessionId]
+      if (state?.agentType === 'work-observer' || state?.automation?.jobId === 'system:work-observer') throw new Error('Automatic work observation has been retired')
       if (state?.retirement) {
         if (input.source.kind !== 'user') throw new Error('Session is retired; restore it before automated delivery.')
         await this.saveState(sessionId, { ...state, retirement: undefined })
@@ -1648,6 +1649,7 @@ ${JSON.stringify(request)}`,
         throw new Error('Child sessions cannot switch folders')
       }
     }
+    if (stateFields?.agentType === 'work-observer' || stateFields?.automation?.jobId === 'system:work-observer') throw new Error('Automatic work observation has been retired')
     const agent = this.deps.agentTypes.resolve(
       stateFields?.agentType ?? 'general',
     )
@@ -1745,7 +1747,11 @@ ${JSON.stringify(request)}`,
       folderId: stateFields?.folderId ?? parentState?.folderId,
       reportTo: mode === 'session' ? undefined : stateFields?.reportTo,
       originUser: stateFields?.originUser,
-      name: stateFields?.name === undefined ? undefined : parseSessionName(stateFields.name),
+      name: stateFields?.name === undefined
+        ? mode === 'task' && ownerId
+          ? parseSessionName((stateFields?.description ?? 'Task').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 120) || 'Task')
+          : undefined
+        : parseSessionName(stateFields.name),
       description: stateFields?.description,
       preloadTools: stateFields?.preloadTools,
     }
@@ -1950,6 +1956,38 @@ ${JSON.stringify(request)}`,
       state.workPolicy = parsed
       this.invalidateSystemPrompts()
       this.deps.bus.emit('session.changed', { sessionId })
+    })
+  }
+
+  /** Tool entry point: the caller supplies only its runtime-bound identity, never a target. */
+  async updateSelfMetadata(sessionId: string, value: unknown): Promise<void> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected metadata object')
+    const patch = value as Record<string, unknown>
+    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['title', 'description', 'completed'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
+    const changes: Partial<SessionState> = {}
+    if ('title' in patch) changes.name = parseSessionName(patch.title as string)
+    if ('description' in patch) {
+      if (typeof patch.description !== 'string' || patch.description.length > 4000) throw new TypeError('Description must be text of at most 4000 characters')
+      changes.description = patch.description
+    }
+    if ('completed' in patch) {
+      if (typeof patch.completed !== 'boolean') throw new TypeError('completed must be boolean')
+      changes.completed = patch.completed
+    }
+    await this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state || this.stopped || this.deleting.has(sessionId) || state.mode === 'call' || state.automation || state.sessionKind === 'orchestrator') throw new Error('Self metadata requires an available ordinary durable session or task')
+      // Fresh task identity is owned by its parent, not by the child's prompt or supplied patch.
+      if (state.mode === 'task' && Object.keys(patch).some(key => key !== 'completed')) throw new Error('Task title and description are parent-owned; update_self accepts only completed.')
+      if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
+      const release = this.acquireFolderAccess()
+      try {
+        this.assertFolderAccess(sessionId)
+        await this.store.saveState(sessionId, { ...state, ...changes })
+        Object.assign(state, changes)
+        this.invalidateSystemPrompts()
+        this.deps.bus.emit('session.changed', { sessionId })
+      } finally { release() }
     })
   }
 
@@ -2355,7 +2393,7 @@ ${JSON.stringify(request)}`,
       description: state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
       segmentIndex: state.segmentIndex, lastActivityAt: state.lastActivityAt,
       folderId: state.folderId, initiativeId: state.initiativeId, automation: state.automation,
-      agentType: state.agentType, mode: state.mode, executionStatus: state.executionStatus,
+      agentType: state.agentType, mode: state.mode, completed: state.completed, executionStatus: state.executionStatus,
       sessionKind: state.sessionKind === 'orchestrator' ? 'orchestrator' : undefined,
       createdBySessionId: state.createdBySessionId,
     }))
@@ -2472,6 +2510,7 @@ ${JSON.stringify(request)}`,
     const handoff = this.deps.handoffManager?.getContextPolicy(window ?? undefined)
     return {
       ...(state.projectId ? { projectId: state.projectId } : {}),
+      ...(state.completed === undefined ? {} : { completed: state.completed }),
       ...parseTopicSessionFields(state),
       description: state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
       sessionId,
@@ -2685,7 +2724,7 @@ ${JSON.stringify(request)}`,
 
   listSessions(): Array<
     Pick<SessionState, 'projectId' | 'sessionId' | 'name' | 'description' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'createdBySessionId'
-      | 'initiativeId' | 'automation' | 'agentType' | 'mode' | 'executionStatus'>
+      | 'initiativeId' | 'automation' | 'agentType' | 'mode' | 'completed' | 'executionStatus'>
   > {
     return Object.values(this.sessionStates).filter(s => !s.retirement).map((s) => ({
       ...(s.projectId ? { projectId: s.projectId } : {}),
@@ -2699,6 +2738,7 @@ ${JSON.stringify(request)}`,
       automation: s.automation,
       agentType: s.agentType,
       mode: s.mode,
+      completed: s.completed,
       executionStatus: s.executionStatus,
       sessionKind: s.sessionKind === 'orchestrator' ? 'orchestrator' : undefined,
       createdBySessionId: s.createdBySessionId,
@@ -2993,7 +3033,7 @@ ${JSON.stringify(request)}`,
       this.deps.agentTypes.resolve('general')!
 
     if (name === 'work-observer') {
-      return { agentType: { ...resolved, allowedTools: [], blockedTools: undefined, soul: false, skills: false }, allowedTools: [] }
+      throw new Error('Automatic work observation has been retired')
     }
     if (name === 'work-organizer') {
       const allowedTools = ['organization_read', 'organization_patch', 'organization_finish']
@@ -3186,6 +3226,9 @@ ${JSON.stringify(request)}`,
       parentSessionId: delegationOwner(state),
       initiativeId: state.initiativeId,
       contextResetAt: state.contextResetAt,
+      ...((state.mode ?? 'session') === 'session' && !state.automation && state.sessionKind !== 'orchestrator' ? {
+        sessionMetadata: { title: state.name ?? state.topic?.title ?? state.generatedTitle, description: state.description, topic: state.topic, completed: state.completed ?? false },
+      } : {}),
       ...sessionPromptLocality(state),
     }
     const systemPrompt = state.channelBoundary && conversationPolicy

@@ -1,13 +1,14 @@
-import { OrganizationConflict } from './work-observer.ts'
+import { isLightweightTopic, sessionTopicTitle, sessionTopicDescription, sessionTopicSequence } from '../sessions/lightweight-topic.ts'
+import { OrganizationConflict } from './organization-controller.ts'
 import { randomUUID } from 'node:crypto'
-import { ObserverOutputError } from './observer-output.ts'
+import { OrganizationOutputError } from './organization-output.ts'
 import { z } from 'zod'
 import { physicalSessionId } from '../sessions/session-identity.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { WorkConflict } from '../initiatives/work-contract.ts'
 import { FolderError } from '../folders/registry.ts'
-import { projectWorkOverviewSchema, type ProjectWorkOverview, type ProjectWorkItem } from './work-overview.ts'
+import { projectWorkOverviewSchema, visibleProjectFocus, type ProjectWorkOverview, type ProjectWorkItem } from './work-overview.ts'
 
 export const humanWorkActionSchema = z.object({
   action: z.enum(['create', 'update', 'assign', 'review']),
@@ -33,13 +34,13 @@ export async function applyHumanWorkAction(sessions: SessionManager, body: z.inf
   }
 }
 
-export async function projectWorkOverview(sessions: SessionManager, github: Record<string, ProjectWorkItem['github']> = {}, observer?: ProjectWorkOverview['observer']): Promise<ProjectWorkOverview> {
+export async function projectWorkOverview(sessions: SessionManager, github: Record<string, ProjectWorkItem['github']> = {}, organization?: ProjectWorkOverview['organization']): Promise<ProjectWorkOverview> {
   const alignment = sessions.alignment
   if (!alignment) throw new WorkConflict('Work is unavailable.')
-  const states = (await sessions.listHistoryStates()).filter(state => state.agentType !== 'work-organizer' && state.agentType !== 'work-observer')
+  const states = (await sessions.listHistoryStates()).filter(state => isLightweightTopic(state) || state.mode === 'task')
   const records = alignment.store.workRecords()
-  return projectWorkOverviewSchema.parse({
-    observer,
+  const overview = projectWorkOverviewSchema.parse({
+    organization,
     focus: alignment.store.projectFocus(),
     items: records.map(record => {
       const authority = alignment.store.workAuthority(record.subject)
@@ -64,10 +65,12 @@ export async function projectWorkOverview(sessions: SessionManager, github: Reco
     sessions: states.map(state => {
       const full = state
       const temporary = state.mode === 'task' || state.mode === 'call'
+      const workKeys = alignment.store.workSessionKeys(state.sessionId, records).filter(key => records.some(record => record.key === key))
       const observed = records.find(record => record.observation?.sessionId === state.sessionId)
-      return { sessionId: state.sessionId, title: state.name || state.topic?.title || state.generatedTitle || state.chatName || state.description || observed?.workflow?.title || state.sessionId,
+      return { sessionId: state.sessionId, title: sessionTopicTitle(state),
+        description: sessionTopicDescription(state), completed: state.completed ?? false, topicSequence: sessionTopicSequence(state), workKeys,
         assignable: !temporary, parentSessionId: full?.parentSessionId ?? null, lastActivityAt: state.lastActivityAt,
-        workKey: alignment.decisionContext(state.sessionId)?.originKey ?? observed?.key,
+        workKey: workKeys[0] ?? observed?.key,
         activity: sessions.inputs.get(state.sessionId) || sessions.yields.get(state.sessionId) ? 'waiting'
           : sessions.isWaitingForCall(state.sessionId) ? 'waiting-for-call'
           : temporary && full?.executionStatus && full.executionStatus !== 'running' ? full.executionStatus
@@ -90,11 +93,12 @@ export async function projectWorkOverview(sessions: SessionManager, github: Reco
       workKeys: effect.stamps.map(stamp => stamp.key),
     })),
   })
+  return { ...overview, focus: visibleProjectFocus(overview) }
 }
 
 export function projectWorkPlugin(sessions: SessionManager, authorize: (request: Request) => boolean | Promise<boolean>,
   github: () => Record<string, ProjectWorkItem['github']> = () => ({}),
-  observer?: () => ProjectWorkOverview['observer'],
+  organization?: () => ProjectWorkOverview['organization'],
   organize?: (signal: AbortSignal, mode?: "full"|"delta") => Promise<void>): GatewayPlugin {
   return app => {
     const diagnostics = new WeakMap<Request, string>()
@@ -126,7 +130,7 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
       if (!sessions.alignment) return c.json({ error: 'work_unavailable' }, 501)
       return next()
     })
-    app.get('/api/work', async c => c.json(await projectWorkOverview(sessions, github(), observer?.())))
+    app.get('/api/work', async c => c.json(await projectWorkOverview(sessions, github(), organization?.())))
     // Historical decisions are read on expansion, not on every live overview refresh.
     app.get('/api/work-history', async c => {
       if (!diagnostics.has(c.req.raw) && !await authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
@@ -162,7 +166,7 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
         console.info('[work-organization]', diagnostic(stage, 'organization_started'))
         await organize(c.req.raw.signal,mode)
         stage = 'overview'
-        const overview = await projectWorkOverview(sessions, github(), observer?.())
+        const overview = await projectWorkOverview(sessions, github(), organization?.())
         console.info('[work-organization]', diagnostic('complete', 'organization_succeeded'))
         return c.json(overview)
       } catch (error) {
@@ -172,7 +176,7 @@ export function projectWorkPlugin(sessions: SessionManager, authorize: (request:
           return c.json({ error: code, stage, correlationId, message: 'Organization is unavailable, already queued, or has no recorded topics. Previously saved results and valid partial patches were kept.' }, 409)
         }
         const code = stage === 'overview' ? 'organization_refresh_failed'
-          : error instanceof ObserverOutputError ? error.code
+          : error instanceof OrganizationOutputError ? error.code
           : c.req.raw.signal.aborted || error instanceof Error && error.name === 'TimeoutError' ? 'organization_cancelled'
           : 'organization_failed'
         // Never log provider messages, JSON output, Zod values or conversation evidence.

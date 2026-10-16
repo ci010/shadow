@@ -157,8 +157,8 @@ const selected = ref(''), editing = ref(false), wide = ref(false)
 
 const diagnosticsOpen = ref(false)
 const organizing = ref(false), organizationMessage = ref('')
-const liveOrganization = computed(() => data.value?.observer?.organization ?? data.value?.focus?.organization)
-const organizationDisabled = computed(() => data.value?.observer?.organizerEnabled === false)
+const liveOrganization = computed(() => data.value?.organization?.organization ?? data.value?.focus?.organization)
+const organizationDisabled = computed(() => data.value?.organization?.enabled === false)
 const organizationBusy = computed(() => organizing.value || liveOrganization.value?.status === 'running')
 const organizationProgress = computed(() => {
   const status = liveOrganization.value
@@ -171,7 +171,7 @@ async function organizeTopics(mode: 'full' | 'delta' = 'full') {
   const apiBase = props.apiBase, projectId = props.projectId
   const controller = new AbortController()
   organizationController = controller
-  organizing.value = true; organizationMessage.value = data.value?.observer?.running ? t('Waiting for observation to finish; bounded organization will then run.') : t('Valid patches appear live and remain saved if organization stops.')
+  organizing.value = true; organizationMessage.value = t('Valid patches appear live and remain saved if organization stops.')
   let failureMessage = organizationErrorMessage('organization_network_failed'), diagnostic = ''
   try {
     const response = await fetch(apiUrl(apiBase, '/api/work/organize'), { method: 'POST',

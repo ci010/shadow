@@ -33,6 +33,7 @@ const CALL_COORDINATION_TOOLS = new Set([
 
 export function executionModeAllowsTool(mode: ExecutionMode | undefined, name: string): boolean {
   if (!mode || mode === 'session') return true
+  if (mode === 'task' && name === 'session') return true // Action-level ceiling: completion only.
   if (SESSION_ONLY_TOOLS.has(name)) return false
   return mode !== 'call' || !CALL_COORDINATION_TOOLS.has(name)
 }

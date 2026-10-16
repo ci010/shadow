@@ -35,6 +35,15 @@ export function normalizePersistedConfig(value: unknown): Record<string, unknown
     throw new TypeError('Configuration must be an object.')
   }
   const raw: Record<string, unknown> = { ...value }
+  // Read-only migration: preserve independent organizer preferences, discard retired observation settings.
+  if (Object.hasOwn(raw, 'workObserver')) {
+    const legacy = raw.workObserver as Record<string, unknown> | undefined
+    if (!raw.organization && legacy && typeof legacy === 'object') raw.organization = {
+      ...(legacy.organizerEnabled !== undefined ? { enabled: legacy.organizerEnabled } : {}),
+      ...(legacy.organizerModel !== undefined ? { model: legacy.organizerModel } : {}),
+    }
+    delete raw.workObserver
+  }
   if (Object.hasOwn(raw, 'voice')) {
     delete raw.voice
     console.warn('[config] Retired voice settings are ignored; automatic STT is no longer available. Use audio_cpp for transcription. The retired field is removed on the next configuration save.')

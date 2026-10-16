@@ -167,14 +167,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
   })
 })
 
-for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}: observer receipt and organizer outcome barriers settle independently, interrupted organizer stays live`, async () => {
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}: organizer outcome barrier settles independently, interrupted organizer stays live`, async () => {
   await withTempWorkspace(async root => {
     const { systemAutomationRef } = await import('../cron/contracts.ts')
     const store = new Store(join(root, 'sessions')); await store.init()
     const f = fixture(root, store)
     try {
       await f.manager.start()
-      for (const role of ['work-organizer', 'work-observer'] as const) {
+      for (const role of ['work-organizer'] as const) {
         const chatId = crypto.randomUUID(), id = `${role}:${chatId}`
         const automation = systemAutomationRef(role, id, role === 'work-organizer' ? 'delta' : undefined)
         await f.manager.startSession({ channel: role, chatId, agentType: role, mode: 'task', task: role, waitForCompletion: true,
@@ -197,7 +197,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
         }
         assert.equal(f.manager.getSessionState(id), null)
       }
-      assert.equal(f.requests.length, 2)
+      assert.equal(f.requests.length, 1)
     } finally { await f.manager.stop(); store.close() }
   })
 })
@@ -261,3 +261,21 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 }
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}: retired observation is readable but never resumed`, async () => {
+  await withTempWorkspace(async root => {
+    const store = new Store(join(root, 'sessions')); await store.init()
+    const id = 'work-observer:work-observer-1750000000001'
+    await store.saveState(id, { sessionId: id, projectId: 'fixture-project', ownershipVersion: 2, physicalIdVersion: 2,
+      mode: 'task', segmentIndex: 0, agentType: 'work-observer', executionStatus: 'pending' })
+    const f = fixture(root, store)
+    try {
+      await f.manager.start()
+      assert.equal((await f.manager.readSessionState(id))?.agentType, 'work-observer')
+      await assert.rejects(f.manager.deliver(id, { kind: 'message', id: 'legacy-input', timestamp: new Date().toISOString(),
+        content: 'Resume', policy: 'queue', source: { kind: 'event', eventId: 'legacy', type: 'fixture', source: 'fixture' } }), /retired/)
+      await assert.rejects(f.manager.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', task: 'Restart' }), /retired/)
+      assert.equal(f.requests.length, 0)
+    } finally { await f.manager.stop(); store.close() }
+  })
+})

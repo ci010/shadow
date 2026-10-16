@@ -13,6 +13,8 @@ import type { ChannelManager } from '../channels/manager.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
 import { SubagentTool } from '../tools/subagent.ts'
+import { SessionTool } from '../tools/session.ts'
+import { TopicService } from './topics.ts'
 import { MessageTool } from '../tools/message.ts'
 import { AskTool } from '../tools/ask.ts'
 import { InvokeTool } from '../tools/invoke-tool.ts'
@@ -143,7 +145,7 @@ function sourceContext(workspace: string, f: ReturnType<typeof fixture>): Execut
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: explicit task and call inference reaches the provider; observer stays tool-free and off the dashboard`, async () => {
+  test(`${Store.name}: explicit task and call inference reaches the provider; retired observer cannot start or restore`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -162,26 +164,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           await pending
           await waitFor(() => f.sessions.getSessionState(request.sessionId)?.executionStatus === 'completed')
         }
-        const id = await f.sessions.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', task: 'Summarize evidence' })
-        assert(id)
-        const observer = await f.next(id)
-        assert.deepEqual(observer.names, [])
-        const app = new Hono()
-        sessionsApiPlugin(f.sessions)(app)
-        for (const path of ['/api/sessions', '/api/sessions/graph']) {
-          const body = await (await app.request(path)).json()
-          assert(!body.sessions.some((session: { sessionId: string }) => session.sessionId === id))
-        }
-        assert(f.sessions.getSessionState(id))
-        observer.resolve(done('{"track":false}'))
-        const manualId = await f.sessions.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', task: 'Organize evidence', maxTokens: 16_384 })
-        assert(manualId)
-        const manual = await f.next(manualId)
-        assert.equal((await store.getState(manualId))?.config?.maxTokens, 16_384)
-        assert.deepEqual(manual.names, [])
-        assert.equal(manual.maxTokens, 16_384)
-        manual.resolve(done('{"groups":[]}'))
-        await assert.rejects(f.sessions.startSession({ agentType: 'work-observer', task: 'Invalid', maxTokens: NaN }), /positive safe integer/)
+        await assert.rejects(f.sessions.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', task: 'Retired' }), /retired/)
+        await assert.rejects(f.sessions.buildSession('work-observer:legacy', undefined, { agentType: 'work-observer' }), /retired/)
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
@@ -376,6 +360,58 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.stop()
         await f.sessions.start()
         assert.deepEqual(f.sessions.getToolDefinitions('web:orchestrator').map(tool => tool.name).sort(), allowed)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: fresh task identity is parent-owned while self completion persists`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store, { projectId: 'p' })
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:root')
+        await f.sessions.buildSession('virtual:task', undefined, {
+          mode: 'task', parentSessionId: 'web:root', name: 'Parent title', description: 'Parent purpose',
+        })
+        for (const patch of [{ title: 'Child title' }, { description: 'Child purpose' },
+          { topic: { title: 'Bypass', goal: 'Goal', scope: '' } }, { completed: true, title: 'Mixed' }]) {
+          await assert.rejects(f.sessions.updateSelfMetadata('virtual:task', patch), 'topic' in patch ? /Unknown or empty/ : /parent-owned/)
+        }
+        await assert.rejects(f.sessions.updateConversationMetadata('virtual:task', { title: 'Legacy bypass' }), /ordinary/)
+        const sessionTool = new SessionTool(new TopicService({
+          projectId: 'p', sessions: f.sessions, folders: {} as never, listStates: async () => [],
+          resolveAgent: () => undefined, changed: () => {},
+        }))
+        const context = { sessionId: 'virtual:task', projectId: 'p', signal: new AbortController().signal } as ExecutionContext
+        await assert.rejects(sessionTool.execute({ action: 'update_self', title: 'Bypass' }, context), /parent-owned/)
+        await assert.rejects(sessionTool.execute({ action: 'update_self', topic: { title: 'Bypass', goal: 'Goal', scope: '' } }, context), /Unknown or empty/)
+        await assert.rejects(sessionTool.execute({ action: 'update', sessionId: 'virtual:task', title: 'Bypass' }, context), /Temporary/)
+        await assert.rejects(sessionTool.execute({ action: 'update_self', sessionId: 'web:root', completed: true }, context), /Unknown/)
+        const receipt = JSON.parse(await sessionTool.execute({ action: 'update_self', completed: true }, context))
+        assert.equal(receipt.title, 'Parent title')
+        assert.equal(receipt.description, 'Parent purpose')
+        assert.equal(f.sessions.getSessionState('virtual:task')?.completed, true)
+        await sessionTool.execute({ action: 'update_self', completed: false }, context)
+        const saved = (await store.getState('virtual:task'))!
+        assert.equal(saved.name, 'Parent title')
+        assert.equal(saved.description, 'Parent purpose')
+        assert.equal(saved.completed, false)
+        assert.equal(saved.topic, undefined)
+        await f.sessions.buildSession('virtual:legacy', undefined, {
+          mode: 'task', parentSessionId: 'web:root', description: 'Legacy purpose',
+        })
+        assert.equal(f.sessions.getSessionState('virtual:legacy')?.name, 'Legacy purpose')
+        await f.sessions.buildSession('virtual:call', undefined, { mode: 'call', parentSessionId: 'web:root', description: 'Call purpose' })
+        assert.equal(f.sessions.getSessionState('virtual:call')?.name, undefined)
+        await assert.rejects(f.sessions.updateSelfMetadata('virtual:call', { completed: true }), /ordinary/)
+        const taskTools = new SessionTools(new Tools(workspace), workspace)
+        taskTools.setExecutionScope('task', ['call'])
+        assert.equal(taskTools.executionDenial('session', { action: 'update_self', completed: true }), undefined)
+        for (const args of [{ action: 'update_self', topic: {} }, { action: 'update', title: 'Bypass' }, { action: 'create' }]) {
+          assert.match(taskTools.executionDenial('session', args)!, /parent-owned/)
+        }
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
@@ -1474,26 +1510,7 @@ for(const Store of [JsonlSessionStore,SqliteSessionStore]) for (const limit of [
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(Store.name + ': observer host limit exposes no tools and never recovers with another provider call', async () => withTempWorkspace(async workspace => {
-    const store: SessionStore = new Store(join(workspace, 'sessions')); await store.init()
-    const f = fixture(workspace, store, { projectId: 'fixture' })
-    try {
-      await f.sessions.start()
-      const id = 'work-observer:one'
-      const job = f.sessions.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', chatId: 'one', task: 'Return JSON', waitForCompletion: true,
-        executionLimits: { allowedTools: [], inferenceRequests: 1, toolCalls: 1, argumentBytes: 1 } })
-      const request = await f.next(id); assert.deepEqual(request.names, [])
-      assert.doesNotMatch(JSON.stringify(request.messages), /runtime-context-audience/)
-      assert.doesNotMatch(String(request.messages[0]?.content), /Current Turn: Response Audience|Use message|Address the conversation's user/,
-        'Host-consumed JSON is not a user conversation or a peer message')
-      assert.doesNotMatch(JSON.stringify(request.messages), /inference requests including this one remain|Remaining execution budget/,
-        'Execution budgets are enforced by the host, not exposed in model-visible context')
-      request.resolve(invoke('read', { path: 'not-allowed' }))
-      await job
-      assert.equal(f.requests.filter(r => r.sessionId === id).length, 1)
-      assert.equal((await f.sessions.getExecutionResult(id))?.status, 'failed')
-    } finally { await f.sessions.stop(); await store.close?.() }
-  }))
+
 }
 
 for(const Store of [JsonlSessionStore,SqliteSessionStore]) {

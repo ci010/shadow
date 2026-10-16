@@ -33,17 +33,17 @@ test('selected automation renders actual metrics, unknown usage, frequency and r
   const requests: string[] = []
   t.mock.method(globalThis, 'fetch', async (input: unknown) => {
     requests.push(String(input))
-    return Response.json({ profile: { frequency: { description: 'Event coalesced 20 seconds', scope: 'current_runtime' }, runs: { total: 1, failed: 0, partial: 0, cancelled: 0, unknown: 0 }, usage: { providerCalls: 3, toolCalls: 2, inputTokens: 0, outputTokens: null, knownUsageCalls: 2, unknownUsageCalls: 1, untrackedSessions: 0 }, coverage: 'partial', window: { from: '2026-10-10T00:00:00.000Z', asOf: '2026-10-11T00:00:00.000Z' }, limitations: ['No cost estimates'] } })
+    return Response.json({ profile: { frequency: { description: 'Explicit full / delta organization', scope: 'current_runtime' }, runs: { total: 1, failed: 0, partial: 0, cancelled: 0, unknown: 0 }, usage: { providerCalls: 3, toolCalls: 2, inputTokens: 0, outputTokens: null, knownUsageCalls: 2, unknownUsageCalls: 1, untrackedSessions: 0 }, coverage: 'partial', window: { from: '2026-10-10T00:00:00.000Z', asOf: '2026-10-11T00:00:00.000Z' }, limitations: ['No cost estimates'] } })
   })
-  const root = node('root'), app = renderer.createApp(module.exports.default, { apiBase: 'https://example.test/projects/current/', featureId: 'system:work-observer', active: true })
+  const root = node('root'), app = renderer.createApp(module.exports.default, { apiBase: 'https://example.test/projects/current/', featureId: 'system:work-organizer', active: true })
   app.mount(root); t.after(() => app.unmount())
   const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
   await settle()
   const text = (n: Node): string => n.text + n.children.map(text).join(' ')
   assert.match(text(root), /Recorded provider calls 3/); assert.match(text(root), /Input tokens 0.*Output tokens Unknown/)
-  assert.match(text(root), /Event coalesced 20 seconds/); assert.match(text(root), /Usage known \/ unknown calls: 2 \/ 1/)
+  assert.match(text(root), /Explicit full \/ delta organization/); assert.match(text(root), /Usage known \/ unknown calls: 2 \/ 1/)
   const find = (n: Node): Node | undefined => n.tag === 'button' ? n : n.children.map(find).find(Boolean)
   ;(find(root)?.props.onClick as () => void)(); await settle()
   assert.equal(requests.length, 2)
-  assert.ok(requests.every(url => url === 'https://example.test/projects/current/api/automations/system%3Awork-observer/profile'))
+  assert.ok(requests.every(url => url === 'https://example.test/projects/current/api/automations/system%3Awork-organizer/profile'))
 })

@@ -8,6 +8,8 @@ import { sourceIdentity, validatePresentation, type PresentationSource } from '.
 import type { ExecutionContext } from '../tools/context.ts'
 import type { Tool } from '../tools/tool.ts'
 
+export type OrganizationTopic = Pick<WorkRecord, 'key' | 'sequence' | 'changedAt'> & { definition: { objective: string }; workflow?: { title?: string; parentKey?: string }; notes?: { summary?: string }; observation?: { sessionId: string }; sessionCompleted?: boolean }
+
 export type OrganizationMode = 'full' | 'delta'
 export const ORGANIZATION_TOOLS = ['organization_read', 'organization_patch', 'organization_finish'] as const
 const readSchema=z.object({key:z.string().optional(),offset:z.number().int().min(0).optional(),memberOffset:z.number().int().min(0).optional()}).strict()
@@ -31,11 +33,11 @@ const stableId = (keys: string[]) => `topic-${createHash('sha256').update([...ke
  * Evidence contains own human/semantic reports, never tools or child traces.
  */
 export class WorkOrganizer {
-  private run?: { sessionId: string; signal: AbortSignal; mode: OrganizationMode; manifest: WorkRecord[]; candidates: number; stale: Set<string>; evidence: Map<string,PresentationSource[]>; omissions: Map<string,{historyPartial:boolean;available:number;retained:number;textTruncated:number}>; read: Map<string,PresentationSource>; covered: Set<string>; versions: Map<string,string>; receipts: Map<string,{body:string;revision:number}>; patches:number; finished:boolean; bytes:number }
+  private run?: { sessionId: string; signal: AbortSignal; mode: OrganizationMode; manifest: OrganizationTopic[]; candidates: number; stale: Set<string>; evidence: Map<string,PresentationSource[]>; omissions: Map<string,{historyPartial:boolean;available:number;retained:number;textTruncated:number}>; read: Map<string,PresentationSource>; covered: Set<string>; versions: Map<string,string>; receipts: Map<string,{body:string;revision:number}>; patches:number; finished:boolean; bytes:number }
   private last?: { mode:OrganizationMode; status:'running'|'completed'|'partial'; coveredCount:number; manifestCount:number; patches:number }
   constructor(private store: Pick<InitiativeStore,'workRecords'|'workObservations'|'projectFocus'|'saveProjectFocus'>, private deps: {
     projectId:string; evidence(id:string,signal:AbortSignal):Promise<{sources:PresentationSource[];partial:boolean}>;
-    activity(id:string):string; physical?(id:string):string|undefined; changed():void;
+    sessionForWork?(key:string):string|undefined; activity(id:string):string; physical?(id:string):string|undefined; changed():void;
   }) {}
   status() {
     if (this.last) return this.last
@@ -43,17 +45,17 @@ export class WorkOrganizer {
     // A persisted running snapshot is interrupted, not an active execution after restart.
     return persisted ? { ...persisted, status: persisted.status === 'running' ? 'partial' as const : persisted.status } : undefined
   }
-  begin(sessionId:string, mode:OrganizationMode, signal:AbortSignal): string {
+  begin(sessionId:string, mode:OrganizationMode, signal:AbortSignal, topics: OrganizationTopic[] = []): string {
     if(this.run) throw new WorkConflict('Organization already running')
     signal.throwIfAborted()
-    const records=this.store.workRecords(), observations=this.store.workObservations(), previous=this.store.projectFocus()
-    const candidates=records.filter(r=>!r.workflow?.parentKey && !observations.find(o=>o.sessionId===r.observation?.sessionId)?.parentSessionId)
+    const records: OrganizationTopic[]=this.store.workRecords().map(record => ({...record, observation: record.observation ?? (this.deps.sessionForWork?.(record.key) ? {sessionId:this.deps.sessionForWork(record.key)!} : undefined)})), observations=this.store.workObservations(), previous=this.store.projectFocus()
+    const candidates=[...records, ...topics].filter(r=>!r.workflow?.parentKey && !observations.find(o=>o.sessionId===r.observation?.sessionId)?.parentSessionId)
       .sort((a,b)=>b.changedAt.localeCompare(a.changedAt)||a.key.localeCompare(b.key))
     const eligible=mode==='full'?candidates:candidates.filter(r=>previous?.sources.find(s=>s.key===r.key)?.sequence!==r.sequence)
     const manifest=eligible.slice(0,mode==='delta'?3:30)
     this.run={sessionId,signal,mode,manifest,candidates:candidates.length,stale:new Set(),evidence:new Map(),omissions:new Map(),read:new Map(),covered:new Set(),versions:new Map(),receipts:new Map(),patches:0,finished:false,bytes:0}
     this.last={mode,status:'running',coveredCount:0,manifestCount:manifest.length,patches:0};this.deps.changed()
-    return JSON.stringify({mode,manifest:manifest.map(r=>({key:r.key,sequence:r.sequence,title:r.workflow?.title,objective:r.definition.objective.slice(0,800),summary:r.notes?.summary?.slice(0,800)})),revision:previous?.revision??0,
+    return JSON.stringify({mode,manifest:manifest.map(r=>({key:r.key,sequence:r.sequence,title:r.workflow?.title,sessionCompleted:r.sessionCompleted,objective:r.definition.objective.slice(0,800),summary:r.notes?.summary?.slice(0,800)})),revision:previous?.revision??0,
       instruction:'Read bounded evidence, then commit valid small patches immediately. Do not wait for a complete project response. Finish explicitly. Manifest is fixed; omission is not deletion. Delta only reclassifies manifest keys, preserving unrelated groups/cards/hierarchy identities. Existing hierarchy is display interpretation, never authority.'})
   }
   private bound(context:ExecutionContext) {
@@ -71,7 +73,7 @@ export class WorkOrganizer {
     this.run!.stale.add(key)
     throw new WorkConflict(JSON.stringify({code:'ORGANIZATION_STALE_TOPIC',key,reason,retryable:false,action:'Skip topic in this run; finish with partial:true to preserve committed progress.'}))
   }
-  private async loadEvidence(record:WorkRecord) {
+  private async loadEvidence(record:OrganizationTopic) {
     const run=this.run!
     if(run.stale.has(record.key))this.stale(record.key,'Already invalidated')
     const known=record.observation?.sessionId

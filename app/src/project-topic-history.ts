@@ -9,7 +9,7 @@ export function projectTopics(data: ProjectWorkOverview): ProjectTopic[] {
     const items = data.items.filter(item => group.topicKeys.includes(item.key))
     const ids = new Set((group.cards ?? []).flatMap(card => card.sources.map(source => source.sessionId)))
     return [{ key: `presentation:${index}`, title: group.category, root: undefined as ProjectWorkItem | undefined,
-      items, sessions: data.sessions.filter(session => !session.parentSessionId && ids.has(session.sessionId)),
+      items, sessions: data.sessions.filter(session => session.assignable && ids.has(session.sessionId)),
       changedAt: [...items.map(item => item.changedAt), ...data.sessions.filter(session => ids.has(session.sessionId)).map(session => session.lastActivityAt ?? '')].filter(at => Number.isFinite(Date.parse(at))).sort().at(-1) ?? data.focus!.inferredAt, fallback: false }]
     })
     const cited = new Set(data.focus.result.groups.flatMap(group => group.topicKeys))
@@ -23,14 +23,14 @@ export function projectTopics(data: ProjectWorkOverview): ProjectTopic[] {
     const allKeys = new Set(members.map(item => item.key))
     const items = workCanvasRows(members, allKeys, allKeys).map(row => row.item)
     const keys = new Set(items.map(item => item.key))
-    const sessions = data.sessions.filter(session => keys.has(session.workKey ?? '') || items.some(item =>
+    const sessions = data.sessions.filter(session => keys.has(session.workKey ?? '') || session.workKeys?.some(key => keys.has(key)) || items.some(item =>
       item.assignee === session.sessionId || item.observation?.sessionId === session.sessionId))
     sessions.forEach(session => represented.add(session.sessionId))
     return { key: root.key, title: root.title, root: root as ProjectWorkItem | undefined, items, sessions,
       changedAt: [root.changedAt, ...items.map(item => item.changedAt), ...sessions.map(session => session.lastActivityAt ?? '')].sort().at(-1) ?? '',
       fallback: false }
   })
-  for (const session of data.sessions) if (!represented.has(session.sessionId)) topics.push({
+  for (const session of data.sessions) if (session.assignable && !represented.has(session.sessionId)) topics.push({
     key: `session:${session.sessionId}`, title: session.title, root: undefined, items: [], sessions: [session],
     changedAt: session.lastActivityAt ?? '', fallback: true,
   })

@@ -121,7 +121,9 @@ export interface SessionState {
   workPolicy?: WorkPolicy
   /** User-selected display name, independent of identity and topic instructions. */
   name?: string
-  /** Background summary title; explicit names and topic titles always take precedence. */
+  /** Explicit current-goal completion; independent of inferred runtime activity. Absent means open. */
+  completed?: boolean
+  /** Legacy background summary title; explicit names and topic titles always take precedence. */
   generatedTitle?: string
   /** Last known platform conversation name; never overrides a user-selected name. */
   chatName?: string

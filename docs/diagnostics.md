@@ -107,7 +107,7 @@ instead of silently substituting a scripted provider.
 
 ### Organization output limits
 
-Manual organization has a 16,384-token output ceiling for its bounded topic/card/hierarchy response. Automatic compact work observations retain the builtin observer's 2,000-token ceiling. These are ceilings, not fixed token consumption, and incomplete provider output is never retried automatically. A captured Responses `max_output_tokens` incomplete failure becomes the safe `model_output_limit` organization diagnostic; no partial JSON or invented citations are accepted. Existing results remain intact. Unknown provider errors remain generic so provider content does not leak into HTTP responses or structured organization logs.
+Manual organization has a 16,384-token output ceiling for its bounded topic/card/hierarchy response. These are ceilings, not fixed token consumption, and incomplete provider output is never retried automatically. A captured Responses `max_output_tokens` incomplete failure becomes the safe `model_output_limit` organization diagnostic; no partial JSON or invented citations are accepted. Existing results remain intact. Unknown provider errors remain generic so provider content does not leak into HTTP responses or structured organization logs.
 
 ### Profile UI and URL boundaries
 

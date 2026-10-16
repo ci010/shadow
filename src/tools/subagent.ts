@@ -12,6 +12,7 @@ import type { A2aSessions } from '../a2a/sessions.ts'
 import { workBindingSchema } from '../sessions/work-policy.ts'
 import { REASONING_EFFORTS, type InferenceSettings } from '../agent/llm-config.ts'
 import { z } from 'zod'
+import { parseSessionName } from '../sessions/session-name.ts'
 
 /** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
@@ -27,9 +28,10 @@ export class SubagentTool implements Tool {
       task: { type: 'string', description: 'Initial work. Required for task/call.' },
       model: { type: 'string', description: 'Optional exact model ID from v:models. Omission preserves role defaults for tasks and caller settings for calls.' },
       effort: { type: 'string', enum: [...REASONING_EFFORTS], description: 'Optional reasoning effort supported by the selected model. Omission inherits existing defaults.' },
+      title: { type: 'string', description: 'Task only: parent-owned display title, max 120 characters. Supply title and description explicitly; legacy omission derives a title from description. Ignored for call.' },
       description: {
         type: 'string',
-        description: 'Short description of the sub-agent session\'s purpose.',
+        description: 'Parent-owned task discovery description (max 4000 characters); the task child cannot change title or description. Call purpose is unchanged.',
       },
       initiative_id: {
         type: 'string',
@@ -120,6 +122,8 @@ export class SubagentTool implements Tool {
       return `Error: unknown agent type "${typeName}". Available: ${this.agentTypes.allNames().join(', ')}`
     }
     const mode = args.mode ?? 'task'
+    const title = mode === 'task' ? parseSessionName(args.title ?? description.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 120)) : undefined
+    if (mode === 'task' && description.length > 4000) return 'Error: task description must be at most 4000 characters.'
     const overrides: InferenceSettings = {
       ...(args.model === undefined ? {} : { model: z.string().trim().min(1).max(512).parse(args.model) }),
       ...(args.effort === undefined ? {} : { reasoningEffort: z.enum(REASONING_EFFORTS).parse(args.effort) }),
@@ -186,6 +190,7 @@ export class SubagentTool implements Tool {
         config: inference,
         originUser: ctx.senderName,
         description,
+        ...(mode === 'task' ? { name: title } : {}),
         preloadTools,
         workspaceRoot,
         workdir: parentState?.workdir,

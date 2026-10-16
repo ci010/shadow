@@ -1,3 +1,4 @@
+import { isLightweightTopic } from './lightweight-topic.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { SessionManager } from './session-manager.ts'
@@ -46,6 +47,7 @@ export interface TopicSummary {
   initiativeId?: string
   createdBySessionId?: string
   status: string
+  completed: boolean
   lastActivityAt?: string
   metadataSource: 'explicit' | 'summary' | 'description' | 'first_message' | 'identifier'
 }
@@ -53,7 +55,7 @@ export interface TopicSummary {
 export interface TopicServiceOptions {
   projectId: string
   sessions: Pick<SessionManager, 'getSessionState' | 'buildSession' | 'assertFolderAccess' |
-    'assertInitiativeAccess' | 'updateConversationMetadata' | 'deliver' | 'alignment'>
+    'assertInitiativeAccess' | 'updateConversationMetadata' | 'updateSelfMetadata' | 'deliver' | 'alignment'>
   listStates: () => Promise<SessionState[]>
   firstMessage?: (sessionId: string) => Promise<string | null>
   folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess'>
@@ -71,7 +73,8 @@ function topicSummary(projectId: string, state: SessionState, firstMessage?: str
     folderId: state.folderId,
     initiativeId: state.initiativeId,
     createdBySessionId: state.createdBySessionId,
-    status: state.recovery ? 'needs_attention' : state.executionStatus ?? 'idle',
+    completed: state.completed ?? false,
+    status: state.completed ? 'completed' : state.recovery ? 'needs_attention' : state.executionStatus ?? 'idle',
     lastActivityAt: state.lastActivityAt,
     metadataSource: state.name || state.topic ? 'explicit' : state.generatedTitle ? 'summary' : state.description ? 'description' : firstMessage ? 'first_message' : 'identifier',
   }
@@ -132,10 +135,7 @@ export class TopicService {
 
   async summaries(): Promise<TopicSummary[]> {
     const states = (await this.options.listStates())
-      .filter(state => (state.mode ?? 'session') === 'session' &&
-        state.sessionKind !== 'orchestrator' && state.sessionId !== ORCHESTRATOR_SESSION_ID &&
-        !state.automation && (state.topicRequestHash || state.sessionKind === 'topic' ||
-          !['reflector', 'soul-reflector', 'encapsulator'].includes(state.agentType ?? '')))
+      .filter(isLightweightTopic)
     const summaries: TopicSummary[] = []
     for (const state of states) {
       const firstMessage = !state.topic && !state.description ? await this.options.firstMessage?.(state.sessionId) : undefined
@@ -224,6 +224,13 @@ export class TopicService {
     await this.options.sessions.updateConversationMetadata(sessionId, topic)
     this.options.changed(sessionId)
     return this.requireSummary(sessionId)
+  }
+
+  async updateSelf(request: unknown, actorSessionId: string) {
+    this.assertActor(this.options.projectId, actorSessionId)
+    await this.options.sessions.updateSelfMetadata(actorSessionId, request)
+    this.options.changed(actorSessionId)
+    return { ...this.requireSummary(actorSessionId), completed: this.options.sessions.getSessionState(actorSessionId)?.completed ?? false }
   }
 
   async registerFolder(path: unknown, signal?: AbortSignal) {

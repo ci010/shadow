@@ -74,3 +74,21 @@ test('organization receipt contract rejects unbounded or inconsistent counts', (
   const ref = systemAutomationRef('work-organizer', organizerId, 'full')
   assert.throws(() => parseAutomationSessionRef({ ...ref, organization: { mode:'full', status:'partial', coveredCount: 4, manifestCount: 3, patches: 1 } }))
 })
+
+test('retired observation history never reappears in automation inventory or routes', async () => {
+  const states = [{ sessionId: 'work-observer:work-observer-1750000000001', agentType: 'work-observer', projectId: 'fixture' }]
+  const manager = { automationFeatureStates: async () => states } as unknown as SessionManager
+  const app = new Hono()
+  registerAutomationRoutes(app, { listJobs: () => [] } as unknown as CronService, manager, 'fixture', undefined, undefined, undefined,
+    { authorize: () => true, preference: () => true, update: async () => { throw new Error('Retired automation must not update') } })
+  const { AutomationProfileService } = await import('./profile.ts')
+  const profiles = new AutomationProfileService({ listJobs: () => [] } as unknown as CronService, manager, 'fixture')
+  assert.deepEqual(await profiles.featureIds(), ['system:work-organizer'])
+  assert.equal(await profiles.query('system:work-observer'), undefined)
+  const catalog = await (await app.request('/api/automations')).json()
+  assert.deepEqual(catalog.automations.map((job: { id: string }) => job.id), ['system:work-organizer'])
+  for (const [suffix, method] of [['profile', 'GET'], ['runs', 'GET'], ['run', 'POST'], ['cancel', 'POST'], ['', 'PATCH']]) {
+    const response = await app.request('/api/automations/system%3Awork-observer' + (suffix ? '/' + suffix : ''), { method })
+    assert.equal(response.status, 404)
+  }
+})

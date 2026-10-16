@@ -4,7 +4,7 @@ import { ContextBuilder, type SessionPromptContext } from './builder.ts'
 import { getBuiltinAgentTypes } from '../types/builtins.ts'
 import { guidelineProvider, executionContractProvider } from './guideline.ts'
 
-for (const name of ['work-observer', 'work-organizer']) test(`${name} uses only its actual bounded contract, not environment providers`, async () => {
+for (const name of ['work-organizer']) test(`${name} uses only its actual bounded contract, not environment providers`, async () => {
   const agent = (await getBuiltinAgentTypes()).find(role => role.name === name)!
   const context: SessionPromptContext = { agent, channel: name, chatId: 'run', sessionId: `${name}:run`, mode: 'task', behavior: {} }
   const builder = new ContextBuilder('.')
@@ -16,8 +16,7 @@ for (const name of ['work-observer', 'work-organizer']) test(`${name} uses only 
   assert.match(result.systemPrompt, /untrusted data/)
   assert.match(result.systemPrompt, /acceptance/)
   assert.doesNotMatch(result.systemPrompt, /PowerShell|Platform|Working directory|### Shell|Tool discovery|skill_read|microphone|Delegation Parent/)
-  if (name === 'work-observer') assert.match(result.systemPrompt, /JSON object/)
-  else assert.match(result.systemPrompt, /organization_finish/)
+  assert.match(result.systemPrompt, /organization_finish/)
   // Name alone must not shrink a tool-capable/ordinary session's context.
   const ordinary = new ContextBuilder('.')
   ordinary.register({ name: 'runtime', getPromptSection: () => 'FULL ENVIRONMENT' })

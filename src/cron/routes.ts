@@ -14,13 +14,14 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
   app.get('/api/automations/:id/profile', async c => {
     const id = c.req.param('id')
     if (!id.trim() || id.length > 128) return c.json({ error: 'invalid_automation_feature' }, 400)
+    if (id === 'system:work-observer') return c.json({ error: 'automation_not_found' }, 404)
     const profile = await profiler.query(id)
     return profile ? c.json({ profile }) : c.json({ error: 'automation_not_found' }, 404)
   })
   const records = async () => (await sessions.automationFeatureStates()).flatMap(state => {
     if (!state || state.projectId && state.projectId !== projectId) return []
     const automation = resolveAutomationSession(state)
-    return automation ? [{ state, automation }] : []
+    return automation && automation.jobId !== 'system:work-observer' && automation.config?.agentType !== 'work-observer' ? [{ state, automation }] : []
   })
   const summaries = async (authorized = false): Promise<AutomationSummary[]> => {
     const jobs = new Map<string, AutomationSummary>()
@@ -105,7 +106,7 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
     const page = await sessions.querySessionHistoryStates({ projectId, jobId: id, offset, limit })
     const all = page.states.flatMap(state => {
       const automation = resolveAutomationSession(state)
-      return automation ? [{ state, automation }] : []
+      return automation && automation.jobId !== 'system:work-observer' && automation.config?.agentType !== 'work-observer' ? [{ state, automation }] : []
     })
     const runs: AutomationRunSummary[] = await Promise.all(all.map(async ({ state, automation }) => {
       const status = state.executionStatus

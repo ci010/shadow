@@ -4,13 +4,12 @@ import { InitiativeStore } from '../initiatives/store.ts'
 import { workRecordSchema } from '../initiatives/work-contract.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { voiceEvidence, voiceGroups } from '../testing/voice-presentation.ts'
-import { Bus } from '../bus/bus.ts'
 import { createProjectScope } from './scope.ts'
 import { WorkOrganizer } from './work-organizer.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { readFile } from 'node:fs/promises'
-import { WorkObserver } from './work-observer.ts'
+import { OrganizationController } from './organization-controller.ts'
 import { projectFocusSnapshotSchema } from './focus-contract.ts'
 
 const work = workRecordSchema.parse({ key: 'topic:web:chat-voice', subject: { kind: 'topic', sessionId: 'web:chat-voice' }, sequence: 1, revision: 1,
@@ -23,8 +22,7 @@ test('semantic organization recovers discarded human discussion, splits outcomes
   const scope = createProjectScope('fixture')
   store.saveWork(work, 0, 'fixture', 'created')
   let calls = 0, mode = 'valid', activity = 'before', missing = false
-  const observer = new WorkObserver(store, { scope, bus: new Bus(), state: () => ({ lastActivityAt: activity }) as never, changed() {},
-    summarize:async()=>{throw new Error('Automatic summarizer must not organize')},
+  const controller = new OrganizationController({ scope, changed() {},
     organize:async(runMode,signal)=>{
       calls++
       const organizer=new WorkOrganizer(store,{projectId:'fixture',activity:()=>activity,changed(){},evidence:async()=>({sources:missing?voiceEvidence.slice(0,3):voiceEvidence,partial:false})})
@@ -42,10 +40,10 @@ test('semantic organization recovers discarded human discussion, splits outcomes
         await organizer.patch({patchId:'voice-patch',expectedRevision:store.projectFocus()?.revision??0,groups,hierarchy:[{id:'voice',title:'提升语音能力',purpose:'相关语音目标的展示归纳',groupIds:['voice-topic']}]},ctx)
         await organizer.finish({},ctx)
       }finally{organizer.end()}
-    } }, false)
+    } })
   try {
     assert.equal(calls, 0)
-    await observer.organize(new AbortController().signal)
+    await controller.organize(new AbortController().signal)
     assert.equal(calls, 1)
     const snapshot = store.projectFocus()!
     assert.deepEqual(snapshot.result.groups.map(({id:_id,...group})=>group), voiceGroups)
@@ -55,14 +53,14 @@ test('semantic organization recovers discarded human discussion, splits outcomes
     assert.match(snapshot.result.groups[0]!.cards![1]!.markdown, /为什么.*做了什么.*如何/s)
     for (const invalid of ['invented', 'stale', 'deleted']) {
       mode = invalid
-      await assert.rejects(observer.organize(new AbortController().signal))
+      await assert.rejects(controller.organize(new AbortController().signal))
       assert.deepEqual(store.projectFocus(), snapshot)
     }
-    await observer.stop(); store.close()
+    await controller.stop(); store.close()
     store = new InitiativeStore(home)
     assert.deepEqual(store.projectFocus(), snapshot, 'SQLite safe reopen retains evidence snapshot')
     assert.deepEqual(projectFocusSnapshotSchema.parse(JSON.parse(JSON.stringify(snapshot))), snapshot, 'JSON roundtrip retains optional presentation')
-  } finally { await observer.stop(); store.close(); scope.close() }
+  } finally { await controller.stop(); store.close(); scope.close() }
 }))
 
 test('presentation rejects wrong physical provenance, delegate-only cards and inferred abandonment', () => {
@@ -94,8 +92,7 @@ test('material autonomous model decision is a distinct goal-anchored card; routi
   groups[0]!.cards.push({ id: 'streaming-choice', title: '流式识别架构取舍', state: 'reported_complete',
     markdown: '**模型选择**：降低延迟，接受缓冲复杂度。\n\n**如何**：分开录音和解码能力；检查、重试和修复仅为支撑细节，不代表用户批准。',
     sources: [reference(2), reference(4), reference(5)], stateSources: [reference(4)] })
-  const observer = new WorkObserver(store, { scope, bus: new Bus(), state: () => undefined, changed() {},
-    summarize:async()=>{throw new Error('Automatic summarizer must not organize')},
+  const controller = new OrganizationController({ scope, changed() {},
     organize:async(runMode,signal)=>{
       const instructions=await readFile(new URL('../agent/types/builtin/work-organizer/AGENT.md',import.meta.url),'utf8')
       assert.match(instructions,/material model choices/)
@@ -111,9 +108,9 @@ test('material autonomous model decision is a distinct goal-anchored card; routi
         await organizer.patch({patchId:'model-choice',expectedRevision:0,groups:groups.map(g=>({...g,id:'voice-topic'})),hierarchy:[{id:'voice',title:'提升语音能力',purpose:'相关语音目标的展示归纳',groupIds:['voice-topic']}]},ctx)
         await organizer.finish({},ctx)
       }finally{organizer.end()}
-    } }, false)
+    } })
   try {
-    await observer.organize(new AbortController().signal)
+    await controller.organize(new AbortController().signal)
     const snapshot = store.projectFocus()!
     assert.deepEqual(snapshot.result.groups[0]!.cards!.map(card => card.id), ['ime-option', 'local-asr', 'streaming-choice'])
     assert.match(snapshot.result.groups[0]!.cards![2]!.markdown, /模型选择/)
@@ -121,7 +118,7 @@ test('material autonomous model decision is a distinct goal-anchored card; routi
     const delegateOnly = structuredClone(groups)
     delegateOnly[0]!.cards[2]!.sources = [reference(4), reference(5)]
     assert(!projectFocusSnapshotSchema.safeParse({ ...snapshot, result: { groups: delegateOnly } }).success)
-  } finally { await observer.stop(); store.close(); scope.close() }
+  } finally { await controller.stop(); store.close(); scope.close() }
 }))
 
 

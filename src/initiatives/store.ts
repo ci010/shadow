@@ -15,6 +15,7 @@ export interface InitiativeQueryResult {
   changes: number
 }
 export interface InitiativeStoreOptions {
+  sessionTopicSequence?: (sessionId: string) => number | undefined
   trackWork?: boolean
   /** Informative only, never releases work. True is live, false inactive, undefined unknown. */
   isSessionActive?: (sessionId: string) => boolean | undefined
@@ -74,6 +75,7 @@ export class InitiativeStore {
         this.#db.exec(`BEGIN IMMEDIATE; ${WORK_SCHEMA} PRAGMA user_version=5; COMMIT;`)
       }
       this.#db.exec('CREATE TABLE IF NOT EXISTS work_observations (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT; CREATE TABLE IF NOT EXISTS project_focus_summary (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;')
+      this.#db.exec('CREATE TABLE IF NOT EXISTS work_session_links (session_id TEXT NOT NULL, work_key TEXT NOT NULL, PRIMARY KEY(session_id,work_key)) STRICT; INSERT OR IGNORE INTO work_session_links SELECT session_id,work_key FROM work_focus WHERE work_key IS NOT NULL;')
       const integrity = this.#db.prepare('PRAGMA quick_check').all()
       if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || this.#db.prepare('PRAGMA foreign_key_check').all().length) {
         throw new Error('Corrupt initiative database')
@@ -135,40 +137,27 @@ export class InitiativeStore {
 
   saveProjectFocus(value: ProjectFocusSnapshot, impactedKeys?: readonly string[], expectedRevision?: number, validatedSources?: readonly {key:string;sequence:number}[]): void {
     const snapshot = projectFocusSnapshotSchema.parse(value)
-    this.#transaction('work-observer', () => {
+    this.#transaction('work-organizer', () => {
       if (expectedRevision !== undefined) {
         const current = this.#one('project_focus_summary', 'current')
         const revision = current ? (JSON.parse(String(current.data)).revision ?? 0) : 0
         if (revision !== expectedRevision) throw new WorkConflict('Presentation revision changed.')
       }
       for (const source of validatedSources ?? snapshot.sources.filter(source => !impactedKeys || impactedKeys.includes(source.key))) {
-        const row = this.#one('work_contracts', source.key)
-        if (Number(row?.sequence) !== source.sequence) throw new WorkConflict('Topics changed during organization; retry with current notes.')
+        const row = source.key.startsWith('session:') ? undefined : this.#one('work_contracts', source.key)
+        if (source.key.startsWith('session:') && this.#all('SELECT work_key FROM work_session_links WHERE session_id=?', [source.key.slice(8)]).length) throw new WorkConflict('Conversation was associated with Work during organization.')
+        const sequence = source.key.startsWith('session:') ? this.#options.sessionTopicSequence?.(source.key.slice(8)) : Number(row?.sequence)
+        if (sequence !== source.sequence) throw new WorkConflict('Topics changed during organization; retry with current notes.')
       }
       this.#write('INSERT INTO project_focus_summary (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
         ['current', JSON.stringify(snapshot)])
     })
   }
 
+  /** Legacy evidence is read only to preserve historical organizer root selection. */
   workObservations(): WorkObservation[] {
     return this.#transaction('', () => this.#all('SELECT data FROM work_observations ORDER BY id')
       .map(row => workObservationSchema.parse(JSON.parse(String(row.data)))), undefined, true)
-  }
-
-  saveWorkObservation(value: WorkObservation): void {
-    const record = workObservationSchema.parse(value)
-    this.#transaction('work-observer', () => {
-      if (!this.#one('work_observations', record.sessionId) && this.#all('SELECT id FROM work_observations').length >= 200) {
-        const oldest = this.#all('SELECT id,data FROM work_observations')
-          .map(row => ({ id: String(row.id), record: workObservationSchema.parse(JSON.parse(String(row.data))) }))
-          .filter(entry => entry.record.processed === entry.record.version)
-          .sort((a, b) => a.record.events.at(-1)!.at.localeCompare(b.record.events.at(-1)!.at))[0]
-        if (!oldest) throw new WorkConflict('Work observation limit reached (200 pending conversations).')
-        this.#write('DELETE FROM work_observations WHERE id=?', [oldest.id])
-      }
-      this.#write('INSERT INTO work_observations (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
-        [record.sessionId, JSON.stringify(record)])
-    })
   }
 
   saveWork(record: WorkRecord, expectedSequence: number, actor: string, kind: string, eventDetails?: unknown): void {
@@ -184,6 +173,9 @@ export class InitiativeStore {
       this.#validateWorkGraph(records)
       if (prior) this.#write('UPDATE work_contracts SET sequence=?, data=? WHERE id=?', [parsed.sequence, JSON.stringify(parsed), parsed.key])
       else this.#insert('work_contracts', { id: parsed.key, sequence: parsed.sequence, data: JSON.stringify(parsed) })
+      for (const sessionId of new Set([parsed.workflow?.manager, parsed.workflow?.assignee].filter((id): id is string => !!id))) {
+        this.#write('INSERT OR IGNORE INTO work_session_links (session_id,work_key) VALUES (?,?)', [sessionId, parsed.key])
+      }
       const notebookEvent = parsed.notes && ['note', 'created', 'assignment', 'impact_review'].includes(kind)
       const previous = prior ? workRecordSchema.parse(JSON.parse(String(prior.data))) : undefined
       this.#workEvent(parsed.key, actor, kind, notebookEvent ? {
@@ -341,6 +333,19 @@ export class InitiativeStore {
 
   recoverWorkEffects(): void {
     this.#transaction('', () => { this.#write("UPDATE work_effects SET status='unknown'", []) })
+  }
+
+  /** Historical association is separate from current execution focus and grants no authority. */
+  workSessionKeys(sessionId: string, records: readonly WorkRecord[] = this.workRecords()): string[] {
+    const explicit = this.#transaction('', () => this.#all('SELECT work_key FROM work_session_links WHERE session_id=?', [sessionId]).map(row => String(row.work_key)), undefined, true)
+    return [...new Set([...explicit, ...records.filter(record => record.workflow?.assignee === sessionId || record.workflow?.manager === sessionId || record.observation?.sessionId === sessionId).map(record => record.key)])]
+  }
+
+  linkWorkSession(sessionId: string, key: string): void {
+    this.#transaction(sessionId, () => {
+      if (!this.#one('work_contracts', key)) throw new WorkConflict('Work not found.')
+      this.#write('INSERT OR IGNORE INTO work_session_links (session_id,work_key) VALUES (?,?)', [sessionId, key])
+    })
   }
 
   workFocus(sessionId: string): string | undefined {
@@ -557,7 +562,7 @@ export class InitiativeStore {
     const db = this.#db as DatabaseSync & { setAuthorizer?: (callback: (action: number, arg1: string | null, arg2: string | null, database: string | null) => number) => void }
     if (!db.setAuthorizer) throw new Error('InitiativeStore requires node:sqlite setAuthorizer (use Node 24.15+)')
     const codes = constants as unknown as Record<string, number>
-    const workTables = ['work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_observations', 'project_focus_summary']
+    const workTables = ['work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_session_links', 'work_observations', 'project_focus_summary']
     const readable = new Set([...Object.keys(TABLE_COLUMNS), 'initiative_legacy_imports', ...workTables])
     db.setAuthorizer((action, arg1, arg2, database) => {
       if (database && database !== 'main') return codes.SQLITE_DENY!

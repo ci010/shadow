@@ -11,7 +11,7 @@ import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
-test('observer and organizer reuse chat bubbles and bounded conversation disclosures at desktop and mobile widths', { timeout: 90_000 }, async t => {
+test('organizer reuses chat bubbles and bounded conversation disclosures at desktop and mobile widths', { timeout: 90_000 }, async t => {
   const directory = resolve(root, '.test-artifacts', `automation-detail-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
@@ -26,8 +26,6 @@ test('observer and organizer reuse chat bubbles and bounded conversation disclos
       const conversation={automation:ref({id:'system:work-organizer',name:'Topic organization',source:'system',schedule:'Event driven',enabled:true}),run:ref({title:'RAW TITLE',status:'completed',startedAt:'2026-10-11T12:00:00Z',organization:{status:'completed',coveredCount:2,manifestCount:2,patches:1}}),error:ref(null),historyError:ref(null),loading:ref(false),refresh(){},retry(){}};
       const bubble=(id,input,source)=>h('div',{class:'chat-message-entry'},[h('div',{class:['chat-bubble','automation-bubble',input?'chat-user':'chat-assistant']},[h(AutomationPayload,{source:JSON.stringify(source),input,automationId:id})])]);
       createApp({render:()=>h('div',{style:'display:flex;flex-direction:column;height:100vh'},[h(AutomationConversationInfo,{conversation}),h('div',{class:'chat-messages'},[h('div',{class:'chat-message-list'},[
-        bubble('system:work-observer',true,{originalGoal:{text:'Fix navigation'},previous:{summary:'Evidence '.repeat(300),next:'Review'},events:[{}],prompt:'SECRET'}),
-        bubble('system:work-observer',false,{title:'Navigation',objective:'Fix menu',summary:'Patched',next:'Review'}),
         bubble('system:work-organizer',true,{mode:'delta',manifest:Array.from({length:30},()=>({title:'Navigation topic',objective:'Keep menu usable',summary:'Semantic summary'})),prompt:'SECRET'}),
         bubble('system:work-organizer',false,{status:'completed',coveredCount:2,manifestCount:2,patches:1})
       ])])])}).mount('#app');`
@@ -37,12 +35,12 @@ test('observer and organizer reuse chat bubbles and bounded conversation disclos
   const main=resolve(directory,'main.cjs')
   await writeFile(main, `const {app,BrowserWindow}=require('electron');const assert=require('node:assert/strict'); app.setPath('userData',${JSON.stringify(directory)});app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1100,height:800,webPreferences:{contextIsolation:true,nodeIntegration:false}});const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');const wait=()=>new Promise(r=>setTimeout(r,400));try{
     await win.loadURL(${JSON.stringify(new URL('__automation_detail',server.resolvedUrls!.local[0]).href)});
-    for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('.automation-presentation').length===4))break;await wait()}
+    for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('.automation-presentation').length===2))break;await wait()}
     assert.equal(await run(()=>document.querySelectorAll('.automation-payload .tool-payload').length),0);
     assert.equal(await run(()=>document.body.textContent.includes('SECRET')),false);
     assert.equal(await run(()=>document.body.textContent.includes('RAW TITLE')),false);
-    assert.equal(await run(()=>document.querySelectorAll('.automation-presentation .message-preview-card[data-expanded="false"]').length),2);
-    assert.equal(await run(()=>document.querySelectorAll('.automation-presentation .message-preview-card[data-expanded="true"]').length),2);
+    assert.equal(await run(()=>document.querySelectorAll('.automation-presentation .message-preview-card[data-expanded="false"]').length),1);
+    assert.equal(await run(()=>document.querySelectorAll('.automation-presentation .message-preview-card[data-expanded="true"]').length),1);
     for(const width of [1100,390]){win.setSize(width,800);await wait();
       assert.ok(await run(()=>document.documentElement.scrollWidth<=innerWidth));
       assert.ok(await run(()=>Array.from(document.querySelectorAll('.chat-user .message-preview-content')).every(e=>e.clientHeight<130)));

@@ -12,16 +12,17 @@ export class AutomationProfileService {
     const ids = new Set([...this.cron.listJobs().map(job => job.id), ...Object.values(SYSTEM_AUTOMATIONS).map(job => job.id)])
     for (const state of await this.sessions.automationFeatureStates()) {
       const automation = state?.projectId === this.projectId ? resolveAutomationSession(state) : undefined
-      if (automation) ids.add(automation.jobId)
+      if (automation && automation.jobId !== 'system:work-observer' && automation.config?.agentType !== 'work-observer') ids.add(automation.jobId)
     }
     return [...ids]
   }
   async query(featureId: string, signal?: AbortSignal): Promise<AutomationProfile | undefined> {
     if (typeof featureId !== 'string' || !featureId.trim() || featureId.length > 128) throw new TypeError('Invalid automation feature')
+    if (featureId === 'system:work-observer') return undefined
     const records = (await this.sessions.listHistoryStates({ jobId: featureId })).flatMap(state => {
       if (!state || state.projectId !== this.projectId) return []
       const automation = resolveAutomationSession(state)
-      return automation?.jobId === featureId ? [{ state, automation }] : []
+      return automation?.jobId === featureId && automation.config?.agentType !== 'work-observer' ? [{ state, automation }] : []
     })
     const job = this.cron.listJobs().find(job => job.id === featureId)
     const system = Object.values(SYSTEM_AUTOMATIONS).some(job => job.id === featureId)

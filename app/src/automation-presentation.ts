@@ -3,7 +3,7 @@ export type AutomationField = { label: MessageKey; text: string; textKey?: Messa
 const record = (value: unknown): Record<string, unknown> | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 const text = (value: unknown): string => typeof value === 'string' ? value.trim().slice(0, 4000) : ''
 export function isReadableSystemAutomation(id?: string): boolean {
-  return id === 'system:work-observer' || id === 'system:work-organizer'
+  return id === 'system:work-organizer'
 }
 /** Whitelist semantic content: never promote prompts, traces or arbitrary JSON. */
 export function automationPresentation(source: string, input: boolean, id?: string): AutomationField[] {
@@ -16,28 +16,15 @@ export function automationPresentation(source: string, input: boolean, id?: stri
     if (!input && id === 'system:work-organizer' && source.trim() && !source.trim().startsWith('{')) add('Organization outcome', source)
     return fields
   }
-  if (id === 'system:work-observer') {
-    if (input) {
-      const previous = record(value.previous)
-      add('Objective', previous?.objective ?? record(value.originalGoal)?.text)
-      add('Summary', previous?.summary)
-      add('Next', previous?.next)
-      if (Array.isArray(value.events)) fields.push({ label: 'Evidence', text: String(value.events.length) })
-    } else {
-      if (value.track === false) fields.push({ label: 'Observation outcome', text: 'No work topic identified', textKey: 'No work topic identified' })
-      for (const [key, label] of [['title', 'Title'], ['objective', 'Objective'], ['summary', 'Summary'], ['next', 'Next']] as const) add(label!, value[key!])
-    }
-  } else {
-    add('Organization mode', value.mode)
-    if (Array.isArray(value.manifest)) for (const topic of value.manifest) {
-      const item = record(topic)
-      add('Title', item?.title)
-      add('Objective', item?.objective)
-      add('Summary', item?.summary)
-    }
-    add('Organization outcome', value.status)
-    for (const key of ['coveredCount', 'manifestCount', 'patches']) if (typeof value[key] === 'number') fields.push({ label: key === 'coveredCount' ? 'Covered topics' : key === 'manifestCount' ? 'Topics' : 'Saved patches', text: String(value[key]) })
+  add('Organization mode', value.mode)
+  if (Array.isArray(value.manifest)) for (const topic of value.manifest) {
+    const item = record(topic)
+    add('Title', item?.title)
+    add('Objective', item?.objective)
+    add('Summary', item?.summary)
   }
+  add('Organization outcome', value.status)
+  for (const key of ['coveredCount', 'manifestCount', 'patches']) if (typeof value[key] === 'number') fields.push({ label: key === 'coveredCount' ? 'Covered topics' : key === 'manifestCount' ? 'Topics' : 'Saved patches', text: String(value[key]) })
   return fields
 }
 

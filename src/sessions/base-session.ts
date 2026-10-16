@@ -273,7 +273,7 @@ export abstract class BaseSession {
       executionContext = { ...executionContext, workStamps: workGuard?.snapshot(this.id) }
       const boundedSystemTask = this.state.mode === 'task' &&
         this.state.agentType === executionContext.channel &&
-        (this.state.agentType === 'work-observer' || this.state.agentType === 'work-organizer')
+        this.state.agentType === 'work-organizer'
       await this.recordContextEvent('work', boundedSystemTask ? '' : workGuard?.prompt(this.id, executionContext) ?? '')
       const durableMessages = modelMessages(this.messages, executionContext.channel === 'qq')
       const inferenceMessages = transientResults.size ? modelMessages(this.messages.map(message =>

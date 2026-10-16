@@ -1,3 +1,5 @@
+> Historical implementation notes: automatic title/goal observation has been removed. Only independent organization and explicit session metadata remain active; observer references below describe retired behavior, not supported configuration or entrypoints.
+
 # Project 因果对齐：目标、设计取舍与后续演进
 
 状态：**设计意图与未来工作文档，部分基础已实现；不是全部完成的功能清单。**
@@ -213,7 +215,7 @@ Project 因果总览、无 Work 的运行活动、上下文问答和隔离的只
 后续已实现事件触发的辅助整理 MVP：独立、无工具的观察者从新输入、真实分工和
 最终报告生成带来源的未分配 Work，不要求 worker 主动记账。它不是周期性巡检，
 没有历史回填，也没有证明能长期维护正确的因果树。配置、成本边界和人工编辑保护
-见 [自动观察机制](tools-and-automations.md#automatic-observation-mvp)。
+见 [自动观察机制](tools-and-automations.md#retired-automatic-observation)。
 历史导入、完整自动因果抽取和自动选择提问层次仍属于候选方案。
 任何自动推断都必须显示来源和不确定性，不能把猜测写成用户意图。
 

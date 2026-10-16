@@ -47,20 +47,29 @@ test('subagent only creates temporary work, preserving explicit workdir and igno
   assert.equal(receipt.mode, 'task')
   assert.match(createdId, /^virtual:general-/)
   assert.equal(fields?.mode, 'task')
+  assert.equal(fields?.name, 'Work')
+  assert.equal(fields?.description, 'Work')
+  await tool.execute({ mode: 'task', title: 'Parent title', description: 'Parent description', task: 'Do work' }, context)
+  assert.equal(fields?.name, 'Parent title')
+  assert.equal(fields?.description, 'Parent description')
+  await assert.rejects(tool.execute({ mode: 'task', title: ' ', description: 'Purpose', task: 'Work' }, context), /session name/)
+  assert.match(await tool.execute({ mode: 'task', title: 'Title', description: 'x'.repeat(4001), task: 'Work' }, context), /4000/)
   assert.equal(fields?.workspaceRoot, 'discord:root')
   assert.equal(fields?.workdir, workdir)
   assert.equal(fields?.folderId, 'folder-a')
   assert.equal(fields?.parentSessionId, parent.sessionId)
-  assert.equal(starts, 1)
+  assert.equal(starts, 2)
   parent.agentType = 'orchestrator'
-  assert.equal(await tool.execute({ mode: 'call', description: 'Leaf', task: 'Inspect' }, context), 'Call result')
+  assert.equal(await tool.execute({ mode: 'call', title: 'Ignored call title', description: 'Leaf', task: 'Inspect' }, context), 'Call result')
   assert.equal(calls, 1)
+  assert.equal(fields?.name, undefined)
+  assert.equal(fields?.description, 'Leaf')
   assert.equal(fields?.agentType, 'general')
   assert.equal(fields?.reportTo, undefined)
   assert.match(await tool.execute({ mode: 'task', agent_type: 'orchestrator', description: 'Alias', task: 'Work' }, context), /cannot be used/)
 })
 
-test('subagent validates and persists explicit model/effort before task or call creation', async () => {
+test('subagent permits task inference overrides but calls reject explicit fields and inherit caller settings', async () => {
   const parent: SessionState = { sessionId: 'web:parent', mode: 'session', segmentIndex: 0, config: { model: 'parent', reasoningEffort: 'high' } }
   const fields: Array<Parameters<SessionManager['buildSession']>[2]> = []
   const validated: InferenceSettings[] = []

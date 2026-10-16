@@ -13,7 +13,10 @@ import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionStore } from './session-store.ts'
 import { sessionsApiPlugin } from './routes.ts'
 import { localFolderWorkdirRef } from './locality.ts'
-import { Tools } from '../tools/registry.ts'
+import { TopicService } from './topics.ts'
+import { SessionTool } from '../tools/session.ts'
+import type { ExecutionContext } from '../tools/context.ts'
+import { Tools, SessionTools } from '../tools/registry.ts'
 import type { LLMProvider } from '../providers/provider.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
 import type { WorkdirCapabilityState } from './locality.ts'
@@ -43,6 +46,50 @@ const invalidConfigs = [
 ]
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(Store.name + ': self tool persists explicit metadata and completion separately from activity', async t => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const sessions = makeManager(workspace, store, { projectId: 'p' })
+    try {
+      for (const id of ['web:self', 'web:other']) await store.saveState(id, { sessionId: id, projectId: 'p', mode: 'session', segmentIndex: 0, executionStatus: 'waiting', topic: id === 'web:self' ? { title: 'Legacy', goal: 'Old goal', scope: 'Old scope' } : undefined })
+      await sessions.start()
+      const service = new TopicService({ projectId: 'p', sessions, listStates: async () => Object.values(await store.listAllStates()), folders: {} as any, resolveAgent: () => undefined, changed: () => {} })
+      const tool = new SessionTool(service)
+      const baseTools = new Tools(workspace); baseTools.register(tool)
+      const tools = new SessionTools(baseTools, workspace)
+      const context = { projectId: 'p', sessionId: 'web:self', tools, signal: new AbortController().signal } as ExecutionContext
+      const topic = { title: 'Explicit title', goal: 'Verify explicit state', scope: 'Current work' }
+      const receipt = await tools.execute('session', { action: 'update_self', title: topic.title, description: 'Discovery', completed: true }, context)
+      equal(JSON.parse(receipt as string).completed, true)
+      equal(sessions.getSessionState('web:self')?.executionStatus, 'waiting')
+      equal(sessions.getSessionState('web:other')?.completed, undefined)
+      const saved = await store.getState('web:self')
+      equal(saved?.completed, true)
+      deepEqual(saved?.topic, { title: 'Legacy', goal: 'Old goal', scope: 'Old scope' })
+      equal(saved?.name, topic.title)
+      equal(sessions.listSessions().find(s => s.sessionId === 'web:self')?.completed, true)
+      const app = new Hono(); sessionsApiPlugin(sessions)(app)
+      const graph = await (await app.request('/api/sessions/graph')).json()
+      equal(graph.sessions.find((s: any) => s.sessionId === 'web:self').completed, true)
+      for (const patch of [{ sessionId: 'web:other', completed: false }, { completed: 'yes' }, { topic: { goal: 'missing title' } }, { topic: { title: 'Forbidden', goal: 'No new topic metadata', scope: 'Not tool-owned' } }, {}]) {
+        await assert.rejects(tool.execute({ action: 'update_self', ...patch }, context))
+      }
+      await assert.rejects(tool.execute({ action: 'update', sessionId: 'web:other', title: 'Forbidden' }, context), /own/)
+      await assert.rejects(tool.execute({ action: 'update_self', completed: false }, { ...context, projectId: 'wrong' }), /Project/)
+      const failure = t.mock.method(store, 'saveState', async () => { throw new Error('synthetic metadata disk failure') })
+      await assert.rejects(tool.execute({ action: 'update_self', title: 'Not committed', completed: false }, context), /disk failure/)
+      equal(sessions.getSessionState('web:self')?.completed, true)
+      equal(sessions.getSessionState('web:self')?.name, topic.title)
+      failure.mock.restore()
+      await sessions.stop()
+      await sessions.start()
+      equal(sessions.getSessionState('web:self')?.completed, true)
+      await tool.execute({ action: 'update_self', completed: false }, context)
+      equal((await store.getState('web:self'))?.completed, false)
+      equal((await store.getState('web:self'))?.name, topic.title)
+    } finally { await sessions.stop(); store.close?.() }
+  }))
+
   test(`${Store.name}: leaf calls omit the inapplicable subagent usage column`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

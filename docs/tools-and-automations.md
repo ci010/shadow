@@ -101,8 +101,7 @@ completion counts, observed costs or live configuration values.
 
 | Automation | Default trigger | Provider request ceiling | Tool calls / argument bytes |
 | --- | --- | --- | --- |
-| Work observer | New evidence, coalesced 20 seconds | 1 | No tools |
-| Organizer delta | Coalesced root observation saves or explicit action | 4 | 12 / 96,000 |
+| Organizer delta | Explicit delta action | 4 | 12 / 96,000 |
 | Organizer full | Explicit action | 8 | 24 / 192,000 |
 | Reflector | 30-minute check, pending evidence only | 6 | 18 / 96,000 |
 | Encapsulator | 2-hour check, unconsumed events only | 8 | 24 / 192,000 |
@@ -113,7 +112,7 @@ editable cron override; ordinary cron jobs retain their existing execution defau
 Writers need separate read, validated-write and learning_result/final stages and
 are not one-shot. Exhaustion may leave partial effects, which are retained for
 recovery; no cursor advances without the existing verified receipt and successful
-completion. Automatic observation plus delta is not one request overall. No new
+completion. No new
 cooldown, polling schedule, one-shot organizer or profiling model call is introduced.
 See src/runtime/main/project-runtime.ts, src/projects/work-organizer.ts and
 src/agent/learning/pipelines.ts for the enforced limits; src/agent/learning/service.ts
@@ -454,71 +453,21 @@ reset the viewport; Fit all remains an explicit help action. Dense crossing edge
 and very large nested regions may still require manual pan/zoom; the layout is not
 a semantic DAG optimizer and does not reinterpret relationship cycles as ownership.
 
-### Automatic observation (MVP)
+## Retired automatic observation
 
-`workObserver.enabled` defaults to `true`; set it to `false` to disable automatic
-extra inference (explicit user-triggered organization remains available). Optional `workObserver.model` overrides `agent.quickModel`, falling
-back to `agent.model`. The tool-free observer runs through SessionManager, not
-a separate tool loop. It coalesces new evidence for 20 seconds and has a 90-second
-deadline per inference; unchanged evidence does not trigger repeated calls. Each
-observer execution is host-limited to one provider.chat request with no tools.
-Provider transport retries are separate and unchanged; this is not a one-HTTP-attempt guarantee.
+Automatic title/goal observation has been removed. Sessions publish explicit metadata via `session action=update_self`; independent topic organization remains available.
 
-It observes new authenticated inputs, actual-parent delegations and final turn
-reports in Project-local web chats and their descendants. It does not backfill
-existing histories, inspect tool dumps, or observe managed external channels,
-automation, coordinators or itself. At most 12 bounded evidence entries per
-conversation are retained in the Project Initiative database. The 200-entry
-ledger evicts processed evidence before accepting new conversations, never
-pending evidence or the resulting Work notes.
+Fresh local asynchronous `subagent` tasks have parent-owned identity: supply `title`
+and `description` when creating one. `title` is a one-line display name (up to 120
+characters); `description` is discovery text (up to 4000 characters). For compatibility,
+existing description-only calls derive the title from its first 120 characters,
+flattening control characters. Both are persisted as the task's name and description.
+The task may use `session action=update_self` only with `completed:true` or
+`completed:false`; title and description are immutable to
+the child, including through legacy update. This does not grant parents a new
+cross-session editing API. Blocking `call` forks keep their existing metadata and
+cannot use session tools. Remote A2A retains its separate delegation contract.
 
-Generated notes are labelled as interpretations with source IDs and session
-links. They remain unassigned: no forced worker bookkeeping, focus injection,
-notifications or implicit authorization. Parent links reflect recorded delegation,
-not a proven causal explanation. Manual/worker edits pause automatic replacement;
-stale model results cannot overwrite newer evidence or edits. Invalid output and
-inference failures remain visible, rather than manufacturing progress. This is
-not semantic proof of intent, acceptance, or automatic contextual question routing.
-
-The same per-session call can also save evidence-labelled semantic categories,
-shared purpose and inferred recent user motivation. These are display hypotheses,
-not user quotations or execution authority. Up to eight persisted category/purpose
-snippets provide bounded naming context; no additional automatic model call is made.
-
-The single Dashboard groups recent focus → separate topics → expandable evidence
-and decision history. Missing semantic inference is honestly unclassified. Causal
-structure, Board and Graph are advanced structure tools rather than a second homepage.
-**Reorganize recent topics** runs a dedicated `work-organizer` task through the
-normal SessionManager tool loop. **Update changed topics** is a distinct delta
-mode: it processes changed note keys and necessary placements, preserving unrelated
-topics, cards and hierarchy IDs. Full mode may progressively regroup the fixed
-manifest; omission never deletes untouched topics. Neither mode changes execution
-ownership or establishes user intent or acceptance.
-
-The task uses only host-bound `organization_read`, `organization_patch` and
-`organization_finish`. Full mode has ceilings of eight inference requests,
-24 tool calls (including denied/invalid attempts), 192,000 UTF-8 argument bytes
-and 16 patches. Delta (automatic or explicit) uses four requests, 12 tool calls,
-96,000 argument bytes and four patches, with at most three changed root topics.
-Both modes retain the 48,000-byte per-patch limit and 120-second deadline.
-The full fixed manifest holds at most 30 recent root topics; each evidence page returns at most two sources,
-with 240 sources cached per run. This can cost multiple bounded model requests,
-not one call. Evidence is bounded human conversation text and semantic reports,
-not full tool results, reasoning, child logs, filesystem data or an entire tool
-trace. Scanning stored records is not the same as sending those records to the
-model. Missing evidence remains unknown. No per-tool-batch summaries or additional
-batch-summary calls are implemented.
-
-Each validated patch persists atomically and appears through existing realtime
-updates before the run finishes. Coverage, mode and partial/completed status are
-visible. Invalid later output, conflicts, provider failure or cancellation retain
-already committed valid patches; a plain final without explicit finish is partial.
-Explicit `pruneTopicKeys` at finish is full-mode only and restricted to covered,
-unchanged fixed-manifest topics. It cannot remove uncovered members of a shared
-group or delete the last evidence-bearing topic; omission alone never prunes.
-An event-driven source save can coalesce one bounded automatic delta; opening the
-Dashboard never starts organization, and no periodic loop or free automatic retry
-is introduced. Duplicate concurrent requests remain rejected.
 
 ### Current-task steering and inference overrides
 
@@ -809,46 +758,19 @@ schedules with `cron_add`; wrapping the old array in a versioned object is not
 a safe migration.
 
 
-### Internal work observation and topic organization
+### Explicit topic organization (no automatic observation)
 
-Built-in work-observer and work-organizer executions use the normal SessionManager
+Built-in work-organizer executions use the normal SessionManager
 execution/tool loop, but their UI home is **Automations**, not ordinary conversations.
-New runs persist `automation.config.source: 'system'`. These event-driven/manual
+New runs persist `automation.config.source: 'system'`. These explicitly requested
 runs are not cron jobs, but their stable feature controllers appear in Automations
 with the same enable/disable popup and detail controls. The controls apply to
-`system:work-observer` (自动观察) and `system:work-organizer` (话题整理), not to
+`system:work-organizer` (话题整理), not to
 individual saved runs. Full and delta organization share one organizer control.
 
-These two system features show semantic input/outcome fields by default: observed
-objective/summary/next, extracted title, or the fixed organization manifest and
-plain final outcome. Raw JSON and internal instructions remain in lazily mounted,
-collapsed Technical details. Ordinary conversations and other automation features
-keep their existing presentation; unified history and model selection are unchanged.
+The organizer shows its fixed manifest and plain final outcome by default; raw JSON and internal instructions remain collapsed in Technical details. Its bounded prompt permits only organization_read/organization_patch/organization_finish, without filesystem, shell, device, delegation or discovery tools. Ordinary sessions retain full context.
 
-Their effective prompts are deliberately bounded. Observer has no tools; organizer
-has only organization_read/organization_patch/organization_finish, not filesystem,
-shell, device, delegation or discovery tools. ContextBuilder bypasses general
-runtime/workspace/memory/guidance providers for these matching task roles/channels
-and exact tool sets, preserving their role safety/evidence/output contracts and
-supplied task context. The inference loop also omits general response-audience and
-work-assignment guidance for these host-consumed tasks, retaining execution budgets.
-General tool-capable sessions still receive the full normal context. Saved historical
-prompts are not rewritten; the reduced context applies to new prompt assembly.
-
-Preferences persist per Project through ProjectConfigStore:
-`workObserver.enabled` and `workObserver.organizerEnabled` (both default true).
-Disabling observation stops collecting new events, discards pending admission and
-aborts its active observation inference; it does not disable topic organization.
-Disabling organization blocks both automatic delta and explicit manual full/delta
-requests, cancels a queued manual request, and aborts its active execution without
-canceling independent observation. The dashboard explains the disabled state and
-links to the feature controls instead of dispatching a request. Re-enabling does
-not automatically backfill historical evidence or retry cancelled organization;
-new observed activity or an explicit user organization request is required.
-Already committed notes and presentation patches remain saved, including partial
-coverage/status and execution traces. No committed patch is rolled back.
-Automation updates validate the exact boolean payload and require host authorization
-on the owning Project router.
+Preferences persist per Project as `organization.enabled` (default true) and optional `organization.model`. Disabling organization blocks full/delta requests and aborts active execution; committed presentation patches remain saved. Re-enabling does not backfill or retry work. Updates require host authorization on the owning Project router.
 
 The existing automation workspace keeps the native execution trace and diagnostics.
 Internal run history is expandable, with full/delta scope filters, execution state,
@@ -865,10 +787,8 @@ view does not rewrite historical records or inspect prompts to classify them.
 
 ### Evidence boundaries and coverage
 
-- The work observer summarizes local facts, original goal, new source identities and prior compact notes. Its existing bounded call (2,000 output tokens) no longer requests project categories, purpose or motivation; legacy focus remains readable. Goal revision still requires a new user/parent instruction, not a report paraphrase. Titles continue through the same call.
-- The organizer alone produces project hierarchy and display-purpose interpretation. Automatic delta runs coalesce root observation saves; child-only administrative saves do not trigger organization. Meaningful child outcomes should appear in the parent's report. This is a deterministic scope rule, not a semantic-equivalence detector.
+- The organizer alone produces project hierarchy and display-purpose interpretation. Full and delta modes retain bounded manifests; meaningful child outcomes should appear in the parent's report.
 - Project-private learning uses one provenance/lineage eligibility predicate for scheduling and source selection, including unfinished batch execution/recovery. Internal system and learning automation (and their descendants), known historical internal addresses, missing lineage and channel-scoped histories are excluded. Agent names alone do not exclude a human-owned session. User cron work remains eligible. Channel learning retains its separate journal.
-- Observer status exposes process-local actual model-call, new-identity and overlap counts; these reset on restart, contain no evidence text and are not quality scores or cost estimates. Coverage compares persisted source sequences against current root records, with latest source-change and last snapshot timestamps. Sequence freshness is not proof of complete history or semantic correctness. Persisted organizer coverage is restored; interrupted `running` snapshots display as partial after restart.
 - No additional model scoring, periodic project-summary generation or automatic outcome attribution was added. Existing correction/result evidence remains available; assistant completion reports are not independent verification. Provider-token aggregation, material semantic fingerprints, richer sourced outcome feedback and dedicated coverage UI remain candidates, not implemented features.
 
 ### Read-only automation profiling
@@ -879,7 +799,7 @@ The UTC half-open window is `[asOf - 24h, asOf)`. Run counts use exact persisted
 
 Tool counts are distinct persisted tool-result IDs, not every nested or interrupted tool invocation. Historical missing telemetry, unreported usage, missing cached/reasoning breakdowns, durations and costs are explicit limitations. Totals are known subtotals, not estimated budgets or quality scores. Source reads stop at 100,000 records and visibly mark lower-bound counts if capped. No prompt, raw error or private configuration fields are returned.
 
-Frequency descriptions are scoped: runtime observer event coalescing, organizer root-change delta events/manual full operation, configured learning poll intervals, or the current user cron schedule. Historical snapshots never claim to describe current runtime policy.
+Frequency descriptions are scoped: explicit organizer full/delta operation, configured learning poll intervals, or the current user cron schedule. Historical snapshots never claim to describe current runtime policy.
 
 ### Current-instance runtime diagnostics
 
@@ -930,3 +850,35 @@ logs. Source changes do not alter a running host: restart/relaunch the source
 backend or rebuild/relaunch the packaged backend to load this mount. Existing
 `v:bg`, `v:sessions` and `v:events` are execution/history/subscription views;
 the `log` tool writes learning events, not runtime diagnostics.
+
+
+### Lightweight conversation topics and Work associations
+
+Every ordinary user-visible session is itself a lightweight topic, including normal
+questions with no Work. There is no extra topic entity or registration step. The
+Project dashboard/Work overview reads these conversations directly and provides
+title, discovery description, explicit completion, derived activity and conversation
+navigation. Internal task executions are folded under their owner/Work; calls and
+organizer/observer archives never become independent dashboard topics.
+
+`session action=update_self` accepts only title, description and completed for a
+durable session. Tasks accept completed only; their title/description remain
+parent-owned. Calls cannot mutate self metadata. The tool no longer accepts a
+topic object. Old persisted topic metadata and unrelated native topic routing stay
+read-compatible. Formal outcomes, acceptance and boundaries belong in Work, not
+this discovery metadata. Session completion ends that session's responsibility; it
+does not complete associated Work.
+
+Creating Work from a session automatically associates that conversation. Use
+`work action=link key=...` to associate an existing Work explicitly. This historical
+association persists independently of `work action=select` execution focus; linking
+does not assign Work, change authority, select focus or set completion. Clearing or
+switching focus does not erase associations. No title-similarity matching is used.
+Associated sessions are displayed under their Work instead of duplicate top-level
+conversation cards. Normal questions and subagents do not need to create Work.
+
+Explicit full/delta organization accepts both Work and unassociated conversation
+identities as its bounded source manifest; it reads existing semantic conversation
+evidence, not an automatic observer or background model goal guess. Conversation
+metadata/completion changes invalidate organization source versions. Lightweight
+topics are never materialized as Work just to make organization possible.

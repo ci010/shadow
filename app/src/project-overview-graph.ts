@@ -46,7 +46,7 @@ export function overviewGraph(data: ProjectWorkOverview, history: YieldDecisionR
     edges.push(...legacy.edges.filter(edge => retained.has(edge.from) && retained.has(edge.to)))
     return organizeGraph({ nodes, edges }, data)
   }
-  const childSessions = new Set(data.sessions.filter(session => session.parentSessionId).map(session => session.sessionId))
+  const childSessions = new Set(data.sessions.filter(session => !session.assignable && session.parentSessionId).map(session => session.sessionId))
   const hidden = new Set(data.items.filter(item => childSessions.has(item.observation?.sessionId ?? item.assignee ?? '') || !!item.observation && !!item.parentKey && item.origin !== 'human').map(item => item.key))
   const items = data.items.filter(item => !hidden.has(item.key))
   const nodes: OverviewNode[] = items.map(item => ({ id: item.key, parentId: item.parentKey ?? undefined, title: item.title,
@@ -55,8 +55,8 @@ export function overviewGraph(data: ProjectWorkOverview, history: YieldDecisionR
     sessionId: item.observation?.sessionId ?? item.assignee ?? undefined,
     evidence: item.observation ? item.observation.sources.map(source => `${source.physicalId}/${source.id}`).join(', ') : `${item.key} v${item.sequence}`,
     detail: item.notes?.summary ?? item.objective }))
-  for (const session of data.sessions) if (!session.parentSessionId && !data.items.some(item => item.key === session.workKey || item.assignee === session.sessionId || item.observation?.sessionId === session.sessionId)) {
-    nodes.push({ id: `session:${session.sessionId}`, title: session.title, kind: 'topic', at: session.lastActivityAt ?? '', authority: 'session_derived', sessionId: session.sessionId, evidence: 'Session metadata only; not a verified topic boundary.', detail: session.activity })
+  for (const session of data.sessions) if (session.assignable && !data.items.some(item => item.key === session.workKey || session.workKeys?.includes(item.key) || item.assignee === session.sessionId || item.observation?.sessionId === session.sessionId)) {
+    nodes.push({ id: `session:${session.sessionId}`, title: session.title, kind: 'topic', at: session.lastActivityAt ?? '', authority: 'session_derived', sessionId: session.sessionId, evidence: 'Conversation identity and explicit metadata; no inferred Work association.', detail: session.description || session.activity, status: session.completed ? 'completed' : session.activity })
   }
   const edges: OverviewEdge[] = []
   for (const item of items) {

@@ -1,3 +1,4 @@
+import { isLightweightTopic, sessionTopicKey, sessionTopicSequence, sessionTopicTitle, sessionTopicDescription } from '../../sessions/lightweight-topic.ts'
 import { automationModelSettings, automationDispatchModel } from '../../cron/automation-model.ts'
 import { isLearningSourceEligible } from '../../agent/learning/source-eligibility.ts'
 import { resolve } from 'node:path'
@@ -54,10 +55,10 @@ import { SessionRetirement } from '../../sessions/retirement.ts'
 import { registerRetirementRoutes } from '../../sessions/retirement-routes.ts'
 import { SessionRetirementTool } from '../../tools/session-retirement.ts'
 import { SESSION_CLEANUP_AUTOMATION, SESSION_CLEANUP_DEFAULT_KEY } from '../../cron/defaults.ts'
-import { WorkObserver } from '../../projects/work-observer.ts'
+import { OrganizationController } from '../../projects/organization-controller.ts'
 import { physicalSessionId } from '../../sessions/session-identity.ts'
 import { WorkOrganizer, ORGANIZATION_TOOLS } from '../../projects/work-organizer.ts'
-import { observerExecutionError } from '../../projects/observer-output.ts'
+import { organizationExecutionError } from '../../projects/organization-output.ts'
 import { JsonlSessionStore } from '../../sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from '../../sessions/session-store-sqlite.ts'
 import type { SessionStore } from '../../sessions/session-store.ts'
@@ -741,6 +742,7 @@ export async function createProjectRuntime(
 
   const initiatives = new InitiativeStore(workspace, {
     trackWork: true,
+    sessionTopicSequence: id => { const state = sessions.getSessionState(id); return state && isLightweightTopic(state) ? sessionTopicSequence(state) : undefined },
     isSessionKnown: id => sessions.getSessionState(id) !== null,
     isSessionActive: id => {
       if (sessions.getSessionState(id)?.recovery) return false
@@ -814,13 +816,25 @@ export async function createProjectRuntime(
     },
   })
   sessions.alignment = alignment
+  const organizationSessionsByWork = new Map<string, string>()
   const workOrganizer = new WorkOrganizer(initiatives, {projectId:project.id,
+    sessionForWork: key => organizationSessionsByWork.get(key),
     evidence:(id,signal)=>sessions.getPresentationEvidence(id,signal),
     activity:id=>sessions.getSessionState(id)?.lastActivityAt??'', physical:id=>{const state=sessions.getSessionState(id);return state?physicalSessionId(state):undefined}, changed:()=>realtime.invalidateSessions()})
   for(const tool of workOrganizer.tools()) { tools.register(tool); coordinator?.allow(tool) }
   const runOrganization = async (mode:'full'|'delta',signal:AbortSignal) => {
     const chatId = randomUUID(), sessionId = 'work-organizer:'+chatId
-    const manifest = workOrganizer.begin(sessionId,mode,signal)
+    const topicStates = (await sessions.listHistoryStates()).filter(isLightweightTopic)
+    const records = initiatives.workRecords()
+    const associations = new Map(topicStates.map(state => [state.sessionId, initiatives.workSessionKeys(state.sessionId, records)]))
+    organizationSessionsByWork.clear()
+    for (const state of topicStates) for (const key of associations.get(state.sessionId)!) if (!organizationSessionsByWork.has(key)) organizationSessionsByWork.set(key, state.sessionId)
+    const topics = topicStates.filter(state => !associations.get(state.sessionId)!.length).map(state => ({
+      key: sessionTopicKey(state.sessionId), sessionCompleted: state.completed ?? false, sequence: sessionTopicSequence(state), changedAt: state.lastActivityAt ?? '',
+      definition: { objective: sessionTopicDescription(state) || sessionTopicTitle(state) }, workflow: { title: sessionTopicTitle(state) },
+      observation: { sessionId: state.sessionId },
+    }))
+    const manifest = workOrganizer.begin(sessionId,mode,signal,topics)
     let problem: 'execution_failed' | 'unfinished' | undefined
     try {
       const task = await workOrganizer.initialContext(manifest)
@@ -831,35 +845,15 @@ export async function createProjectRuntime(
         executionLimits:{allowedTools:ORGANIZATION_TOOLS,inferenceRequests:mode==='delta'?4:8,toolCalls:mode==='delta'?12:24,argumentBytes:mode==='delta'?96000:192000}})
       if(!id) throw new Error('Work organizer unavailable')
       const result=await sessions.getExecutionResult(id)
-      if(result?.status!=='completed') { problem='execution_failed'; throw observerExecutionError(result?.error) }
+      if(result?.status!=='completed') { problem='execution_failed'; throw organizationExecutionError(result?.error) }
       if(workOrganizer.status()?.status!=='completed') { problem='unfinished'; throw new Error('Organization ended without explicit finish; saved patches retained') }
     } finally { workOrganizer.end(); await sessions.updateAutomationOrganization(sessionId,workOrganizer.status(),problem); await sessions.finalizeAutomation(sessionId) }
   }
-  const workObserver = new WorkObserver(initiatives, {
-    bus, scope, state: id => sessions.getSessionState(id),
-    organize:runOrganization, organizationStatus:()=>workOrganizer.status(),
-    conversationEvidence: (id, signal) => sessions.getPresentationEvidence(id, signal),
-    updateTitle: (id, title) => sessions.updateGeneratedTitle(id, title),
+  const organizationController = new OrganizationController({
+    scope, organize: runOrganization, organizationStatus: () => workOrganizer.status(),
     changed: () => realtime.invalidateSessions(),
-    summarize: async (task, signal, options) => {
-      const chatId = 'work-observer-'+randomUUID(), sessionId = 'work-observer:'+chatId
-      try {
-        const id = await sessions.startSession({
-          agentType: 'work-observer', mode: 'task', channel: 'work-observer', chatId, task,
-          automation: systemAutomationRef('work-observer', sessionId),
-          statePersistence: { version: 1, kind: 'fresh-automation', jobId: 'system:work-observer' },
-          model: automationDispatchModel(activeConfig, 'system:work-observer'),
-          signal, waitForCompletion: true, maxTokens: options?.maxTokens,
-          executionLimits: { allowedTools: [], inferenceRequests: 1, toolCalls: 1, argumentBytes: 1 },
-        })
-        if (!id) throw new Error('Work observer agent is unavailable.')
-        const result = await sessions.getExecutionResult(id)
-        if (result?.status !== 'completed') throw observerExecutionError(result?.error)
-        return result.content
-      } finally { await sessions.finalizeAutomation(sessionId) }
-    },
-  }, config.workObserver.enabled, 20_000, config.workObserver.organizerEnabled)
-  cleanup.push(() => workObserver.stop())
+  }, config.organization.enabled)
+  cleanup.push(() => organizationController.stop())
   const github = new GitHubService(new GitHubStore(workspace), new GitHubClient(), {
     alignment,
     durableSession: id => {
@@ -1217,10 +1211,8 @@ export async function createProjectRuntime(
   cronService.setHandler(async (job, signal) => { await cronDispatcher.dispatch(job, signal) })
   cronService.setOnChanged(() => realtime.invalidateSessions())
   const automationProfiles = new AutomationProfileService(cronService, sessions, project.id, id => {
-    if (id === 'system:work-observer') return { kind: 'event', scope: 'current_runtime', intervalMs: 20_000,
-      description: 'Eligible conversation events are coalesced for 20 seconds; idle time does not start a run.' }
     if (id === 'system:work-organizer') return { kind: 'event', scope: 'current_runtime',
-      description: 'Changed root observations coalesce into automatic delta runs; full or delta can also be started manually. No periodic schedule.' }
+      description: 'Full or delta organization starts only on explicit request. No observation subscription or periodic schedule.' }
     if (id.startsWith('learning:')) {
       const policy = configStore.current().learning
       const intervalMs = id === 'learning:reflector' ? policy.reflectIntervalMs : id === 'learning:encapsulator' ? policy.encapsulateIntervalMs
@@ -1252,17 +1244,17 @@ export async function createProjectRuntime(
     modelSettings: id => automationModelSettings(configStore.current(), id),
     updateModel: async (id, model) => {
       await configStore.update(raw => {
-        const workObserver = { ...(raw.workObserver as Record<string, unknown>) }
-        const key = id === 'system:work-observer' ? 'model' : 'organizerModel'
-        if (model === null) delete workObserver[key]
-        else workObserver[key] = model
-        return { ...raw, workObserver }
+        const organization = { ...(raw.organization as Record<string, unknown>) }
+        const key = 'model'
+        if (model === null) delete organization[key]
+        else organization[key] = model
+        return { ...raw, organization }
       })
     },
-    preference: id => id === 'system:work-observer' ? configStore.current().workObserver.enabled : configStore.current().workObserver.organizerEnabled,
+    preference: () => configStore.current().organization.enabled,
     update: async (id, enabled) => {
-      await configStore.update(raw => ({ ...raw, workObserver: { ...(raw.workObserver as object),
-        [id === 'system:work-observer' ? 'enabled' : 'organizerEnabled']: enabled } }))
+      await configStore.update(raw => ({ ...raw, organization: { ...(raw.organization as object),
+        enabled } }))
     },
   }, automationProfiles)
   function learningPipeline(id: string): Pipeline {
@@ -1309,7 +1301,7 @@ export async function createProjectRuntime(
         throw cause
       }
       learning.update(newConfig.learning)
-      workObserver.update(newConfig.workObserver.enabled, newConfig.workObserver.organizerEnabled)
+      organizationController.update(newConfig.organization.enabled)
       sessions.updateProvider(newProvider, newQuickModel)
       provider = newProvider
       llm = newLlm
@@ -1388,7 +1380,7 @@ export async function createProjectRuntime(
     }),
     topicsPlugin(topics, dependencies.authorize),
     sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
-    projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => workObserver.status(), (signal,mode) => workObserver.organize(signal,mode)),
+    projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => organizationController.status(), (signal,mode) => organizationController.organize(signal,mode)),
     githubPlugin(github, dependencies.authorize),
     backgroundTasksPlugin(backgroundTasks, async id => !!await sessions.readSessionState(id)),
     remoteSessionPlugin({
@@ -1461,7 +1453,7 @@ export async function createProjectRuntime(
       () => github.stop(),
       () => cronService.stop(),
       () => stopLearning,
-      () => workObserver.stop(),
+      () => organizationController.stop(),
       () => userActions.shutdown(),
       () => folders.dispose(),
       () => handoffManager.stop(),
@@ -1506,7 +1498,6 @@ export async function createProjectRuntime(
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
     await learningRuntime.recover()
     learning.start()
-    workObserver.start()
   })
   await ready
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)

@@ -31,6 +31,9 @@ export const projectWorkOverviewSchema = z.object({
     parentSessionId: id.nullable().optional(), lastActivityAt: id.optional(),
     activity: z.string().optional(),
     workKey: id.optional(),
+    workKeys: z.array(id).optional(),
+    description: z.string().optional(), completed: z.boolean().optional(),
+    topicSequence: z.number().int().positive().optional(),
   })),
   requests: z.array(z.object({
     id, sessionId: id, kind: z.enum(['input', 'decision']), question: id, workKeys: z.array(id),
@@ -40,10 +43,9 @@ export const projectWorkOverviewSchema = z.object({
   effects: z.array(z.object({
     id, sessionId: id, tool: id, status: z.enum(['running', 'unknown']), workKeys: z.array(id),
   })),
-  observer: z.object({
-    organization: z.object({mode:z.enum(["full","delta"]),status:z.enum(["running","completed","partial"]),coveredCount:z.number().int().nonnegative(),manifestCount:z.number().int().nonnegative(),patches:z.number().int().nonnegative()}).optional(),
-    organizerEnabled: z.boolean().optional(), enabled: z.boolean(), running: z.boolean(), pending: z.number().int().nonnegative(),
-    errors: z.array(z.object({ sessionId: id, error: z.string() })), error: z.string().optional(),
+  organization: z.object({
+    organization: z.object({mode:z.enum(['full','delta']),status:z.enum(['running','completed','partial']),coveredCount:z.number().int().nonnegative(),manifestCount:z.number().int().nonnegative(),patches:z.number().int().nonnegative()}).optional(),
+    enabled: z.boolean(), running: z.boolean(),
   }).optional(),
 }).superRefine((value, ctx) => {
   const lookup = new Map(value.items.map(item => [item.key, item]))
@@ -65,3 +67,33 @@ export const projectWorkOverviewSchema = z.object({
 })
 export type ProjectWorkItem = z.infer<typeof projectWorkItemSchema>
 export type ProjectWorkOverview = z.infer<typeof projectWorkOverviewSchema>
+
+/** Read-time projection only: a previously organized standalone conversation must not
+ * remain a duplicate root after an explicit Work association. Saved evidence stays intact. */
+export function visibleProjectFocus(data: ProjectWorkOverview): ProjectWorkOverview['focus'] {
+  const focus = data.focus
+  if (!focus) return undefined
+  const obsolete = new Set(data.sessions.filter(session => !session.assignable || data.items.some(item =>
+    item.key === session.workKey || session.workKeys?.includes(item.key) || item.assignee === session.sessionId || item.observation?.sessionId === session.sessionId))
+    .map(session => `session:${session.sessionId}`))
+  if (!focus.result.groups.some(group => group.topicKeys.some(key => obsolete.has(key)))) return focus
+  const indexes = new Map<number, number>()
+  const groups = focus.result.groups.flatMap((group, index) => {
+    const topicKeys = group.topicKeys.filter(key => !obsolete.has(key))
+    if (!topicKeys.length) return []
+    indexes.set(index, indexes.size)
+    const removedIds = new Set(group.topicKeys.filter(key => obsolete.has(key)).map(key => key.slice(8)))
+    return [{ ...group, topicKeys, cards: group.cards?.filter(card => card.sources.some(source => !removedIds.has(source.sessionId))) }]
+  })
+  if (!groups.length) return undefined
+  const hierarchy = focus.result.hierarchy?.map(node => ({ ...node, groupIndexes: node.groupIndexes.flatMap(index => indexes.has(index) ? [indexes.get(index)!] : []) }))
+  if (hierarchy) {
+    let changed = true
+    while (changed) {
+      changed = false
+      for (let i = hierarchy.length - 1; i >= 0; i--) if (!hierarchy[i]!.groupIndexes.length && !hierarchy.some(node => node.parentId === hierarchy[i]!.id)) { hierarchy.splice(i, 1); changed = true }
+    }
+  }
+  const sources = focus.sources.filter(source => !obsolete.has(source.key))
+  return { ...focus, inputCount: sources.length, sources, result: { groups, hierarchy } }
+}

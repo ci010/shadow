@@ -116,6 +116,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (value.automationVersion === 1) metadata.automationVersion = 1
   if (value.recovery !== undefined) metadata.recovery = parseSessionRecovery(value.recovery)
   if (value.contextResetAt !== undefined) metadata.contextResetAt = parseContextResetAt(value.contextResetAt)
+  if (typeof value.completed === 'boolean') metadata.completed = value.completed
   if (typeof value.completionReported === 'boolean') metadata.completionReported = value.completionReported
   if (isExecutionMode(value.mode)) metadata.mode = value.mode
   if (['pending', 'running', 'waiting', 'completed', 'failed', 'cancelled'].includes(String(value.executionStatus))) {
@@ -397,6 +398,7 @@ export class SqliteSessionStore implements SessionStore {
         retirement: state.retirement === undefined ? undefined : retirementReceiptSchema.parse(state.retirement),
         workPolicy: parseWorkPolicy(state.workPolicy),
         name: state.name === undefined ? undefined : parseSessionName(state.name),
+        completed: state.completed,
         generatedTitle: state.generatedTitle === undefined ? undefined : parseSessionName(state.generatedTitle),
         chatName: state.chatName === undefined ? undefined : parseSessionName(state.chatName),
         decisionOwnerSessionId: parseDecisionOwner(state.decisionOwnerSessionId),

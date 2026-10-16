@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { isLearningSourceEligible } from './source-eligibility.ts'
-import { systemAutomationRef } from '../../cron/contracts.ts'
+import { systemAutomationRef, resolveAutomationSession } from '../../cron/contracts.ts'
 import type { SessionState } from '../../sessions/session-store.ts'
 
 test('learning eligibility uses provenance and lineage, not agent names', () => {
@@ -11,7 +11,7 @@ test('learning eligibility uses provenance and lineage, not agent names', () => 
   add('root', { agentType: 'reflector' }); add('child', { parentSessionId: 'root' })
   assert(eligible('root')); assert(eligible('child'))
   for (const agentType of ['work-observer', 'work-organizer'] as const) {
-    add(agentType, { automation: systemAutomationRef(agentType, agentType) })
+    add(agentType, { automation: agentType === 'work-organizer' ? systemAutomationRef(agentType, agentType) : resolveAutomationSession({ sessionId: 'work-observer:work-observer-1700000000000', agentType }) })
     add(`${agentType}-child`, { parentSessionId: agentType })
     assert(!eligible(agentType)); assert(!eligible(`${agentType}-child`))
     add(`user-${agentType}`, { agentType }); assert(eligible(`user-${agentType}`))

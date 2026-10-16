@@ -28,13 +28,13 @@ test('organization diagnostics cover pre-model errors without leaking exception 
 })
 
  test('captured Responses output-limit failure retains a safe organization diagnostic', async () => {
-  const { observerExecutionError } = await import('./observer-output.ts')
+  const { organizationExecutionError } = await import('./organization-output.ts')
   const { organizationErrorMessage } = await import('../../app/src/organization-error.ts')
   const app = new Hono()
   let calls = 0
   projectWorkPlugin({ alignment: {} } as SessionManager, () => true, undefined, undefined, async () => {
     calls++
-    throw observerExecutionError('Responses request incomplete: max_output_tokens')
+    throw organizationExecutionError('Responses request incomplete: max_output_tokens')
   })(app)
   const response = await app.request('/api/work/organize', { method: 'POST', body: '{}' })
   const body = await response.json()
@@ -43,5 +43,5 @@ test('organization diagnostics cover pre-model errors without leaking exception 
   assert.equal(body.stage, 'organization')
   assert.equal(calls, 1) // No paid retry on incomplete output.
   assert.match(organizationErrorMessage(body.error), /output length limit/)
-  assert.equal(observerExecutionError('private provider response').message, 'Work observation did not complete.')
+  assert.equal(organizationExecutionError('private provider response').message, 'Work organization did not complete.')
 })

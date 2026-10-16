@@ -763,7 +763,7 @@ test('internal prompts and semantic execution output are disclosed, never defaul
   assert.doesNotMatch(payload, /renderMarkdown/)
 })
 
-for (const feature of ['system:work-observer', 'system:work-organizer']) {
+for (const feature of ['system:work-organizer']) {
   for (const enabled of [true, false]) {
     test(`system feature ${feature} exposes ${enabled ? 'disable' : 'enable'} in popup`, async t => {
       const view = mount(t, true, true)

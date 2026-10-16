@@ -5,7 +5,7 @@ import { WORK_HELP, type WorkAlignment } from '../sessions/work-alignment.ts'
 import { WorkConflict, workRecordSchema, type WorkRecord } from '../initiatives/work-contract.ts'
 
 const request = z.object({
-  action: z.enum(['context', 'list', 'tree', 'create', 'update', 'assign', 'review', 'select']),
+  action: z.enum(['context', 'list', 'tree', 'create', 'update', 'assign', 'review', 'select', 'link']),
   key: z.string().min(1).max(600).optional(),
   version: z.number().int().positive().optional(),
   data: z.unknown().optional(),
@@ -24,7 +24,7 @@ export class WorkTool implements Tool {
   readonly name = 'work'
   readonly supportsRemoteWorkdir = true
   readonly readonly = (args: Record<string, unknown>) => ['context', 'list', 'tree'].includes(String(args.action))
-  readonly description = 'Shared work notes and Project goal map, never a prerequisite for tools. create needs data={title,definition:{objective},notes:{kind}}; child notes need relation={kind:supports|requires|assumption,reason}. update needs key, version and only changed fields: data.notes={summary,plan,next,artifacts,html,attention?}, data.status/blockedReason. Workers update their branch; coordinators maintain goals and causal links. Report meaningful findings once here, not again by message. Only attention wakes a coordinator; routine notes update the dashboard silently. context returns current notes and ancestor paths; data.includeSchema=true adds help. No adopt, policy, checkpoint or per-step bookkeeping. Completion is a reported result, not user acceptance. Ask consequential questions at the affected goal with ask workKey/decisionKey.'
+  readonly description = 'Shared work notes and Project goal map, never a prerequisite for tools. create associates the current session automatically. link key associates this conversation with existing Work without changing focus or assignment; select changes execution focus, not association history. Session completion never completes Work. create needs data={title,definition:{objective},notes:{kind}}; child notes need relation={kind:supports|requires|assumption,reason}. update needs key, version and only changed fields: data.notes={summary,plan,next,artifacts,html,attention?}, data.status/blockedReason. Workers update their branch; coordinators maintain goals and causal links. Report meaningful findings once here, not again by message. Only attention wakes a coordinator; routine notes update the dashboard silently. context returns current notes and ancestor paths; data.includeSchema=true adds help. No adopt, policy, checkpoint or per-step bookkeeping. Completion is a reported result, not user acceptance. Ask consequential questions at the affected goal with ask workKey/decisionKey.'
   readonly parameters: ToolParameters = {
     type: 'object', properties: {
       action: { type: 'string', enum: request.shape.action.options },
@@ -47,6 +47,7 @@ export class WorkTool implements Tool {
       const view = this.alignment.context(context.sessionId, key, false)
       return JSON.stringify({
         selected: view.selected,
+        associated: this.alignment.store.workSessionKeys(context.sessionId),
         records: view.records.map(record => ({
           ...workReceipt(record), definition: record.definition, origin: record.origin,
           userQuote: record.requestSource?.quote, notes: record.notes, authority: record.authority,
@@ -59,7 +60,7 @@ export class WorkTool implements Tool {
     if (action === 'list' || action === 'tree') {
       return JSON.stringify(await this.alignment.execute(actor, action, key, undefined, data, context.signal))
     }
-    if (action === 'select') {
+    if (action === 'link' || action === 'select') {
       return JSON.stringify(await this.alignment.execute(actor, action, key,
         key ? this.alignment.get(key).revision : undefined, data, context.signal))
     }

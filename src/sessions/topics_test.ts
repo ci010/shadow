@@ -58,6 +58,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       },
       assertFolderAccess(id) { assert(states.has(id)) },
       assertInitiativeAccess(id) { if (id !== 'work') throw new Error('Unknown Project initiative') },
+      async updateSelfMetadata() { throw new Error('Not used by this fixture') },
       async updateConversationMetadata(id, topic) {
         const state = states.get(id)
         assert(state)

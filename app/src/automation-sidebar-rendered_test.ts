@@ -27,8 +27,8 @@ test('actual folder sidebar hover maps inactive historical system controllers to
         return `import {createApp,h} from 'vue';
           import FoldersSidebar from '/src/components/FoldersSidebar.vue';
           window.patches=[];window.allowed=!location.search.includes('denied');
-          const jobs=['work-observer','work-organizer'].map(kind=>({id:'system:'+kind,name:kind==='work-observer'?'自动观察':'话题整理',source:'system',session:'fresh',schedule:'Event-driven / manual',enabled:false,configuredEnabled:true,editable:false,canToggle:true,toggleId:'system:'+kind,toggleEnabled:true}));
-          jobs.push({...jobs[1],id:'historical-organizer',enabled:false,configuredEnabled:false});
+          const jobs=['work-organizer'].map(kind=>({id:'system:'+kind,name:'话题整理',source:'system',session:'fresh',schedule:'Event-driven / manual',enabled:false,configuredEnabled:true,editable:false,canToggle:true,toggleId:'system:'+kind,toggleEnabled:true}));
+          jobs.push({...jobs[0],id:'historical-organizer',enabled:false,configuredEnabled:false});
           window.fetch=async(input,init={})=>{
             const url=new URL(String(input),location.href);
             if(url.pathname.endsWith('/api/automations'))return Response.json({automations:jobs.map(j=>({...j,canToggle:window.allowed}))});
@@ -62,9 +62,9 @@ test('actual folder sidebar hover maps inactive historical system controllers to
       const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');
       const wait=()=>new Promise(r=>setTimeout(r,250));
       await win.loadURL(${JSON.stringify(new URL('__automation', server.resolvedUrls!.local[0]).href)});
-      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===3))break;await wait()}
-      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),3);
-      for(const id of ['system:work-observer','system:work-organizer','historical-organizer']){
+      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
+      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),2);
+      for(const id of ['system:work-organizer','historical-organizer']){
         const before=id==='historical-organizer'?'Enable':'Disable';const after=before==='Disable'?'Enable':'Disable';
         await win.webContents.executeJavaScript("document.querySelector("+JSON.stringify('[data-automation-id="'+id+'"]')+").parentElement.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}))");await wait();
         await wait();
@@ -78,9 +78,9 @@ test('actual folder sidebar hover maps inactive historical system controllers to
         assert.equal(await run(()=>document.querySelector('.shared-hover-info .automation-action')?.textContent.trim()),after);
         await run(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})));await wait();
       }
-      assert.deepEqual(await run(()=>window.patches),['system:work-observer','system:work-organizer','system:work-organizer'].map((id,i)=>({path:'/projects/fixture/api/automations/'+encodeURIComponent(id),body:{enabled:i===2}})));
+      assert.deepEqual(await run(()=>window.patches),['system:work-organizer','system:work-organizer'].map((id,i)=>({path:'/projects/fixture/api/automations/'+encodeURIComponent(id),body:{enabled:i===1}})));
       await win.loadURL(${JSON.stringify(new URL('__automation?denied', server.resolvedUrls!.local[0]).href)});
-      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===3))break;await wait()}
+      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
       await run(()=>document.querySelector('[data-automation-id]').parentElement.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'})));await wait();
       assert.equal(await run(()=>document.querySelectorAll('.shared-hover-info .automation-action').length),0);
       assert.equal(await run(()=>document.querySelector('.shared-hover-info')?.getAttribute('role')),'tooltip');
