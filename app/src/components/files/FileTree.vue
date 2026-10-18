@@ -49,7 +49,7 @@
           <p v-if="searchTruncated" class="file-tree-note">{{ t('Showing the first 200 matches. Narrow your search to find more.') }}</p>
           <template v-for="path in searchPaths" :key="path">
           <FileTreeNode v-if="isArchive(path)" :api-base="displaySource.apiBase" :session-id="displaySource.sessionId"
-            :folder-id="displaySource.folderId" :dir="path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''"
+            :folder-id="displaySource.folderId" :session-workspace="sessionWorkspace" :dir="path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''"
             :entry="searchEntry(path)" :depth="0" :active="active && !sourcePending" :workspace-key="workspaceKey"
             :selected-path="selectedPath" :reveal-version="revealVersion" :refresh-version="revision"
             @open="onOpen" @node-offline="fileOffline = true" @context-menu="openContextMenu" />
@@ -65,7 +65,7 @@
         <template v-if="!normalizedFilter || changesOnly">
         <template v-if="hasSource && (changesOnly ? gitStatus?.available : loaded)">
           <FileTreeNode v-for="entry in filteredEntries" :key="`${workspaceKey}:${changesOnly}:${fileEntryKey(entry)}`" :api-base="displaySource.apiBase"
-            :session-id="displaySource.sessionId" :folder-id="displaySource.folderId" dir="" :entry="entry" :depth="0" :active="active && !sourcePending"
+            :session-id="displaySource.sessionId" :folder-id="displaySource.folderId" :session-workspace="sessionWorkspace" dir="" :entry="entry" :depth="0" :active="active && !sourcePending"
             :filter-query="changesOnly ? normalizedFilter : ''"
             :workspace-key="workspaceKey"
             :selected-path="selectedPath" :reveal-version="revealVersion"
@@ -78,7 +78,7 @@
     </section>
     <FilePreviewModal v-if="previewEntry" :key="previewPath" inline :api-base="apiBase" :session-id="sessionId"
       :remote="workdir?.kind === 'remote'"
-      :folder-id="folderId" :dir="previewDir" :entry="previewEntry" @close="closePreview" />
+      :folder-id="folderId" :session-workspace="sessionWorkspace" :dir="previewDir" :entry="previewEntry" @close="closePreview" />
     <div v-else-if="previewOnOpen" class="file-preview-empty">{{ t('Select a file to preview its current contents.') }}</div>
     <FileTreeContextMenu v-if="contextMenu" :request="contextMenu" :workdir="workdir" @close="contextMenu = undefined" />
   </div>
@@ -93,6 +93,7 @@ import { fileTreeShortcut, type FileTreeMenuRequest } from '../../file-tree-menu
 import FilePreviewModal from './FilePreviewModal.vue'
 import HoverInfo from '../HoverInfo.vue'
 import NodeOfflineState from './NodeOfflineState.vue'
+import { sessionWorkspaceLabel } from '../../file-spaces.ts'
 import { folderIcon } from '../../file-icons.ts'
 import { isNodeOfflineError } from '../../workdir-request-error.ts'
 import { type DirListing, type FileEntry, useSessionFiles } from '../../composables/useSessionFiles'
@@ -103,7 +104,7 @@ import { HomeTreeCacheKey, type HomeTreeState } from '../../home-tree-cache.ts'
 import { isArchive } from '../../archive-format.ts'
 import { startFileReferenceDrag } from '../../file-reference-drag.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; folderId?: string; previewOnOpen?: boolean; treeOnly?: boolean; active?: boolean; gitStatus?: GitStatus; gitLoading?: boolean; gitError?: string; gitOffline?: boolean; remote?: boolean; selectedPath?: string; revealVersion?: number }>(), { active: true, remote: false, revealVersion: 0 })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; sessionWorkspace?: boolean; folderId?: string; previewOnOpen?: boolean; treeOnly?: boolean; active?: boolean; gitStatus?: GitStatus; gitLoading?: boolean; gitError?: string; gitOffline?: boolean; remote?: boolean; selectedPath?: string; revealVersion?: number }>(), { active: true, remote: false, revealVersion: 0 })
 const emit = defineEmits<{ open: [payload: OpenFile]; 'refresh-git': [] }>()
 const id = `file-tree-${useId()}`
 const changesOnly = ref(false)
@@ -113,7 +114,7 @@ const searchPaths = ref<string[]>([])
 const searching = ref(false)
 const searchError = ref('')
 const searchTruncated = ref(false)
-const files = computed(() => useSessionFiles(props.apiBase, props.folderId))
+const files = computed(() => useSessionFiles(props.apiBase, props.folderId, props.sessionWorkspace))
 const hasSource = computed(() => !!(props.folderId || props.sessionId))
 const tree = ref<HTMLElement>()
 const body = ref<HTMLElement>()
@@ -126,8 +127,8 @@ const filteredEntries = computed(() => displayEntries.value.filter(entry =>
 const loading = ref(false)
 const loaded = ref(false)
 const workdir = ref<DirListing['workdir']>()
-const expectedHome = computed(() => homeCache?.expectsHome({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folderId }) === true)
-const currentSource = (): FileTreeSource => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folderId, home: expectedHome.value })
+const expectedHome = computed(() => !props.sessionWorkspace && homeCache?.expectsHome({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folderId }) === true)
+const currentSource = (): FileTreeSource => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folderId, sessionWorkspace: props.sessionWorkspace, home: expectedHome.value })
 const displaySource = ref(currentSource())
 const sourcePending = ref(false)
 let releaseReferenceDrag: (() => void) | undefined
@@ -142,7 +143,7 @@ function referenceDragStart(event: DragEvent) {
   if (!releaseReferenceDrag) event.preventDefault()
 }
 onUnmounted(referenceDragEnd)
-watch(() => [props.apiBase, props.sessionId, props.folderId, props.active], referenceDragEnd)
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, props.active], referenceDragEnd)
 const contextMenu = shallowRef<FileTreeMenuRequest>()
 function openContextMenu(request: FileTreeMenuRequest) {
   if (props.active && !sourcePending.value && !offline.value) contextMenu.value = request
@@ -155,10 +156,10 @@ function menuKey(event: KeyboardEvent, path: string) {
   event.stopPropagation()
   if (!event.repeat) openContextMenu({ event, path, shortcut })
 }
-watch(() => [props.apiBase, props.sessionId, props.folderId, props.active, workdir.value, sourcePending.value, filterQuery.value, changesOnly.value],
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, props.active, workdir.value, sourcePending.value, filterQuery.value, changesOnly.value],
   () => { contextMenu.value = undefined })
 const workspaceKey = computed(() => fileWorkspaceKey(displaySource.value, workdir.value))
-const workspaceLabel = computed(() => workdir.value?.scope === 'home' ? t('Home')
+const workspaceLabel = computed(() => props.sessionWorkspace ? sessionWorkspaceLabel(workdir.value?.displayPath, props.sessionId) : workdir.value?.scope === 'home' ? t('Home')
   : workdir.value?.displayPath?.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1)
     || (workdir.value?.kind === 'remote' ? t('Remote workspace') : props.folderId ? t('Folder workspace') : t('Session workspace')))
 const workspaceInfo = computed(() => [
@@ -197,7 +198,7 @@ async function reload(refreshChildren = true): Promise<void> {
     fileOffline.value = false
     rootEntries.value = fileWorkspaceKey(source, listing.workdir) === workspaceKey.value
       ? reconcileFileEntries(rootEntries.value, listing.entries) : listing.entries
-    homeState.value = homeCache?.confirm(source, listing, refreshChildren)
+    homeState.value = (props.sessionWorkspace ? undefined : homeCache?.confirm(source, listing, refreshChildren))
     if (homeState.value) rootEntries.value = homeState.value.entries
     workdir.value = listing.workdir
     displaySource.value = source
@@ -258,7 +259,7 @@ function clearListing(): void {
   rootEntries.value = []
   previewEntry.value = null
 }
-watch([() => props.apiBase, () => props.sessionId, () => props.folderId, expectedHome], () => {
+watch([() => props.apiBase, () => props.sessionId, () => props.folderId, () => props.sessionWorkspace, expectedHome], () => {
   request?.abort()
   request = undefined
   loading.value = false
@@ -270,7 +271,7 @@ watch([() => props.apiBase, () => props.sessionId, () => props.folderId, expecte
     displaySource.value = next
   }
   if (!loaded.value) {
-    const cached = homeCache?.candidate(next)
+    const cached = props.sessionWorkspace ? undefined : homeCache?.candidate(next)
     if (cached) {
       homeState.value = cached
       rootEntries.value = cached.entries
@@ -289,7 +290,7 @@ watch(() => props.active, active => {
   if (active && (!loaded.value || sourcePending.value)) void reload(false)
   else if (!active) { request?.abort(); request = undefined; loading.value = false; previewEntry.value = null }
 })
-watch([normalizedFilter, changesOnly, () => props.active, () => props.apiBase, () => props.sessionId, () => props.folderId, loaded, sourcePending],
+watch([normalizedFilter, changesOnly, () => props.active, () => props.apiBase, () => props.sessionId, () => props.folderId, () => props.sessionWorkspace, loaded, sourcePending],
   ([query, changes, active], _previous, onCleanup) => {
     searchPaths.value = []
     searching.value = false

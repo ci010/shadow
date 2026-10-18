@@ -70,8 +70,8 @@ export function gitUnavailableLabel(reason: GitStatus['reason']): string {
   return t('Git status is not available for this workdir.')
 }
 
-export function createGitFilesClient(apiBase: string, sessionId: string, folderId?: string) {
-  const root = folderId ? `/api/folders/${encodeURIComponent(folderId)}` : `/api/sessions/${encodeURIComponent(sessionId)}`
+export function createGitFilesClient(apiBase: string, sessionId: string, folderId?: string, sessionWorkspace = false) {
+  const root = folderId ? `/api/folders/${encodeURIComponent(folderId)}` : `/api/sessions/${encodeURIComponent(sessionId)}${sessionWorkspace ? "/workspace" : ""}`
   async function request(operation: string, signal: AbortSignal, file?: string): Promise<unknown> {
     const url = apiUrl(apiBase, `${root}/git/${operation}`)
     if (file !== undefined) url.searchParams.set('path', file)

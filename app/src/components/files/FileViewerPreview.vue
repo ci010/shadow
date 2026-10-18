@@ -22,7 +22,7 @@ import NodeOfflineState from './NodeOfflineState.vue'
 import { fileViewerFormat } from '../../file-viewer.ts'
 import '../../open-file-viewer.css'
 
-const props = defineProps<{ apiBase: string; sessionId: string; folderId?: string; path: string; name: string; active: boolean; sourceBlob?: Blob }>()
+const props = defineProps<{ apiBase: string; sessionId: string; sessionWorkspace?: boolean; folderId?: string; path: string; name: string; active: boolean; sourceBlob?: Blob }>()
 const { isDark } = useTheme()
 const extension = computed(() => props.name.slice(props.name.lastIndexOf('.')).toLowerCase())
 const container = ref<HTMLElement>()
@@ -71,7 +71,7 @@ async function load(): Promise<void> {
   loading.value = true
   try {
     const [blob, module] = await Promise.all([
-      props.sourceBlob ?? useSessionFiles(props.apiBase, props.folderId).readBlob(props.sessionId, props.path, controller.signal),
+      props.sourceBlob ?? useSessionFiles(props.apiBase, props.folderId, props.sessionWorkspace).readBlob(props.sessionId, props.path, controller.signal),
       import('../../open-file-viewer-sdk.ts'),
     ])
     if (controller.signal.aborted) return
@@ -90,7 +90,7 @@ async function load(): Promise<void> {
   }
 }
 onMounted(() => void load())
-watch(() => [props.apiBase, props.sessionId, props.folderId, props.path, props.name, props.active, props.sourceBlob], () => {
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, props.path, props.name, props.active, props.sourceBlob], () => {
   offline.value = false
   void load()
 }, { flush: 'post' })

@@ -36,6 +36,7 @@ export function workspaceProvider(
         ...(project ? [await projectProvider(project).getPromptSection(ctx) ?? '', ''] : []),
       ]
 
+      lines.push('## Execution', '')
       if (
         locations.workdir.available && locations.workdir.locality === 'local'
       ) {
@@ -45,13 +46,8 @@ export function workspaceProvider(
             ? ctx.workspaceRoot && ctx.workspaceRoot !== ctx.sessionId ? 'inherited session-managed directory' : 'session-managed directory'
             : 'local workdir capability'}.`,
           '',
-          coordinator ? 'Relative file paths resolve from the working directory.'
-            : 'Keep this directory tidy. Relative file paths resolve from the working directory.',
-          `**Session uploads**: \`${join(locations.sessionDataDir, 'uploads')}\` (not the registered folder).`,
-          ...(!coordinator ? [
-            'The shared `.tmp/` name resolves from the Project data directory, not the working directory, for scratch/ephemeral data.',
-            '`write("notes.md")` writes into the working directory.',
-          ] : []),
+          'This is the default execution directory (cwd), not the Project data directory. Relative file paths resolve from the working directory unless a tool explicitly selects another cwd.',
+          ...(!coordinator ? ['Keep the working directory tidy. `write("notes.md")` writes into the working directory.'] : []),
         )
       } else if (!locations.workdir.available) {
         const ref = locations.workdir.workdir
@@ -76,9 +72,18 @@ export function workspaceProvider(
 
       lines.push(
         '',
-        `**Project data directory (Home; not the working directory)**: \`${locations.home}\``,
+        '## Session storage (Main)',
+        '',
+        `**Session workspace**: \`${locations.sessionDataDir}\` (${locations.workdir.available && locations.workdir.locality === 'local' && locations.workdir.path === locations.sessionDataDir ? 'also the default execution directory' : 'private session storage; separate from the default execution directory'}).`,
+        `**Session uploads**: \`${join(locations.sessionDataDir, 'uploads')}\` (not the registered folder).`,
         'Files, attachments and images received on any channel are automatically saved in private session uploads, not the registered folder.',
         'Use the absolute attachment paths supplied in messages; they are not remote workdir paths.',
+        '',
+        '## Internal application data',
+        '',
+        `**Project data directory (Home; not the working directory)**: \`${locations.home}\``,
+        'Home is internal application data, not an execution directory or deliverable destination. A session workspace is private session storage; it is only the cwd when selected as the workdir. Neither is a registered Project folder.',
+        ...(!coordinator ? ['The shared `.tmp/` name resolves from the Project data directory, not the working directory, for scratch/ephemeral data.'] : []),
         '',
         '## File destinations and delivery',
         '',

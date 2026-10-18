@@ -25,7 +25,7 @@
         :key="fileEntryKey(child)"
         :api-base="apiBase"
         :session-id="sessionId"
-        :folder-id="folderId"
+        :folder-id="folderId" :session-workspace="sessionWorkspace"
         :dir="fullPath"
         :entry="child"
         :depth="depth + 1"
@@ -70,7 +70,7 @@ import {
 const props = withDefaults(defineProps<{
   apiBase: string
   sessionId: string
-  folderId?: string
+  sessionWorkspace?: boolean; folderId?: string
   dir: string
   entry: FileEntry
   depth: number
@@ -104,7 +104,7 @@ function menuKey(event: KeyboardEvent) {
   } else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openContextMenu(event)
 }
 
-const files = computed(() => useSessionFiles(props.apiBase, props.folderId))
+const files = computed(() => useSessionFiles(props.apiBase, props.folderId, props.sessionWorkspace))
 
 const fullPath = computed(() => joinPath(props.dir, props.entry.name))
 const sizeLabel = computed(() => props.entry.mtime === null ? '' : formatSize(props.entry.size))
@@ -134,7 +134,7 @@ async function loadChildren(): Promise<void> {
     let entries: FileEntry[]
     if (archiveContainer.value) {
       const archive = props.entry.archive ?? { path: fullPath.value, members: [] }
-      const index = await listArchive(props.apiBase, props.sessionId, props.folderId, archive, controller.signal)
+      const index = await listArchive(props.apiBase, props.sessionId, props.folderId, archive, controller.signal, props.sessionWorkspace)
       if (controller.signal.aborted) return
       entries = archiveDirectory(index, archive)
       ownArchiveIndex.value = index
@@ -173,7 +173,7 @@ function onRowClick(): void {
     emit('open', { path: fullPath.value, entry: props.entry })
   }
 }
-const sourceKey = computed(() => JSON.stringify([props.apiBase, props.sessionId, props.folderId]))
+const sourceKey = computed(() => JSON.stringify([props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace]))
 watch(() => [props.workspaceKey ?? sourceKey.value, fullPath.value, sourceKey.value, props.active, props.refreshVersion] as const,
   ([workspace, path, source, active, refresh], [previousWorkspace, previousPath, previousSource, , previousRefresh]) => {
     const reset = workspace !== previousWorkspace || path !== previousPath

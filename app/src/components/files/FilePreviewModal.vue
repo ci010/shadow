@@ -37,7 +37,7 @@
         <div v-else-if="archiveContainer" class="file-modal-note">
           {{ t('Expand this archive in the file tree to browse its contents, or use Download to save it.') }}
         </div>
-        <FileViewerPreview v-else-if="viewerFormat" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId"
+        <FileViewerPreview v-else-if="viewerFormat" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" :session-workspace="sessionWorkspace"
           :path="path" :name="entry.name" :active="active" :source-blob="archiveBlob" />
         <div v-else-if="remote && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
           {{ error || t('Loading…') }} <button v-if="error" class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button>
@@ -45,7 +45,7 @@
         <img v-else-if="kind === 'image' && entry.archive" :src="rawSource" :alt="entry.name" class="file-modal-media"
           referrerpolicy="no-referrer" @error="archiveMediaError" />
         <ImageAnnotationPreview v-else-if="kind === 'image'" :key="`image:${rawSource}`" :src="rawSource" :name="entry.name"
-          :source-key="JSON.stringify([apiBase, sessionId, folderId, path])" :context-key="contextKey"
+          :source-key="JSON.stringify([apiBase, sessionId, folderId, sessionWorkspace, path])" :context-key="contextKey"
           :active="active" :editable="canQuote && !entry.archive" :keyboard-active="selectionActive"
           @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
         <video v-else-if="kind === 'video' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`video:${rawSource}`" :src="raw" class="file-modal-media" controls autoplay @error="archiveMediaError" />
@@ -120,7 +120,7 @@ import {
 const props = withDefaults(defineProps<{
   apiBase: string
   sessionId: string
-  folderId?: string
+  sessionWorkspace?: boolean; folderId?: string
   dir: string
   entry: FileEntry
   inline?: boolean
@@ -133,7 +133,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ close: []; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 
-const files = computed(() => useSessionFiles(props.apiBase, props.folderId))
+const files = computed(() => useSessionFiles(props.apiBase, props.folderId, props.sessionWorkspace))
 
 const path = computed(() => joinPath(props.dir, props.entry.name))
 const kind = computed(() => fileKind(props.entry.ext))
@@ -182,7 +182,7 @@ const highlightError = ref('')
 const selectionRoot = ref<HTMLElement>()
 const selectionEnabled = computed(() => props.active && props.selectionActive && !props.entry.archive && textMode.value
   && loaded.value && !loading.value && !error.value && !binary.value && !!textContent.value.trim())
-const selectionKey = computed(() => JSON.stringify([props.apiBase, props.sessionId, props.folderId, path.value, sourceView.value, frameNonce.value, encoding.value]))
+const selectionKey = computed(() => JSON.stringify([props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, path.value, sourceView.value, frameNonce.value, encoding.value]))
 function quoteSelection(text: string, range: Range): void {
   if (!selectionEnabled.value || !props.canQuote || !selectionRoot.value || !text.trim()) return
   const lines = isMemoryEvents.value && !sourceView.value
@@ -241,7 +241,7 @@ async function loadText(): Promise<void> {
   try {
     if (props.entry.archive) {
       if (!archiveBlob.value) {
-        const blob = await readArchiveEntry(props.apiBase, props.sessionId, props.folderId, props.entry.archive, controller.signal)
+        const blob = await readArchiveEntry(props.apiBase, props.sessionId, props.folderId, props.entry.archive, controller.signal, props.sessionWorkspace)
         if (controller.signal.aborted) return
         archiveBlob.value = blob
         archiveUrl.value = URL.createObjectURL(blob)
@@ -289,7 +289,7 @@ async function loadText(): Promise<void> {
   }
 }
 
-watch(() => [props.apiBase, props.sessionId, props.folderId, path.value, kind.value, props.remote, props.entry.archive], () => {
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, path.value, kind.value, props.remote, props.entry.archive], () => {
   releaseArchive()
   downloads.reset()
   encoding.value = 'auto'

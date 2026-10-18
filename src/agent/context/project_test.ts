@@ -54,7 +54,7 @@ test('cold-start project context includes empty selection and a bounded folder s
 test('directory discovery is on demand while the selected resource remains identifiable', () => {
   const folders = Array.from({ length: 100 }, (_, i) => folder(i))
   const prompt = provider(folders).getPromptSection({ ...context, folderId: folders.at(-1)!.id }) as string
-  assert.match(prompt, /Selected registered resource \(metadata\): id="folder-99"/)
+  assert.match(prompt, /Selected Project folder \/ registered resource \(metadata\): id="folder-99"/)
   assert.match(prompt, /100 registered/)
   assert.equal(prompt.split('\n').filter(line => line.startsWith('- id=')).length, 0)
   assert.doesNotMatch(prompt, /id="folder-8"/)
@@ -74,7 +74,7 @@ test('summary encodes and bounds untrusted display data including newlines, mark
 
 test('unknown selected folder is not inferred from cwd or borrowed from another project', () => {
   const prompt = provider([folder(0)]).getPromptSection({ ...context, folderId: 'other-folder' }) as string
-  assert.match(prompt, /Selected registered resource: id="other-folder" \(not registered in this project; unavailable\)/)
+  assert.match(prompt, /Selected Project folder \/ registered resource: id="other-folder" \(not registered in this project; unavailable\)/)
   assert.throws(() => provider([]).getPromptSection({ ...context, projectId: 'other-project' }), /current Project context/)
   assert.throws(() => provider([]).getPromptSection({ ...context, projectId: undefined }), /current Project context/)
 })

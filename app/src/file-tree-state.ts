@@ -5,18 +5,19 @@ export interface FileTreeSource {
   sessionId: string
   folderId?: string
   home?: boolean
+  sessionWorkspace?: boolean
 }
 
 export function fileWorkspaceKey(source: FileTreeSource, workdir?: DirListing['workdir']): string {
-  if (workdir?.kind === 'local' && workdir.scope === 'home' && workdir.displayPath && !source.folderId) {
+  if (!source.sessionWorkspace && workdir?.kind === 'local' && workdir.scope === 'home' && workdir.displayPath && !source.folderId) {
     return JSON.stringify([source.apiBase, 'home', workdir.displayPath])
   }
-  return JSON.stringify([source.apiBase, source.sessionId, source.folderId, workdir?.kind, workdir?.displayPath, workdir?.scope])
+  return JSON.stringify([source.apiBase, source.sessionId, source.folderId, source.sessionWorkspace, workdir?.kind, workdir?.displayPath, workdir?.scope])
 }
 
 /** Keep the last verified Home inert until the new session's listing confirms its root. */
 export function canRetainHomeTree(previous: FileTreeSource, next: FileTreeSource, workdir?: DirListing['workdir']): boolean {
-  return previous.apiBase === next.apiBase && !previous.folderId && !next.folderId
+  return !previous.sessionWorkspace && !next.sessionWorkspace && previous.apiBase === next.apiBase && !previous.folderId && !next.folderId
     && !!previous.sessionId && next.home === true
     && workdir?.kind === 'local' && workdir.scope === 'home' && !!workdir.displayPath
 }

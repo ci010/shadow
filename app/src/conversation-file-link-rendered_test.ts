@@ -54,6 +54,7 @@ test('conversation links open scoped previews and reveal nested files without na
           import Workbench from '/src/components/files/FileWorkbench.vue';
           import Attachments from '/src/components/MessageAttachments.vue';
           import { messageAttachments } from '/src/message-attachments.ts';
+          import { discordReviewLink } from '/src/discord-integration.ts';
           import { conversationFileLink } from '/src/conversation-file-link.ts';
           import { conversationLinkSession } from '/src/project-coordination.ts';
           import { imagePreviewFromEvent } from '/src/image-viewer.ts';
@@ -67,7 +68,7 @@ test('conversation links open scoped previews and reveal nested files without na
             const markdown = '[Daily report](reports/daily/REPORT.md)\\n\\n[Unlisted report](unlisted.md)\\n\\n[Missing](missing.md)\\n\\n[External](https://example.invalid/report.md)';
             const attachments = messageAttachments('MEDIA:reports/daily/REPORT.md\\nMEDIA:C:\\\\synthetic\\\\owner\\\\review notes\\\\自我介绍.md');
             return () => h(Workbench, {ref:workbench, apiBase:props.apiBase, sessionId:activeSessionId.value,
-              contextKey:'fixture', active:true, style:'height:100vh'}, {
+              contextKey:'fixture', active:true, initialExplorerOpen:true, style:'height:100vh'}, {
               default:() => [
                 h('article', {class:'fixture-message', onClick:openConversationLink,
                   innerHTML:DOMPurify.sanitize(marked.parse(markdown))}),

@@ -93,7 +93,7 @@ test('file delivery guidance separates durable outputs from session drafts for e
   }
 })
 
-test('workspace prompt reports unavailable capability without a local path', async () => {
+test('workspace prompt reports unavailable capability without treating session storage as execution cwd', async () => {
   const workspace = resolve('workspace')
   const ctx = context({
     workdir: {
@@ -110,7 +110,9 @@ test('workspace prompt reports unavailable capability without a local path', asy
   assert((prompt ?? '').includes('**Node**: `child-node`'))
   assert((prompt ?? '').includes('**Capability**: `folder-capability`'))
   assert((prompt ?? '').includes('**Unavailable reason**: `node-missing`'))
-  assertEquals(prompt?.includes(sessionWorkspacePath(workspace, 'discord:top')), false)
+  assertEquals(prompt?.includes(sessionWorkspacePath(workspace, 'discord:top')), true)
+  assert.match(prompt!, /## Session storage \(Main\)/)
+  assert.match(prompt!, /private session storage; separate from the default execution directory/)
   assertEquals(prompt?.includes('C:\\Folders\\example'), false)
 })
 
@@ -147,7 +149,9 @@ test('workspace owns upload guidance across local, remote and unavailable workdi
       assert(prompt.includes(resolve(locations.sessionDataDir, 'uploads')))
       assert.match(prompt, /shared `\.tmp\/` name resolves from the Project data directory, not the working directory/)
     } else {
-      assert.doesNotMatch(prompt, /\*\*Session uploads\*\*:/)
+      assert.match(prompt, /## Session storage \(Main\)/)
+      assert.match(prompt, /\*\*Session uploads\*\*:/)
+      assert.match(prompt, /private session storage; separate from the default execution directory/)
       assert(!prompt.includes(folder))
       assert.match(prompt, kind === 'remote'
         ? /File and process operations must use the remote executor/
@@ -193,4 +197,40 @@ test('coordinator workspace retains read context without worker resources or wri
   const ordinary = (await provider.getPromptSection(context()))!
   assert.match(ordinary, /v:tools|v:config/)
   assert.match(ordinary, /write\("notes.md"\)/)
+})
+
+
+test('environment names private session storage separately from default execution cwd', async () => {
+  const home = resolve('.test-data', 'environment-home')
+  const folder = resolve('.test-data', 'environment-folder')
+  for (const kind of ['managed', 'inherited', 'folder'] as const) {
+    const ctx = context({
+      workspaceRoot: kind === 'inherited' ? 'web:owner' : undefined,
+      workdir: kind === 'folder' ? localFolderWorkdirRef('fixture') : undefined,
+    })
+    const lookup = () => ({
+      node: 'online' as const, capability: { kind: 'workdir' as const, online: true, path: folder },
+    })
+    const locations = resolveSessionLocations(home, ctx, undefined, lookup)
+    const prompt = (await workspaceProvider(home, new VirtualFs(), lookup).getPromptSection(ctx))!
+    assert(prompt.includes('**Session workspace**: `' + locations.sessionDataDir + '`'))
+    assert.match(prompt, /default execution directory \(cwd\)/)
+    assert.match(prompt, /unless a tool explicitly selects another cwd/)
+    assert.match(prompt, /Home is internal application data, not an execution directory or deliverable destination/)
+    assert.match(prompt, /Neither is a registered Project folder/)
+    assert.match(prompt, kind === 'folder'
+      ? /private session storage; separate from the default execution directory/
+      : /also the default execution directory/)
+  }
+})
+
+test('current session metadata mount is discoverable in the injected workspace prompt', async () => {
+  const fs = new VirtualFs()
+  fs.mount('v:session', 'self.json: read/write current session title, description and completed as JSON; identity is runtime-bound; task metadata is parent-owned', () => '{}')
+  const provider = workspaceProvider(resolve('.test-data', 'self-metadata-prompt'), fs)
+  const prompt = (await provider.getPromptSection(context()))!
+  assert.match(prompt, /Virtual resources:/)
+  assert.match(prompt, /v:session\/.*self\.json: read\/write current session/)
+  assert.match(prompt, /identity is runtime-bound; task metadata is parent-owned/)
+  assert.doesNotMatch(prompt, /update_self/)
 })

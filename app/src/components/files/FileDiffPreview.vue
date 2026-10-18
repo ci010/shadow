@@ -47,7 +47,7 @@ import { createGitFilesClient, diffLines, type GitDiff } from '../../git-files.t
 import { highlightFile, type FileHighlightToken } from '../../file-highlighting.ts'
 import { quoteDiffSelection, splitHighlightLines } from '../../git-diff-selection.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; folderId?: string; path: string; active: boolean; selectionActive: boolean; canQuote: boolean; revision: number }>()
+const props = defineProps<{ apiBase: string; sessionId: string; sessionWorkspace?: boolean; folderId?: string; path: string; active: boolean; selectionActive: boolean; canQuote: boolean; revision: number }>()
 const emit = defineEmits<{ quote: [text: string]; 'open-source': [] }>()
 const diff = shallowRef<GitDiff>()
 const hunks = computed(() => diff.value?.hunks.map(hunk => ({ ...hunk, rows: diffLines(hunk) })) ?? [])
@@ -105,7 +105,7 @@ async function loadDiff() {
   controller = request
   loading.value = !diff.value || offline.value
   try {
-    const next = await createGitFilesClient(props.apiBase, props.sessionId, props.folderId).diff(props.path, request.signal)
+    const next = await createGitFilesClient(props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace).diff(props.path, request.signal)
     if (request.signal.aborted) return
     error.value = ''
     offline.value = false
@@ -129,7 +129,7 @@ function quote(text: string, range: Range) {
 }
 function beginSelection(event: PointerEvent) { if (event.target instanceof Node && selectionRoot.value?.contains(event.target)) pointerDown = true }
 function finishSelection() { pointerDown = false; applyPending() }
-watch(() => [props.apiBase, props.sessionId, props.folderId, props.path], () => {
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, props.path], () => {
   controller?.abort()
   generation++
   diff.value = undefined

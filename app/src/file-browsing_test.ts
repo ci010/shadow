@@ -627,7 +627,7 @@ test('scratch workbenches hide the explorer and Git without losing the expansion
         const state = getCurrentInstance()!.setupState
         state.width = 1000
         assert.equal(state.explorerAvailable, identity.available)
-        assert.equal(state.expanded, identity.available)
+        assert.equal(state.expanded, false, 'Explorer starts collapsed even on wide screens')
         state.preference = true
         assert.equal(state.expanded, identity.available)
         assert.equal(state.preference, true)
@@ -1156,4 +1156,63 @@ test('unknown text previews reset, cancel and never display data from a previous
   assert.equal(state().binary, false)
   assert.equal(pending.length, 3)
   assert.equal(new URL(state().staticSrc).pathname, '/api/folders/folder-c/static/page.html')
+})
+
+test('explicit session tree discards Home state and scopes child previews and context menu paths to Main storage', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileTree', { ...base, sessionId: 'web:chat-one', folderId: undefined, sessionWorkspace: false, treeOnly: true })
+  pending[0]!.finish({ path: '', entries: [entry], workdir: { kind: 'local', scope: 'home', displayPath: 'C:\\private-project-home' } })
+  await settle()
+  props.sessionWorkspace = true
+  await nextTick()
+  assert.equal(state().loaded, false)
+  assert.deepEqual(state().displayEntries, [])
+  assert.match(pending[1]!.url.pathname, /\/workspace\/files$/)
+  pending[1]!.finish({ path: '', entries: [entry], workdir: { kind: 'local', displayPath: 'C:\\session-storage' } })
+  await settle()
+  assert.equal(state().workspaceLabel, 'Session workspace')
+  assert.equal(state().workdir.displayPath, 'C:\\session-storage')
+  assert.equal(state().homeState, undefined)
+  const preview = mount(t, 'FilePreviewModal', { ...base, sessionId: 'web:chat-one', folderId: undefined, sessionWorkspace: true, dir: '', entry })
+  assert.match(pending.at(-1)!.url.pathname, /\/workspace\/preview$/)
+  pending.at(-1)!.finish({ binary: false, size: 7, content: 'session' })
+  await settle()
+  assert.equal(preview.state().files.rawUrl('web:chat-one', 'image.png').includes('/workspace/raw?'), true)
+  assert.equal(preview.state().files.staticUrl('web:chat-one', 'page/index.html').includes('/workspace/static/page/index.html'), true)
+})
+
+test('two file spaces retain distinct tabs and preview source through switching workbench contexts', async t => {
+  const restoreGlobals: (() => void)[] = []
+  const globals: Record<string, unknown> = { document: { addEventListener() {}, removeEventListener() {}, getElementById() { return undefined } }, window: { addEventListener() {}, removeEventListener() {} }, ResizeObserver: class { observe() {} disconnect() {} } }
+  for (const [key, value] of Object.entries(globals)) {
+    const original = Object.getOwnPropertyDescriptor(globalThis, key)
+    Object.defineProperty(globalThis, key, { configurable: true, value })
+    restoreGlobals.push(() => { if (original) Object.defineProperty(globalThis, key, original); else Reflect.deleteProperty(globalThis, key) })
+  }
+  requests(t)
+  const { props, state } = mount(t, 'FileWorkbench', { ...base, sessionId: 'web:chat-one', contextKey: 'one', active: true })
+  t.after(() => restoreGlobals.forEach(restore => restore()))
+  assert.equal(state().expanded, false)
+  const project = { path: 'same.txt', entry, source: { folderId: 'folder-a' } }
+  const session = { path: 'same.txt', entry, source: { sessionWorkspace: true } }
+  state().openFile(project)
+  state().openFile(session)
+  assert.equal(state().tabs.files.length, 2)
+  assert.deepEqual(state().selectedSource, session.source)
+  // A registered Folder must not hijack an explicitly scoped attachment/session
+  // link, while an unscoped Markdown workdir link belongs to Project files.
+  state().openLinkedFile({ path: 'report.md', entry: { ...entry, name: 'report.md' } })
+  assert.deepEqual(state().selectedSource, { folderId: 'folder-a' })
+  state().openLinkedFile(session)
+  assert.deepEqual(state().selectedSource, session.source)
+  assert.equal(state().fileSpace, 'session')
+  state().fileSpace = 'session'
+  props.folderId = 'folder-b'
+  props.contextKey = 'two'
+  await nextTick()
+  assert.equal(state().fileSpace, 'project')
+  props.folderId = undefined
+  props.contextKey = 'three'
+  await nextTick()
+  assert.equal(state().fileSpace, 'session')
 })

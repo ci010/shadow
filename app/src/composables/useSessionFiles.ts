@@ -95,7 +95,7 @@ function buildUrl(apiBase: string, path: string, params: Record<string, string>)
 }
 
 /** A folder ID selects registry-backed routes, never a renderer-supplied path. */
-export function useSessionFiles(apiBase: string, folderId?: string) {
+export function useSessionFiles(apiBase: string, folderId?: string, sessionWorkspace = false) {
   async function requestFile(url: string, signal?: AbortSignal): Promise<Response> {
     const deadline = AbortSignal.timeout(30_000)
     try {
@@ -109,7 +109,7 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
   }
   const root = (sessionId: string) => folderId
     ? `/api/folders/${encodeURIComponent(folderId)}`
-    : `/api/sessions/${encodeURIComponent(sessionId)}`
+    : `/api/sessions/${encodeURIComponent(sessionId)}${sessionWorkspace ? "/workspace" : ""}`
 
   async function listDir(sessionId: string, path = '', signal?: AbortSignal): Promise<DirListing> {
     const url = buildUrl(apiBase, `${root(sessionId)}/files`, { path })

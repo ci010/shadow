@@ -3,7 +3,7 @@ import { onUnmounted, ref, shallowRef, watch, type Ref } from 'vue'
 import { createGitFilesClient, type GitStatus } from '../git-files.ts'
 import { isNodeOfflineError } from '../workdir-request-error.ts'
 
-export function useWorkdirGit(source: () => { apiBase: string; sessionId: string; folderId?: string }, active: Ref<boolean>) {
+export function useWorkdirGit(source: () => { apiBase: string; sessionId: string; folderId?: string; sessionWorkspace?: boolean }, active: Ref<boolean>) {
   const status = shallowRef<GitStatus>()
   const loading = ref(false)
   const error = ref('')
@@ -27,7 +27,7 @@ export function useWorkdirGit(source: () => { apiBase: string; sessionId: string
     controller = request
     loading.value = !status.value || offline.value
     try {
-      const next = await createGitFilesClient(current.apiBase, current.sessionId, current.folderId).status(request.signal)
+      const next = await createGitFilesClient(current.apiBase, current.sessionId, current.folderId, current.sessionWorkspace).status(request.signal)
       if (request.signal.aborted) return
       error.value = ''
       offline.value = false
@@ -50,7 +50,7 @@ export function useWorkdirGit(source: () => { apiBase: string; sessionId: string
       }
     }
   }
-  watch(() => [source().apiBase, source().sessionId, source().folderId], () => {
+  watch(() => [source().apiBase, source().sessionId, source().folderId, source().sessionWorkspace], () => {
     stop()
     status.value = undefined
     fingerprint = ''

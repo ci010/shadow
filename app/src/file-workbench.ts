@@ -1,12 +1,14 @@
 import type { FileEntry } from './composables/useSessionFiles.ts'
 
 export interface OpenFile {
+  source?: { sessionWorkspace?: boolean; folderId?: string }
   path: string
   entry: FileEntry
   view?: 'diff'
 }
 
 export function fileTabKey(file: OpenFile): string {
+  if (file.source) { const { source, ...rest } = file; return `\0source:${JSON.stringify(source)}:${fileTabKey(rest)}` }
   if (file.entry.archive) return `\0archive:${JSON.stringify([file.entry.archive.path, ...file.entry.archive.members])}`
   return file.view === 'diff' ? `\0diff:${file.path}` : file.path
 }
