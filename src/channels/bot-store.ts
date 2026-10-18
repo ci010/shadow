@@ -14,6 +14,8 @@ const recordSchema = z.object({
   displayName: z.string().trim().min(1).max(100),
   config: z.record(z.unknown()),
   legacySessionId: z.literal(true).optional(),
+  purpose: z.enum(['personal', 'service', 'legacy']).default('legacy'),
+  verifiedOwner: z.object({ senderId: z.string().min(1), chatId: z.string().min(1), verifiedAt: z.string() }).strict().optional(),
 }).strict()
 const documentSchema = z.object({ version: z.literal(2), bots: z.array(recordSchema) }).strict()
 
@@ -23,6 +25,8 @@ export interface BotInstance {
   platform: ChannelId
   displayName: string
   enabled: boolean
+  purpose: 'personal' | 'service' | 'legacy'
+  verifiedOwner?: { senderId: string; chatId: string; verifiedAt: string }
   config: NonNullable<Config['channels'][ChannelId]>
   legacySessionId?: true
 }
@@ -44,6 +48,31 @@ export interface BotInstanceStoreOptions {
 export class BotInstanceStore {
   readonly projectId: string
   private document: z.infer<typeof documentSchema>
+  private accessChanges = new Map<string, { active: number; revision: number }>()
+
+  /** Transient only: shared by adapter and session admission, never persisted. */
+  beginAccessChange(id: string): () => void {
+    this.get(id)
+    const state = this.accessChanges.get(id) ?? { active: 0, revision: 0 }
+    state.active++
+    state.revision++
+    this.accessChanges.set(id, state)
+    let released = false
+    return () => { if (!released) { released = true; state.active-- } }
+  }
+
+  assertAccess(id: string): void {
+    if (this.accessChanges.get(id)?.active) throw new Error('Bot access change in progress')
+  }
+
+  accessGuard(id: string): () => void {
+    this.assertAccess(id)
+    const revision = this.accessChanges.get(id)?.revision ?? 0
+    return () => {
+      this.assertAccess(id)
+      if ((this.accessChanges.get(id)?.revision ?? 0) !== revision) throw new Error('Bot access changed')
+    }
+  }
 
   constructor(private readonly options: BotInstanceStoreOptions) {
     this.projectId = options.projectId
@@ -54,10 +83,10 @@ export class BotInstanceStore {
     } else {
       this.document = {
         version: 2,
-        bots: options.legacyConfig ? CHANNEL_IDS.filter(platform =>
+        bots: options.legacyConfig ? CHANNEL_IDS.filter(platform => platform !== 'wechat' &&
           options.legacyConfig?.channels[platform] !== undefined || options.legacyRawChannels?.[platform] !== undefined
         ).map(platform => ({
-          id: `legacy-${platform}`, projectId: this.projectId, platform,
+          purpose: 'legacy' as const, id: `legacy-${platform}`, projectId: this.projectId, platform,
           displayName: `${platform === 'qq' ? 'QQ' : platform === 'discord' ? 'Discord' : 'Feishu'} bot`,
           legacySessionId: true as const,
           config: { ...options.legacyRawChannels?.[platform] },
@@ -78,6 +107,7 @@ export class BotInstanceStore {
   }
 
   private resolve(raw: z.infer<typeof recordSchema>): BotInstance {
+    if (raw.platform === 'wechat' && raw.purpose !== 'personal') throw new ChannelSetupError('wechat_personal_bot_required')
     const inherited = raw.legacySessionId ? this.options.legacyConfig?.channels[raw.platform] : undefined
     const config = ChannelsSchema.parse({ [raw.platform]: { ...inherited, ...raw.config } })[raw.platform]!
     return { ...raw, config, enabled: config.enabled }
@@ -94,7 +124,7 @@ export class BotInstanceStore {
     const bot = this.get(id)
     return {
       ...channelSetupStatus(bot.platform, { [bot.platform]: bot.config }, health),
-      id: bot.id, projectId: bot.projectId, platform: bot.platform, displayName: bot.displayName,
+      purpose: bot.purpose, ownerVerified: !!bot.verifiedOwner, id: bot.id, projectId: bot.projectId, platform: bot.platform, displayName: bot.displayName,
     }
   }
 
@@ -113,9 +143,9 @@ export class BotInstanceStore {
     this.document = document
   }
 
-  create(platform: ChannelId, displayName: string, config: Record<string, unknown>, signal?: AbortSignal): BotInstance {
+  create(platform: ChannelId, displayName: string, config: Record<string, unknown>, signal?: AbortSignal, purpose: 'personal' | 'service' = 'service'): BotInstance {
     const raw = recordSchema.parse({
-      id: randomUUID(), projectId: this.projectId, platform, displayName, config: this.patch(platform, config),
+      purpose, id: randomUUID(), projectId: this.projectId, platform, displayName, config: this.patch(platform, config),
     })
     const bot = this.resolve(raw)
     this.validateEnabled(bot)
@@ -124,11 +154,11 @@ export class BotInstanceStore {
     return bot
   }
 
-  update(id: string, input: { displayName?: string; config?: Record<string, unknown> }, signal?: AbortSignal): BotInstance {
+  update(id: string, input: { displayName?: string; config?: Record<string, unknown>; purpose?: 'personal' | 'service' }, signal?: AbortSignal): BotInstance {
     const previous = this.document.bots.find(bot => bot.id === id)
     if (!previous) throw new ChannelSetupError('unknown_bot')
     const raw = recordSchema.parse({
-      ...previous, ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
+      ...previous, ...(input.purpose && input.purpose !== previous.purpose ? { purpose: input.purpose, verifiedOwner: undefined } : {}), ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
       config: { ...previous.config, ...this.patch(previous.platform, input.config ?? {}) },
     })
     const bot = this.resolve(raw)
@@ -136,6 +166,13 @@ export class BotInstanceStore {
     signal?.throwIfAborted()
     this.save({ ...this.document, bots: this.document.bots.map(entry => entry.id === id ? raw : entry) })
     return bot
+  }
+
+  bindOwner(id: string, senderId?: string, chatId?: string): void {
+    const previous = this.document.bots.find(bot => bot.id === id)
+    if (!previous) throw new ChannelSetupError('unknown_bot')
+    const raw = recordSchema.parse({ ...previous, verifiedOwner: senderId ? { senderId, chatId, verifiedAt: new Date().toISOString() } : undefined })
+    this.save({ ...this.document, bots: this.document.bots.map(bot => bot.id === id ? raw : bot) })
   }
 
   delete(id: string, signal?: AbortSignal): void {

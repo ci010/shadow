@@ -36,7 +36,7 @@ test('status contract rejects malformed, duplicate, unknown and credential-beari
   for (const value of [null, {}, { channels: [] }, { channels: [channels[0], channels[0], channels[2]] }]) {
     assert.throws(() => parseChannelList(value), /channel list/)
   }
-  for (const patch of [{ id: 'wechat' }, { state: 'ready' }, { enabled: 'true' }, { config: { secret: 'must-not-reach-renderer' } },
+  for (const patch of [{ id: 'unknown' }, { state: 'ready' }, { enabled: 'true' }, { config: { secret: 'must-not-reach-renderer' } },
     { config: { sandbox: 'false' } }, { secrets: { secret: 'actual-value' } }, { secrets: { madeUp: false } }]) {
     assert.throws(() => parseChannelStatus({ ...channels[0], ...patch }), /invalid channel status/)
   }
@@ -57,7 +57,7 @@ test('channel drafts never contain saved secrets and blank password fields prese
 })
 
 test('trusted audience lists round-trip separately from sender and admin settings', () => {
-  for (const initial of statuses()) {
+  for (const initial of statuses().filter(item => item.id !== 'wechat')) {
     const channel = parseChannelStatus({
       ...initial, config: { trustedChats: ['room', 'thread'], allowFrom: ['alice'], adminChats: ['admin-room'] },
     })
@@ -77,7 +77,7 @@ test('trusted audience lists round-trip separately from sender and admin setting
   }
 })
 test('connect validates required credentials, lists, selections and bitmasks; incomplete drafts may be saved disabled', () => {
-  for (const channel of statuses()) {
+  for (const channel of statuses().filter(item => item.id !== 'wechat')) {
     const draft = channelDraft(channel)
     assert.throws(() => channelPatch(channel, draft, true), /required/)
     assert.equal(channelPatch(channel, draft, false).enabled, false)

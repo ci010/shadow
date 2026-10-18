@@ -75,15 +75,15 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
     getPolicy: () => ({ timeoutMs: null }), notifyUser: async () => {}, notifyParent: async () => {},
   })
   let promptInvalidations = 0
-  const sessions: Pick<SessionManager, 'yields' | 'getActiveSession' | 'invalidateSystemPrompts'> = {
-    yields, getActiveSession: () => undefined,
+  const sessions: Pick<SessionManager, 'yields' | 'getActiveSession' | 'invalidateSystemPrompts' | 'retireIdleConversationContexts'> = {
+    retireIdleConversationContexts: async () => {}, yields, getActiveSession: () => undefined,
     invalidateSystemPrompts: () => { promptInvalidations++ },
   }
   const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: join(root, projectId) } }), bus, sessions as SessionManager, async message => {
     received.push(message)
     receivedScopes.push(getProjectScope()?.projectId)
     return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
-  }, { projectId, instanceStore: store, scope, factory: (id, _config, bot) => {
+  }, { projectId, instanceStore: store, serviceAssigned: () => true, scope, factory: (id, _config, bot) => {
     assert.ok(bot)
     const channel = new BotChannel(id, bus, bot, actualIdentity)
     created.push(channel)
@@ -123,7 +123,7 @@ test('QQ per-bot trigger modes persist, reach the real adapter and can be reconf
   const manager = new ChannelManager(ConfigSchema.parse({}), new Bus(), {} as SessionManager, async message => {
     received.push(message)
     return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
-  }, { projectId: 'A', instanceStore: store })
+  }, { projectId: 'A', instanceStore: store, serviceAssigned: () => true })
   await manager.init()
   t.after(() => manager.stopAll())
   const incoming = async (botId: string) => {
@@ -432,7 +432,7 @@ test('org settings API validates ownership, redacts secrets, retains blanks and 
   assert.equal((await post({ projectId: 'B', platform: 'qq', displayName: 'Bad', config: {} })).status, 400)
   assert.equal((await post({ platform: 'qq', displayName: 'Bad', config: { enabled: true } })).status, 400)
   const responses = await Promise.all(['One', 'Two'].map((displayName, index) => post({
-    platform: 'qq', displayName, config: { appId: `app-${index}`, secret: 'synthetic-secret', enabled: true },
+    purpose: 'service', platform: 'qq', displayName, config: { appId: `app-${index}`, secret: 'synthetic-secret', enabled: true },
   })))
   assert.deepEqual(responses.map(response => response.status), [201, 201])
   const bodies = await Promise.all(responses.map(response => response.json()))

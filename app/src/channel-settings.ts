@@ -60,6 +60,11 @@ export const channelDefinitions: Array<{
         : field.key === 'allowFrom' ? { ...field, hint: t('Optional connection-wide sender ceiling. Per-channel users and roles must also permit the sender.') } : field),
     ] },
   },
+  {
+    id: 'wechat', label: 'WeChat', get description() { return t('WeChat supports personal Bots only. Scan with your own WeChat account, then verify the owner.') }, portal: '',
+    get instructions() { return [t('Save and connect, generate the WeChat login QR code, scan and confirm in WeChat, then check login and pair the owner.')] },
+    get fields() { return accessFields.filter(field => field.key === 'allowFrom') },
+  },
 ]
 const stateLabels: Record<ChannelSetupStatus['state'], string> = {
   get disabled() { return t('Disconnected') }, get unconfigured() { return t('Not configured') }, get connecting() { return t('Connecting') },

@@ -26,6 +26,7 @@ import {
   WEIXIN_POLL_INTERVAL_MS,
   WEIXIN_POLL_REQUEST_TIMEOUT_MS,
   WeixinApiClient,
+  WeixinDeliveryError,
   WeixinMessageItemType,
   WeixinMessageState,
   WeixinMessageType,
@@ -39,6 +40,7 @@ import type {
   WeixinLoginWaitResult,
   WeixinMessage,
   WeixinMessageItem,
+  WeixinSendDiagnostic,
 } from './wechat/sdk.ts'
 import { AbstractChannel } from './base.ts'
 
@@ -48,6 +50,8 @@ import { AbstractChannel } from './base.ts'
 
 export interface WeChatChannelOptions {
   workspace: string
+  storageDirectory?: string
+  scoped?: boolean
   allowFrom?: string[]
 }
 
@@ -204,6 +208,7 @@ export class WeChatChannel extends AbstractChannel {
 
   private repository: WeixinRepository
   private apiClient: WeixinApiClient
+  private deliveryQueues = new Map<string, Promise<void>>()
   private workspace: string
   private mediaDir: string
 
@@ -214,25 +219,29 @@ export class WeChatChannel extends AbstractChannel {
   constructor(bus: Bus, private readonly options: WeChatChannelOptions) {
     super(bus, options.allowFrom)
     this.workspace = options.workspace
-    this.mediaDir = projectStoragePath(options.workspace, 'uploads', 'wechat')
+    this.mediaDir = options.storageDirectory ? `${options.storageDirectory}/media` : projectStoragePath(options.workspace, 'uploads', 'wechat')
 
     const routeTag = resolveRouteTag()
-    this.repository = new WeixinRepository(options.workspace)
+    this.repository = new WeixinRepository(options.workspace, options.storageDirectory)
     this.apiClient = new WeixinApiClient(routeTag)
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   async start(app: Hono): Promise<void> {
-    this._registerRoutes(app)
+    this.setAccepting(true)
+    if (!this.options.scoped) this._registerRoutes(app)
 
     const account = this.repository.getLatestAccount()
     if (account) {
+      this.reportIdentity(account.accountId)
+      this.reportState('connecting')
       console.info(
         `[wechat] Resuming with stored account: ${account.accountId}`,
       )
       this._startMonitor()
     } else {
+      this.reportState('disconnected')
       console.info(
         '[wechat] No stored credentials — waiting for login via /wechat/login',
       )
@@ -240,6 +249,8 @@ export class WeChatChannel extends AbstractChannel {
   }
 
   async stop(): Promise<void> {
+    this.setAccepting(false)
+    this.reportState('disconnected')
     this._stopMonitor()
     if (this._pollPromise) {
       await this._pollPromise
@@ -251,30 +262,30 @@ export class WeChatChannel extends AbstractChannel {
   // ── Send ──────────────────────────────────────────────────────────────────
 
   async send(msg: OutboundMessage): Promise<string | null> {
+    // iLink replies cannot be edited and may have a limited reply budget.
+    // Keep execution events and intermediate commentary in Web only; never
+    // let them consume the context token's budget before the final response.
+    if (msg.event !== 'response' || !msg.done) return null
     if (!msg.content && !msg.media?.length) return null
 
-    try {
+    return this._deliver(msg.chatId, async (diagnostic) => {
       if (msg.media?.length) {
         for (const mediaPath of msg.media) {
           const raw = await readFile(mediaPath)
           const b64 = btoa(String.fromCharCode(...raw))
-          await this._sendImage(msg.chatId, b64)
+          await this._sendImage(msg.chatId, b64, diagnostic)
         }
       }
       if (msg.content) {
-        await this._sendText(msg.chatId, msg.content)
+        await this._sendTextWithNotice(msg.chatId, msg.content, diagnostic)
       }
-    } catch (err) {
-      console.error('[wechat] Send failed:', err)
-    }
-
-    return null
+    }).then(() => null)
   }
 
   override update = undefined
 
   override async presentDecisionText(chatId: string, content: string): Promise<void> {
-    await this._sendText(chatId, content)
+    await this._deliver(chatId, (diagnostic) => this._sendText(chatId, content, diagnostic))
   }
 
   override getCapabilities(): import('./capabilities.ts').ChannelCapabilities {
@@ -328,6 +339,16 @@ export class WeChatChannel extends AbstractChannel {
   }
 
   // ── Login ─────────────────────────────────────────────────────────────────
+
+  async startLogin(): Promise<WeixinLoginStartResult> {
+    return this._startLogin()
+  }
+
+  async waitForLogin(): Promise<WeixinLoginWaitResult> {
+    const result = await this._waitForLogin(20_000)
+    if (result.connected) this._startMonitor()
+    return result
+  }
 
   private async _startLogin(): Promise<WeixinLoginStartResult> {
     const baseUrl = this.repository.getLatestAccount()?.baseUrl ??
@@ -428,7 +449,9 @@ export class WeChatChannel extends AbstractChannel {
       linkedUserId: status.ilink_user_id,
       savedAt: new Date().toISOString(),
     }
+    this.reportIdentity(account.accountId)
     this.repository.saveAccount(account)
+    this.reportState('connected')
     this.repository.updateLoginStatus(
       session.sessionKey,
       'confirmed',
@@ -516,6 +539,7 @@ export class WeChatChannel extends AbstractChannel {
           continue
         }
 
+        this.reportState('connected')
         backoffMs = WEIXIN_POLL_INTERVAL_MS
 
         if (response.msgs?.length) {
@@ -534,7 +558,8 @@ export class WeChatChannel extends AbstractChannel {
           WEIXIN_POLL_INTERVAL_MS
         await sleep(Math.max(waitMs, 200))
       } catch (err) {
-        console.error('[wechat] Poll error:', err)
+        console.error('[wechat] Poll failed')
+        this.reportState('error')
         backoffMs = Math.min(backoffMs * 2, 30_000)
         await sleep(backoffMs)
       }
@@ -568,9 +593,7 @@ export class WeChatChannel extends AbstractChannel {
       return
     }
 
-    if (msg.context_token && chatId) {
-      this.repository.saveContextToken(chatId, msg.context_token)
-    }
+    if (!this.isAllowed(chatId)) return
 
     let mediaResult: InboundMediaResult | null = null
     const mainMedia = findMainMediaItem(msg.item_list)
@@ -599,18 +622,69 @@ export class WeChatChannel extends AbstractChannel {
       return
     }
 
+    if (msg.context_token?.trim()) {
+      const previousToken = this.repository.getContextToken(chatId)
+      this.repository.saveContextToken(chatId, msg.context_token)
+      if (previousToken !== msg.context_token) this.repository.enableUndeliveredNotice(chatId)
+    }
+
     console.info(`[wechat] Incoming from ${chatId}: "${text.slice(0, 80)}"`)
     const media = mediaResult ? [mediaResult.filePath] : undefined
-    await this.handleIncoming(chatId, chatId, text, String(msg.message_id ?? ''), undefined, media)
+    await this.handleIncoming(chatId, chatId, text, String(msg.message_id ?? ''), { isGroup: false }, media)
   }
 
   // ── Outbound helpers ──────────────────────────────────────────────────────
 
-  private async _sendText(chatId: string, text: string): Promise<void> {
+  /** Serialize per chat: one notice snapshot cannot be acknowledged twice. */
+  private async _deliver(chatId: string, operation: (diagnostic: WeixinSendDiagnostic) => Promise<void>): Promise<void> {
+    const previous = this.deliveryQueues.get(chatId) ?? Promise.resolve()
+    const current = previous.catch(() => {}).then(async () => {
+      const diagnostic = { replyId: crypto.randomUUID(), part: 0 }
+      const started = performance.now()
+      const log = (event: string, reason?: string) => console.info('[wechat] reply ' + JSON.stringify({
+        replyId: diagnostic.replyId, event, partsAttempted: diagnostic.part,
+        elapsedMs: Math.round(performance.now() - started), ...(reason ? { reason } : {}),
+      }))
+      log('start')
+      try { await operation(diagnostic); log('api_accepted') } catch (error) {
+        const safe = error instanceof WeixinDeliveryError ? error : new WeixinDeliveryError('local_failure')
+        log('failed', safe.reason)
+        this.repository.recordUndelivered(chatId)
+        throw safe
+      }
+    })
+    this.deliveryQueues.set(chatId, current)
+    try { await current } finally {
+      if (this.deliveryQueues.get(chatId) === current) this.deliveryQueues.delete(chatId)
+    }
+  }
+
+  private async _sendTextWithNotice(chatId: string, text: string, diagnostic: WeixinSendDiagnostic): Promise<void> {
+    const count = this.repository.getUndelivered(chatId)?.eligibleCount ?? 0
+    await this._sendText(chatId, count ? text + '\n\n此前有' + count + '条回复未送达，可在Web查看' : text, diagnostic)
+    if (count) this.repository.acknowledgeUndelivered(chatId, count)
+  }
+
+  private _logSendPreflight(chatId: string, diagnostic: WeixinSendDiagnostic): void {
+    diagnostic.part++
+    const record = this.repository.getContextTokenRecord(chatId)
+    const timestamp = record?.updatedAt ? Date.parse(record.updatedAt) : NaN
+    const age = Date.now() - timestamp
+    console.info('[wechat] part ' + JSON.stringify({
+      ...diagnostic, event: 'preflight',
+      accountTokenPresent: Boolean(this.repository.getLatestAccount()?.botToken?.trim()),
+      contextTokenPresent: Boolean(record?.token?.trim()),
+      ...(Number.isFinite(age) && age >= 0 ? { contextTokenAgeMs: age } : {}),
+    }))
+  }
+
+  private async _sendText(chatId: string, text: string, diagnostic: WeixinSendDiagnostic): Promise<void> {
+    this._logSendPreflight(chatId, diagnostic)
     const account = this.repository.getLatestAccount()
-    if (!account) throw new Error('Not logged in')
+    if (!account?.botToken?.trim()) throw new WeixinDeliveryError('missing_account')
 
     const contextToken = this.repository.getContextToken(chatId)
+    if (!contextToken?.trim()) throw new WeixinDeliveryError('missing_context_token')
     const item: WeixinMessageItem = {
       type: WeixinMessageItemType.TEXT,
       text_item: { text },
@@ -623,14 +697,16 @@ export class WeChatChannel extends AbstractChannel {
       item_list: [item],
       context_token: contextToken ?? undefined,
     }
-    await this.apiClient.sendMessage(account.baseUrl, account.botToken, { msg })
+    await this.apiClient.sendMessage(account.baseUrl, account.botToken, { msg }, { ...diagnostic })
   }
 
-  private async _sendImage(chatId: string, imageBase64: string): Promise<void> {
+  private async _sendImage(chatId: string, imageBase64: string, diagnostic: WeixinSendDiagnostic): Promise<void> {
+    this._logSendPreflight(chatId, diagnostic)
     const account = this.repository.getLatestAccount()
-    if (!account) throw new Error('Not logged in')
+    if (!account?.botToken?.trim()) throw new WeixinDeliveryError('missing_account')
 
     const contextToken = this.repository.getContextToken(chatId)
+    if (!contextToken?.trim()) throw new WeixinDeliveryError('missing_context_token')
     const item: WeixinMessageItem = {
       type: WeixinMessageItemType.IMAGE,
       image_item: { data: imageBase64, format: 'base64' },
@@ -643,6 +719,6 @@ export class WeChatChannel extends AbstractChannel {
       item_list: [item],
       context_token: contextToken ?? undefined,
     }
-    await this.apiClient.sendMessage(account.baseUrl, account.botToken, { msg })
+    await this.apiClient.sendMessage(account.baseUrl, account.botToken, { msg }, { ...diagnostic })
   }
 }

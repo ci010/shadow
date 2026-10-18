@@ -5,13 +5,15 @@ import { ConfigStore, REDACTED_SECRET } from '../config/store.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { CHANNEL_IDS, type ChannelId, type ChannelSetupStatus, type ChannelState } from './setup-contract.ts'
 
-const labels: Record<ChannelId, string> = { qq: 'QQ', feishu: 'Feishu', discord: 'Discord' }
+const labels: Record<ChannelId, string> = { qq: 'QQ', feishu: 'Feishu', discord: 'Discord', wechat: 'WeChat' }
 export const secretFields: Record<ChannelId, readonly string[]> = {
   qq: ['secret', 'token'],
   feishu: ['appSecret', 'encryptKey', 'verificationToken'],
   discord: ['token'],
+  wechat: [],
 }
 const publicFields: Record<ChannelId, readonly string[]> = {
+  wechat: ['allowFrom'],
   qq: ['appId', 'sandbox', 'intents', 'markdown', 'triggerMode', 'allowFrom', 'adminChats', 'trustedChats'],
   feishu: ['appId', 'allowFrom', 'adminChats', 'trustedChats'],
   discord: ['triggerMode', 'reactionEmoji', 'memberIntent', 'allowFrom', 'adminChats', 'trustedChats'],
@@ -25,6 +27,7 @@ const common = {
   trustedChats: z.array(text.transform(value => value.trim()).pipe(z.string().min(1))).max(1000).optional(),
 }
 export const channelPatchSchemas = {
+  wechat: z.object({ enabled: common.enabled, allowFrom: common.allowFrom }).strict(),
   qq: z.object({
     ...common, appId: text.optional(), secret: secret.optional(), token: secret.optional(),
     sandbox: z.boolean().optional(), intents: z.number().int().min(0).max(0xffffffff).optional(),
@@ -49,6 +52,7 @@ export function isChannelId(value: string): value is ChannelId {
 export function channelConfigured(id: ChannelId, config: Config['channels']): boolean {
   const entry = config[id]
   if (!entry) return false
+  if (id === 'wechat') return true // Credentials belong to the instance-scoped iLink repository, not config.
   if (id === 'qq') return !!config.qq?.appId?.trim() && !!config.qq?.secret?.trim()
   if (id === 'feishu') return !!config.feishu?.appId?.trim() && !!config.feishu?.appSecret?.trim()
   return !!config.discord?.token?.trim()
@@ -112,6 +116,7 @@ export function channelSetupPlugin(options: {
       c.json({ channels: CHANNEL_IDS.map((id) => options.runtime.status(id)) }))
     app.patch('/api/channels/:id', async (c) => {
       const id = c.req.param('id')
+      if (id === 'wechat') return c.json({ error: 'wechat_personal_bot_required' }, 400)
       if (!isChannelId(id)) return c.json({ error: 'unknown_channel' }, 404)
       let body: unknown
       try {

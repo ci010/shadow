@@ -1,11 +1,38 @@
 # Messaging channels
 
-Project settings → **Bots** configures QQ, Feishu, and Discord instances.
+Project settings → **Bots** configures QQ, Feishu, Discord, and personal-only WeChat/iLink instances.
 Each Project may have several bots per platform, with separate credentials,
 sender policies, and runtime status. Providers and device pairing remain
 App-wide. A saved bot configuration is not proof of platform delivery or
 verified connectivity; the backend can be locally ready while a bot is
-offline. Legacy WeChat/iLink adapters are not started by Project runtimes.
+offline. Legacy global WeChat configuration is not imported or started by Project runtimes.
+
+## WeChat personal entry (iLink)
+
+WeChat is available only for **personal** Bots, never service Bots. Both creation
+and role changes are validated by the backend, including persisted-record loading.
+Select Personal assistant → WeChat, add a Bot, then save and connect. Generate the
+login QR code, scan and confirm with your own WeChat account, and use **Check
+WeChat login** (repeat if still waiting; regenerate an expired code). Next generate
+an owner pairing challenge, send the exact `/shadow-pair …` command in the Bot's
+private chat, inspect the candidate ID in Web, and confirm. Until confirmation,
+business messages are blocked. Only verified-owner direct messages enter the
+existing Project session pipeline; no second agent/message loop is introduced.
+
+Account tokens, login sessions, sync cursors, context tokens and downloaded media
+are isolated under the Project's `state/wechat/<bot-id>/` storage. Tokens are not
+returned by the Bots API. The authenticated, Project-local login endpoints are
+`POST /api/channels/:id/wechat/login` and `/wait`; legacy `/wechat/*` routes are
+not mounted by scoped Bots. Re-login requires revoking the owner first, which
+also disconnects the Bot. Revocation does not delete stored iLink credentials;
+reconnecting may resume them, but still requires fresh Web owner confirmation.
+Duplicate iLink account identities cannot run concurrently across Projects/Bots.
+
+This reuses the existing iLink API and polling adapter, not desktop automation.
+Availability depends on WeChat/iLink account eligibility, platform access and
+network connectivity. Live QR scan and real-account delivery are not covered by
+fixture tests. WeChat groups, service assignments, desktop WeChat, streaming
+updates and threads are not supported by this entry.
 
 Bot conversations display the last known group/channel name or, for direct
 messages, the other participant's display name. Names are persisted across
@@ -31,6 +58,79 @@ Listing a Discord server or parent channel does not implicitly trust its
 threads. Trust does not grant administrator or tool permissions. Changing a
 policy refreshes future reusable-conversation requests, but cannot retract
 an in-flight reply.
+
+## Choose a Bot's role
+
+Create a connection with an explicit purpose rather than inferring its authority
+from a private message:
+
+- **Connect my assistant (personal):** a channel entry point for this Project's
+  owner. Only the verified owner's direct messages enter ordinary Project
+  assistant inference. Group messages and other senders are rejected. The
+  assistant uses normal dynamic Skill discovery and activation, not a published
+  service Skill bundle. Existing role/tool limits and protected-operation review
+  still apply; this does not make Web-only management or computer tools available
+  on a messaging platform. QQ/Discord still use ordinary replies for questions.
+- **Create a service Bot (service):** a restricted employee with an explicitly
+  configured Agent, Skills, tools and resources. Owner DMs do not switch it to a
+  personal assistant. QQ/Feishu require a published authoring binding; Discord
+  requires an integration assignment. Unassigned conversations are rejected,
+  rather than falling back to ordinary Project assistant capabilities.
+
+Existing version-2 connections without a purpose appear as legacy/unclassified
+and cannot handle business messages until explicitly configured. They are not
+silently converted into personal assistants. A Bot with conversation history
+cannot switch roles: create another Bot instead. A history-free Bot must be
+stopped before changing its role. Platform credential/identity uniqueness checks
+still apply when creating connections.
+
+### Verify the personal assistant's owner
+
+Save and connect the personal Bot, then start owner pairing from its authenticated
+Shadow settings page. Shadow generates a short-lived challenge. Send
+`/shadow-pair <challenge>` to that exact Bot in a private platform conversation,
+then return to Shadow, inspect the candidate platform sender ID, and explicitly
+confirm it. The platform message registers a candidate only; it does not grant
+admin access or enter model inference. Reject an unfamiliar candidate and restart
+pairing. Do not share the challenge or paste it into group chat.
+
+Challenges expire after five minutes and are held only in memory. Confirmation
+consumes the challenge; restarting, reconnecting or disabling the Bot invalidates
+pending pairing. Pairing is scoped to the exact Project and Bot. An allowlist,
+platform administrator role, display name or user-profile link is not verified
+Project ownership. Revoke the owner from Shadow to disable the personal entry.
+
+Disabling, deleting or revoking a Bot retires its idle conversation contexts and
+related descendants before reducing access. If a related context is active,
+queued or being prepared, the operation returns `bot_context_busy` (HTTP 409)
+instead of claiming it cancelled execution. Let the work finish or stop it through
+its supported execution controls, then retry; a failed operation is not proof
+that authorization was revoked.
+
+### Skills and permissions
+
+For a personal entry, reading a Skill can register permitted tool declarations in
+the current session; it does not run tools or approve side effects. For a service
+Bot, select and review the required Skills in its published configuration. Skill
+selection is not blanket authorization: Agent tool/module ceilings, readable
+resources and applicable capability grants must also allow the operation. Prefer
+scoped read-only capabilities for FAQ/status roles. Raw native filesystem/network
+modules have host authority and are not sandboxed by `readFolders` or grants.
+
+### Owner setup API
+
+All routes below use the existing authenticated administrator boundary under
+`/api/channels`. Creating an instance requires `purpose: "personal" | "service"`;
+status returns its purpose and `ownerVerified`, not the stored owner record.
+
+- `POST /:id/owner-challenge`: start pairing; returns `challenge` and `expiresAt`.
+- `GET /:id/owner-candidate`: inspect the pending candidate and expiry.
+- `POST /:id/owner-confirm` with `{ "challenge": "..." }`: confirm the exact
+  candidate from the authenticated owner interface.
+- `DELETE /:id/owner`: revoke the owner and disable the connection.
+
+Saving configuration, pairing and passing synthetic tests are not proof of live
+platform message delivery. WeChat is supported only through the personal iLink entry described above.
 
 ## Discord Agents and channel access
 
@@ -383,19 +483,23 @@ the need to recognize `mentions[].is_you` for model triggering.
 Rich-message, quoted-file and binary frame fixtures cover the adapter, provider
 input and both session stores; live quoted-file delivery is still unverified.
 
-## QQ GROUP notifications and passive replies
+## QQ GROUP/C2C notifications and passive replies
 
 Ordinary GROUP/C2C replies send the final summary, rather than every tool
 result or intermediate model update. Questions and final errors are separate
 messages. Guild channels and DMs use their existing progressive delivery.
 
-GROUP responses without an originating QQ message ID (for example, an
-asynchronous result handed back from another session) use proactive sending:
-the request omits `msg_id` and its paired `msg_seq`. Enable the QQ client's
-**allow the robot to speak proactively in the group** setting. QQ enforces its
-own proactive permissions and rate limits; enabling the setting does not
-guarantee delivery. Text, Markdown and uploaded media use the same routing.
-C2C sending remains passive-only.
+GROUP and C2C responses without an originating QQ message ID (for example,
+an asynchronous result handed back from another session) use proactive sending:
+the request omits `msg_id` and its paired `msg_seq`. For C2C, enable the robot's
+**active message push** setting in the QQ client; for GROUP, enable **allow the
+robot to speak proactively in the group**. These are QQ recipient preferences,
+not a Shadow setting. QQ enforces its own proactive permissions and rate limits;
+enabling the setting does not guarantee delivery. Text, Markdown and uploaded
+media use the same routing. See the current [message overview](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html)
+and [C2C push-enabled event](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/c2c_msg_receive.html).
+Shadow does not require observing that event after startup: the send endpoint
+checks the user's current preference, including when it was enabled earlier.
 
 An explicitly supplied passive source never falls back to proactive sending,
 including after expiry, quota exhaustion, platform rejection or an ambiguous
@@ -426,3 +530,15 @@ and [C2C endpoint](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users
 for current upstream rules. The C2C overview and `msg_id` description have
 historically stated different windows; do not infer a longer safe deadline
 from the overview alone.
+
+## Bot setup from Web Chat
+
+The built-in `bot-setup` skill and lazy-loaded `bot_setup` tool provide a Chat-local setup entry. In an authenticated Main administrator Web chat, ask to add a Bot, choose personal/service, platform and name, and open the inline setup card. No Channels/settings-page navigation is needed for connection configuration.
+
+- `create` creates a disconnected Bot in the runtime-bound Project; `connection` toggles an already configured connection; `status` returns the existing redacted Bot status contract.
+- `open` waits while the administrator uses the trusted inline card. App IDs, tokens and secrets go from that card directly to the existing authorized Project channel API, not through tool arguments/results, the model, ordinary chat messages, an adhoc I/O socket or a readable temporary file. Use HTTPS or loopback HTTP; the Chat card refuses insecure non-loopback transport. Never paste a secret into ordinary chat.
+- The card reuses the existing Bot connection editor: WeChat personal-only QR login/check, connection status, owner challenge/candidate review and explicit human confirmation. Successful WeChat login alone is not owner verification. The tool deliberately has no owner-confirm operation.
+- The invitation is in memory, bound to Project and logical Web session, expires after ten minutes and is cleared on tool cancellation/runtime shutdown. Done/Cancel closes it. Changing Project/chat unmounts its private inputs; the old invitation expires or can be cancelled on return. Aborting a request cannot guarantee rollback of an already committed HTTP mutation: check status before retrying.
+- Only host-stamped Web administrator contexts may invoke the tool. A paired channel owner, group chat, cross-Project context, script invocation or remote workdir cannot use it. Every card HTTP operation still passes existing server management authorization; no HTTP credential is exposed to the agent.
+
+**Current service boundary:** creating/configuring a service Bot connection is available inside Chat, but this card does not implement Agent creation/publication or grant a binding. Existing explicit published Agent/skill/tool/resource restrictions continue to apply. An unbound service Bot is not ready for business traffic. Do not report a complete service-publication setup based solely on connection status. This is a connection/personal-owner setup workflow, not a replacement for the separate authoring publication workflow.

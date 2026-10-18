@@ -10,10 +10,12 @@
     <p v-if="notice" class="channel-notice" role="status">{{ notice }}</p>
     <p v-if="reviewLinkError" class="channel-error" role="alert">{{ reviewLinkError }}</p>
     <form v-if="available" class="bot-create" @submit.prevent="addBot">
-      <label>{{ t('Platform') }}<UiSelect v-model="newPlatform" :disabled="!!saving"><option v-for="item in channelDefinitions" :key="item.id" :value="item.id">{{ item.label }}</option></UiSelect></label>
+      <label>{{ t('Role') }}<UiSelect v-model="newPurpose" required :disabled="!!saving"><option value="" disabled>{{ t('Select a role') }}</option><option value="personal">{{ t('Personal assistant — owner-only Project entry') }}</option><option value="service">{{ t('Service Bot — explicitly restricted Agent') }}</option></UiSelect></label>
+      <label>{{ t('Platform') }}<UiSelect v-model="newPlatform" :disabled="!!saving"><option v-for="item in channelDefinitions" :key="item.id" :value="item.id" :disabled="item.id === 'wechat' && newPurpose !== 'personal'">{{ item.id === 'wechat' ? t('WeChat (personal Bots only)') : item.label }}</option></UiSelect></label>
       <label>{{ t('Bot name') }}<input v-model="newName" maxlength="100" required :disabled="!!saving" :placeholder="t('Name this connection')" /></label>
-      <button :disabled="!!saving || !newName.trim()">{{ t('Add bot') }}</button>
+      <button :disabled="!!saving || !newName.trim() || !newPurpose">{{ t('Add bot') }}</button>
     </form>
+    <p>{{ t('WeChat supports personal Bots only.') }}</p>
     <p v-if="!loading && !listError && !channels.length" class="channel-notice">{{ t('No bots yet. Add a bot, then configure its credentials to connect it.') }}</p>
     <div class="channel-list">
       <article v-for="channel in channels" :key="channel.id" class="channel-row" :data-channel="channel.id">
@@ -22,13 +24,55 @@
           <div class="channel-copy"><h3>{{ channel.displayName }}</h3><p>{{ definition(channel.platform).label }} &middot; {{ definition(channel.platform).description }}</p></div>
           <span class="channel-state" :data-state="channel.state"><span class="channel-dot" aria-hidden="true" />{{ channelStateLabel(botChannel(channel)) }}</span>
           <div class="channel-actions">
-            <button v-if="channel.platform === 'discord'" :aria-expanded="accessBot === channel.id" @click="accessBot = accessBot === channel.id ? undefined : channel.id">{{ t('Discord access') }}</button>
+            <button v-if="channel.platform === 'discord' && channel.purpose === 'service'" :aria-expanded="accessBot === channel.id" @click="accessBot = accessBot === channel.id ? undefined : channel.id">{{ t('Discord access') }}</button>
             <button :disabled="!!saving" :aria-expanded="expanded === channel.id" :aria-controls="`channel-${channel.id}-editor`" @click="configure(channel)">{{ channel.configured ? t('Configure') : t('Set up') }}</button>
             <button v-if="channel.enabled" :disabled="!!saving" @click="changeConnection(channel, false)">{{ t('Disconnect') }}</button>
             <button v-else-if="channel.configured" :disabled="!!saving" @click="changeConnection(channel, true)">{{ t('Connect') }}</button>
             <button :disabled="!!saving" @click="removeBot(channel)">{{ t('Remove') }}</button>
           </div>
         </header>
+        <p>{{ channel.purpose === 'personal' ? t('Personal assistant: verified owner direct messages only. Project skills and approved permissions apply; management remains Web-only where required.') : channel.purpose === 'service' ? t('Service Bot: explicit published Agent, skills, tools and resources required. Owner DMs do not become personal sessions.') : t('Legacy / unclassified: business requests blocked until explicitly configured.') }}</p>
+        <div v-if="!channel.enabled">
+          <small>{{ t('Role changes require disconnecting and no existing conversation history. Create a new Bot for an existing connection with history.') }}</small>
+          <button v-if="channel.purpose !== 'personal'" @click="changePurpose(channel, 'personal')">{{ t('Configure as personal assistant') }}</button>
+          <button v-if="channel.purpose !== 'service' && channel.platform !== 'wechat'" @click="changePurpose(channel, 'service')">{{ t('Configure as service Bot') }}</button>
+        </div>
+        <section v-if="channel.purpose === 'personal'" class="owner-setup" :class="{ 'owner-setup--ready': channel.ownerVerified }" :aria-label="t('Personal Bot setup')">
+          <header class="owner-setup-heading">
+            <div><span class="setup-eyebrow">{{ t('Personal Bot setup') }}</span><h4>{{ channel.ownerVerified ? t('Owner paired') : t('One more step: pair your account') }}</h4></div>
+            <span class="setup-badge">{{ channel.ownerVerified ? t('Owner paired') : t('Pairing required') }}</span>
+          </header>
+          <p class="setup-summary">{{ channel.ownerVerified ? t('Only your verified account can chat with this personal Bot. Connect the platform before sending messages.') : t('A platform connection alone cannot receive assistant requests. Pair your own account below to unlock private chat.') }}</p>
+          <ol class="setup-steps">
+            <li :class="{ 'step-done': channel.state === 'connected', 'step-current': channel.state !== 'connected' }"><span class="step-number">1</span><div><strong>{{ t('Connect platform') }}</strong><small>{{ channelStateLabel(botChannel(channel)) }}</small></div></li>
+            <li :class="{ 'step-done': channel.ownerVerified, 'step-current': channel.state === 'connected' && !channel.ownerVerified }"><span class="step-number">2</span><div><strong>{{ t('Pair your account') }}</strong><small>{{ channel.ownerVerified ? t('Verified owner bound') : t('Required before chatting') }}</small></div></li>
+            <li :class="{ 'step-current': channel.ownerVerified && channel.state === 'connected' }"><span class="step-number">3</span><div><strong>{{ t('Start a private chat') }}</strong><small>{{ channel.ownerVerified && channel.state === 'connected' ? t('Ready for your messages') : t('Available after connection and pairing') }}</small></div></li>
+          </ol>
+          <div v-if="!channel.ownerVerified" class="setup-next">
+            <template v-if="channel.state !== 'connected'">
+              <strong>{{ t('First, connect this Bot') }}</strong>
+              <p>{{ t('Open configuration to save credentials and connect. Then return here to pair your account.') }}</p>
+              <button class="channel-primary" :disabled="!!saving" @click="configure(channel)">{{ t('Configure') }}</button>
+            </template>
+            <template v-else>
+              <strong>{{ t('Next: verify that this account is yours') }}</strong>
+              <p v-if="!pairings[channel.id]">{{ t('Generate a temporary command, send it to this Bot in your own private chat, then return here to confirm your account.') }}</p>
+              <button v-if="!pairings[channel.id]" class="channel-primary" :disabled="!!saving" @click="pairOwner(channel)">{{ t('Start owner pairing') }}</button>
+              <template v-else>
+                <p>{{ t('Copy the command below and send it in your own private chat with this Bot within five minutes. No reply in the platform is expected; return here after sending.') }}</p>
+                <BotPairingCommand :challenge="pairings[channel.id]!" />
+                <div class="setup-confirm-actions"><button class="channel-primary" :disabled="!!saving" @click="confirmOwner(channel)">{{ t('I sent it — verify my account') }}</button><button :disabled="!!saving" @click="pairOwner(channel)">{{ t('Generate a new command') }}</button></div>
+                <small>{{ t('You will review the platform user ID before binding. Only confirm your own account.') }}</small>
+              </template>
+            </template>
+          </div>
+          <button v-else :disabled="!!saving" @click="revokeOwner(channel)">{{ t('Revoke owner and disconnect') }}</button>
+        </section>
+        <div v-if="channel.platform === 'wechat' && channel.enabled && !channel.ownerVerified">
+          <button :disabled="!!saving" @click="wechatLogin(channel, 'login')">{{ t('Generate WeChat login QR code') }}</button>
+          <button :disabled="!!saving" @click="wechatLogin(channel, 'wait')">{{ t('Check WeChat login') }}</button>
+          <img v-if="wechatQr[channel.id]" :src="wechatQr[channel.id]" :alt="t('WeChat login QR code')" width="240" referrerpolicy="no-referrer" />
+        </div>
         <p v-if="channel.message" class="channel-message" :class="{ 'channel-error': channel.state === 'error' }">{{ channel.message }}</p>
         <p v-if="errors[channel.id]" class="channel-error" role="alert">{{ errors[channel.id] }}</p>
         <p v-if="saving === channel.id" role="status">{{ t('Updating') }} {{ channel.displayName }} {{ t('connection...') }}</p>
@@ -39,7 +83,7 @@
             <div class="channel-instructions">
               <strong>{{ t('Before you connect') }}</strong>
               <ol><li v-for="instruction in definition(channel.platform).instructions" :key="instruction">{{ instruction }}</li></ol>
-              <button type="button" class="portal-link" @click="openPortal(channel)">{{ t('Open') }} {{ definition(channel.platform).label }} {{ t('developer portal') }} <span class="i-lucide-arrow-up-right" aria-hidden="true" /></button>
+              <button v-if="definition(channel.platform).portal" type="button" class="portal-link" @click="openPortal(channel)">{{ t('Open') }} {{ definition(channel.platform).label }} {{ t('developer portal') }} <span class="i-lucide-arrow-up-right" aria-hidden="true" /></button>
             </div>
             <div class="channel-fields">
               <template v-for="field in definition(channel.platform).fields.filter(field => !field.advanced)" :key="field.key">
@@ -76,7 +120,7 @@
             </div>
           </fieldset>
         </form>
-        <DiscordAccess v-if="available && accessBot === channel.id && channel.platform === 'discord'" :api-base="apiBase" :project-id="projectId" :bot="channel" :active="active"
+        <DiscordAccess v-if="available && accessBot === channel.id && channel.platform === 'discord' && channel.purpose === 'service'" :api-base="apiBase" :project-id="projectId" :bot="channel" :active="active"
           :requested-review-id="requestedReviewId" />
       </article>
     </div>
@@ -85,11 +129,12 @@
 
 <script setup lang="ts">
 import UiSelect from './UiSelect.vue'
+import BotPairingCommand from './BotPairingCommand.vue'
 import { t } from '../i18n.ts'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import type { ChannelId } from '../../../src/channels/setup-contract.ts'
 import { channelDefinitions, channelStateLabel, type ChannelDraft } from '../channel-settings.ts'
-import { botChannel, botDraft, botPatch, createBotSettingsClient, type BotInstanceStatus } from '../bot-settings.ts'
+import { botChannel, botDraft, botPatch, createBotSettingsClient, wechatLoginQr, type BotInstanceStatus } from '../bot-settings.ts'
 import DiscordAccess from './DiscordAccess.vue'
 
 const props = defineProps<{ apiBase: string; projectId: string; available: boolean; active: boolean; reviewBotId?: string; requestedReviewId?: string }>()
@@ -101,6 +146,46 @@ const accessBot = ref<string>()
 const reviewLinkError = ref('')
 const newPlatform = ref<ChannelId>('qq')
 const newName = ref('')
+const newPurpose = ref<'' | 'personal' | 'service'>('')
+const wechatQr = ref<Record<string, string>>({})
+watch(newPurpose, purpose => { if (purpose !== 'personal' && newPlatform.value === 'wechat') newPlatform.value = 'qq' })
+async function wechatLogin(bot: BotInstanceStatus, operation: 'login' | 'wait') {
+  if (saving.value || !props.available) return
+  stopPolling()
+  const controller = new AbortController()
+  mutation = controller
+  saving.value = bot.id
+  try {
+    const result = await createBotSettingsClient(props.apiBase, props.projectId).wechat(bot.id, operation, controller.signal)
+    if (controller.signal.aborted) return
+    if (operation === 'login') wechatQr.value[bot.id] = wechatLoginQr(result)
+    if (result.connected === true) delete wechatQr.value[bot.id]
+    notice.value = typeof result.message === 'string' ? result.message : t('Scan the QR code with your own WeChat account and confirm, then check login.')
+    errors.value[bot.id] = ''
+  } catch { if (!controller.signal.aborted) errors.value[bot.id] = t('WeChat login failed. Connect an unbound personal Bot and retry.') }
+  finally { if (mutation === controller) { mutation = undefined; saving.value = undefined; await refresh() } }
+}
+const pairings = ref<Record<string, string>>({})
+async function changePurpose(bot: BotInstanceStatus, purpose: 'personal' | 'service') { await update(bot, { purpose }) }
+async function pairOwner(bot: BotInstanceStatus) {
+  errors.value[bot.id] = ''
+  try { pairings.value[bot.id] = (await createBotSettingsClient(props.apiBase, props.projectId).challenge(bot.id)).challenge } catch { errors.value[bot.id] = t('Could not generate owner challenge. Connect the unbound personal Bot first.') }
+}
+async function confirmOwner(bot: BotInstanceStatus) {
+  const client = createBotSettingsClient(props.apiBase, props.projectId)
+  try {
+    const { candidate } = await client.candidate(bot.id)
+    if (!candidate) { errors.value[bot.id] = t('No private-chat candidate yet, or challenge expired.'); return }
+    if (!window.confirm(t('Bind platform user {candidate} as the sole owner? Verify this is your own platform account.', { candidate }))) return
+    await client.confirm(bot.id, pairings.value[bot.id]!)
+    delete pairings.value[bot.id]
+    errors.value[bot.id] = ''
+    await refresh()
+  } catch { errors.value[bot.id] = t('Owner confirmation failed; generate a new challenge.') }
+}
+async function revokeOwner(bot: BotInstanceStatus) {
+  try { await createBotSettingsClient(props.apiBase, props.projectId).revoke(bot.id); await refresh() } catch { errors.value[bot.id] = t('Revocation not applied. Wait for active or queued work (including child agents) to finish or cancel it in Web, then retry.') }
+}
 const loading = ref(false)
 const listError = ref('')
 const notice = ref('')
@@ -141,7 +226,7 @@ function cancelConfiguration(channel: BotInstanceStatus) {
   errors.value[channel.id] = ''
   expanded.value = undefined
 }
-async function update(channel: BotInstanceStatus, patch: { displayName?: string; config?: Record<string, unknown> }, resetDraft = true) {
+async function update(channel: BotInstanceStatus, patch: { purpose?: 'personal' | 'service'; displayName?: string; config?: Record<string, unknown> }, resetDraft = true) {
   if (saving.value || !props.available) return
   stopPolling()
   const controller = new AbortController()
@@ -176,6 +261,7 @@ async function openPortal(channel: BotInstanceStatus) {
   } catch { errors.value[channel.id] = t('Could not open the browser. Open {portal} manually.', { portal: definition(channel.platform).portal }) }
 }
 async function addBot() {
+  if (!newPurpose.value) return
   if (saving.value || !props.available) return
   stopPolling()
   const controller = new AbortController()
@@ -183,7 +269,7 @@ async function addBot() {
   saving.value = 'create'
   listError.value = ''
   try {
-    const bot = await createBotSettingsClient(props.apiBase, props.projectId).create(newPlatform.value, newName.value, controller.signal)
+    const bot = await createBotSettingsClient(props.apiBase, props.projectId).create(newPlatform.value, newName.value, controller.signal, newPurpose.value)
     if (controller.signal.aborted) return
     channels.value.push(bot)
     configure(bot)
@@ -214,6 +300,7 @@ watch([() => props.apiBase, () => props.projectId, () => props.available], () =>
   mutation?.abort()
   mutation = undefined
   saving.value = undefined
+  wechatQr.value = {}
   channels.value = []
   drafts.value = {}
   errors.value = {}
@@ -292,4 +379,24 @@ button:where(:not(.ui-select)):focus-visible, input:focus-visible, textarea:focu
   button:where(:not(.ui-select)) { min-height: 44px; }
   .channel-row { padding: 20px 0; }
 }
+.owner-setup { margin-top: 20px; padding: 20px; border: 1px solid var(--c-blue); border-radius: var(--radius-control); background: var(--c-bg-soft); }
+.owner-setup--ready { border-color: var(--c-border); }
+.owner-setup-heading { display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 12px; }
+.setup-eyebrow { font-size: 12px; color: var(--c-text-secondary); }
+.owner-setup h4 { margin: 6px 0 0; font-size: 18px; }
+.setup-badge { border: 1px solid var(--c-border); padding: 5px 10px; font-size: 12px; border-radius: var(--radius-control); color: var(--c-warn); }
+.owner-setup--ready .setup-badge { color: var(--c-git-added); }
+.setup-summary, .setup-next p { font-size: 13px; line-height: 1.7; color: var(--c-text-secondary); }
+.setup-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0; margin: 20px 0; list-style: none; }
+.setup-steps li { display: flex; align-items: start; gap: 10px; padding: 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); }
+.step-number { display: grid; place-items: center; flex: 0 0 26px; height: 26px; border: 1px solid var(--c-border); border-radius: 50%; font-size: 13px; }
+.setup-steps strong { font-size: 13px; }
+.setup-steps small, .setup-next > small { display: block; font-size: 12px; color: var(--c-text-secondary); margin-top: 6px; line-height: 1.6; }
+.setup-steps .step-current { border-color: var(--c-blue); }
+.step-current .step-number { color: var(--c-text-on-primary); background: var(--c-primary-bg); }
+.step-done .step-number { color: var(--c-git-added); }
+.setup-next { border-top: 1px solid var(--c-border); padding-top: 18px; }
+.setup-next > strong { font-size: 14px; }
+.setup-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 700px) { .setup-steps { grid-template-columns: 1fr; } .owner-setup { padding: 16px; } }
 </style>

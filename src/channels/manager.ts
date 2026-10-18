@@ -1,3 +1,5 @@
+import { projectStoragePath } from '../utils/data-paths.ts'
+import { randomBytes } from 'node:crypto'
 import { ChannelAdmissionError, ChannelConnectionError, type BaseChannel, type ChannelDecision } from './base.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import { YieldError } from '../sessions/yield.ts'
@@ -13,6 +15,7 @@ import { QQChannel } from './qq.ts'
 import { QQDeliveryError } from './qq-replies.ts'
 import { WebChannel } from './web.ts'
 import { WeChatChannel } from './wechat.ts'
+import { WeixinDeliveryError } from './wechat/sdk.ts'
 import { CHANNEL_IDS, type BotInstanceStatus, type ChannelId, type ChannelSetupStatus, type ChannelState } from './setup-contract.ts'
 import { channelConfigured, channelSetupStatus, ChannelSetupError, isChannelId } from './setup.ts'
 import type { BotInstance, BotInstanceStore } from './bot-store.ts'
@@ -30,6 +33,7 @@ export interface ChannelManagerOptions {
   /** Defaults to the construction scope; the host closes it after channel shutdown. */
   scope?: ProjectScope
   realtime?: RealtimePublisher
+  serviceAssigned?: (address: ChannelAddress) => boolean
   discordIntegration?: DiscordIntegration
 }
 
@@ -41,6 +45,7 @@ const scopedApps = new WeakMap<Hono, ChannelManager>()
  * Initializes enabled channels and manages outbound message dispatch.
  */
 export class ChannelManager {
+  private ownerChallenges = new Map<string, { token: string; expires: number; senderId?: string; chatId?: string }>()
   private channels = new Map<string, BaseChannel>()
   private running = false
   private dispatchController?: AbortController
@@ -93,7 +98,7 @@ export class ChannelManager {
         if (bot.enabled && channelConfigured(bot.platform, { [bot.platform]: bot.config })) this.installBot(bot)
       }
     } else for (const id of CHANNEL_IDS) {
-      if (ch[id]?.enabled && channelConfigured(id, ch)) this.install(id)
+      if (id !== 'wechat' && ch[id]?.enabled && channelConfigured(id, ch)) this.install(id)
     }
 
     // Web channel is always enabled (serves as the browser/observer interface)
@@ -119,7 +124,7 @@ export class ChannelManager {
       if (!this.options || key === 'web') this.bindChannel(channel, key)
     }
     if (this.options && (ch.wechat?.enabled || ch.wechatDesktop?.enabled)) {
-      console.warn('[channel-manager] Legacy WeChat adapters are unavailable in project runtimes')
+      console.warn('[channel-manager] Legacy WeChat config is ignored in project runtimes; add a personal WeChat Bot instead')
     }
 
     console.info(
@@ -144,7 +149,7 @@ export class ChannelManager {
 
   private installBot(bot: BotInstance): BaseChannel {
     const config = { ...this.config, channels: { ...this.config.channels, [bot.platform]: bot.config } }
-    const channel = this.factory?.(bot.platform, config, bot) ?? this.createChannel(bot.platform, config)
+    const channel = this.factory?.(bot.platform, config, bot) ?? this.createChannel(bot.platform, config, bot)
     if (channel.name !== bot.platform || !channel.setBotScope || (bot.platform === 'discord' && !channel.setIdentityHandler)) {
       throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
     }
@@ -160,6 +165,7 @@ export class ChannelManager {
       }
     })
     channel.setStatusListener?.(state => {
+      if (this.channels.get(bot.id) === channel && state !== 'connected' && state !== 'running') this.ownerChallenges.delete(bot.id)
       if (this.channels.get(bot.id) === channel && !this.cleanupFailed.has(bot.id)) this.health.set(bot.id, {
         state: identityFailure ? 'error' : state,
         ...(identityFailure ? { message: identityFailure }
@@ -195,9 +201,77 @@ export class ChannelManager {
     return pending
   }
 
-  createBot(input: { platform: ChannelId; displayName: string; config: Record<string, unknown> }, signal?: AbortSignal): Promise<BotInstanceStatus> {
+  private accessChange<T>(id: string, operation: () => Promise<T>): Promise<T> {
     return this.botOperation(async () => {
-      const bot = this.options!.instanceStore.create(input.platform, input.displayName, input.config, signal)
+      const release = this.options!.instanceStore.beginAccessChange(id)
+      try { return await operation() } finally { release() }
+    })
+  }
+
+  private matchesBotContext(sessionId: string, bot: BotInstance): boolean {
+    const seen = new Set<string>()
+    let id: string | undefined = sessionId
+    while (id && !seen.has(id)) {
+      if (id.startsWith(`bot:${encodeURIComponent(bot.projectId)}:${encodeURIComponent(bot.id)}:`) ||
+        (bot.legacySessionId && id.startsWith(`${bot.platform}:`))) return true
+      seen.add(id)
+      const state = this.sessionManager.getSessionState(id)
+      id = state?.parentSessionId ?? state?.channelBoundary?.ownerSessionId
+    }
+    return false
+  }
+
+  createOwnerChallenge(id: string): { challenge: string; expiresAt: string; candidate?: string } {
+    const bot = this.options?.instanceStore.get(id)
+    if (this.closing || !bot || bot.purpose !== 'personal' || bot.verifiedOwner || !bot.enabled) throw new ChannelSetupError('owner_pairing_unavailable')
+    const token = randomBytes(24).toString('hex'), expires = Date.now() + 5 * 60_000
+    this.ownerChallenges.set(id, { token, expires })
+    return { challenge: token, expiresAt: new Date(expires).toISOString() }
+  }
+
+  ownerCandidate(id: string): { candidate?: string; expiresAt?: string } {
+    this.options?.instanceStore.get(id)
+    const value = this.ownerChallenges.get(id)
+    return value && value.expires > Date.now() ? { candidate: value.senderId, expiresAt: new Date(value.expires).toISOString() } : {}
+  }
+
+  confirmOwner(id: string, token: string): Promise<void> {
+    return this.accessChange(id, async () => {
+      const value = this.ownerChallenges.get(id)
+      if (!value || value.token !== token || value.expires <= Date.now() || !value.senderId) throw new ChannelSetupError('owner_confirmation_failed')
+      const bot = this.options!.instanceStore.get(id)
+      if (bot.purpose !== 'personal' || bot.verifiedOwner || !bot.enabled) throw new ChannelSetupError('owner_confirmation_failed')
+      await this.sessionManager.retireIdleConversationContexts(sessionId => this.matchesBotContext(sessionId, bot))
+      this.ownerChallenges.delete(id)
+      this.options!.instanceStore.bindOwner(id, value.senderId, value.chatId)
+    })
+  }
+
+  revokeOwner(id: string): Promise<void> {
+    return this.accessChange(id, async () => {
+      const bot = this.options!.instanceStore.get(id)
+      await this.sessionManager.retireIdleConversationContexts(sessionId => this.matchesBotContext(sessionId, bot))
+      this.ownerChallenges.delete(id)
+      if (!await this.stopBot(id)) throw new ChannelSetupError('channel_restart_required', 503)
+      this.options!.instanceStore.bindOwner(id)
+      this.options!.instanceStore.update(id, { config: { enabled: false } })
+    })
+  }
+
+  wechatLogin(id: string, wait = false): Promise<unknown> {
+    return this.botOperation(async () => {
+      const bot = this.options!.instanceStore.get(id)
+      const channel = this.channels.get(id)
+      if (bot.platform !== 'wechat' || bot.purpose !== 'personal' || bot.verifiedOwner || !bot.enabled || !(channel instanceof WeChatChannel)) {
+        throw new ChannelSetupError('wechat_personal_bot_required')
+      }
+      return wait ? channel.waitForLogin() : channel.startLogin()
+    })
+  }
+
+  createBot(input: { purpose?: 'personal' | 'service'; platform: ChannelId; displayName: string; config: Record<string, unknown> }, signal?: AbortSignal): Promise<BotInstanceStatus> {
+    return this.botOperation(async () => {
+      const bot = this.options!.instanceStore.create(input.platform, input.displayName, input.config, signal, input.purpose)
       if (bot.enabled) {
         const channel = this.installBot(bot)
         if (this.app) await this.startChannel(bot.id, channel)
@@ -206,10 +280,20 @@ export class ChannelManager {
     })
   }
 
-  updateBot(id: string, input: { displayName?: string; config?: Record<string, unknown> }, signal?: AbortSignal): Promise<BotInstanceStatus> {
-    return this.botOperation(async () => {
+  updateBot(id: string, input: { purpose?: 'personal' | 'service'; displayName?: string; config?: Record<string, unknown> }, signal?: AbortSignal): Promise<BotInstanceStatus> {
+    return this.accessChange(id, async () => {
       if (this.cleanupFailed.has(id)) throw new ChannelSetupError('channel_restart_required', 503)
       const previous = this.options!.instanceStore.get(id)
+      if (input.config?.enabled === false) {
+        await this.sessionManager.retireIdleConversationContexts(sessionId => this.matchesBotContext(sessionId, previous))
+      }
+      if (input.purpose && input.purpose !== previous.purpose) {
+        if (previous.enabled) throw new ChannelSetupError('disconnect_before_role_change')
+        if (this.sessionManager.listSessions().some(({ sessionId }) => this.matchesBotContext(sessionId, previous))) {
+          throw new ChannelSetupError('role_change_requires_new_bot')
+        }
+        await this.sessionManager.retireIdleConversationContexts(sessionId => this.matchesBotContext(sessionId, previous))
+      }
       const bot = this.options!.instanceStore.update(id, input, signal)
       this.invalidateAudienceIfChanged(previous.config.trustedChats, bot.config.trustedChats)
       if (!await this.stopBot(id)) return this.options!.instanceStore.status(id, this.health.get(id))
@@ -222,8 +306,9 @@ export class ChannelManager {
   }
 
   deleteBot(id: string, signal?: AbortSignal): Promise<void> {
-    return this.botOperation(async () => {
-      this.options!.instanceStore.get(id)
+    return this.accessChange(id, async () => {
+      const retiring = this.options!.instanceStore.get(id)
+      await this.sessionManager.retireIdleConversationContexts(sessionId => this.matchesBotContext(sessionId, retiring))
       signal?.throwIfAborted()
       if (!await this.stopBot(id)) throw new ChannelSetupError('channel_restart_required', 503)
       const previous = this.options!.instanceStore.get(id)
@@ -233,6 +318,7 @@ export class ChannelManager {
   }
 
   private async stopBot(id: string): Promise<boolean> {
+    this.ownerChallenges.delete(id)
     this.options?.discordIntegration?.invalidateBot(id)
     if (this.cleanupFailed.has(id)) return false
     const previous = this.channels.get(id)
@@ -260,7 +346,7 @@ export class ChannelManager {
     } : undefined
     if (scope) channel.setBotScope?.(scope)
     const integration = this.options?.discordIntegration
-    if (integration && bot?.platform === 'discord') {
+    if (integration && bot?.platform === 'discord' && bot.purpose === 'service') {
       if (!channel.setDiscordIntegration) throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
       channel.setDiscordIntegration({
         admit: (input, signal) => integration.prepareIngress(bot.id, input, signal),
@@ -276,13 +362,49 @@ export class ChannelManager {
       if (bot && ['error', 'disconnected', 'restart-required'].includes(this.health.get(key)?.state ?? '')) {
         throw new ChannelAdmissionError('The source bot connection is unavailable', 503)
       }
+      if (bot) {
+        const verifyAccess = this.options!.instanceStore.accessGuard(bot.id)
+        const current = this.options!.instanceStore.get(bot.id)
+        if (!current.enabled) throw new ChannelAdmissionError('Bot disabled', 403)
+        if (current.purpose === 'personal' && current.platform === 'discord') {
+          if (message.isGroup !== false || !(channel instanceof DiscordChannel)) throw new ChannelAdmissionError('Private Discord DM required', 403)
+          const inspection = await channel.inspectConversation(message.chatId, message.senderId, new AbortController().signal)
+          if (inspection.location.type !== 1 || inspection.location.recipientId !== message.senderId) throw new ChannelAdmissionError('Private Discord DM required', 403)
+          verifyAccess()
+          if (this.closing || this.channels.get(key) !== channel) throw new ChannelAdmissionError('Connection changed', 503)
+        }
+        const pair = /^\/shadow-pair ([a-f0-9]{48})\s*$/.exec(message.content)
+        if (pair) {
+          const challenge = this.ownerChallenges.get(bot.id)
+          if (message.isGroup !== false || !challenge || challenge.expires <= Date.now() || challenge.senderId || pair[1] !== challenge.token) {
+            throw new ChannelAdmissionError('Pairing rejected', 403)
+          }
+          challenge.senderId = message.senderId
+          challenge.chatId = message.chatId
+          return { status: 'accepted', sessionId: channelSessionId({ ...scope!, conversationId: message.chatId }), inputId: 'owner-pairing' }
+        }
+        if (current.purpose === 'personal') {
+          if (message.isGroup !== false || current.verifiedOwner?.senderId !== message.senderId) {
+            throw new ChannelAdmissionError('Verified owner direct messages only', 403)
+          }
+        } else if (current.purpose !== 'service' || (current.platform === 'discord' && integration
+          ? !message.channelAdmissionId
+          : !this.options?.serviceAssigned?.({ ...scope!, conversationId: message.chatId }))) {
+          throw new ChannelAdmissionError('Explicit service assignment required; configure this Bot in Web', 403)
+        }
+      }
       if (message.channel !== channel.name) throw new ChannelAdmissionError('Channel identity mismatch', 403)
       return this.receive({
         ...message, ...(scope ? { channelAddress: { ...scope, conversationId: message.chatId } } : {}),
-        ...(integration && bot?.platform === 'discord' ? { admin: false } : {}),
+        ...(bot ? { admin: bot.purpose === 'personal' } : {}),
       })
     })
     channel.setDecisionHandler?.(async decision => {
+      if (bot) {
+        this.options!.instanceStore.assertAccess(bot.id)
+        const current = this.options!.instanceStore.get(bot.id)
+        if (current.purpose === 'legacy' || (current.purpose === 'personal' && (current.verifiedOwner?.senderId !== decision.senderId || current.verifiedOwner?.chatId !== decision.chatId))) throw new ChannelAdmissionError('Web-only approval or verified owner required', 403)
+      }
       if (this.closing || this.availableByKey(key) !== channel) throw new YieldError('unavailable', 'The channel connection has changed.')
       return this.answerDecision(channel, decision, scope ? { ...scope, conversationId: decision.chatId } : undefined)
     })
@@ -468,7 +590,14 @@ export class ChannelManager {
     await channel.presentDecisionText(msg.chatId, msg.content, msg.replyTo)
   }
 
-  private createChannel(id: ChannelId, config = this.config): BaseChannel {
+  private createChannel(id: ChannelId, config = this.config, bot?: BotInstance): BaseChannel {
+    if (id === 'wechat') {
+      if (!bot || bot.purpose !== 'personal') throw new ChannelSetupError('wechat_personal_bot_required')
+      return new WeChatChannel(this.bus, {
+        workspace: config.agent.workspace, allowFrom: config.channels.wechat?.allowFrom,
+        storageDirectory: projectStoragePath(config.agent.workspace, 'wechat', bot.id), scoped: true,
+      })
+    }
     const ch = {
       discord: config.channels.discord ?? { enabled: false, triggerMode: 'mention' as const, reactionEmoji: '👀' },
       feishu: config.channels.feishu ?? { enabled: false },
@@ -578,7 +707,7 @@ export class ChannelManager {
     try {
       if (this.options) {
         const bot = this.options.instanceStore.get(id)
-        if (bot.platform !== 'discord') {
+        if (bot.platform !== 'discord' && bot.platform !== 'wechat') {
           const config: Record<string, unknown> = bot.config
           this.claimIdentity(channel, `${bot.platform}:app:${config.appId}`)
         }
@@ -668,6 +797,7 @@ export class ChannelManager {
   }
 
   beginShutdown(): void {
+    this.ownerChallenges.clear()
     this.closing = true
   }
 
@@ -727,7 +857,7 @@ export class ChannelManager {
     const channel = key ? this.availableByKey(key) : undefined
     if (!channel) throw new YieldError('unavailable', 'The source bot is unavailable.')
     const verify = channel.connectionGuard?.()
-    const integration = msg.channel === 'discord' ? this.options?.discordIntegration : undefined
+    const integration = msg.channel === 'discord' && (!msg.channelAddress || this.options?.instanceStore.get(msg.channelAddress.botInstanceId).purpose !== 'personal') ? this.options?.discordIntegration : undefined
     const guard = () => integration!.assertDelivery(msg, this.dispatchController?.signal ?? new AbortController().signal)
     if (integration) await guard()
     const run = async () => {
@@ -757,8 +887,9 @@ export class ChannelManager {
           try {
             await this.deliver(msg)
           } catch (error) {
-            const reason = error instanceof QQDeliveryError ? error.message : 'source_bot_unavailable'
-            console.error(error instanceof QQDeliveryError
+            const safeDeliveryError = error instanceof QQDeliveryError || error instanceof WeixinDeliveryError
+            const reason = safeDeliveryError ? error.message : 'source_bot_unavailable'
+            console.error(safeDeliveryError
               ? `[channel-manager] ${reason}`
               : '[channel-manager] Source bot delivery unavailable')
             this.bus.emit('channel.delivery.failed', {

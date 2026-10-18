@@ -1,3 +1,4 @@
+import { writePrivateFile } from '../../config/store.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 /**
  * weixin_sdk.ts
@@ -16,7 +17,7 @@ import { projectStoragePath } from '../../utils/data-paths.ts'
 
 import { createDecipheriv } from 'node:crypto'
 import { Buffer } from 'node:buffer'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { env } from 'node:process'
 import { join } from 'node:path'
@@ -267,6 +268,30 @@ function withTimeout(timeoutMs: number): AbortController {
   return controller
 }
 
+export type WeixinDeliveryReason = 'transport_unknown' | 'http_rejected' | 'malformed_response' | 'business_rejected' | 'missing_account' | 'missing_context_token' | 'local_failure'
+
+/** Contains no remote text, credentials, URL or unsafe cause. Never automatically retry. */
+export class WeixinDeliveryError extends Error {
+  readonly retryable = false
+  constructor(readonly reason: WeixinDeliveryReason, readonly status?: number, readonly ret?: number, readonly errcode?: number) {
+    super(`WeChat delivery failed: ${reason}${status === undefined ? '' : ' status=' + status}${ret === undefined ? '' : ' ret=' + ret}${errcode === undefined ? '' : ' errcode=' + errcode}`)
+    this.name = 'WeixinDeliveryError'
+  }
+}
+
+export interface WeixinSendDiagnostic { replyId: string; part: number }
+
+function diagnosticType(value: unknown): string {
+  return value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value
+}
+
+// Never echo arbitrary MIME subtypes or parameters from remote headers.
+function diagnosticContentType(value: string | null): string {
+  if (value === null) return 'missing'
+  const mime = value.split(';', 1)[0]?.trim().toLowerCase()
+  return mime === 'application/json' || mime === 'text/plain' || mime === 'text/html' ? mime : 'other'
+}
+
 export class WeixinApiClient {
   constructor(private readonly routeTag?: string) {}
 
@@ -326,20 +351,64 @@ export class WeixinApiClient {
     baseUrl: string,
     token: string,
     payload: { msg: WeixinMessage },
+    diagnostic?: WeixinSendDiagnostic,
   ): Promise<void> {
-    const body = JSON.stringify({ ...payload, base_info: buildBaseInfo() })
-    const res = await fetch(buildUrl(baseUrl, 'ilink/bot/sendmessage'), {
-      method: 'POST',
-      headers: buildAuthHeaders(token, body, this.routeTag),
-      body,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '(unreadable)')
-      throw new Error(
-        `sendMessage failed: ${res.status} ${res.statusText} ${text}`,
-      )
+    const attemptId = crypto.randomUUID()
+    const started = performance.now()
+    const context = { replyId: diagnostic?.replyId ?? crypto.randomUUID(), part: diagnostic?.part ?? 1, attemptId }
+    const details: Record<string, string | number | boolean> = {}
+    const log = (event: string) => console.info('[wechat] sendmessage ' + JSON.stringify({
+      ...context, event, elapsedMs: Math.round(performance.now() - started), ...details,
+    }))
+    log('start')
+    try {
+      const body = JSON.stringify({ ...payload, base_info: buildBaseInfo() })
+      let res: Response
+      try {
+        res = await fetch(buildUrl(baseUrl, 'ilink/bot/sendmessage'), {
+          method: 'POST', headers: buildAuthHeaders(token, body, this.routeTag), body,
+        })
+      } catch { throw new WeixinDeliveryError('transport_unknown') }
+      details.status = res.status
+      details.contentType = diagnosticContentType(res.headers.get('content-type'))
+      if (!res.ok) throw new WeixinDeliveryError('http_rejected', res.status)
+      let result: unknown
+      let text: string
+      // One consumption, replacing res.json(); no clone or additional error-body read.
+      try { text = await res.text() } catch {
+        details.structure = 'unreadable'
+        throw new WeixinDeliveryError('malformed_response', res.status)
+      }
+      try { result = JSON.parse(text) } catch {
+        details.structure = text.trim() ? 'non_json' : 'empty'
+        throw new WeixinDeliveryError('malformed_response', res.status)
+      }
+      details.structure = diagnosticType(result)
+      if (!result || typeof result !== 'object' || Array.isArray(result)) throw new WeixinDeliveryError('malformed_response', res.status)
+      const codes = result as Record<string, unknown>
+      const valid = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && Math.abs(v) <= 2147483647
+      for (const key of ['ret', 'errcode'] as const) {
+        details[key + 'Present'] = key in codes
+        if (key in codes) {
+          details[key + 'Type'] = diagnosticType(codes[key])
+          details[key + 'Valid'] = valid(codes[key])
+          if (valid(codes[key])) details[key] = codes[key] as number
+        }
+      }
+      if ((!('ret' in codes) && !('errcode' in codes)) || ('ret' in codes && !valid(codes.ret)) || ('errcode' in codes && !valid(codes.errcode))) {
+        details.malformed = !('ret' in codes) && !('errcode' in codes) ? 'missing_codes' : 'invalid_code'
+        throw new WeixinDeliveryError('malformed_response', res.status)
+      }
+      const ret = codes.ret as number | undefined
+      const errcode = codes.errcode as number | undefined
+      if ((ret !== undefined && ret !== 0) || (errcode !== undefined && errcode !== 0)) throw new WeixinDeliveryError('business_rejected', res.status, ret, errcode)
+      // API accepted, not evidence of device delivery or reading.
+      log('api_accepted')
+    } catch (error) {
+      details.reason = error instanceof WeixinDeliveryError ? error.reason : 'local_failure'
+      log('failed')
+      throw error
     }
-    await res.text()
   }
 }
 
@@ -350,10 +419,14 @@ export class WeixinApiClient {
 /** Maximum number of seen-message keys kept in memory / on disk. */
 const SEEN_MAX = 5000
 
+export interface WeixinContextToken { token: string; updatedAt?: string }
+export interface WeixinUndelivered { count: number; lastFailureAt: string; eligibleCount: number }
+
 interface RepoData {
   account: WeixinAccountRecord | null
   loginSession: WeixinLoginSessionRecord | null
-  contextTokens: Record<string, string>
+  contextTokens: Record<string, string | WeixinContextToken>
+  undelivered: Record<string, WeixinUndelivered>
   syncStates: Record<string, string>
   seenMessages: string[]
 }
@@ -363,6 +436,7 @@ function emptyData(): RepoData {
     account: null,
     loginSession: null,
     contextTokens: {},
+    undelivered: {},
     syncStates: {},
     seenMessages: [],
   }
@@ -378,7 +452,7 @@ function readJsonFile<T>(path: string, fallback: T): T {
 }
 
 function writeJsonFile(path: string, data: unknown): void {
-  writeFileSync(path, JSON.stringify(data, null, 2))
+  writePrivateFile(path, JSON.stringify(data, null, 2))
 }
 
 export class WeixinRepository {
@@ -386,8 +460,8 @@ export class WeixinRepository {
   private data: RepoData
   private seenSet: Set<string>
 
-  constructor(workspace: string) {
-    this.dir = projectStoragePath(workspace, 'wechat')
+  constructor(workspace: string, directory?: string) {
+    this.dir = directory ?? projectStoragePath(workspace, 'wechat')
     mkdirSync(this.dir, { recursive: true })
     this.data = this._load()
     this.seenSet = new Set(this.data.seenMessages)
@@ -436,12 +510,44 @@ export class WeixinRepository {
   // ── Context tokens ──────────────────────────────────────────────────────
 
   saveContextToken(chatId: string, contextToken: string): void {
-    this.data.contextTokens[chatId] = contextToken
+    this.data.contextTokens[chatId] = { token: contextToken, updatedAt: new Date().toISOString() }
     this._save('context-tokens.json', this.data.contextTokens)
   }
 
   getContextToken(chatId: string): string | null {
-    return this.data.contextTokens[chatId] ?? null
+    return this.getContextTokenRecord(chatId)?.token ?? null
+  }
+
+  getContextTokenRecord(chatId: string): WeixinContextToken | null {
+    const value = this.data.contextTokens[chatId]
+    return typeof value === 'string' ? { token: value } : value ?? null
+  }
+
+  getUndelivered(chatId: string): WeixinUndelivered | null {
+    const value = this.data.undelivered[chatId]
+    return value ? { ...value } : null
+  }
+
+  recordUndelivered(chatId: string): void {
+    const previous = this.getUndelivered(chatId)
+    this.data.undelivered[chatId] = { count: (previous?.count ?? 0) + 1, lastFailureAt: new Date().toISOString(), eligibleCount: previous?.eligibleCount ?? 0 }
+    this._save('undelivered.json', this.data.undelivered)
+  }
+
+  enableUndeliveredNotice(chatId: string): void {
+    const pending = this.data.undelivered[chatId]
+    if (!pending) return
+    pending.eligibleCount = pending.count
+    this._save('undelivered.json', this.data.undelivered)
+  }
+
+  acknowledgeUndelivered(chatId: string, count: number): void {
+    const pending = this.data.undelivered[chatId]
+    if (!pending) return
+    pending.count = Math.max(0, pending.count - count)
+    pending.eligibleCount = Math.max(0, pending.eligibleCount - count)
+    if (!pending.count) delete this.data.undelivered[chatId]
+    this._save('undelivered.json', this.data.undelivered)
   }
 
   // ── Sync state ──────────────────────────────────────────────────────────
@@ -492,10 +598,11 @@ export class WeixinRepository {
         join(this.dir, 'login-session.json'),
         null,
       ),
-      contextTokens: readJsonFile<Record<string, string>>(
+      contextTokens: readJsonFile<Record<string, string | WeixinContextToken>>(
         join(this.dir, 'context-tokens.json'),
         {},
       ),
+      undelivered: readJsonFile<Record<string, WeixinUndelivered>>(join(this.dir, 'undelivered.json'), {}),
       syncStates: readJsonFile<Record<string, string>>(
         join(this.dir, 'sync-state.json'),
         {},

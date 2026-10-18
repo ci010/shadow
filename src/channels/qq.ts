@@ -351,9 +351,10 @@ export class QQChannel extends AbstractChannel {
     if (isV2) {
       const count = Number(!!msg.content.trim()) + (msg.media?.length ?? 0)
       if (!count) return null
-      // Session handoffs have no QQ source: send a proactive group notification.
+      // Session handoffs have no QQ source: GROUP and C2C both support proactive
+      // notifications. QQ enforces the recipient's push preference and quotas.
       // An explicit passive source never falls back after rejection or expiry.
-      if (target.kind === 'group' && passiveMsgId === undefined) return deliver()
+      if (passiveMsgId === undefined) return deliver()
       return this.passiveReplies.send(msg.chatId, passiveMsgId, count, deliver)
     }
     // Retain legacy guild failure/fallback behavior.

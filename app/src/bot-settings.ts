@@ -1,3 +1,4 @@
+import qrcode from 'qrcode-generator'
 import { t } from './i18n.ts'
 import type { BotInstanceStatus, ChannelId, ChannelSetupStatus } from '../../src/channels/setup-contract.ts'
 import { channelDefinitions, channelDraft, channelPatch, parseChannelStatus, type ChannelDraft } from './channel-settings.ts'
@@ -5,6 +6,17 @@ import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
 
 export type { BotInstanceStatus }
+
+/** iLink returns QR content, not necessarily an image URL. Encode locally. */
+export function wechatLoginQr(value: unknown): string {
+  if (!isRecord(value) || typeof value.qrcodeUrl !== 'string' || !value.qrcodeUrl.trim() || value.qrcodeUrl.length > 4096) {
+    throw new Error('Invalid WeChat QR content')
+  }
+  const qr = qrcode(0, 'M')
+  qr.addData(value.qrcodeUrl)
+  qr.make()
+  return qr.createDataURL(5, 20)
+}
 
 export function botChannel(bot: BotInstanceStatus): ChannelSetupStatus {
   return { ...bot, id: bot.platform, label: bot.displayName }
@@ -28,7 +40,7 @@ export function parseBotStatus(value: unknown, projectId: string): BotInstanceSt
     throw new Error(t('Main returned invalid bot ownership or status. Refresh before retrying.'))
   }
   const status = parseChannelStatus({ ...value, id: value.platform })
-  return { ...status, id: value.id, projectId, platform: status.id, displayName: value.displayName }
+  return { ...status, purpose: value.purpose === 'personal' || value.purpose === 'service' ? value.purpose : 'legacy', ownerVerified: value.ownerVerified === true, id: value.id, projectId, platform: status.id, displayName: value.displayName }
 }
 
 export function parseBotList(value: unknown, projectId: string): BotInstanceStatus[] {
@@ -60,13 +72,30 @@ export function createBotSettingsClient(base: string, projectId: string, request
   }
   return {
     async list(signal?: AbortSignal) { return parseBotList(await json('', { signal }), projectId) },
-    async create(platform: ChannelId, displayName: string, signal?: AbortSignal) {
+    async create(platform: ChannelId, displayName: string, signal: AbortSignal | undefined, purpose: 'personal' | 'service') {
+      if (purpose !== 'personal' && purpose !== 'service') throw new Error('Select a Bot role.')
+      if (platform === 'wechat' && purpose !== 'personal') throw new Error(t('WeChat supports personal Bots only.'))
       if (!displayName.trim()) throw new Error(t('Enter a bot name.'))
-      return parseUpdate(await json('', { method: 'POST', body: JSON.stringify({ platform, displayName: displayName.trim(), config: { enabled: false } }), signal }))
+      return parseUpdate(await json('', { method: 'POST', body: JSON.stringify({ purpose, platform, displayName: displayName.trim(), config: { enabled: false } }), signal }))
     },
-    async save(id: string, patch: { displayName?: string; config?: Record<string, unknown> }, signal?: AbortSignal) {
+    async save(id: string, patch: { purpose?: 'personal' | 'service'; displayName?: string; config?: Record<string, unknown> }, signal?: AbortSignal) {
       return parseUpdate(await json(`/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch), signal }), id)
     },
+    async wechat(id: string, operation: 'login' | 'wait', signal?: AbortSignal) {
+      const value = await json(`/${encodeURIComponent(id)}/wechat/${operation}`, { method: 'POST', signal })
+      if (!isRecord(value)) throw new Error('Invalid WeChat login response')
+      return value
+    },
+    async challenge(id: string) {
+      return await json(`/${encodeURIComponent(id)}/owner-challenge`, { method: 'POST' }) as { challenge: string; expiresAt: string }
+    },
+    async candidate(id: string) {
+      return await json(`/${encodeURIComponent(id)}/owner-candidate`) as { candidate?: string }
+    },
+    async confirm(id: string, challenge: string) {
+      await json(`/${encodeURIComponent(id)}/owner-confirm`, { method: 'POST', body: JSON.stringify({ challenge }) })
+    },
+    async revoke(id: string) { await json(`/${encodeURIComponent(id)}/owner`, { method: 'DELETE' }) },
     async remove(id: string, signal?: AbortSignal) {
       const result = await json(`/${encodeURIComponent(id)}`, { method: 'DELETE', signal })
       if (!isRecord(result) || result.deleted !== true) throw new Error(t('Main did not confirm bot removal. Refresh before retrying.'))

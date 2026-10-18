@@ -17,7 +17,8 @@ import { BotInstanceStore } from './bot-store.ts'
 import { ChannelManager } from './manager.ts'
 import { QQChannel } from './qq.ts'
 import { QQDeliveryError } from './qq-replies.ts'
-import { inputContext, type SessionMessageInput } from '../sessions/input.ts'
+import { inputContext } from '../sessions/input.ts'
+import { eventToInput } from '../events/service.ts'
 
 const NOW = Date.parse('2026-09-18T04:00:00.000Z')
 const options = { appId: 'synthetic-app', secret: 'synthetic-secret' }
@@ -137,34 +138,36 @@ test('QQ source and sequence tracking is isolated by chat and channel instance; 
   assert.deepEqual(wire.messages().map(request => request.body.msg_seq), [1, 1, 1, 1, 2])
 })
 
-for (const markdown of [true, false]) {
-  test(`QQ proactive group replies omit passive credentials (${markdown ? 'Markdown' : 'text'})`, async t => {
+for (const [chatId, path] of [['group:one', '/v2/groups/one/messages'], ['c2c:alice', '/v2/users/alice/messages']] as const) for (const markdown of [true, false]) {
+  test(`QQ proactive ${chatId} replies omit passive credentials (${markdown ? 'Markdown' : 'text'})`, async t => {
     const wire = transport(t)
     const qq = channel(new Bus(), { markdown })
-    await incoming(qq, 'group:one', 'unrelated')
-    const outbound = message({ replyTo: undefined })
+    await incoming(qq, chatId, 'unrelated')
+    const outbound = message({ chatId, replyTo: undefined })
     await qq.onMessage({ ...outbound, done: false })
     await qq.onMessage({ ...outbound, event: 'tool_result' })
     assert.equal(wire.messages().length, 0)
     await qq.onMessage(outbound)
     assert.deepEqual(wire.messages(), [{
-      path: '/v2/groups/one/messages',
+      path,
       body: markdown ? { msg_type: 2, markdown: { content: 'Summary' } } : { msg_type: 0, content: 'Summary' },
     }])
-    await qq.send(message({ replyTo: 'unrelated' }))
+    await qq.send(message({ chatId, replyTo: 'unrelated' }))
     assert.equal(wire.messages()[1].body.msg_seq, 1)
-    await assert.rejects(qq.send(message({ chatId: 'c2c:alice', replyTo: undefined })), { kind: 'invalid_source' })
+    t.mock.timers.tick(9 * 60_000)
+    await assert.rejects(qq.send(message({ chatId, replyTo: 'unrelated' })), { kind: 'expired' })
+    assert.equal(wire.messages().length, 2)
   })
 }
 
-test('QQ proactive group media uploads once and sends without passive credentials', async t => {
+for (const chatId of ['group:one', 'c2c:alice']) test(`QQ proactive ${chatId} media uploads once and sends without passive credentials`, async t => {
   const wire = transport(t)
   await withTempWorkspace(async workspace => {
-    const dir = sessionWorkspacePath(workspace, 'qq:group:one')
+    const dir = sessionWorkspacePath(workspace, `qq:${chatId}`)
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, 'report.txt'), 'synthetic report')
     const qq = channel(new Bus(), { workspace })
-    await qq.onMessage(message({ replyTo: undefined, media: ['report.txt'] }))
+    await qq.onMessage(message({ chatId, replyTo: undefined, media: ['report.txt'] }))
     assert.deepEqual(wire.messages().map(request => request.body), [
       { msg_type: 2, markdown: { content: 'Summary' } },
       { msg_type: 7, media: { file_info: 'file' } },
@@ -178,11 +181,11 @@ for (const [name, failure, kind] of [
   ['rate', () => Response.json({ code: 40034100, message: 'secret' }, { status: 429 }), 'rate'],
   ['network', () => { throw new Error('secret') }, 'unknown'],
 ] as const) {
-  test(`QQ proactive ${name} failure is surfaced without format fallback or retry`, async t => {
+  for (const chatId of ['group:one', 'c2c:alice']) test(`QQ proactive ${chatId} ${name} failure is surfaced without format fallback or retry`, async t => {
     const wire = transport(t)
     wire.fail(failure)
     const qq = channel()
-    await assert.rejects(qq.onMessage(message({ replyTo: undefined })), (error: unknown) => {
+    await assert.rejects(qq.onMessage(message({ chatId, replyTo: undefined })), (error: unknown) => {
       assert.ok(error instanceof QQDeliveryError)
       assert.equal(error.kind, kind)
       assert.doesNotMatch(error.message, /secret/)
@@ -373,7 +376,7 @@ test('QQ media upload time cannot extend the message deadline', async t => {
   })
 })
 
-test('QQ manager routes decisions with their source and emits delivery failure for explicit rejection', async t => {
+for (const [conversationId, messagePath] of [['group:one', '/v2/groups/one/messages'], ['c2c:alice', '/v2/users/alice/messages']] as const) test(`QQ manager routes ${conversationId} asynchronous completion and delivery failure`, async t => {
   const wire = transport(t)
   await withTempWorkspace(async workspace => {
     const bus = new Bus()
@@ -389,26 +392,28 @@ test('QQ manager routes decisions with their source and emits delivery failure f
       createdAt: new Date().toISOString(), deadline: null,
     }
     const { channelSessionId } = await import('../bus/events.ts')
-    const address = { projectId: 'project', botInstanceId: bot.id, platform: 'qq', conversationId: 'group:one' }
+    const address = { projectId: 'project', botInstanceId: bot.id, platform: 'qq', conversationId }
     request.sessionId = request.recipient.sessionId = channelSessionId(address)
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, {
       yields: { get: () => request }, getActiveSession: () => undefined,
     } as unknown as SessionManager, async msg => ({
       status: 'accepted', sessionId: request.sessionId, inputId: msg.messageId,
-    }), { projectId: 'project', instanceStore: store, factory: () => qq })
+    }), { projectId: 'project', instanceStore: store, factory: () => qq, serviceAssigned: () => true })
     await manager.init()
     await manager.startAll(new Hono())
     try {
-      await incoming(qq)
-      await incoming(qq, 'group:one', 'unrelated')
-      await manager.deliver(message({ channelAddress: address, done: false, yieldRequest: request, content: 'Proceed? 1/2' }))
+      await incoming(qq, conversationId)
+      await incoming(qq, conversationId, 'unrelated')
+      await manager.deliver(message({ chatId: conversationId, channelAddress: address, done: false, yieldRequest: request, content: 'Proceed? 1/2' }))
       assert.equal(wire.messages()[0].body.msg_id, 'source')
-      const handoff: SessionMessageInput = {
-        id: 'handoff', kind: 'message', policy: 'queue',
-        timestamp: new Date().toISOString(),
-        source: { kind: 'session', sessionId: 'web:worker', coordination: { intent: 'handoff' } },
-        content: 'Task finished. Notify the group.',
-      }
+      t.mock.timers.tick(9 * 60_000)
+      // Same event projection used by SessionManager.reportCompletion -> EventService.
+      const handoff = eventToInput({
+        id: 'subagent-completion:web:worker', type: 'subagent-complete', source: 'subagent',
+        timestamp: new Date().toISOString(), targetSessionId: request.sessionId,
+        origin: { sessionId: 'web:worker', inputId: 'task', source: { kind: 'session', sessionId: 'web:worker' } },
+        content: 'Task finished. PR #1792 is ready.',
+      }, { urgency: 'queue' })
       const context = inputContext(request.sessionId, handoff)
       assert.deepEqual(context.channelAddress, address)
       assert.equal(context.platformMessageId, undefined)
@@ -417,13 +422,13 @@ test('QQ manager routes decisions with their source and emits delivery failure f
         channelAddress: context.channelAddress, replyTo: context.platformMessageId,
       }))
       assert.deepEqual(wire.messages()[1], {
-        path: '/v2/groups/one/messages', body: { msg_type: 2, markdown: { content: 'Summary' } },
+        path: messagePath, body: { msg_type: 2, markdown: { content: 'Summary' } },
       })
       wire.fail(() => Response.json({ code: 40034128 }, { status: 400 }))
       const failed = new Promise<unknown>(resolve => bus.on('channel.delivery.failed', event => resolve(event)))
-      bus.emit('message.outbound', message({ channelAddress: address }))
+      bus.emit('message.outbound', message({ chatId: conversationId, channelAddress: address, replyTo: undefined }))
       assert.deepEqual(await failed, {
-        projectId: 'project', channelAddress: address, channel: 'qq', chatId: 'group:one',
+        projectId: 'project', channelAddress: address, channel: 'qq', chatId: conversationId,
         error: 'QQ delivery failed: quota (rejected) status=400 code=40034128',
       })
       assert.equal(wire.messages().length, 3)

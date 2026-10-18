@@ -97,7 +97,7 @@ async function fixture(t: TestContext, raw: Record<string, unknown> = {}, enviro
   }
 }
 
-test('channel API authorizes both GET and PATCH and exposes only the three selected channels', async (t) => {
+test('channel API authorizes both GET and PATCH and exposes the selected channel setup entries', async (t) => {
   const f = await fixture(t, {
     channels: { qq: { appId: 'public-app-id', secret: 'synthetic-qq-secret', token: 'synthetic-legacy-token' } },
   })
@@ -107,20 +107,20 @@ test('channel API authorizes both GET and PATCH and exposes only the three selec
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('Cache-Control'), 'no-store')
   const body = await response.json() as { channels: ChannelSetupStatus[] }
-  assert.deepEqual(body.channels.map((channel) => channel.id), ['qq', 'feishu', 'discord'])
+  assert.deepEqual(body.channels.map((channel) => channel.id), ['qq', 'feishu', 'discord', 'wechat'])
   assert.equal(body.channels[0].configured, true)
   assert.equal(body.channels[0].state, 'disabled')
   assert.equal(body.channels[0].config.appId, 'public-app-id')
   assert.equal(body.channels[0].config.triggerMode, 'mention')
   assert.deepEqual(body.channels[0].secrets, { secret: true, token: true })
   assert.doesNotMatch(JSON.stringify(body), /synthetic-|config\.json|access_token/)
-  assert.equal((await f.patch('wechat', { enabled: true })).status, 404)
+  assert.equal((await f.patch('wechat', { enabled: true })).status, 400)
   assert.equal((await f.patch('__proto__', { enabled: true })).status, 404)
 })
 
 test('strict partial patches validate required credentials and never blank stored secrets', async (t) => {
   const f = await fixture(t)
-  for (const id of ['qq', 'feishu', 'discord']) {
+  for (const id of ['qq', 'feishu', 'discord', 'wechat']) {
     assert.equal((await f.patch(id, { enabled: true })).status, 400)
     assert.equal((await f.patch(id, { unknown: 'value' })).status, 400)
     assert.equal((await f.patch(id, { enabled: 'true' })).status, 400)
@@ -349,12 +349,12 @@ test('runtime authorization requires the main launch credential or a verified lo
 test('real channel GET and PATCH responses round-trip through the frontend parsers with every public field intact', async (t) => {
   const { parseChannelList, parseChannelStatus } = await import('../../app/src/channel-settings.ts')
   const f = await fixture(t)
-  const publicConfig: Record<ChannelId, ChannelSetupStatus['config']> = {
+  const publicConfig: Record<Exclude<ChannelId, 'wechat'>, ChannelSetupStatus['config']> = {
     qq: { appId: 'qq-app', sandbox: true, markdown: false, triggerMode: 'all', intents: 0xffffffff, allowFrom: ['qq-sender'], adminChats: ['qq-admin'], trustedChats: ['qq-room'] },
     feishu: { appId: 'feishu-app', allowFrom: ['feishu-sender'], adminChats: ['feishu-admin'], trustedChats: ['feishu-room'] },
     discord: { triggerMode: 'all', reactionEmoji: '', allowFrom: ['discord-sender'], adminChats: ['discord-admin'], trustedChats: ['discord-room'] },
   }
-  const credentials: Record<ChannelId, Record<string, string>> = {
+  const credentials: Record<Exclude<ChannelId, 'wechat'>, Record<string, string>> = {
     qq: { secret: 'synthetic-qq-secret', token: 'synthetic-qq-token' },
     feishu: { appSecret: 'synthetic-feishu-secret', encryptKey: 'synthetic-encryption', verificationToken: 'synthetic-verification' },
     discord: { token: 'synthetic-discord-token' },
@@ -367,7 +367,7 @@ test('real channel GET and PATCH responses round-trip through the frontend parse
     assert.deepEqual(parsed, wire.channels)
     return parsed
   }
-  assert.equal((await get()).length, 3)
+  assert.equal((await get()).length, 4)
   for (const id of ['qq', 'feishu', 'discord'] as const) {
     const response = await f.patch(id, { ...publicConfig[id], ...credentials[id], enabled: true })
     assert.equal(response.status, 200)
@@ -382,6 +382,7 @@ test('real channel GET and PATCH responses round-trip through the frontend parse
   }
   const list = await get()
   for (const channel of list) {
+    if (channel.id === 'wechat') continue
     assert.deepEqual(channel.config, publicConfig[channel.id])
     assert.equal(channel.state, channel.id === 'feishu' ? 'running' : 'connected')
     const response = await f.patch(channel.id, { enabled: false })

@@ -104,6 +104,8 @@ export class DiscordIntegration implements ConversationPolicies {
   }
 
   managed(sessionId: string): boolean {
+    const address = this.address(sessionId)
+    if (address && this.options.bots.get(address.botInstanceId).purpose === 'personal') return false
     return !!this.sessions?.getSessionState(sessionId)?.channelBoundary || !!this.address(sessionId) || sessionId.startsWith('discord:') ||
       channelAddressFromSessionId(sessionId)?.platform === 'discord'
   }
