@@ -199,6 +199,8 @@ test('mode surfaces compile without replacing existing composer, hidden preview 
     }).errors, [])
     if (filename === 'ExecutionMessage.vue') {
       assert.match(source, /:data-execution-id="execution\.sessionId"/)
+      assert.match(source, /v-if="execution\.model"[^\n]*Model: \{\{ execution\.model \}\}/)
+      assert.match(source, /v-if="execution\.effort"[^\n]*Effort: \{\{ execution\.effort \}\}/)
       assert.doesNotMatch(source, /fetch\(/)
     }
     if (filename === 'ChatTab.vue') {

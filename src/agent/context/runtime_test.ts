@@ -541,6 +541,17 @@ test('standalone session contracts retain mode disclosure when no runtime provid
 })
 
 
+test('Vue Flow capability points to its skill without embedding the protocol', () => {
+  const prompt = channelCapabilityPrompt('web', unavailableCapabilities(), false, true, false)
+  assert.match(prompt, /answer-flow.*Vue Flow/)
+  assert.match(prompt, /Read `v:skills\/answer-flow`/)
+  assert.doesNotMatch(prompt, /"nodes"|"edges"|"version"/)
+  for (const channel of ['discord', 'qq', 'wechat', 'feishu', 'a2a']) {
+    assert.doesNotMatch(channelCapabilityPrompt(channel, unavailableCapabilities(), false, true, false), /answer-flow/)
+  }
+})
+
+
 test('explicit self metadata exposes the current goal and reopened completion without changing activity', async () => {
   const provider = runtimeIdentityProvider({
     identity: new IdentityManager('.test-data\\unused-runtime-identity'),

@@ -1,3 +1,4 @@
+import { parseTaskRecord } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { retirementReceiptSchema } from './retirement-contract.ts'
 import { DatabaseSync as Database } from 'node:sqlite'
@@ -76,6 +77,7 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'executionKey',
   'parentToolCallId',
   'completionReported',
+  'task',
 ])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -116,6 +118,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (value.automationVersion === 1) metadata.automationVersion = 1
   if (value.recovery !== undefined) metadata.recovery = parseSessionRecovery(value.recovery)
   if (value.contextResetAt !== undefined) metadata.contextResetAt = parseContextResetAt(value.contextResetAt)
+  if (value.task !== undefined) metadata.task = parseTaskRecord(value.task)
   if (typeof value.completed === 'boolean') metadata.completed = value.completed
   if (typeof value.completionReported === 'boolean') metadata.completionReported = value.completionReported
   if (isExecutionMode(value.mode)) metadata.mode = value.mode
@@ -430,6 +433,7 @@ export class SqliteSessionStore implements SessionStore {
         executionKey: state.executionKey,
         parentToolCallId: state.parentToolCallId,
         completionReported: state.completionReported,
+        task: state.task === undefined ? undefined : parseTaskRecord(state.task),
       },
     }
     await withRetry('saveState', () =>

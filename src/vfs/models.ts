@@ -61,7 +61,7 @@ export function createModelsHandler(snapshot: () => Promise<ModelsSnapshot>): {
       }
       return [
         'Configured selectable models: copy an exact id into subagent.model. Discovery grants no permissions and does not guarantee credentials, quota, connectivity or live availability.',
-        'Omit model/effort to preserve task role defaults or call caller settings. Effort omission inherits existing defaults, not an automatic supported value; a known unsupported inherited effort can fail validation when changing model. Unknown support is not a guarantee.',
+        'Omit model/effort in task mode to preserve role defaults. Call mode forbids model/effort and always inherits caller settings. Effort omission inherits existing defaults, not an automatic supported value; a known unsupported inherited effort can fail validation when changing model. Unknown support is not a guarantee.',
         'Context/output metadata describes limits or budgets, not measured task performance. Size and performance stay unknown without evidence.',
         ...all.map(entry => entry.content),
       ].join('\n\n')

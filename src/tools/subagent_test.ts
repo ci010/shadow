@@ -25,6 +25,7 @@ test('subagent only creates temporary work, preserving explicit workdir and igno
     getSessionState: () => parent,
     executeOnce: (_key: string, run: () => Promise<string>) => run(),
     buildSession: async (id: string, _parent: unknown, next: typeof fields) => { createdId = id; fields = next },
+    configureTaskReview: async () => {},
     startChild: async () => { starts++ },
     startCall: async () => { calls++; return 'Call result' },
   } as unknown as SessionManager
@@ -81,6 +82,7 @@ test('subagent permits task inference overrides but calls reject explicit fields
       validated.push(settings)
     },
     buildSession: async (_id: string, _parent: unknown, value: Parameters<SessionManager['buildSession']>[2]) => { fields.push(value) },
+    configureTaskReview: async () => {},
     startChild: async () => {}, startCall: async () => 'result',
   } as unknown as SessionManager
   const types = { resolve: () => ({ name: 'general', model: 'role', reasoningEffort: 'low' }), allNames: () => ['general'] } as unknown as AgentTypesManager
@@ -88,11 +90,23 @@ test('subagent permits task inference overrides but calls reject explicit fields
   const context = { sessionId: parent.sessionId, physicalSessionId: 'physical', messageId: 'input' } as ExecutionContext
   await tool.execute({ description: 'Task', task: 'Work', model: 'chosen', effort: 'medium' }, context)
   assert.deepEqual(fields[0]?.config, { model: 'chosen', reasoningEffort: 'medium' })
-  await tool.execute({ mode: 'call', description: 'Call', task: 'Inspect', effort: 'low' }, context)
-  assert.equal(fields[1]?.config?.model, 'parent')
-  assert.equal(fields[1]?.config?.reasoningEffort, 'low')
+  for (const overrides of [
+    { model: 'chosen' }, { model: 'parent' }, { effort: 'low' }, { effort: 'high' },
+    { model: 'parent', effort: 'high' }, { model: null }, { effort: null },
+    { model: undefined }, { effort: undefined },
+  ]) {
+    assert.match(await tool.execute({ mode: 'call', description: 'Call', task: 'Inspect', ...overrides }, context), /cannot specify model or effort/)
+  }
+  assert.equal(fields.length, 1)
+  assert.equal(validated.length, 1)
+  context.model = 'active-caller'
+  context.reasoningEffort = 'medium'
+  await tool.execute({ mode: 'call', description: 'Call', task: 'Inspect' }, context)
+  assert.deepEqual(fields[1]?.config, { model: 'active-caller', reasoningEffort: 'medium' })
+  await tool.execute({ mode: 'call', description: 'Call fallback', task: 'Inspect' }, { ...context, model: undefined, reasoningEffort: undefined })
+  assert.deepEqual(fields[2]?.config, parent.config)
   assert.equal(validated[0]?.model, 'chosen')
   await assert.rejects(tool.execute({ description: 'Bad', task: 'Work', effort: 'invalid' }, context))
   await assert.rejects(tool.execute({ description: 'Bad', task: 'Work', model: 'unsupported' }, context), /not selectable/)
-  assert.equal(fields.length, 2)
+  assert.equal(fields.length, 3)
 })

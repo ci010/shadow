@@ -21,6 +21,7 @@ import type { GatewayPlugin } from '../gateway/types.ts'
 import { physicalSessionId, SessionIdentityError } from './session-identity.ts'
 import {
   resolveSessionLocations,
+  managedSessionWorkdirRef,
   type SessionLocalityState,
   type WorkdirCapabilityLookup,
   type WorkdirResolution,
@@ -130,8 +131,14 @@ function remoteFilesystemStatus(error: RemoteFilesystemError): 400 | 404 | 503 {
 async function sessionFileBase(
   sessions: SessionManager,
   key: string,
+  managed = false,
 ): Promise<WorkdirResolution & { scope?: 'home' }> {
   const state = await sessions.readSessionState(key)
+  if (managed && state) {
+    const locations = resolveSessionLocations(sessions.workspace, state, undefined, sessions.workdirCapabilityLookup)
+    // Explicit session storage is Main-local, independently of execution workdir locality.
+    return { available: true, locality: 'local', workdir: managedSessionWorkdirRef(state.workspaceRoot ?? key), path: locations.sessionDataDir }
+  }
   const base = resolveSessionFileBase(
     sessions.workspace,
     key,
@@ -201,7 +208,7 @@ export function sessionsApiPlugin(
       if (!c.req.path.slice('/api/sessions/'.length).includes('/')) return next()
       const key = c.req.param('key') ?? ''
       const historicalRead = c.req.method === 'GET' || c.req.method === 'HEAD'
-      if (sessions?.projectId && !(historicalRead ? await sessions.readSessionState(key) : sessions.getSessionState(key))) {
+      if ((sessions?.projectId || /^\/api\/sessions\/[^/]+\/workspace\//.test(c.req.path)) && sessions && !(historicalRead ? await sessions.readSessionState(key) : sessions.getSessionState(key))) {
         return c.json({ error: 'session_not_found' }, 404)
       }
       const suffix = c.req.path.slice('/api/sessions/'.length)
@@ -216,10 +223,10 @@ export function sessionsApiPlugin(
       return next()
     })
     for (const operation of ['status', 'diff'] as const) {
-      app.get(`/api/sessions/:key/git/${operation}`, async c => {
+      for (const fileRoute of [`/api/sessions/:key/git/${operation}`, `/api/sessions/:key/workspace/git/${operation}`]) app.get(fileRoute, async c => {
         if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
-        const key = c.req.param('key')
-        const base = await sessionFileBase(sessions, key)
+        const key = c.req.param('key')!
+        const base = await sessionFileBase(sessions, key, fileRoute.includes('/workspace/'))
         if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
         if (base.locality === 'remote') {
           if (!sessions.remoteExecutor) return operation === 'status'
@@ -702,12 +709,12 @@ export function sessionsApiPlugin(
     })
 
     // ── Session workspace file browsing ────────────────────────────────
-    app.get('/api/sessions/:key/files/search', async c => {
+    for (const fileRoute of ['/api/sessions/:key/files/search', '/api/sessions/:key/workspace/files/search']) app.get(fileRoute, async c => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
-      const key = c.req.param('key')
+      const key = c.req.param('key')!
       const query = fileSearchQuery(c)
       if (!query) return c.json({ error: 'invalid_query' }, 400)
-      const base = await sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key, fileRoute.includes('/workspace/'))
       if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
       if (base.locality === 'local') return serveLocalFileSearch(c, base.path)
       if (!sessions.remoteExecutor) return c.json(remoteWorkdirRequiresExecutorApiResult(key, base), 501)
@@ -730,13 +737,13 @@ export function sessionsApiPlugin(
       }
     })
     // List a directory inside a session's working directory.
-    app.get('/api/sessions/:key/files', async (c) => {
+    for (const fileRoute of ['/api/sessions/:key/files', '/api/sessions/:key/workspace/files']) app.get(fileRoute, async (c) => {
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = c.req.param('key')
+      const key = c.req.param('key')!
       const relPath = c.req.query('path') ?? ''
-      const base = await sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key, fileRoute.includes('/workspace/'))
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
@@ -800,13 +807,13 @@ export function sessionsApiPlugin(
     })
 
     // Serve the raw bytes of a file (used for image/video/audio previews).
-    app.get('/api/sessions/:key/raw', async (c) => {
+    for (const fileRoute of ['/api/sessions/:key/raw', '/api/sessions/:key/workspace/raw']) app.get(fileRoute, async (c) => {
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = c.req.param('key')
+      const key = c.req.param('key')!
       const relPath = c.req.query('path') ?? ''
-      const base = await sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key, fileRoute.includes('/workspace/'))
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
@@ -819,14 +826,14 @@ export function sessionsApiPlugin(
     // Static file serving: like opening a local file directly, so an HTML page's
     // relative asset references (CSS, fonts, images, scripts) resolve against the
     // request path instead of a query param. Enables full page previews.
-    app.get('/api/sessions/:key/static/*', async (c) => {
+    for (const fileRoute of ['/api/sessions/:key/static/*', '/api/sessions/:key/workspace/static/*']) app.get(fileRoute, async (c) => {
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = c.req.param('key')
+      const key = c.req.param('key')!
       const relPath = staticFilePath(c)
       if (relPath === null) return c.json({ error: 'invalid_path' }, 400)
-      const base = await sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key, fileRoute.includes('/workspace/'))
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
@@ -837,16 +844,16 @@ export function sessionsApiPlugin(
     })
 
     // Return a truncated text preview of a file (used for text tiles).
-    app.get('/api/sessions/:key/preview', async (c) => {
+    for (const fileRoute of ['/api/sessions/:key/preview', '/api/sessions/:key/workspace/preview']) app.get(fileRoute, async (c) => {
       const encoding = c.req.query('encoding') ?? 'auto'
       if (!isTextEncoding(encoding)) return c.json({ error: 'invalid_text_encoding' }, 400)
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = c.req.param('key')
+      const key = c.req.param('key')!
       const relPath = c.req.query('path') ?? ''
       const maxBytes = filePreviewLimit(c.req.query('maxBytes'))
-      const base = await sessionFileBase(sessions, key)
+      const base = await sessionFileBase(sessions, key, fileRoute.includes('/workspace/'))
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }

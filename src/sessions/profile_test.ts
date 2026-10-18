@@ -74,7 +74,7 @@ test('existing read/search virtual APIs discover and page stats without a new to
   const vfs = new VirtualFs()
   vfs.mount('v:stats', 'Usage statistics', handlers.read, handlers.list)
   const context = { projectId: 'p', sessionId: 'web:root', signal: new AbortController().signal } as ExecutionContext
-  const listed = await new SearchTool('.', undefined, vfs).execute({ space: 'glob:v:stats', query: '**' }, context)
+  const listed = await new SearchTool('.', undefined, vfs).execute({ handler: 'glob', path: 'v:stats', query: '**' }, context)
   assert.match(String(listed), /v:stats\/sessions\/web%3Aroot/)
   assert.equal(f.reads(), 0)
   const page = requireToolText(await new ReadTool('.', vfs).execute({ path: 'v:stats/sessions/web%3Aroot', offset: 2, limit: 1 }, context))

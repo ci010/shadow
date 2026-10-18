@@ -57,6 +57,7 @@ import { providerFailureKind, type ProviderFailureKind } from '../providers/prov
 export abstract class BaseSession {
   protected usage: LLMResponseUsage | undefined
   protected responseContext: ResponseContext | undefined
+  private messagePersistenceFailed = false
   private providerFailure?: ProviderFailureKind
   private providerWaiting?: RateLimitWait
   get rateLimitWait(): RateLimitWait | undefined { return this.providerWaiting }
@@ -152,6 +153,7 @@ export abstract class BaseSession {
         })
       }
     } catch (err) {
+      this.messagePersistenceFailed = true
       console.error(
         `[session] Failed to persist messages for ${this.id}:`,
         errMsg(err),
@@ -184,6 +186,7 @@ export abstract class BaseSession {
     this.bus.emit('session.activity.changed', { sessionId: this.id })
   }
   protected async finishTurn(fact: SessionTurnFact): Promise<void> {
+    if (this.state.task?.activeRunId) fact.runId = this.state.task.activeRunId
     this.state.executionStatus = fact.status
     if (this.state.mode === 'session' && fact.status !== 'completed'
       && this.messages.some(message => message.role !== 'system')) {
@@ -448,6 +451,7 @@ export abstract class BaseSession {
     const pendingResults = new Map(calls.map(call => [call.id, call]))
     const traceAttributes = { sessionId: this.id, physicalSessionId: this.physicalSessionId }
     using span = uspan('agent.tools', { attributes: traceAttributes })
+    const publishedCallbacks = new Map<string, Array<() => void>>()
     const recordResult = async (call: ToolCall, result: ToolResult) => {
       // Only the host-bounded dedicated organizer terminates on its finish receipt.
       if (this.state.mode === 'task' && this.state.agentType === 'work-organizer'
@@ -468,6 +472,11 @@ export abstract class BaseSession {
         ...result.content, ...(snapshotText ? [{ type: 'text' as const, text: snapshotText }] : []),
       ])
       await this.appendMessages(llm, { role: 'tool', content, tool_call_id: call.id, name: call.name })
+      // Legacy unbounded sessions log persistence errors and continue. Deferred
+      // process-lifecycle effects must instead fail closed on an unsafe history.
+      if (publishedCallbacks.has(call.id) && this.messagePersistenceFailed) {
+        throw new Error('Cannot run deferred tool action after session message persistence failure')
+      }
       if (transient !== undefined && typeof result !== 'string') transientResults.set(call.id, result.content)
       pendingResults.delete(call.id)
       await this.tools.boundary?.beforeOutput(signal)
@@ -483,6 +492,8 @@ export abstract class BaseSession {
         toolName: call.name,
         done: false,
       })
+      for (const callback of publishedCallbacks.get(call.id) ?? []) callback()
+      publishedCallbacks.delete(call.id)
     }
 
     this.onToolPhaseStart()
@@ -512,6 +523,11 @@ export abstract class BaseSession {
           const fileChangePhysicalId = this.physicalSessionId
           const context: ExecutionContext = {
             ...executionContext, toolCallId: tc.id, toolCallName: tc.name,
+            afterToolResultPublished: callback => {
+              const callbacks = publishedCallbacks.get(tc.id) ?? []
+              callbacks.push(callback)
+              publishedCallbacks.set(tc.id, callbacks)
+            },
             recordFileChange: file_change => this.store.appendRawEvents(fileChangePhysicalId, [{ file_change }]),
             readFileChange: (id, signal) => readSessionFileChange(this.store, this.state, id, signal),
           }

@@ -1,3 +1,4 @@
+import type { TaskRecord } from './task-record.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import { providerFailureKinds, type ProviderFailureKind } from '../providers/provider.ts'
 import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
@@ -155,6 +156,8 @@ export interface SessionState {
   parentToolCallId?: string
   /** One-shot completion has been admitted to its recipient. */
   completionReported?: boolean
+  /** Absent on legacy one-shot tasks and all calls/automation runs. */
+  task?: TaskRecord
   /** Logical session key (e.g. "discord:123") */
   sessionId: string
   /** V2 hashes the complete logical ID. Absent retains legacy physical log addresses. */

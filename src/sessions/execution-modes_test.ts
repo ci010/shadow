@@ -1,3 +1,5 @@
+import { createSelfSessionHandler } from '../vfs/session.ts'
+import { TaskTool } from '../tools/task.ts'
 import { ReplyTool } from '../tools/reply.ts'
 import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
@@ -54,7 +56,7 @@ async function waitFor(check: () => boolean) {
 }
 
 function fixture(workspace: string, store: SessionStore, settings: {
-  callTimeoutMs?: number; ignoreAbort?: boolean; projectId?:string; hasInitiative?: (id: string) => boolean
+  managedReview?: boolean; callTimeoutMs?: number; ignoreAbort?: boolean; projectId?:string; hasInitiative?: (id: string) => boolean
 } = {}) {
   const requests: Array<{
     sessionId: string; messages: ChatMessage[]; names: string[]; signal: AbortSignal; model?: string; effort?: string; maxTokens?: number; settled: boolean
@@ -99,7 +101,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
   events.emit = async value => { reports.push(value); await emit(value) }
   const sessions: SessionManager = new SessionManager({
     workspace, store, provider, bus, tools, agentTypes, events, projectId:settings.projectId,
-    handoffManager: { shouldHandoff: () => false },
+    handoffManager: { shouldHandoff: () => false, getContextPolicy: () => undefined },
     context: {
       buildSystemPrompt: async (ctx: any) => JSON.stringify({ sessionId: ctx.sessionId, mode: ctx.mode, role: ctx.agent.name }),
       buildSystemPromptDetails: async () => ({ systemPrompt: 'Synthetic preview', sections: [] }),
@@ -107,8 +109,11 @@ function fixture(workspace: string, store: SessionStore, settings: {
     getLlmRuntimeConfig: () => llm, callTimeoutMs: settings.callTimeoutMs,
     hasInitiative: settings.hasInitiative,
   } as unknown as SessionManagerDeps)
+  // Older lifecycle fixtures intentionally exercise persisted manual-review compatibility.
+  if (!settings.managedReview) sessions.configureTaskReview = async () => {}
   const subagent = new SubagentTool(bus, sessions, agentTypes, { createThread: async () => null } as unknown as ChannelManager)
   tools.register(subagent)
+  tools.register(new TaskTool(sessions))
   tools.register(new AskTool(sessions.yields, sessions.inputs))
   tools.register(new ReplyTool(sessions.yields, sessions.inputs))
   tools.register(new InvokeTool())
@@ -145,7 +150,7 @@ function sourceContext(workspace: string, f: ReturnType<typeof fixture>): Execut
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: explicit task and call inference reaches the provider; retired observer cannot start or restore`, async () => {
+  test(`${Store.name}: task overrides and inherited call inference reach the provider; retired observer cannot start or restore`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -154,7 +159,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
         for (const mode of ['task', 'call'] as const) {
-          const pending = f.subagent.execute({ description: 'Override inference', task: 'Bounded work', mode, model: 'override', effort: 'high' }, sourceContext(workspace, f))
+          const context = { ...sourceContext(workspace, f), model: 'override', reasoningEffort: 'high' as const }
+          const pending = f.subagent.execute({ description: 'Inference', task: 'Bounded work', mode,
+            ...(mode === 'task' ? { model: 'override', effort: 'high' } : {}),
+          }, context)
           await waitFor(() => f.requests.some(request => !request.settled && request.sessionId !== 'web:root'))
           const request = f.requests.find(request => !request.settled && request.sessionId !== 'web:root')!
           assert.equal(request.model, 'override')
@@ -164,8 +172,24 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           await pending
           await waitFor(() => f.sessions.getSessionState(request.sessionId)?.executionStatus === 'completed')
         }
+        // A direct backend caller cannot smuggle inference through the child prototype.
+        await f.sessions.buildSession('virtual:direct-call', undefined, {
+          mode: 'call', parentSessionId: 'web:root',
+          config: { model: 'injected', reasoningEffort: 'low' },
+        })
+        const direct = f.sessions.startCall('virtual:direct-call', 'Direct bounded work', {
+          ...sourceContext(workspace, f), model: 'override', reasoningEffort: 'high',
+        })
+        const directRequest = await f.next('virtual:direct-call')
+        assert.equal(directRequest.model, 'override')
+        assert.equal(directRequest.effort, 'high')
+        assert.equal((await store.getState('virtual:direct-call'))?.config?.model, 'override')
+        assert.equal((await store.getState('virtual:direct-call'))?.config?.reasoningEffort, 'high')
+        directRequest.resolve(done())
+        await direct
         await assert.rejects(f.sessions.startSession({ agentType: 'work-observer', mode: 'task', channel: 'work-observer', task: 'Retired' }), /retired/)
         await assert.rejects(f.sessions.buildSession('work-observer:legacy', undefined, { agentType: 'work-observer' }), /retired/)
+
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
@@ -364,7 +388,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: fresh task identity is parent-owned while self completion persists`, async () => {
+  test(`${Store.name}: fresh task identity is parent-owned; reviewable self completion denied and legacy completion persists`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -380,20 +404,29 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           await assert.rejects(f.sessions.updateSelfMetadata('virtual:task', patch), 'topic' in patch ? /Unknown or empty/ : /parent-owned/)
         }
         await assert.rejects(f.sessions.updateConversationMetadata('virtual:task', { title: 'Legacy bypass' }), /ordinary/)
-        const sessionTool = new SessionTool(new TopicService({
+        const metadataService = new TopicService({
           projectId: 'p', sessions: f.sessions, folders: {} as never, listStates: async () => [],
           resolveAgent: () => undefined, changed: () => {},
-        }))
+        })
+        const sessionTool = new SessionTool(metadataService)
+        const self = createSelfSessionHandler(f.sessions, () => metadataService)
+        const writeSelf = async (patch: unknown) => self.write('self.json', { content: JSON.stringify(patch) }, context)
         const context = { sessionId: 'virtual:task', projectId: 'p', signal: new AbortController().signal } as ExecutionContext
-        await assert.rejects(sessionTool.execute({ action: 'update_self', title: 'Bypass' }, context), /parent-owned/)
-        await assert.rejects(sessionTool.execute({ action: 'update_self', topic: { title: 'Bypass', goal: 'Goal', scope: '' } }, context), /Unknown or empty/)
+        await assert.rejects(writeSelf({ title: 'Bypass' }), /parent-owned/)
+        await assert.rejects(writeSelf({ topic: { title: 'Bypass', goal: 'Goal', scope: '' } }), /Unknown or empty/)
         await assert.rejects(sessionTool.execute({ action: 'update', sessionId: 'virtual:task', title: 'Bypass' }, context), /Temporary/)
-        await assert.rejects(sessionTool.execute({ action: 'update_self', sessionId: 'web:root', completed: true }, context), /Unknown/)
-        const receipt = JSON.parse(await sessionTool.execute({ action: 'update_self', completed: true }, context))
+        await assert.rejects(writeSelf({ sessionId: 'web:root', completed: true }), /Unknown/)
+        await assert.rejects(writeSelf({ completed: true }), /review submission/)
+        const unchanged = await self.read('self.json', context)
+        await self.write('self.json', { content: unchanged }, context)
+        assert.equal(f.sessions.getSessionState('virtual:task')?.completed ?? false, false)
+        // Records without the new metadata retain their legacy one-shot contract.
+        delete f.sessions.getSessionState('virtual:task')!.task
+        const receipt = JSON.parse(await writeSelf({ completed: true }))
         assert.equal(receipt.title, 'Parent title')
         assert.equal(receipt.description, 'Parent purpose')
         assert.equal(f.sessions.getSessionState('virtual:task')?.completed, true)
-        await sessionTool.execute({ action: 'update_self', completed: false }, context)
+        await writeSelf({ completed: false })
         const saved = (await store.getState('virtual:task'))!
         assert.equal(saved.name, 'Parent title')
         assert.equal(saved.description, 'Parent purpose')
@@ -408,7 +441,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await assert.rejects(f.sessions.updateSelfMetadata('virtual:call', { completed: true }), /ordinary/)
         const taskTools = new SessionTools(new Tools(workspace), workspace)
         taskTools.setExecutionScope('task', ['call'])
-        assert.equal(taskTools.executionDenial('session', { action: 'update_self', completed: true }), undefined)
+        assert.match(taskTools.executionDenial('session', { action: 'update_self', completed: true })!, /parent-owned/)
         for (const args of [{ action: 'update_self', topic: {} }, { action: 'update', title: 'Bypass' }, { action: 'create' }]) {
           assert.match(taskTools.executionDenial('session', args)!, /parent-owned/)
         }
@@ -1556,4 +1589,227 @@ for(const Store of [JsonlSessionStore,SqliteSessionStore]) {
       assert.equal((await f.sessions.getExecutionResult(id))?.status,'completed')
     }finally{await f.sessions.stop();await store.close?.()}
   }))
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: reviewable task permission, CAS, multi-run history and restart`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      let f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:root')
+        await f.sessions.buildSession('web:reviewer')
+        await f.sessions.buildSession('web:stranger')
+        const { child, parent } = await f.spawn()
+        parent.resolve(done('Waiting'))
+        ;(await f.next(child)).resolve(done('Revision one sentinel'))
+        await waitFor(() => f.reports.filter(r => r.type === 'subagent-complete').length === 1 && !f.sessions.getActiveSession(child))
+        let task = await f.sessions.taskAction('web:root', child, 'read')
+        assert.equal(task.status, 'in_review')
+        assert.equal(task.revision, 1)
+        assert.equal(f.sessions.getSessionState(child)?.completed, false)
+        await assert.rejects(f.sessions.updateSelfMetadata(child, { completed: true }), /review submission/)
+        await assert.rejects(f.sessions.taskAction(child, child, 'close', task.version, { revision: 1 }), /creator/)
+        await assert.rejects(f.sessions.taskAction('web:stranger', child, 'read'), /denied/)
+        await assert.rejects(f.sessions.taskAction('web:reviewer', child, 'close', task.version, { revision: 1 }), /denied/)
+        task = await f.sessions.taskAction('web:root', child, 'set_reviewer', task.version, { reviewerSessionId: 'web:reviewer' })
+        await assert.rejects(f.sessions.taskAction('web:root', child, 'close', task.version - 1, { revision: 1 }), /version conflict/)
+        task = await f.sessions.taskAction('web:reviewer', child, 'request_changes', task.version, { revision: 1 })
+        await assert.rejects(f.sessions.deliver(child, { ...input('Implicit restart', 'next-step'), source: { kind: 'session', sessionId: 'web:root' } }), /does not accept subsequent/)
+        const firstRunId = task.activeRunId
+        await f.sessions.stop()
+        f = fixture(workspace, store)
+        await f.sessions.start()
+        task = await f.sessions.taskAction('web:root', child, 'read')
+        assert.equal(task.status, 'changes_requested')
+        task = await f.sessions.taskAction('web:root', child, 'run', task.version, { content: 'Please revise with second sentinel' })
+        assert.notEqual(task.activeRunId, firstRunId)
+        const worker = await f.next(child)
+        assert.ok(worker.messages.some(m => String(m.content).includes('Revision one sentinel')))
+        assert.ok(worker.messages.some(m => JSON.stringify(m.content).includes('second sentinel')))
+        worker.resolve(done('Revision two'))
+        await waitFor(() => f.sessions.getSessionState(child)?.task?.revision === 2 && !f.sessions.getActiveSession(child))
+        task = await f.sessions.taskAction('web:root', child, 'read')
+        await waitFor(() => f.reports.filter(r => r.type === 'subagent-complete').length === 1)
+        assert.equal(task.submissions.length, 2)
+        await assert.rejects(f.sessions.taskAction('web:reviewer', child, 'close', task.version, { revision: 1 }), /exact current/)
+        task = await f.sessions.taskAction('web:reviewer', child, 'close', task.version, { revision: 2 })
+        assert.equal(task.status, 'closed')
+        assert.equal(task.reviewReceipt?.actorSessionId, 'web:reviewer')
+        assert.equal(task.reviewReceipt?.runId, task.activeRunId)
+        const loaded = await store.getState(child)
+        assert.deepEqual(loaded?.task, task)
+        assert.equal(loaded?.completed, true)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: task failed and interrupted runs never submit or accept`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      let f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:root')
+        const { child, parent } = await f.spawn()
+        parent.resolve(done())
+        ;(await f.next(child)).reject(new Error('Failed reviewable run'))
+        await waitFor(() => f.sessions.getSessionState(child)?.completionReported === true && !f.sessions.getActiveSession(child))
+        let task = await f.sessions.taskAction('web:root', child, 'read')
+        assert.equal(task.status, 'working')
+        assert.equal(task.submissions.length, 0)
+        await assert.rejects(f.sessions.taskAction('web:root', child, 'close', task.version, { revision: 0 }), /in review/)
+        task = await f.sessions.taskAction('web:root', child, 'run', task.version, { content: 'Retry the failed run' })
+        ;(await f.next(child)).resolve(done('Success after failure'))
+        await waitFor(() => f.sessions.getSessionState(child)?.task?.revision === 1 && f.sessions.getSessionState(child)?.completionReported === true && !f.sessions.getActiveSession(child))
+        assert.equal(f.reports.filter(r => r.type === 'subagent-failed').length, 1)
+        assert.equal(f.reports.filter(r => r.type === 'subagent-complete').length, 1)
+        task = await f.sessions.taskAction('web:root', child, 'read')
+        task = await f.sessions.taskAction('web:root', child, 'request_changes', task.version, { revision: 1 })
+        await f.sessions.taskAction('web:root', child, 'run', task.version, { content: 'Third run interrupted' })
+        await f.next(child)
+        await f.sessions.stop()
+        // Simulate a crash with a new active run but no receipt for it: old successful receipts remain in the same physical log.
+        const interrupted = (await store.getState(child))!
+        interrupted.task = { ...interrupted.task!, activeRunId: crypto.randomUUID() }
+        interrupted.executionStatus = 'running'
+        interrupted.completionReported = false
+        await store.saveState(child, interrupted)
+        f = fixture(workspace, store)
+        await f.sessions.start()
+        task = await f.sessions.taskAction('web:root', child, 'read')
+        assert.equal(task.status, 'working')
+        assert.equal(task.revision, 1, 'An old successful receipt must not submit the interrupted new run')
+        assert.equal(f.sessions.getSessionState(child)?.executionStatus, 'cancelled')
+        task = await f.sessions.taskAction('web:root', child, 'cancel', task.version)
+        assert.equal(task.status, 'cancelled')
+        assert.notEqual(f.sessions.getSessionState(child)?.completed, true)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  for (const changes of [false, true]) test(`${Store.name}: managed review ${changes ? 'returns then passes' : 'direct pass'} only delivers accepted result`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store = new Store(join(workspace, 'sessions')); await store.init()
+      const f = fixture(workspace, store, { managedReview: true })
+      try {
+        await f.sessions.start(); await f.sessions.buildSession('web:root')
+        const receipt = JSON.parse(await f.subagent.execute({ mode: 'task', task: 'Original requirement sentinel', description: 'Reviewed', review: { mode: 'agent', criteria: 'Acceptance sentinel', max_rounds: 3 } }, sourceContext(workspace, f)))
+        const child = receipt.sessionId
+        ;(await f.next(child)).resolve(done('first submission'))
+        await waitFor(() => !!f.sessions.getSessionState(child)?.task?.workflow?.reviewerSessionId)
+        let reviewer = f.sessions.getSessionState(child)!.task!.workflow!.reviewerSessionId!
+        let request = await f.next(reviewer)
+        assert.match(JSON.stringify(request.messages), /Original requirement sentinel/)
+        assert.match(JSON.stringify(request.messages), /Acceptance sentinel/)
+        assert.equal(f.reports.length, 0)
+        await assert.rejects(f.sessions.reviewTask(child, child, 1, 'pass', ''), /authority/)
+        await assert.rejects(f.sessions.reviewTask(reviewer, child, 0, 'pass', ''), /Stale/)
+        if (changes) {
+          request.resolve(invoke('task', { action: 'review', sessionId: child, revision: 1, outcome: 'changes_requested', content: 'Add fixed sentinel' }))
+          ;(await f.next(reviewer)).resolve(done('Review returned'))
+          const second = await f.next(child)
+          assert.match(JSON.stringify(second.messages), /first submission/)
+          assert.match(JSON.stringify(second.messages), /Add fixed sentinel/)
+          assert.equal(f.reports.length, 0)
+          second.resolve(done('accepted second submission'))
+          const oldReviewer = reviewer
+          await waitFor(() => !!f.sessions.getSessionState(child)?.task?.workflow?.reviewerSessionId && f.sessions.getSessionState(child)?.task?.workflow?.reviewerSessionId !== oldReviewer)
+          reviewer = f.sessions.getSessionState(child)!.task!.workflow!.reviewerSessionId!
+          request = await f.next(reviewer)
+          await assert.rejects(f.sessions.reviewTask(oldReviewer, child, 2, 'pass', ''), /authority/)
+        }
+        request.resolve(invoke('task', { action: 'review', sessionId: child, revision: changes ? 2 : 1, outcome: 'pass' }))
+        ;(await f.next(reviewer)).resolve(done('Reviewer final, not delivered'))
+        await waitFor(() => f.reports.some(r => r.type === 'subagent-complete'))
+        assert.equal(f.reports.length, 1)
+        assert.equal(f.reports[0].content, changes ? 'accepted second submission' : 'first submission')
+        assert.equal(f.sessions.getSessionState(child)!.task!.status, 'closed')
+        assert.equal((await store.getState(child))!.task!.workflow!.terminal, 'passed')
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+  test(`${Store.name}: managed parent review remains open and structured blocked escalates`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store = new Store(join(workspace, 'sessions')); await store.init(); const f = fixture(workspace, store, { managedReview: true })
+      try {
+        await f.sessions.start(); await f.sessions.buildSession('web:root')
+        const { sessionId } = JSON.parse(await f.subagent.execute({ mode: 'task', task: 'Requirement', description: 'Parent review' }, sourceContext(workspace, f)))
+        ;(await f.next(sessionId)).resolve(done('unaccepted'))
+        await waitFor(() => f.reports.length === 1)
+        assert.equal(f.reports[0].type, 'subagent-review-requested')
+        assert.equal(f.sessions.getSessionState(sessionId)!.task!.status, 'in_review')
+        await f.sessions.reviewTask('web:root', sessionId, 1, 'blocked', 'Scope requires new authority')
+        assert.equal(f.reports[1].type, 'subagent-failed')
+        assert.equal(f.reports.filter(r => r.type === 'subagent-complete').length, 0)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  for (const failure of ['budget', 'worker', 'verdict', 'restart'] as const) test(`${Store.name}: managed review failure ${failure} escalates without success or replay`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store = new Store(join(workspace, 'sessions')); await store.init(); const f = fixture(workspace, store, { managedReview: true })
+      let restarted: ReturnType<typeof fixture> | undefined
+      try {
+        await f.sessions.start(); await f.sessions.buildSession('web:root')
+        const { sessionId } = JSON.parse(await f.subagent.execute({ mode: 'task', task: 'Requirement', description: 'Failure', review: { mode: 'agent', max_rounds: 1 } }, sourceContext(workspace, f)))
+        const first = await f.next(sessionId)
+        if (failure === 'worker') first.reject(new Error('Worker failed sentinel'))
+        else {
+          first.resolve(done('candidate'))
+          await waitFor(() => !!f.sessions.getSessionState(sessionId)?.task?.workflow?.reviewerSessionId)
+          const reviewer = f.sessions.getSessionState(sessionId)!.task!.workflow!.reviewerSessionId!
+          const request = await f.next(reviewer)
+          if (failure === 'restart') {
+            await f.sessions.stop()
+            restarted = fixture(workspace, store, { managedReview: true }); await restarted.sessions.start()
+            assert.equal(restarted.requests.filter(r => r.sessionId !== 'web:root').length, 0)
+            assert.equal((await store.getState(sessionId))!.task!.workflow!.terminal, 'failed')
+            assert.equal(restarted.reports.filter(r => r.type === 'subagent-complete').length, 0)
+            return
+          }
+          if (failure === 'budget') {
+            request.resolve(invoke('task', { action: 'review', sessionId, revision: 1, outcome: 'changes_requested', content: 'Needs more work' }))
+            ;(await f.next(reviewer)).resolve(done('returned'))
+          } else request.resolve(done('PASS in natural language must not count'))
+        }
+        await waitFor(() => f.reports.some(r => r.type === 'subagent-failed'))
+        assert.equal(f.reports.filter(r => r.type === 'subagent-complete').length, 0)
+        assert.equal(f.reports.length, 1)
+        assert.equal(f.sessions.getSessionState(sessionId)!.task!.workflow!.terminal, 'failed')
+      } finally { await restarted?.sessions.stop(); await f.sessions.stop(); store.close?.() }
+    })
+  })
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: parent review request goes to creator while report_to routes accepted delivery only`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store = new Store(join(workspace, 'sessions')); await store.init()
+      const f = fixture(workspace, store, { managedReview: true })
+      try {
+        await f.sessions.start(); await f.sessions.buildSession('web:root'); await f.sessions.buildSession('web:recipient')
+        const { sessionId } = JSON.parse(await f.subagent.execute({ mode: 'task', task: 'Requirement', description: 'Routed review', report_to: 'web:recipient' }, sourceContext(workspace, f)))
+        ;(await f.next(sessionId)).resolve(done('accepted routed result'))
+        await waitFor(() => f.reports.length === 1)
+        assert.equal(f.reports[0].type, 'subagent-review-requested')
+        assert.equal(f.reports[0].targetSessionId, 'web:root')
+        await assert.rejects(f.sessions.reviewTask('web:recipient', sessionId, 1, 'pass', ''), /authority/)
+        await f.sessions.reviewTask('web:root', sessionId, 1, 'pass', '')
+        assert.equal(f.reports.length, 2)
+        assert.equal(f.reports[1].type, 'subagent-complete')
+        assert.equal(f.reports[1].targetSessionId, 'web:recipient')
+        assert.equal(f.reports[1].content, 'accepted routed result')
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
 }

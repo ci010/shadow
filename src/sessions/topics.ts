@@ -55,7 +55,7 @@ export interface TopicSummary {
 export interface TopicServiceOptions {
   projectId: string
   sessions: Pick<SessionManager, 'getSessionState' | 'buildSession' | 'assertFolderAccess' |
-    'assertInitiativeAccess' | 'updateConversationMetadata' | 'updateSelfMetadata' | 'deliver' | 'alignment'>
+    'assertInitiativeAccess' | 'updateConversationMetadata' | 'deliver' | 'alignment'>
   listStates: () => Promise<SessionState[]>
   firstMessage?: (sessionId: string) => Promise<string | null>
   folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess'>
@@ -224,13 +224,6 @@ export class TopicService {
     await this.options.sessions.updateConversationMetadata(sessionId, topic)
     this.options.changed(sessionId)
     return this.requireSummary(sessionId)
-  }
-
-  async updateSelf(request: unknown, actorSessionId: string) {
-    this.assertActor(this.options.projectId, actorSessionId)
-    await this.options.sessions.updateSelfMetadata(actorSessionId, request)
-    this.options.changed(actorSessionId)
-    return { ...this.requireSummary(actorSessionId), completed: this.options.sessions.getSessionState(actorSessionId)?.completed ?? false }
   }
 
   async registerFolder(path: unknown, signal?: AbortSignal) {

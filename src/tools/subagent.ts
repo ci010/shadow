@@ -10,14 +10,15 @@ import { channelAddressFromSessionId } from '../bus/events.ts'
 import { parseInitiativeId } from '../sessions/initiative-metadata.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
 import { workBindingSchema } from '../sessions/work-policy.ts'
-import { REASONING_EFFORTS, type InferenceSettings } from '../agent/llm-config.ts'
+import { REASONING_EFFORTS, inferenceSettings, type InferenceSettings } from '../agent/llm-config.ts'
 import { z } from 'zod'
+import { isToolAllowed } from '../utils/tool-allow.ts'
 import { parseSessionName } from '../sessions/session-name.ts'
 
 /** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
   readonly name = 'subagent'
-  readonly description = 'Create a temporary asynchronous task, or invoke a blocking bounded leaf call. Use session creation for independent long-lived conversations. These are executions, not work items. Blocking calls must use this tool directly, not an exec/invoke bridge.'
+  readonly description = 'Create an asynchronous reviewable local task, or invoke a blocking bounded leaf call. Declare review at creation: parent (default) or an independently managed agent. Structured verdicts automatically rerun requested changes in the same worker history; only PASS delivers success. Remote A2A tasks remain legacy one-shot and do not support this review lifecycle. Use session creation for independent long-lived conversations. These are executions, not work items. Blocking calls must use this tool directly, not an exec/invoke bridge.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -26,8 +27,8 @@ export class SubagentTool implements Tool {
         description: 'Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Omission defaults to task in a long-lived session; tasks must explicitly choose call.',
       },
       task: { type: 'string', description: 'Initial work. Required for task/call.' },
-      model: { type: 'string', description: 'Optional exact model ID from v:models. Omission preserves role defaults for tasks and caller settings for calls.' },
-      effort: { type: 'string', enum: [...REASONING_EFFORTS], description: 'Optional reasoning effort supported by the selected model. Omission inherits existing defaults.' },
+      model: { type: 'string', description: 'Task only: optional exact model ID from v:models; omission preserves role defaults. Forbidden in call mode, which always inherits caller settings.' },
+      effort: { type: 'string', enum: [...REASONING_EFFORTS], description: 'Task only: optional reasoning effort supported by the selected model. Omission inherits existing defaults. Forbidden in call mode, which always inherits caller settings.' },
       title: { type: 'string', description: 'Task only: parent-owned display title, max 120 characters. Supply title and description explicitly; legacy omission derives a title from description. Ignored for call.' },
       description: {
         type: 'string',
@@ -43,11 +44,14 @@ export class SubagentTool implements Tool {
           'Agent role. Defaults to "general"; explicit call mode inherits the caller role when omitted. ' +
           'Discover local roles and configured a2a:<agent> targets with read("v:agents"). Remote targets support task mode only and inherit no local resources.',
       },
+      review: {
+        type: 'object', description: 'Local task review policy {mode: parent|agent, agent_type?: local role (default verify), max_rounds?: integer 1..10 (default 3), criteria?: text}. Omission defaults to parent review; agent creates an independent reviewer automatically. PASS alone delivers success; changes rerun the original worker. Calls and A2A do not accept review.',
+      },
       report_to: {
         type: 'string',
         description:
           'Session ID to route the final task result to instead of this session. ' +
-          'Format: "channel:chatId". Enables agent chains (e.g., coder → verifier).',
+          'Format: "channel:chatId". Routing only: this does not grant reviewer or close authority.',
       },
       preload_tools: {
         type: 'object',
@@ -80,6 +84,9 @@ export class SubagentTool implements Tool {
     if (!description) return 'Error: description is required'
 
     if (args.mode !== undefined && !isExecutionMode(args.mode)) return 'Error: mode must be task or call.'
+    if (args.mode === 'call' && (Object.hasOwn(args, 'model') || Object.hasOwn(args, 'effort'))) {
+      return 'Error: call mode cannot specify model or effort; it always inherits caller inference settings.'
+    }
     const allowedModes = this.sessions.getAllowedSubagentModes(ctx.sessionId)
     if (args.mode === undefined && !allowedModes.includes('task')) {
       return `Error: mode is required in this scope; choose ${allowedModes.join(', ') || 'nothing'}.`
@@ -130,14 +137,17 @@ export class SubagentTool implements Tool {
     }
     const inference = mode === 'call' ? {
       ...structuredClone(parentState?.config ?? {}),
-      ...(ctx.model !== undefined ? { model: ctx.model } : {}),
-      ...(ctx.temperature !== undefined ? { temperature: ctx.temperature } : {}),
-      ...(ctx.maxTokens !== undefined ? { maxTokens: ctx.maxTokens } : {}),
-      ...(ctx.thinking !== undefined ? { thinking: structuredClone(ctx.thinking) } : {}),
-      ...(ctx.reasoningEffort !== undefined ? { reasoningEffort: ctx.reasoningEffort } : {}),
-      ...overrides,
+      ...inferenceSettings(ctx),
     } : { ...overrides }
     if (mode === 'call' && reportTo !== undefined) return 'Error: call mode cannot use report_to.'
+    if (mode === 'call' && args.review !== undefined) return 'Error: calls do not support review policies.'
+    const review = mode === 'task' ? z.object({ mode: z.enum(['parent', 'agent']).default('parent'), agent_type: z.string().min(1).optional(), max_rounds: z.number().int().min(1).max(10).default(3), criteria: z.string().max(16000).default('') }).strict().parse(args.review ?? {}) : undefined
+    if (review?.mode === 'parent' && review.agent_type !== undefined) return 'Error: parent review does not accept agent_type.'
+    if (review?.mode === 'agent' && (!this.agentTypes.resolve(review.agent_type ?? 'verify') || (review.agent_type ?? 'verify') === 'orchestrator')) return 'Error: reviewer must be a configured local non-orchestrator agent.'
+    if (review?.mode === 'agent') {
+      const reviewer = this.agentTypes.resolve(review.agent_type ?? 'verify')!
+      if (reviewer.name.startsWith('a2a:') || !isToolAllowed(reviewer, 'task')) return 'Error: reviewer must be local and permitted to use the structured task review tool.'
+    }
     const task = typeof args.task === 'string' ? args.task.trim() : ''
     if (!task) return `Error: task is required for mode="${mode}".`
     if (reportTo !== undefined && !/^[^:]+:.+$/.test(reportTo)) return 'Error: report_to must be a session ID in channel:chatId format.'
@@ -199,6 +209,7 @@ export class SubagentTool implements Tool {
       },
     )
 
+    if (review) await this.sessions.configureTaskReview(sessionId, task, { mode: review.mode, agentType: review.mode === 'agent' ? review.agent_type ?? 'verify' : undefined, maxRounds: review.max_rounds, criteria: review.criteria })
     this.sessions.alignment?.linkExecution(sessionId, parentSessionId, work)
     if (mode === 'call') return this.sessions.startCall(sessionId, task, ctx)
     if (task) {
@@ -213,7 +224,7 @@ export class SubagentTool implements Tool {
     return JSON.stringify({
       sessionId, executionId: mode === 'task' ? sessionId : undefined, mode, agentType: typeName,
       status: task ? 'running' : 'pending',
-      message: 'Task started. Correct this assignment with message(sessionId, content); it applies at the next safe step. Do not take over its files until completion or confirmed cancellation. Final result is automatic.',
+      message: 'Task started. Correct this assignment with message(sessionId, content); it applies at the next safe step. Do not take over its files until completion or confirmed cancellation. Review workflow is automatic. Parent review receives a review request and uses task(action=review) with the fixed revision; agent review needs no parent orchestration. Only PASS reports success; failures escalate.',
     })
     })
   }

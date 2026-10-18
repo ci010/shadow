@@ -20,7 +20,7 @@ export function contextWindowLabel(value: number | null | undefined): string {
 
 export function isChannelConversation(session: SidebarSession | undefined): boolean {
   return !!session && (!session.mode || session.mode === 'session') &&
-    ['qq', 'discord', 'feishu'].includes(session.channelAddress?.platform ?? session.sessionId.split(':', 1)[0])
+    ['qq', 'discord', 'feishu', 'wechat'].includes(session.channelAddress?.platform ?? session.sessionId.split(':', 1)[0])
 }
 
 export const effortOptions = [

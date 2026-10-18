@@ -18,9 +18,11 @@ test('automatic metadata observer is retired while manual organization and histo
 
 test('tool and inline guidance expose explicit self metadata, completion and reopening, not routing', async () => {
   const tool = new SessionTool({} as never)
-  assert.ok((tool.parameters.properties?.action as { enum: string[] }).enum.includes('update_self'))
+  assert.equal((tool.parameters.properties?.action as { enum: string[] }).enum.includes('update_self'), false)
   const guidance = await readFile(new URL('../agent/context/tools-guideline.ts', import.meta.url), 'utf8')
-  assert.match(guidance, /session action=update_self/)
+  assert.doesNotMatch(guidance, /update_self/)
+  assert.match(guidance, /v:session\/self.json/)
+  assert.match(guidance, /first user request/)
   assert.match(guidance, /completed:true/)
   assert.match(guidance, /completed:false/)
   assert.match(guidance, /independent of inferred running\/waiting activity/)

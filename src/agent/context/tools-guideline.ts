@@ -76,14 +76,14 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
       '- Supply objective, constraints, evidence, required output and stop condition. Optional `work:{key}` links a shared note and contextual questions; an unambiguous parent focus is inherited. No adoption protocol. Modes never widen permissions.',
     ]
     if (modes.includes('task')) {
-      lines.push('- `mode: "task"`: bounded `task` at creation, fresh context, one assignment, automatic completion; no follow-up assignments. Its actual parent may send corrections while it runs.')
+      lines.push('- `mode: "task"`: one assignment, fresh context. Declare parent (default) or agent `review`; changes reuse worker history, only PASS delivers success. The parent may send corrections.')
       lines.push('- Optional `model` (exact v:models ID) and `effort` select inference at creation; omitted values preserve role/caller defaults.')
       lines.push('- Stabilize shared interfaces before parallel migrations. Only continue independent work: taking over a worker scope requires completion or confirmed cancellation, then re-read its files. A failed message does not stop the worker.')
       lines.push('- Asynchronous creation admits an ID, not a result. Provide context explicitly. Continue independent work or end your turn; do not sleep or poll.')
       lines.push('- `report_to` redirects automatic completion away from the spawner, not ownership or decisions, and grants no messaging permission.')
     }
     if (modes.includes('call')) {
-      lines.push('- `mode: "call"`: inherited context snapshot; returns its final result in this invocation, not its internal trace or a completion event. Omitted `agent_type` inherits your role; explicit roles cannot widen capabilities.')
+      lines.push('- `mode: "call"`: inherited context snapshot; returns its final result in this invocation, not its internal trace or a completion event. Model and effort always inherit the caller; do not specify `model` or `effort`. Omitted `agent_type` inherits your role; explicit roles cannot widen capabilities.')
       lines.push('- Invoke call directly with `subagent`, never through exec/scripts/invoke_tool. Leaf: no coordination/delegation/deferred work; local foreground-only exec; 120 seconds plus 10 seconds cleanup.')
       lines.push('- Blocked calls return missing input and partial work. Resolve blockers and account for side effects before retrying. No `report_to` for call.')
     }
@@ -97,12 +97,13 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
     sections.push(lines.join('\n'))
   }
 
-  if (mode === 'task' && allows('session')) sections.push('- `session action=update_self` accepts only completed:true to mark resolved or completed:false to reopen. Title and description are parent-owned.')
+  if (mode === 'task' && allows('task')) sections.push('- Review a fixed revision with `task(action:review,sessionId,revision,outcome:pass|changes_requested|blocked,content)`. Only the designated reviewer may decide. Changes automatically rerun the worker; only PASS delivers success. Failure or exhausted rounds escalate; Work is unchanged.')
+  if (mode === 'task') sections.push('- Read/write `v:session/self.json` for current metadata. Title and description are parent-owned: omit them or preserve unchanged. completed:true marks resolved and completed:false reopens; reviewable tasks must return a final response for review, never self-accept. An unchanged full JSON roundtrip is allowed.')
+  if (mode === 'session' && allows('read') && allows('write')) sections.push('- Read/write `v:session/self.json`: partial/full JSON title/description/completed. After understanding the first user request, set accurate title/description; update only for goal changes, not continual polishing. completed:true ends responsibility, not Work; completed:false reopens, independent of inferred running/waiting activity. No background observer.')
   if (mode === 'session' && allows('session')) {
     sections.push(`### Peer conversations
 
-- Reuse peers: discover \`grep:v:sessions\`; \`v:sessions/<id>/brief\` gives metadata and conversation URL, not work scope.
-- \`session action=update_self\`: set only title/description/completed for yourself. Sessions are discoverable topics without registration or Work; formal goals/boundaries belong in Work. completed:true ends your responsibility, not Work; completed:false reopens it, independent of inferred running/waiting activity. No sessionId or topic parameter.
+- Reuse peers: discover \`search({handler: "grep", path: "v:sessions", query})\`; \`v:sessions/<id>/brief\` gives metadata and conversation URL, not work scope.
 - \`session action=create\`: title; description is metadata, initialMessage is the request. Optional \`work:{key}\` links an unassigned note before kickoff.
 - Retry with the same \`requestId\`; kickoff is not replayed. \`initialMessageStatus\`: \`accepted\`, \`not_requested\`, \`not_replayed\`. Admission is not completion.
 - \`work assign\` sets responsibility; directories and creator provenance are not ownership. Metadata never revises work. Work create associates this session; work link key associates existing Work without changing select focus.

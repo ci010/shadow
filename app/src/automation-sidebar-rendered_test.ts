@@ -62,7 +62,11 @@ test('actual folder sidebar hover maps inactive historical system controllers to
       const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');
       const wait=()=>new Promise(r=>setTimeout(r,250));
       await win.loadURL(${JSON.stringify(new URL('__automation', server.resolvedUrls!.local[0]).href)});
-      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
+      for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-heading')))break;await wait()}
+      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'false');
+      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),0);
+      await run(()=>document.querySelector('.automations-heading').click());await wait();
+      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
       assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),2);
       for(const id of ['system:work-organizer','historical-organizer']){
         const before=id==='historical-organizer'?'Enable':'Disable';const after=before==='Disable'?'Enable':'Disable';
@@ -80,10 +84,19 @@ test('actual folder sidebar hover maps inactive historical system controllers to
       }
       assert.deepEqual(await run(()=>window.patches),['system:work-organizer','system:work-organizer'].map((id,i)=>({path:'/projects/fixture/api/automations/'+encodeURIComponent(id),body:{enabled:i===1}})));
       await win.loadURL(${JSON.stringify(new URL('__automation?denied', server.resolvedUrls!.local[0]).href)});
-      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
+      for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-heading')))break;await wait()}
+      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'false');
+      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),0);
+      await run(()=>document.querySelector('.automations-heading').click());await wait();
+      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
       await run(()=>document.querySelector('[data-automation-id]').parentElement.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'})));await wait();
       assert.equal(await run(()=>document.querySelectorAll('.shared-hover-info .automation-action').length),0);
       assert.equal(await run(()=>document.querySelector('.shared-hover-info')?.getAttribute('role')),'tooltip');
+      await run(()=>document.querySelector('.automations-heading').click());await wait();
+      assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'false');
+      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),0);
+      await run(()=>document.querySelector('.automations-heading').click());await wait();
+      assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),2);
       console.log('AUTOMATION_REAL_HOVER_OK');app.exit(0);
     }).catch(error=>{console.error(error);app.exit(1)});
   `)

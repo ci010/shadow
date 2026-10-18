@@ -5,7 +5,7 @@ import { parseSessionGraph } from './folders-sidebar.ts'
 import { readFile } from 'node:fs/promises'
 import { compileScript, compileStyle, compileTemplate, parse } from 'vue/compiler-sfc'
 
-for (const platform of ['qq', 'discord', 'feishu']) test(`${platform} conversation controls keep inherited defaults separate from session overrides and exclude executions`, () => {
+for (const platform of ['qq', 'discord', 'feishu', 'wechat']) test(`${platform} conversation controls keep inherited defaults separate from session overrides and exclude executions`, () => {
   const sessionId = `bot:project-a:bot-a:${platform}:group%3Aa`
   const inferenceDefaults = { model: 'agent-model', thinking: { type: 'enabled' }, reasoningEffort: 'low' }
   const graph = (extra: Record<string, unknown> = {}) => ({ nodes: [], sessions: [

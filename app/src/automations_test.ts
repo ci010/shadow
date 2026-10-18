@@ -276,6 +276,13 @@ function mount(t: TestContext, active = true, withSidebar = false) {
   }))
   app.provide(Symbol.for('shadow.automation-catalog'), catalog)
   app.mount(root)
+  // These catalog/action tests exercise the expanded contents; the real-renderer
+  // sidebar test separately verifies the default-collapsed disclosure behavior.
+  const expandSidebar = (parent: TreeNode): void => {
+    if (parent.props.class === 'automations-heading') (parent.props.onClick as (() => void))()
+    else for (const child of parent.children) expandSidebar(child)
+  }
+  if (withSidebar) expandSidebar(root)
   let mounted = true
   const unmount = () => { if (mounted) { app.unmount(); mounted = false } }
   t.after(unmount)

@@ -123,3 +123,27 @@ test('legacy missing-ID calls pair only within a tool block; mismatched IDs stay
   assert.equal(entries[2].result, 'Correct ID')
   assert.equal(entries[3].result, 'Wrong ID')
 })
+
+
+test('execution summaries show resolved model and effort, with task-only argument fallback', () => {
+  for (const mode of ['task', 'call'] as const) {
+    const invocation = { ...call('a', mode), toolCall: { name: 'subagent', arguments: {
+      mode, model: 'requested-model', effort: 'low',
+    } } }
+    const pending = inlineExecutionMessages([invocation], [], 'owner', {}, true).entries.get(0)!
+    assert.equal(pending.model, mode === 'task' ? 'requested-model' : undefined)
+    assert.equal(pending.effort, mode === 'task' ? 'low' : undefined)
+    const sessions = parseSessionGraph({ sessions: [{ sessionId: 'child', mode,
+      parentSessionId: 'owner', parentToolCallId: 'a',
+      config: { model: 'resolved-model', reasoningEffort: 'high' },
+      inferenceDefaults: { model: 'default-model', reasoningEffort: 'medium' },
+    }], nodes: [] })
+    const resolved = inlineExecutionMessages([invocation], sessions, 'owner', {}, true).entries.get(0)!
+    assert.equal(resolved.model, 'resolved-model')
+    assert.equal(resolved.effort, 'high')
+    sessions[0].config = undefined
+    const defaults = inlineExecutionMessages([invocation], sessions, 'owner', {}, true).entries.get(0)!
+    assert.equal(defaults.model, 'default-model')
+    assert.equal(defaults.effort, 'medium')
+  }
+})

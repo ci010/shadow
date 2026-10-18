@@ -1,6 +1,11 @@
 <template>
   <section v-if="jobs.length || initialLoading || error" class="automations-sidebar" :aria-label="t('Automations')" :aria-busy="loading">
-    <h3 v-if="!rail">{{ t('Automations') }}</h3>
+    <button type="button" class="automations-heading" :class="{ 'is-rail': rail }" :aria-label="t('Automations')" :aria-expanded="expanded" @click="expanded = !expanded">
+      <span :class="expanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="automations-disclosure" aria-hidden="true" />
+      <span v-if="!rail">{{ t('Automations') }}</span>
+      <span v-else class="i-lucide-folder" aria-hidden="true" />
+    </button>
+    <div v-if="expanded" class="automations-items">
     <p v-if="updateError && !rail" class="automations-note" role="alert">{{ updateError }}</p>
     <div v-if="error" class="automations-error" role="alert">
       <p v-if="!rail">{{ error }}</p>
@@ -25,6 +30,7 @@
         </button>
       </template>
     </HoverInfo>
+    </div>
   </section>
 </template>
 
@@ -44,6 +50,7 @@ const props = defineProps<{
 }>()
 defineEmits<{ select: [id: string] }>()
 const { jobs, error, loading, loaded, refresh } = useAutomationCatalog(() => props.apiBase, () => props.active)
+const expanded = ref(false)
 const updating = reactive(new Set<string>())
 const updateError = ref('')
 // Shared hover content can outlive the row's snapshot after catalog refresh.
@@ -69,7 +76,12 @@ function working(id: string) {
 <style scoped>
 .automations-sidebar { margin-top: var(--sidebar-section-gap); min-width: 0; }
 .automations-sidebar:first-child { margin-top: 0; }
-h3 { margin: 0 0 var(--sidebar-heading-gap); padding-inline: calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)) var(--sidebar-row-inset); color: var(--c-text-secondary); font-size: 12px; line-height: 20px; font-weight: 500; }
+.automations-heading { display: flex; align-items: center; gap: var(--sidebar-heading-gap); width: 100%; min-height: var(--sidebar-row-height); margin: 0; padding: 2px var(--sidebar-row-inset); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; line-height: 20px; font-weight: 500; text-align: left; cursor: pointer; }
+.automations-heading:hover { background: var(--c-bg-muted); }
+.automations-heading:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.automations-disclosure { width: var(--sidebar-disclosure); height: 14px; flex-shrink: 0; }
+.automations-heading.is-rail { justify-content: center; padding: 8px 2px; }
+.automations-items { margin-top: var(--sidebar-heading-gap); }
 .automation-action { margin-top: 10px; min-height: 32px; padding: 4px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; cursor: pointer; }
 .automation-action:disabled { opacity: .5; cursor: default; }
 .automation-action:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }

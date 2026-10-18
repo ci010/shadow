@@ -8,6 +8,8 @@ export interface InlineExecution {
   mode: 'task' | 'call'
   label: string
   agentType?: string
+  model?: string
+  effort?: string
   sessionId?: string
   stage?: SessionStage
   blocked: boolean
@@ -55,6 +57,10 @@ export function inlineExecutionMessages(
       mode,
       label: typeof call.args.description === 'string' ? call.args.description : session?.label ?? (mode === 'task' ? t('Delegated task') : t('Context call')),
       agentType: session?.agentType ?? (typeof call.args.agent_type === 'string' ? call.args.agent_type : undefined),
+      model: session?.config?.model ?? session?.inferenceDefaults?.model
+        ?? (mode === 'task' && typeof call.args.model === 'string' ? call.args.model : undefined),
+      effort: session?.config?.reasoningEffort ?? session?.inferenceDefaults?.reasoningEffort
+        ?? (mode === 'task' && typeof call.args.effort === 'string' ? call.args.effort : undefined),
       sessionId: session?.sessionId ?? (typeof result?.sessionId === 'string' && result.sessionId ? result.sessionId : undefined),
       stage: blocked || failed ? 'failed' : session ? executionDisplayStage(session, stages[session.sessionId]) : status ?? (live ? 'running' : undefined),
       blocked,

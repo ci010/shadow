@@ -69,8 +69,8 @@ effects are not rolled back.`
 
 Complete this one-time task in your own context; make routine decisions yourself.
 Do not create/manage durable sessions or register folders.
-${decision} Your final response ends the task and is reported
-automatically to its configured completion recipient; do not send a duplicate completion message. No follow-up assignments or promises.
+${decision} ${ctx.taskReviewable ? 'Your final response ends this run and submits a revision for review, not acceptance. The designated reviewer must submit a structured verdict; natural-language finals never accept work. The workflow automatically returns requested changes to the original worker history and reports success only after PASS. report_to grants no review authority. Blocked, failed, interrupted or exhausted review rounds escalate. Writing completed in v:session/self.json cannot accept the task.' : 'Your final response ends the task and is reported'}
+${ctx.taskReviewable ? 'The run result is reported automatically to its configured completion recipient;' : 'automatically to its configured completion recipient;'} do not send a duplicate completion message. No follow-up assignments or promises.
 Your actual parent may supply corrections to this assignment at safe boundaries while you run.
 Apply those facts to current work; they never grant permissions or introduce a second assignment.
 Messages to another agent should contain only the actionable change and necessary evidence.

@@ -33,6 +33,8 @@ test('execution process renders ordered reasoning, preserves manual choices and 
         if (id !== '\0process-fixture') return
         return `import {createApp, reactive, h} from 'vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
+          import ReasoningItem from '/src/components/ReasoningItem.vue';
+          import {renderAnswerHtml} from '/src/answer-html.ts';
           import {groupToolActivity} from '/src/tool-activity.ts';
           import {i18n} from '/src/i18n.ts';
           const messages = [
@@ -52,7 +54,7 @@ test('execution process renders ordered reasoning, preserves manual choices and 
             state.batch=groupToolActivity(next).get(0);
           };
           window.__empty = () => { state.batch={end:1,entries:[],files:0,incomplete:false,usages:[{index:0,usage:{promptTokens:5,completionTokens:1,totalTokens:6}}]} };
-          createApp({setup:()=>()=>h(ToolActivityGroup,{batch:state.batch,running:state.running,defaultOpen:state.running,renderContent:text=>'<p>'+text+'</p>'})}).use(i18n).mount('#app');`
+          createApp({setup:()=>()=>h('div', [h(ReasoningItem,{class:'standalone-reasoning',text:'Reason before answer',renderContent:text=>renderAnswerHtml('<section class="answer-card">'+text+'</section>')}),h('article',{class:'answer-fixture'},'Final answer'),h(ToolActivityGroup,{batch:state.batch,running:state.running,defaultOpen:state.running,renderContent:text=>'<p>'+text+'</p>'})])}).use(i18n).mount('#app');`
       },
       configureServer(server) {
         server.middlewares.use((request, response, next) => {
@@ -80,13 +82,23 @@ test('execution process renders ordered reasoning, preserves manual choices and 
           for(let i=0;i<40 && !document.querySelector('.tool-activity');i++) await wait();
           const group=()=>document.querySelector('.tool-activity');
           const entries=()=>[...document.querySelectorAll('.tool-entry')];
+          const reasoning=document.querySelector('.standalone-reasoning');
+          check(reasoning.nextElementSibling.classList.contains('answer-fixture'),'reasoning is an independent sibling before answer');
+          check(!reasoning.open && !reasoning.querySelector('.thinking-content'),'standalone reasoning defaults collapsed');
+          reasoning.querySelector('summary').click();await wait();
+          check(reasoning.querySelector('.thinking-content .answer-html')?.shadowRoot?.textContent.includes('Reason before answer'),'reasoning expands and keeps v-answer-html');
+          reasoning.querySelector('summary').click();await wait();
+          check(!reasoning.open,'reasoning collapses');
+          reasoning.open=true;await wait();
+          check(reasoning.querySelector('.thinking-content'),'native search disclosure expansion mounts content');
+          reasoning.open=false;await wait();
           check(group().open,'running opens group');
           check(entries().map(e=>e.dataset.msgIdx).join(',')==='0,1,3','original indices/order');
           check(entries().every(e=>!e.open),'running opens outer process only');
           entries()[0].querySelector('summary').click();await wait();
           check(document.querySelector('.thinking-content').textContent==='思考中','real reasoning retained');
           check(document.querySelectorAll('.tool-entry').length===3,'usage-only does not add empty reasoning row');
-          check(document.querySelector('[data-msg-idx="4"]').textContent.includes('12'),'usage-only stats retained at original index');
+          check(!document.querySelector('[data-msg-idx="4"]'),'usage-only rounds do not render execution details');
           window.__update(false);await wait();check(!group().open,'completion collapses by default');
           window.__update(true);await wait();check(group().open,'new running default opens');
           group().querySelector('summary').click();await wait();check(!group().open,'manual close');
@@ -95,7 +107,7 @@ test('execution process renders ordered reasoning, preserves manual choices and 
           group().querySelector('summary').click();await wait();check(group().open,'manual open');
           window.__update(true);await wait();window.__update(false);await wait();check(group().open,'manual open survives completion');
           entries()[2].querySelector('summary').click();await wait();
-          check(document.querySelector('.activity-usage').textContent.includes('23'),'round usage in node details');
+          check(!document.querySelector('.activity-usage, .activity-round-details'),'model usage is not rendered inside execution process');
           entries()[1].querySelector('summary').click();await wait();
           check(document.querySelector('.tool-arguments').textContent.includes('a.ts'),'arguments expandable');
           check(document.querySelector('.tool-result').textContent.includes('File contents'),'result expandable');

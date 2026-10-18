@@ -1,3 +1,5 @@
+import { createTaskLifecycle, transitionTaskLifecycle, type TaskLifecycleAction } from './task-lifecycle.ts'
+import { parseTaskRecord, type TaskRecord } from './task-record.ts'
 import { validateFreshAutomationState } from './fresh-automation-state.ts'
 import { createHash } from 'node:crypto'
 import { retirementReceiptSchema, type RetirementReceipt } from './retirement-contract.ts'
@@ -23,7 +25,7 @@ import type {
 } from '../agent/context/builder.ts'
 import type { EventService } from '../events/service.ts'
 import type { IdentityManager } from '../agent/identity.ts'
-import { isContextWindow, resolveInferenceSettings, validateInferenceCapabilities, type InferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
+import { inferenceSettings, isContextWindow, resolveInferenceSettings, validateInferenceCapabilities, type InferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { ProjectScope } from '../projects/scope.ts'
 import { channelAddressFromSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
@@ -442,6 +444,13 @@ export class SessionManager {
         throw new Error('Blocking calls require native subagent invocation; a script bridge cannot guarantee the caller remains attached.')
       }
       context.signal.throwIfAborted()
+      // Admission is authoritative even for callers that bypass SubagentTool.
+      // Never accept inference overrides stored in the child prototype.
+      state.config = {
+        ...structuredClone(this.sessionStates[context.sessionId]?.config ?? {}),
+        ...inferenceSettings(context),
+      }
+      await this.saveState(sessionId, state)
     } catch (error) {
       state.executionStatus = context.signal.aborted ? 'cancelled' : 'failed'
       await this.saveState(sessionId, state)
@@ -1117,9 +1126,18 @@ ${JSON.stringify(request)}`,
       for (const state of Object.values(this.sessionStates)) {
         if (state.mode !== 'task' || state.completionReported || !state.lastActivityAt || !state.reportTo) continue
         if (this.historyConflict(state.sessionId)) continue
+        if (state.task?.workflow) {
+          const w = state.task.workflow
+          if (!w.terminal && !(w.mode === 'parent' && state.task.status === 'in_review' && !w.decision)) await this.failTaskReview(state, 'Workflow interrupted by process restart; no automatic write replay.')
+          continue
+        }
+        if (Object.values(this.sessionStates).some(s => s.task?.workflow?.reviewerSessionId === state.sessionId)) continue
         let fact: SessionTurnFact | undefined
         for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
-          if (record.execution_receipt) fact = record.execution_receipt as SessionTurnFact
+          if (record.execution_receipt) {
+            const receipt = record.execution_receipt as SessionTurnFact
+            if (!state.task || receipt.runId === state.task.activeRunId) fact = receipt
+          }
         }
         if (!fact && state.executionStatus === 'cancelled') {
           fact = {
@@ -1127,6 +1145,7 @@ ${JSON.stringify(request)}`,
             inputId: state.executionKey ?? state.sessionId,
             source: { kind: 'session', sessionId: state.parentSessionId ?? state.parent?.id ?? state.sessionId },
             status: 'cancelled', content: '', error: 'Execution interrupted by process restart.',
+            ...(state.task ? { runId: state.task.activeRunId } : {}),
           }
         }
         if (fact) await this.reportCompletion(fact)
@@ -1136,19 +1155,154 @@ ${JSON.stringify(request)}`,
     for (const state of Object.values(this.sessionStates)) if (state.statePersistence && state.automationCallerSettled) await this.finalizeAutomation(state.sessionId)
   }
 
+  /** Called at creation, before admission; no Work lifecycle mutations. */
+  async configureTaskReview(sessionId: string, assignment: string, review: { mode: 'parent' | 'agent'; agentType?: string; maxRounds: number; criteria: string }): Promise<void> {
+    const state = this.sessionStates[sessionId]
+    if (!state?.task || state.executionStatus !== 'pending') throw new Error('Review policy requires a fresh local task')
+    const task = parseTaskRecord({ ...state.task, workflow: { ...review, assignment } })
+    await this.store.saveState(sessionId, { ...state, task })
+    state.task = task
+  }
+
+  private async saveReviewTask(state: SessionState, task: TaskRecord): Promise<void> {
+    await this.store.saveState(state.sessionId, { ...state, task, completed: task.status === 'closed' })
+    state.task = task
+    state.completed = task.status === 'closed'
+  }
+
+  /** Structured verdict only. A reviewer final is not a verdict. */
+  async reviewTask(actorId: string, workerId: string, revision: number, outcome: 'pass' | 'changes_requested' | 'blocked', content: string): Promise<TaskRecord> {
+    const result = await this.withStateCreation(workerId, async () => {
+      const state = this.sessionStates[workerId]
+      const task = state?.task
+      const w = task?.workflow
+      if (!task || !w || !this.sessionStates[actorId] || this.stopped) throw new Error('Review workflow unavailable')
+      if (actorId === workerId || actorId !== (w.mode === 'parent' ? task.creatorSessionId : w.reviewerSessionId)) throw new Error('Review authority denied')
+      if (task.status !== 'in_review' || w.terminal || w.decision || revision !== task.revision) throw new Error('Stale or duplicate review revision')
+      if (!['pass', 'changes_requested', 'blocked'].includes(outcome) || typeof content !== 'string' || (outcome !== 'pass' && !content.trim())) throw new Error('Review outcome requires actionable content')
+      const next = { ...task, version: task.version + 1, workflow: { ...w, decision: { revision, outcome, content } } }
+      await this.saveReviewTask(state, next)
+      return structuredClone(next)
+    })
+    // Agent verdicts are applied after the independent review run settles.
+    if (result.workflow!.mode === 'parent') await this.advanceTaskReview(this.sessionStates[workerId])
+    return result
+  }
+
+  private async emitReviewOutcome(state: SessionState, kind: 'review' | 'passed' | 'failed', content: string): Promise<void> {
+    const task = state.task!
+    const w = task.workflow!
+    if (kind !== 'review' && w.delivered) return
+    // Persist before publishing: restart never replays writes or a successful delivery.
+    if (kind !== 'review') await this.saveReviewTask(state, { ...task, workflow: { ...w, delivered: true } })
+    await this.deps.events.emit({
+      id: `task-review:${state.sessionId}:${task.revision}:${kind}`, type: kind === 'review' ? 'subagent-review-requested' : kind === 'passed' ? 'subagent-complete' : 'subagent-failed',
+      source: 'subagent', targetSessionId: kind === 'review' ? task.creatorSessionId : state.reportTo ?? task.creatorSessionId, senderName: 'Task review', content,
+      origin: { sessionId: state.sessionId, inputId: state.executionKey ?? state.sessionId, source: { kind: 'session', sessionId: state.sessionId } },
+      meta: { kind: 'subagent', sourceSessionId: state.sessionId, mode: 'task', executionStatus: kind === 'passed' ? 'completed' : kind === 'failed' ? 'failed' : 'pending', revision: task.revision, taskStatus: task.status },
+    })
+  }
+
+  private async failTaskReview(state: SessionState, reason: string): Promise<void> {
+    const task = state.task!
+    await this.saveReviewTask(state, { ...task, version: task.version + 1, workflow: { ...task.workflow!, terminal: 'failed', failure: reason } })
+    await this.emitReviewOutcome(state, 'failed', `Task review failed: ${reason}`)
+  }
+
+  private async advanceTaskReview(state: SessionState): Promise<void> {
+    const task = state.task!
+    const w = task.workflow!
+    const decision = w.decision
+    if (w.terminal || !decision) return
+    if (decision.outcome === 'blocked') return this.failTaskReview(state, decision.content)
+    if (decision.outcome === 'pass') {
+      const next = transitionTaskLifecycle(task, w.mode === 'parent' ? task.creatorSessionId : w.reviewerSessionId!, { type: 'close', revision: decision.revision })
+      await this.saveReviewTask(state, { ...task, ...next, version: task.version + 1, reviewReceipt: { actorSessionId: w.mode === 'parent' ? task.creatorSessionId : w.reviewerSessionId!, revision: task.revision, runId: task.activeRunId!, at: new Date().toISOString() }, workflow: { ...w, terminal: 'passed' } })
+      await this.emitReviewOutcome(state, 'passed', w.submission!.content)
+      return
+    }
+    if (task.revision >= w.maxRounds) return this.failTaskReview(state, `Review round budget (${w.maxRounds}) exhausted. ${decision.content}`)
+    const next = transitionTaskLifecycle(task, w.mode === 'parent' ? task.creatorSessionId : w.reviewerSessionId!, { type: 'request_changes', revision: decision.revision })
+    await this.saveReviewTask(state, { ...task, ...next, version: task.version + 1, activeRunId: undefined, workflow: { ...w, decision: undefined, reviewerSessionId: undefined } })
+    state.executionStatus = 'pending'
+    state.completionReported = false
+    await this.store.saveState(state.sessionId, state)
+    this.acceptedInputs.delete(state.sessionId)
+    const input: SessionInput = { id: crypto.randomUUID(), kind: 'message', content: `Review requested changes for revision ${decision.revision}:\n${decision.content}`, policy: 'next-step', timestamp: new Date().toISOString(), source: { kind: 'session', sessionId: task.creatorSessionId } }
+    this.taskRunInputs.add(input)
+    await this.deliver(state.sessionId, input)
+  }
+
+  private async requestTaskReview(state: SessionState, fact: SessionTurnFact): Promise<void> {
+    const task = state.task!
+    const w = task.workflow!
+    if (w.terminal) return
+    if (fact.status !== 'completed') return this.failTaskReview(state, fact.error ?? `Worker ${fact.status}`)
+    if (w.submission?.revision === task.revision) return
+    const submission = { revision: task.revision, content: fact.content ?? '', artifactRef: task.submissions.at(-1)!.artifactRef }
+    await this.saveReviewTask(state, { ...task, workflow: { ...w, submission } })
+    const prompt = `Review the fixed submission below against the original assignment and acceptance criteria. Do not edit worker artifacts. Use task(action=review, sessionId=${JSON.stringify(state.sessionId)}, revision=${task.revision}, outcome=pass|changes_requested|blocked, content=...) for a structured verdict; natural-language finals are not verdicts.\nOriginal assignment:\n${w.assignment}\nAcceptance criteria:\n${w.criteria}\nSubmission revision ${task.revision}; artifact: ${submission.artifactRef}\n${submission.content}`
+    if (w.mode === 'parent') { await this.emitReviewOutcome(state, 'review', prompt); return }
+    const reviewerId = `virtual:review-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
+    const owner = this.sessionStates[task.creatorSessionId]
+    await this.buildSession(reviewerId, { id: owner.sessionId, physicalId: SessionManager.currentPhysicalId(owner) }, { mode: 'task', agentType: w.agentType, parentSessionId: owner.sessionId, description: `Review ${state.name ?? state.sessionId} revision ${task.revision}`, workspaceRoot: state.workspaceRoot, workdir: state.workdir, folderId: state.folderId, workPolicy: state.workPolicy })
+    await this.saveReviewTask(state, { ...state.task!, reviewerSessionId: reviewerId, workflow: { ...state.task!.workflow!, reviewerSessionId: reviewerId } })
+    await this.deliver(reviewerId, { id: crypto.randomUUID(), kind: 'message', content: prompt, policy: 'queue', timestamp: new Date().toISOString(), source: { kind: 'session', sessionId: owner.sessionId } })
+  }
+
+  private readonly taskRunInputs = new WeakSet<SessionInput>()
+
   private reportCompletion(fact: SessionTurnFact): Promise<void> {
     const state = this.sessionStates[fact.sessionId]
     if (!state || state.mode !== 'task' || this.deleting.has(fact.sessionId)) return Promise.resolve()
+    const reviewOwner = Object.values(this.sessionStates).find(s => s.task?.workflow?.reviewerSessionId === fact.sessionId)
+    if (reviewOwner) {
+      const w = reviewOwner.task!.workflow!
+      if (w.terminal) return Promise.resolve()
+      const pending = this.reporting.get(fact.sessionId)
+      if (pending) return pending
+      const report = Promise.resolve().then(() => fact.status !== 'completed' || !w.decision
+        ? this.failTaskReview(reviewOwner, fact.error ?? 'Reviewer ended without a structured verdict')
+        : this.advanceTaskReview(reviewOwner)).catch(error => this.failTaskReview(reviewOwner, String(error)))
+      this.reporting.set(fact.sessionId, report)
+      const cleanup = () => { if (this.reporting.get(fact.sessionId) === report) this.reporting.delete(fact.sessionId) }
+      void report.then(cleanup, cleanup)
+      return report
+    }
+    if (state.task && (!fact.runId || fact.runId !== state.task.activeRunId)) return Promise.resolve()
     const targetId = state.reportTo
-    if (!targetId || targetId === fact.sessionId || this.deleting.has(targetId)
-      || (targetId === (state.parentSessionId ?? state.parent?.id) && !this.sessionStates[targetId])
-      || state.completionReported) return Promise.resolve()
+    if ((!state.task && (!targetId || targetId === fact.sessionId || this.deleting.has(targetId)
+      || (targetId === (state.parentSessionId ?? state.parent?.id) && !this.sessionStates[targetId])))
+      || (state.task ? state.task.reportedRunIds.includes(state.task.activeRunId ?? '') : state.completionReported)) return Promise.resolve()
     const key = fact.sessionId
     const pending = this.reporting.get(key)
     if (pending) return pending
     const report = Promise.resolve().then(async () => {
+      if (state.task && fact.status === 'completed' && state.task.status === 'working') {
+        await this.withStateCreation(state.sessionId, async () => {
+          const task = state.task!
+          if (task.status !== 'working') return
+          const next = { ...transitionTaskLifecycle(task, state.sessionId, { type: 'submit', runId: task.activeRunId!, artifactRef: `${SessionManager.currentPhysicalId(state)}#${fact.turnId}` }), version: task.version + 1, reportedRunIds: task.reportedRunIds }
+          await this.store.saveState(state.sessionId, { ...state, task: next, completed: false })
+          state.task = next
+          state.completed = false
+        })
+      }
+      if (state.task?.workflow) {
+        try { await this.requestTaskReview(state, fact) }
+        catch (error) { await this.failTaskReview(state, String(error)) }
+        return
+      }
+      const markReported = () => this.withStateCreation(state.sessionId, async () => {
+        const task = state.task
+        const next = { ...state, completionReported: true, ...(task && fact.runId ? { task: { ...task, reportedRunIds: [...new Set([...task.reportedRunIds, fact.runId])] } } : {}) }
+        await this.store.saveState(state.sessionId, next)
+        Object.assign(state, next)
+      })
+      if (!targetId || targetId === fact.sessionId || this.deleting.has(targetId)
+        || (targetId === (state.parentSessionId ?? state.parent?.id) && !this.sessionStates[targetId])) { await markReported(); return }
       const content = (fact.status === 'failed' ? fact.error : fact.content)?.trim()
-      const eventId = `subagent-completion:${fact.sessionId}`
+      const eventId = `subagent-completion:${fact.sessionId}${state.task ? `:${state.task.activeRunId}` : ''}`
       this.completionEvents.set(eventId, { sourceId: fact.sessionId, targetId })
       try {
         await this.deps.events.emit({
@@ -1160,10 +1314,10 @@ ${JSON.stringify(request)}`,
           meta: {
             kind: 'subagent', sourceSessionId: fact.sessionId, agentType: state.agentType,
             mode: state.mode, executionId: state.executionId, executionStatus: fact.status,
+            ...(state.task ? { runId: state.task.activeRunId, taskStatus: state.task.status, revision: state.task.revision } : {}),
           },
         })
-        state.completionReported = true
-        await this.saveState(state.sessionId, state)
+        await markReported()
       } finally {
         this.completionEvents.delete(eventId)
       }
@@ -1173,6 +1327,59 @@ ${JSON.stringify(request)}`,
     void report.then(() => { cleanup(); this.retrySettledAutomations() }, () => {})
     void report.then(cleanup, cleanup)
     return report
+  }
+
+  /** Structured acceptance commands. No text message can authorize these transitions. */
+  async taskAction(actorSessionId: string, sessionId: string, action: string, expectedVersion?: number, fields: { reviewerSessionId?: string | null; revision?: number; content?: string } = {}): Promise<TaskRecord> {
+    let runInput: SessionInput | undefined
+    const result = await this.withStateCreation(sessionId, async () => {
+      const actor = this.sessionStates[actorSessionId]
+      const state = this.sessionStates[sessionId]
+      if (!actor || actor.mode === 'call' || !state?.task || this.stopped || this.deleting.has(sessionId)
+        || (this.deps.projectId && (actor.projectId !== this.deps.projectId || state.projectId !== this.deps.projectId))) throw new Error('Reviewable task is unavailable')
+      const task = state.task
+      if (![task.creatorSessionId, task.workerSessionId, task.reviewerSessionId].includes(actorSessionId)) throw new Error('Task access denied')
+      if (action === 'read') return structuredClone(task)
+      if (task.workflow) throw new Error('Managed review tasks use structured review, not manual lifecycle commands')
+      if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== task.version) throw new Error('Task version conflict; read the current task before retrying')
+      let next: TaskRecord
+      if (action === 'run') {
+        if (actorSessionId !== task.creatorSessionId) throw new Error('Only the creator may run a revision')
+        if (!fields.content?.trim()) throw new Error('A revision run requires explicit instructions')
+        if (this.sessions[sessionId] || this.reporting.has(sessionId) || !['completed', 'failed', 'cancelled'].includes(state.executionStatus ?? '')) throw new Error('Wait for the previous run and its report to settle')
+        if (task.status !== 'changes_requested' && !(task.status === 'working' && ['failed', 'cancelled'].includes(state.executionStatus ?? ''))) throw new Error('Task is not ready for another run')
+        next = { ...task, status: 'changes_requested', activeRunId: undefined, version: task.version + 1 }
+        runInput = { id: crypto.randomUUID(), kind: 'message', content: fields.content, policy: 'next-step', timestamp: new Date().toISOString(), source: { kind: 'session', sessionId: actorSessionId } }
+        this.taskRunInputs.add(runInput)
+      } else {
+        let command: TaskLifecycleAction
+        if (action === 'set_reviewer') {
+          if (fields.reviewerSessionId !== null && (!fields.reviewerSessionId || !this.sessionStates[fields.reviewerSessionId] || this.sessionStates[fields.reviewerSessionId].mode === 'call' || (this.deps.projectId && this.sessionStates[fields.reviewerSessionId].projectId !== this.deps.projectId))) throw new Error('Reviewer must be an existing non-call session in this Project')
+          command = { type: 'set_reviewer', reviewerSessionId: fields.reviewerSessionId! }
+        } else if (action === 'close' || action === 'request_changes') command = { type: action, revision: fields.revision! }
+        else if (action === 'cancel') command = { type: 'cancel' }
+        else throw new Error('Unknown task action')
+        next = { ...transitionTaskLifecycle(task, actorSessionId, command), version: task.version + 1, reportedRunIds: task.reportedRunIds }
+        if (action === 'close') next.reviewReceipt = { actorSessionId, revision: task.revision, runId: task.submissions.at(-1)!.runId, at: new Date().toISOString() }
+      }
+      const patch = { ...state, task: next, completed: next.status === 'closed', ...(runInput ? { executionStatus: 'pending' as const, completionReported: false } : {}) }
+      await this.store.saveState(sessionId, patch)
+      Object.assign(state, patch)
+      if (runInput) this.acceptedInputs.delete(sessionId)
+      if (action === 'cancel') this.sessions[sessionId]?.cancel()
+      this.deps.bus.emit('session.changed', { sessionId })
+      return structuredClone(next)
+    })
+    if (runInput) {
+      try { await this.deliver(sessionId, runInput) }
+      catch (error) {
+        const state = this.sessionStates[sessionId]
+        if (state) { state.executionStatus = 'failed'; await this.store.saveState(sessionId, state) }
+        throw error
+      }
+      return structuredClone(this.sessionStates[sessionId].task!)
+    }
+    return result
   }
 
   invalidateSystemPrompts(): void {
@@ -1234,6 +1441,7 @@ ${JSON.stringify(request)}`,
       this.assertFolderAccess(sessionId)
       this.assertHistoryWritable(sessionId)
       const state = this.sessionStates[sessionId]
+      if (state?.task && state.executionStatus === 'pending' && state.task.version > 0 && !this.taskRunInputs.has(input)) throw new Error('Use the structured task run action; messages cannot restart a task')
       if (state?.agentType === 'work-observer' || state?.automation?.jobId === 'system:work-observer') throw new Error('Automatic work observation has been retired')
       if (state?.retirement) {
         if (input.source.kind !== 'user') throw new Error('Session is retired; restore it before automated delivery.')
@@ -1361,6 +1569,12 @@ ${JSON.stringify(request)}`,
             }])
             throw new Error('Execution closed before this correction could be admitted; inspect its final result.')
           }
+        }
+        if (state?.task && state.executionStatus === 'pending') {
+          const task = state.task
+          const next = { ...transitionTaskLifecycle(task, state.sessionId, { type: 'start_run', runId: crypto.randomUUID() }), version: task.version + 1, reportedRunIds: task.reportedRunIds }
+          await this.store.saveState(sessionId, { ...state, task: next })
+          state.task = next
         }
         session.dispatch(deliveryInput, resolveInferenceSettings(
           config, this.deps.conversationPolicies?.resolve(sessionId)?.agent, state?.config,
@@ -1755,6 +1969,7 @@ ${JSON.stringify(request)}`,
       description: stateFields?.description,
       preloadTools: stateFields?.preloadTools,
     }
+    if (state.mode === 'task' && ownerId && !state.automation && !state.statePersistence) state.task = { ...createTaskLifecycle({ creatorSessionId: ownerId, workerSessionId: sessionId }), version: 0, reportedRunIds: [] }
     if (state.mode !== 'session') state.executionId = sessionId
     if (state.statePersistence) {
       if (!this.store.archiveState) throw new Error('Store does not support fresh automation persistence')
@@ -1960,14 +2175,16 @@ ${JSON.stringify(request)}`,
   }
 
   /** Tool entry point: the caller supplies only its runtime-bound identity, never a target. */
-  async updateSelfMetadata(sessionId: string, value: unknown): Promise<void> {
+  async updateSelfMetadata(sessionId: string, value: unknown, expected?: string): Promise<void> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected metadata object')
     const patch = value as Record<string, unknown>
     if (!Object.keys(patch).length || Object.keys(patch).some(key => !['title', 'description', 'completed'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
     const changes: Partial<SessionState> = {}
-    if ('title' in patch) changes.name = parseSessionName(patch.title as string)
+    if ('title' in patch) {
+      if (typeof patch.title !== 'string') throw new TypeError('Title must be text')
+    }
     if ('description' in patch) {
-      if (typeof patch.description !== 'string' || patch.description.length > 4000) throw new TypeError('Description must be text of at most 4000 characters')
+      if (typeof patch.description !== 'string') throw new TypeError('Description must be text of at most 4000 characters')
       changes.description = patch.description
     }
     if ('completed' in patch) {
@@ -1977,9 +2194,16 @@ ${JSON.stringify(request)}`,
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
       if (!state || this.stopped || this.deleting.has(sessionId) || state.mode === 'call' || state.automation || state.sessionKind === 'orchestrator') throw new Error('Self metadata requires an available ordinary durable session or task')
+      if (expected !== undefined && expected !== JSON.stringify({ title: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '', description: state.description ?? '', completed: state.completed ?? false }, null, 2)) throw new Error('Session metadata changed during editing. Reread v:session/self.json and retry.')
       // Fresh task identity is owned by its parent, not by the child's prompt or supplied patch.
-      if (state.mode === 'task' && Object.keys(patch).some(key => key !== 'completed')) throw new Error('Task title and description are parent-owned; update_self accepts only completed.')
+      if (state.mode === 'task' && (('title' in patch && patch.title !== (state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '')) || ('description' in patch && patch.description !== (state.description ?? '')))) throw new Error('Task title and description are parent-owned; preserve them unchanged or omit them.')
+      if (state.task && 'completed' in patch && patch.completed !== (state.completed ?? false)) throw new Error('Worker completion is a review submission, not acceptance; return a final response instead')
       if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
+      const currentTitle = state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? ''
+      if ('title' in patch && patch.title !== currentTitle) changes.name = parseSessionName(patch.title as string)
+      if (typeof patch.description === 'string' && patch.description !== (state.description ?? '') && patch.description.length > 4000) throw new TypeError('Description must be text of at most 4000 characters')
+      if (patch.title === '' && (state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '') !== '') throw new TypeError('Title must not be empty')
+      if (state.mode === 'task') { delete changes.name; delete changes.description }
       const release = this.acquireFolderAccess()
       try {
         this.assertFolderAccess(sessionId)
@@ -2008,23 +2232,6 @@ ${JSON.stringify(request)}`,
         state.name = name; state.description = metadata.description
         this.deps.bus.emit('session.changed', { sessionId })
       } finally { release() }
-    })
-  }
-
-  /** Persist a display-only summary title without modifying explicit conversation metadata. */
-  async updateGeneratedTitle(sessionId: string, value: string): Promise<void> {
-    // Observer titles allow 160 characters; display names allow 120 and one line.
-    const title = parseSessionName(value.replace(/[\r\n\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 120))
-    await this.withStateCreation(sessionId, async () => {
-      const state = this.sessionStates[sessionId]
-      if (!state || this.stopped || this.deleting.has(sessionId)
-        || (this.deps.projectId && state.projectId !== this.deps.projectId)
-        || state.name || state.topic || state.chatName || state.channelBoundary || state.automation
-        || state.sessionKind === 'orchestrator' || (state.mode ?? 'session') !== 'session'
-        || state.generatedTitle === title) return
-      await this.store.saveState(sessionId, { ...state, generatedTitle: title })
-      state.generatedTitle = title
-      this.deps.bus.emit('session.renamed', { sessionId })
     })
   }
 
@@ -2421,6 +2628,7 @@ ${JSON.stringify(request)}`,
     return this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
       if (!state?.statePersistence) return false
+      if (state.task && !['closed', 'cancelled'].includes(state.task.status)) return false
       if (!state.automationCallerSettled) {
         state.automationCallerSettled = true
         await this.store.saveState(sessionId, state)
@@ -3003,6 +3211,7 @@ ${JSON.stringify(request)}`,
       execNodeOnly: this.deps.execNodeOnly,
       agent: agentType,
       mode: state?.mode ?? agentType.defaultMode,
+      taskReviewable: !!state?.task,
       workRequired: opts.sessionId ? this.alignment?.required(sessionId) ?? false : false,
       parentSessionId: delegationOwner(state),
       initiativeId: state?.initiativeId,
@@ -3222,6 +3431,7 @@ ${JSON.stringify(request)}`,
       execNodeOnly: this.deps.execNodeOnly,
       agent: resolvedAgentType,
       mode: state.mode,
+      taskReviewable: !!state.task,
       workRequired: this.alignment?.required(sessionId) ?? false,
       parentSessionId: delegationOwner(state),
       initiativeId: state.initiativeId,

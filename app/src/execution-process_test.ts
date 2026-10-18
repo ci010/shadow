@@ -61,8 +61,9 @@ test('actual ChatTab message template emits no empty assistant article and keeps
   const template = parse(source).descriptor.template!.content
   const start = template.indexOf('<template v-for="(msg, idx) in displayMessages"')
   const end = template.indexOf('</component>', start) + '</component>'.length
+  const rowTemplate = template.slice(start, end) + '</template>'
   assert.ok(start >= 0 && end > start)
-  const compiled = compileTemplate({ source: `<div>${template.slice(start, end)}</div></template></div>`, filename: 'ChatProcessRows.vue', id: 'process', ssr: true, ssrCssVars: [] })
+  const compiled = compileTemplate({ source: `<div>${rowTemplate}</div></template></div>`, filename: 'ChatProcessRows.vue', id: 'process', ssr: true, ssrCssVars: [] })
   assert.deepEqual(compiled.errors, [])
   const module = { exports: {} as { ssrRender?: unknown } }
   const code = ts.transpileModule(compiled.code, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
@@ -70,7 +71,7 @@ test('actual ChatTab message template emits no empty assistant article and keeps
   const displayMessages = [
     { role: 'assistant', content: '' },
     thinking('思考中'), call, result,
-    { role: 'assistant', content: 'Final answer', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } },
+    { role: 'assistant', reasoningText: 'Reason before answer', content: 'Final answer', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } },
     { role: 'user', content: 'Next user turn' },
     { role: 'assistant', content: '', usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 } },
     { role: 'assistant', content: '', reasoningText: '  \n\t', usage: { promptTokens: 8, completionTokens: 1, totalTokens: 9 } },
@@ -85,19 +86,25 @@ test('actual ChatTab message template emits no empty assistant article and keeps
       streaming: false, streamContent: '', isDirectChat: true, requestBusy: false, currentRecovery: null,
       expandedThinking: new Set(), currentWorkdir: undefined, childSessionId: null,
       t: (key: string) => key, formatNumber: String, renderMarkdown: (text: string) => `<p>${text}</p>`,
-      isErrorMessage: () => false, clearSelection() {}, toggleThinking() {}, inspectExecution() {}, openImagePreview() {},
+      isErrorMessage: () => false, clearSelection() {}, setThinkingExpanded() {}, inspectExecution() {}, openImagePreview() {},
     }),
     ssrRender: module.exports.ssrRender as never,
   })
   const app = createSSRApp(Root)
+  app.directive('answer-html', {})
   const Stub = defineComponent({ render: () => null })
   for (const name of ['AutomationPayload', 'CommandResult', 'ExecutionMessage', 'MessageAction', 'InputQuestion', 'YieldDecision', 'ConversationEvent', 'ConversationSummary', 'SessionMessageDisclosure', 'MessageAttachments', 'MessageTimestamp']) app.component(name, Stub)
+  app.component('ReasoningItem', defineComponent({ props: ['text', 'open'], setup: props => () => h('details', { class: 'reasoning-item', open: props.open }, [h('summary', 'Thinking'), props.open ? h('div', props.text) : null]) }))
   app.component('ToolActivityGroup', defineComponent({ props: ['batch'], setup: props => () => h('section', { class: 'process-fixture' }, props.batch.entries.map((entry: { index: number; reasoning?: string }) => h('span', { 'data-msg-idx': entry.index }, entry.reasoning ?? 'tool'))) }))
   const html = await renderToString(app)
   assert.equal((html.match(/role="article"/g) ?? []).length, 2, 'Only actual assistant answer and user prose produce articles')
   assert.match(html, /思考中/)
   assert.match(html, /data-msg-idx="1"/)
   assert.match(html, /Final answer/)
+  assert.ok(html.indexOf('class="reasoning-item"') < html.indexOf('data-msg-idx="4"'), 'Reasoning precedes the answer card')
+  assert.match(html, /<details class="reasoning-item">/)
+  assert.doesNotMatch(html, /Reason before answer/)
+  assert.doesNotMatch(html, /thinking-block/)
   assert.match(html, /Next user turn/)
   assert.match(html, /<div class="usage-info">/)
   assert.doesNotMatch(html, /usage-details/)

@@ -73,8 +73,8 @@ function scriptedProvider(sourcePath: string): LLMProvider {
       if (coordinator) {
         if (turn === 2) return { content: null, toolCalls: [call('read', { path: 'v:memory/' })] }
         if (turn === 3) return { content: null, toolCalls: [
-          call('search', { space: 'glob', path: 'v:memory/topics', query: '**/*.md' }),
-          call('search', { space: 'grep', path: 'v:sessions', query: 'Operations Wiki import' }),
+          call('search', { handler: 'glob', path: 'v:memory/topics', query: '**/*.md' }),
+          call('search', { handler: 'grep', path: 'v:sessions', query: 'Operations Wiki import' }),
         ] }
         if (turn === 4) {
           assert(messages.some(message => message.role === 'tool' && message.content === 'No files found'))
@@ -88,7 +88,7 @@ function scriptedProvider(sourcePath: string): LLMProvider {
         assert.match(JSON.stringify(messages), /Wiki uses v:memory/)
         if (turn === 2) return { content: null, toolCalls: [
           call('read', { path: sourcePath }),
-          call('search', { space: 'glob', path: 'v:memory/topics', query: '**/*.md' }),
+          call('search', { handler: 'glob', path: 'v:memory/topics', query: '**/*.md' }),
         ] }
         if (turn === 3) return { content: null, toolCalls: [
           call('write', { path: WIKI_PATH, content: `${SOURCE}\nSource: ${sourcePath}\n` }),
@@ -230,7 +230,7 @@ async function scenario(
       const invalidMountCalls = calls.filter(call =>
         /^v:wiki(?:[\\/]|$)/.test(String(call.args.path))
         || /^(?:glob|grep):v:wiki(?:[\\/]|$)/.test(String(call.args.space))
-        || /^glob(?::)?$/.test(String(call.args.space)) && /^v:wiki(?:[\\/]|$)/.test(String(call.args.query)))
+        || /^glob(?::)?$/.test(String(call.args.handler ?? call.args.space)) && /^v:wiki(?:[\\/]|$)/.test(String(call.args.query)))
       assert.deepEqual(invalidMountCalls, [], 'No reads, searches or writes may address the nonexistent Wiki mount')
       assert(!calls.some(call => call.sessionId === 'web:orchestrator' && call.name === 'write'))
       const writes = calls.filter(call => call.name === 'write')

@@ -15,7 +15,7 @@ test('coordinator keeps routing and approval rules while loading authoring detai
   assert(agent)
   const prompt = agent.prompt.replace(/\s+/g, ' ')
   for (const rule of [
-    /Search `grep:v:sessions` before creating a session/,
+    /Search `handler: "grep", path: "v:sessions"` before creating a session/,
     /Gather required baselines before kickoff/,
     /conversationUrl.*logical session ID/,
     /Never resolve remote display paths on Main or quietly widen access/,
@@ -49,7 +49,7 @@ test('coordinator keeps routing and approval rules while loading authoring detai
 test('coordinator cannot activate dynamic tools; sessions share the direct Work surface without Initiative SQL', async t => {
   const agent = (await getBuiltinAgentTypes()).find(agent => agent.name === 'orchestrator')
   assert(agent)
-  assert.match(agent.prompt, /Search `grep:v:sessions` before creating a session/)
+  assert.match(agent.prompt, /Search `handler: "grep", path: "v:sessions"` before creating a session/)
   const base = new Tools('.')
   const importer = new ImportTool(new Map(), '.')
   await importer.updateMcpServers([{ name: 'fixture', transport: 'stdio', command: 'never-execute' }])
@@ -68,7 +68,7 @@ test('coordinator cannot activate dynamic tools; sessions share the direct Work 
   }
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('unexpected connection') })
   assert.deepEqual(tools.getDefinitions().map(definition => definition.function.name).sort(), ['ask', 'authoring_change', 'channel_config', 'message', 'project_config', 'read', 'reply', 'search', 'session', 'skill_read', 'skill_save', 'sql', 'work'])
-  assert.match(requireToolText(await tools.execute('search', { space: 'grep:v:tools/fixture', query: '' }, context)), /not available/)
+  assert.match(requireToolText(await tools.execute('search', { handler: 'grep', path: 'v:tools/fixture', query: '' }, context)), /not available/)
   assert.match(requireToolText(await tools.execute('invoke_tool', { name: 'fixture__execute', args: {} }, context)), /not found|not available|not allowed/i)
   assert.equal(connect.mock.callCount(), 0)
   const borrowed = tools.snapshot()

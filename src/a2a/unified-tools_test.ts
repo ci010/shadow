@@ -256,7 +256,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         const vfs = new VirtualFs()
         vfs.mount('v:bg', 'Executions', view.read, view.list)
         const search = new SearchTool(f.workspace, undefined, vfs)
-        for (const query of [{ space: 'glob:v:bg', query: '**' }, { space: 'grep:v:bg', query: 'executionId' }]) {
+        for (const query of [{ handler: 'glob', path: 'v:bg', query: '**' }, { handler: 'grep', path: 'v:bg', query: 'executionId' }]) {
           const found = await search.execute(query, ctx)
           for (const id of expected) assert.ok(found.includes(`v:bg/${id}`), found)
           assert.ok(!found.includes(foreign.taskId), found)

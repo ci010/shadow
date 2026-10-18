@@ -35,7 +35,7 @@ test('runtime VFS discoverability, paging, scope and read-only boundaries', asyn
   const handlers = createRuntimeHandler(log, 'p', (_project, actor) => { if (actor !== 'web:root') throw new Error('Invalid actor') })
   const vfs = new VirtualFs()
   vfs.mount('v:runtime', 'Diagnostics', handlers.read, handlers.list)
-  const listed = await new SearchTool('.', undefined, vfs).execute({ space: 'glob:v:runtime', query: '**' }, context)
+  const listed = await new SearchTool('.', undefined, vfs).execute({ handler: 'glob', path: 'v:runtime', query: '**' }, context)
   assert.match(String(listed), /v:runtime\/logs/)
   const page = requireToolText(await new ReadTool('.', vfs).execute({ path: 'v:runtime/logs', offset: 2, limit: 1 }, context))
   assert.match(page, /403/)

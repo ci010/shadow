@@ -1,3 +1,4 @@
+import { createSelfSessionHandler } from '../vfs/session.ts'
 import assert, { deepEqual, equal } from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
@@ -49,17 +50,21 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(Store.name + ': self tool persists explicit metadata and completion separately from activity', async t => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions'))
     await store.init()
-    const sessions = makeManager(workspace, store, { projectId: 'p' })
+    const bus = new Bus(), changed: string[] = []
+    bus.on('session.changed', fact => changed.push(fact.sessionId))
+    const sessions = makeManager(workspace, store, { projectId: 'p', bus })
     try {
       for (const id of ['web:self', 'web:other']) await store.saveState(id, { sessionId: id, projectId: 'p', mode: 'session', segmentIndex: 0, executionStatus: 'waiting', topic: id === 'web:self' ? { title: 'Legacy', goal: 'Old goal', scope: 'Old scope' } : undefined })
       await sessions.start()
       const service = new TopicService({ projectId: 'p', sessions, listStates: async () => Object.values(await store.listAllStates()), folders: {} as any, resolveAgent: () => undefined, changed: () => {} })
       const tool = new SessionTool(service)
+      const self = createSelfSessionHandler(sessions, () => service)
+      const writeSelf = async (patch: unknown, ctx = context) => self.write('self.json', { content: JSON.stringify(patch) }, ctx)
       const baseTools = new Tools(workspace); baseTools.register(tool)
       const tools = new SessionTools(baseTools, workspace)
       const context = { projectId: 'p', sessionId: 'web:self', tools, signal: new AbortController().signal } as ExecutionContext
       const topic = { title: 'Explicit title', goal: 'Verify explicit state', scope: 'Current work' }
-      const receipt = await tools.execute('session', { action: 'update_self', title: topic.title, description: 'Discovery', completed: true }, context)
+      const receipt = await writeSelf({ title: topic.title, description: 'Discovery', completed: true })
       equal(JSON.parse(receipt as string).completed, true)
       equal(sessions.getSessionState('web:self')?.executionStatus, 'waiting')
       equal(sessions.getSessionState('web:other')?.completed, undefined)
@@ -71,20 +76,30 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const app = new Hono(); sessionsApiPlugin(sessions)(app)
       const graph = await (await app.request('/api/sessions/graph')).json()
       equal(graph.sessions.find((s: any) => s.sessionId === 'web:self').completed, true)
-      for (const patch of [{ sessionId: 'web:other', completed: false }, { completed: 'yes' }, { topic: { goal: 'missing title' } }, { topic: { title: 'Forbidden', goal: 'No new topic metadata', scope: 'Not tool-owned' } }, {}]) {
-        await assert.rejects(tool.execute({ action: 'update_self', ...patch }, context))
+      for (const patch of [null, [], { title: null }, { completed: 0 }, { sessionId: 'web:other', completed: false }, { completed: 'yes' }, { topic: { goal: 'missing title' } }, { topic: { title: 'Forbidden', goal: 'No new topic metadata', scope: 'Not tool-owned' } }, {}]) {
+        await assert.rejects(writeSelf(patch))
       }
       await assert.rejects(tool.execute({ action: 'update', sessionId: 'web:other', title: 'Forbidden' }, context), /own/)
-      await assert.rejects(tool.execute({ action: 'update_self', completed: false }, { ...context, projectId: 'wrong' }), /Project/)
+      await assert.rejects(writeSelf({ completed: false }, { ...context, projectId: 'wrong' }), /Project/)
+      const changedBeforeFailure = changed.length
       const failure = t.mock.method(store, 'saveState', async () => { throw new Error('synthetic metadata disk failure') })
-      await assert.rejects(tool.execute({ action: 'update_self', title: 'Not committed', completed: false }, context), /disk failure/)
+      await assert.rejects(writeSelf({ title: 'Not committed', completed: false }), /disk failure/)
       equal(sessions.getSessionState('web:self')?.completed, true)
       equal(sessions.getSessionState('web:self')?.name, topic.title)
+      equal(changed.length, changedBeforeFailure)
+      assert(changed.includes('web:self'))
       failure.mock.restore()
+      const stale = await self.read('self.json', context)
+      await writeSelf({ description: 'Changed meanwhile' })
+      await assert.rejects(sessions.updateSelfMetadata('web:self', { completed: false }, stale), /changed during editing/)
+      await assert.rejects(Promise.resolve(self.write('self.json', { content: '{bad json}' }, context)), /Invalid JSON/)
+      await assert.rejects(sessions.updateSelfMetadata('web:self', { title: 'x'.repeat(121) }), /120/)
+      await assert.rejects(sessions.updateSelfMetadata('web:self', { description: 'x'.repeat(4001) }), /4000/)
+      await self.write('self.json', { content: await self.read('self.json', context) }, context)
       await sessions.stop()
       await sessions.start()
       equal(sessions.getSessionState('web:self')?.completed, true)
-      await tool.execute({ action: 'update_self', completed: false }, context)
+      await writeSelf({ completed: false })
       equal((await store.getState('web:self'))?.completed, false)
       equal((await store.getState('web:self'))?.name, topic.title)
     } finally { await sessions.stop(); store.close?.() }
@@ -291,46 +306,19 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: summary titles persist, refresh and yield to explicit names`, async () => {
-    await withTempWorkspace(async workspace => {
-      const store: SessionStore = new Store(join(workspace, 'sessions'))
-      await store.init()
-      const bus = new Bus(), renamed: string[] = []
-      bus.on('session.renamed', fact => renamed.push(fact.sessionId))
-      const sessions = makeManager(workspace, store, { bus })
-      try {
-        await store.saveState('web:auto', { sessionId: 'web:auto', segmentIndex: 0 })
-        await store.saveState('web:topic', { sessionId: 'web:topic', segmentIndex: 0,
-          topic: { title: 'Explicit topic', goal: 'Goal', scope: 'Scope' } })
-        await sessions.start()
-        await sessions.updateGeneratedTitle('web:auto', 'Initial summary')
-        await sessions.updateGeneratedTitle('web:auto', 'Updated summary')
-        equal((await sessions.getSessionDetails('web:auto'))?.name, 'Updated summary')
-        equal(sessions.listSessions().find(s => s.sessionId === 'web:auto')?.name, 'Updated summary')
-        equal((await store.getState('web:auto'))?.generatedTitle, 'Updated summary')
-        equal((await store.getState('web:auto'))?.name, undefined)
-        const app = new Hono()
-        sessionsApiPlugin(sessions)(app)
-        const graph = await (await app.request('/api/sessions/graph')).json()
-        equal(graph.sessions.find((s: { sessionId: string }) => s.sessionId === 'web:auto')?.title, 'Updated summary')
-        await sessions.setSessionConfig('web:auto', { model: 'fixture' })
-        await sessions.updateGeneratedTitle('web:auto', 'Updated summary')
-        deepEqual(renamed, ['web:auto', 'web:auto'])
-        await sessions.renameSession('web:auto', 'Manual title')
-        await sessions.updateGeneratedTitle('web:auto', 'Must not replace manual')
-        await sessions.updateGeneratedTitle('web:topic', 'Must not replace topic')
-        equal((await sessions.getSessionDetails('web:auto'))?.name, 'Manual title')
-        equal((await store.getState('web:topic'))?.generatedTitle, undefined)
-        await sessions.stop()
-        const restarted = makeManager(workspace, store)
-        await restarted.start()
-        try {
-          equal(restarted.getSessionState('web:auto')?.generatedTitle, 'Updated summary')
-          equal((await restarted.getSessionDetails('web:auto'))?.name, 'Manual title')
-        } finally { await restarted.stop() }
-      } finally { await sessions.stop(); store.close?.() }
-    })
-  })
+  test(`${Store.name}: historical generated titles remain readable`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const sessions = makeManager(workspace, store)
+    try {
+      await store.saveState('web:legacy', { sessionId: 'web:legacy', segmentIndex: 0, generatedTitle: 'Historical title' })
+      await sessions.start()
+      equal((await sessions.getSessionDetails('web:legacy'))?.name, 'Historical title')
+      await sessions.renameSession('web:legacy', 'Explicit title')
+      equal((await sessions.getSessionDetails('web:legacy'))?.name, 'Explicit title')
+      equal((await store.getState('web:legacy'))?.generatedTitle, 'Historical title')
+    } finally { await sessions.stop(); store.close?.() }
+  }))
 
   test(`${Store.name}: failed rename does not publish optimistic metadata or notifications`, async t => {
     await withTempWorkspace(async workspace => {

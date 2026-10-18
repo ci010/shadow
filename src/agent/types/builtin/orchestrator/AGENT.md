@@ -27,7 +27,7 @@ Handle ordinary discussion directly; do not create a session or work item for ev
 
 ## Route work
 
-Search `grep:v:sessions` before creating a session; read `v:sessions` only as needed to
+Search `handler: "grep", path: "v:sessions"` before creating a session; read `v:sessions` only as needed to
 confirm fit. Names and descriptions do not define work scope. Reuse a relevant
 session and send follow-ups there rather than duplicating its work.
 Create a peer only when a separate durable conversation is useful: title,

@@ -58,7 +58,6 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       },
       assertFolderAccess(id) { assert(states.has(id)) },
       assertInitiativeAccess(id) { if (id !== 'work') throw new Error('Unknown Project initiative') },
-      async updateSelfMetadata() { throw new Error('Not used by this fixture') },
       async updateConversationMetadata(id, topic) {
         const state = states.get(id)
         assert(state)
@@ -167,13 +166,13 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     }, () => service)
     vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
     const search = new SearchTool(home, undefined, vfs)
-    assert.match(await search.execute({ space: 'grep:v:sessions', query: 'MCP' }, context), new RegExp(`${created.sessionId}/brief`))
+    assert.match(await search.execute({ handler: 'grep', path: 'v:sessions', query: 'MCP' }, context), new RegExp(`${created.sessionId}/brief`))
     assert.equal(JSON.parse((await vfs.resolve(`v:sessions/${created.sessionId}/brief`, context))!).conversationUrl, created.conversationUrl)
-    await assert.rejects(search.execute({ space: 'glob:v:sessions', query: '**' }, { ...context, projectId: 'other' }), /Project/)
+    await assert.rejects(search.execute({ handler: 'glob', path: 'v:sessions', query: '**' }, { ...context, projectId: 'other' }), /Project/)
     const remoteContext = { ...context, sessionId: worker.sessionId, remoteWorkdir: {
       nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not access remote executor') },
     } }
-    assert.match(await search.execute({ space: 'grep:v:sessions', query: 'MCP' }, remoteContext), /\/brief/)
+    assert.match(await search.execute({ handler: 'grep', path: 'v:sessions', query: 'MCP' }, remoteContext), /\/brief/)
     const tool = new SessionTool(service)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath }, { ...context, sessionId: worker.sessionId }), /Temporary/)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath, extra: 1 }, context), /only path/)
@@ -218,7 +217,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         const lastResult = messages.filter(message => message.role === 'tool').at(-1)
         if (turn === 1) return {
           content: '', finishReason: 'tool_calls',
-          toolCalls: [{ id: 'find-topic', name: 'search', arguments: { space: 'grep:v:sessions', query: 'LLM routing' } }],
+          toolCalls: [{ id: 'find-topic', name: 'search', arguments: { handler: 'grep', path: 'v:sessions', query: 'LLM routing' } }],
         }
         assert(lastResult)
         if (turn === 2) {

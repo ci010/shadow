@@ -90,6 +90,8 @@ export interface AcceptedSessionInput {
 }
 
 export interface SessionTurnFact {
+  /** Reviewable task run identity; absent on legacy tasks and calls. */
+  runId?: string
   sessionId: string
   turnId: string
   inputId: string

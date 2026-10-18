@@ -66,7 +66,7 @@ test('system prompt — guideline section for general agent in group chat', asyn
 test('tool operations stay discoverable on demand while critical recovery boundaries remain inline', async () => {
   const provider = guidelineProvider()
   const required = [
-    /search\(\{ space: "grep:v:tools", query, limit\?, offset\? \}\)/,
+    /search\(\{ handler: "grep", path: "v:tools", query, limit\?, offset\? \}\)/,
     /Virtual pages default to 100 results/,
     /continuation footer's offset/,
     /Before config commits.*temporary connections and paginated `tools\/list`.*no tools execute or runtime connection remains/,
@@ -162,7 +162,7 @@ test('general root direct guideline stays within its character budget', async ()
   builder.register(guidelineProvider())
   const prompt = (await builder.buildSystemPrompt(makeContext(general, false)))
     .replace(/\r\n/g, '\n')
-  assert(prompt.length <= 12500, `guideline grew to ${prompt.length} characters`)
+  assert(prompt.length <= 12600, `guideline grew to ${prompt.length} characters`)
 })
 
 test('ordinary and formerly managed sessions receive the same optional notebook guidance', async () => {
@@ -178,7 +178,7 @@ test('ordinary and formerly managed sessions receive the same optional notebook 
   const managed = (await provider.getPromptSection({ ...makeContext(general, false), workRequired: true }))!
   assert.equal(managed, ordinary)
   const length = managed.replace(/\r\n/g, '\n').length
-  assert(length <= 12500, `managed guideline grew to ${length} characters`)
+  assert(length <= 12600, `managed guideline grew to ${length} characters`)
 })
 
 test('coordinator static prompt stays compact without generic worker manuals', async () => {
@@ -192,4 +192,39 @@ test('coordinator static prompt stays compact without generic worker manuals', a
   assert.match(prompt, /action: schema/)
   assert.match(prompt, /LAST message a non-silent request/)
   assert.match(prompt, /silent: true.*archive without triggering a response/)
+})
+
+test('managed review contract requires structured verdict and keeps parent acceptance separate from worker finals', async () => {
+  const types = await getBuiltinAgentTypes()
+  const verify = types.find(agent => agent.name === 'verify')!
+  const ctx = { ...makeContext(verify, false), mode: 'task' as const, taskReviewable: true }
+  const contract = (await executionContractProvider().getPromptSection(ctx))!
+  assert.match(contract, /submits a revision for review, not acceptance/)
+  assert.match(contract, /structured verdict; natural-language finals never accept work/)
+  assert.match(contract, /automatically returns requested changes to the original worker history/)
+  assert.match(contract, /reports success only after PASS/)
+  assert.doesNotMatch(contract, /creator may explicitly start another run/)
+  const guidance = (await guidelineProvider().getPromptSection(ctx))!
+  assert.match(guidance, /task\(action:review,sessionId,revision,outcome:pass\|changes_requested\|blocked,content\)/)
+  assert.match(guidance, /Only the designated reviewer may decide/)
+  assert.doesNotMatch(guidance, /expectedVersion|set_reviewer|explicit.*close\/request_changes/)
+  assert(verify.allowedTools?.includes('task'))
+})
+
+test('current session JSON guidance is injected into ordinary and task system prompts', async () => {
+  const general = (await getBuiltinAgentTypes()).find(agent => agent.name === 'general')!
+  const builder = new ContextBuilder('/workspace')
+  builder.register(executionContractProvider())
+  builder.register(guidelineProvider())
+  const ordinary = await builder.buildSystemPrompt(makeContext(general, false))
+  assert.match(ordinary, /v:session\/self\.json/)
+  assert.match(ordinary, /After understanding the first user request/)
+  assert.match(ordinary, /not continual polishing/)
+  assert.match(ordinary, /completed:true.*completed:false/)
+  assert.doesNotMatch(ordinary, /update_self/)
+  const task = await builder.buildSystemPrompt({ ...makeContext(general, false), mode: 'task', taskReviewable: true })
+  assert.match(task, /Title and description are parent-owned/)
+  assert.match(task, /unchanged full JSON roundtrip/)
+  assert.match(task, /never self-accept/)
+  assert.doesNotMatch(task, /update_self/)
 })

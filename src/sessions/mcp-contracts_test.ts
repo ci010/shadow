@@ -250,7 +250,7 @@ export async function run() {return 'skill-case-complete'}
         if (turns === 1) return {
           content: '', finishReason: 'tool_calls',
           toolCalls: [
-            { id: 'search', name: 'search', arguments: { query: 'Synthetic', space: 'grep:v:tools/fixture' } },
+            { id: 'search', name: 'search', arguments: { query: 'Synthetic', handler: 'grep', path: 'v:tools/fixture' } },
           ],
         }
         if (turns === 2) {

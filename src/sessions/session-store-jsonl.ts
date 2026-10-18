@@ -1,3 +1,4 @@
+import { parseTaskRecord, TaskRecordError } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { retirementReceiptSchema } from './retirement-contract.ts'
 import { join } from 'node:path'
@@ -54,6 +55,7 @@ export class JsonlSessionStore implements SessionStore {
 
     try {
       const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
+      if (state.task !== undefined) state.task = parseTaskRecord(state.task)
       if (!state.sessionId) return null
       if (state.generatedTitle !== undefined) state.generatedTitle = parseSessionName(state.generatedTitle)
       if (state.name !== undefined) state.name = parseSessionName(state.name)
@@ -69,7 +71,7 @@ export class JsonlSessionStore implements SessionStore {
       Object.assign(state, parseTopicSessionFields(state))
       return state
     } catch (error) {
-      if (error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError || error instanceof DecisionOwnerMetadataError) throw error
+      if (error instanceof TaskRecordError || error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError || error instanceof DecisionOwnerMetadataError) throw error
       return null
     }
   }
@@ -85,6 +87,7 @@ export class JsonlSessionStore implements SessionStore {
     if (state.name !== undefined) state = { ...state, name: parseSessionName(state.name) }
     if (state.chatName !== undefined) state = { ...state, chatName: parseSessionName(state.chatName) }
     state = normalizeInitiativeMetadata(validateOwnership({ ...state, ownershipVersion: state.ownershipVersion ?? 2 })) as unknown as SessionState
+    if (state.task !== undefined) state.task = parseTaskRecord(state.task)
     parseAutomationSessionRef(state.automation)
     parsePhysicalIdVersion(state.physicalIdVersion)
     parseContextResetAt(state.contextResetAt)
@@ -147,6 +150,7 @@ export class JsonlSessionStore implements SessionStore {
         if (!raw) continue
         try {
           const parsed = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
+          if (parsed.task !== undefined) parsed.task = parseTaskRecord(parsed.task)
           if (!parsed.sessionId) continue
           if (parsed.name !== undefined) parsed.name = parseSessionName(parsed.name)
           if (parsed.chatName !== undefined) parsed.chatName = parseSessionName(parsed.chatName)
@@ -163,7 +167,7 @@ export class JsonlSessionStore implements SessionStore {
             folderId: typeof parsed.folderId === 'string' ? parsed.folderId : undefined,
             ...parseTopicSessionFields(parsed),
           })
-        } catch (error) { if (error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
+        } catch (error) { if (error instanceof TaskRecordError || error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     results.push(...await this.fresh.summaries())
@@ -186,6 +190,7 @@ export class JsonlSessionStore implements SessionStore {
         if (!raw) continue
         try {
           const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
+          if (state.task !== undefined) state.task = parseTaskRecord(state.task)
           if (!state.sessionId) continue
           if (state.generatedTitle !== undefined) state.generatedTitle = parseSessionName(state.generatedTitle)
           if (state.name !== undefined) state.name = parseSessionName(state.name)
@@ -197,7 +202,7 @@ export class JsonlSessionStore implements SessionStore {
           if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
           Object.assign(state, parseTopicSessionFields(state))
           result[state.sessionId] = state
-        } catch (error) { if (error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
+        } catch (error) { if (error instanceof TaskRecordError || error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     Object.assign(result, await this.fresh.listActive())
