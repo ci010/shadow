@@ -100,6 +100,7 @@ export type DesktopRequest =
   | { method: 'bind'; windowId: string; foregroundInput?: boolean }
   | { method: 'observe'; targetId: string; screenshot: boolean }
   | { method: 'act'; targetId: string; observationId: string; actionId: string; action: ComputerAction }
+  | { method: 'foreground'; targetId: string }
   | { method: 'release'; targetId: string }
 
 export class ComputerError extends Error {

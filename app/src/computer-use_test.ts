@@ -75,6 +75,40 @@ test('opening controls never enumerates or shares windows without a user action'
   assert.ok(state.status.value?.grant)
 })
 
+test('passive status failures stay silent; opening controls checks again and reports a local failure', async t => {
+  const { state, requests } = harness(t)
+  requests[0].finish(new Response(null, { status: 503 }))
+  await settle()
+  assert.equal(state.error.value, '')
+  assert.equal(state.needsReload.value, false)
+  assert.equal(state.expanded.value, false)
+  state.expanded.value = true
+  assert.equal(requests.length, 2)
+  requests[1].finish(new Response(null, { status: 503 }))
+  await settle()
+  assert.match(state.error.value, /Could not load computer use/)
+  assert.equal(state.needsReload.value, true)
+  const reload = state.refresh()
+  requests[2].finish(Response.json(makeStatus()))
+  await reload
+  assert.equal(state.error.value, '')
+  assert.equal(state.needsReload.value, false)
+})
+
+test('status failures during shared desktop access remain visible even with collapsed controls', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const { state, requests } = harness(t)
+  requests[0].finish(Response.json(makeStatus(true)))
+  await settle()
+  assert.equal(state.expanded.value, false)
+  t.mock.timers.tick(1000)
+  assert.equal(requests.length, 2)
+  requests[1].reject(new Error('offline'))
+  await settle()
+  assert.match(state.error.value, /Could not load computer use/)
+  assert.equal(state.needsReload.value, true)
+})
+
 test('approval submits only the immutable request ID and decision, not a replacement action', async t => {
   const { state, requests } = harness(t)
   requests[0].finish(Response.json(makeStatus(true, true)))
@@ -265,4 +299,23 @@ test('review expiry drops its image and cannot leave an enabled approval button'
   assert.equal(state.frameUrl.value, '')
   assert.equal(await state.decide(true), false)
   assert.deepEqual(revoked, ['blob:expiring-frame'])
+})
+
+
+test('agent-selected target needs no manual listing and foreground permission posts only its exact target ID', async t => {
+  const { state, requests } = harness(t)
+  requests[0].finish(Response.json(makeStatus(true)))
+  await settle()
+  assert.equal(state.windows.value.length, 0)
+  assert.equal(state.status.value?.grant?.foregroundInput, false)
+  const permission = state.enableForeground()
+  assert.match(requests[1].url, /\/foreground$/)
+  assert.deepEqual(JSON.parse(requests[1].init.body as string), { targetId })
+  const allowed = { ...makeStatus(true), grant: { ...makeStatus(true).grant!, foregroundInput: true } }
+  requests[1].finish(Response.json(allowed))
+  await settle()
+  requests[2].finish(Response.json(allowed))
+  await permission
+  assert.equal(state.status.value?.grant?.foregroundInput, true)
+  assert.equal(requests.some(request => /\/(windows|share)$/.test(request.url)), false)
 })

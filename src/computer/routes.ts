@@ -39,6 +39,10 @@ export function registerComputerRoutes(parent: Hono, options: {
     const input = z.object({ windowId: z.string().uuid(), foregroundInput: z.boolean().default(false) }).strict().parse(await c.req.json())
     return c.json(await options.service.share(owner(c.req.param('sessionId')), input.windowId, c.req.raw.signal, input.foregroundInput))
   })
+  app.post('/api/computer/:sessionId/foreground', async c => {
+    const input = z.object({ targetId: z.string().uuid() }).strict().parse(await c.req.json())
+    return c.json(await options.service.enableForeground(owner(c.req.param('sessionId')), input.targetId, c.req.raw.signal))
+  })
   app.get('/api/computer/:sessionId/decisions/:id/frame', c => {
     const image = options.service.reviewFrame(owner(c.req.param('sessionId')), c.req.param('id'))
     return c.body(Uint8Array.from(image), 200, {

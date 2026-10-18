@@ -28,6 +28,7 @@ export class FixtureDesktop implements ComputerDesktop {
     if (this.failure) throw this.failure
     if (request.method === 'list') return { windows: [this.window], excluded: 0 }
     if (request.method === 'bind') return this.target
+    if (request.method === 'foreground') return { enabled: true }
     if (request.method === 'observe') return structuredClone({ ...this.observation,
       screenshot: request.screenshot ? this.observation.screenshot : undefined })
     if (request.method === 'act') {

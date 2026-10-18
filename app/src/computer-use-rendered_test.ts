@@ -27,7 +27,7 @@ test('computer controls render safe defaults, exact-action review and independen
       resolveId: id => id === '/computer-fixture.ts' ? '\0computer-fixture' : undefined,
       load: id => id !== '\0computer-fixture' ? undefined : `
         import 'uno.css'; import '/src/styles.css';
-        import { createApp, h } from 'vue';
+        import { createApp, h, ref } from 'vue';
         import { setLocalePreference } from '/src/i18n.ts';
         import ComputerControl from '/src/components/ComputerControl.vue';
         const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -38,13 +38,16 @@ test('computer controls render safe defaults, exact-action review and independen
         context.fillStyle='#17202b'; context.font='18px sans-serif'; context.fillText('Synthetic review only',20,35);
         context.strokeRect(60,50,80,50); context.strokeRect(270,200,60,60);
         const png=Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]),c=>c.charCodeAt(0));
-        window.fixture = {state,requests:[],decisions:[],shares:[],stops:0,frameMode:'ok',setLocalePreference};
+        window.fixture = {state,target,requests:[],decisions:[],shares:[],permissions:[],stops:0,frameMode:'ok',statusMode:'error',setLocalePreference};
         window.fetch = async (url, init) => {
           const path = new URL(url, location.href).pathname; window.fixture.requests.push({path,method:init?.method||'GET'});
           if(path.endsWith('/windows')) return Response.json({windows:[{id,title:target.title,app:'fixture',pid:42}],excluded:0});
           if(path.endsWith('/share')) {
             const body=JSON.parse(init.body); window.fixture.shares.push(body);
             state.grant = {target,expiresAt:new Date(Date.now()+600000).toISOString(),foregroundInput:body.foregroundInput};
+          }
+          if(path.endsWith('/foreground')) {
+            window.fixture.permissions.push(JSON.parse(init.body)); state.grant.foregroundInput=true;
           }
           if(path.endsWith('/frame')) return window.fixture.frameMode==='ok'
             ? new Response(png,{headers:{'content-type':'image/png'}}) : new Response('Synthetic failure',{status:503});
@@ -53,9 +56,9 @@ test('computer controls render safe defaults, exact-action review and independen
             return Response.json({requestId,accepted:true});
           }
           if(path.endsWith('/stop')) {window.fixture.stops++;state.grant=null;state.pending=null;return Response.json({stopped:true});}
-          return Response.json(state);
+          return window.fixture.statusMode==='error' ? new Response(null,{status:503}) : Response.json(state);
         };
-        createApp({render:() => h(ComputerControl,{apiBase:location.origin,projectId:'fixture',sessionId:'web:fixture',active:true,canSubmit:true,stage:'tool'})}).mount('#app');
+        createApp({setup() { const control=ref(); return () => h('div', [h('button',{class:'computer-entry',onClick:()=>control.value.open()}, 'Computer use · '+(control.value?.stateLabel || '')), h(ComputerControl,{ref:control,apiBase:location.origin,projectId:'fixture',sessionId:'web:fixture',active:true,canSubmit:true,stage:'tool'})]) }}).mount('#app');
       `,
       configureServer(server) {
         server.middlewares.use((request, response, next) => {

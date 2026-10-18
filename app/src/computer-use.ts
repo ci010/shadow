@@ -40,7 +40,7 @@ export function useComputer(source: () => ComputerSource) {
   const needsReload = ref(false)
   const listed = ref(false)
   const now = ref(Date.now())
-  const operation = ref<'windows' | 'sharing' | 'approving' | 'denying' | 'stopping' | null>(null)
+  const operation = ref<'permission' | 'windows' | 'sharing' | 'approving' | 'denying' | 'stopping' | null>(null)
   const busy = computed(() => operation.value !== null)
   const enabled = computed(() => source().active && source().canSubmit && !!source().projectId && !!source().sessionId)
   const remaining = computed(() => Math.max(0, Math.ceil((Date.parse(status.value?.pending?.expiresAt ?? '') - now.value) / 1000)) || 0)
@@ -138,7 +138,11 @@ export function useComputer(source: () => ComputerSource) {
       if (manual) needsReload.value = false
       if (!needsReload.value) error.value = ''
     } catch {
-      if (current === generation && !controller.signal.aborted) {
+      // Passive discovery must not turn an unrelated chat into an error panel.
+      // Once the owner opens controls or this conversation has desktop access,
+      // failures remain visible and block approvals until an explicit reload.
+      if (current === generation && !controller.signal.aborted
+        && (manual || expanded.value || status.value?.grant || status.value?.pending || status.value?.executing)) {
         needsReload.value = true
         error.value = t('Could not load computer use. Check your local owner connection and reload.')
       }
@@ -201,6 +205,13 @@ export function useComputer(source: () => ComputerSource) {
       listed.value = false
     })
   }
+  function enableForeground() {
+    const targetId = status.value?.grant?.target.id
+    if (!targetId || needsReload.value || status.value?.pending || status.value?.executing) return Promise.resolve(false)
+    return mutate('permission', '/foreground', { targetId }, value => {
+      status.value = parseComputerStatus(value, source())
+    })
+  }
   function decide(approved: boolean) {
     const pending = status.value?.pending
     if (!pending || needsReload.value || remaining.value === 0 || approved && !canApprove.value) return Promise.resolve(false)
@@ -209,6 +220,7 @@ export function useComputer(source: () => ComputerSource) {
       if (result.accepted && status.value?.pending?.id === pending.id) status.value.pending = null
     })
   }
+  watch(expanded, value => { if (value && (!status.value || needsReload.value)) void refresh(true) }, { flush: 'sync' })
   watch(selected, () => { foregroundInput.value = false }, { flush: 'sync' })
   watch([() => status.value?.pending, enabled, needsReload, remaining, busy], () => {
     if (!enabled.value || needsReload.value || busy.value || !remaining.value || !status.value?.pending?.frame) { clearFrame(); return }
@@ -235,5 +247,5 @@ export function useComputer(source: () => ComputerSource) {
   onUnmounted(clear)
   return { status, windows, selected, foregroundInput, expanded, error, loading, needsReload, listed, operation, busy, enabled, remaining,
     frameUrl, frameState, canApprove, frameLoaded, frameFailed, reloadFrame: loadFrame,
-    refresh: () => refresh(true), findWindows, share, decide, stop }
+    refresh: () => refresh(true), findWindows, share, enableForeground, decide, stop }
 }

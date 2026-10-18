@@ -130,6 +130,13 @@ namespace Shadow {
                             snapshot.Data = null;
                             break;
                         }
+                        case "foreground": {
+                            Window window = Target(Text(input, "targetId"));
+                            window.Snapshot = null;
+                            window.ForegroundInput = true;
+                            result = new { enabled = true };
+                            break;
+                        }
                         case "act": result = Act(input); break;
                         case "release": Targets.Remove(Text(input, "targetId")); result = new { released = true }; break;
                         default: throw new Failure("invalid_request");

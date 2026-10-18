@@ -5,12 +5,12 @@ import { ComputerService } from './service.ts'
 import { ComputerActionSchema, ComputerError } from '../execution/computer/contracts.ts'
 import { fixture, FixtureDesktop, frame, owner } from './testing/fixture.ts'
 
-test('desktop is off until an exact, listed window is shared by the owner', async t => {
+test('desktop access starts only after an exact, current listed window is selected', async t => {
   const desktop = new FixtureDesktop()
   const service = new ComputerService(desktop)
   t.after(() => service.close())
   assert.equal(service.status(owner).grant, null)
-  await assert.rejects(service.observe(owner, desktop.target.id, false, new AbortController().signal), /share a window/)
+  await assert.rejects(service.observe(owner, desktop.target.id, false, new AbortController().signal), /List supported windows/)
   await assert.rejects(service.share(owner, desktop.window.id, new AbortController().signal), /Refresh/)
   assert.equal(desktop.calls.length, 0)
   await service.windows(owner, new AbortController().signal)
@@ -201,7 +201,7 @@ test('lost action outcomes revoke grants instead of inviting replay', async t =>
   assert.equal(f.service.status(owner).grant, null)
   assert.equal(f.service.status(owner).lastAction?.outcome, 'outcome_unknown')
   assert.equal(f.desktop.calls.filter(call => call.method === 'act').length, 1)
-  await assert.rejects(f.service.act(owner, f.input(), f.signal), /share a window/)
+  await assert.rejects(f.service.act(owner, f.input(), f.signal), /List supported windows/)
 })
 
 test('native restart invalidates observations and grant, and other projects cannot release ownership', async t => {
@@ -210,7 +210,7 @@ test('native restart invalidates observations and grant, and other projects cann
   assert.ok(f.service.status(owner).grant)
   f.desktop.generation++
   assert.equal(f.service.status(owner).grant, null)
-  await assert.rejects(f.observe(), /share a window/)
+  await assert.rejects(f.observe(), /List supported windows/)
 })
 
 test('disabled Main and unsupported platforms do not start a host', async () => {
@@ -304,5 +304,52 @@ test('cancelling a dispatched action or receiving a malformed receipt revokes ra
     assert.equal(f.desktop.calls.filter(call => call.method === 'act').length, 1)
     assert.equal(f.service.status(owner).grant, null)
     assert.equal(f.service.status(owner).lastAction?.outcome, 'outcome_unknown')
+  }
+})
+
+
+test('owner can enable foreground for the agent-selected target without relisting, extending access or approving an action', async t => {
+  const f = await fixture(t)
+  const before = f.service.status(owner)
+  for (const foreign of [{ ...owner, sessionId: 'web:foreign' }, { ...owner, projectId: 'foreign' }]) {
+    await assert.rejects(f.service.enableForeground(foreign, f.desktop.target.id, f.signal))
+  }
+  await assert.rejects(f.service.enableForeground(owner, crypto.randomUUID(), f.signal))
+  assert.equal(f.desktop.calls.some(call => call.method === 'foreground'), false)
+  const state = await f.service.enableForeground(owner, f.desktop.target.id, f.signal)
+  assert.equal(state.grant?.foregroundInput, true)
+  assert.equal(state.grant?.expiresAt, before.grant?.expiresAt)
+  assert.equal(state.grant?.target.id, before.grant?.target.id)
+  assert.equal(state.pending, null)
+  await assert.rejects(f.service.act(owner, f.input(), f.signal), /Observe/)
+  await f.observe()
+  const pending = f.service.act(owner, { ...f.input(), action: { kind: 'type_text', elementId: '0', text: 'ordinary text' } }, f.signal)
+  assert.equal(f.desktop.calls.some(call => call.method === 'act'), false)
+  await assert.rejects(f.service.enableForeground(owner, f.desktop.target.id, f.signal), /current action/)
+  f.service.decide(owner, f.service.status(owner).pending!.id, false)
+  await pending
+  await f.service.release(owner)
+  await assert.rejects(f.service.enableForeground(owner, f.desktop.target.id, f.signal), /List supported/)
+})
+
+
+test('Stop and malformed host permission acknowledgements cannot leave foreground access enabled', async t => {
+  for (const cause of ['stop', 'malformed'] as const) {
+    const f = await fixture(t)
+    const gate = Promise.withResolvers<void>()
+    const request = f.desktop.request.bind(f.desktop)
+    f.desktop.request = async (input, signal) => {
+      if (input.method !== 'foreground') return request(input, signal)
+      await gate.promise
+      return cause === 'malformed' ? { enabled: 'true' } : { enabled: true }
+    }
+    const permission = f.service.enableForeground(owner, f.desktop.target.id, f.signal)
+    const rejected = assert.rejects(permission)
+    if (cause === 'stop') await f.service.stopAll()
+    gate.resolve()
+    await rejected
+    assert.equal(f.service.status(owner).grant, null)
+    assert.equal(f.service.status(owner).pending, null)
+    assert.equal(f.desktop.calls.some(call => call.method === 'act'), false)
   }
 })

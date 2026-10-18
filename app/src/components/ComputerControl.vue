@@ -1,5 +1,5 @@
 <template>
-  <section v-if="enabled" class="computer-control" :aria-label="t('Computer use')">
+  <section v-if="enabled && (expanded || error || status?.grant || busy)" class="computer-control" :aria-label="t('Computer use')">
     <div class="computer-toolbar">
       <button type="button" class="computer-disclosure" :aria-expanded="expanded" :aria-controls="panelId" @click="expanded = !expanded">
         <span class="i-lucide-monitor w-3.5 h-3.5" aria-hidden="true" />
@@ -19,6 +19,10 @@
         <template v-else-if="status?.grant">
           <p class="computer-target"><strong>{{ status.grant.target.title || status.grant.target.app }}</strong><span>{{ status.grant.target.app }} · {{ t('Access expires at {time}', { time: formatDateTime(status.grant.expiresAt, { hour: '2-digit', minute: '2-digit' }) }) }}</span></p>
           <p class="computer-note">{{ status.grant.foregroundInput ? t('Keyboard and mouse enabled; UIA remains preferred.') : t('UIA only; keyboard and mouse are off.') }}</p>
+          <template v-if="!status.grant.foregroundInput && !status.pending && !status.executing">
+            <p class="computer-note">{{ t('Off by default. Each input still needs approval. Shadow attempts to restore focus and pointer position only if you have not taken over.') }}</p>
+            <button type="button" :disabled="busy || needsReload" @click="enableForeground">{{ t('Allow foreground keyboard and mouse') }}</button>
+          </template>
           <template v-if="status.pending">
             <h3>{{ t('Approve this action once?') }}</h3>
             <dl>
@@ -87,12 +91,12 @@
           <p v-else class="computer-note">{{ t('The assistant can observe this window. Every modification needs your approval.') }}</p>
         </template>
         <template v-else-if="status?.available">
-          <p class="computer-note">{{ t('Share one already-open window for 10 minutes. Window text and requested screenshots go to your configured model. Raw observations are not saved in chat history; assistant replies and entered text may be retained.') }}</p>
+          <p class="computer-note">{{ t('The assistant can list and select a supported window for your requested task; no manual sharing is needed. Access lasts 10 minutes. Window text and requested screenshots go to your configured model. Every modification still needs your approval.') }}</p>
           <p class="computer-note">{{ t('Close sensitive content first. Screenshots may include secrets. Browsers use the existing browser tools; Shadow cannot control itself.') }}</p>
           <button type="button" :disabled="busy" @click="findWindows">{{ operation === 'windows' ? t('Finding windows…') : t('Refresh available windows') }}</button>
           <p v-if="listed && !windows.length" role="status">{{ t('No supported windows found. Open a normal Windows application, then refresh.') }}</p>
           <template v-if="windows.length">
-            <label :for="selectId">{{ t('Window to share') }}</label>
+            <label :for="selectId">{{ t('Window to share (optional manual selection)') }}</label>
             <UiSelect :id="selectId" v-model="selected" :disabled="busy">
               <option disabled value="">{{ t('Select a window') }}</option>
               <option v-for="window in windows" :key="window.id" :value="window.id">{{ window.title || window.app }} — {{ window.app }} ({{ window.pid }})</option>
@@ -126,7 +130,7 @@ const selectId = `${panelId}-window`
 const visible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
 const { status, windows, selected, foregroundInput, expanded, error, loading, needsReload, listed, operation, busy, enabled, remaining,
   frameUrl, frameState, canApprove, frameLoaded, frameFailed, reloadFrame,
-  refresh, findWindows, share, decide, stop } = useComputer(() => ({ ...props, active: props.active && visible.value }))
+  refresh, findWindows, share, enableForeground, decide, stop } = useComputer(() => ({ ...props, active: props.active && visible.value }))
 const pointerAction = computed(() => {
   const action = status.value?.pending?.action
   return action && isPointerAction(action) ? action : null
@@ -134,7 +138,9 @@ const pointerAction = computed(() => {
 const foregroundPending = computed(() => !!status.value?.pending && isForegroundAction(status.value.pending.action))
 const markerRadius = computed(() => Math.max(6, (status.value?.pending?.frame?.width ?? 0) / 55))
 const stateLabel = computed(() => status.value?.pending ? t('Approval needed') : status.value?.grant ? t('Window shared')
-  : status.value?.busy ? t('In use elsewhere') : status.value && !status.value.available ? t('Unavailable') : t('Off'))
+  : status.value?.busy ? t('In use elsewhere') : status.value && !status.value.available ? t('Unavailable') : status.value?.available ? t('Ready — assistant can select a window') : loading.value ? t('Checking availability…') : t('Not shared'))
+// Opening never enumerates, shares or captures a window.
+defineExpose({ open: () => { expanded.value = true }, stateLabel })
 function actionLabel(kind: ComputerAction['kind']) {
   return { invoke: t('Activate control'), set_value: t('Replace field value'), toggle: t('Toggle control'), select: t('Select item'), scroll: t('Scroll control'),
     click: t('Click screenshot position'), move: t('Move pointer'), drag: t('Drag with left mouse button'), wheel: t('Scroll with mouse wheel'),

@@ -78,3 +78,55 @@ test('disabled Main policy denies computer tool import and already imported exec
     await tools.resetDynamicAndWait()
   })
 })
+
+
+test('agent lists and selects without manual sharing; selection cannot enable input or approve mutations', async t => {
+  await withTempWorkspace(async workspace => {
+    const f = await fixture(t)
+    await f.service.release(owner)
+    const base = new Tools(workspace)
+    const importer = new ImportTool(new Map(), workspace)
+    for (const tool of computerTools(f.service, owner.projectId, id => assert.equal(id, owner.sessionId))) importer.registerBuiltin(tool.name, tool)
+    base.register(new InvokeTool(importer))
+    const tools = new SessionTools(base, workspace)
+    tools.setExecutionScope('session', ['call'])
+    const context: ExecutionContext = { ...owner, physicalSessionId: 'fixture', tools, channel: 'web',
+      chatId: 'fixture', senderId: 'owner', messageId: 'fixture', signal: f.signal }
+    const invoke = (args: Record<string, unknown>, patch: Partial<ExecutionContext> = {}) =>
+      tools.execute('invoke_tool', { name: 'computer_setup', args }, { ...context, ...patch })
+    assert.match(toolResultText(await invoke({ action: 'status' })), /"grant":null/)
+    const before = f.desktop.calls.length
+    for (const patch of [{ projectId: 'foreign' }, { scriptInvocation: true }, { channel: 'discord' }]) {
+      for (const args of [{ action: 'windows' }, { action: 'select', windowId: f.desktop.window.id }]) {
+        assert.match(toolResultText(await invoke(args, patch)), /owning local web conversation/)
+      }
+    }
+    tools.setExecutionScope('call', [])
+    assert.match(toolResultText(await invoke({ action: 'windows' })), /owning local web conversation/)
+    tools.setExecutionScope('session', ['call'])
+    assert.equal(f.desktop.calls.length, before)
+    const listed = await invoke({ action: 'windows' })
+    assert.match(toolResultText(listed), /Synthetic fixture/)
+    assert.doesNotMatch(transientToolSummary(listed)!, /Synthetic fixture|"pid"/)
+    assert.equal(f.service.status(owner).grant, null)
+    assert.equal(f.desktop.calls.at(-1)?.method, 'list')
+    assert.match(toolResultText(await invoke({ action: 'select', windowId: f.desktop.window.id, foregroundInput: true })), /invalid arguments/)
+    assert.match(toolResultText(await invoke({ action: 'foreground', targetId: f.desktop.target.id })), /invalid arguments/)
+    assert.match(toolResultText(await invoke({ action: 'select', windowId: crypto.randomUUID() })), /Refresh/)
+    assert.match(toolResultText(await invoke({ action: 'select', windowId: f.desktop.window.id }, { recoveringToolCall: true })), /not replayed/)
+    await invoke({ action: 'select', windowId: f.desktop.window.id })
+    assert.equal(f.service.status(owner).grant?.foregroundInput, false)
+    assert.deepEqual(f.desktop.calls.at(-1), { method: 'bind', windowId: f.desktop.window.id, foregroundInput: false })
+    await tools.execute('invoke_tool', { name: 'computer_observe', args: { targetId: f.desktop.target.id } }, context)
+    const action = tools.execute('invoke_tool', { name: 'computer_act', args: f.input() }, context)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(f.desktop.calls.some(call => call.method === 'act'), false)
+    const pending = f.service.status(owner).pending!
+    assert.ok(pending)
+    f.service.decide(owner, pending.id, false)
+    await action
+    await invoke({ action: 'release' })
+    assert.equal(f.service.status(owner).grant, null)
+    await tools.resetDynamicAndWait()
+  })
+})

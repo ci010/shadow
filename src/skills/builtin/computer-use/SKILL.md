@@ -1,7 +1,7 @@
 ---
 name: computer-use
 description: >
-  Observe and operate a user-shared Windows desktop application using accessibility
+  List, select, observe and operate a task-relevant Windows desktop application using accessibility
   controls first, with optional window screenshots and separately enabled guarded
   foreground keyboard/mouse input. Every action requires an exact owner approval.
   Browser work uses chrome-devtools instead.
@@ -18,10 +18,16 @@ It is unavailable on remote workdirs, service Session 0, locked desktops, and
 task/call or script invocations. Never work around a denial
 with shell input injection, another MCP server, elevation or an alternate tool.
 
-1. Invoke `computer_setup` with `{"action":"status"}` through `invoke_tool`.
-   If there is no shared target, ask the user to open **Computer use** above this
-   conversation's composer, refresh the window list and share a window. Stop
-   until they do so. There is no tool that grants access or approves actions.
+1. This capability is available by default in eligible local owner Main sessions.
+   Invoke `computer_setup` with `{"action":"status"}` through `invoke_tool`.
+   If no target is selected, call `{"action":"windows"}`, then
+   `{"action":"select","windowId":"<current listed ID>"}`. No manual window
+   sharing is required. Listing returns supported window metadata, not screenshots;
+   IDs expire after 30 seconds. Select only a target relevant to the user's requested
+   task, never browse unrelated background applications. If the intended target is
+   ambiguous, ask which task/application they mean. List again for expired IDs.
+   Selection acquires one window for 10 minutes with UIA-only permission and does
+   not focus it, capture it, enable foreground input, or approve a mutation.
 2. Invoke `computer_observe` with the returned `targetId`. Start with the
    accessibility tree. Request `screenshot:true` only when necessary and when
    the selected model accepts images. Never request a whole-desktop capture.
@@ -32,8 +38,11 @@ with shell input injection, another MCP server, elevation or an alternate tool.
    - `{"kind":"toggle","elementId":"3"}`
    - `{"kind":"select","elementId":"5"}`
    - `{"kind":"scroll","elementId":"6","direction":"down"}`
-   Foreground actions are available only when the user has explicitly shared the
-   window with **Allow foreground keyboard and mouse** enabled. Check
+   Foreground actions are available only when the user explicitly enables
+   **Allow foreground keyboard and mouse** for the selected target in
+   **+ → Computer use**. The agent cannot enable this permission. No relisting
+   or manual target selection is needed; the panel shows the agent-selected target.
+   Enabling permission invalidates old observations; observe again afterward. Check
    `computer_setup`'s `grant.foregroundInput`; never infer permission from a UIA
    failure or switch methods to get around a denial. Keyboard actions require
    a current `focusable:true`, visible, enabled, non-protected element:
@@ -105,4 +114,4 @@ If state changes, observe again; do not guess an element's new identity.
 An unknown result may already have changed the application. Access is revoked
 and saved actions are never replayed, including after restart or Continue.
 Explain the uncertainty and ask the user to inspect the application before
-sharing it again. Cancellation stops future work, not effects already delivered.
+selecting it again. Cancellation stops future work, not effects already delivered.

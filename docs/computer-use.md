@@ -5,28 +5,46 @@ Automation operations, with separately enabled, guarded foreground keyboard and
 mouse input. This is not unattended desktop control or a cross-platform/
 remote-desktop release.
 
+The capability is available by default in eligible local owner Main conversations;
+there is no per-chat enable switch or manual window-sharing prerequisite. The
+agent can enumerate supported windows and select the task-relevant target through
+`computer_setup`. Opening the composer **+ → Computer use** panel does not itself
+enumerate or capture anything. A selected window keeps compact status and Stop
+visible; exact-action reviews open automatically. Idle chats show no persistent
+computer-use panel. Passive availability-check failures stay silent; opening the
+controls checks again and reports connection errors locally. Failures during
+shared desktop access remain visible and require reload before approval.
+
 ## Use it
 
 Use a local web/Electron conversation on Main with local execution enabled.
-Open the application yourself at ordinary user privilege, then:
+Open the application at ordinary user privilege and ask the assistant to perform
+your task. The assistant lists supported window metadata with
+`computer_setup {action:"windows"}`, then acquires a current `windowId` with
+`{action:"select",windowId}`. It can observe and propose UIA actions immediately;
+you do not need to choose/share a window first. Only windows relevant to your
+request should be selected or observed, not unrelated background content.
+Window metadata and observations go to your configured model. Raw metadata,
+trees and screenshots are transient; model replies/entered text may be retained.
+Close sensitive content first; screenshots may contain secrets.
 
-1. Open **Computer use** above the conversation composer.
-2. Read the data-sharing notice and select **Refresh available windows**.
-3. Select a window. Leave **Allow foreground keyboard and mouse** off for
-   UIA-only access, or explicitly enable it for this window. Choose
-   **Share this window**.
-4. Ask the assistant to work with it. Review each proposed change in the
-   conversation and choose **Approve once** or **Reject action**.
-5. Choose **Stop all desktop access** to revoke access immediately, including
-   another conversation's lease. This does not close the target application.
+Review each proposed change and choose **Approve once** or **Reject action**.
+For tasks needing foreground keyboard/mouse, open **+ → Computer use**, check
+the displayed agent-selected target, and choose **Allow foreground keyboard and
+mouse**. This separate explicit owner permission is off by default; the agent
+cannot enable it. No relisting or manual selection is needed. It invalidates
+old observations, does not extend access, and does not approve any action.
+UIA remains preferred. Optional manual window selection is still available in
+the panel, not a prerequisite. Use **Stop all desktop access** to revoke access
+immediately, including another conversation's lease; it does not close the app.
 
-Sharing grants observation of one window for at most 10 minutes. It does not
+Selecting grants observation of one window for at most 10 minutes. It does not
 grant unattended modification: every action has a single-use, 60-second
 review showing the window and exact action. Keyboard reviews show the target
 control and complete key chord or text; pointer reviews show the exact screenshot
 with position/drag markers. A missing, expired or undecodable review image
 disables coordinate approval. Rejection and Stop remain available.
-Only one conversation can share a desktop window across all Projects at a time.
+Only one conversation can hold a desktop window across all Projects at a time.
 Window lists expire after 30 seconds; refresh them before making a stale choice.
 
 Browser tasks retain the existing Chrome DevTools implementation. Common browser
@@ -45,7 +63,7 @@ does not establish that the entire underlying document is unchanged.
 
 UIA remains preferred whenever it exposes the needed operation. Foreground
 permission defaults to off, is bound to the selected window and expires with
-its grant. Changing windows resets the sharing checkbox. The model cannot enable
+its grant. Changing windows resets foreground permission. The model cannot enable
 it, approve an input, or hold keys/buttons across actions.
 
 | Action | Contract |

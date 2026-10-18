@@ -103,7 +103,7 @@ export class ComputerService {
     } finally { this.binding = undefined }
   }
 
-  /** Called only by the authenticated local owner route, never by an agent tool. */
+  /** Acquire a listed target. Agent tools always use the default UIA-only permission. */
   async share(owner: ComputerOwner, windowId: string, signal: AbortSignal, foregroundInput = false): Promise<ComputerStatus> {
     this.assertAvailable(owner)
     if (this.operation) throw new ComputerError('desktop_busy', 'The previous desktop operation is still stopping.')
@@ -136,11 +136,32 @@ export class ComputerService {
     return this.status(owner)
   }
 
+  /** Authenticated owner UI only; deliberately not exposed by agent tools. Does not extend the lease. */
+  async enableForeground(owner: ComputerOwner, targetId: string, signal: AbortSignal): Promise<ComputerStatus> {
+    const grant = this.requireGrant(owner, targetId)
+    if (this.operation) throw new ComputerError('action_pending', 'Finish or reject the current action before changing permission.')
+    this.operation = true
+    this.clearObservation(grant)
+    try {
+      const result = await this.desktop.request({ method: 'foreground', targetId }, AbortSignal.any([signal, grant.controller.signal]))
+      if (!result || typeof result !== 'object' || !('enabled' in result) || result.enabled !== true) {
+        throw new ComputerError('host_failure', 'The desktop host did not confirm foreground permission.')
+      }
+      signal.throwIfAborted()
+      if (this.requireGrant(owner, targetId) !== grant) throw new ComputerError('interrupted', 'The selected window changed.')
+      grant.foregroundInput = true
+      return this.status(owner)
+    } catch (error) {
+      await this.release(owner)
+      throw error
+    } finally { this.operation = false }
+  }
+
   private requireGrant(owner: ComputerOwner, targetId: string): Grant {
     this.assertAvailable(owner)
     const grant = this.grant
     if (!grant || !sameOwner(grant.owner, owner) || grant.target.id !== targetId) {
-      throw new ComputerError('not_shared', 'Ask the user to share a window using Computer use above the conversation composer.', 403)
+      throw new ComputerError('not_shared', 'List supported windows with computer_setup action:windows, then select a task-relevant windowId.', 403)
     }
     return grant
   }
@@ -189,7 +210,7 @@ export class ComputerService {
       throw new ComputerError('stale_observation', 'Observe the window again before requesting an action.')
     }
     if (isForegroundAction(action) && !grant.foregroundInput) {
-      throw new ComputerError('input_not_enabled', 'The user must share this window with foreground keyboard and mouse permission enabled.', 403)
+      throw new ComputerError('input_not_enabled', 'Ask the user to enable foreground keyboard and mouse for this selected target in Computer use. The agent cannot enable it; every action still requires exact review.', 403)
     }
     const element = 'elementId' in action ? observed.value.elements.find(element => element.id === action.elementId) : undefined
     if (isPointerAction(action)) {
