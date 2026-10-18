@@ -12,6 +12,7 @@ build/
 dist/
 /app/dist-mobile/
 desktop/release/
+/desktop/release-local-*/
 desktop/backend/
 desktop/service/ShadowService.exe
 desktop/aria2/aria2c
