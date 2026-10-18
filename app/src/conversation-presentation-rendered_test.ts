@@ -90,6 +90,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
           import ConversationEvent from '/src/components/ConversationEvent.vue';
           import ConversationSkeleton from '/src/components/ConversationSkeleton.vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
+          import ReasoningItem from '/src/components/ReasoningItem.vue';
           import YieldDecision from '/src/components/YieldDecision.vue';
           import InputQuestion from '/src/components/InputQuestion.vue';
           import { inlineInputQuestions } from '/src/input-history.ts';
@@ -248,7 +249,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
           const empty = { render:() => null };
           createApp({
             __scopeId:'data-v-fixture',
-            components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, InputQuestion, SessionMessageDisclosure,
+            components:{ ReasoningItem, MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, InputQuestion, SessionMessageDisclosure,
               SessionHeading, SegmentNavigation, ConversationSummary, ExecutionMessage, ConversationEvent, CommandResult:empty,
               MessageAttachments:empty, IoRequestCard:empty },
             render,
@@ -266,7 +267,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
               return { ...toRefs(state), t, formatNumber, messageActions, yieldDecisions, inputQuestions, SessionMessageDisclosure,
                 displayMessages:computed(() => state.messages.map(msg => ({ ...msg, attachmentBody:messageAttachments(msg.content) }))),
                 inlineExecutions:computed(() => ({entries:new Map(Object.entries(state.executionFixtures).map(([index, value]) => [Number(index), value]))})),
-                ioAfter:new Map(), expandedThinking:new Set(),
+                ioAfter:new Map(), expandedThinking:new Set(), setThinkingExpanded(){},
                 toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded, ...inputQuestions.value.excluded,
                   ...Object.keys(state.executionFixtures).map(Number), 12]))),
                 inspectExecution:nav.inspectExecution, sourceForEvent:meta => meta.attrs['source-session-id'] ? ({

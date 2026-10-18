@@ -10,7 +10,12 @@
       <span v-if="running" class="activity-status">{{ t('Running') }}</span>
     </summary>
     <div class="activity-list trace-guide">
-      <details v-for="entry in batch.entries" :key="entry.index" v-disclosure-motion class="tool-entry" :data-msg-idx="entry.index" :open="expanded.has(entry.index)" @toggle.self="setExpanded(entry.index, $event)">
+      <template v-for="entry in batch.entries" :key="entry.index">
+      <ReasoningItem v-if="entry.reasoning !== undefined" class="tool-entry" :data-msg-idx="entry.index"
+        :text="entry.reasoning" :render-content="renderContent ?? (() => '')" :open="expanded.has(entry.index)" :active="groupOpen"
+        @update:open="$event ? expanded.add(entry.index) : expanded.delete(entry.index)" @interact="chooseEntry">
+      </ReasoningItem>
+      <details v-else v-disclosure-motion class="tool-entry" :data-msg-idx="entry.index" :open="expanded.has(entry.index)" @toggle.self="setExpanded(entry.index, $event)">
         <summary class="tool-call-header" :title="entry.summary || entry.title" @click="chooseEntry">
           <span class="tool-disclosure-icon" aria-hidden="true">
             <span class="tool-icon activity-icon" :class="entry.reasoning !== undefined ? 'i-lucide-brain' : entry.path ? (matchedFileIcon(entry.path) ?? icons[entry.icon]) : icons[entry.icon]" />
@@ -23,7 +28,6 @@
           <span v-if="entry.summary && !entry.file" class="tool-args-summary">{{ entry.summary }}</span>
         </summary>
         <div v-if="groupOpen && expanded.has(entry.index)" class="tool-entry-content">
-          <div v-if="entry.reasoning" class="thinking-content prose" v-html="renderContent?.(entry.reasoning)" />
           <ToolFileDiffPreview v-if="entry.file && entry.toolCallId && apiBase !== undefined && sessionId"
             :api-base="apiBase" :session-id="sessionId" :tool-call-id="entry.toolCallId" :path="entry.path" />
           <p v-else-if="entry.file" class="activity-status">{{ t('No historical file diff is available for this tool call.') }}</p>
@@ -37,26 +41,23 @@
               <summary class="tool-result-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Result') }}</summary>
               <ToolPayload v-if="!closedResults.has(entry.index)" boxed class="tool-result-content" :source="entry.result || t('(Empty result)')" :images="entry.images" :file-path="entry.readPath" :line-numbers="entry.lineNumbers" :search-result="entry.grep" />
             </details>
-            <p v-if="entry.usage" class="activity-usage">{{ t('{prompt} prompt · {completion} completion · {total} total tokens', { prompt: formatNumber(entry.usage.promptTokens), completion: formatNumber(entry.usage.completionTokens), total: formatNumber(entry.usage.totalTokens) }) }}</p>
             <p v-if="entry.reasoning === undefined && entry.result === undefined" class="activity-status">{{ running ? t('Waiting for result…') : t('No result recorded') }}</p>
           </component>
         </div>
       </details>
+      </template>
     </div>
-    <details v-if="batch.usages?.length" v-disclosure-motion class="activity-round-details">
-      <summary class="tool-details-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Details') }}</summary>
-      <p v-for="round in batch.usages" :key="round.index" :data-msg-idx="round.index" class="activity-usage">{{ t('{prompt} prompt · {completion} completion · {total} total tokens', { prompt: formatNumber(round.usage.promptTokens), completion: formatNumber(round.usage.completionTokens), total: formatNumber(round.usage.totalTokens) }) }}</p>
-    </details>
   </details>
 </template>
 
 <script setup lang="ts">
-import { t, formatNumber } from '../i18n.ts'
+import { t } from '../i18n.ts'
 import { computed, reactive, ref, watch } from 'vue'
 import type { ToolActivity, ToolActivityBatch } from '../tool-activity.ts'
 import { matchedFileIcon } from '../file-icons.ts'
 import { vDisclosureMotion } from '../disclosure-motion.ts'
 import LineChangeCounts from './LineChangeCounts.vue'
+import ReasoningItem from './ReasoningItem.vue'
 import ToolPayload from './ToolPayload.vue'
 import ToolFileDiffPreview from './ToolFileDiffPreview.vue'
 const props = defineProps<{ batch: ToolActivityBatch; renderContent?: (text: string) => string; defaultOpen?: boolean; running?: boolean; apiBase?: string; sessionId?: string }>()
@@ -146,7 +147,7 @@ summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .activity-icon { display: block; flex: 0 0 16px; width: 16px; height: 16px; }
 .tool-args-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: var(--c-text-muted); }
 .tool-name { flex: 0 1 auto; }
-.activity-status, .activity-usage { color: var(--c-text-muted); font-size: 12px; }
+.activity-status { color: var(--c-text-muted); font-size: 12px; }
 .activity-status { flex-shrink: 0; }
 .activity-failed { flex-shrink: 0; color: var(--c-error); font-size: 12px; }
 .tool-entry-content { padding: 4px 8px 12px 28px; }

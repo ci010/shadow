@@ -28,7 +28,7 @@ function stylesheet(source: string, filename: string): Sheet {
 
 const globalStyles = stylesheet(await readFile(new URL('./styles.css', import.meta.url), 'utf8'), 'styles.css')
 const components = new Map(await Promise.all([
-  'ChatTab', 'MessageAction', 'MessagePreviewCard', 'SessionMessageDisclosure', 'ExecutionMessage', 'SessionActivity', 'ProjectCoordinator', 'ToolActivityGroup',
+  'ChatTab', 'MessageAction', 'MessagePreviewCard', 'SessionMessageDisclosure', 'ExecutionMessage', 'SessionActivity', 'ProjectCoordinator', 'ToolActivityGroup', 'ReasoningItem',
 ].map(async name => {
   const filename = `${name}.vue`
   const { descriptor, errors } = parse(await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8'))
@@ -238,19 +238,18 @@ test('conversation reading width belongs to the rail rather than Markdown', () =
 })
 
 test('session source, reasoning and running tool text remain neutral rather than semantic status colors', () => {
+  const reasoning = declarations(components.get('ReasoningItem')!, '.reasoning-item')
+  assert.ok(!reasoning.has('border') && !reasoning.has('background'), 'Reasoning is a lightweight item, not a card')
   assert.equal(property('MessagePreviewCard', '.message-preview-card', 'color'), 'var(--c-text-secondary)')
   assert.equal(property('MessagePreviewCard', '.message-preview-card', 'background'), 'var(--c-chat-action-bg)')
   assert.ok(property('MessagePreviewCard', '.message-preview-card', 'border').includes('var(--c-chat-border)'))
   for (const { name, tokens } of themes) {
     for (const [component, selector] of [
-      ['ChatTab', '.thinking-header'], ['ChatTab', '.thinking-content'], ['ToolActivityGroup', '.activity-status'],
+      ['ReasoningItem', '.reasoning-item'], ['ToolActivityGroup', '.activity-status'],
     ]) {
       requireNeutral(color(property(component!, selector!, 'color'), tokens), `${name} ${component} ${selector}`)
     }
-    requireNeutral(color(property('ChatTab', '.thinking-block', 'background'), tokens), `${name} reasoning surface`)
   }
-  const border = property('ChatTab', '.thinking-block', 'border')
-  assert.doesNotMatch(border, /--c-(?:warn(?:ing)?|success|error|info|amber|purple|blue)\b/, 'Reasoning borders are not status indicators')
 })
 
 test('session activity reserves success and error for completed and failed work', () => {

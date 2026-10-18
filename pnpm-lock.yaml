@@ -234,6 +234,9 @@ importers:
       pdfjs-dist:
         specifier: 5.7.284
         version: 5.7.284
+      qrcode-generator:
+        specifier: 2.0.4
+        version: 2.0.4
       shiki:
         specifier: 4.4.3
         version: 4.4.3
@@ -3736,6 +3739,9 @@ packages:
   pvutils@1.2.0:
     resolution: {integrity: sha1-S1SHqczNUtJ1sFOHdXkKPKmCvCI=}
     engines: {node: '>=16.0.0'}
+
+  qrcode-generator@2.0.4:
+    resolution: {integrity: sha1-6LPzCSJXfrpSB4qpwNWip0/h/ZQ=}
 
   qs@6.16.0:
     resolution: {integrity: sha1-wixyOiipIPOqzc6Cifq9Q+zLef0=}
@@ -7928,6 +7934,8 @@ snapshots:
       tslib: 2.8.1
 
   pvutils@1.2.0: {}
+
+  qrcode-generator@2.0.4: {}
 
   qs@6.16.0:
     dependencies:

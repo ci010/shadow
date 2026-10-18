@@ -5,7 +5,7 @@
       <button class="execution-inspect trace-header" :disabled="!execution.sessionId" :aria-pressed="execution.sessionId ? !!selected : undefined"
         :aria-label="t('Inspect {mode}: {label}', { mode: execution.mode, label: execution.label })" @click.stop="emit('interact'); inspect()">
         <span class="execution-icon i-lucide-git-branch" aria-hidden="true" />
-        <span class="execution-copy"><strong>{{ execution.label }}</strong><span>{{ execution.mode === 'call' ? t('Call · inherited context · blocking') : t('Task · fresh context · async') }}<template v-if="execution.agentType"> · {{ execution.agentType }}</template></span></span>
+        <span class="execution-copy"><strong>{{ execution.label }}</strong><span>{{ execution.mode === 'call' ? t('Call · inherited context · blocking') : t('Task · fresh context · async') }}<template v-if="execution.agentType"> · {{ execution.agentType }}</template><template v-if="execution.model"> · Model: {{ execution.model }}</template><template v-if="execution.effort"> · Effort: {{ execution.effort }}</template></span></span>
         <span v-if="execution.blocked" class="execution-blocked">{{ t('Blocked') }}</span>
         <SessionActivity v-else :stage="execution.stage" />
         <span v-if="execution.sessionId" class="i-lucide-chevron-right execution-icon" aria-hidden="true" />

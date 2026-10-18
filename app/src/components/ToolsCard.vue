@@ -28,7 +28,7 @@
       </div>
       <div v-else :class="embedded ? 'tools-content' : 'flex-1 overflow-y-auto px-4 py-3 min-h-0'">
         <div class="tools-list">
-          <details v-for="t in tools" :key="t.name" class="tool-def">
+          <details v-for="t in sortedTools" :key="t.name" class="tool-def">
             <summary>
               <div class="tool-def-header">
                 <span class="tool-def-name">{{ t.name }}</span>
@@ -54,6 +54,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { t } from '../i18n.ts'
 import { useTextCopy } from '../composables/useTextCopy.ts'
 
@@ -77,6 +78,11 @@ const props = withDefaults(defineProps<{
   maxHeight: '',
   collapsible: false,
 })
+
+// Sort a copy for presentation without changing the runtime's tool order.
+const sortedTools = computed(() => [...props.tools].sort((a, b) =>
+  a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }),
+))
 
 const collapsed = defineModel<boolean>('collapsed', { default: false })
 

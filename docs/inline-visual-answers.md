@@ -96,3 +96,85 @@ copy still copies readable Markdown source. Light-DOM-only search/highlight or
 inspection utilities do not automatically traverse shadow roots. Render tests
 exercise the same Vue directive lifecycle and Markdown sanitization boundary in
 Electron, not a full mounted ChatTab with live backend services.
+
+## Native Vue Flow diagrams
+
+Use a fenced `answer-flow` **JSON** block for explanatory node/edge diagrams. This
+is an installed native Vue component in the message DOM, not generated Vue code,
+an iframe, website or executable template. Read `v:skills/answer-flow` for agent
+authoring guidance. Normal Markdown and `answer-html` remain supported unchanged.
+
+````markdown
+```answer-flow
+{
+  "version": 1,
+  "title": "Evidence boundary",
+  "summary": "The service accepts observations; an observation alone is not approval.",
+  "direction": "LR",
+  "groups": [{"id": "host", "label": "Host boundary"}],
+  "nodes": [
+    {"id": "observer", "label": "Observer", "group": "host", "status": "implemented", "detail": "Reports observations only."},
+    {"id": "service", "label": "Service", "status": "proposed"}
+  ],
+  "edges": [{"source": "observer", "target": "service", "label": "observations", "status": "unverified"}]
+}
+```
+````
+
+### Version 1 contract
+
+Only the listed fields are accepted; unsupported properties reject the diagram.
+- Root: required `version: 1`, `nodes`, `edges`; optional `title`, `summary`,
+  `direction` (`TB` default or `LR`), integer `height` (240–640 pixels, default 400), `groups`, `layout` (`{mode:"auto"}` default or `{mode:"relative"}`).
+- Node: required `id`, `label`; optional `detail`, `status`, `group` (existing group ID), `placement`.
+- Edge: required `source`, `target` (existing node IDs); optional `label`, `status`.
+- Group: required `id`, `label`. Node IDs and group IDs are each unique within their
+  namespace. IDs are plain strings, not DOM IDs. Nodes may belong to one group.
+- Optional status is exactly `implemented`, `proposed` or `unverified`. It is a
+  textual evidence claim, not verification supplied by the renderer. Edge status
+  uses color plus visible text/dash patterns, never color alone.
+- Bounds: 64 KiB UTF-8 source (65,536 bytes), 1–60 nodes,
+  0–120 edges, 0–12 groups. IDs max 64 characters; labels/title max 160;
+  details/summary max 2,000. Required strings must be nonblank. Control characters
+  other than tab/newline/carriage return are rejected.
+
+Relative mode requires every node to have `placement:{row,column}` with integers
+0–20. Rows increase downward; columns rightward, independent of direction. Cells
+are group-local (ungrouped nodes share their own grid); duplicate cells in a group
+are rejected. Fixed spacing and padded bounds keep group lanes non-overlapping;
+TB lanes run side by side, LR lanes stack, in group order then the ungrouped lane.
+Auto mode (including omitted layout) rejects placement and retains the original
+edge-based layering. Missing/unknown layout modes and absolute/free modes are
+invalid. The Skill contains a relative example. Fit includes the whole graph on
+mobile as well as desktop.
+
+No pixel coordinates, HTML, CSS, Vue expressions, actions, links or arbitrary node
+components are accepted. Labels/details are literal text; strings resembling HTML
+or `{{ Vue expressions }}` never execute. The renderer computes deterministic
+cycle-safe top-bottom or left-right layers and non-overlapping group boundary
+lanes. It does not reuse the project overview's ownership/evidence-specific graph
+semantics. Cross-group edges remain genuine relationships, not decorative lines.
+
+Pan, pinch zoom, zoom buttons and Fit diagram explore the bounded canvas. Mouse
+wheel zooms while over the canvas, without panning or scrolling the page. Outside
+the canvas, normal conversation scrolling is unchanged. Nodes cannot be dragged,
+connected or deleted; selecting a node only opens its explanatory details. A
+light-DOM “Diagram text (searchable)” disclosure includes all groups, node
+labels/details and edge relationships for search, selection and accessibility.
+The disclosure also makes details available without interacting with the canvas.
+No business actions or approval controls are present. Theme colors, borders and
+fonts use the public `--answer-*` aliases; no transitions are introduced.
+
+Partial/invalid streaming JSON displays a readable status and an inert source
+disclosure instead of throwing or executing fallback markup. Replacing Markdown
+unmounts diagram apps and their Vue Flow stores before replacing DOM; conversation
+teardown does the same. Every diagram has a separate generated store ID even if
+its JSON node IDs are identical to another diagram. The existing directive covers
+all Markdown surfaces, including expanded reasoning, historical messages,
+execution output, action output and attachment text.
+
+Implementation: `app/src/answer-flow.ts`, `app/src/components/AnswerFlow.vue`,
+`app/src/answer-html.ts`. Tests exercise the actual component/directive in Electron
+and schema/layout independently; they do not mount a full backend-connected
+conversation. The transition example at https://vueflow.dev/examples/transition.html
+is optional inspiration only, not an accepted protocol or required animation.
