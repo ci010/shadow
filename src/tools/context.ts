@@ -37,6 +37,8 @@ export interface ExecutionContext extends MessageContext {
   tools: SessionTools
   /** Abort signal for the current turn - tools should check this for early cancellation. */
   signal: AbortSignal
+  /** Host-only: run after this call result is persisted and emitted to outbound transport. */
+  afterToolResultPublished?: (callback: () => void) => void
   /** Provider tool invocation ID, used for idempotent subagent admission. */
   toolCallId?: string
   /** Only the unfinished saved batch; remote shells reconcile instead of re-executing. */

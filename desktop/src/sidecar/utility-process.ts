@@ -1,3 +1,4 @@
+import { isDevelopmentRestartMessage } from '../development-restart.js'
 import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'node:events'
 import type { ForkOptions } from 'electron'
@@ -7,6 +8,7 @@ interface UtilityChild {
   readonly pid: number | undefined
   readonly stdout: SidecarChildProcess['stdout']
   readonly stderr: SidecarChildProcess['stderr']
+  on(event: 'message', listener: (message: unknown) => void): unknown
   once(event: 'exit', listener: (code: number) => void): unknown
   once(event: 'error', listener: () => void): unknown
   kill(): boolean
@@ -18,6 +20,7 @@ type UtilityFork = (modulePath: string, args: string[], options: ForkOptions) =>
 export function createUtilityProcessSpawn(
   fork: UtilityFork,
   forceKill: (pid: number) => boolean = pid => process.kill(pid, 'SIGKILL'),
+  developmentRestart?: () => void,
 ): SidecarSpawn {
   return (_executablePath, args, options) => {
     // Electron utility processes ignore Node preload execArgv. Use an explicit
@@ -35,11 +38,18 @@ export function createUtilityProcessSpawn(
     if (!entry || entry.startsWith('-')) throw new Error('Backend entry path is required')
     const env = { ...options.env }
     delete env.ELECTRON_RUN_AS_NODE
+    // Never inherit availability from a shell or a packaged parent's environment.
+    delete env.SHADOW_DEV_RESTART_TOOL
+    const restart = env.SHADOW_DESKTOP_DEV_IPC === '1' && env.NODE_ENV !== 'production' ? developmentRestart : undefined
+    if (restart) env.SHADOW_DEV_RESTART_TOOL = '1'
     const child = fork(preloads.length ? fileURLToPath(new URL('./utility-profile-bootstrap.js', import.meta.url)) : entry,
       preloads.length ? [JSON.stringify(preloads), entry, ...argv] : argv, {
       env,
       stdio: 'pipe',
       serviceName: 'Shadow Backend',
+    })
+    if (restart) child.on('message', message => {
+      if (isDevelopmentRestartMessage(message)) restart()
     })
     const events = new EventEmitter()
     child.once('error', () => events.emit('error', new Error('Backend utility process failed')))

@@ -95,3 +95,24 @@ test('utility preload prefix validates values and preserves application flags', 
   spawn('unused', ['--import', 'file:///preload.js', 'entry.js', '--import', 'application-value'], {})
   assert.equal(forks, 1)
 })
+
+
+test('only a dev supervisor callback arms restart; inherited production markers and malformed messages are inert', () => {
+  for (const enabled of [false, true]) {
+    for (const production of [false, true]) {
+      let restarts = 0
+      const child = Object.assign(new EventEmitter(), { pid: undefined, stdout: null, stderr: null, kill: () => true })
+      const spawn = createUtilityProcessSpawn((_entry, _args, options) => {
+        assert.equal((options.env as NodeJS.ProcessEnv | undefined)?.SHADOW_DEV_RESTART_TOOL, enabled && !production ? '1' : undefined)
+        return child
+      }, undefined, enabled ? () => { restarts++ } : undefined)
+      spawn('unused', ['backend.js'], { env: {
+        SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DEV_RESTART_TOOL: '1', ...(production ? { NODE_ENV: 'production' } : {}),
+      } })
+      for (const malformed of [null, [], 'shadow:dev-restart', { type: 'other' }, { type: 'shadow:dev-restart', extra: true }]) child.emit('message', malformed)
+      assert.equal(restarts, 0)
+      child.emit('message', { type: 'shadow:dev-restart' })
+      assert.equal(restarts, enabled && !production ? 1 : 0)
+    }
+  }
+})

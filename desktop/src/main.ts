@@ -318,6 +318,8 @@ async function start(): Promise<void> {
     onError: () => console.error('[desktop] Web pairing connection publication failed; desktop runtime status is unchanged.'),
     onUnavailable: () => sendRuntimeEndpoint({ type: 'shadow:runtime-stopped' }),
   })
+  const restart = createDevelopmentRestart(app.isPackaged, process, () => app.quit(),
+    error => console.error('[desktop] Development restart request failed:', error))
   const runtimeHost = createProductionRuntimeHost({
     executablePath: process.execPath,
     appPath: app.getAppPath(),
@@ -334,7 +336,7 @@ async function start(): Promise<void> {
       ? { type: 'shadow:runtime-ready', apiBase: activityAuthorization.apiBase }
       : { type: 'shadow:runtime-stopped' })
     void publication.setAuthorization(activityAuthorization)
-  }, createUtilityProcessSpawn((entry, args, options) => utilityProcess.fork(entry, args, options)))
+  }, createUtilityProcessSpawn((entry, args, options) => utilityProcess.fork(entry, args, options), undefined, restart))
   const childPairingCommand = createBackendPairingCommand({
     executablePath: process.execPath, appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath, userDataPath, packaged: app.isPackaged,
@@ -411,8 +413,6 @@ async function start(): Promise<void> {
     await microApps!.open(identity)
   }
   mainTray = new Tray(desktopTrayIconPath(app.isPackaged))
-  const restart = createDevelopmentRestart(app.isPackaged, process, () => app.quit(),
-    error => console.error('[desktop] Development restart request failed:', error))
   const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit(), restart, !app.isPackaged)
   const disposeBackground = installBackgroundWindow(app, mainWindow)
   app.once('will-quit', () => {
