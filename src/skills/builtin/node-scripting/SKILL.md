@@ -16,7 +16,7 @@ All session tools are injected as callable functions — call them directly by n
 ```typescript
 // Tool functions and helpers are auto-available. No imports needed.
 const content = await read({ path: 'README.md' })
-const hits = await search({ space: 'grep', path: 'src', include: '**/*.ts', query: 'TODO' })
+const hits = await search({ handler: 'grep', path: 'src', include: '**/*.ts', query: 'TODO' })
 console.log(content, hits)
 ```
 

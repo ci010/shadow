@@ -17,7 +17,7 @@ function parseSpace(space: string): { scheme: string; qualifier: string } {
 
 /**
  * Unified search tool that dispatches to glob, grep or web search
- * based on the URI-style `space` parameter.
+ * based on the implementation name in `handler`.
  */
 export class SearchTool implements Tool {
   readonly name = 'search'
@@ -31,17 +31,17 @@ export class SearchTool implements Tool {
         type: 'string',
         description: 'Glob pattern, regex or web keywords. Use ** to list virtual entries.',
       },
-      space: {
-        type: 'string',
-        description:
-          'grep or glob with path below; web:[domain] for web search. Legacy grep:[file-glob], grep:v:<folder>[/path] and glob:[path] also work.',
+      handler: {
+        type: 'string', enum: ['grep', 'glob', 'web'],
+        description: 'Search implementation: grep (content), glob (names), or web. Bare names only; put file/virtual scope in path and web scope in domain.',
       },
+      domain: { type: 'string', description: 'web only: restrict results to a DNS domain, e.g. github.com. No URL, path or site: prefix.' },
       path: { type: 'string', description: 'File/directory search root or v:<folder>[/path]. Defaults to the effective workdir, not the repository root.' },
       include: { type: 'string', description: 'grep only: relative file glob, e.g. **/*.ts. Not the search root.' },
       limit: { type: 'integer', description: 'File/virtual searches: 1-100 results per page (default 100).' },
       offset: { type: 'integer', description: 'File/virtual searches: nonnegative result offset (default 0).' },
     },
-    required: ['space', 'query'],
+    required: ['handler', 'query'],
     additionalProperties: false,
   }
 
@@ -86,19 +86,31 @@ export class SearchTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
-    if (typeof args.space !== 'string') return 'Error: space must be a string.'
-    const { scheme, qualifier } = parseSpace(args.space)
-    if (!['grep', 'glob', 'web'].includes(scheme)) return `Error: unknown search space "${scheme}". Use grep:, glob: or web:; virtual folders require grep:v:<folder> or glob:v:<folder>.`
-    if (Object.keys(args).some(key => !['space', 'query', 'path', 'include', 'limit', 'offset'].includes(key))) return 'Error: supported search parameters are space, query, path, include, limit and offset.'
-    if (typeof args.query !== 'string') return 'Error: query must be a string.'
-    for (const key of ['path', 'include']) {
-      if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key])) return `Error: ${key} must be a nonempty string.`
+    // Runtime-only compatibility for stored calls. Never advertise the overloaded legacy field.
+    if (args.handler !== undefined && args.space !== undefined) return 'Error: use handler, not both handler and legacy space.'
+    const legacy = args.handler === undefined && typeof args.space === 'string'
+    const { scheme, qualifier } = legacy ? parseSpace(args.space as string) : { scheme: args.handler, qualifier: '' }
+    if (typeof scheme !== 'string' || !['grep', 'glob', 'web'].includes(scheme)) return 'Error: handler must be a bare implementation name: grep, glob or web. Put file/virtual scope in path and web scope in domain.'
+    if (Object.keys(args).some(key => !['handler', 'domain', 'space', 'query', 'path', 'include', 'limit', 'offset'].includes(key))) return 'Error: supported search parameters are handler, query, path, include, domain, limit and offset.'
+    if (args.domain !== undefined) {
+      if (scheme !== 'web') return 'Error: domain is supported only by web.'
+      if (typeof args.domain !== 'string' || args.domain.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(args.domain)) return 'Error: domain must be a DNS domain without URL, path, whitespace or site: prefix.'
+      if (qualifier) return 'Error: specify the web domain in domain, not both domain and legacy space.'
     }
-    if (args.include !== undefined && scheme !== 'grep') return 'Error: include is supported only by grep.'
-    if (typeof args.include === 'string' && isAbsolute(args.include)) return 'Error: include is a relative file glob; put the search root in path.'
-    if (scheme === 'web' && ['path', 'include', 'limit', 'offset'].some(key => args[key] !== undefined)) return 'Error: web search does not support path, include, limit or offset.'
-    if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > 100)) return 'Error: limit must be an integer from 1 to 100.'
-    if (args.offset !== undefined && (!Number.isSafeInteger(args.offset) || Number(args.offset) < 0)) return 'Error: offset must be a nonnegative safe integer.'
+    if (typeof args.query !== 'string') return 'Error: query must be a string.'
+    // File-only options are harmless on web searches; do not reject the request.
+    const ignoredWebOptions = scheme === 'web'
+      ? ['path', 'include', 'limit', 'offset'].filter(key => args[key] !== undefined)
+      : []
+    if (scheme !== 'web') {
+      for (const key of ['path', 'include']) {
+        if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key])) return `Error: ${key} must be a nonempty string.`
+      }
+      if (args.include !== undefined && scheme !== 'grep') return 'Error: include is supported only by grep.'
+      if (typeof args.include === 'string' && isAbsolute(args.include)) return 'Error: include is a relative file glob; put the search root in path.'
+      if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > 100)) return 'Error: limit must be an integer from 1 to 100.'
+      if (args.offset !== undefined && (!Number.isSafeInteger(args.offset) || Number(args.offset) < 0)) return 'Error: offset must be a nonnegative safe integer.'
+    }
     const query = args.query
     let root = typeof args.path === 'string' ? args.path : undefined
     let include = typeof args.include === 'string' ? args.include : undefined
@@ -145,11 +157,15 @@ export class SearchTool implements Tool {
         if (!this.webSearchTool) {
           return 'Error: web search is not configured for this search tool.'
         }
-        const webQuery = qualifier
-          ? `${query} site:${qualifier}`
+        const domain = args.domain ?? qualifier
+        const webQuery = domain
+          ? `${query} site:${domain}`
           : query
         try {
-          return await this.webSearchTool.execute({ query: webQuery }, context)
+          const result = await this.webSearchTool.execute({ query: webQuery }, context)
+          return ignoredWebOptions.length
+            ? `Warning: web search ignores unsupported parameters: ${ignoredWebOptions.join(', ')}. Results are not filtered or paginated by these parameters.\n\n${result}`
+            : result
         } catch (err) {
           context.signal.throwIfAborted()
           const msg = err instanceof Error ? err.message : String(err)
@@ -161,13 +177,14 @@ export class SearchTool implements Tool {
       }
 
       default:
-        throw new Error(`Unhandled search space: ${scheme}`)
+        throw new Error(`Unhandled search handler: ${scheme}`)
     }
   }
 
   getChatTextDisplay(args: Record<string, unknown>): string {
-    const space = String(args.space ?? '?')
+    const handler = String(args.handler ?? args.space ?? '?')
+    const scope = args.domain ?? args.path
     const query = String(args.query ?? '')
-    return `🔍 ${space} ${query}`
+    return `🔍 ${handler}${scope ? ` ${scope}` : ''} ${query}`
   }
 }

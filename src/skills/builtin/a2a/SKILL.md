@@ -16,7 +16,7 @@ an existing coding application's UI chat.
 
 ```javascript
 read({ path: "v:agents" })
-search({ space: "grep:v:agents", query: "remote" })
+search({ handler: "grep", path: "v:agents", query: "remote" })
 ```
 
 Local entries describe agent roles. Remote entries use names such as
@@ -77,7 +77,7 @@ Do not send another message while a task is active or its outcome is uncertain.
 read({ path: "v:sessions/<returned-sessionId>" })
 read({ path: "v:sessions/<returned-sessionId>/executions" })
 read({ path: "v:bg/<returned-executionId>" })
-search({ space: "glob:v:bg", query: "remote:*/executions/*", limit: 20 })
+search({ handler: "glob", path: "v:bg", query: "remote:*/executions/*", limit: 20 })
 ```
 
 `v:bg` aggregates your background work, local task/call, and remote executions;

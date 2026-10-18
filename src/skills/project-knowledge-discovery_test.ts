@@ -61,7 +61,7 @@ test('coordinator can discover and read the instruction-only knowledge Skill wit
     }
     for (const query of ['memory', 'Wiki', 'knowledge']) {
       const result = requireToolText(await tools.execute('search', {
-        space: 'grep', path: 'v:skills/project-knowledge', query,
+        handler: 'grep', path: 'v:skills/project-knowledge', query,
       }, context))
       assert.match(result, /v:skills\/project-knowledge/)
     }

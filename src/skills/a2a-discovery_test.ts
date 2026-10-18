@@ -30,7 +30,7 @@ test('A2A guidance is discoverable and readable without configuring remote agent
       const tools = new SessionTools(new Tools(home), home)
       const context = { tools, signal: new AbortController().signal } as ExecutionContext
       for (const query of ['A2A', 'Claude', 'Codex', 'Copilot', 'request_id']) {
-        const result = await search.execute({ space: 'grep:v:skills', query }, context)
+        const result = await search.execute({ handler: 'grep', path: 'v:skills', query }, context)
         assert.match(result, /v:skills\/a2a/, `A2A must be searchable by ${query}`)
       }
       assert.equal(await handlers.read('a2a', context), skill.body)

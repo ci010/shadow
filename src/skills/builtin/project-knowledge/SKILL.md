@@ -44,8 +44,8 @@ Use existing `read` and `search`; discovering a tool named "wiki" is unnecessary
 
 ```js
 read({ path: "v:memory/" })
-search({ space: "glob", path: "v:memory/topics", query: "**/*.md" })
-search({ space: "grep", path: "v:memory", query: "relevant topic" })
+search({ handler: "glob", path: "v:memory/topics", query: "**/*.md" })
+search({ handler: "grep", path: "v:memory", query: "relevant topic" })
 read({ path: "v:memory/topics/operations.md" })
 ```
 

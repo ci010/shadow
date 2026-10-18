@@ -45,7 +45,7 @@ fixed inventory or a guarantee that every installed version has every feature.
 Invocation can lazily launch a default browser in an owning session.
 Search never launches browsers; use browser_setup to discover live contracts first.
 Borrowing leaf calls require the owner to initialize first. To choose a browser,
-discover `browser_setup` with `search({ space: "grep:v:tools", query: "browser_setup" })`,
+discover `browser_setup` with `search({ handler: "grep", path: "v:tools", query: "browser_setup" })`,
 or invoke the known ID directly:
 
 ```js
@@ -94,13 +94,13 @@ invoke_tool({ name: "browser_setup", args: { action: "close", instance: "<id>" }
 For a slow page, for example:
 
 ```js
-search({ space: "grep:v:tools/chrome-devtools", query: "performance", limit: 3 })
+search({ handler: "grep", path: "v:tools/chrome-devtools", query: "performance", limit: 3 })
 ```
 
 With multiple instances, select one explicitly:
 
 ```js
-search({ space: "grep:v:tools/chrome-devtools/<id>", query: "snapshot" })
+search({ handler: "grep", path: "v:tools/chrome-devtools/<id>", query: "snapshot" })
 invoke_tool({ name: "chrome-devtools__take_snapshot", instance: "<id>", args: {} })
 ```
 
@@ -121,9 +121,9 @@ If the desired contract is missing:
    remain deferred even when explicitly selected. `browser_setup` discovery is metadata only, not
    browser initialization. Installed MCP search remains offline. An empty result
    does not mean the browser lacks the capability.
-2. Search `grep:v:tools/chrome-devtools` and try a broader regex from the table.
+2. Search `handler: "grep", path: "v:tools/chrome-devtools"` and try a broader regex from the table.
 3. If keywords still miss, list that source with
-   `search({ space: "glob:v:tools/chrome-devtools", query: "**", limit: 20 })`.
+   `search({ handler: "glob", path: "v:tools/chrome-devtools", query: "**", limit: 20 })`.
    Follow the continuation footer's offset only until the needed contract is found or the list ends.
    Do not enumerate every schema before starting ordinary browser work.
 4. Report connection/configuration failures separately from unsupported

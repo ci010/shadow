@@ -17,7 +17,16 @@ async function spawnRg(
   signal?: AbortSignal,
 ): Promise<{ stdout: string; exitCode: number }> {
   signal?.throwIfAborted()
-  const proc = childSpawn('rg', args, {
+  // Apply exclusions last so an include glob cannot re-enable OS artifacts.
+  // Windows device names can exist as directory entries (e.g. via POSIX tools),
+  // but opening them through ordinary Win32 paths can fail the entire search.
+  const artifactGlobs = ['--glob=!.DS_Store']
+  if (process.platform === 'win32') {
+    for (const name of ['nul', 'con', 'prn', 'aux', 'com[1-9¹²³]', 'lpt[1-9¹²³]', 'conin$', 'conout$']) {
+      artifactGlobs.push(`--iglob=!${name}`, `--iglob=!${name}.*`)
+    }
+  }
+  const proc = childSpawn('rg', [...args, ...artifactGlobs], {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const onAbort = () => {

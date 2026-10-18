@@ -13,7 +13,7 @@ agent turn. Implement normal HTML/CSS/JavaScript, optionally with a local
 Node.js or Python HTTP service. Do not modify Shadow source, add Electron IPC,
 or use an I/O capture card as the permanent application.
 
-Discover `micro_app` via `search({space:"grep:v:tools",query:"micro_app"})`.
+Discover `micro_app` via `search({handler: "grep", path: "v:tools",query:"micro_app"})`.
 Read the tool contract and invoke it through `invoke_tool`.
 Call `micro_app({action:"capabilities"})` before choosing storage or runtime
 behavior. It reports the SDK and host limits without granting execution access.

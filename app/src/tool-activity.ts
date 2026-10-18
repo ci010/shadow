@@ -125,7 +125,7 @@ function activity(message: ToolActivityMessage, index: number, result?: ToolActi
     path: (write || read) && path ? path : undefined,
     readPath: read && path && !failed && !(typeof args.flag === 'string' && args.flag.includes('l')) ? path : undefined,
     lineNumbers: read && typeof args.flag === 'string' && args.flag.includes('n'),
-    grep: /^(grep|rg)$/.test(name) || name === 'search' && typeof args.space === 'string' && /^grep(?::|$)/.test(args.space),
+    grep: /^(grep|rg)$/.test(name) || name === 'search' && (args.handler === 'grep' || args.handler === undefined && typeof args.space === 'string' && /^grep(?::|$)/.test(args.space)),
     file: success && path ? path : undefined,
     changes: success ? parseLineChanges(text) : undefined,
     failed,

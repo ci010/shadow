@@ -25,8 +25,8 @@ test('read results carry file grammars and numbering, including imported and leg
     call('read', { path: 'failed.ts' }), result('Error: missing'),
     call('read', { path: 'v:memory/list.md', flag: 'l' }), result('list'),
     call('write', { path: 'out.ts' }), result('OK write +1 -0'),
-    call('search', { space: 'grep:*.ts', query: 'needle' }), result('No matches found'),
-    call('search', { space: 'web', query: 'needle' }), result('web'),
+    call('search', { handler: 'grep', include: '*.ts', query: 'needle' }), result('No matches found'),
+    call('search', { handler: 'web', query: 'needle' }), result('web'),
   ]).get(0)!.entries
   assert.deepEqual(entries.map(entry => entry.readPath), ['src\\main.ts', 'main.py', 'App.vue', undefined, undefined, undefined, undefined, undefined])
   assert.equal(entries[0].lineNumbers, true)
@@ -130,4 +130,15 @@ test('successful dynamic edits retain the outer tool-call identity for historica
   assert.equal(batch.entries[0].toolCallId, 'edit-1')
   assert.equal(batch.entries[0].file, 'file.ts')
   assert.equal(batch.files, 1)
+})
+
+
+test('search activity recognizes new handlers and stored legacy calls without treating web as grep', () => {
+  const entries = groupToolActivity([
+    call('search', { handler: 'grep', path: 'v:tools', query: 'needle' }), result('match'),
+    call('search', { space: 'grep:v:tools', query: 'needle' }), result('match'),
+    call('search', { handler: 'web', domain: 'example.com', query: 'needle' }), result('web'),
+    call('search', { handler: 'glob', path: 'v:tools', query: '*' }), result('path'),
+  ]).get(0)!.entries
+  assert.deepEqual(entries.map(entry => entry.grep), [true, true, false, false])
 })

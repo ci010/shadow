@@ -12,7 +12,7 @@ Use this skill when the user requests runtime logs or troubleshooting. It uses e
 ## Discover and read
 
 1. Read `v:runtime` first. Its live guide is authoritative for available log sources, retention, instance/Project scope and limitations. Do not assume every console, child-process or disk log is collected.
-2. Discover entries with `search({space: "glob", path: "v:runtime", query: "**"})`.
+2. Discover entries with `search({handler: "glob", path: "v:runtime", query: "**"})`.
 3. Read bounded pages with `read({path: "v:runtime/logs", offset: 1, limit: 50})`. Follow the live guide for any additional paths or supported filters. Increase the page only when necessary; do not dump the entire log into the conversation.
 4. Correlate timestamp, source, level, operation and error/status fields actually present with the user's failed action. A retained older event is not evidence that the latest retry failed identically.
 

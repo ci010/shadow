@@ -1,7 +1,7 @@
 import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { resolve, toNamespacedPath } from 'node:path'
 import test from 'node:test'
 import type { ExecutionContext } from './context.ts'
 import { groupTools } from '../utils/tools-group.ts'
@@ -25,21 +25,21 @@ test('virtual glob and grep scope subdirectories, exact files, patterns and pagi
   vfs.mount('v:config', 'Read-only config', () => '')
   const search = new SearchTool('.', undefined, vfs)
   const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
-  assert.equal(await search.execute({ space: 'glob:v:memory', query: '**/*.md' }, context), 'v:memory/nested/a.md\nv:memory/root.md')
-  assert.equal(await search.execute({ space: 'glob:v:memory/nested', query: '**/*.{md,txt}' }, context), 'v:memory/nested/a.md\nv:memory/nested/deeper/b.txt')
-  assert.equal(await search.execute({ space: 'glob:', query: 'v:memory/nested/*.md' }, context), 'v:memory/nested/a.md')
-  assert.equal(await search.execute({ space: 'grep:v:memory/nested/a.md', query: 'needle' }, context), 'v:memory/nested/a.md:  Line 2: needle child')
-  assert.doesNotMatch(await search.execute({ space: 'grep:v:memory/nested', query: 'needle' }, context), /root.md|nested\/nested/)
-  assert.equal(await search.execute({ space: 'grep:v:memory', query: 'NEEDLE' }, context), 'No matches found')
-  assert.equal(await search.execute({ space: 'glob:v:memory', query: '**', limit: 1, offset: 2 }, context), 'v:memory/root.md')
+  assert.equal(await search.execute({ handler: 'glob', path: 'v:memory', query: '**/*.md' }, context), 'v:memory/nested/a.md\nv:memory/root.md')
+  assert.equal(await search.execute({ handler: 'glob', path: 'v:memory/nested', query: '**/*.{md,txt}' }, context), 'v:memory/nested/a.md\nv:memory/nested/deeper/b.txt')
+  assert.equal(await search.execute({ handler: 'glob', query: 'v:memory/nested/*.md' }, context), 'v:memory/nested/a.md')
+  assert.equal(await search.execute({ handler: 'grep', path: 'v:memory/nested/a.md', query: 'needle' }, context), 'v:memory/nested/a.md:  Line 2: needle child')
+  assert.doesNotMatch(await search.execute({ handler: 'grep', path: 'v:memory/nested', query: 'needle' }, context), /root.md|nested\/nested/)
+  assert.equal(await search.execute({ handler: 'grep', path: 'v:memory', query: 'NEEDLE' }, context), 'No matches found')
+  assert.equal(await search.execute({ handler: 'glob', path: 'v:memory', query: '**', limit: 1, offset: 2 }, context), 'v:memory/root.md')
   for (const space of ['glob:v:unknown', 'grep:v:config', 'glob:v:memory/../config']) {
     await assert.rejects(search.execute({ space, query: 'x' }, context), /virtual|Virtual/)
   }
-  await assert.rejects(new SearchTool('.').execute({ space: 'glob:v:memory', query: '**' }, context), /not configured/)
-  await assert.rejects(search.execute({ space: 'grep:v:memory', query: '[' }, context), /regular expression/)
+  await assert.rejects(new SearchTool('.').execute({ handler: 'glob', path: 'v:memory', query: '**' }, context), /not configured/)
+  await assert.rejects(search.execute({ handler: 'grep', path: 'v:memory', query: '[' }, context), /regular expression/)
   const controller = new AbortController()
   controller.abort()
-  await assert.rejects(search.execute({ space: 'glob:v:memory', query: '**' }, { ...context, signal: controller.signal }), { name: 'AbortError' })
+  await assert.rejects(search.execute({ handler: 'glob', path: 'v:memory', query: '**' }, { ...context, signal: controller.signal }), { name: 'AbortError' })
 })
 
 test('virtual memory search reads the Project Home, not the session or registered folder', async () => {
@@ -53,8 +53,8 @@ test('virtual memory search reads the Project Home, not the session or registere
     vfs.mount('v:memory', 'Memory', handlers.read, handlers.list)
     const context = { tools: new SessionTools(new Tools(home), home), cwd: resolve(home, 'workdir'), signal: new AbortController().signal } as ExecutionContext
     const search = new SearchTool(home, undefined, vfs)
-    assert.match(await search.execute({ space: 'grep:v:memory', query: 'useful' }, context), /v:memory\/nested\/lesson.md/)
-    assert.equal(await search.execute({ space: 'grep:v:memory', query: 'wrong' }, context), 'No matches found')
+    assert.match(await search.execute({ handler: 'grep', path: 'v:memory', query: 'useful' }, context), /v:memory\/nested\/lesson.md/)
+    assert.equal(await search.execute({ handler: 'grep', path: 'v:memory', query: 'wrong' }, context), 'No matches found')
     assert.equal(await vfs.resolve('v:memory/nested/lesson.md', context), 'learned a useful lesson')
     assert.match(await vfs.resolve('v:memory/nested', context) ?? '', /nested\/lesson.md/)
   })
@@ -75,9 +75,9 @@ test('virtual session search includes earlier history while glob avoids loading 
   vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
   const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
   const search = new SearchTool('.', undefined, vfs)
-  assert.equal(await search.execute({ space: 'glob:v:sessions', query: '*' }, context), 'v:sessions/web:one')
+  assert.equal(await search.execute({ handler: 'glob', path: 'v:sessions', query: '*' }, context), 'v:sessions/web:one')
   assert.equal(historyReads, 0)
-  const match = await search.execute({ space: 'grep:v:sessions/web:one', query: 'old needle' }, context)
+  const match = await search.execute({ handler: 'grep', path: 'v:sessions/web:one', query: 'old needle' }, context)
   assert.match(match, /old needle/)
   assert.equal(historyReads, 1)
   const line = Number(match.match(/Line (\d+):/)?.[1])
@@ -118,7 +118,7 @@ for (const version of [1, 2] as const) {
     assert.match(first, /segment message 0\nline two 0/)
     assert.doesNotMatch(first, /segment message 100/)
     assert.equal(first.split('\n\n[truncated:')[0].split('\n').length, 35)
-    const match = await search.execute({ space: `grep:${path}`, query: '^line two 119$' }, context)
+    const match = await search.execute({ handler: 'grep', path: path, query: '^line two 119$' }, context)
     const line = Number(match.match(/Line (\d+):/)?.[1])
     assert.ok(line > 100)
     assert.equal(requireToolText(await read.execute({ path, offset: line, limit: 1, flag: 'n' }, context)), `${line}  line two 119`)
@@ -130,7 +130,7 @@ for (const version of [1, 2] as const) {
     assert.match(page, /Messages 1–35 of 120/)
     assert.match(page, /segment message 34\n/)
     assert.doesNotMatch(page, /segment message 35\n/)
-    assert.equal(await search.execute({ space: 'glob:v:sessions', query: '*' }, context), `v:sessions/${id}`)
+    assert.equal(await search.execute({ handler: 'glob', path: 'v:sessions', query: '*' }, context), `v:sessions/${id}`)
   })
 }
 
@@ -167,26 +167,26 @@ test('file searches still use real paths and can match literal virtual-path text
   const search = new SearchTool(home)
   const tools = new SessionTools(new Tools(home), home)
   const context = { tools, cwd: home, signal: new AbortController().signal } as ExecutionContext
-  assert.match(await search.execute({ space: 'glob:memory', query: '*.md' }, context), /lesson\.md/)
-  assert.match(await search.execute({ space: 'grep:*.md', query: 'v:tools' }, context), /Read v:tools for metadata/)
-  assert.match(await search.execute({ space: `grep:${resolve(home, 'memory')}`, query: 'v:tools' }, context), /Read v:tools for metadata/)
-  assert.match(await search.execute({ space: 'grep', path: 'memory', include: '*.md', query: 'v:tools' }, context), /Read v:tools for metadata/)
+  assert.match(await search.execute({ handler: 'glob', path: 'memory', query: '*.md' }, context), /lesson\.md/)
+  assert.match(await search.execute({ handler: 'grep', include: '*.md', query: 'v:tools' }, context), /Read v:tools for metadata/)
+  assert.match(await search.execute({ handler: 'grep', path: resolve(home, 'memory'), query: 'v:tools' }, context), /Read v:tools for metadata/)
+  assert.match(await search.execute({ handler: 'grep', path: 'memory', include: '*.md', query: 'v:tools' }, context), /Read v:tools for metadata/)
   await writeFile(resolve(home, 'memory', 'two.md'), 'needle 1\nneedle 2\nneedle 3')
-  const first = await search.execute({ space: 'grep', path: 'memory', include: '*.md', query: 'needle', limit: 1 }, context)
+  const first = await search.execute({ handler: 'grep', path: 'memory', include: '*.md', query: 'needle', limit: 1 }, context)
   assert.match(first, /Line 1: needle 1[\s\S]*continue with offset: 1/)
-  const second = await search.execute({ space: 'grep', path: 'memory', query: 'needle', limit: 1, offset: 1 }, context)
+  const second = await search.execute({ handler: 'grep', path: 'memory', query: 'needle', limit: 1, offset: 1 }, context)
   assert.match(second, /Line 2: needle 2/)
   assert.doesNotMatch(second, /needle 1|needle 3/)
-  const glob = await search.execute({ space: 'glob', path: 'memory', query: '*.md', limit: 1 }, context)
+  const glob = await search.execute({ handler: 'glob', path: 'memory', query: '*.md', limit: 1 }, context)
   assert.match(glob, /continue with offset: 1/)
-  await assert.rejects(search.execute({ space: 'grep', path: 'missing', query: 'x' }, context), /ripgrep search failed/)
-  await assert.rejects(search.execute({ space: 'grep', path: 'memory', query: '[' }, context), /ripgrep search failed/)
-  await assert.rejects(search.execute({ space: 'glob', path: 'missing', query: '*' }, context), /ripgrep search failed/)
+  await assert.rejects(search.execute({ handler: 'grep', path: 'missing', query: 'x' }, context), /ripgrep search failed/)
+  await assert.rejects(search.execute({ handler: 'grep', path: 'memory', query: '[' }, context), /ripgrep search failed/)
+  await assert.rejects(search.execute({ handler: 'glob', path: 'missing', query: '*' }, context), /ripgrep search failed/)
 })
 
-test('search keeps the space contract and concise virtual-path boundary', () => {
+test('search advertises the handler contract and concise virtual-path boundary', () => {
   const search = new SearchTool('.')
-  assert.deepEqual(search.parameters.required, ['space', 'query'])
+  assert.deepEqual(search.parameters.required, ['handler', 'query'])
   assert.equal('sources' in search.parameters.properties, false)
   assert.equal('instance' in search.parameters.properties, false)
   assert(search.description.length <= 180)
@@ -200,13 +200,13 @@ test('explicit roots cannot bypass remote scope or silently override another roo
     nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not execute') },
   } }
   for (const args of [
-    { space: 'grep', path: 'src', query: 'x' },
-    { space: 'glob', path: 'src', query: 'v:sessions/**' },
-    { space: 'grep', path: 'v:memory', query: 'x' },
+    { handler: 'grep', path: 'src', query: 'x' },
+    { handler: 'glob', path: 'src', query: 'v:sessions/**' },
+    { handler: 'grep', path: 'v:memory', query: 'x' },
   ]) assert.match(await search.execute(args, remote), /only v:sessions searches/)
   assert.match(await search.execute({ space: 'grep:v:memory', path: 'src', query: 'x' }, context), /not both/)
-  assert.match(await search.execute({ space: 'web', path: 'src', query: 'x' }, context), /does not support/)
-  assert.match(await search.execute({ space: 'grep', include: resolve('src'), query: 'x' }, context), /put the search root in path/)
+  assert.match(await search.execute({ handler: 'web', path: 'src', query: 'x' }, context), /not configured/)
+  assert.match(await search.execute({ handler: 'grep', include: resolve('src'), query: 'x' }, context), /put the search root in path/)
 })
 
 test('virtual search preserves continuation and warnings while physical search keeps generic truncation', async t => {
@@ -222,11 +222,11 @@ test('virtual search preserves continuation and warnings while physical search k
     const tools = new SessionTools(base, home)
     const context = { tools, cwd: home, signal: new AbortController().signal } as ExecutionContext
     for (const args of [
-      { space: 'grep:v:memory', query: 'x' },
-      { space: 'glob:v:memory', query: '**' },
-      { space: 'glob:', query: 'v:memory/**' },
-      { space: 'grep', path: 'v:memory', include: '*.md', query: 'x' },
-      { space: 'glob', path: 'v:memory', query: '**' },
+      { handler: 'grep', path: 'v:memory', query: 'x' },
+      { handler: 'glob', path: 'v:memory', query: '**' },
+      { handler: 'glob', query: 'v:memory/**' },
+      { handler: 'grep', path: 'v:memory', include: '*.md', query: 'x' },
+      { handler: 'glob', path: 'v:memory', query: '**' },
     ]) {
       const result = requireToolText(await tools.execute('search', { ...args, limit: 1 }, context))
       assert.match(result, /continue with offset: 1/)
@@ -234,7 +234,7 @@ test('virtual search preserves continuation and warnings while physical search k
       assert.doesNotMatch(result, /\[truncated:/)
     }
     t.mock.method(search, 'execute', async () => 'x'.repeat(200))
-    const result = requireToolText(await tools.execute('search', { space: 'grep:*.md', query: 'x' }, context))
+    const result = requireToolText(await tools.execute('search', { handler: 'grep', include: '*.md', query: 'x' }, context))
     assert.match(result, /\[truncated:/)
   })
 })
@@ -252,14 +252,14 @@ test('unified search keeps web dispatch, file/web query validation and source er
   base.register(new SearchTool(home, web))
   const tools = new SessionTools(base, home)
   const context = { tools, signal: new AbortController().signal } as ExecutionContext
-  const result = await tools.execute('search', { space: 'web:example.com', query: 'docs' }, context)
+  const result = await tools.execute('search', { handler: 'web', domain: 'example.com', query: 'docs' }, context)
   assert.deepEqual(calls, [{ query: 'docs site:example.com' }])
   assert.match(requireToolText(result), /\[truncated:/)
   for (const space of ['grep:*.ts', 'glob:src', 'web:']) {
     assert.match(requireToolText(await tools.execute('search', { space }, context)), /query must be a string/)
   }
   for (const space of ['tools:', 'skills:', 'sessions:', 'v:tools', 'unknown:']) {
-    assert.match(requireToolText(await tools.execute('search', { space, query: '' }, context)), /unknown search space/)
+    assert.match(requireToolText(await tools.execute('search', { space, query: '' }, context)), /handler must be a bare implementation/)
   }
 })
 
@@ -279,7 +279,7 @@ test('web search reports missing providers and request failures without local se
   const tools = new SessionTools(new Tools('.'), '.')
   const context = { tools, signal: new AbortController().signal } as ExecutionContext
   assert.equal(
-    await new SearchTool('.').execute({ space: 'web:', query: 'docs' }, context),
+    await new SearchTool('.').execute({ handler: 'web', query: 'docs' }, context),
     'Error: web search is not configured for this search tool.',
   )
   const web: Tool = {
@@ -287,7 +287,7 @@ test('web search reports missing providers and request failures without local se
     execute: async () => { throw new Error('Synthetic network failure') },
   }
   assert.equal(
-    await new SearchTool('.', web).execute({ space: 'web:', query: 'docs' }, context),
+    await new SearchTool('.', web).execute({ handler: 'web', query: 'docs' }, context),
     'Web search failed: Synthetic network failure\n\n' +
       'Check network access to the search provider and its service status, API credentials, and usage limits.',
   )
@@ -305,7 +305,118 @@ test('web search preserves cancellation rather than suggesting provider repairs'
     },
   }
   await assert.rejects(
-    new SearchTool('.', web).execute({ space: 'web:', query: 'docs' }, context),
+    new SearchTool('.', web).execute({ handler: 'web', query: 'docs' }, context),
     { name: 'AbortError' },
   )
+})
+
+
+test('physical searches exclude OS artifacts even with explicit include globs', async t => {
+  if (!await detectRipgrep()) return t.skip('ripgrep is not installed')
+  await withTempWorkspace(async home => {
+    await mkdir(resolve(home, 'nested'))
+    const artifacts = ['.DS_Store']
+    if (process.platform === 'win32') artifacts.push('nul', 'NUL.txt', 'CON', 'aux.log', 'COM1', 'LPT9.txt')
+    for (const name of artifacts) {
+      await writeFile(toNamespacedPath(resolve(home, 'nested', name)), 'artifact needle')
+    }
+    await writeFile(resolve(home, 'nested', 'normal.txt'), 'normal needle')
+    await writeFile(resolve(home, 'nested', 'null.txt'), 'normal needle')
+    const context = { tools: new SessionTools(new Tools(home), home), cwd: home, signal: new AbortController().signal } as ExecutionContext
+    const search = new SearchTool(home)
+    const matches = await search.execute({ handler: 'grep', query: 'needle', include: '*' }, context)
+    assert.match(matches, /normal\.txt/)
+    assert.match(matches, /null\.txt/)
+    assert.doesNotMatch(matches, /artifact needle/)
+    assert.equal(await search.execute({ handler: 'grep', query: 'artifact needle' }, context), 'No matches found')
+    const files = await search.execute({ handler: 'glob', query: '**/*' }, context)
+    assert.match(files, /normal\.txt/)
+    for (const name of artifacts) assert.ok(!files.split(/\r?\n/).some(line => line.endsWith(`\\${name}`) || line.endsWith(`/${name}`)), `unexpected artifact: ${name}`)
+  })
+})
+
+test('web search ignores file-only options with a warning and still dispatches the query', async () => {
+  const calls: Record<string, unknown>[] = []
+  const web: Tool = {
+    name: 'web', description: '', parameters: { type: 'object', properties: {} },
+    execute: async args => { calls.push(args); return 'search results' },
+  }
+  const search = new SearchTool('.', web)
+  const context = { signal: new AbortController().signal } as ExecutionContext
+  for (const options of [{ offset: 10 }, { limit: 5 }, { path: 'src', include: '*.ts', limit: 5, offset: 10 }]) {
+    const args = { handler: 'web', domain: 'example.com', query: 'docs', ...options }
+    const result = await search.execute(args, context)
+    assert.match(result, /^Warning: web search ignores unsupported parameters:/)
+    for (const key of Object.keys(options)) assert.ok(result.includes(key))
+    assert.match(result, /Results are not filtered or paginated/)
+    assert.match(result, /\n\nsearch results$/)
+    assert.equal(args.query, 'docs')
+  }
+  assert.deepEqual(calls, Array(3).fill({ query: 'docs site:example.com' }))
+  assert.equal(await search.execute({ handler: 'web', query: 'docs' }, context), 'search results')
+  assert.match(await search.execute({ handler: 'grep', query: 'docs', offset: -1 }, context), /^Error: offset/)
+  const failed = new SearchTool('.', { ...web, execute: async () => { throw new Error('provider unavailable') } })
+  assert.match(await failed.execute({ handler: 'web', query: 'docs', offset: 10 }, context), /^Web search failed: provider unavailable/)
+})
+
+
+test('handler rejects overloaded selectors and exposes only unambiguous scope fields', async () => {
+  const search = new SearchTool('.')
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  assert.equal('space' in search.parameters.properties, false)
+  assert.deepEqual(search.parameters.properties.handler.enum, ['grep', 'glob', 'web'])
+  assert.ok(search.parameters.properties.domain)
+  for (const handler of ['grep:v:tools', 'glob:src', 'web:example.com', 'grep:', 'gh', '', null, 1]) {
+    assert.match(await search.execute({ handler, query: 'x' }, context), /handler must be a bare implementation name.*path.*domain/)
+  }
+  assert.match(await search.execute({ handler: 'grep', space: 'grep', query: 'x' }, context), /not both handler and legacy space/)
+  assert.match(await search.execute({ handler: 'glob', domain: 'example.com', query: '*' }, context), /domain is supported only by web/)
+  assert.equal(search.getChatTextDisplay({ handler: 'grep', path: 'v:tools', query: 'needle' }), '🔍 grep v:tools needle')
+})
+
+test('web domain is independent of handler and path, validates before invoking the provider', async () => {
+  const queries: unknown[] = []
+  const web: Tool = {
+    name: 'web', description: '', parameters: { type: 'object', properties: {} },
+    execute: async args => { queries.push(args.query); return 'results' },
+  }
+  const search = new SearchTool('.', web)
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  for (const domain of ['', 'https://example.com', 'example.com/path', 'site:example.com', 'example.com other.com', '-example.com', 'example..com', 123]) {
+    assert.match(await search.execute({ handler: 'web', domain, query: 'docs' }, context), /domain must be a DNS domain/)
+  }
+  assert.deepEqual(queries, [])
+  assert.equal(await search.execute({ handler: 'web', domain: 'docs.example.com', query: 'docs' }, context), 'results')
+  assert.match(await search.execute({ handler: 'web', domain: 'example.com', path: 'src', query: 'docs' }, context), /Warning: web search ignores unsupported parameters: path/)
+  assert.deepEqual(queries, ['docs site:docs.example.com', 'docs site:example.com'])
+  assert.equal(search.getChatTextDisplay({ handler: 'web', domain: 'example.com', query: 'docs' }), '🔍 web example.com docs')
+})
+
+test('legacy space remains runtime-only for stored calls, with conflicting new scopes rejected', async () => {
+  const vfs = new VirtualFs()
+  vfs.mount('v:tools', 'Tools', () => 'needle', () => [{ name: 'contract', content: 'needle' }])
+  const search = new SearchTool('.', undefined, vfs)
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  for (const handler of ['grep', 'glob']) {
+    const query = handler === 'grep' ? 'needle' : '**'
+    assert.equal(await search.execute({ space: `${handler}:v:tools`, query }, context), await search.execute({ handler, path: 'v:tools', query }, context))
+  }
+  assert.match(await search.execute({ space: 'web:example.com', domain: 'other.com', query: 'docs' }, context), /not both domain and legacy space/)
+})
+
+
+test('remote workdir virtual sessions stay on the control plane for handler/path searches', async () => {
+  const vfs = new VirtualFs()
+  vfs.mount('v:sessions', 'Sessions', () => 'needle', () => [{ name: 'web:one', content: 'needle' }])
+  const search = new SearchTool('.', undefined, vfs)
+  const local = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const context = {
+    ...local,
+    remoteWorkdir: { nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not forward virtual search to remote filesystem') } },
+  }
+  assert.equal(await search.execute({ handler: 'glob', path: 'v:sessions', query: '*' }, context), 'v:sessions/web:one')
+  assert.match(await search.execute({ handler: 'grep', path: 'v:sessions', query: 'needle' }, context), /v:sessions\/web:one.*needle/)
+  for (const path of ['src', 'v:tools', 'v:sessions-other']) {
+    assert.match(await search.execute({ handler: 'glob', path, query: '**' }, context), /only v:sessions searches/)
+  }
 })

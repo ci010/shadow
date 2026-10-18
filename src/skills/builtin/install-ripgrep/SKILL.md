@@ -54,8 +54,8 @@ After installing, use the built-in search paths — no tool registration or
 explicit import is needed:
 
 ```
-search({ space: "glob:", query: "**/*.ts" })
-search({ space: "grep:", query: "TODO" })
+search({ handler: "glob", query: "**/*.ts" })
+search({ handler: "grep", query: "TODO" })
 ```
 
 Verify with `rg --version` if unsure whether the install succeeded.

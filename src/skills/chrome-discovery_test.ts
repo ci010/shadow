@@ -27,20 +27,20 @@ test('browser capabilities are visible in the compact summary before tool discov
       const search = new SearchTool(home, undefined, vfs)
       const context = { tools: new SessionTools(new Tools(home), home), signal: new AbortController().signal } as ExecutionContext
       for (const query of ['[Ss]low page', '[Ff]ailed API request', '[Bb]roken button', 'memory', '[Mm]obile layout', 'accessibility audit', 'Edge', 'Brave', 'Electron', 'browser_setup']) {
-        const result = await search.execute({ space: 'grep:v:skills/chrome-devtools', query }, context)
+        const result = await search.execute({ handler: 'grep', path: 'v:skills/chrome-devtools', query }, context)
         assert.match(result, /v:skills\/chrome-devtools/, `Browser skill must be discoverable for ${query}`)
       }
       const body = skills.getSkillBody('chrome-devtools')
       assert.ok(body)
       assert.match(body, /tool search uses case-sensitive regular expressions/)
       assert.match(body, /Check warnings/)
-      assert.match(body, /glob:v:tools\/chrome-devtools", query: "\*\*", limit: 20/)
+      assert.match(body, /handler: "glob", path: "v:tools\/chrome-devtools", query: "\*\*", limit: 20/)
       assert.match(body, /continuation footer's offset/)
       assert.match(body, /not merely to hide tool schemas/)
       assert.match(body, /does not inherit the parent's open page or login/)
       const normalized = body.replace(/\s+/g, ' ')
       for (const contract of [
-        /search\(\{ space: "grep:v:tools", query: "browser_setup" \}\)/,
+        /search\(\{ handler: "grep", path: "v:tools", query: "browser_setup" \}\)/,
         /name: "browser_setup", args: \{ action: "launch", browser: "edge" \}/,
         /`browser` accepts `edge`, `brave`, `chrome`, or `default`/,
         /`executablePath` instead of `browser`.*explicit choice never falls back/,
@@ -54,7 +54,7 @@ test('browser capabilities are visible in the compact summary before tool discov
         /connects and lists live contracts without business tool RPCs/,
         /args: \{ action: "list" \}/,
         /args: \{ action: "close", instance: "<id>" \}/,
-        /space: "grep:v:tools\/chrome-devtools\/<id>", query: "snapshot"/,
+        /handler: "grep", path: "v:tools\/chrome-devtools\/<id>", query: "snapshot"/,
         /name: "chrome-devtools__take_snapshot", instance: "<id>", args: \{\}/,
         /no per-instance prefix variants or alternate full source/,
         /One session instance allows omitted `instance`; two or more require an explicit ID/,

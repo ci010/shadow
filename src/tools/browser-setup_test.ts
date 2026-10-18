@@ -89,7 +89,7 @@ function fixture(t: TestContext, home: string) {
     context.tools.execute('invoke_tool', { name: 'browser_setup', args }, context)
   const search = async (context: ExecutionContext, args: Record<string, unknown> = {}) => {
     const path = `v:tools/chrome-devtools${args.instance ? `/${args.instance}` : ''}`
-    const result = requireToolText(await context.tools.execute('search', { space: `glob:${path}`, query: '*__inspect' }, context))
+    const result = requireToolText(await context.tools.execute('search', { handler: 'glob', path: path, query: '*__inspect' }, context))
     if (result.startsWith('Error') || result.includes('Warning:')) return result
     const paths = result.split('\n').filter(line => line.startsWith('v:'))
     const tools = await Promise.all(paths.map(async path =>
@@ -243,7 +243,7 @@ test('setup is discoverable without starting a browser; default use stays lazy a
   await withTempWorkspace(async home => {
     const f = fixture(t, home)
     const context = f.session()
-    const found = requireToolText(await context.tools.execute('search', { space: 'glob:v:tools', query: '**/browser_setup' }, context))
+    const found = requireToolText(await context.tools.execute('search', { handler: 'glob', path: 'v:tools', query: '**/browser_setup' }, context))
     assert.match(found, /v:tools\/browser_setup\/browser_setup/)
     assert.equal(f.connect.mock.callCount(), 0)
     assert.equal(f.live.size, 0)
@@ -383,8 +383,8 @@ test('invalid setup and instance arguments fail before any allocation or connect
       { action: 'launch', endpoint: 'http://localhost:9222' },
       { action: 'close' },
     ]) assert.match(requireToolText(await f.setup(context, args)), /^Error/)
-    assert.match(requireToolText(await context.tools.execute('search', { space: 'glob:v:tools', query: '**', instance: 123 }, context)), /supported search parameters/)
-    assert.match(requireToolText(await context.tools.execute('search', { space: 'tools:', query: '', instance: 'x' }, context)), /unknown search space/)
+    assert.match(requireToolText(await context.tools.execute('search', { handler: 'glob', path: 'v:tools', query: '**', instance: 123 }, context)), /supported search parameters/)
+    assert.match(requireToolText(await context.tools.execute('search', { space: 'tools:', query: '', instance: 'x' }, context)), /handler must be a bare implementation/)
     assert.match(requireToolText(await context.tools.execute('invoke_tool', { name: 'browser_setup', instance: 'x', args: { action: 'list' } }, context)), /instance is supported only/)
     assert.equal(f.connect.mock.callCount(), 0)
     assert.equal(f.live.size, 0)

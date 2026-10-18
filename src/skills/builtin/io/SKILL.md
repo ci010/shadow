@@ -33,7 +33,7 @@ at a caller-chosen path. It does not perform speech recognition.
 ## Workflow
 
 1. Discover `io_capabilities`, `io_run`, and `io_surface` with
-   `search(query="io", space="grep:v:tools")`. Read their returned contract paths,
+   `search(query="io", handler="grep", path="v:tools")`. Read their returned contract paths,
    then call them through `invoke_tool`.
    `io_capabilities` reports connected clients, first-party sources and controls,
    not business processors. `needs_client` means the user must open the local host.

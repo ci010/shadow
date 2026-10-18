@@ -45,7 +45,7 @@ async function setup(t: TestContext, builtins = new Map<string, LoadableEntry>()
     await rm(home, { recursive: true, force: true })
   })
   const search = async (args: Record<string, unknown>, ctx = context) =>
-    requireToolText(await ctx.tools.execute('search', { space: 'grep:v:tools', query: 'subject', ...args }, ctx))
+    requireToolText(await ctx.tools.execute('search', { handler: 'grep', path: 'v:tools', query: 'subject', ...args }, ctx))
   const read = async (path = 'v:tools/mail/mail__SearchMessages', ctx = context) =>
     requireToolText(await ctx.tools.execute('read', { path }, ctx))
   const invoke = (args: Record<string, unknown>) => tools.execute('invoke_tool', { name: 'mail__SearchMessages', args }, context)
@@ -54,7 +54,7 @@ async function setup(t: TestContext, builtins = new Map<string, LoadableEntry>()
 
 test('VFS searches names, descriptions and full schemas; read returns exact contracts without connecting', async t => {
   const f = await setup(t)
-  assert.equal(await f.search({ space: 'glob:v:tools/mail', query: '*__*' }), 'v:tools/mail/mail__SearchMessages')
+  assert.equal(await f.search({ handler: 'glob', path: 'v:tools/mail', query: '*__*' }), 'v:tools/mail/mail__SearchMessages')
   for (const query of ['subject', '"query"', '"maximum": 10']) {
     assert.match(await f.search({ query }), /v:tools\/mail\/mail__SearchMessages/)
   }
@@ -110,7 +110,7 @@ test('invalid arguments never execute and live schemas replace stale indexed met
   f.tools.resetDynamic()
   f.list.mock.mockImplementation(async () => [])
   assert.match(requireToolText(await f.invoke({ folder: 'inbox' })), /not advertised/)
-  assert.equal(await f.search({ space: 'glob:v:tools/mail', query: '*__*' }), 'No files found')
+  assert.equal(await f.search({ handler: 'glob', path: 'v:tools/mail', query: '*__*' }), 'No files found')
 })
 
 test('uninitialized factories stay deferred, static contracts work, and warnings survive no-match queries', async t => {
@@ -124,7 +124,7 @@ test('uninitialized factories stay deferred, static contracts work, and warnings
   const missing = await f.search({ query: 'never matches' })
   assert.match(missing, /No matches found/)
   assert.match(missing, /Warning: v:tools\/deferred:.*does not initialize/)
-  assert.match(await f.search({ space: 'grep:v:tools/deferred/unknown', query: 'never' }), /Warning:/)
+  assert.match(await f.search({ handler: 'grep', path: 'v:tools/deferred/unknown', query: 'never' }), /Warning:/)
   assert.equal(factories, 0)
   assert.equal(f.connect.mock.callCount(), 0)
 })
@@ -134,7 +134,7 @@ test('missing or malformed MCP indexes report incomplete coverage without fallba
   await f.importer.updateMcpServers([config, { name: 'missing', transport: 'stdio', command: 'never' }])
   assert.match(await f.search({ query: 'no matches' }), /Warning: v:tools\/missing:.*not indexed/)
   t.mock.method(f.index, 'read', async () => { throw new Error('Malformed tool index') })
-  assert.match(await f.search({ space: 'grep:v:tools/mail', query: 'nothing' }), /Warning:.*Malformed tool index/)
+  assert.match(await f.search({ handler: 'grep', path: 'v:tools/mail', query: 'nothing' }), /Warning:.*Malformed tool index/)
   assert.equal(f.connect.mock.callCount(), 0)
   assert.equal(f.list.mock.callCount(), 0)
 })
@@ -142,9 +142,9 @@ test('missing or malformed MCP indexes report incomplete coverage without fallba
 test('VFS tool listing is deterministic and paginated; encoded tool names round-trip through read', async t => {
   const f = await setup(t)
   await f.index.store(config, ['a', 'b', 'slash/name%', 'z'].map(name => ({ ...advertised[0], name })))
-  const first = await f.search({ space: 'glob:v:tools/mail', query: '*__*', limit: 2 })
+  const first = await f.search({ handler: 'glob', path: 'v:tools/mail', query: '*__*', limit: 2 })
   assert.equal(first, 'v:tools/mail/mail__a\nv:tools/mail/mail__b\n(Showing 2 of 4 results; continue with offset: 2.)')
-  const last = await f.search({ space: 'glob:v:tools/mail', query: '*__*', limit: 2, offset: 2 })
+  const last = await f.search({ handler: 'glob', path: 'v:tools/mail', query: '*__*', limit: 2, offset: 2 })
   assert.equal(last, 'v:tools/mail/mail__slash%2Fname%25\nv:tools/mail/mail__z')
   assert.equal(JSON.parse(await f.read('v:tools/mail/mail__slash%2Fname%25')).name, 'mail__slash/name%')
   assert.equal(f.connect.mock.callCount(), 0)

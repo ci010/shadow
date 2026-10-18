@@ -7,7 +7,7 @@ metadata:
 
 # Cron Scheduling
 
-Use `search(query="**", space="glob:v:tools/cron")` to discover scheduling tools;
+Use `search(query="**", handler="glob", path="v:tools/cron")` to discover scheduling tools;
 read their returned paths for complete contracts.
 Invoke `cron_add`, `cron_list`, or `cron_remove` through `invoke_tool`.
 No separate import or `action` argument is required. Arguments are validated

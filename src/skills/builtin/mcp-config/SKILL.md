@@ -141,7 +141,7 @@ future tool execution. Restart restores the source catalog with zero connections
 To discover indexed metadata, select the configured source:
 
 ```js
-search({ space: "glob:v:tools/teams", query: "**" })
+search({ handler: "glob", path: "v:tools/teams", query: "**" })
 ```
 
 Read the returned individual tool paths for exact names, descriptions,

@@ -1,6 +1,6 @@
 ---
 name: tool-operations
-description: Detailed tool discovery, Skill maintenance, MCP configuration and recovery, and managed Bot authoring. Read before integration or resource maintenance.
+description: Detailed tool discovery, Skill maintenance, MCP configuration and recovery, Bot role selection (personal assistant versus service Bot), and managed Bot authoring. Read before Bot setup, integration or resource maintenance.
 metadata:
   category: setup
 ---
@@ -14,10 +14,10 @@ restrictions. Reading this guide grants no capabilities.
 ### Project Coordination
 
 Reuse durable Project sessions; they are root peers, not coordinator children.
-`search({ space: "grep:v:sessions", query })` searches histories and session metadata.
+`search({ handler: "grep", path: "v:sessions", query })` searches histories and session metadata.
 Read a matching `v:sessions/<session-id>/brief` for title and description,
 folderId, initiativeId, createdBySessionId, status and conversationUrl.
-Use `glob:v:sessions` with `query: "*/brief"` to list sessions. `session` creates
+Use `handler: "glob", path: "v:sessions"` with `query: "*/brief"` to list sessions. `session` creates
 or renames conversations; it does not create work or define acceptance.
 Use `work` for work definitions, assignments, dependencies and progress.
 Creator provenance is not structural ownership.
@@ -40,7 +40,7 @@ input requests use `reply({request_id, text})` with the returned pending request
 Use `ask(kind=input)` for missing text and `ask(kind=decision)` for decisions.
 Discovery and familiar tool names do not grant outbound access.
 
-**Execution inventory:** `read("v:bg")` and `grep:v:bg`/`glob:v:bg` cover owned
+**Execution inventory:** `read("v:bg")` and `handler: "grep", path: "v:bg"`/`handler: "glob", path: "v:bg"` cover owned
 background work, local task/call and remote A2A executions without duplicating
 their state. Read `v:bg/<executionId>` for status/output. Background IDs use `bg:`;
 use the returned reference with `cancel`, never `kill` or a PID.
@@ -62,8 +62,8 @@ Full writes include revision in JSON `content`. Exact edits use
 `match`/`content`, optional `flag: "g"`; they revision-check a prior read's redacted
 snapshot in the same logical/physical session. Missing snapshot: reread.
 
-**Find skills:** `search({ space: "grep:v:skills", query: "CSV", limit: 5, offset: 0 })`
-returns matching lines and read paths. Use `grep:v:skills/<name>` to narrow.
+**Find skills:** `search({ handler: "grep", path: "v:skills", query: "CSV", limit: 5, offset: 0 })`
+returns matching lines and read paths. Use `handler: "grep", path: "v:skills/<name>"` to narrow.
 Skill resources, including frontmatter in `<name>/SKILL.md`, are searchable too.
 Search, index/category reads, and bundled resource reads do not activate tools.
 Prompt hints contain only bounded core/recent metadata, including learned Skills.
@@ -102,12 +102,12 @@ stale registrations fail instead of silently switching code. Registrations are n
 across sessions. Invalid declarations remain discoverable with `toolsError`,
 but exact skill reads fail explicitly.
 
-**Discover:** `search({ space: "grep:v:tools", query, limit?, offset? })` searches
+**Discover:** `search({ handler: "grep", path: "v:tools", query, limit?, offset? })` searches
 names, descriptions and parameter schemas with case-sensitive regular expressions.
 Read returned `v:tools/<source>/<encoded-tool-name>` paths for full contracts.
-Use `glob:v:tools` with `query: "**"` to list paths, or scope either protocol to
+Use `handler: "glob", path: "v:tools"` with `query: "**"` to list paths, or scope either protocol to
 `v:tools/<source>`. Virtual pages default to 100 results (maximum 100); follow
-the continuation footer's offset. Files/web use `grep:`/`glob:`/`web:`.
+the continuation footer's offset. Select `handler: "grep"`, `"glob"` or `"web"`; use `path` for file/virtual scope and `domain` for web scope.
 
 Installed MCP search, global or targeted, reads active metadata or the persistent index: exact names,
 descriptions, parameters and `indexedAt`; zero connections, `tools/list` RPCs or
@@ -145,7 +145,62 @@ access/TLS controls. Lazy-load failure does not authorize configuration, credent
 changes or new permissions. With `toolExecution: "unknown"`, execution may have
 started: inspect the outcome before any retry, especially writes.
 
+## Bot role selection and setup
+
+Before configuring a Bot, distinguish two purposes. Prefer **Connect my assistant**
+for a personal Project entry point and **Create a service Bot** for a dedicated
+employee. Private versus group chat alone does not determine the purpose. Inspect
+current setup/API capabilities before claiming either workflow is supported.
+
+- **Personal assistant:** a separately created channel entry point for the
+  Project owner's assistant, not an authored service Agent. Require a trusted,
+  exact-Project/exact-Bot owner verification flow; a display name, platform
+  administrator role, first sender, `allowFrom`, or `userlink` profile assignment
+  is not proof of ownership. Only the verified owner's direct messages may enter
+  ordinary inference. Unbound identities, other people and group messages must
+  be rejected; never use an open or empty allowlist as a substitute. The personal
+  assistant follows the ordinary Project dynamic Skill discovery/activation path
+  and the owner's permitted capabilities, not a copied service Skill bundle.
+  Keep session/role/tool restrictions and protected-operation approvals. A private
+  channel is not permission to bypass Web-only operations or platform limits.
+- **Service Bot:** a dedicated role with explicitly selected instructions, Skills,
+  tools and authorized resources. Select the smallest useful set for its duty:
+  approved-document read/search for FAQ; a scoped read-only service grant for
+  status; separately reviewed write capabilities only when the job requires them.
+  Owner DMs remain service conversations, not personal-assistant sessions.
+  Unassigned conversations must not fall back to the ordinary Project assistant.
+  A service Bot must not acquire extra tools by dynamically reading `v:skills`.
+- One platform Bot instance must not silently serve both purposes. Do not infer
+  owner identity or convert a legacy connection into a personal entry point.
+  Unsupported setup paths are blockers to report, not permission to emulate a
+  personal assistant with a privileged service Agent or broad `adminChats`.
+  Project runtimes do not currently start legacy WeChat adapters.
+
+### Skill allocation is not blanket authorization
+
+Ordinary Project Skill discovery exposes metadata; an exact `v:skills/<name>`
+read registers that Skill's permitted tool declarations in the current session.
+It does not execute the tools or authorize unrelated side effects. Admin-only
+Skills still require current admin status, and Agent/module/tool ceilings apply.
+
+Managed service Skills use a different path: selected bundle Skill instructions
+and tool declarations are assembled at publication. Actual tools must also pass
+Agent allowed/blocked tools, module ceilings, resource access and applicable
+binding grants. Selecting instructions can change behavior even when a tool is
+not allowed. Changing selections or grants requires the existing exact-version
+owner review, not a Skill read or chat acknowledgment. Raw native filesystem or
+network modules execute with host authority; `readFolders` and named grants do
+not sandbox them. Prefer scoped capability interfaces.
+
+Validate setup against owner and non-owner DMs, group rejection for personal
+entries, unassigned service conversations, restart persistence, revoked owner or
+service authorization, and cross-Project/cross-Bot isolation. Preview and mocked
+tests are not proof of live platform delivery. Report unsupported capabilities
+and required Shadow owner-review steps explicitly.
+
 ## Managed Bot authoring
+
+The workflows below configure service Bots, not personal Project entry points.
 
 Discord uses `channel_config`, not `authoring_change`. In owner coordination,
 read `action: schema`, then `list` for named Bot connections and the current

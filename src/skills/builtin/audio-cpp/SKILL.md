@@ -11,7 +11,7 @@ metadata:
 Shadow does **not** ship audio.cpp executables or model weights. Do not claim
 speech recognition or synthesis is available until `audio_cpp status` shows an
 installed CLI and the requested model. Discover the `audio_cpp` contract with
-`search(query="audio_cpp", space="grep:v:tools")`, then call it with
+`search(query="audio_cpp", handler="grep", path="v:tools")`, then call it with
 `invoke_tool`. Its `status`, `assess`, `setup`, `configure_remote`, `inspect`, `configure`, `transcribe`, and `speak`
 actions are the supported Shadow integration. The local backend runs on the owning host only: a
 remote workdir must use a capability implemented on its own node, not Main's

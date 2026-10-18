@@ -285,7 +285,7 @@ export class ImportTool implements Tool {
       instance: instance.id, source: 'v:tools/chrome-devtools', mode: instance.target.mode,
       owned: instance.target.mode === 'launch', ready: instance.ready,
       ...(instance.target.mode === 'launch' ? instance.target.options : { endpoint: instance.target.endpoint }),
-      usage: 'Search glob:v:tools/chrome-devtools/<instance> or grep:v:tools/chrome-devtools/<instance>. Pass instance to invoke_tool({name:"chrome-devtools__...",instance,args:{...}}).',
+      usage: 'Search with handler "glob" or "grep" and path "v:tools/chrome-devtools/<instance>". Pass instance to invoke_tool({name:"chrome-devtools__...",instance,args:{...}}).',
     }
   }
 
@@ -489,7 +489,7 @@ export class ImportTool implements Tool {
     const entries = await this.virtualEntries(context, { subpath: path })
     if (!path) return entries.filter(entry => !entry.name.includes('/')).map(entry => entry.content).join('\n') || 'No dynamic tool sources are available for this agent.'
     const entry = entries.find(entry => entry.name === path)
-    if (!entry) throw new Error('Unknown or unavailable tool metadata path. Search glob:v:tools for current paths.')
+    if (!entry) throw new Error('Unknown or unavailable tool metadata path. Search with handler "glob" and path "v:tools" for current paths.')
     return entry.content
   }
 
@@ -732,7 +732,7 @@ export class ImportTool implements Tool {
 
       result = await load(catalogName)
       if (sessionTools.hasDynamic(toolName)) return result
-      result ??= `Error: tool "${toolName}" is not advertised by server "${serverName}". Search grep:v:tools and read the matching paths for current tool IDs.`
+      result ??= `Error: tool "${toolName}" is not advertised by server "${serverName}". Search with handler "grep" and path "v:tools", then read matching paths for current tool IDs.`
     }
     return result
   }

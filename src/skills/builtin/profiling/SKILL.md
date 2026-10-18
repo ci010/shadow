@@ -10,7 +10,7 @@ metadata:
 Use existing read/search capabilities only, when someone requests statistics. This skill adds no tools, permissions, inference calls, automatic self-analysis or background collection.
 
 - `read("v:stats")` describes the available paths in the current Project.
-- `search({space: "glob", path: "v:stats", query: "**"})` lists metadata without scanning event history.
+- `search({handler: "glob", path: "v:stats", query: "**"})` lists metadata without scanning event history.
 - `read("v:stats/project")` gives the Project total and rolling 24h summary.
 - Read a returned `v:stats/sessions/<URL-encoded logical session ID>` for this conversation's own and including-descendants statistics. Use the logical ID, not a physical segment ID. For example `web:example` becomes `web%3Aexample`.
 - Read `v:stats/automations/<URL-encoded feature ID>` for an automation's aggregation, frequency and run outcomes, such as `system%3Awork-organizer`.

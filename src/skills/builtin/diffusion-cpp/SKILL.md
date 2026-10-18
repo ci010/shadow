@@ -10,7 +10,7 @@ metadata:
 
 Shadow ships neither `sd-cli` nor weights. Start with `diffusion_cpp status` and
 `diffusion_cpp discover` (find its contract with
-`search(query="diffusion_cpp", space="grep:v:tools")` and call via
+`search(query="diffusion_cpp", handler="grep", path="v:tools")` and call via
 `invoke_tool`). `status` distinguishes missing configuration from accessible
 paths; **neither an accessible path nor a discovery candidate proves the model
 can run**. `inspect` can show CLI `help` or `devices`. All operations are local

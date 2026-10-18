@@ -11,7 +11,7 @@ metadata:
 Read `v:events/sources` and `v:events` first. Existing channel, cron, or
 custom sources may already produce the event. The event tools are dynamically
 available, not part of the base tool list: use
-`search({space:"glob:v:tools/events", query:"**"})` to discover both
+`search({handler: "glob", path: "v:tools/events", query:"**"})` to discover both
 `event_source` and `event_subscribe`; read the returned paths for the current
 schemas. Invoke by exact name with `invoke_tool({name:"event_source",args:{...}})`
 or `invoke_tool({name:"event_subscribe",args:{...}})`. The first invocation

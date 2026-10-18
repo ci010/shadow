@@ -18,7 +18,7 @@ test('coordinator file search never auto-installs a missing ripgrep helper', asy
   try {
     process.env.PATH = ''
     const tool = new SearchTool(process.cwd(), undefined, undefined, false)
-    const result = await tool.execute({ space: 'grep', query: 'unused' }, {
+    const result = await tool.execute({ handler: 'grep', query: 'unused' }, {
       signal: new AbortController().signal,
     } as ExecutionContext)
     assert.match(result, /ripgrep/)

@@ -10,7 +10,7 @@ metadata:
 
 Shadow bundles a pinned `aria2c` with the desktop application; it does not
 silently use the system `PATH`. Use `download` through `invoke_tool` (find its
-contract with `search(query="download", space="grep:v:tools")`). Run
+contract with `search(query="download", handler="grep", path="v:tools")`). Run
 `download status` to check the binary and version. Source and built backends
 running from a repository checkout use `desktop/aria2/aria2c` (`aria2c.exe`
 on Windows); these development assets are not downloaded at startup.
