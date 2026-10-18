@@ -27,7 +27,7 @@
       @draft="createNewWebChat"
     />
 
-    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? conversationTitle : 'New conversation'" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
+    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? conversationTitle : 'New conversation'" :folder-id="activeSessionId ? activeSession?.folderId : draft.folder?.id"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
       :project-navigation-enabled="!embedded"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
@@ -175,7 +175,11 @@
             <ConversationSummary v-else-if="msg.isSummary" :content="msg.content"
               :render-content="renderMarkdown" @interact="clearSelection" />
             <!-- User-facing messages: trigger provenance does not determine the recipient. -->
-            <component v-else :is="msg.sessionSource ? SessionMessageDisclosure : 'div'"
+            <template v-else>
+            <ReasoningItem v-if="msg.role === 'assistant' && (msg.reasoningContent || msg.reasoningText || '').trim()"
+              :text="msg.reasoningContent || msg.reasoningText || ''" :render-content="renderMarkdown"
+              :open="expandedThinking.has(idx)" @update:open="setThinkingExpanded(idx, $event)" @interact="clearSelection" />
+            <component :is="msg.sessionSource ? SessionMessageDisclosure : 'div'"
               v-bind="msg.sessionSource ? {
                 title: sessionMessageTitle(msg.sessionSource),
                 recipient: sessionMessageSourceLabel(msg.sessionSource, allSessions),
@@ -191,15 +195,6 @@
               :aria-label="msg.sessionSource ? t('{value1} from {value2}', { value1: sessionMessageTitle(msg.sessionSource), value2: sessionMessageSourceLabel(msg.sessionSource, allSessions) }) : msg.role === 'user' ? (msg.senderName ? t('Message from {senderName}', { senderName: msg.senderName }) : t('User message')) : t('Assistant message')"
             >
               <div v-if="!msg.sessionSource && msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
-              <!-- Reasoning / thinking content (collapsible) -->
-              <div v-if="msg.reasoningContent || msg.reasoningText" class="thinking-block">
-                <div class="thinking-header" @click="toggleThinking(idx)">
-                  <span class="thinking-icon i-lucide-brain w-4 h-4" aria-hidden="true" />
-                  <span class="thinking-label">{{ t('Thinking') }}</span>
-                  <span class="thinking-toggle w-3 h-3" :class="expandedThinking.has(idx) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" aria-hidden="true" />
-                </div>
-                <div v-if="expandedThinking.has(idx)" class="thinking-content prose" v-answer-html v-html="renderMarkdown(msg.reasoningContent || msg.reasoningText || '')" />
-              </div>
               <div v-if="msg.attachmentBody.text" class="chat-content prose" v-answer-html v-html="renderMarkdown(msg.attachmentBody.text)" />
               <div
                 v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
@@ -217,6 +212,7 @@
               <MessageTimestamp v-if="!msg.sessionSource" :timestamp="msg.timestamp" />
               </div>
             </component>
+            </template>
             <YieldDecision v-for="[index, decision] in yieldDecisions.after.get(idx)"
               :key="decision.requestId" :decision="decision" :api-base="apiBase"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
@@ -289,11 +285,14 @@
           :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled"
           :use-composer="isDirectChat && !viewingPhysicalId" :composer-id="domId('message-input')" :composer-busy="submittingMessage"
           @request="handleYieldRequest" @inspect="inspectExecution" @custom="focusQuestionComposer" />
+        <BotChatSetup :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
+          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
+          :can-submit="installation.uiScopes.includes('main:admin')" />
         <CredentialRequest v-if="activeSessionId === 'web:orchestrator'" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
-        <ComputerControl v-if="isDirectChat && !isCall && !remoteConversation && !embedded" :api-base="apiBase"
+        <ComputerControl ref="computerControl" v-if="canUseComputer" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
@@ -411,9 +410,13 @@
           </div>
           <div class="composer-toolbar">
             <div class="composer-controls">
-              <ComposerPopover ref="composerOptions" :label="mobileLayout ? t('Message options') : t('Add attachments or context')" :sheet="mobileLayout" :title="composerPopoverTitle" :disabled="mobileLayout ? pickingContext || submissionBusy : !canOpenComposerPopover || pickingContext || submissionBusy" :width="220">
+              <ComposerPopover ref="composerOptions" :label="mobileLayout ? t('Message options') : t('Add attachments or context')" :sheet="mobileLayout" :title="composerPopoverTitle" :disabled="mobileLayout ? pickingContext || submissionBusy : !(canOpenComposerPopover || canUseComputer) || pickingContext || submissionBusy" :width="220">
                 <template #trigger><span class="i-lucide-plus w-5 h-5" aria-hidden="true" /></template>
                 <template #default="{ close }">
+                  <button v-if="canUseComputer" class="context-action" @click="close(); computerControl?.open()">
+                    <span class="context-icon i-lucide-monitor" aria-hidden="true" />
+                    {{ t('Computer use') }} · {{ computerControl?.stateLabel }}
+                  </button>
                   <button class="context-action" :disabled="!canOpenComposerPopover" @click="close(); canPickContext ? pickContext('file') : openAttachmentPicker()">
                     <span class="context-icon i-lucide-file-plus" aria-hidden="true" />
                     {{ t('Add file') }}
@@ -545,6 +548,7 @@ import type { YieldRequest, YieldDecisionRecord } from '../../../src/sessions/yi
 import { isInputRequest, MAX_YIELD_CUSTOM_TEXT_LENGTH, type AskRequest } from '../yield-requests.ts'
 import { MAX_ANSWER_ATTACHMENTS } from '../../../src/sessions/answer-media.ts'
 import CredentialRequest from './CredentialRequest.vue'
+import BotChatSetup from './BotChatSetup.vue'
 import ComputerControl from './ComputerControl.vue'
 import PublicationRequest from './PublicationRequest.vue'
 import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
@@ -596,6 +600,7 @@ import { isChannelConversation, updateSessionSettings, type ReasoningSettings, t
 import { draftSettingsKey as createDraftSettingsKey, loadDraftSettings, saveDraftSettings } from '../draft-settings.ts'
 import { useConversationNavigation } from '../composables/useConversationNavigation.ts'
 import ToolActivityGroup from './ToolActivityGroup.vue'
+import ReasoningItem from './ReasoningItem.vue'
 import ConversationSummary from './ConversationSummary.vue'
 import { groupToolActivity } from '../tool-activity.ts'
 import { toolImages } from '../tool-images.ts'
@@ -744,6 +749,9 @@ const pastingFiles = ref(false)
 const attachmentInput = ref<HTMLInputElement>()
 const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && typeof File === 'function' && typeof FormData === 'function')
 const canPickContext = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
+const computerControl = ref<InstanceType<typeof ComputerControl>>()
+const canUseComputer = computed(() => isDirectChat.value && !isCall.value && !remoteConversation.value && !props.embedded
+  && !!activeSessionId.value && installation.value.uiScopes.includes('main:admin'))
 const canOpenComposerPopover = computed(() => canAttachFiles.value || canPickContext.value)
 const composerPopoverTitle = computed(() =>
   remoteConversation.value ? t('Local attachments are not transferred to remote workspaces')
@@ -1375,13 +1383,9 @@ function sourceForEvent(meta: ChatEventMeta): SidebarSession | undefined {
   return allSessions.value.find(session => session.sessionId === eventSourceSession(meta))
 }
 
-function toggleThinking(idx: number): void {
-  clearSelection()
-  if (expandedThinking.has(idx)) {
-    expandedThinking.delete(idx)
-  } else {
-    expandedThinking.add(idx)
-  }
+function setThinkingExpanded(idx: number, open: boolean): void {
+  if (open) expandedThinking.add(idx)
+  else expandedThinking.delete(idx)
 }
 
 // ── History collapsing (from raw ChatMessage[] to ChatMsg[]) ─────────────────
@@ -1575,6 +1579,12 @@ const workRevision = ref(0)
 async function loadSessionList(): Promise<void> {
   await projectLease?.refresh()
 }
+
+// Folder identity comes from the scoped session graph, never a workdir display path.
+// Drop the previous Project's metadata before a new graph arrives (IDs may repeat).
+watch(() => [props.apiBase, props.projectId] as const, () => {
+  allSessions.value = []
+}, { flush: 'sync' })
 
 watch(() => [props.apiBase, props.projectId, paneActive.value] as const, ([base, projectId, active], _previous, onCleanup) => {
   if (!active) return
@@ -3179,59 +3189,6 @@ function resendLastMessage() {
 }
 
 /* ── Chat media ──────────────────────────────────────────── */
-
-/* ── Thinking / reasoning block ───────────────────────────── */
-
-.thinking-block {
-  margin-bottom: 0.4rem;
-  border: 1px solid var(--c-chat-border);
-  border-radius: var(--radius-control);
-  padding: 0.25rem 0.5rem;
-  background: var(--c-chat-action-bg);
-}
-
-.thinking-header {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  cursor: pointer;
-  user-select: none;
-  font-size: 0.65rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--c-text-secondary);
-}
-
-.thinking-icon {
-  font-size: 0.7rem;
-}
-
-.thinking-label {
-  flex: 1;
-}
-
-.thinking-toggle {
-  font-size: 0.45rem;
-  color: var(--c-text-faint);
-}
-
-.thinking-content {
-  margin-top: 0.3rem;
-  font-size: 0.75rem;
-  line-height: 1.5;
-  color: var(--c-text-secondary, var(--c-text-body));
-}
-
-.thinking-content :deep(pre) {
-  background: var(--c-bg-muted);
-  color: var(--c-text);
-  border-radius: var(--radius-sm);
-  padding: 0.35rem;
-  font-size: 0.65rem;
-  overflow-x: auto;
-  margin: 0.3rem 0;
-}
 
 /* ── Chat messages ──────────────────────────────────────────── */
 

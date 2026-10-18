@@ -153,10 +153,14 @@ export class Tools {
       if (
         text.length > this.truncationThreshold &&
         !EXEMPT_TOOLS.has(name) && !tool.preserveOutput &&
-        !(name === 'search' && typeof args.space === 'string' && (
-          /^(?:glob|grep):[\\/]*v:/.test(args.space) ||
-          /^(?:glob|grep)(?::.*)?$/.test(args.space) && typeof args.path === 'string' && isVirtualPath(args.path) ||
-          /^(?:glob|glob:)$/.test(args.space) && args.path === undefined && typeof args.query === 'string' && isVirtualPath(args.query)
+        !(name === 'search' && (
+          (args.handler === 'grep' || args.handler === 'glob') && typeof args.path === 'string' && isVirtualPath(args.path) ||
+          args.handler === 'glob' && args.path === undefined && typeof args.query === 'string' && isVirtualPath(args.query) ||
+          typeof args.space === 'string' && (
+            /^(?:glob|grep):[\\/]*v:/.test(args.space) ||
+            /^(?:glob|grep)(?::.*)?$/.test(args.space) && typeof args.path === 'string' && isVirtualPath(args.path) ||
+            /^(?:glob|glob:)$/.test(args.space) && args.path === undefined && typeof args.query === 'string' && isVirtualPath(args.query)
+          )
         )) &&
         !(context.remoteWorkdir && name === 'exec')
       ) {
@@ -537,9 +541,8 @@ export class SessionTools extends Tools {
     if (!executionModeAllowsTool(this.scope?.mode, name)) {
       return this.rejectExecution(`${name} is unavailable in ${this.scope?.mode} mode; return to the parent for durable coordination or deferred work.`)
     }
-    if (this.scope?.mode === 'task' && name === 'session'
-      && (args.action !== 'update_self' || Object.keys(args).some(key => !['action', 'completed'].includes(key)))) {
-      return this.rejectExecution('Task session access is limited to update_self with completed; title, description and topic are parent-owned.')
+    if (this.scope?.mode === 'task' && name === 'session') {
+      return this.rejectExecution('Task session metadata is parent-owned; read/write v:session/self.json for completion only.')
     }
     if (name === 'subagent' && this.scope && !this.scope.modes.includes('task') && args.mode === undefined) {
       return `Error: mode is required in this scope; choose ${this.scope.modes.join(', ')}.`
@@ -644,7 +647,7 @@ export class SessionTools extends Tools {
           ...(scope.modes.includes('task') ? [] : ['mode'])])],
         properties: {
           ...Object.fromEntries(Object.entries(def.function.parameters.properties)
-            .filter(([name]) => name !== 'report_to' || scope.modes.includes('task'))),
+            .filter(([name]) => !['report_to', 'review'].includes(name) || scope.modes.includes('task'))),
           mode: { ...def.function.parameters.properties.mode, enum: [...scope.modes],
             description: scope.modes.includes('task')
               ? 'Omission defaults to task, which returns an admitted ID immediately. Call waits for its final result.'

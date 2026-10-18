@@ -26,7 +26,7 @@
 | [Windows computer use](computer-use.md) | UIA-first shared windows, opt-in guarded keyboard/mouse, exact-action reviews, transient observations and limits |
 | [Conventional audio setup](audio-setup.md) | First-use local/remote chooser, Agent-managed verified audio.cpp installation, model assessment and explicit API routes |
 | [Project Quick Actions](quick-actions.md) | Chat command buttons, dashboard pins, direct runs, and stable Search overlays |
-| [Inline visual answers](inline-visual-answers.md) | Native Markdown + safe HTML explanatory layouts inside web messages; no iframe or separate app |
+| [Inline visual answers](inline-visual-answers.md) | Native Markdown, isolated HTML/CSS and Vue Flow diagrams inside web messages; no iframe or separate app |
 | [Project Micro Apps](microapps.md) | Reusable Web tools, reviewed revisions, isolated pages, local backends and scoped model access |
 | [Conversation agent authoring](agent-authoring.md) | Independent Changes, delegated resource edits, saved checks, owner-reviewed probes/publication and legacy drafts |
 | [A2A text integration](a2a.md) | Opt-in A2A server/client, SDK/MCP coding-agent bridges, task continuation, notifications and trust boundaries |

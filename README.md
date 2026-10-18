@@ -54,6 +54,17 @@ Main and its backend, rebuild the backend/desktop shell, and launch a new
 Electron process while keeping Vite running. Normal quit still stops the entire
 development process tree; this restart entry is absent in packaged builds.
 
+The same supervised development restart is available to local admin sessions as
+an on-demand dynamic tool: `invoke_tool({ name: 'development_restart', args: {} })`.
+It is absent from the production/headless tool catalog and requires the live
+Electron utility-process bridge, not just `NODE_ENV=development`. The host first
+persists the tool receipt and publishes its outbound event, then waits 1.5 seconds
+before invoking the tray's existing restart callback. This is a transport flush
+window, not a client/network delivery acknowledgement; disconnected clients can
+read the durable receipt after reconnecting. Scripts, remote workdirs, recovered
+calls and non-admin sessions cannot request it. The whole app restarts, interrupting
+other active sessions; do not use it as a per-session reset.
+
 Browser session checks automatically retry temporary HTTP 503 responses while
 the backend starts, within a single 15-second timeout. The app stays gated until
 the session is verified; a longer outage displays an error with a manual retry.

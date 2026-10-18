@@ -25,7 +25,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const botSession = channelSessionId({ projectId: 'work', botInstanceId: 'bot', platform: 'qq', conversationId: 'group:room' })
   const sessions = [
-    { sessionId: 'web:chat-one', title: 'Issue investigation', folderId: 'code' },
+    { sessionId: 'web:chat-one', title: 'Issue investigation', folderId: 'code', completed: true },
     { sessionId: 'web:chat-two', title: 'A very long conversation title that must truncate instead of changing the row height', folderId: 'code' },
     { sessionId: 'task:one', title: 'Nested work', folderId: 'code', mode: 'task', parentSessionId: 'web:chat-one', executionStatus: 'running' },
     { sessionId: botSession, title: 'Bot conversation' },

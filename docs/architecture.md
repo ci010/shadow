@@ -699,7 +699,7 @@ revises goals, grants permissions, reassigns Work or proves acceptance.
 See [GitHub collaboration](github.md) for setup, recovery and polling limitations.
 
 Durable conversations are `web:chat-UUID` root peers. Topic is no longer a
-separate business object. Project-scoped `search({space: "grep:v:sessions", query})`
+separate business object. Project-scoped `search({handler: "grep", path: "v:sessions", query})`
 searches histories and session metadata.
 Read `v:sessions/<session-id>/brief` for title/description, folderId,
 initiativeId, createdBySessionId, status and conversationUrl.
@@ -1185,7 +1185,7 @@ treated as authorization failures.
 
 `SessionTools` filters base tools by agent type and owns a session-only dynamic
 layer. **Dynamic tool schemas are not added to the base definitions sent to
-the model.** `search` with `space: "grep:v:tools"` returns matching lines and paths;
+the model.** `search` with `handler: "grep", path: "v:tools"` returns matching lines and paths;
 read an individual tool path for its complete invocation contract.
 `invoke_tool({name, args})` resolves known catalog IDs lazily and validates
 arguments before execution. There is no "contract already disclosed" flag or
@@ -1585,7 +1585,7 @@ mode rather than rewriting the previously read contents.
   operation drafts are not exposed. External content remains data, not authority.
 
 The public `search` tool accepts only grep/glob/web protocols. Use
-`grep:v:memory`, `glob:v:skills` or another searchable virtual path; a bare
+`handler: "grep", path: "v:memory"`, `handler: "glob", path: "v:skills"` or another searchable virtual path; a bare
 `v:` path is not a protocol. Virtual grep uses case-sensitive JavaScript regexes;
 virtual glob uses POSIX glob matching with recursive patterns. Subpaths restrict
 the scope and output retains canonical read paths. Explicit `path` separates the
@@ -1603,7 +1603,7 @@ unpaged reads retain the recent-message default.
 
 `v:tools/<name>` identifies a virtual catalog source for the internal lazy
 loader, not an ordinary filesystem directory. Models
-select it through `search({ space: "grep:v:tools/<name>", query })` or invoke a known
+select it through `search({ handler: "grep", path: "v:tools/<name>", query })` or invoke a known
 tool ID. The Project-bound `v:memory` write handler maps wiki Markdown writes
 to Home's memory directory and reuses the filesystem writer and its write-history
 recording. Existing tool filtering and local/non-call restrictions still apply.
@@ -1723,7 +1723,7 @@ are not authoring principals. Reads never return stored credential values.
 See [Conversation agent authoring](agent-authoring.md) for formats, test inputs,
 source hashes, approval and credential boundaries.
 
-`search({ space: "grep:v:skills", query: "CSV", limit: 5, offset: 0 })` returns
+`search({ handler: "grep", path: "v:skills", query: "CSV", limit: 5, offset: 0 })` returns
 matching lines and read paths. Scope to `v:skills/<name>` or grep frontmatter in
 its `SKILL.md` resource to inspect metadata such as category.
 Search, index/category reads, and bundled resource reads never activate tools.
@@ -1862,8 +1862,8 @@ Configured servers are always lazy catalog sources, including after config
 reload. `McpManager`/watcher updates that catalog and invalidates affected
 session connections; it never registers raw MCP tools in the base registry.
 Discovery through `read("v:tools")` exposes source names and descriptions without
-connections; `search({space: "grep:v:tools/<source>", query})` returns matching lines
-and read paths. `glob:v:tools/<source>` with `query: "**"` lists paths in stable
+connections; `search({handler: "grep", path: "v:tools/<source>", query})` returns matching lines
+and read paths. `handler: "glob", path: "v:tools/<source>"` with `query: "**"` lists paths in stable
 order. `limit` (default/max 100) and `offset` bound virtual results; a continuation
 footer identifies the next offset. Partial failures and deferred sources remain
 explicit. Complete contract reads and self-limited virtual grep/glob results bypass
@@ -1880,7 +1880,7 @@ Chrome DevTools has one public lazy source, `chrome-devtools`, with no
 filter. Search returns matching paths/lines; read the selected path for its
 contract. Loading the source does not inject all schemas into the base tool list.
 The dynamic catalog also exposes `browser_setup`: global
-`search({space: "grep:v:tools", query: "browser_setup"})` discovers its metadata without
+`search({handler: "grep", path: "v:tools", query: "browser_setup"})` discovers its metadata without
 initializing browsers. Global VFS search includes already-loaded browser contracts
 under instance-specific paths without reconnecting. Uninitialized browser sources
 remain deferred even when explicitly selected; browser_setup initializes them.
@@ -1902,7 +1902,7 @@ changing arguments cannot silently create a second browser. Empty
 
 Setup connects/lists live contracts without business tool RPCs and returns
 `{instance, source: "v:tools/chrome-devtools", mode, owned, ready, ...}`.
-`search({space: "grep:v:tools/chrome-devtools/<instance>", query: "snapshot"})`
+`search({handler: "grep", path: "v:tools/chrome-devtools/<instance>", query: "snapshot"})`
 finds that instance's contracts. Read the returned paths for full schemas.
 `invoke_tool({name: "chrome-devtools__take_snapshot", instance: id, args: {...}})`
 routes canonical tool names to isolated instance registries, never prefix variants.

@@ -27,8 +27,10 @@ async function main() {
     await wait(`!!document.querySelector('.session-select .tree-icon .i-lucide-brain')`)
     assert.equal(await execute(`!!document.querySelector('.folder-folder-row .session-activity')`), false,
       'Folder rows do not repeat conversation or subagent status')
-    assert.equal(await execute(`!!document.querySelector('.folder-session-row .tree-meta')`), false,
-      'Conversation status occupies its leading icon, not a trailing label')
+    assert.equal(await execute(`document.querySelectorAll('.folder-session-row .session-completed').length`), 1,
+      'Explicit completion remains visible independently of running activity')
+    assert.equal(await execute(`!!document.querySelector('.folder-session-row .tree-meta .session-activity')`), false,
+      'Inferred conversation activity stays in the leading icon')
     assert.equal(await execute(`document.querySelector('.session-select .session-activity').title.includes('1 subagent')`), true,
       'Delegated work stays discoverable without a folder badge or trailing count')
     for (const width of [1100, 390]) {

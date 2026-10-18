@@ -270,12 +270,12 @@ discover skills or tool contracts; use `invoke_tool` for a known dynamic
 tool. Search does not activate a skill or run a tool.
 
 ```js
-search({ space: "grep:v:skills", query: "CSV" })
-search({ space: "glob:v:tools/cron", query: "**" })
+search({ handler: "grep", path: "v:skills", query: "CSV" })
+search({ handler: "glob", path: "v:tools/cron", query: "**" })
 read({ path: "v:tools/cron/cron_add" })
 ```
 
-Virtual `grep:` searches use JavaScript regular expressions; `glob:` searches
+Virtual `handler: "grep"` searches use JavaScript regular expressions; `handler: "glob"` searches
 match paths. Results are paginated with `limit` and `offset`. Unknown mounts
 fail rather than silently searching Main's filesystem. See
 [tool layers](architecture.md#tools-skills-and-mcp) for their scope and
@@ -384,14 +384,24 @@ than claiming Discord-style text/attachment semantics. See the official
 For filesystem content, prefer explicit root and filter fields:
 
 ```js
-search({ space: "grep", path: "src", include: "**/*.ts", query: "symbol", limit: 10 })
-search({ space: "glob", path: "src", query: "**/*test.ts", limit: 10 })
+search({ handler: "grep", path: "src", include: "**/*.ts", query: "symbol", limit: 10 })
+search({ handler: "glob", path: "src", query: "**/*test.ts", limit: 10 })
 ```
 
-`path` defaults to the effective workdir. Legacy `grep:*.ts` is still a file
-filter; an absolute `grep:<path>` is a root, not a glob. Do not specify two roots
-or two filters. File and virtual searches accept `limit` (1-100) and zero-based
-`offset`; web searches do not. Ripgrep errors are failures, not "no matches".
+`handler` selects only the implementation (`grep`, `glob`, or `web`); combined
+values such as `grep:v:tools` are invalid. `path` sets a file/virtual root and
+defaults to the effective workdir. `include` is a relative grep file filter, not
+a root. File and virtual searches accept `limit` (1-100) and zero-based `offset`.
+Ripgrep errors are failures, not "no matches".
+
+For web scope use `search({ handler: "web", domain: "example.com", query: "docs" })`.
+`domain` accepts a DNS domain, not a URL, path, or `site:` prefix, and is valid only
+with web. Web searches warn when ignoring file-only options (`path`, `include`,
+`limit`, `offset`); these do not restrict or paginate web results.
+
+Old stored calls using `space` still execute through runtime-only compatibility,
+but `space` is absent from the advertised schema. Do not combine it with
+`handler`, or specify the same root/filter/domain in both legacy and new fields.
 
 `read` uses **one-based** line `offset`/`limit` for files, URL text and virtual
 text. Local `v:sessions/<id>` line ranges use the same complete-history view as
@@ -407,7 +417,7 @@ message indices instead of lines. Plain URL text keeps its line structure;
 ## Inspect and cancel executions
 
 `read({path: "v:bg"})` lists the current session's background work, local task/call,
-and remote A2A executions. `grep:v:bg` and `glob:v:bg` search that same inventory.
+and remote A2A executions. `handler: "grep", path: "v:bg"` and `handler: "glob", path: "v:bg"` search that same inventory.
 Use a returned reference with `read({path: "v:bg/<executionId>"})` or
 `cancel({executionId: "<executionId>"})`; background references start with `bg:`.
 Keep that prefix: `bg:0123456789abcdef` is read at
@@ -455,15 +465,15 @@ a semantic DAG optimizer and does not reinterpret relationship cycles as ownersh
 
 ## Retired automatic observation
 
-Automatic title/goal observation has been removed. Sessions publish explicit metadata via `session action=update_self`; independent topic organization remains available.
+Automatic title/goal observation has been removed. Sessions publish explicit metadata via `write` of `v:session/self.json`; independent topic organization remains available.
 
 Fresh local asynchronous `subagent` tasks have parent-owned identity: supply `title`
 and `description` when creating one. `title` is a one-line display name (up to 120
 characters); `description` is discovery text (up to 4000 characters). For compatibility,
 existing description-only calls derive the title from its first 120 characters,
 flattening control characters. Both are persisted as the task's name and description.
-The task may use `session action=update_self` only with `completed:true` or
-`completed:false`; title and description are immutable to
+The task may use `write` of `v:session/self.json` with `completed:true` or
+`completed:false` for non-reviewable tasks; unchanged title and description may be included in a full JSON roundtrip. Reviewable tasks submit a final response instead of self-completing. Title and description are immutable to
 the child, including through legacy update. This does not grant parents a new
 cross-session editing API. Blocking `call` forks keep their existing metadata and
 cannot use session tools. Remote A2A retains its separate delegation contract.
@@ -805,7 +815,7 @@ Frequency descriptions are scoped: explicit organizer full/delta operation, conf
 
 The `runtime-diagnostics` skill describes the workflow. `read({ path: "v:runtime" })`
 provides the live scope/retention guide; `read({ path: "v:runtime/logs", offset: 1,
-limit: 50 })` pages redacted JSONL. `search({ space: "glob:v:runtime", query: "**" })`
+limit: 50 })` pages redacted JSONL. `search({ handler: "glob", path: "v:runtime", query: "**" })`
 discovers the read-only entry without fetching log content.
 
 General `runtime_log` events reuse the same **project OTel store and existing
@@ -861,9 +871,8 @@ title, discovery description, explicit completion, derived activity and conversa
 navigation. Internal task executions are folded under their owner/Work; calls and
 organizer/observer archives never become independent dashboard topics.
 
-`session action=update_self` accepts only title, description and completed for a
-durable session. Tasks accept completed only; their title/description remain
-parent-owned. Calls cannot mutate self metadata. The tool no longer accepts a
+`write` of `v:session/self.json` accepts only title, description and completed for a
+durable session. Tasks may change completed only (reviewable completion requires review); unchanged title/description may be included in a full roundtrip and remain parent-owned. Calls cannot mutate self metadata. The tool no longer accepts a
 topic object. Old persisted topic metadata and unrelated native topic routing stay
 read-compatible. Formal outcomes, acceptance and boundaries belong in Work, not
 this discovery metadata. Session completion ends that session's responsibility; it
@@ -882,3 +891,5 @@ identities as its bounded source manifest; it reads existing semantic conversati
 evidence, not an automatic observer or background model goal guess. Conversation
 metadata/completion changes invalidate organization source versions. Lightweight
 topics are never materialized as Work just to make organization possible.
+
+Current session metadata is available at `v:session/self.json` via read/write. Writes accept nonempty partial JSON objects or the full read result, with only title (string, max 120), description (string, max 4000), completed (boolean). Exact match edits validate the full resulting JSON; append is unsupported. Identity is runtime-bound, not a JSON target. Tasks must preserve parent-owned title/description unchanged or omit them; reviewable task completion changes require review, not self-acceptance. Calls/automations cannot write. Ordinary new sessions set accurate title and description after understanding the first request, and update only for meaningful goal changes.

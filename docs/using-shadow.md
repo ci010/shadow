@@ -345,7 +345,7 @@ references and coordinator delegation.
 
 **Wiki is a category within the Project memory store, not a separate service.**
 Agents read/list it through `read` on `v:memory/`, or use `search` with
-`space: "glob"` / `space: "grep"` and `path: "v:memory"`. There is no `v:wiki`
+`handler: "glob"` / `handler: "grep"` and `path: "v:memory"`. There is no `v:wiki`
 mount or dedicated Wiki tool. Authorized local workers create/update shared
 Wiki Markdown at paths such as `v:memory/topics/xmcl-ops.md`; the Knowledge UI
 classifies those files as **Wiki**. Session memory, events, conventions and

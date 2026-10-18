@@ -1,4 +1,9 @@
+import { createSelfSessionHandler } from '../../vfs/session.ts'
+import { registerDevelopmentRestart } from '../../tools/development-restart.ts'
+import { TaskTool } from '../../tools/task.ts'
 import { isLightweightTopic, sessionTopicKey, sessionTopicSequence, sessionTopicTitle, sessionTopicDescription } from '../../sessions/lightweight-topic.ts'
+import { botConversationPolicies } from '../../channels/bot-policies.ts'
+import { channelSessionId } from '../../bus/events.ts'
 import { automationModelSettings, automationDispatchModel } from '../../cron/automation-model.ts'
 import { isLearningSourceEligible } from '../../agent/learning/source-eligibility.ts'
 import { resolve } from 'node:path'
@@ -125,6 +130,8 @@ import { createAgentsHandler } from '../../vfs/agents.ts'
 import { Bus } from '../../bus/bus.ts'
 import { ChannelManager } from '../../channels/manager.ts'
 import { botSetupPlugin } from '../../channels/bot-setup.ts'
+import { BotChatSetup, botChatSetupPlugin } from '../../channels/chat-setup.ts'
+import { BotSetupTool } from '../../tools/bot-setup.ts'
 import { BotInstanceStore } from '../../channels/bot-store.ts'
 import { MemoryDomains } from '../../memory/domains.ts'
 import { IntegrationStore } from '../../channels/integration-store.ts'
@@ -431,6 +438,7 @@ export async function createProjectRuntime(
   const importTool = new ImportTool(loadable, workspace, chromeManager, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport)
   tools.register(new SearchTool(workspace, webSearchTool, vfs, dependencies.localExecutor !== false))
   tools.register(new InvokeTool(importTool))
+  registerDevelopmentRestart(importTool)
 
   // Purge stale tool-result temp files from previous runs
   await cleanupTempFiles(workspace)
@@ -530,7 +538,7 @@ export async function createProjectRuntime(
     },
   })
   const sessions: SessionManager = new SessionManager({
-    conversationPolicies: combineConversationPolicies(discordIntegration, authoring),
+    conversationPolicies: botConversationPolicies(botStore, combineConversationPolicies(discordIntegration, authoring)),
     projectId: project.id,
     promptCaptures,
     hasInitiative: id => initiatives.getSummary(id) !== null,
@@ -765,6 +773,7 @@ export async function createProjectRuntime(
     changed: id => realtime.invalidateSessions(id),
   })
   tools.register(new SessionTool(topics))
+  tools.register(new TaskTool(sessions))
   initiatives.recoverWorkEffects()
   const alignment: WorkAlignment = new WorkAlignment(initiatives, {
     state: id => sessions.getSessionState(id),
@@ -944,6 +953,9 @@ export async function createProjectRuntime(
 
   const agentsVfs = createAgentsHandler(agentTypes, a2a.sessions)
   vfs.mount('v:agents', 'available local roles and configured remote agent targets; discovery grants no capabilities', agentsVfs.read, agentsVfs.list)
+
+  const selfSessionVfs = createSelfSessionHandler(sessions, () => topics)
+  vfs.mount('v:session', 'self.json: read/write current session title, description and completed as JSON; identity is runtime-bound; task metadata is parent-owned', selfSessionVfs.read, undefined, selfSessionVfs.write)
 
   const sessionsVfs = createSessionsHandler(sessions, () => topics, a2a.sessions)
   vfs.mount(
@@ -1310,7 +1322,17 @@ export async function createProjectRuntime(
   }
   const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
     projectId: project.id, instanceStore: botStore, realtime, discordIntegration,
+    serviceAssigned: address => !!authoring.resolve(channelSessionId(address))?.binding.enabled,
   })
+  const botChatSetup = new BotChatSetup(project.id)
+  cleanup.push(() => botChatSetup.stop())
+  botChatSetupPlugin(botChatSetup, dependencies.authorize)(app)
+  importTool.registerBuiltin('bot_setup', new BotSetupTool(botChatSetup, channels, sessionId => {
+    const state = sessions.getSessionState(sessionId)
+    if (!state || !sessionId.startsWith('web:') || (state.mode ?? 'session') !== 'session'
+      || state.parentSessionId || state.automation) throw new Error('Bot setup requires a user-owned Web conversation.')
+    sessions.assertFolderAccess(sessionId)
+  }))
   discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
   const channelConfigurationTool = ownerChannelConfigurationTool(channelIntegrations, memoryDomains, channels.discordTransport())
   tools.register(channelConfigurationTool)
