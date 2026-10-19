@@ -54,6 +54,82 @@ card remains available for retry. Signing out does not remove the connection or
 select another account. It removes that instance's credentials for its active host,
 as before; other hosts and other instances are unchanged.
 
+## GitHub Copilot provider v2
+
+`copilot` now selects **v2** by default, so existing `model@copilot` references and
+named instances with `type: "copilot"` need no model-reference or configuration rewrite.
+Credentials from the former short-key flow require a fresh explicit v2 sign-in.
+New named Copilot connections created in settings explicitly use `type: "copilot-v2"`.
+Both types use the v2 backend broker; the setup form shows its version. Protocol
+identity remains `copilot`, preserving Chat/Responses continuity and AI-credit estimates.
+
+V2 uses the validated GitHub Device Code flow and then checks
+`https://api.<host>/copilot_internal/user` with the resulting OAuth credential.
+It uses that OAuth credential directly at the validated CAPI endpoint, with
+`Copilot-Integration-Id: copilot-developer-app`; **v2 does not call the legacy
+`/copilot_internal/v2/token` exchange**. The latter returned 404 in real testing
+on the licensed `msft.ghe.com` host, while the same OAuth credential directly
+returned 27 models from `https://copilot-api.msft.ghe.com/models`.
+
+Cached v2 credentials have an explicit `directOAuth` profile containing clientId,
+granted scope and whether expiry is known. V2 does not treat old short keys as OAuth
+credentials. A known `expires_in` is measured before the seat request and enforced;
+unknown expiry is marked as unknown, not presented as an eight-hour lifetime.
+No automatic OAuth refresh protocol is guessed: known expiry or token rejection
+requires new authorization. Explicit readiness rechecks share a seat request per
+instance; cancelling one waiter does not cancel another. Sign-out and replacement
+fence late results. Normal requests never launch interactive sign-in or borrow an
+ambient account.
+
+V2 now uses an **App-style, minimal-permission OAuth profile** for both github.com
+and hosted GHE (`*.ghe.com`): client `Ov23ctr1Udn5GokVCVJf`, requested scope exactly
+`copilot`. The client was traced from the local GitHub Copilot App's native request
+construction; the minimal scope subset is an explicit operator choice, not a claim
+that the App itself only requests this permission. See [native evidence and boundaries](copilot-app-auth-evidence.md).
+The old VS Code-client / GHE `user:email` profile is no longer used by v2.
+V1 retains its existing client and `read:user` behavior for rollback.
+
+New v2 login responses must include a string `scope` containing the standalone
+`copilot` token (comma/ASCII-whitespace separated). Missing, malformed or insufficient
+scope fails with `scope_missing` **before** the Copilot access check or persistence.
+No retry adds repo/workflow/other scopes. If the enterprise policy or this client does
+not accept the minimal request, the flow fails explicitly; successful live authorization
+has not been established by synthetic tests. The consent page may name the official
+GitHub Copilot App because that is the public OAuth client, not a Shadow-owned app.
+Requesting permission does not override enterprise OAuth/SSO policy or grant a license.
+
+Previously saved credentials are not silently upgraded or deleted on failed attempts.
+Explicitly start a new sign-in to create the direct OAuth profile and verify its granted
+scope. A successful sign-in replaces that instance/host's credential files atomically;
+it does not preserve a second archived copy of the old v1 credential.
+
+Storage remains private-file based. This change does not implement Windows Credential
+Manager, extract credentials from the official App, or claim to reproduce its complete
+runtime token protocol. Existing Chat/Responses serialization and billing remain shared
+with v1; credential acquisition and integration headers are version-specific.
+Real operator-assisted verification on `msft.ghe.com` passed onboarding, readiness
+recheck, 17 selectable models and one `gpt-5-mini` Chat-completions request using the
+production classes with isolated in-memory storage. It did not sign the running
+installation in or verify every model/Responses path. See the evidence note above.
+
+V2 login failures carry an allowlisted `errorStage` (`oauth_device`, `oauth_token`,
+`copilot_access`; legacy `copilot_token` remains understood) and safe HTTP statuses
+400–599. The UI distinguishes a server error such as 404 from a connection timeout,
+and OAuth rejection from a failed Copilot access check. Raw upstream response bodies,
+tokens and arbitrary diagnostics are never returned. A rejected check is not by itself
+proof of an absent license: verify the host/account that owns the subscription.
+Onboarding requires the access check to succeed before committing credentials.
+
+For an explicit rollback, stop/restart Main with the same instance ID configured as
+`type: "copilot-v1"` (for the legacy identity: `"copilot": { "type": "copilot-v1" }`).
+Qualified model IDs do not change. Because the direct OAuth profile and old short-key
+profile are not interchangeable, rollback can require a fresh v1 sign-in. To return,
+restore `type: "copilot"` or `"copilot-v2"` and restart, then sign in if needed. Do not run
+v1 and v2 brokers concurrently for the same instance: their in-memory generations
+are not synchronized. The settings UI keeps types immutable and is not a live
+version-switch control. No live process restart or real-account login is performed
+by the synthetic regression tests.
+
 ## Failures and removal
 
 Requests route only to their explicit instance (or the existing primary instance

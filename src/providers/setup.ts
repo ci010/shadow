@@ -8,13 +8,15 @@ import { ConfigStore, REDACTED_SECRET } from '../config/store.ts'
 import { ConfigSchema, type Config } from '../config/schema.ts'
 import { DEFAULT_COPILOT_MODEL } from '../config/defaults.ts'
 import { parseModelSpec } from './aggregated.ts'
-import { detectProvider, providerType, knownProviderNames, resolveProviderSettings } from './factory.ts'
+import { detectProvider, providerType, knownProviderNames, resolveProviderSettings, isCopilotProviderType, copilotAuthForInstance } from './factory.ts'
+import { CopilotAuthenticatorV2 } from './copilot-v2.ts'
 import {
   CopilotAuthenticator,
   CopilotAuthError,
   type CopilotGrant,
   type DeviceAuthorization,
   type CopilotAuthFailure,
+  type CopilotAuthStage,
 } from './copilot.ts'
 
 export interface ProviderSetupStatus {
@@ -48,6 +50,8 @@ export interface LoginStatus {
   host?: string
   state: LoginState
   message?: string
+  errorStage?: CopilotAuthStage
+  httpStatus?: number
   errorCode?: CopilotAuthFailure
   userCode?: string
   verificationUri?: string
@@ -150,7 +154,7 @@ export class ProviderSetup {
   private get instanceId(): string { return this.options.instanceId ?? 'copilot' }
   private instance(id = 'copilot'): ProviderSetup {
     if (id === this.instanceId) return this
-    if (!ProviderName.safeParse(id).success || providerType(this.options.getConfig(), id) !== 'copilot') throw new Error('Unknown Copilot instance')
+    if (!ProviderName.safeParse(id).success || !isCopilotProviderType(providerType(this.options.getConfig(), id))) throw new Error('Unknown Copilot instance')
     let child = this.children.get(id)
     if (!child) {
       child = new ProviderSetup({ ...this.options, instanceId: id, auth: this.rootAuth })
@@ -168,8 +172,8 @@ export class ProviderSetup {
   private readiness?: { revision: number; host: string; config: Config; until: number; value: Promise<ProviderSetupStatus> }
 
   constructor(private readonly options: SetupOptions) {
-    this.rootAuth = options.auth ?? new CopilotAuthenticator()
-    this.auth = this.rootAuth.forInstance(this.instanceId)
+    this.rootAuth = options.auth ?? new CopilotAuthenticatorV2()
+    this.auth = copilotAuthForInstance(options.getConfig(), this.instanceId, this.rootAuth)
     this.request = options.fetch ?? fetch
     this.now = options.now ?? Date.now
     this.cleanupTimer = setInterval(() => this.prune(), 30_000)
@@ -190,18 +194,18 @@ export class ProviderSetup {
     for (const provider of names) {
       const entry = config.providers[provider]
       const type = providerType(config, provider)
-      const auth = type === 'copilot' ? this.rootAuth.forInstance(provider) : undefined
+      const auth = isCopilotProviderType(type) ? copilotAuthForInstance(config, provider, this.rootAuth) : undefined
       const cachedCopilot = auth && (auth.hasAccessToken() || auth.hasValidApiKey())
       const settings = resolveProviderSettings(config, provider)
-      const explicit = entry && (entry.type || type === 'copilot' || entry.apiKey?.trim() ||
+      const explicit = entry && (entry.type || isCopilotProviderType(type) || entry.apiKey?.trim() ||
         entry.baseUrl?.trim() || entry.quickModel?.trim() ||
         Object.keys(entry.modelContextWindows ?? {}).length > 0)
-      if (!explicit && !settings.apiKey.trim() && !(type === 'copilot' && cachedCopilot)) continue
+      if (!explicit && !settings.apiKey.trim() && !(isCopilotProviderType(type) && cachedCopilot)) continue
       const baseUrl = safeBaseUrl(settings.baseUrl)
       providers.push({
         provider, ...(entry?.type ? { type } : {}), ...(entry?.name ? { name: entry.name } : {}),
         authMode: settings.authMode,
-        ...(type === 'copilot' ? { host: auth!.getHost() } : {}),
+        ...(isCopilotProviderType(type) ? { host: auth!.getHost() } : {}),
         hasApiKey: !!settings.apiKey,
         selected: provider === selected,
         ...(baseUrl ? { baseUrl } : {}),
@@ -215,7 +219,7 @@ export class ProviderSetup {
     const config = this.options.getConfig()
     const selected = parseModelSpec(config.agent.model)
     const selectedId = selected.provider ?? detectProvider(selected.model)
-    const auth = this.rootAuth.forInstance(providerType(config, selectedId) === 'copilot' ? selectedId : 'copilot')
+    const auth = copilotAuthForInstance(config, isCopilotProviderType(providerType(config, selectedId)) ? selectedId : 'copilot', this.rootAuth)
     if (!refresh && this.readiness?.revision === auth.getRevision() && this.readiness?.host === auth.getHost() && this.readiness.config === config && this.readiness.until > this.now()) return this.readiness.value
     const value = this.check(config, this.shutdown.signal, refresh)
     this.readiness = { revision: auth.getRevision(), host: auth.getHost(), config, until: this.now() + 30_000, value }
@@ -226,7 +230,7 @@ export class ProviderSetup {
     const spec = parseModelSpec(config.agent.model)
     const provider = spec.provider ?? detectProvider(spec.model)
     const type = providerType(config, provider)
-    const auth = type === 'copilot' ? this.rootAuth.forInstance(provider) : this.auth
+    const auth = isCopilotProviderType(type) ? copilotAuthForInstance(config, provider, this.rootAuth) : this.auth
     const settings = resolveProviderSettings(config, provider)
     const status: ProviderSetupStatus = {
       provider, type, name: config.providers[provider]?.name,
@@ -415,6 +419,8 @@ export class ProviderSetup {
     this.finish(flow, {
       loginId: flow.status.loginId, state,
       ...(code ? { errorCode: code } : {}),
+      ...(error instanceof CopilotAuthError && error.stage ? { errorStage: error.stage } : {}),
+      ...(error instanceof CopilotAuthError && typeof error.httpStatus === 'number' && Number.isInteger(error.httpStatus) && error.httpStatus >= 400 && error.httpStatus <= 599 ? { httpStatus: error.httpStatus } : {}),
       message: error instanceof CopilotAuthError ? error.message : state === 'cancelled' ? 'Sign-in was cancelled.' : 'Sign-in could not be completed or saved. Try again.',
     })
     this.invalidate()

@@ -8,7 +8,7 @@ import { appDataPaths } from '../../utils/data-paths.ts'
 import type { MainRuntimeHandle, MainRuntimeOptions } from './contracts.ts'
 import { resolveUiDistDirectory } from './paths.ts'
 import type { Config } from '../../config/schema.ts'
-import { CopilotAuthenticator } from '../../providers/copilot.ts'
+import { CopilotAuthenticatorV2 } from '../../providers/copilot-v2.ts'
 import { ProviderSetup } from '../../providers/setup.ts'
 import { RuntimeDiagnosticLog } from '../diagnostic-log.ts'
 import { createAggregatedProvider } from '../../providers/factory.ts'
@@ -115,7 +115,7 @@ export async function startProjectHost(
   const deletions = new Set<string>()
   let stopping = false
   let activeConfig = config
-  const copilotAuth = new CopilotAuthenticator()
+  const copilotAuth = new CopilotAuthenticatorV2()
   const chromePortAllocator = new ChromePortAllocator()
   const computer = new ComputerService(new WindowsComputerDesktop(), { enabled: options.localExecutor !== false })
   cleanup.push(() => computer.close())

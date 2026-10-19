@@ -4,6 +4,7 @@ import { env } from 'node:process'
 import { OpenAICompatibleProvider } from './openai-compatible.ts'
 import { AnthropicProvider } from './anthropic.ts'
 import { CopilotProvider, CopilotAuthenticator } from './copilot.ts'
+import { CopilotAuthenticatorV2, CopilotProviderV2 } from './copilot-v2.ts'
 import { DeepSeekProvider } from './deepseek.ts'
 import { AgnesProvider } from './agnes.ts'
 import { AggregatedProvider, parseModelSpec } from './aggregated.ts'
@@ -27,6 +28,8 @@ const PROVIDER_DEFAULTS: Record<string, {
     apiKeyEnv: 'ANTHROPIC_API_KEY',
   },
   copilot: {},
+  'copilot-v2': {},
+  'copilot-v1': {},
   deepseek: {
     baseUrl: 'https://api.deepseek.com',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
@@ -56,6 +59,18 @@ const PROVIDER_DEFAULTS: Record<string, {
 
 export function providerType(config: Config, id: string): string {
   return config.providers[id]?.type ?? id
+}
+
+export function isCopilotProviderType(type: string): boolean {
+  return type === 'copilot' || type === 'copilot-v2' || type === 'copilot-v1'
+}
+
+/** Setup and inference must use the same instance broker, including rollback. */
+export function copilotAuthForInstance(config: Config, id: string, root: CopilotAuthenticator): CopilotAuthenticator {
+  if (providerType(config, id) === 'copilot-v1' && root instanceof CopilotAuthenticatorV2) {
+    return root.forLegacyInstance(id)
+  }
+  return root.forInstance(id)
 }
 
 export function knownProviderNames(): string[] {
@@ -108,7 +123,7 @@ export function resolveProviderSettings(config: Config, name: string): {
     configured.baseUrl.replace(/\/+$/, '') !== defaults?.baseUrl?.replace(/\/+$/, '')
   return {
     apiKey, baseUrl,
-    authMode: type === 'copilot' ? 'copilot'
+    authMode: isCopilotProviderType(type) ? 'copilot'
       : !apiKey && customEndpoint ? 'none' : 'api-key',
   }
 }
@@ -142,8 +157,10 @@ export function createProvider(
   }
 
   // --- Copilot (OpenAI-compatible but with custom OAuth auth) ---
-  if (type === 'copilot') {
-    return new CopilotProvider((copilotAuth ?? new CopilotAuthenticator()).forInstance(name))
+  if (isCopilotProviderType(type)) {
+    const root = copilotAuth ?? new CopilotAuthenticatorV2()
+    const auth = copilotAuthForInstance(config, name, root)
+    return type === 'copilot-v1' ? new CopilotProvider(auth) : new CopilotProviderV2(auth)
   }
 
   if (type === 'deepseek') {
@@ -192,7 +209,7 @@ export function createAggregatedProvider(config: Config, copilotAuth?: CopilotAu
   // Providers with explicit config entries. Copilot authenticates via OAuth
   // (no apiKey/baseUrl), so an empty `providers.copilot: {}` entry enables it.
   for (const [name, pc] of Object.entries(config.providers)) {
-    if (providerType(config, name) === 'copilot' || pc.apiKey || pc.baseUrl) names.add(name)
+    if (isCopilotProviderType(providerType(config, name)) || pc.apiKey || pc.baseUrl) names.add(name)
   }
 
   // Instantiate each provider

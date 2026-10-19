@@ -50,7 +50,10 @@ export const providerPresets = [
 ]
 
 export function providerDisplayName(provider: string): string {
-  return provider === 'copilot' ? 'GitHub Copilot' : providerPresets.find(item => item.id === provider)?.name ?? provider
+  if (provider === 'copilot') return 'GitHub Copilot'
+  if (provider === 'copilot-v2') return 'GitHub Copilot v2'
+  if (provider === 'copilot-v1') return 'GitHub Copilot v1'
+  return providerPresets.find(item => item.id === provider)?.name ?? provider
 }
 
 export function providerFailureMessage(kind: string): string {
@@ -65,8 +68,14 @@ export function providerFailureMessage(kind: string): string {
   }
 }
 
-export function copilotFailureMessage(code: string): string {
+export function copilotFailureMessage(code: string, stage?: string, httpStatus?: number): string {
+  if (code === 'network' && typeof httpStatus === 'number' && Number.isInteger(httpStatus) && httpStatus >= 400 && httpStatus <= 599) return t('Authentication failed at {stage} with HTTP {status}. The server returned an error; this is not a connection timeout.', { stage: stage ?? 'authentication', status: httpStatus })
+  if (code === 'denied' && stage === 'copilot_access') return t('GitHub authorization succeeded, but the Copilot access check was rejected. Check the selected account host, license, SSO and organization policy.')
+  if (code === 'expired' && stage === 'copilot_access') return t('The saved Copilot authorization has expired. Sign in again to renew it.')
+  if (code === 'denied' && stage === 'copilot_token') return t('GitHub authorization succeeded, but the Copilot token exchange was rejected. Check this account’s Copilot license, enterprise host, SSO and organization policy. This does not by itself prove the account has no Copilot access.')
+  if (code === 'denied' && (stage === 'oauth_device' || stage === 'oauth_token')) return t('GitHub rejected the OAuth authorization. Check the authorization request and your enterprise OAuth policy, then retry.')
   switch (code) {
+    case 'scope_missing': return t('GitHub did not grant the requested copilot scope. Start a new authorization and check enterprise OAuth policy. Shadow will not request broader permissions automatically.')
     case 'proxy': return providerFailureMessage('proxy')
     case 'network': return t('GitHub could not be reached. Check your connection and proxy, then retry. Your saved sign-in has not been removed.')
     case 'storage': return providerFailureMessage('storage')
@@ -121,6 +130,8 @@ export interface DeviceLogin {
   verificationUri?: string
   expiresAt?: number
   intervalMs?: number
+  errorStage?: 'oauth_device' | 'oauth_token' | 'copilot_token' | 'copilot_access'
+  httpStatus?: number
   errorCode?: string
 }
 
@@ -178,7 +189,10 @@ export function parseDeviceLogin(value: unknown): DeviceLogin {
     loginId: value.loginId,
     ...(value.host !== undefined ? { host: normalizeCopilotHost(value.host) } : {}),
     state: value.state as LoginState,
-    ...(typeof value.errorCode === 'string' && ['missing', 'denied', 'expired', 'cancelled', 'network', 'proxy', 'invalid', 'storage'].includes(value.errorCode)
+    ...(['oauth_device', 'oauth_token', 'copilot_token', 'copilot_access'].includes(String(value.errorStage))
+      ? { errorStage: value.errorStage as DeviceLogin['errorStage'] } : {}),
+    ...(typeof value.httpStatus === 'number' && Number.isInteger(value.httpStatus) && value.httpStatus >= 400 && value.httpStatus <= 599 ? { httpStatus: value.httpStatus } : {}),
+    ...(typeof value.errorCode === 'string' && ['missing', 'denied', 'expired', 'cancelled', 'network', 'proxy', 'invalid', 'storage', 'scope_missing'].includes(value.errorCode)
       ? { errorCode: value.errorCode } : {}),
     ...(value.state === 'pending' ? {
       userCode: value.userCode as string,
@@ -302,7 +316,7 @@ export function createDeviceLoginController(
   }
   function accept(login: DeviceLogin, current: number) {
     update({ state: login.state, login,
-      ...(login.errorCode ? { error: copilotFailureMessage(login.errorCode) } : {}) })
+      ...(login.errorCode ? { error: copilotFailureMessage(login.errorCode, login.errorStage, login.httpStatus) } : {}) })
     if (login.state !== 'pending') activeId = undefined
     if (login.state === 'pending') {
       // GitHub polling is owned by Main; this timer only refreshes its safe status.

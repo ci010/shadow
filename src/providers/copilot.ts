@@ -119,14 +119,16 @@ export const COPILOT_VERIFICATION_URI = 'https://github.com/login/device'
 //  Copilot Authenticator – OAuth Device Code Flow
 // ---------------------------------------------------------------------------
 
-interface ApiKeyInfo {
+export interface ApiKeyInfo {
   token: string
   expires_at: number
   endpoints?: { api?: string }
+  directOAuth?: { clientId: string; scope: string; expiryKnown: boolean }
 }
 
-export type CopilotAuthFailure = 'missing' | 'denied' | 'expired' | 'cancelled' | 'network' | 'proxy' | 'invalid' | 'storage'
+export type CopilotAuthFailure = 'missing' | 'denied' | 'expired' | 'cancelled' | 'network' | 'proxy' | 'invalid' | 'storage' | 'scope_missing'
 const AUTH_MESSAGES: Record<CopilotAuthFailure, string> = {
+  scope_missing: 'GitHub did not grant the required Copilot scope. Start a new sign-in with Copilot access.',
   missing: 'Sign in to GitHub Copilot to continue.',
   denied: 'GitHub authorization was denied or Copilot access is unavailable. Sign in again.',
   expired: 'The GitHub code expired. Start a new sign-in.',
@@ -137,8 +139,10 @@ const AUTH_MESSAGES: Record<CopilotAuthFailure, string> = {
   storage: 'Credentials could not be saved. Check access to the application data directory.',
 }
 
+export type CopilotAuthStage = 'oauth_device' | 'oauth_token' | 'copilot_token' | 'copilot_access'
+
 export class CopilotAuthError extends Error {
-  constructor(readonly code: CopilotAuthFailure) {
+  constructor(readonly code: CopilotAuthFailure, readonly stage?: CopilotAuthStage, readonly httpStatus?: number) {
     super(AUTH_MESSAGES[code])
     this.name = 'CopilotAuthError'
   }
@@ -167,7 +171,7 @@ export interface CopilotAuthStorage {
   remove(name: string): void
 }
 
-interface CopilotAuthOptions {
+export interface CopilotAuthOptions {
   isolated?: boolean
   fetch?: typeof fetch
   now?: () => number
@@ -180,7 +184,7 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
-function validApiKey(value: unknown, host: string): ApiKeyInfo | null {
+export function validApiKey(value: unknown, host: string): ApiKeyInfo | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const info = value as ApiKeyInfo
   if (typeof info.token !== 'string' || !info.token.trim() || !Number.isFinite(info.expires_at)) return null
@@ -211,14 +215,14 @@ function validApiKey(value: unknown, host: string): ApiKeyInfo | null {
  *    `api.githubcopilot.com`). Refreshed automatically when expired.
  */
 export class CopilotAuthenticator {
-  private readonly tokenDir: string
+  protected readonly tokenDir: string
   private readonly accessTokenFile: string
   private readonly apiKeyFile: string
   private readonly modelsCacheFile: string
   private readonly request: typeof fetch
-  private readonly now: () => number
+  protected readonly now: () => number
   private readonly wait: (ms: number, signal?: AbortSignal) => Promise<void>
-  private readonly storage: CopilotAuthStorage
+  protected readonly storage: CopilotAuthStorage
   private readonly activeHostFile: string
   private activeHost: string
   private revision = 0
@@ -290,7 +294,7 @@ export class CopilotAuthenticator {
   /** Lets provider requests reject stale auth/model results across a sign-in or sign-out. */
   getRevision(): number { return this.revision }
 
-  private filesFor(host: string) {
+  protected filesFor(host: string) {
     // Legacy files and configured filename overrides belong ONLY to GitHub.com.
     return host === 'github.com' ? {
       access: this.accessTokenFile, key: this.apiKeyFile, models: this.modelsCacheFile,
@@ -303,6 +307,7 @@ export class CopilotAuthenticator {
 
   /** True when a cached access token exists on disk for the active host. */
   hasAccessToken(): boolean {
+    if (this.hasRejectedCredentialProfile()) return false
     return !!this.storage.read(this.filesFor(this.activeHost).access)?.trim()
   }
 
@@ -325,13 +330,19 @@ export class CopilotAuthenticator {
    * Request a GitHub device code (step 1 of the login flow).
    * Returns the verification URI and user code to display to the caller.
    */
+  protected deviceLoginClientId(host: string): string { return clientId(host) }
+  protected deviceLoginScope(_host: string): string { return 'read:user' }
+
+  /** Validate successful OAuth responses before exchanging or returning any credentials. */
+  protected validateOAuthTokenResponse(_response: Record<string, unknown>): void {}
+
   async startDeviceLogin(signal?: AbortSignal, targetHost?: string): Promise<DeviceAuthorization> {
     const host = authHost(targetHost === undefined ? this.activeHost : targetHost)
     const verificationUri = copilotVerificationUri(host)
     const json = await this.fetchJson(`https://${host}/login/device/code`, {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': USER_AGENT },
-      body: JSON.stringify({ client_id: clientId(host), scope: 'read:user' }),
+      body: JSON.stringify({ client_id: this.deviceLoginClientId(host), scope: this.deviceLoginScope(host) }),
     }, signal)
     if (typeof json.device_code !== 'string' || !json.device_code ||
       typeof json.user_code !== 'string' || !/^[A-Z0-9-]{4,32}$/i.test(json.user_code) ||
@@ -370,15 +381,16 @@ export class CopilotAuthenticator {
         method: 'POST',
         headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': USER_AGENT },
         body: JSON.stringify({
-          client_id: clientId(host),
+          client_id: this.deviceLoginClientId(host),
           device_code: device.deviceCode,
           grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
         }),
       }, signal)
       if (typeof json.access_token === 'string' && json.access_token) {
-        const apiKey = await this.refreshApiKey(json.access_token, host, signal)
+        this.validateOAuthTokenResponse(json)
+        const grant = await this.buildGrantFromOAuthResponse(json, host, signal)
         signal?.throwIfAborted()
-        return { accessToken: json.access_token, apiKey, host }
+        return grant
       }
       if (json.error === 'authorization_pending') continue
       if (json.error === 'slow_down') {
@@ -393,6 +405,11 @@ export class CopilotAuthenticator {
       throw new CopilotAuthError('invalid')
     }
     throw new CopilotAuthError('expired')
+  }
+
+  protected async buildGrantFromOAuthResponse(response: Record<string, unknown>, host: string, signal?: AbortSignal): Promise<CopilotGrant> {
+    const accessToken = response.access_token as string
+    return { accessToken, host, apiKey: await this.refreshApiKey(accessToken, host, signal) }
   }
 
   /** Commit credentials first, selection last. The returned undo is for setup transaction failure. */
@@ -443,6 +460,7 @@ export class CopilotAuthenticator {
     const host = this.activeHost
     const revision = this.revision
     const files = this.filesFor(host)
+    if (this.hasRejectedCredentialProfile(host)) throw new CopilotAuthError('missing')
     const cached = this.readApiKeyFile(host)
     if (cached && cached.expires_at > this.now() / 1000 && (!forceRefresh || !this.hasAccessToken())) {
       return cached.token
@@ -479,7 +497,7 @@ export class CopilotAuthenticator {
     return this.readApiKeyFile()?.endpoints?.api ?? defaultApiBase(this.activeHost)
   }
 
-  private async refreshApiKey(accessToken: string, host: string, signal?: AbortSignal): Promise<ApiKeyInfo> {
+  protected async refreshApiKey(accessToken: string, host: string, signal?: AbortSignal): Promise<ApiKeyInfo> {
     // Official VS Code CAPI client derives api.<enterprise-host>, not GHES /api/v3.
     const json = await this.fetchJson(`https://api.${host}/copilot_internal/v2/token`, {
       headers: {
@@ -495,7 +513,7 @@ export class CopilotAuthenticator {
     return info
   }
 
-  private async fetchJson(url: string, init: RequestInit, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  protected async fetchJson(url: string, init: RequestInit, signal?: AbortSignal): Promise<Record<string, unknown>> {
     try {
       signal?.throwIfAborted()
       const timeout = AbortSignal.timeout(30_000)
@@ -504,8 +522,8 @@ export class CopilotAuthenticator {
         redirect: 'error',
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       })
-      if (res.status === 401 || res.status === 403) throw new CopilotAuthError('denied')
-      if (!res.ok) throw new CopilotAuthError('network')
+      if (res.status === 401 || res.status === 403) throw new CopilotAuthError('denied', undefined, res.status)
+      if (!res.ok) throw new CopilotAuthError('network', undefined, res.status)
       try { return record(await res.json()) } catch (error) {
         if (error instanceof CopilotAuthError) throw error
         throw new CopilotAuthError('invalid')
@@ -522,13 +540,30 @@ export class CopilotAuthenticator {
     this.storage.remove(this.filesFor(this.activeHost).key)
   }
 
-  private readApiKeyFile(host = this.activeHost): ApiKeyInfo | null {
-    const raw = this.storage.read(this.filesFor(host).key)
-    if (!raw) return null
-    try { return validApiKey(JSON.parse(raw), host) } catch { return null }
+  /** A version must never silently interpret another version's credential profile. */
+  protected acceptsApiKeyProfile(info: ApiKeyInfo, _host: string): boolean {
+    return info.directOAuth === undefined
   }
 
-  private writeApiKeyFile(info: ApiKeyInfo, host: string): void {
+  private hasRejectedCredentialProfile(host = this.activeHost): boolean {
+    const raw = this.storage.read(this.filesFor(host).key)
+    if (!raw) return false
+    try {
+      const parsed = JSON.parse(raw) as ApiKeyInfo
+      return !!parsed && typeof parsed === 'object' && !this.acceptsApiKeyProfile(parsed, host)
+    } catch { return false }
+  }
+
+  protected readApiKeyFile(host = this.activeHost): ApiKeyInfo | null {
+    const raw = this.storage.read(this.filesFor(host).key)
+    if (!raw) return null
+    try {
+      const info = validApiKey(JSON.parse(raw), host)
+      return info && this.acceptsApiKeyProfile(info, host) ? info : null
+    } catch { return null }
+  }
+
+  protected writeApiKeyFile(info: ApiKeyInfo, host: string): void {
     this.storage.write(this.filesFor(host).key, JSON.stringify(info))
   }
 
@@ -571,6 +606,7 @@ export class CopilotAuthenticator {
  * persisted OAuth credentials; normal API requests only refresh existing ones.
  */
 export class CopilotProvider implements LLMProvider {
+  protected inferenceHeaders(): Record<string, string> { return copilotHeaders() }
   readonly name = 'copilot'
 
   readonly auth: CopilotAuthenticator
@@ -628,7 +664,7 @@ export class CopilotProvider implements LLMProvider {
         const request = {
           url: `${baseURL}${endpoint}`,
           apiKey,
-          headers: copilotHeaders(),
+          headers: this.inferenceHeaders(),
           model,
           messages: inlinedMessages,
           tools,
@@ -720,7 +756,7 @@ export class CopilotProvider implements LLMProvider {
         headers: {
           accept: 'application/json',
           authorization: `Bearer ${apiKey}`,
-          ...copilotHeaders(),
+          ...this.inferenceHeaders(),
         },
       })
       this.assertRevision(revision)

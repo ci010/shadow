@@ -340,3 +340,50 @@ test('instance-scoped client sends login, polling, cancel and logout to the same
   ] })
   assert.deepEqual(parsed.map(item => [item.provider, item.type, item.name]), [['a', 'deepseek', 'Work'], ['b', 'deepseek', 'Home']])
 })
+
+
+test('safe authentication phase distinguishes OAuth rejection from Copilot exchange in UI', async () => {
+  for (const errorStage of ['oauth_device', 'oauth_token', 'copilot_token'] as const) {
+    const views: LoginView[] = []
+    const failed = parseDeviceLogin({ loginId: 'attempt-stage', state: 'denied', errorCode: 'denied', errorStage, httpStatus: 403, message: 'private-token-response', accessToken: 'private-token' })
+    assert.equal(failed.errorStage, errorStage)
+    assert.equal(failed.httpStatus, 403)
+    const controller = createDeviceLoginController({ start: async () => failed, poll: async () => failed, cancel: async () => {} }, view => views.push(view), undefined, () => failed.loginId)
+    await controller.start()
+    assert.equal(views.at(-1)?.error, copilotFailureMessage('denied', errorStage))
+    assert.doesNotMatch(JSON.stringify(views), /private-token/)
+    if (errorStage === 'copilot_token') assert.match(views.at(-1)!.error!, /authorization succeeded/)
+    else assert.match(views.at(-1)!.error!, /rejected the OAuth/)
+  }
+  const unknown = parseDeviceLogin({ loginId: 'attempt-stage', state: 'denied', errorCode: 'denied', errorStage: 'private-token', httpStatus: 700 })
+  assert.equal(unknown.errorStage, undefined)
+  assert.equal(unknown.httpStatus, undefined)
+})
+
+
+test('missing copilot grant remains a distinct actionable error without upstream text', async () => {
+  const failed = parseDeviceLogin({ loginId: 'scope-attempt', state: 'error', errorCode: 'scope_missing', errorStage: 'oauth_token', message: 'synthetic-private-upstream' })
+  assert.equal(failed.errorCode, 'scope_missing')
+  const views: LoginView[] = []
+  const controller = createDeviceLoginController({ start: async () => failed, poll: async () => failed, cancel: async () => {} }, view => views.push(view), undefined, () => failed.loginId)
+  await controller.start()
+  assert.equal(views.at(-1)?.error, copilotFailureMessage('scope_missing'))
+  assert.match(views.at(-1)!.error!, /did not grant.*copilot/)
+  assert.match(views.at(-1)!.error!, /not request broader permissions automatically/)
+  assert.doesNotMatch(JSON.stringify(views), /synthetic-private-upstream/)
+})
+
+
+test('server HTTP errors preserve safe status and phase rather than being called connection timeouts', async () => {
+  const failed = parseDeviceLogin({ loginId: 'server-error', state: 'error', errorCode: 'network', errorStage: 'copilot_access', httpStatus: 404, message: 'synthetic-secret-upstream' })
+  assert.equal(failed.errorStage, 'copilot_access')
+  assert.equal(failed.httpStatus, 404)
+  const views: LoginView[] = []
+  const controller = createDeviceLoginController({ start: async () => failed, poll: async () => failed, cancel: async () => {} }, view => views.push(view), undefined, () => failed.loginId)
+  await controller.start()
+  assert.match(views.at(-1)!.error!, /copilot_access.*404/)
+  assert.match(views.at(-1)!.error!, /not a connection timeout/)
+  assert.doesNotMatch(JSON.stringify(views), /synthetic-secret-upstream/)
+  assert.match(copilotFailureMessage('expired', 'copilot_access'), /authorization has expired/)
+  assert.match(copilotFailureMessage('denied', 'copilot_access'), /access check was rejected/)
+})

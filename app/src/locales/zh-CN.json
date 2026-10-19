@@ -3787,5 +3787,12 @@
   "Next: preview an allowed person, then mention the Bot in the assigned Discord channel. Preview does not send a message or run a model.": "下一步：预览获准成员的访问权限，再在已分配的 Discord 频道中提及 Bot。预览不会发送消息或运行模型。",
   "Open Discord access to load current assignments": "打开 Discord 访问设置以加载当前分配",
   "I have invited the Bot — continue to assignments": "我已邀请 Bot — 继续配置分配",
-  "Opening configuration does not verify installation or grant access.": "打开配置不代表已验证安装，也不会授予访问权限。"
+  "Opening configuration does not verify installation or grant access.": "打开配置不代表已验证安装，也不会授予访问权限。",
+  "GitHub authorization succeeded, but the Copilot token exchange was rejected. Check this account’s Copilot license, enterprise host, SSO and organization policy. This does not by itself prove the account has no Copilot access.": "GitHub 授权已成功，但后续 Copilot token 交换被拒绝。请检查此账号的 Copilot 许可证、企业主机、SSO 和组织策略。仅凭此错误不能认定账号没有 Copilot 权限。",
+  "GitHub rejected the OAuth authorization. Check the authorization request and your enterprise OAuth policy, then retry.": "GitHub 拒绝了 OAuth 授权。请检查授权请求及企业 OAuth 策略后重试。",
+  "GitHub did not grant the requested copilot scope. Start a new authorization and check enterprise OAuth policy. Shadow will not request broader permissions automatically.": "GitHub 未授予所请求的 copilot 权限。请重新授权并检查企业 OAuth 策略。Shadow 不会自动请求更广泛的权限。",
+  "This v2 sign-in uses the GitHub Copilot App OAuth client with only the copilot scope. Broader repository and workflow permissions are not requested. The authorization page may identify the official app rather than Shadow.": "此 v2 登录使用 GitHub Copilot App 的 OAuth client，仅请求 copilot 权限，不请求仓库和 workflow 等更广泛的权限。授权页可能显示官方 App 的名称，而非 Shadow。",
+  "Authentication failed at {stage} with HTTP {status}. The server returned an error; this is not a connection timeout.": "认证在 {stage} 阶段收到 HTTP {status}。服务端返回了错误，并非连接超时。",
+  "GitHub authorization succeeded, but the Copilot access check was rejected. Check the selected account host, license, SSO and organization policy.": "GitHub 授权已成功，但 Copilot 访问检查被拒绝。请检查所选账号的主机、许可证、SSO 和组织策略。",
+  "The saved Copilot authorization has expired. Sign in again to renew it.": "已保存的 Copilot 授权已到期，请重新登录以更新授权。"
 }

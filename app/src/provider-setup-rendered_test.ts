@@ -346,3 +346,49 @@ test('named Copilot title and sign-out identify the instance and preserve same-h
   await view.click('Sign out of GitHub Copilot')
   assert.match(view.text(), /Signed out of Copilot instance Work GitHub/)
 })
+
+
+test('new Copilot connection registers explicit v2 before login and keeps its stable ID', async t => {
+  const posts: { url: string; body: Record<string, unknown> }[] = []
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const body = JSON.parse(String(init?.body))
+    posts.push({ url: String(url), body })
+    if (String(url).includes('/api/provider/instances')) return Response.json({ ok: true })
+    return Response.json({ loginId: body.attemptId, host: 'github.com', state: 'succeeded' })
+  })
+  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'add', status: null })
+  await view.click('GitHub Copilot')
+  assert.match(view.text(), /v2/)
+  assert.match(view.text(), /only the copilot scope/)
+  assert.match(view.text(), /official app rather than Shadow/)
+  await view.click('Sign in with GitHub Copilot')
+  assert.equal(posts.length, 2)
+  assert.equal(posts[0].body.type, 'copilot-v2')
+  assert.match(String(posts[0].body.provider), /^account-.*-copilot$/)
+  assert.equal(new URL(posts[1].url).searchParams.get('provider'), posts[0].body.provider)
+  assert.equal(posts[1].body.reauthenticate, true)
+})
+
+test('explicit rollback form shows v1 without changing the connection ID', t => {
+  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'edit', status: { ...status, type: 'copilot-v1' } })
+  assert.match(view.text(), /v1/)
+  assert.doesNotMatch(view.text(), /v2/)
+  assert.doesNotMatch(view.text(), /only the copilot scope/)
+})
+
+
+for (const type of ['copilot', 'copilot-v1', 'copilot-v2']) {
+  test(`setup retry preserves immutable existing ${type} when registering a display name`, async t => {
+    const bodies: Record<string, unknown>[] = []
+    t.mock.method(globalThis, 'fetch', async (url, init) => {
+      const body = JSON.parse(String(init?.body))
+      bodies.push(body)
+      return Response.json(String(url).includes('/api/provider/instances') ? { ok: true }
+        : { loginId: body.attemptId, host: 'github.com', state: 'succeeded' })
+    })
+    const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'setup', status: { ...status, type, name: 'Existing' } })
+    await view.click('Sign in with GitHub Copilot')
+    assert.equal(bodies[0].type, type)
+    assert.equal(bodies[0].provider, 'copilot')
+  })
+}

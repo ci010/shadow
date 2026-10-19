@@ -17,8 +17,9 @@
     </div>
 
     <div v-if="method === 'copilot'" class="method-panel">
-      <h2>{{ t('Use your GitHub Copilot account') }}</h2>
+      <h2>{{ t('Use your GitHub Copilot account') }} <small>{{ props.mode !== 'add' && props.status?.type === 'copilot-v1' ? 'v1' : 'v2' }}</small></h2>
       <p>{{ t('Authorize Shadow on GitHub using a device code. Your account must have access to Copilot.') }}</p>
+      <p v-if="props.mode === 'add' || props.status?.type !== 'copilot-v1'" class="help">{{ t('This v2 sign-in uses the GitHub Copilot App OAuth client with only the copilot scope. Broader repository and workflow permissions are not requested. The authorization page may identify the official app rather than Shadow.') }}</p>
       <p v-if="mode === 'edit' && status?.authMode === 'copilot'" class="help">{{ t('Current Copilot host: {host}', { host: status.host ?? 'github.com' }) }}</p>
       <label>{{ t('GitHub account host') }}
         <UiSelect v-model="copilotHostType" :disabled="busy || saving">
@@ -167,6 +168,7 @@ const readinessMessages: Record<string, string> = {
   get network_error() { return providerFailureMessage('network') },
   get proxy_error() { return copilotFailureMessage('proxy') },
   get storage_error() { return copilotFailureMessage('storage') },
+  get scope_missing_error() { return copilotFailureMessage('scope_missing') },
 }
 const readinessMessage = computed(() => readinessMessages[props.status?.reason ?? ''] ?? t('Complete the configuration below.'))
 const expiryTime = computed(() => formatDateTime(new Date(login.value.login?.expiresAt ?? 0), { hour: 'numeric', minute: '2-digit', second: '2-digit' }))
@@ -217,7 +219,11 @@ async function startLogin() {
   signedOut.value = false
   saving.value = true
   try {
-    if (props.mode === 'add' || (props.mode === 'setup' && displayName.value.trim())) await client.instance(instanceId.value, 'copilot', displayName.value.trim() || 'GitHub Copilot')
+    if (props.mode === 'add' || (props.mode === 'setup' && displayName.value.trim())) {
+      const type = props.mode !== 'add' && props.status?.provider === instanceId.value && props.status.authMode === 'copilot'
+        ? props.status.type ?? 'copilot' : 'copilot-v2'
+      await client.instance(instanceId.value, type, displayName.value.trim() || 'GitHub Copilot')
+    }
     await controller.start(undefined, normalizeCopilotHost(selectedCopilotHost.value))
   } catch (error) { message.value = error instanceof Error ? error.message : t('Could not save the provider. Please retry.') }
   finally { saving.value = false }
