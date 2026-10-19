@@ -56,13 +56,10 @@
     <!-- Chat area -->
     <div class="chat-panel" :class="{ 'is-draft': !activeSessionId }">
       <div v-if="!activeSessionId" class="draft-heading">
-        <div v-if="!draft.folder" class="draft-mark" aria-hidden="true">
-          <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M24 5 40 14v20L24 43 8 34V14L24 5Z" /><path d="m24 14 9 5v10l-9 5-9-5V19l9-5Z" /></svg>
-        </div>
         <h1>{{ t('What would you like to work on?') }}</h1>
         <p v-if="projectName" class="draft-scratch">{{ projectName }}</p>
         <div v-if="installation.mode === 'main'" class="draft-location">
-          <ExecutionLocationSelector ref="executionLocationSelector" :empty-label="t('From scratch · No folder selected')"
+          <ExecutionLocationSelector ref="executionLocationSelector" :empty-label="t('From scratch · No folder selected')" show-shortcuts :folder-sessions="allSessions"
             :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
             :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
         </div>
@@ -3031,8 +3028,6 @@ function resendLastMessage() {
 .is-embedded :deep(.session-heading) { padding: 4px 8px; }
 .chat-panel.is-draft { flex: 0 0 auto; }
 .draft-heading { flex-shrink: 0; box-sizing: border-box; width: min(100%, 720px); padding: 0 24px; margin: 0 auto 30px; text-align: center; color: var(--c-text); }
-.draft-mark { width: 64px; height: 64px; margin: 0 auto 22px; color: var(--c-text-secondary); }
-.draft-mark svg { width: 100%; height: 100%; }
 .draft-heading h1 { margin: 0 0 10px; font-size: clamp(19px, 2vw, 26px); font-weight: 500; letter-spacing: -.025em; }
 .draft-heading p { margin: 0; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
 .draft-location { display: flex; justify-content: center; margin-top: 14px; }
@@ -3130,7 +3125,6 @@ function resendLastMessage() {
   .mobile-sidebar-backdrop { display: block; position: absolute; inset: 36px 0 0; z-index: 11; border: 0; background: rgb(0 0 0 / 25%); }
   .mobile-sessions-toggle { display: block; position: absolute; top: 6px; left: 8px; z-index: 13; }
   .draft-heading { margin-bottom: 18px; }
-  .draft-mark { width: 48px; height: 48px; margin-bottom: 16px; }
   .session-status-row { width: calc(100% - 24px); }
   .chat-working-detail { display: none; }
   .chat-composer { width: calc(100% - 24px); margin-bottom: 12px; }

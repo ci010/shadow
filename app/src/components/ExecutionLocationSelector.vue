@@ -1,5 +1,6 @@
 <template>
-  <ComposerPopover ref="popover" :label="t('Execution location')" :title="label" :disabled="disabled" :width="360" @opened="refresh" @closed="closed">
+  <div class="location-selector" :class="{ 'with-shortcuts': showShortcuts }">
+  <ComposerPopover ref="popover" :label="t('Execution location')" :title="label" :disabled="disabled" :width="360" @opened="menuOpened" @closed="closed">
     <template #trigger>
       <span :class="folder ? 'i-lucide-folder' : selected ? 'i-lucide-monitor' : 'i-lucide-laptop'" aria-hidden="true" />
       <span class="location-label">{{ label }}</span>
@@ -39,24 +40,32 @@
       <p class="location-note">{{ t('Conversations and managed folders are created on first send.') }}</p>
     </template>
   </ComposerPopover>
+  <button v-for="target in shortcutTargets" :key="target.folder.id" type="button" class="location-shortcut"
+    :disabled="disabled || loading || !!error || !target.available"
+    :aria-pressed="folder?.id === target.folder.id" :title="[target.detail, target.unavailableReason].filter(Boolean).join(' · ')"
+    @click="emit('select', { kind: 'folder', folder: target.folder })">
+    <span class="i-lucide-folder" aria-hidden="true" /><span class="location-label">{{ target.folder.name }}</span>
+  </button>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { computed, onDeactivated, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onActivated, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import { fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
 import { remoteNodeTargets, type RemoteChatTarget } from '../remote-conversations.ts'
 import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
-import { projectFolderTargets, type ExecutionLocation } from '../execution-locations.ts'
+import { commonFolderTargets, projectFolderTargets, type FolderUsageSession, type ExecutionLocation } from '../execution-locations.ts'
 
-const props = defineProps<{ apiBase: string; projectId: string; folder?: FolderRecord; selected?: RemoteChatTarget; disabled?: boolean; emptyLabel?: string }>()
+const props = defineProps<{ apiBase: string; projectId: string; folder?: FolderRecord; selected?: RemoteChatTarget; disabled?: boolean; emptyLabel?: string; showShortcuts?: boolean; folderSessions?: readonly FolderUsageSession[] }>()
 const emit = defineEmits<{ select: [target: ExecutionLocation | undefined] }>()
 const popover = ref<InstanceType<typeof ComposerPopover>>()
 const label = computed(() => props.folder?.name ?? (props.selected ? `${props.selected.nodeName} · ${props.selected.displayName}` : props.emptyLabel ?? t('This computer')))
 const nodes = ref<NodeInventoryEntry[]>([])
 const folders = ref<FolderRecord[]>([])
 const folderTargets = computed(() => projectFolderTargets(props.projectId, folders.value, nodes.value))
+const shortcutTargets = computed(() => props.showShortcuts ? commonFolderTargets(folderTargets.value, props.folderSessions ?? []) : [])
 const targets = computed(() => remoteNodeTargets(nodes.value))
 const loading = ref(false)
 const error = ref('')
@@ -65,6 +74,10 @@ let opened = false
 async function openRemote() {
   if (props.disabled) return
   await popover.value?.show()
+}
+function menuOpened() {
+  opened = true
+  void refresh()
 }
 function closed() {
   opened = false
@@ -77,7 +90,6 @@ function cancel() {
 }
 async function refresh() {
   cancel()
-  opened = true
   const controller = new AbortController()
   request = controller
   loading.value = true
@@ -108,14 +120,21 @@ watch(() => [props.apiBase, props.projectId], () => {
   nodes.value = []
   folders.value = []
   error.value = ''
-  if (opened) void refresh()
+  if (opened || props.showShortcuts) void refresh()
 }, { flush: 'sync' })
+onMounted(() => { if (props.showShortcuts) void refresh() })
+onActivated(() => { if (props.showShortcuts && !request) void refresh() })
 onDeactivated(closed)
 onUnmounted(cancel)
 defineExpose({ openRemote })
 </script>
 
 <style scoped>
+.location-selector.with-shortcuts { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
+.location-shortcut { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 38px; padding: 8px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
+.location-shortcut:hover:not(:disabled), .location-shortcut[aria-pressed="true"] { background: var(--c-bg-muted); color: var(--c-text); border-color: var(--c-blue); }
+.location-shortcut:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.location-shortcut:disabled { opacity: .55; cursor: not-allowed; }
 .location-label { max-width: min(32ch, 45vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .location-header, .location-device { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px; font-size: 12px; }
 .location-refresh { padding: 4px 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font: inherit; cursor: pointer; }

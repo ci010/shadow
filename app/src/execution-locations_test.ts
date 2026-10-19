@@ -57,3 +57,17 @@ test('selecting either project folder defers creation and first send uses its sc
   assert.equal(scratch.folder, undefined, 'This computer clears any previously selected folder')
   assert.equal(requests.length, 2)
 })
+
+test('common folder shortcuts rank direct conversations by frequency then recency and cap at three', async () => {
+  const { commonFolderTargets } = await import('./execution-locations.ts')
+  const targets = projectFolderTargets('a', [local, remote, { ...local, id: 'third' }, { ...local, id: 'fourth' }], [])
+  const session = (folderId: string, lastActivityAt = '2026-10-01') => ({ folderId, lastActivityAt, isDirectChat: true, parentSessionId: null })
+  const ranked = commonFolderTargets(targets, [session('remote'), session('remote'), session('third', '2026-10-02'), session('local'),
+    { ...session('fourth'), isDirectChat: false }, { ...session('fourth'), parentSessionId: 'parent' }, session('deleted')])
+  assert.deepEqual(ranked.map(target => target.folder.id), ['remote', 'third', 'local'])
+  assert.equal(ranked[0].available, false, 'offline folders preserve menu availability')
+  assert.deepEqual(commonFolderTargets(targets, []).map(target => target.folder.id), ['local', 'remote', 'third'])
+  assert.deepEqual(targets.map(target => target.folder.id), ['local', 'remote', 'third', 'fourth'], 'input is unchanged')
+  assert.deepEqual(commonFolderTargets([], []), [])
+  assert.equal(commonFolderTargets(targets.slice(0, 1), []).length, 1)
+})
