@@ -1,3 +1,4 @@
+import { isUtf8 } from 'node:buffer'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { lstat, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { isNotFoundError } from '../utils/runtime.ts'
@@ -175,12 +176,21 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
     const target = await resolveWritableFile(root, args.path)
     try {
       signal.throwIfAborted()
+      if (args.mode === 'append') {
+        try {
+          const existing = await readFile(target)
+          if (!isUtf8(existing) || existing.includes(0)) throw new CapabilityFilesystemError('file-type-denied', 'Append requires UTF-8 text; original file unchanged')
+        } catch (error) {
+          if (!isNotFoundError(error)) throw error
+        }
+      }
       await writeFile(target, args.content, {
         flag: args.mode === 'append' ? 'a' : 'w',
       })
       signal.throwIfAborted()
       return `${bytes.length} bytes written`
     } catch (error) {
+      if (error instanceof CapabilityFilesystemError) throw error
       if (error instanceof DOMException && error.name === 'AbortError') {
         throw error
       }

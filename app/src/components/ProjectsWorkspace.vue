@@ -95,8 +95,8 @@ import { projectBase } from '../api-url.ts'
 import { createProjectsClient, projectChatLocation, type ProjectRecord } from '../projects.ts'
 import { createConversationResources, type ConversationResource } from '../project-workspaces.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
-import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
-import { createNewConversationShortcut, resolveConversationFolder } from '../new-conversation-shortcut.ts'
+import { type FolderRecord } from '../folders-client.ts'
+import { createNewConversationShortcut, hasVisibleNewConversationOverlay } from '../new-conversation-shortcut.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { DEFAULT_PROJECT_SIDEBAR, projectSidebarStorageKey, restoreProjectSidebarPreferences } from '../project-sidebar.ts'
 import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
@@ -308,22 +308,14 @@ function startDraft(projectId: string, folder?: FolderRecord, remote = false) {
 const keyboardActive = ref(true)
 const newConversationShortcut = createNewConversationShortcut({
   context() {
-    if (!keyboardActive.value || !props.visible || !installation.value.uiScopes.includes('chat:write')
+    if (!keyboardActive.value || !props.visible || creating.value || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]')) || !installation.value.uiScopes.includes('chat:write')
       || !['chat', 'project-settings', 'agents'].includes(String(route.name))) return
     const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
     if (!projects.value.some(project => project.id === projectId)) return
-    return { projectId, sessionId: selected.value?.sessionId ?? '', folder: selected.value?.folder }
+    // Ctrl+N matches the sidebar's explicit Start from scratch action, never inherits a workdir.
+    return { projectId, sessionId: '' }
   },
-  async resolveFolder(context, signal) {
-    const lease = liveState.acquireProject(props.apiBase, context.projectId)
-    try {
-      await lease.graph.refresh()
-      if (signal.aborted) return
-      if (lease.graph.state.error) throw new Error(lease.graph.state.error)
-      return await resolveConversationFolder(context.sessionId, lease.graph.state.value ?? [],
-        () => createFoldersClient(projectBase(props.apiBase, context.projectId)).list(signal))
-    } finally { lease.release() }
-  },
+  async resolveFolder() { return undefined },
   start(context, folder) { startDraft(context.projectId, folder) },
   failed(cause) {
     error.value = cause instanceof Error ? cause.message : t('Could not resolve the conversation folder. Retry.')
@@ -377,9 +369,9 @@ function knowledgeNavigation(resource: ConversationResource, active: boolean, en
 function projectNavigation(resource: ConversationResource, tab?: ProjectTab) {
   if (!props.visible || selected.value?.key !== resource.key || route.params.projectId !== resource.projectId) return
   if (tab) {
-    if (route.name !== (tab === 'settings' ? 'project-settings' : 'agents')) {
-      void router.push({ name: tab === 'settings' ? 'project-settings' : 'agents',
-        params: { projectId: resource.projectId, ...(tab === 'settings' ? { section: 'general' } : {}) } })
+    if (route.name !== 'project-settings') {
+      void router.push({ name: 'project-settings',
+        params: { projectId: resource.projectId, section: 'general' } })
     }
   } else if (route.name === 'project-settings' || route.name === 'agents') {
     void router.push(projectChatLocation(resource))

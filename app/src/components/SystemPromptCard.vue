@@ -47,7 +47,7 @@ import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
 import { Marked } from 'marked'
-import katex from 'katex'
+import { markedMath } from '../marked-math.ts'
 import { useTextCopy } from '../composables/useTextCopy.ts'
 
 // Prompt HTML is documentation, not executable markup. Disable both block and
@@ -59,6 +59,8 @@ const marked = new Marked({
     tag() { return undefined },
   },
 })
+
+marked.use(markedMath())
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -127,28 +129,9 @@ function preprocessCustomXml(text: string, fragments: string[]): string {
 
 function renderMarkdown(text: string): string {
   if (!text) return ''
-  const mathBlocks: string[] = []
   const fragments: string[] = []
-  let src = preprocessCustomXml(text, fragments)
-
-  src = src.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
-    const idx = mathBlocks.length
-    try {
-      mathBlocks.push(katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }))
-    } catch { mathBlocks.push(`$$${math}$$`) }
-    return `\x00MATH${idx}\x00`
-  })
-
-  src = src.replace(/\$([^\$\n]+?)\$/g, (_, math) => {
-    const idx = mathBlocks.length
-    try {
-      mathBlocks.push(katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }))
-    } catch { mathBlocks.push(`$${math}$`) }
-    return `\x00MATH${idx}\x00`
-  })
-
+  const src = preprocessCustomXml(text, fragments)
   let html = marked.parse(src, { async: false }) as string
-  html = html.replace(/\x00MATH(\d+)\x00/g, (_, i) => mathBlocks[parseInt(i)])
   html = html.replace(/\x00FRAGMENT(\d+)\x00/g, (_, i) => fragments[parseInt(i)])
 
   return mobileResources.html(DOMPurify.sanitize(html, {

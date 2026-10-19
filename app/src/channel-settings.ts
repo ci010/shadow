@@ -52,7 +52,7 @@ export const channelDefinitions: Array<{
     get instructions() { return [t('Create an application and bot in the Discord Developer Portal, then copy the bot token.'), t('Enable the Message Content intent and invite the bot with permissions to view channels and send messages.'), t('After connecting, open Discord access to assign Agents and permissions. Channels and DMs stay closed until assigned.')] },
     get fields(): ChannelField[] { return [
       { key: 'token', label: t('Bot token'), kind: 'password', required: true },
-      { key: 'triggerMode', label: t('Legacy response mode'), kind: 'select', options: ['mention', 'all'], default: 'mention', hint: t('Project Bots use the per-channel trigger in Discord access instead of this legacy default.') },
+      { key: 'triggerMode', label: t('Legacy response mode'), kind: 'select', advanced: true, options: ['mention', 'all'], default: 'mention', hint: t('Project Bots use the per-channel trigger in Discord access instead of this legacy default.') },
       { key: 'memberIntent', label: t('Request Guild Members intent'), kind: 'checkbox', default: false, hint: t('Enable Server Members intent in the Discord Developer Portal first. This provides live membership-change events; REST permissions are still checked for every request and delivery.') },
       { key: 'reactionEmoji', label: t('Received-message reaction'), kind: 'text', default: '👀', advanced: true, hint: t('Leave empty to disable the reaction.') },
       ...accessFields.map(field => field.key === 'adminChats'

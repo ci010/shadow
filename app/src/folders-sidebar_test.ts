@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { groupFolderSessions, isAbsoluteFolderPath, parseSessionGraph, FOLDER_ACTIONS, suggestCloneDirectory, visibleSessions } from './folders-sidebar.ts'
+import { sidebarSessionIconStage, groupFolderSessions, isAbsoluteFolderPath, parseSessionGraph, FOLDER_ACTIONS, suggestCloneDirectory, visibleSessions } from './folders-sidebar.ts'
 
 const folder = { id: 'folder-a', name: 'same-name', path: 'C:\\fixtures\\one', createdAt: '2026-09-10T00:00:00Z' }
 const automation = { jobId: 'scheduled-task', name: 'Scheduled review', runId: 'run-1', startedAt: '2026-09-16T00:00:00Z', contextMode: 'fresh' }
@@ -221,4 +221,15 @@ test('directory suggestion handles HTTPS and SSH without carrying URL tokens', (
 test('browser fallback accepts explicit absolute paths, not folder upload names or relative guesses', () => {
   for (const path of ['C:\\fixtures\\folder', 'D:/fixture/folder', '\\\\server\\share\\folder', '/fixture/folder']) assert.equal(isAbsoluteFolderPath(path), true)
   for (const path of ['', 'folder', './folder', 'C:folder', '~\\folder']) assert.equal(isAbsoluteFolderPath(path), false)
+})
+
+test('sidebar completion only replaces idle/inactive activity, not live or execution states', () => {
+  for (const stage of [undefined, 'idle', 'inactive']) {
+    assert.equal(sidebarSessionIconStage(stage, true), 'completed')
+    assert.equal(sidebarSessionIconStage(stage, false), 'inactive')
+  }
+  for (const stage of ['llm', 'tool', 'running', 'waiting', 'rate-limit', 'waiting-for-call', 'pending', 'failed', 'cancelled', 'completed', 'unknown']) {
+    assert.equal(sidebarSessionIconStage(stage, true), stage)
+    assert.equal(sidebarSessionIconStage(stage, false), stage)
+  }
 })

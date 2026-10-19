@@ -61,16 +61,11 @@
         </div>
         <h1>{{ t('What would you like to work on?') }}</h1>
         <p v-if="projectName" class="draft-scratch">{{ projectName }}</p>
-        <div v-if="draft.folder" class="draft-folder" :aria-label="t('Working folder: {name}', { name: draft.folder.name })">
-          <svg class="draft-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 6h6l3 3h9v11H3V6Z" /><path d="M3 6V4h6l3 3h9v2" /></svg>
-          <div class="draft-folder-copy">
-            <span class="draft-folder-label">{{ draft.folder.kind === 'remote' ? t('Remote folder on {nodeName}', { nodeName: draftRemote?.nodeName }) : t('New conversation in folder') }}</span>
-            <strong>{{ draft.folder.name }}</strong>
-            <span class="draft-folder-path" :title="draft.folder.path">{{ draft.folder.path }}</span>
-          </div>
+        <div v-if="installation.mode === 'main'" class="draft-location">
+          <ExecutionLocationSelector ref="executionLocationSelector" :empty-label="t('From scratch · No folder selected')"
+            :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
+            :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
         </div>
-        <p v-else-if="draftRemote" class="draft-scratch">{{ draftRemote.nodeName }} &middot; {{ draftRemote.displayPath || draftRemote.displayName }}</p>
-        <p v-else class="draft-scratch">{{ t('From scratch · No folder selected') }}</p>
       </div>
       <template v-else>
         <div v-show="!mobileLayout || previousPhysicalId || viewingPhysicalId || automationConversation" class="conversation-heading-row">
@@ -208,6 +203,8 @@
                 <span class="usage-badge">{{ formatNumber(msg.usage.promptTokens) }} {{ t('prompt') }}</span>
                 <span class="usage-badge">{{ formatNumber(msg.usage.completionTokens) }} {{ t('completion') }}</span>
                 <span class="usage-badge total">{{ formatNumber(msg.usage.totalTokens) }} {{ t('total') }}</span>
+                <span v-for="cost in msg.usage.costs" :key="cost.currency" class="usage-badge" :title="t('Estimated cost, not a bill. Plan allowances and discounts may differ.')">{{ t(msg.usage.costIncomplete ? 'Known cost subtotal (incomplete)' : 'Estimated cost') }}: {{ formatUsageCost(cost) }}</span>
+                <span v-if="msg.usage.costIncomplete" class="usage-badge">{{ t(msg.usage.costs?.length ? 'Cost estimate incomplete' : 'Cost could not be estimated') }}</span>
               </div>
               <MessageTimestamp v-if="!msg.sessionSource" :timestamp="msg.timestamp" />
               </div>
@@ -361,6 +358,11 @@
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
             :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && installation.uiScopes.includes('chat:write') && route.name === 'chat'"
             @complete="completeSlashCommand" />
+          <SessionReferenceMenu ref="sessionReferenceMenu" :project-id="projectId || liveProjectId(apiBase)" :sessions="allSessions" :session-id="activeSessionId || ''"
+            :text="inputText" :input="chatInput" :focused="composerFocused"
+            :selection-start="composerSelection.start" :selection-end="composerSelection.end"
+            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && installation.uiScopes.includes('chat:write') && route.name === 'chat'"
+            @complete="completeSessionReference" />
           <input ref="attachmentInput" class="composer-file-input" type="file" multiple @change="handleAttachmentInput">
           <div v-if="pendingAttachments.length" class="composer-context composer-attachments" :aria-label="t('Attached files')">
             <span v-for="attachment in pendingAttachments" :key="attachment.key" class="context-chip attachment-chip" :class="{ 'attachment-reference': attachment.sourceKey }" :title="attachment.source?.path ?? attachment.file.name">
@@ -391,9 +393,9 @@
               role="combobox"
               aria-autocomplete="list"
               aria-haspopup="listbox"
-              :aria-expanded="slashMenu?.open ?? false"
-              :aria-controls="slashMenu?.open ? slashMenu.listId : undefined"
-              :aria-activedescendant="slashMenu?.activeId"
+              :aria-expanded="!!(sessionReferenceMenu?.open || slashMenu?.open)"
+              :aria-controls="sessionReferenceMenu?.open ? sessionReferenceMenu.listId : slashMenu?.open ? slashMenu.listId : undefined"
+              :aria-activedescendant="sessionReferenceMenu?.activeId || slashMenu?.activeId"
               :rows="mobileLayout ? 1 : 3"
               :disabled="submissionBusy"
               @keydown="handleKeyDown"
@@ -431,17 +433,13 @@
                   </button>
                   <div v-if="mobileLayout" class="mobile-message-settings">
                     <ModelSelector :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
-                    <ExecutionLocationSelector v-if="!activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
-                      :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
-                      :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
+
                     <button v-if="requestBusy && !answeringQuestion" class="context-action" :disabled="!canSend" @click="close(); sendMessage()">{{ t('Send guidance to running agent') }}</button>
                   </div>
                 </template>
               </ComposerPopover>
               <ModelSelector v-if="!mobileLayout" :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
-              <ExecutionLocationSelector v-if="!mobileLayout && !activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
-                :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
-                :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
+
             </div>
             <div class="composer-submit">
             <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? t('Stopping current request; waiting for Main...') : preparingSend ? t('Starting conversation...') : submittingMessage ? t('Sending...') : pastingFiles ? t('Reading copied files...') : queueModifier ? t('Ctrl+Enter to add to queue') : answeringQuestion ? t('Enter to answer · Shift+Enter for a new line') : imageEditsBusy.size ? t('Preparing marked image...') : attachmentDropTarget ? t('Drop files to attach') : savingSettings ? t('Saving conversation settings...') : pickingContext ? t('Choosing context...') : sessionStage === 'rate-limit' ? t('Waiting for model rate limit (automatic retry)') : requestBusy ? t('Enter for guidance · Ctrl+Enter to queue') : t('Enter to send · Ctrl+Enter to queue') }}</span>
@@ -496,17 +494,19 @@
 
 <script setup lang="ts">
 import { t, formatNumber } from '../i18n.ts'
+import { formatUsageCost, validCostUsage, type CostUsage } from '../usage-cost.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProviderReadiness, providerReadinessMessage, providerBlocksSubmission } from '../provider-readiness.ts'
 import { providerFailureMessage } from '../provider-setup.ts'
 import DOMPurify from 'dompurify'
+import SessionReferenceMenu from './SessionReferenceMenu.vue'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
 import { Marked } from 'marked'
 import { answerHtmlExtension, sanitizeAnswerHtmlRoots, vAnswerHtml } from '../answer-html'
 import { paddedStrongCompatibility } from '../markdown-strong-compat.ts'
-import katex from 'katex'
+import { markedMath } from '../marked-math.ts'
 import MessageAttachments from './MessageAttachments.vue'
 import ImageViewer from './ImageViewer.vue'
 import { imagePreviewFromEvent, imagePreviewMarkup, type ImagePreview } from '../image-viewer.ts'
@@ -644,6 +644,7 @@ function openConversationLink(event: MouseEvent) {
 }
 
 const marked = new Marked({ breaks: true })
+marked.use(markedMath())
 marked.use(paddedStrongCompatibility())
 marked.use(answerHtmlExtension())
 marked.use({
@@ -807,6 +808,7 @@ const inputText = composerDraft.text
 watch(inputText, () => { void nextTick(autoResize) })
 onMounted(autoResize)
 const slashMenu = ref<InstanceType<typeof SlashCommandMenu>>()
+const sessionReferenceMenu = ref<InstanceType<typeof SessionReferenceMenu>>()
 const composerFocused = ref(false)
 const composerComposing = ref(false)
 const queueModifier = ref(false)
@@ -822,6 +824,11 @@ const composerSelection = reactive({ start: 0, end: 0 })
 function updateComposerSelection() {
   composerSelection.start = chatInput.value?.selectionStart ?? 0
   composerSelection.end = chatInput.value?.selectionEnd ?? 0
+}
+async function completeSessionReference(text: string, caret: number) {
+  await completeSlashCommand(text)
+  chatInput.value?.setSelectionRange(caret, caret)
+  updateComposerSelection()
 }
 async function completeSlashCommand(text: string) {
   inputText.value = text
@@ -1232,7 +1239,7 @@ interface ChatMsg {
   toolName?: string
   toolCallId?: string
   toolCall?: { name: string; arguments: Record<string, unknown> }
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
+  usage?: CostUsage & { promptTokens: number; completionTokens: number; totalTokens: number }
   media?: string[]
   /** Round-trippable reasoning (DeepSeek). */
   reasoningContent?: string
@@ -1403,7 +1410,7 @@ interface RawMessage {
   tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>
   tool_call_id?: string
   name?: string
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
+  usage?: CostUsage & { promptTokens: number; completionTokens: number; totalTokens: number }
 }
 
 function rawTextContent(msg: RawMessage, stripMeta = false): string {
@@ -1491,7 +1498,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
           }
           if (cur.tool_calls?.length) {
             // Look ahead to collect tool results keyed by tool_call_id
-            const toolResults: Array<{ content: string; name?: string; toolCallId?: string; media: string[] }> = []
+            const toolResults: Array<{ content: string; name?: string; toolCallId?: string; timestamp?: string; media: string[] }> = []
             let peek = i + 1
             while (peek < raw.length && raw[peek].role === 'tool') {
               const toolMsg = raw[peek]
@@ -1499,6 +1506,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
                 content: rawTextContent(toolMsg),
                 name: toolMsg.name,
                 toolCallId: toolMsg.tool_call_id,
+                timestamp: toolMsg.timestamp,
                 media: toolImages(toolMsg.content),
               })
               peek++
@@ -1518,6 +1526,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
                 role: 'assistant',
                 content: `${tc.function.name}(${tc.function.arguments})`,
                 event: 'tool_call',
+                timestamp: cur.timestamp,
                 toolName: tc.function.name,
                 toolCallId: tc.id,
                 toolCall: { name: tc.function.name, arguments: parsedArgs },
@@ -1532,6 +1541,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
                   event: 'tool_result',
                   toolName: result.name,
                   toolCallId: tc.id,
+                  timestamp: result.timestamp,
                 }
                 out.push(entry)
               }
@@ -1540,7 +1550,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
               if (!consumedResults.has(result)) out.push({
                 role: 'assistant', event: 'tool_result', content: result.content,
                 media: result.media,
-                toolName: result.name, toolCallId: result.toolCallId,
+                toolName: result.name, toolCallId: result.toolCallId, timestamp: result.timestamp,
               })
             }
 
@@ -1557,6 +1567,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
               event: 'tool_result',
               toolName: cur.name,
               toolCallId: cur.tool_call_id,
+              timestamp: cur.timestamp,
               media: toolImages(cur.content),
             })
           }
@@ -2216,6 +2227,7 @@ function isSearchHistoryMessage(value: unknown): value is RawMessage {
     && typeof call.function.name === 'string' && typeof call.function.arguments === 'string'))) return false
   const usage = value.usage
   return usage === undefined || isRecord(usage)
+    && validCostUsage(usage)
     && ['promptTokens', 'completionTokens', 'totalTokens'].every(key => typeof usage[key] === 'number')
 }
 async function revealSearchMatch(match: ConversationSearchMatch, query: string, signal: AbortSignal): Promise<void> {
@@ -2319,6 +2331,7 @@ onUnmounted(() => {
 // ── Send message ──────────────────────────────────────────────────────────────
 
 function handleKeyDown(e: KeyboardEvent): void {
+  if (sessionReferenceMenu.value?.handleKeyDown(e)) return
   if (slashMenu.value?.handleKeyDown(e)) return
   const intent = composerSubmitIntent(e, mobileLayout.value)
   if (intent) {
@@ -2370,7 +2383,7 @@ interface StreamPayload {
   content?: string
   done?: boolean
   media?: string[]
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
+  usage?: CostUsage & { promptTokens: number; completionTokens: number; totalTokens: number }
   toolCall?: { name: string; arguments: Record<string, unknown> }
   toolCallId?: string
   toolName?: string
@@ -2387,7 +2400,7 @@ function isStreamPayload(value: unknown): value is StreamPayload {
     || (value.toolCallId !== undefined && typeof value.toolCallId !== 'string')
     || (value.toolName !== undefined && typeof value.toolName !== 'string')
     || (value.toolCall !== undefined && (!isRecord(value.toolCall) || typeof value.toolCall.name !== 'string' || !isRecord(value.toolCall.arguments)))
-    || (value.usage !== undefined && (!isRecord(value.usage) || !['promptTokens', 'completionTokens', 'totalTokens'].every(key => {
+    || (value.usage !== undefined && (!isRecord(value.usage) || !validCostUsage(value.usage) || !['promptTokens', 'completionTokens', 'totalTokens'].every(key => {
       const count = isRecord(value.usage) ? value.usage[key] : undefined
       return typeof count === 'number' && Number.isFinite(count) && count >= 0
     })))) return false
@@ -2420,7 +2433,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
     flushStreamResponse(state)
     streamingToolCallData.value = payload.toolCall ?? null
     messages.value.push({
-      role: 'assistant', event: 'tool_call', content: payload.content ?? '',
+      role: 'assistant', event: 'tool_call', content: payload.content ?? '', timestamp: new Date().toISOString(),
       toolCall: payload.toolCall, toolCallId: payload.toolCallId, toolName: payload.toolName,
     })
     scrollToBottom()
@@ -2431,7 +2444,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
         const url = mobileResources.resolve(buildMediaUrl(props.apiBase, activeSessionId.value, path))
         return url ? [url] : []
       }),
-      toolCallId: payload.toolCallId, toolName: payload.toolName,
+      toolCallId: payload.toolCallId, toolName: payload.toolName, timestamp: new Date().toISOString(),
     })
     if (payload.toolName === 'subagent' || streamingToolCallData.value?.name === 'subagent') void loadSessionList()
     scrollToBottom()
@@ -2469,7 +2482,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
 }
 
 function flushStreamResponse(state: StreamState, usage?: ChatMsg['usage']) {
-  if (state.accumulated || state.media?.length) {
+  if (state.accumulated || state.media?.length || usage) {
     const { text, paths } = messageAttachments(state.accumulated, state.media)
     messages.value.push({ role: 'assistant', content: text, timestamp: state.timestamp,
       responseContext: state.responseContext, ...(usage ? { usage } : {}), ...(paths.length ? { media: paths } : {}) })
@@ -2798,33 +2811,8 @@ function preprocessCustomXml(text: string): string {
 function renderMarkdown(text: string): string {
   if (!text) return ''
 
-  // Pre-render math with KaTeX before marked processes the text,
-  // so marked never touches LaTeX backslash commands.
-  const mathBlocks: string[] = []
-  let src = preprocessCustomXml(text)
-
-  // Display math: $$...$$  (may span multiple lines)
-  src = src.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
-    const idx = mathBlocks.length
-    try {
-      mathBlocks.push(katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }))
-    } catch { mathBlocks.push(`$$${math}$$`) }
-    return `\x00MATH${idx}\x00`
-  })
-
-  // Inline math: $...$  (single line only)
-  src = src.replace(/\$([^\$\n]+?)\$/g, (_, math) => {
-    const idx = mathBlocks.length
-    try {
-      mathBlocks.push(katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }))
-    } catch { mathBlocks.push(`$${math}$`) }
-    return `\x00MATH${idx}\x00`
-  })
-
-  let html = marked.parse(src, { async: false }) as string
-
-  // Restore rendered math blocks
-  html = html.replace(/\x00MATH(\d+)\x00/g, (_, i) => mathBlocks[parseInt(i)])
+  const src = preprocessCustomXml(text)
+  const html = marked.parse(src, { async: false }) as string
 
   return imagePreviewMarkup(mobileResources.html(DOMPurify.sanitize(sanitizeAnswerHtmlRoots(html), {
     ADD_TAGS: [...KATEX_TAGS, 'img'],
@@ -2848,6 +2836,16 @@ function quoteSelection(text: string): void {
   })
 }
 
+// Focus on entry (including cached/split panes), not on subsequent draft edits.
+watch(() => !activeSessionId.value && paneActive.value && props.keyboardActive
+  && route.name === 'chat' && composerVisible.value, async available => {
+  if (!available) return
+  await nextTick()
+  const input = chatInput.value
+  if (!input || input.disabled || input.readOnly || !input.getClientRects().length) return
+  if (document.querySelector('[role="dialog"], .composer-popover-backdrop')) return
+  input.focus({ preventScroll: true })
+}, { immediate: true, flush: 'post' })
 function handleTypingFocus(e: KeyboardEvent): void {
   if (!props.visible || !conversationDocumentVisible.value || !props.keyboardActive || !paneRoot.value?.getClientRects().length || activePanel.value !== 'conversation' || !isComposerFocusKey(e)) return
   const input = chatInput.value
@@ -3037,12 +3035,8 @@ function resendLastMessage() {
 .draft-mark svg { width: 100%; height: 100%; }
 .draft-heading h1 { margin: 0 0 10px; font-size: clamp(19px, 2vw, 26px); font-weight: 500; letter-spacing: -.025em; }
 .draft-heading p { margin: 0; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
-.draft-folder { display: inline-flex; align-items: center; gap: 16px; box-sizing: border-box; max-width: 100%; margin-top: 20px; padding: 16px 22px; border: 1px solid color-mix(in srgb, var(--c-blue) 40%, var(--c-border)); border-radius: var(--radius-surface); background: color-mix(in srgb, var(--c-blue) 8%, var(--c-bg-card)); text-align: left; }
-.draft-folder-icon { flex: 0 0 34px; width: 34px; height: 34px; color: var(--c-blue); }
-.draft-folder-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.draft-folder-label { color: var(--c-blue); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-.draft-folder strong { color: var(--c-text); font-size: 24px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
-.draft-folder-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
+.draft-location { display: flex; justify-content: center; margin-top: 14px; }
+.draft-location :deep(.composer-control) { min-height: 38px; padding: 8px 14px; gap: 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); font-size: 13px; }
 .draft-heading .draft-scratch { margin-top: 14px; }
 .draft-io { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 18px; }
 .chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; container-type: inline-size; }
@@ -3137,8 +3131,6 @@ function resendLastMessage() {
   .mobile-sessions-toggle { display: block; position: absolute; top: 6px; left: 8px; z-index: 13; }
   .draft-heading { margin-bottom: 18px; }
   .draft-mark { width: 48px; height: 48px; margin-bottom: 16px; }
-  .draft-folder { padding: 14px; gap: 12px; }
-  .draft-folder strong { font-size: 21px; }
   .session-status-row { width: calc(100% - 24px); }
   .chat-working-detail { display: none; }
   .chat-composer { width: calc(100% - 24px); margin-bottom: 12px; }

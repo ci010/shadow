@@ -1,3 +1,4 @@
+import { validCostUsage, type CostUsage } from './usage-cost.ts'
 import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { parseTopicMetadata, type TopicMetadata } from './project-coordination.ts'
@@ -10,7 +11,7 @@ export interface SessionDetails {
   name: string | null
   description?: string
   workdir: { kind: 'local' | 'remote'; displayPath: string | null; nodeId?: string; nodeName?: string; displayName?: string; available?: boolean }
-  usage: { cachedTokens?: number; cacheReportedPromptTokens?: number; promptTokens: number; completionTokens: number; totalTokens: number } | null
+  usage: CostUsage & { cachedTokens?: number; cacheReportedPromptTokens?: number; promptTokens: number; completionTokens: number; totalTokens: number } | null
   subagentUsage?: SessionDetails['usage']
   usageIncomplete?: boolean
   usageScope: 'session' | 'segment' | 'latest-call'
@@ -29,7 +30,7 @@ function nullableCount(value: unknown): number | null {
 
 function parseUsage(value: unknown): SessionDetails['usage'] {
   if (value === null) return null
-  if (!isRecord(value)) throw invalid()
+  if (!isRecord(value) || !validCostUsage(value)) throw invalid()
   const { promptTokens, completionTokens, totalTokens } = value
   if (!tokenCount(promptTokens) || !tokenCount(completionTokens) || !tokenCount(totalTokens)) throw invalid()
   const cachedTokens = value.cachedTokens
@@ -37,7 +38,9 @@ function parseUsage(value: unknown): SessionDetails['usage'] {
   if (cacheReportedPromptTokens !== undefined && (cachedTokens === undefined
     || !tokenCount(cacheReportedPromptTokens) || cacheReportedPromptTokens > promptTokens)) throw invalid()
   if (cachedTokens !== undefined && (!tokenCount(cachedTokens) || cachedTokens > (cacheReportedPromptTokens ?? promptTokens))) throw invalid()
-  return { promptTokens, completionTokens, totalTokens, ...(cachedTokens !== undefined ? { cachedTokens } : {}),
+  return { promptTokens, completionTokens, totalTokens,
+    ...(value.costs !== undefined ? { costs: value.costs as NonNullable<CostUsage['costs']> } : {}),
+    ...(value.costIncomplete !== undefined ? { costIncomplete: value.costIncomplete as boolean } : {}), ...(cachedTokens !== undefined ? { cachedTokens } : {}),
     ...(cacheReportedPromptTokens !== undefined ? { cacheReportedPromptTokens } : {}) }
 }
 

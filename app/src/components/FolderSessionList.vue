@@ -11,9 +11,10 @@
       :icon-only="rail"
       :info-disabled="!showInfo"
       :label="session.label"
-      :ariaLabel="`${session.label}${activityStage(session) === 'waiting' ? ' (needs reply)' : ''}${delegatedLabel(session) ? ` (${delegatedLabel(session)})` : ''}${session.isDirectChat ? '' : ' (read-only)'}`"
+      :subtitle="sessionSubtitle?.(session)"
+      :ariaLabel="`${session.label}${session.completed ? ` (${t('Completed')})` : ''}${activityStage(session) === 'waiting' ? ' (needs reply)' : ''}${delegatedLabel(session) ? ` (${delegatedLabel(session)})` : ''}${session.isDirectChat ? '' : ' (read-only)'}`"
       :current="activeSessionId === session.sessionId ? 'page' : undefined"
-      :title="[session.label, session.sessionId, session.description, session.parentSessionId ? t('Parent: {parentSessionId}', { parentSessionId: session.parentSessionId }) : session.contextParentSessionId ? t('Forked from: {contextParentSessionId}', { contextParentSessionId: session.contextParentSessionId }) : ''].filter(Boolean).join('\n')"
+      :title="[session.label, session.sessionId, session.description, session.completed ? t('Completed') : '', session.parentSessionId ? t('Parent: {parentSessionId}', { parentSessionId: session.parentSessionId }) : session.contextParentSessionId ? t('Forked from: {contextParentSessionId}', { contextParentSessionId: session.contextParentSessionId }) : ''].filter(Boolean).join('\n')"
       separate-toggle
       button-class="session-select"
       toggle-class="lineage-toggle"
@@ -22,11 +23,16 @@
       @toggle="$emit('toggle', session.sessionId)"
       @select="$emit('select', session.sessionId)"
     >
-      <template #icon>
-        <SessionActivity v-if="activityStage(session) || delegatedLabel(session)" :stage="activityStage(session)" :subagents="delegatedActivity(session)" compact icon-only status-icons />
-        <span v-else :class="session.isDirectChat ? 'i-lucide-message-square' : 'i-lucide-bot'" />
+      <template v-if="sessionMetadata" #subtitle>
+        <span class="session-metadata">
+          <span class="session-folder-chip" :class="{ 'is-scratch': !session.folderId }" :title="sessionMetadata(session).folder">{{ sessionMetadata(session).folder }}</span>
+          <time v-if="sessionMetadata(session).time" :datetime="session.lastActivityAt" :title="sessionMetadata(session).absoluteTime">{{ sessionMetadata(session).time }}</time>
+        </span>
       </template>
-      <template #meta><span v-if="session.completed" class="i-lucide-circle-check session-completed" role="img" :aria-label="t('Completed')" :title="t('Completed')" /><WorkingWave v-if="isAnimating(session)" class="session-working-wave" /></template>
+      <template #icon>
+        <SessionActivity :stage="sidebarSessionIconStage(activityStage(session), session.completed)" :subagents="delegatedActivity(session)" compact icon-only status-icons />
+      </template>
+      <template #meta><WorkingWave v-if="isAnimating(session)" class="session-working-wave" /></template>
       <template #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
       <template v-if="showInfo" #info="{ close }">
         <div class="session-info">
@@ -60,7 +66,7 @@
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import { computed } from 'vue'
-import { sessionNavigationParent, visibleSessions, type SidebarSession } from '../folders-sidebar.ts'
+import { sidebarSessionIconStage, sessionNavigationParent, visibleSessions, type SidebarSession } from '../folders-sidebar.ts'
 import SessionActivity from './SessionActivity.vue'
 import WorkingWave from './WorkingWave.vue'
 import TreeRow from './TreeRow.vue'
@@ -70,6 +76,8 @@ import { rootSessionFamilies } from '../folder-rail.ts'
 import { isAnimatingStage, isWorkingStage, prominentWorkingStage } from '../session-activity.ts'
 import { subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 const props = withDefaults(defineProps<{
+  sessionMetadata?: (session: SidebarSession) => { folder: string; time: string; absoluteTime: string }
+  sessionSubtitle?: (session: SidebarSession) => string
   sessions: SidebarSession[]
   activeSessionId: string
   collapsed: ReadonlySet<string>
@@ -106,6 +114,10 @@ function isWorking(session: SidebarSession) { return isWorkingStage(activityStag
 </script>
 
 <style scoped>
+.session-metadata { display: flex; align-items: center; gap: 6px; height: 16px; min-width: 0; }
+.session-folder-chip { display: block; min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; padding-inline: 6px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--c-bg-muted) 88%, var(--c-text-secondary) 12%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-border) 80%, var(--c-text-secondary) 20%); color: var(--c-text-secondary); font-weight: 500; line-height: 16px; }
+.session-folder-chip.is-scratch { background: transparent; box-shadow: none; padding-inline: 0; color: var(--c-text-secondary); font-weight: 400; }
+.session-metadata time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .session-working-wave { color: var(--c-text-secondary); }
 .folder-session-list { list-style: none; padding: 0; margin: 0; }
 .folder-session-row.needs-reply { box-shadow: inset 3px 0 var(--c-warn); background: var(--c-warn-bg); }

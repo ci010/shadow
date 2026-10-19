@@ -14,6 +14,7 @@ export interface ToolActivityMessage {
   media?: string[]
   toolName?: string
   toolCallId?: string
+  timestamp?: string
   toolCall?: { name: string; arguments: Record<string, unknown> }
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
 }
@@ -24,6 +25,7 @@ export interface LineChanges {
 }
 
 export interface ToolActivity {
+  durationMs?: number
   index: number
   toolCallId?: string
   name: string
@@ -50,7 +52,27 @@ export interface ToolActivityBatch {
   usages?: Array<{ index: number; usage: NonNullable<ToolActivityMessage['usage']> }>
   files: number
   changes?: LineChanges
+  durationMs?: number
   incomplete: boolean
+}
+
+/** History uses persisted ISO timestamps; live events use local receipt time, not execution timers. */
+function timestampMs(value: string | undefined): number | undefined {
+  if (!value) return
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : undefined
+}
+
+function elapsed(start: string | undefined, end: string | undefined): number | undefined {
+  const a = timestampMs(start), b = timestampMs(end)
+  return a !== undefined && b !== undefined && b >= a ? b - a : undefined
+}
+
+export function formatToolDuration(ms: number): string {
+  if (ms < 1000) return `≈ ${Math.round(ms)} ms`
+  if (ms < 60_000) return `≈ ${(ms / 1000).toFixed(1)} s`
+  const seconds = Math.round(ms / 1000)
+  return `≈ ${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
 export function toolPayloadPath(source: string): string {
@@ -120,6 +142,7 @@ function activity(message: ToolActivityMessage, index: number, result?: ToolActi
   const success = write && text !== undefined && /^(?:Success: (?:write|edit|append) |OK (?:write|edit|append)(?: |$))/.test(text)
   const failed = text !== undefined && /^(?:Error:|ERROR\b|Failed\b)/i.test(text.trimStart())
   return {
+    durationMs: elapsed(message.timestamp, result?.timestamp),
     index, toolCallId: message.toolCallId, name, title, summary, arguments: call.raw, result: text, usage: result?.usage, images: result?.media,
     icon: write ? 'write' : read ? 'read' : search ? 'search' : exec ? 'exec' : 'tool',
     path: (write || read) && path ? path : undefined,
@@ -193,10 +216,19 @@ export function groupToolActivity(messages: readonly ToolActivityMessage[], excl
         index++
       }
     }
+    // Partial/orphaned intervals cannot establish the group's full wall time.
+    const intervals = entries.filter(entry => entry.reasoning === undefined).map(entry => {
+      const resultIndex = pairs.get(entry.index)
+      const start = timestampMs(messages[entry.index].timestamp)
+      const end = resultIndex === undefined ? undefined : timestampMs(messages[resultIndex].timestamp)
+      return start !== undefined && end !== undefined && end >= start ? { start, end } : undefined
+    })
+    const durationMs = intervals.length && intervals.every(interval => interval !== undefined)
+      ? Math.max(...intervals.map(interval => interval!.end)) - Math.min(...intervals.map(interval => interval!.start)) : undefined
     const changes = entries.filter(entry => entry.changes).map(entry => entry.changes!)
     if (entries.length) groups.set(start, {
       end: index,
-      entries, usages,
+      entries, usages, durationMs,
       files: new Set(entries.flatMap(entry => entry.file ? [entry.file] : [])).size,
       changes: changes.length ? changes.reduce((sum, next) => ({ added: sum.added + next.added, removed: sum.removed + next.removed }), { added: 0, removed: 0 }) : undefined,
       incomplete: entries.some(entry => !!entry.file && !entry.changes),

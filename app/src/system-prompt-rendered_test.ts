@@ -19,7 +19,7 @@ test('system prompt treats HTML as text without losing the tail or generated for
   const js = ts.transpileModule(rendering, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   const script = `import { Marked } from '/node_modules/marked/lib/marked.esm.js';
 import DOMPurify from '/node_modules/dompurify/dist/purify.es.mjs';
-import katex from '/node_modules/katex/dist/katex.mjs';
+import { markedMath } from '/src/marked-math.ts';
 const mobileResources = {html: s => s};
 ${js}
 const check = (ok, message) => {if (!ok) throw Error(message)};
@@ -42,6 +42,17 @@ check(box.textContent.includes('Available Skills') && box.textContent.includes('
 check(box.querySelector('sub')?.textContent === 'one, <style>', 'generated sub lost or content interpreted');
 check(!box.querySelector('style,script'), 'category HTML escaped boundary');
 check(box.querySelector('.katex') && box.querySelector('.katex-display') && box.querySelector('math'), 'KaTeX lost');
+box.innerHTML = renderMarkdown(${JSON.stringify(String.raw`before
+\[
+y^{\rm TS}_{ij}
+=
+\sum_k x_k
+\]
+after \(\mathbf x\) and $x^2$`)});
+check(!box.querySelector('h1'), 'math became a setext heading');
+check(box.querySelectorAll('.katex').length === 3 && box.querySelector('math'), 'delimited math lost after sanitization');
+box.innerHTML = renderMarkdown(${JSON.stringify(String.raw`Code: \`$x$ \(x\)\` and currency $5 and $10, escaped \$x\$.`.replaceAll('\\`', '`'))});
+check(!box.querySelector('.katex') && box.querySelector('code')?.textContent.includes('$x$'), 'code or currency parsed as math');
 check(!window.executed, 'HTML executed');
 window.result = 'SYSTEM_PROMPT_OK';
 } catch(e) { window.result = e.stack; }

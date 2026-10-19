@@ -136,7 +136,7 @@ const activeTab = ref<AgentView>('overview')
 const agentQuery = ref('')
 const toolQuery = ref('')
 const rawPrompt = ref(false)
-const showDetail = ref(!!route.params.agentName)
+const showDetail = ref(!!route.query.agent)
 const navigation = ref<HTMLElement>()
 const detail = ref<HTMLElement>()
 const heading = ref<HTMLElement>()
@@ -147,7 +147,7 @@ const channel = computed({
   set: value => { void router.replace({ query: { ...route.query, channel: value } }) },
 })
 const agentTypes = ref<AgentTypeMeta[]>([])
-const requestedAgent = computed(() => agentTypes.value.find(agent => agent.name === route.params.agentName) ?? agentTypes.value[0])
+const requestedAgent = computed(() => agentTypes.value.find(agent => agent.name === route.query.agent) ?? agentTypes.value[0])
 const selected = ref<AgentTypeMeta | null>(null)
 const renderedSystemPrompt = ref('')
 const resolvedTools = ref<ToolDef[]>([])
@@ -185,7 +185,7 @@ async function loadAgentTypes() {
     const data = parseAgentTypes(await response.json())
     if (request.signal.aborted) return
     agentTypes.value = data
-    if (requestedAgent.value && route.params.agentName !== requestedAgent.value.name) selectAgent(requestedAgent.value, false)
+    if (requestedAgent.value && route.query.agent !== requestedAgent.value.name) selectAgent(requestedAgent.value, false)
   } catch (cause) {
     if (!request.signal.aborted) {
       listError.value = cause instanceof Error ? cause.message : t('Failed to load agent types.')
@@ -217,7 +217,7 @@ async function loadContext(agent: AgentTypeMeta) {
 }
 async function selectAgent(agent: AgentTypeMeta, openDetail = true) {
   if (openDetail) showDetail.value = true
-  void router.replace({ name: 'agents', params: { ...route.params, agentName: agent.name }, query: { ...route.query, channel: channel.value } })
+  void router.replace({ name: 'project-settings', params: { projectId: route.params.projectId, section: 'agents' }, query: { ...route.query, agent: agent.name, channel: channel.value } })
   if (openDetail) { await nextTick(); detail.value?.scrollTo({ top: 0 }); heading.value?.focus({ preventScroll: true }) }
 }
 async function backToTypes() {

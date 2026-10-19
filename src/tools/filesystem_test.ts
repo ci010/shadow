@@ -202,17 +202,15 @@ test('remote append previews and disk writes use only the capability workdir', a
   assert.ok(changes[0].patch.includes('+remote seam+next'))
 })
 
-test('binary append history reports unavailable prior text without inventing decoded file contents', async t => {
+test('binary append is rejected without changing bytes or recording a successful edit', async t => {
   const { root, context, tool } = await fixture(t)
   const changes: RecordedFileChange[] = []
   context.toolCallId = 'binary-append'
   context.recordFileChange = async change => { changes.push(change) }
   await writeFile(join(root, 'binary.dat'), Buffer.from([0xff, 0xfe]))
-  await tool.execute({ path: 'binary.dat', content: 'tail', flag: 'a' }, context)
-  assert.equal(changes.length, 1)
-  assert.match(changes[0].unavailable!, /UTF-8/)
-  assert.equal(changes[0].writtenContent, 'tail')
-  assert.deepEqual(await readFile(join(root, 'binary.dat')), Buffer.from([0xff, 0xfe, ...Buffer.from('tail')]))
+  await assert.rejects(tool.execute({ path: 'binary.dat', content: 'tail', flag: 'a' }, context), /requires UTF-8/)
+  assert.equal(changes.length, 0)
+  assert.deepEqual(await readFile(join(root, 'binary.dat')), Buffer.from([0xff, 0xfe]))
 })
 
 test('overwrites compare the complete previous file including duplicate and unchanged regions', async t => {

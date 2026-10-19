@@ -6,7 +6,7 @@
         <nav class="tab-nav" :class="{ 'mobile-app-nav': mobile.enabled.value }" :aria-label="t('Main navigation')">
           <template v-for="group in navigationGroups" :key="group.name">
             <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
-            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { projectId: route.params.projectId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
+            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : item.name === 'agents' ? { name: 'project-settings', params: { projectId: route.params.projectId || 'default', section: 'agents' } } : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { projectId: route.params.projectId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
               <button class="tab" :class="{ active: isActive }" :aria-current="isActive ? 'page' : undefined" @click="navigate">
                 {{ item.label }}
               </button>

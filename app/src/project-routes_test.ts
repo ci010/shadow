@@ -7,7 +7,7 @@ import { hostBase, projectBase } from './api-url.ts'
 import { liveProjectId } from './composables/useLiveClient.ts'
 
 function applicationRouter(protocol: 'http:' | 'file:'): VueRouter.Router {
-  const source = readFileSync(new URL('./router.ts', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('./router.ts', import.meta.url), 'utf8').replace('import.meta.env.MODE', JSON.stringify('web'))
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   })
@@ -36,7 +36,7 @@ for (const protocol of ['http:', 'file:'] as const) {
       '/projects/other/chat/web%3Achat-same',
       '/projects/owner%20one/settings/bots',
       '/projects/owner%20one/chat/web%3Achat-same?panel=knowledge&entry=memory%2Ftopics%2Fexample.md',
-      '/projects/owner%20one/agents/reviewer',
+      '/projects/owner%20one/settings/agents?agent=reviewer&channel=web',
       '/projects/owner%20one/logs',
       '/projects/owner%20one/spans',
     ]) {
@@ -48,6 +48,23 @@ for (const protocol of ['http:', 'file:'] as const) {
       assert.equal(router.currentRoute.value.hash, expected.hash)
       assert.equal(router.currentRoute.value.redirectedFrom, undefined)
     }
+  })
+  test(`${protocol} legacy Agents navigation retains project, agent, channel and hash`, async () => {
+    const router = applicationRouter(protocol)
+    for (const [path, projectId, agent] of [
+      ['/projects/owner%20one/agents/reviewer?channel=web&retained=yes#tools', 'owner one', 'reviewer'],
+      ['/agents/plan?channel=web&retained=yes#tools', 'default', 'plan'],
+      ['/projects/owner%20one/agents?agent=explore&channel=web&retained=yes#tools', 'owner one', 'explore'],
+    ]) {
+      await router.push(path!)
+      assert.equal(router.currentRoute.value.name, 'project-settings')
+      assert.deepEqual(router.currentRoute.value.params, { projectId, section: 'agents' })
+      assert.deepEqual(router.currentRoute.value.query, { agent, channel: 'web', retained: 'yes' })
+      assert.equal(router.currentRoute.value.hash, '#tools')
+    }
+    await router.push({ name: 'agents', params: { projectId: 'a', agentName: 'plan' }, query: { channel: 'wechat' } })
+    assert.equal(router.currentRoute.value.name, 'project-settings')
+    assert.deepEqual(router.currentRoute.value.query, { agent: 'plan', channel: 'wechat' })
   })
   test(`${protocol} old Knowledge links open the conversation document tab`, async () => {
     const router = applicationRouter(protocol)

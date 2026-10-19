@@ -126,3 +126,12 @@ test('partial cache rates use covered inputs and reject malformed coverage', () 
   }
   assert.throws(() => parseSessionDetails({ ...details, usage: { ...details.usage, cacheReportedPromptTokens: 10 } }, details.sessionId))
 })
+
+test('session details preserve cost units and incomplete estimates on total and delegated usage', () => {
+  const usage = { ...details.usage!, costs: [{ amount: 0.125, currency: 'USD' }, { amount: 2, currency: 'AI_CREDITS' }], costIncomplete: true }
+  const value = { ...details, usage, subagentUsage: usage }
+  assert.deepEqual(parseSessionDetails(value, details.sessionId), value)
+  for (const costs of [null, [{ amount: -1, currency: 'USD' }], [{ amount: 1, currency: 'tokens' }]]) {
+    assert.throws(() => parseSessionDetails({ ...details, usage: { ...details.usage, costs } }, details.sessionId), /session details/)
+  }
+})

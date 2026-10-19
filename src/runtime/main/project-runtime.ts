@@ -1,3 +1,4 @@
+import { SessionProxyTool } from '../../tools/session-proxy.ts'
 import { createSelfSessionHandler } from '../../vfs/session.ts'
 import { registerDevelopmentRestart } from '../../tools/development-restart.ts'
 import { TaskTool } from '../../tools/task.ts'
@@ -406,6 +407,7 @@ export async function createProjectRuntime(
 
   const loadable = new Map<string, LoadableEntry>()
   loadable.set('agent_tool_test', agentToolTest)
+  loadable.set('session_proxy', new SessionProxyTool())
   // Chrome config getter that re-reads from the config file so edits take effect
   // without a process restart (e.g. user sets tools.chrome.executablePath).
   const chromeConfigGetter = (): {

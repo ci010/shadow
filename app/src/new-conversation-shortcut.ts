@@ -7,6 +7,11 @@ export interface NewConversationContext {
   folder?: FolderRecord
 }
 
+/** Persistent v-show/teleported dialogs must not block shortcuts while hidden. */
+export function hasVisibleNewConversationOverlay(elements: Iterable<Pick<Element, 'getClientRects'>>): boolean {
+  return Array.from(elements).some(element => element.getClientRects().length > 0)
+}
+
 /** Consume synchronously; cancel late metadata reads before they can steal navigation. */
 export function createNewConversationShortcut(options: {
   context(): NewConversationContext | undefined

@@ -93,7 +93,8 @@ async function highlight() {
     if (current !== generation || !props.active) return
     pendingTokens = tokens
     applyPending()
-  } catch {
+  } catch (error) {
+    console.warn('File syntax highlighting failed', 'changes.diff', error)
     if (current === generation && props.active) highlightError.value = t('Syntax highlighting is unavailable. The plain-text diff remains available.')
   }
 }

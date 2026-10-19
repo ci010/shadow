@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
 import {
   DiscordDirectorySchema, DiscordMemberSchema, IntegrationChangeSchema, IntegrationDraftSchema, IntegrationOverviewSchema, IntegrationPreviewSchema,
-  type DiscordBinding, type IntegrationChange,
+  type DiscordBinding, type DiscordDirectory, type IntegrationChange,
 } from '../../src/channels/integration-contract.ts'
 import { MemoryResourceSchema } from '../../src/memory/contracts.ts'
 
@@ -92,11 +92,26 @@ export function createDiscordIntegrationClient(base: string, projectId: string, 
 export function bindingLabel(binding: DiscordBinding, channels: readonly { id: string; name: string }[]) {
   const target = binding.target
   return target.kind === 'dm' ? t('Direct message · {userId}', { userId: target.userId })
-    : channels.find(channel => channel.id === target.channelId)?.name ?? t('Unavailable channel · {channelId}', { channelId: target.channelId })
+    : channels.find(channel => channel.id === target.channelId)?.name ?? t('Channel name not resolved · {channelId}', { channelId: target.channelId })
 }
 
 export function discordIds(value: string): string[] {
   const ids = [...new Set(value.split(/[\s,]+/).filter(Boolean))]
   if (ids.some(id => !/^[0-9]{1,20}$/.test(id))) throw new Error(t('Use selected Discord people or numeric user IDs; names are not authorization identifiers.'))
   return ids
+}
+
+// Directory enumeration is incomplete (notably archived/private threads). Missing
+// metadata is not evidence that a saved assignment is invalid.
+export function bindingAvailability(binding: DiscordBinding, directory: DiscordDirectory | undefined, connected: boolean): string {
+  if (!binding.enabled) return t('Disabled')
+  if (!connected) return t('Saved and enabled · Bot disconnected')
+  if (binding.target.kind === 'dm') return t('Saved and enabled · preview access to verify')
+  const target = binding.target
+  const channel = directory?.guildId === target.guildId
+    ? directory.channels.find(item => item.id === target.channelId) : undefined
+  if (!channel) return t('Saved and enabled · directory not resolved')
+  if (!channel.supported) return t('Unsupported type')
+  if (!channel.canView || !channel.canSend) return t('Discord permissions currently block access')
+  return t('Enabled · Bot can send at last sync; preview person access')
 }

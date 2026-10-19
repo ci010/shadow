@@ -16,7 +16,20 @@ export function parseTokenUsage(value: unknown): LLMResponseUsage | null {
     || cacheReportedPromptTokens < 0 || cacheReportedPromptTokens > promptTokens)) return null
   if (cachedTokens !== undefined && (typeof cachedTokens !== "number" || !Number.isSafeInteger(cachedTokens)
     || cachedTokens < 0 || cachedTokens > (cacheReportedPromptTokens ?? promptTokens))) return null
-  return { promptTokens, completionTokens, totalTokens, ...(cachedTokens !== undefined ? { cachedTokens } : {}),
+  const cacheWriteTokens = 'cacheWriteTokens' in value ? value.cacheWriteTokens : undefined
+  if (cacheWriteTokens !== undefined && (typeof cacheWriteTokens !== 'number' || !Number.isSafeInteger(cacheWriteTokens)
+    || cacheWriteTokens < 0 || cacheWriteTokens + (cachedTokens ?? 0) > promptTokens)) return null
+  const costs = 'costs' in value ? value.costs : undefined
+  const costIncomplete = 'costIncomplete' in value ? value.costIncomplete : undefined
+  if (costIncomplete !== undefined && typeof costIncomplete !== 'boolean') return null
+  if (costs !== undefined && (!Array.isArray(costs) || costs.length === 0 || costs.some(cost =>
+    !cost || typeof cost !== 'object' || !Number.isFinite(cost.amount) || cost.amount < 0 ||
+    !['USD', 'CNY', 'AI_CREDITS'].includes(cost.currency)) ||
+    new Set(costs.map(cost => cost.currency)).size !== costs.length)) return null
+  return { promptTokens, completionTokens, totalTokens,
+    ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(costs !== undefined ? { costs: costs.map(cost => ({ amount: cost.amount, currency: cost.currency })) } : {}),
+    ...(costIncomplete !== undefined ? { costIncomplete } : {}), ...(cachedTokens !== undefined ? { cachedTokens } : {}),
     ...(cacheReportedPromptTokens !== undefined ? { cacheReportedPromptTokens } : {}) }
 }
 
@@ -27,7 +40,18 @@ export function addTokenUsage(first: LLMResponseUsage | null, second: LLMRespons
   const hasCacheReport = first.cachedTokens !== undefined || second.cachedTokens !== undefined
   const reportedPromptTokens = (first.cachedTokens === undefined ? 0 : first.cacheReportedPromptTokens ?? first.promptTokens)
     + (second.cachedTokens === undefined ? 0 : second.cacheReportedPromptTokens ?? second.promptTokens)
-  const result = {
+  const costs = new Map<NonNullable<LLMResponseUsage['costs']>[number]['currency'], number>()
+  for (const cost of [...first.costs ?? [], ...second.costs ?? []]) {
+    costs.set(cost.currency, (costs.get(cost.currency) ?? 0) + cost.amount)
+  }
+  const hasCost = costs.size > 0
+  const missingCost = (usage: LLMResponseUsage) => !usage.costs && usage.totalTokens > 0
+  const result: LLMResponseUsage = {
+    ...(first.cacheWriteTokens !== undefined && second.cacheWriteTokens !== undefined
+      ? { cacheWriteTokens: first.cacheWriteTokens + second.cacheWriteTokens } : {}),
+    ...(hasCost ? { costs: [...costs].map(([currency, amount]) => ({ currency, amount })) } : {}),
+    ...(first.costIncomplete || second.costIncomplete || (hasCost && (missingCost(first) || missingCost(second)))
+      ? { costIncomplete: true } : {}),
     promptTokens,
     completionTokens: first.completionTokens + second.completionTokens,
     totalTokens: first.totalTokens + second.totalTokens,
@@ -97,5 +121,7 @@ export async function readTokenUsage(store: SessionStore, state: SessionState) {
       }
     }
   }
-  return { usage: addTokenUsage(legacy, usage), incomplete }
+  const total = addTokenUsage(legacy, usage)
+  if (total?.costs && incomplete) total.costIncomplete = true
+  return { usage: total, incomplete }
 }

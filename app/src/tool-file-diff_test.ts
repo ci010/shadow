@@ -85,3 +85,19 @@ test('diff highlighting preserves exact code, uses the file grammar and keeps ea
   assert.deepEqual(plain[0].map(line => line.map(token => token.text).join('')), diffLines(parseFilePatch(change.patch)[0]).map(row => row.text))
   assert.ok(plain[0].flat().every(token => token.light === undefined))
 })
+
+test('Markdown tool diffs highlight frontmatter and incomplete fenced code without changing rows', async () => {
+  const edit = recordedFileChange({
+    sessionId: 'web:writer', toolCallId: 'markdown-highlight', path: 'notes.md', mode: 'edit',
+    before: '---\r\ntitle: Before\r\n---\r\n```js\r\nconst value = 1\r\n```\r\n',
+    after: '---\r\ntitle: After\r\n---\r\n```js\r\nconst value = "unfinished',
+  })
+  const hunks = parseFilePatch(edit.patch)
+  const tokens = await highlightDiffHunks(hunks, edit.path)
+  for (const [index, hunk] of hunks.entries()) {
+    assert.deepEqual(tokens[index]!.map(line => line.map(token => token.text).join('')), diffLines(hunk).map(row => row.text))
+  }
+  const flat = tokens.flat(2)
+  assert.ok(flat.some(token => token.text === 'title' && token.light === '#22863A'))
+  assert.ok(flat.some(token => token.text === 'const' && token.light === '#D73A49'))
+})

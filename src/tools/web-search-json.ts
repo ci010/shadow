@@ -1,3 +1,4 @@
+import { sessionWebFetch } from '../execution/network/session-proxy.ts'
 import type { ExecutionContext } from './context.ts'
 import type { ToolParameters } from './tool.ts'
 
@@ -48,12 +49,12 @@ export async function executeJsonSearch(
     : AbortSignal.timeout(60_000)
   let response: Response
   try {
-    response = await fetch(options.url, {
+    response = await sessionWebFetch(options.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...options.headers },
       body: JSON.stringify(options.body(args.query, count)),
       signal,
-    })
+    }, context)
     signal.throwIfAborted()
   } catch {
     signal.throwIfAborted()

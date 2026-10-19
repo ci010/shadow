@@ -12,3 +12,18 @@ test('review links navigate only to the current Project and carry no approval au
     assert.equal(discordReviewLink(href, 'another-project'), undefined)
   }
 })
+
+
+test('saved assignments distinguish unresolved directory from permission evidence', async () => {
+  const { bindingLabel, bindingAvailability } = await import('./discord-integration.ts')
+  const binding = { enabled: true, target: { kind: 'channel', guildId: '100', channelId: '201' } } as import('../../src/channels/integration-contract.ts').DiscordBinding
+  const directory = { guildId: '100', channels: [{ id: '201', name: 'support', supported: true, canView: true, canSend: true }] } as import('../../src/channels/integration-contract.ts').DiscordDirectory
+  assert.match(bindingLabel(binding, []), /name not resolved/)
+  assert.equal(bindingLabel(binding, directory.channels), 'support')
+  assert.match(bindingAvailability(binding, undefined, true), /directory not resolved/)
+  assert.match(bindingAvailability(binding, { ...directory, channels: [] }, true), /directory not resolved/)
+  assert.match(bindingAvailability(binding, directory, true), /Bot can send at last sync/)
+  assert.match(bindingAvailability(binding, { ...directory, channels: [{ ...directory.channels[0]!, canSend: false }] }, true), /permissions currently block/)
+  assert.match(bindingAvailability(binding, directory, false), /disconnected/)
+  assert.equal(bindingAvailability({ ...binding, enabled: false }, directory, true), 'Disabled')
+})

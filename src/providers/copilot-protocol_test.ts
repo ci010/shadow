@@ -376,3 +376,36 @@ test('the compatible gateway carries provider-only continuity through a tool rou
   assert.equal(second.status, 200)
   assert.equal((await second.json()).choices[0].message.content, 'done')
 })
+
+test('GPT-6.1 Sol low effort produces AI credits through the Responses and aggregated-provider path', async t => {
+  const model = { ...astra, id: 'gpt-6.1-sol' }
+  const f = fixture(t, { data: [model] })
+  const provider = new AggregatedProvider(new Map([['copilot', f.provider]]), 'copilot')
+  f.reply(Response.json({ ...responsesReply, model: model.id,
+    usage: { input_tokens: 26_674, output_tokens: 359, total_tokens: 27_033,
+      input_tokens_details: { cached_tokens: 24_000 } } }))
+  const result = await provider.chat([{ role: 'user', content: 'Synthetic pricing regression' }], [],
+    { model: 'gpt-6.1-sol@copilot', reasoningEffort: 'low' })
+  assert.equal(f.posts[0]?.path, '/responses')
+  assert.equal(f.posts[0]?.body.model, model.id)
+  assert.deepEqual(f.posts[0]?.body.reasoning, { effort: 'low' })
+  assert.equal(result.usage?.costs?.[0]?.currency, 'AI_CREDITS')
+  assert.ok(Math.abs(result.usage!.costs![0].amount - 1.1338) < 1e-10)
+  assert.equal(result.usage?.costIncomplete, true, 'unreported cache writes keep the estimate a lower bound')
+})
+
+for (const id of ['grok-4.5', 'grok-4.6', 'grok-4.7', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-luna', 'gpt-6-sol']) {
+  test(`${id}: qualified Copilot selection returns nonzero AI credit estimates`, async t => {
+    const chat = id.startsWith('grok-')
+    const f = fixture(t, { data: [{ ...astra, id, supported_endpoints: [chat ? '/chat/completions' : '/responses'] }] })
+    f.reply(Response.json(chat
+      ? { ...chatReply, model: id, usage: { prompt_tokens: 10_000, completion_tokens: 1_000, total_tokens: 11_000, prompt_tokens_details: { cached_tokens: 8_000 } } }
+      : { ...responsesReply, model: id, usage: { input_tokens: 10_000, output_tokens: 1_000, total_tokens: 11_000, input_tokens_details: { cached_tokens: 8_000 } } }))
+    const provider = new AggregatedProvider(new Map([['copilot', f.provider]]), 'copilot')
+    const result = await provider.chat([{ role: 'user', content: 'Synthetic pricing coverage' }], [], { model: `${id}@copilot` })
+    assert.equal(f.posts[0]?.body.model, id)
+    assert.equal(result.usage?.costs?.[0]?.currency, 'AI_CREDITS')
+    assert.ok(result.usage!.costs![0].amount > 0)
+    assert.equal(result.usage?.costIncomplete, chat ? undefined : true)
+  })
+}

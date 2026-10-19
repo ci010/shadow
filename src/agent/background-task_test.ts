@@ -55,6 +55,40 @@ test('background display callbacks retain exact source bot from explicit replies
   }
 })
 
+test('web background completion and failure emit only structured events, including explicit reply addresses', async t => {
+  const deliveries: SessionInput[] = []
+  const displays: OutboundMessage[] = []
+  const bus = new Bus()
+  const events = new EventService('.', bus, async (sessionId, input) => {
+    deliveries.push(input)
+    return { status: 'accepted', sessionId, inputId: input.id }
+  })
+  const manager = new BackgroundTaskManager(bus, events)
+  bus.on('message.outbound', message => { displays.push(message) })
+  t.after(async () => { await manager.stop(); await events.stop(); bus.stopAll() })
+  for (const explicit of [false, true]) {
+    for (const failed of [false, true]) {
+      const task = manager.createDeferredTask({
+        kind: 'process', title: 'Web callback',
+        callback: {
+          sessionId: 'web:target',
+          ...(explicit ? { replyTo: { channel: 'web', chatId: 'target' } } : {}),
+        },
+      })
+      if (failed) task.fail(new Error('process failed'))
+      else task.complete('process result')
+    }
+  }
+  await tick()
+  assert.equal(deliveries.length, 4)
+  assert.equal(displays.length, 0)
+  for (const input of deliveries) {
+    assert(input.kind === 'message' && input.source.kind === 'event')
+    assert.equal(input.source.type, 'background-task-complete')
+    assert.ok(input.source.attributes?.['task-id'])
+  }
+})
+
 test('background session tasks finish once from domain lifecycle, not display done', async () => {
   const bus = new Bus()
   const events = new EventService('.', bus, async (sessionId, input) => ({
@@ -114,7 +148,7 @@ test('background callback targets a session and retains task/input causality wit
   assert.equal(inputs[0].source.origin?.inputId, 'cause')
   accept.resolve()
   await tick()
-  assert.equal(displays, 1)
+  assert.equal(displays, 0, 'Web completion is represented only by the structured session event')
   assert.equal(tasks.complete(task.taskId, 'duplicate'), false)
   assert.equal(inputs.length, 1)
   assert.match(tasks.setContinuation(task.taskId, 'Late after delivery'), /No completion event was replayed/)

@@ -56,6 +56,8 @@
                   <span :title="t('Cache-read tokens / input tokens')"><span class="i-lucide-database" aria-hidden="true" /><span :title="column.usage.cachedTokens === undefined ? undefined : formatNumber(column.usage.cachedTokens)">{{ column.usage.cachedTokens === undefined ? t('Not reported') : formatTokenCount(column.usage.cachedTokens) }}</span> <small :aria-label="t('Cache rate')">({{ cacheRate(column.usage) === null ? t('Not reported') : `${cacheRate(column.usage)}%` }})</small> <small>{{ t('cache') }}</small></span>
                   <small v-if="column.usage.cacheReportedPromptTokens !== undefined" class="details-note">{{ t('Partial cache report: {reported} / {total} input tokens. Rate covers reported inputs only.', { reported: formatTokenCount(column.usage.cacheReportedPromptTokens), total: formatTokenCount(column.usage.promptTokens) }) }}</small>
                   <span :title="t('{value1} output tokens', { value1: formatNumber(column.usage.completionTokens) })"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ formatTokenCount(column.usage.completionTokens) }} <small>{{ t('output') }}</small></span>
+                  <span v-for="cost in column.usage.costs" :key="cost.currency" :title="t('Estimated cost, not a bill. Plan allowances and discounts may differ.')">{{ t(column.usage.costIncomplete ? 'Known cost subtotal (incomplete)' : 'Estimated cost') }}: {{ formatUsageCost(cost) }}</span>
+                  <small v-if="column.usage.costIncomplete" class="details-note">{{ t(column.usage.costs?.length ? 'Cost estimate incomplete' : 'Cost could not be estimated') }}</small>
                 </dd>
                 <dd v-else>{{ t('Not reported') }}</dd>
               </div>
@@ -90,6 +92,7 @@
 
 <script setup lang="ts">
 import { t, formatNumber } from '../i18n.ts'
+import { formatUsageCost } from '../usage-cost.ts'
 import { apiUrl } from '../api-url.ts'
 import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from '../../../src/sessions/session-name.ts'

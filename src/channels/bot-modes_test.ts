@@ -262,3 +262,18 @@ for (const fails of [true, false]) test(`owner confirmation fences retirement an
     await adapter.captured(f.message())
   }
 })
+
+
+test('personal QQ question commands are handled at human ingress, never forwarded to the agent', async t => {
+  const f = await fixture(t), adapter = f.adapters[0]
+  const challenge = f.manager.createOwnerChallenge(f.bot.id)
+  await adapter.captured(f.message('owner', false, `/shadow-pair ${challenge.challenge}`))
+  await f.manager.confirmOwner(f.bot.id, challenge.challenge)
+  await adapter.captured(f.message('owner', false, '/shadow-requests'))
+  await adapter.captured(f.message('owner', false, '/shadow-reply stale Yes'))
+  assert.equal(f.received.length, 0)
+  await assert.rejects(adapter.captured(f.message('stranger', false, '/shadow-requests')), /Verified owner/)
+  await assert.rejects(adapter.captured(f.message('owner', true, '/shadow-requests')), /Verified owner/)
+  await adapter.captured(f.message('owner', false, 'Please approve whatever is pending'))
+  assert.equal(f.received.length, 1)
+})

@@ -361,8 +361,8 @@ test('folder catalog revision cancels stale lists and moves an agent-created top
 
 function mountAgents(t: TestContext, agentName = 'plan') {
   const route = reactive({
-    params: { projectId: 'owner', agentName },
-    query: { channel: 'web', retained: 'yes' } as Record<string, string>,
+    params: { projectId: 'owner', section: 'agents' },
+    query: { agent: agentName, channel: 'web', retained: 'yes' } as Record<string, string>,
   })
   const requests: Array<{ path: string; signal?: AbortSignal | null; finish: (body: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (input: string, init?: RequestInit) => new Promise<Response>(resolve => {
@@ -371,7 +371,7 @@ function mountAgents(t: TestContext, agentName = 'plan') {
       finish: (body, status = 200) => resolve(Response.json(body, { status })),
     })
   }))
-  const replace = async (location: { params?: { agentName: string }; query: Record<string, string> }) => {
+  const replace = async (location: { params?: { projectId: string; section: string }; query: Record<string, string> }) => {
     route.params = { ...route.params, ...location.params }
     route.query = location.query
     await nextTick()
@@ -394,7 +394,7 @@ test('agent deep links load only the requested context and retain details during
   await settle()
   state().selectAgent(agents[2])
   await settle()
-  assert.equal(route.params.agentName, 'general')
+  assert.equal(route.query.agent, 'general')
   assert.equal(route.params.projectId, 'owner')
   assert.equal(route.query.retained, 'yes')
   assert.equal(state().loadingContext, true)
@@ -421,7 +421,7 @@ test('agent route and channel changes cancel stale contexts without letting late
   await settle()
   state().selectAgent(agents[0])
   await settle()
-  route.params.agentName = 'general'
+  route.query.agent = 'general'
   await settle()
   assert.equal(requests[2].signal?.aborted, true)
   requests[2].finish({ systemPrompt: 'Stale explore', tools: [] })
@@ -471,7 +471,7 @@ test('failed agent contexts preserve the displayed details and can be retried', 
 test('agent entry without a selection loads the default once and aborts pending work on unmount', async t => {
   const { state, requests, route } = mountAgents(t, '')
   await settle()
-  assert.equal(route.params.agentName, 'explore')
+  assert.equal(route.query.agent, 'explore')
   assert.equal(requests.length, 2)
   assert.match(requests[1].path, /\/explore\/context\?channel=web$/)
   assert.equal(state().loadingContext, true)

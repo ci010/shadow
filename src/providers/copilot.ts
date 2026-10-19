@@ -1,3 +1,4 @@
+import { estimateUsageCost } from './cost.ts'
 import { dirname, join } from 'node:path'
 import { chmodSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { env } from 'node:process'
@@ -622,9 +623,11 @@ export class CopilotProvider implements LLMProvider {
           providerName: 'copilot',
           signal: options.signal,
         }
-        return endpoint === '/responses'
+        const result = endpoint === '/responses'
           ? await openaiResponses(request)
           : await openaiChat({ ...request, temperature: options.temperature ?? 0.7 })
+        if (result.usage) result.usage = estimateUsageCost(this.name, result.model ?? model, result.usage)
+        return result
       } catch (err) {
         this.assertRevision(revision)
         const is401 = err instanceof ProviderHttpError && err.status === 401

@@ -25,7 +25,7 @@ test('Discord settings render named resources, exact human reviews, learning dom
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const agentId = randomUUID(), domainId = randomUUID(), resourceId = randomUUID(), conversationDomainId = randomUUID(), epoch = randomUUID()
   const bot = { id: 'fixture-bot', projectId: 'fixture-project', platform: 'discord', displayName: 'Community Bot',
-    label: 'Discord', enabled: true, configured: true, state: 'connected', config: {}, secrets: { token: true } }
+    label: 'Discord', purpose: 'service', enabled: true, configured: true, state: 'connected', config: {}, secrets: { token: true } }
   const now = new Date().toISOString()
   const overview = IntegrationOverviewSchema.parse({
     projectId: bot.projectId, version: 1, revision: 0, deploymentIssues: [],

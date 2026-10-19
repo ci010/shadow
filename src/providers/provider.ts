@@ -88,8 +88,12 @@ export interface LLMResponse {
 }
 
 export interface LLMResponseUsage {
+  costs?: import('./cost.ts').UsageCost[]
+  costIncomplete?: boolean
   /** Cache-read input tokens; absent when not reported. */
   cachedTokens?: number
+  /** Cache-write input tokens, included in promptTokens; absent when not reported. */
+  cacheWriteTokens?: number
   /** Input tokens covered by cache reports in a partial aggregate; omitted for complete reports. */
   cacheReportedPromptTokens?: number
   promptTokens: number
@@ -144,11 +148,7 @@ export interface ChatMessage {
   tool_call_id?: string
   name?: string
   /** Token usage for this LLM call. Only present on assistant messages loaded from history. */
-  usage?: {
-    promptTokens: number
-    completionTokens: number
-    totalTokens: number
-  }
+  usage?: LLMResponseUsage
   reasoning_text?: string | null
   /** Chain-of-thought reasoning from thinking models (e.g. DeepSeek). */
   reasoning_content?: string | null

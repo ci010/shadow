@@ -16,6 +16,18 @@ test('file languages cover code and hidden configuration without guessing unknow
   ]) assert.equal(fileLanguage(path!), language)
 })
 
+test('Markdown loads YAML frontmatter and fenced languages before tokenization, including later requests', async () => {
+  const source = '---\r\ntitle: Hello\r\n---\r\n\r\n```js\r\nconst answer = 42\r\n```\r\n'
+  const tokens = await highlightFile(source, 'README.md', { tokenizeTimeLimit: 0 })
+  assertSourceAndKeyword(tokens, source, 'const')
+  assert.ok(tokens.some(token => token.text === 'title' && token.light === '#22863A'))
+  // A grammar requested after Markdown was already compiled must become available too.
+  const python = '# Example\n\n~~~python\ndef greet():\n    return True'
+  assertSourceAndKeyword(await highlightFile(python, 'later.md', { tokenizeTimeLimit: 0 }), python, 'def')
+  const nested = '> ```ts\n> const value: number = 1\n> ```'
+  assertSourceAndKeyword(await highlightFile(nested, 'quoted.md', { tokenizeTimeLimit: 0 }), nested, 'const')
+})
+
 test('Shiki produces real dual-theme tokens for common file languages and hidden config', async () => {
   for (const [path, source] of [
     ['main.ts', 'const value: number = 42;\r\n'],
@@ -99,6 +111,7 @@ function mountHighlighter(t: TestContext) {
 async function settle() { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
 
 test('highlighting ignores stale and hidden requests and exposes failures for explicit retry', async t => {
+  const warning = t.mock.method(console, 'warn', (..._args: unknown[]) => {})
   const { props, pending, errors, state } = mountHighlighter(t)
   assert.deepEqual(state().tokens, [{ text: 'old\r\n' }])
   props.source = 'new\n'
@@ -113,6 +126,12 @@ test('highlighting ignores stale and hidden requests and exposes failures for ex
   pending[2]!.fail()
   await settle()
   assert.match(errors.at(-1)!, /highlighting is unavailable/)
+  assert.equal(warning.mock.callCount(), 1)
+  const diagnostic = warning.mock.calls[0]!.arguments
+  assert.equal(diagnostic[0], 'File syntax highlighting failed')
+  assert.equal(diagnostic[1], 'new.ts')
+  assert.ok(diagnostic[2] instanceof Error)
+  assert.equal(diagnostic.length, 3, 'Diagnostics must not include the source text')
   void state().retry()
   assert.equal(errors.at(-1), '')
   props.active = false
@@ -133,4 +152,31 @@ test('late syntax colors wait until an active native selection is cleared', asyn
   selected = false
   state().applyPending()
   assert.equal(state().tokens[0].light, '#123456')
+})
+
+function assertSourceAndKeyword(tokens: FileHighlightToken[], source: string, keyword: string) {
+  assert.equal(tokens.map(token => token.text).join(''), source)
+  assert.ok(tokens.some(token => token.text === keyword && token.light === '#D73A49' && token.dark === '#F97583'), `expected colored ${keyword}`)
+}
+
+test('truncated and unclosed Markdown, Vue and TSX remain colored and source-exact', async () => {
+  for (const [path, source, keyword] of [
+    ['partial.md', '---\ntitle: Hello\n---\n```javascript\nconst value = "unfinished', 'const'],
+    ['partial.md', '```js\r\nconst value = 1\r\n\n[truncated: read more]', 'const'],
+    ['partial.md', '```tsx\nconst element = <div title="unfinished', 'const'],
+    ['partial.vue', '<template><span>{{ value }}</span></template>\r\n<script setup lang="ts">\r\nconst value: number = 1', 'const'],
+    ['partial.tsx', 'const element = <div title="unfinished', 'const'],
+    ['long.md', '```js\r\n' + 'x'.repeat(20_000) + '\r\nconst value = 1\r\n```', 'const'],
+  ]) {
+    assertSourceAndKeyword(await highlightFile(source!, path!, { tokenizeTimeLimit: 0 }), source!, keyword!)
+  }
+})
+
+test('source validation rejects invalid offsets instead of corrupting displayed text', () => {
+  for (const offset of [-1, 5, NaN, 0.5, Infinity]) {
+    assert.throws(() => preserveHighlightSource('text', [{ content: '', offset }]), /do not match/)
+  }
+  assert.throws(() => preserveHighlightSource('text', [
+    { content: 'te', offset: 0 }, { content: 'ext', offset: 1 },
+  ]), /do not match/)
 })

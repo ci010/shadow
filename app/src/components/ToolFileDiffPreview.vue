@@ -70,7 +70,8 @@ async function highlight(change: ToolFileChange): Promise<void> {
       pending.set(change.id, tokens)
       applyPending()
     }
-  } catch {
+  } catch (error) {
+    console.warn('File syntax highlighting failed', change.path, error)
     if (request && request === controller && !request.signal.aborted) {
       highlightErrors.value[change.id] = t('Syntax highlighting is unavailable. The plain-text diff remains available.')
     }

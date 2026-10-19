@@ -308,6 +308,7 @@ export class WriteTool implements Tool {
       let observedBefore: string | undefined
       try {
         const bytes = await readFile(filePath, { signal: context.signal })
+        if (!isUtf8(bytes) || bytes.includes(0)) throw new ToolNoEffectError('Edit/append requires UTF-8 text; original file unchanged. Convert non-UTF-8 files explicitly before modifying.')
         existing = bytes.toString('utf8')
         if (isUtf8(bytes)) observedBefore = existing
       } catch (error) {
@@ -338,6 +339,7 @@ export class WriteTool implements Tool {
       let observedBefore: string | undefined = ''
       try {
         const bytes = await readFile(filePath, { signal: context.signal })
+        if (!isUtf8(bytes) || bytes.includes(0)) throw new ToolNoEffectError('Edit/append requires UTF-8 text; original file unchanged. Convert non-UTF-8 files explicitly before modifying.')
         existing = bytes.toString('utf8')
         observedBefore = isUtf8(bytes) ? existing : undefined
       } catch (error) {

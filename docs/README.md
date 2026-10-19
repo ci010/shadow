@@ -11,6 +11,7 @@
 | [Tools and automations](tools-and-automations.md) | Virtual discovery, Project MCP, local versus Discord-domain learning, skills and schedules |
 | [Project conventions](project-conventions.md) | Project SQL, attributable rule changes, Work queries, decisions and personal memory boundaries |
 | [GitHub collaboration](github.md) | Project Issue/PR links, confirmed writes, cached evidence, explicit follow-up and uncertain outcome recovery |
+| [Provider cost estimates](provider-cost.md) | DeepSeek estimated currency cost, Copilot AI credits, official pricing sources, and incomplete-accounting limits |
 | [Session diagnosis](diagnostics.md) | Read-only export/API/CLI and development-only prompt capture |
 | [Session retirement](session-retirement.md) | Ordinary opt-in cleanup automation, verified preservation, recovery, upgrade behavior and limits |
 | [Startup profiling](startup-profiling.md) | One-shot dev startup CPU/resource capture, timeout survival, local output and disable controls |

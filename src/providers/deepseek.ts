@@ -1,3 +1,4 @@
+import { estimateUsageCost } from './cost.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { env } from 'node:process'
 import { OpenAICompatibleProvider, openaiChat } from './openai-compatible.ts'
@@ -75,6 +76,7 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
     if (tools.length > 0 && !result.reasoningContent) {
       result.reasoningContent = ''
     }
+    if (result.usage) result.usage = estimateUsageCost(new URL(this.baseURL).origin === 'https://api.deepseek.com' ? this.name : 'unknown', result.model ?? options.model, result.usage)
     return result
   }
 

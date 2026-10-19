@@ -19,10 +19,6 @@
         @click="$emit('knowledge')">
         <span class="i-lucide-book-open w-3.5 h-3.5" aria-hidden="true" />
       </button>
-      <RouterLink v-if="canManageKnowledge" class="project-settings" :aria-label="t('{name} agents', { name: project.name })" :title="t('{name} agents', { name: project.name })"
-        :to="{ name: 'agents', params: { projectId: project.id } }">
-        <span class="i-lucide-bot w-3.5 h-3.5" aria-hidden="true" />
-      </RouterLink>
       <button v-if="runtimeState === 'failed'" class="project-settings retry-runtime" :disabled="retrying" :aria-label="t('Retry {name} startup', { name: project.name })" :title="t('Retry project startup')" @click="retryRuntime"><span class="i-lucide-refresh-cw w-3.5 h-3.5" aria-hidden="true" /></button>
       <RouterLink class="project-settings" :aria-label="t('{name} settings', { name: project.name })" :title="t('{name} settings', { name: project.name })"
         :to="{ name: 'project-settings', params: { projectId: project.id, section: 'general' } }">

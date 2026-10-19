@@ -46,6 +46,9 @@ async function main() {
     await frame()
   }
   const text = async (label: string, scope = 'button') => {
+    if (scope === '.mobile-global-navigation button' && !await execute(`!!${visible('.mobile-global-navigation .tab')}`)) {
+      await click('.mobile-preferences-toggle')
+    }
     await wait(`[...document.querySelectorAll(${JSON.stringify(scope)})].some(el => window.__isVisible(el) && el.textContent.trim() === ${JSON.stringify(label)})`)
     await execute(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(scope)})].find(el => window.__isVisible(el) && el.textContent.trim() === ${JSON.stringify(label)});
       if (!el) throw new Error('Missing visible button: ' + ${JSON.stringify(label)}); el.focus(); el.click(); })()`)
@@ -145,7 +148,13 @@ async function main() {
         assert.ok(chat.bubbleWidth >= chat.width - 1, 'Long assistant replies use the full phone message column')
         assert.equal(chat.rail, false, 'Desktop history rail does not overlap phone messages')
         await open()
-        assert.equal(await execute(`!!${visible('.mobile-global-navigation .tab')} && !!${visible('.mobile-project-navigation [data-project-id="work"]')} && !!${visible('.mobile-global-actions .theme-toggle')}`), true)
+        assert.equal(await execute(`!!${visible('.mobile-project-navigation [data-project-id="work"]')}`), true)
+        assert.equal(await execute(`!!${visible('.mobile-global-navigation .tab')}`), false, 'Global destinations do not occupy the top of the drawer')
+        assert.equal(await execute(`!!${visible('.mobile-global-actions .theme-toggle')}`), false, 'Preferences start collapsed to leave room for conversations')
+        await click('.mobile-preferences-toggle')
+        assert.equal(await execute(`!!${visible('.mobile-global-navigation .tab')}`), true, 'Global destinations remain accessible in the footer')
+        assert.equal(await execute(`!!${visible('.mobile-global-actions .theme-toggle')}`), true, 'Preferences remain accessible on demand')
+        await click('.mobile-preferences-toggle')
         assert.equal(await execute(`document.querySelector('.app-shell').inert`), true)
         assert.equal(await execute(`${visible('[role="dialog"][aria-label="Navigation"]')}.contains(document.activeElement)`), true)
         await execute(`(() => { const panel = ${visible('[role="dialog"][aria-label="Navigation"]')};

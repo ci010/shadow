@@ -65,6 +65,40 @@ export interface FileHighlightToken {
 let highlighter: Promise<HighlighterCore> | undefined
 const loadingLanguages = new Map<FileLanguage, Promise<void>>()
 
+/** Markdown deliberately ships without embeddedLangs in Shiki. Load frontmatter/HTML
+ * and supported fence grammars before compiling it, including on subsequent calls. */
+function markdownLanguages(source: string): FileLanguage[] {
+  const needed = new Set<FileLanguage>(['yaml', 'html'])
+  const aliases: Record<string, FileLanguage> = {
+    js: 'javascript', ts: 'typescript', sh: 'shellscript', shell: 'shellscript', bash: 'shellscript',
+    zsh: 'shellscript', py: 'python', rb: 'ruby', 'c++': 'cpp', 'c#': 'csharp',
+    cs: 'csharp', ps: 'powershell', ps1: 'powershell', yml: 'yaml', md: 'markdown',
+  }
+  // This also accepts fences in blockquotes/lists. It intentionally tolerates an
+  // unfinished fence: read previews and diff hunks need not contain closing fences.
+  for (const match of source.matchAll(/(?:^|\n)[^\S\n]*(?:>[ \t]*)*(?:[-+*][ \t]+)?(?:`{3,}|~{3,})[ \t]*([\w#+.-]+)/g)) {
+    const name = match[1]!.toLowerCase()
+    const language = (Object.hasOwn(aliases, name) ? aliases[name] : undefined)
+      ?? (Object.hasOwn(extensions, name) ? extensions[name] : undefined)
+      ?? (Object.hasOwn(languages, name) ? name as FileLanguage : undefined)
+    if (language && language !== 'markdown') needed.add(language)
+  }
+  return [...needed]
+}
+
+async function loadLanguage(engine: HighlighterCore, language: FileLanguage): Promise<void> {
+  if (engine.getLoadedLanguages().includes(language)) return
+  let loading = loadingLanguages.get(language)
+  if (!loading) {
+    loading = engine.loadLanguage(languages[language]()).catch(error => {
+      loadingLanguages.delete(language)
+      throw error
+    })
+    loadingLanguages.set(language, loading)
+  }
+  await loading
+}
+
 function sharedHighlighter(): Promise<HighlighterCore> {
   return highlighter ??= Promise.all([
     import('shiki/core'), import('shiki/engine/javascript'),
@@ -83,7 +117,8 @@ export function preserveHighlightSource(source: string, tokens: readonly {
   let offset = 0
   const result: FileHighlightToken[] = []
   for (const token of tokens) {
-    if (token.offset < offset || source.slice(token.offset, token.offset + token.content.length) !== token.content) {
+    if (!Number.isInteger(token.offset) || token.offset < offset || token.offset > source.length
+      || source.slice(token.offset, token.offset + token.content.length) !== token.content) {
       throw new Error(t('Syntax tokens do not match the source text.'))
     }
     if (token.offset > offset) result.push({ text: source.slice(offset, token.offset) })
@@ -125,17 +160,10 @@ export async function highlightFile(
   const language = fileLanguage(path)
   if (language === 'text' || !source) return [{ text: source }]
   const engine = await sharedHighlighter()
-  if (!engine.getLoadedLanguages().includes(language)) {
-    let loading = loadingLanguages.get(language)
-    if (!loading) {
-      loading = engine.loadLanguage(languages[language]()).catch(error => {
-        loadingLanguages.delete(language)
-        throw error
-      })
-      loadingLanguages.set(language, loading)
-    }
-    await loading
+  if (language === 'markdown') {
+    await Promise.all(markdownLanguages(source).map(dependency => loadLanguage(engine, dependency)))
   }
+  await loadLanguage(engine, language)
   const { tokens } = engine.codeToTokens(source, {
     lang: language, themes: { light: 'github-light', dark: 'github-dark' },
     tokenizeMaxLineLength: 2000, tokenizeTimeLimit: options.tokenizeTimeLimit ?? 50,

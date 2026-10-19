@@ -126,6 +126,7 @@ export class SearchTool implements Tool {
     }
     const virtualPath = ['grep', 'glob'].includes(scheme) && root && isVirtualPath(root) ? root
       : scheme === 'glob' && !root && isVirtualPath(query) ? query.split(/[\\/]/)[0] : undefined
+    if (context.remoteWorkdir && scheme === 'web') return 'Error: web search is not supported with a remote workdir; no remote network capability exists.'
     if (context.remoteWorkdir && (!virtualPath || !/^v:sessions(?:[\\/]|$)/.test(virtualPath))) {
       return 'Error: only v:sessions searches are supported with a remote workdir.'
     }

@@ -72,7 +72,7 @@ test('factory sends user images in native Chat format with configured credential
   assert.equal(result.content, 'Done')
   assert.equal(result.reasoningContent, 'Synthetic reasoning')
   assert.equal(result.providerState, undefined)
-  assert.deepEqual(result.usage, { promptTokens: 8, completionTokens: 4, totalTokens: 12 })
+  assert.deepEqual(result.usage, { promptTokens: 8, completionTokens: 4, totalTokens: 12, costIncomplete: true })
 })
 
 test('all canonical efforts are forwarded, server defaults stay unset, and thinking off omits effort', async (t) => {

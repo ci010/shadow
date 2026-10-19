@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createNewConversationShortcut, resolveConversationFolder, type NewConversationContext } from './new-conversation-shortcut.ts'
+import { readFileSync } from 'node:fs'
+import { createNewConversationShortcut, hasVisibleNewConversationOverlay, resolveConversationFolder, type NewConversationContext } from './new-conversation-shortcut.ts'
 import type { FolderRecord } from './folders-client.ts'
 
 const folder: FolderRecord = { id: 'folder', projectId: 'project', name: 'Folder', path: '/folder', createdAt: '' }
@@ -62,4 +63,42 @@ test('resolution failures report error without opening scratch', async () => {
     resolveFolder: async () => { throw Error('folder lookup failed') }, start: assert.fail, failed: cause => failures.push(cause) })
   await shortcut.keydown(key())
   assert.equal((failures[0] as Error).message, 'folder lookup failed')
+})
+
+// Wiring is deliberately centralized: per-project sidebar instances must not register shortcuts.
+test('workspace Ctrl+N explicitly starts scratch in the active project with lifecycle and overlay guards', () => {
+  const workspace = readFileSync(new URL('./components/ProjectsWorkspace.vue', import.meta.url), 'utf8')
+  assert.match(workspace, /return \{ projectId, sessionId: '' \}/)
+  assert.match(workspace, /creating.value \|\| hasVisibleNewConversationOverlay\(document.querySelectorAll/)
+  assert.match(workspace, /aria-modal.*dialog\[open\].*role=.*menu/)
+  assert.match(workspace, /!keyboardActive.value \|\| !props.visible/)
+  assert.match(workspace, /onDeactivated\(\(\) => \{ keyboardActive.value = false; newConversationShortcut.cancel\(\)/)
+  assert.equal(workspace.match(/addEventListener\('keydown', newConversationShortcut.keydown\)/g)?.length, 1)
+  assert.match(workspace, /removeEventListener\('keydown', newConversationShortcut.keydown\)/)
+  for (const component of ['ProjectGroup', 'FoldersSidebar']) {
+    assert.doesNotMatch(readFileSync(new URL(`./components/${component}.vue`, import.meta.url), 'utf8'), /addEventListener\('keydown'/)
+  }
+})
+
+ test('hidden persistent dialogs do not block Ctrl+N; visible overlays still do', async () => {
+  const hidden = { getClientRects: () => ({ length: 0 } as DOMRectList) }
+  const visible = { getClientRects: () => ({ length: 1 } as DOMRectList) }
+  let overlays = [hidden]
+  let starts = 0
+  const shortcut = createNewConversationShortcut({
+    context: () => hasVisibleNewConversationOverlay(overlays) ? undefined : { projectId: 'project', sessionId: '' },
+    resolveFolder: async () => undefined,
+    start: () => { starts++ }, failed: assert.fail,
+  })
+  assert.equal(hasVisibleNewConversationOverlay([]), false)
+  const event = key(); await shortcut.keydown(event)
+  assert.equal(event.consumed, true)
+  assert.equal(starts, 1)
+  overlays = [hidden, visible]
+  const blocked = key(); await shortcut.keydown(blocked)
+  assert.equal(blocked.consumed, false)
+  assert.equal(starts, 1)
+  overlays = [hidden]
+  await shortcut.keydown(key())
+  assert.equal(starts, 2)
 })

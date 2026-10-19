@@ -221,6 +221,8 @@ test('current session JSON guidance is injected into ordinary and task system pr
   assert.match(ordinary, /After understanding the first user request/)
   assert.match(ordinary, /not continual polishing/)
   assert.match(ordinary, /completed:true.*completed:false/)
+  assert.match(ordinary, /set completed:false before handling a new request requiring work/)
+  assert.match(ordinary, /thanks, acknowledgements, or metadata-only tidying do not reopen it/)
   assert.doesNotMatch(ordinary, /update_self/)
   const task = await builder.buildSystemPrompt({ ...makeContext(general, false), mode: 'task', taskReviewable: true })
   assert.match(task, /Title and description are parent-owned/)

@@ -142,3 +142,34 @@ test('heading distinguishes partial cache reports, explicit zero and unreported 
   assert.match(view.text(), /0\s+\(0%\)\s+cache/)
   assert.match(view.text(), /Partial cache report:/)
 })
+
+test('heading displays estimated currency and AI credits without merging units', async t => {
+  let incomplete = true
+  let costs: Array<{ amount: number; currency: string }> | undefined = [{ amount: .00012, currency: 'USD' }, { amount: 1.25, currency: 'AI_CREDITS' }]
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    sessionId: 'web:cost', name: 'Cost fixture', workdir: { kind: 'local', displayPath: '/fixture' },
+    usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110,
+      costs, costIncomplete: incomplete },
+    usageScope: 'session', context: { usedTokens: null, windowTokens: null },
+  }))
+  const view = mount(t, 'SessionHeading.vue', { apiBase: 'http://fixture', sessionId: 'web:cost',
+    name: 'Fixture', physicalId: null, revision: 0, active: true })
+  await settle()
+  assert.match(view.text(), /Known cost subtotal \(incomplete\): USD 0\.00012/)
+  assert.match(view.text(), /Known cost subtotal \(incomplete\): 1\.25 AI credits/)
+  assert.match(view.text(), /Cost estimate incomplete/)
+  assert.ok(view.nodes().some(node => node.props.title === 'Estimated cost, not a bill. Plan allowances and discounts may differ.'))
+  assert.doesNotMatch(view.text(), /Estimated cost:/)
+  incomplete = false
+  view.state.revision = 1
+  await settle(); await settle()
+  assert.match(view.text(), /Estimated cost: USD 0\.00012/)
+  assert.doesNotMatch(view.text(), /Known cost subtotal/)
+  costs = undefined
+  incomplete = true
+  view.state.revision = 2
+  await settle(); await settle()
+  assert.match(view.text(), /Cost could not be estimated/)
+  assert.doesNotMatch(view.text(), /Cost estimate incomplete|Estimated cost:|Known cost subtotal/)
+
+})

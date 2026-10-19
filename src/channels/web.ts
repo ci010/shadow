@@ -15,6 +15,7 @@ import type { RealtimePublisher } from '../realtime/hub.ts'
 import type { RealtimeTurnFinishedPayload } from '../realtime/protocol.ts'
 import { isCommandReceipt } from '../slash-commands/receipt.ts'
 import { isMissingMediaFile, mediaFileResponse } from './media-response.ts'
+import { durableMediaRoots, isDurableMediaCandidate, resolveDurableMedia } from './durable-media.ts'
 
 function outboundPayload(msg: OutboundMessage) {
   if (msg.sessionMessage) return { event: 'session_message', message: msg.sessionMessage, media: msg.media }
@@ -83,6 +84,7 @@ export class WebChannel extends AbstractChannel {
     }
   }
   private workspace: string
+  private readonly outputRoots: () => Promise<string[]>
 
   /** Pending sync REST requests keyed by requestId. */
   private syncPending = new Map<string, {
@@ -103,10 +105,13 @@ export class WebChannel extends AbstractChannel {
       workspace?: string
       sessionManager?: SessionManager
       realtime?: RealtimePublisher
+      /** Main-only OS folder resolver; never supplied by an HTTP request. */
+      durableMediaRoots?: () => Promise<string[]>
     },
   ) {
     super(bus, opts.allowFrom, true)
     this.workspace = opts.workspace ?? '.'
+    this.outputRoots = opts.durableMediaRoots ?? durableMediaRoots
     this.sessionManager = opts.sessionManager
 
     this.acceptToolResults = true
@@ -506,7 +511,17 @@ export class WebChannel extends AbstractChannel {
       const mediaPath = privateUpload
         ? relative(mediaRoot, isAbsolute(rawPath) ? rawPath : resolve(locations.sessionDataDir, rawPath))
         : isAbsolute(rawPath) ? relative(mediaRoot, rawPath) : rawPath
-      const resolved = await resolveSessionMediaPath(mediaRoot, mediaPath)
+      let resolved = await resolveSessionMediaPath(mediaRoot, mediaPath)
+      // A durable output is not a browsable folder grant. Only an exact assistant
+      // attachment in this existing Project session's history can expose one file.
+      // SNS and remote-workdir requests retain their existing private-upload policy.
+      if (!resolved && explicitSessionId === undefined && existingState && isAbsolute(rawPath) && this.sessionManager) {
+        const allowedRoots = await this.outputRoots()
+        if (isDurableMediaCandidate(rawPath, allowedRoots)) {
+          const { messages } = await this.sessionManager.getHistory(sessionId, { maxMessages: Number.MAX_SAFE_INTEGER })
+          resolved = await resolveDurableMedia(rawPath, messages, allowedRoots)
+        }
+      }
       if (!resolved) return c.json({ error: 'Media unavailable' }, 404)
 
       return mediaFileResponse(resolved, c.req.raw, c.req.query('download') === '1')

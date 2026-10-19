@@ -1,3 +1,4 @@
+import { sessionWebFetch, sessionProxyOverride } from '../execution/network/session-proxy.ts'
 import { Agent } from 'undici'
 import { localProxyConfiguration, resolveProxyForUrl } from '../execution/network/proxy.ts'
 import type { Tool, ToolParameters } from './tool.ts'
@@ -29,13 +30,13 @@ export class WebSearchTool implements Tool {
       encodeURIComponent(query)
     }&count=${count}`
 
-    const res = await fetch(url, {
+    const res = await sessionWebFetch(url, {
       headers: {
         'X-Subscription-Token': this.apiKey,
         Accept: 'application/json',
       },
       signal: context?.signal,
-    })
+    }, context)
     if (!res.ok) return `Error: Brave search returned ${res.status}`
 
     const data = (await res.json()) as {
@@ -142,6 +143,7 @@ export class FirecrawlSearchTool implements Tool {
     // Keyless requests omit Authorization; a key only raises the credit limit.
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
 
+    const overrideActive = sessionProxyOverride(context)
     const url = `${this.baseUrl}/v2/search`
     const signal = context
       ? AbortSignal.any([context.signal, AbortSignal.timeout(60_000)])
@@ -156,9 +158,9 @@ export class FirecrawlSearchTool implements Tool {
       }),
       signal,
     }
-    let res = await fetch(url, init)
+    let res = await sessionWebFetch(url, init, context)
     let directRetry = false
-    if (res.status === 403) {
+    if (res.status === 403 && !overrideActive) {
       const body = await res.clone().json().catch(() => null) as FirecrawlSearchResponse | null
       signal.throwIfAborted()
       if (typeof body?.error === 'string' && isFirecrawlIpBlock(res.status, body.error)) {

@@ -152,7 +152,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 - No durable sessions through subagent. Use session for permitted durable peers. Temporary executions are internal and never create native platform threads.
 - Use \`preload_tools\` for imported tools needed immediately, e.g. \`{ "chrome-devtools": [] }\`; role restrictions still apply.
 
-- Read/write \`v:session/self.json\`: partial/full JSON title/description/completed. After understanding the first user request, set accurate title/description; update only for goal changes, not continual polishing. completed:true ends responsibility, not Work; completed:false reopens, independent of inferred running/waiting activity. No background observer.
+- Read/write \`v:session/self.json\`: title/description/completed. After understanding the first user request, name/summarize; goal changes only, not continual polishing. completed:true ends responsibility, not Work. If completed, set completed:false before handling a new request requiring work; thanks, acknowledgements, or metadata-only tidying do not reopen it. Independent of activity; no observer.
 
 ### Peer conversations
 
@@ -624,7 +624,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 - No durable sessions through subagent. Use session for permitted durable peers. Temporary executions are internal and never create native platform threads.
 - Use \`preload_tools\` for imported tools needed immediately, e.g. \`{ "chrome-devtools": [] }\`; role restrictions still apply.
 
-- Read/write \`v:session/self.json\`: partial/full JSON title/description/completed. After understanding the first user request, set accurate title/description; update only for goal changes, not continual polishing. completed:true ends responsibility, not Work; completed:false reopens, independent of inferred running/waiting activity. No background observer.
+- Read/write \`v:session/self.json\`: title/description/completed. After understanding the first user request, name/summarize; goal changes only, not continual polishing. completed:true ends responsibility, not Work. If completed, set completed:false before handling a new request requiring work; thanks, acknowledgements, or metadata-only tidying do not reopen it. Independent of activity; no observer.
 
 ### Peer conversations
 
@@ -806,7 +806,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 - No durable sessions through subagent. Use session for permitted durable peers. Temporary executions are internal and never create native platform threads.
 - Use \`preload_tools\` for imported tools needed immediately, e.g. \`{ "chrome-devtools": [] }\`; role restrictions still apply.
 
-- Read/write \`v:session/self.json\`: partial/full JSON title/description/completed. After understanding the first user request, set accurate title/description; update only for goal changes, not continual polishing. completed:true ends responsibility, not Work; completed:false reopens, independent of inferred running/waiting activity. No background observer.
+- Read/write \`v:session/self.json\`: title/description/completed. After understanding the first user request, name/summarize; goal changes only, not continual polishing. completed:true ends responsibility, not Work. If completed, set completed:false before handling a new request requiring work; thanks, acknowledgements, or metadata-only tidying do not reopen it. Independent of activity; no observer.
 
 ### Peer conversations
 
@@ -1401,7 +1401,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 - No durable sessions through subagent. Use session for permitted durable peers. Temporary executions are internal and never create native platform threads.
 - Use \`preload_tools\` for imported tools needed immediately, e.g. \`{ "chrome-devtools": [] }\`; role restrictions still apply.
 
-- Read/write \`v:session/self.json\`: partial/full JSON title/description/completed. After understanding the first user request, set accurate title/description; update only for goal changes, not continual polishing. completed:true ends responsibility, not Work; completed:false reopens, independent of inferred running/waiting activity. No background observer.
+- Read/write \`v:session/self.json\`: title/description/completed. After understanding the first user request, name/summarize; goal changes only, not continual polishing. completed:true ends responsibility, not Work. If completed, set completed:false before handling a new request requiring work; thanks, acknowledgements, or metadata-only tidying do not reopen it. Independent of activity; no observer.
 
 ### Peer conversations
 

@@ -1,3 +1,4 @@
+import { sessionWebFetch } from '../execution/network/session-proxy.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { extname, isAbsolute, join, relative } from 'node:path'
 import {
@@ -15,6 +16,8 @@ import { isImagePath, readImage } from '../utils/image-input.ts'
 import type { VirtualFs } from '../vfs/virtual-fs.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import { executeRemoteFilesystemText } from '../execution/remote-filesystem-client.ts'
+import { decodeReadText } from './read-text.ts'
+import { isTextEncoding, textEncodings, type TextEncoding } from '../execution/filesystem/text-encoding.ts'
 import { isSkillRootPath } from '../skills/paths.ts'
 
 const MAX_SIZE_BYTES = 256 * 1024 // 256 KB
@@ -44,14 +47,13 @@ async function readFileInRange(
   path: string,
   offset: number,
   limit: number | undefined,
+  encoding: TextEncoding = 'auto',
   maxSizeBytes = MAX_SIZE_BYTES,
-): Promise<{ lines: string[]; totalLines: number; clipped: boolean }> {
+): Promise<{ lines: string[]; totalLines: number; clipped: boolean; encoding: string }> {
   const raw = await readFile(path)
-  if (raw.subarray(0, 8192).includes(0)) throw new Error('Binary file cannot be read as text. Use a tool for its format.')
-  const decoder = new TextDecoder('utf-8', { fatal: true })
-  const text = raw.byteLength > maxSizeBytes && limit === undefined
-    ? decoder.decode(raw.subarray(0, maxSizeBytes))
-    : decoder.decode(raw)
+  const truncated = raw.byteLength > maxSizeBytes && limit === undefined
+  const decoded = decodeReadText(truncated ? raw.subarray(0, maxSizeBytes) : raw, encoding, truncated)
+  const text = decoded.content
 
   const allLines = text.split('\n')
   const totalLines = allLines.length
@@ -60,7 +62,7 @@ async function readFileInRange(
   const clipped = (raw.byteLength > maxSizeBytes && limit === undefined) ||
     end < totalLines
 
-  return { lines: allLines.slice(start, end), totalLines, clipped }
+  return { lines: allLines.slice(start, end), totalLines, clipped, encoding: decoded.encoding }
 }
 
 /**
@@ -196,6 +198,10 @@ export class ReadTool implements Tool<ToolResult> {
         type: 'string',
         description: 'File path, directory path, or URL (http/https)',
       },
+      encoding: {
+        type: 'string', enum: textEncodings.map(entry => entry.value),
+        description: 'Local text files only. Default auto: BOM or strict UTF-8. Specify gb18030, shift_jis, etc. to retry legacy text; never rewrites files.',
+      },
       offset: {
         type: 'number',
         description:
@@ -221,6 +227,9 @@ export class ReadTool implements Tool<ToolResult> {
     context: ExecutionContext,
   ): Promise<ToolResult> {
     const raw = String(args.path)
+    if (args.encoding !== undefined && !isTextEncoding(args.encoding)) throw new TypeError('Unsupported read encoding.')
+    const encoding: TextEncoding = isTextEncoding(args.encoding) ? args.encoding : 'auto'
+    if (args.encoding !== undefined && (URL_RE.test(raw) || raw.replace(/\\/g, '/').startsWith('v:'))) throw new Error('read encoding is supported only for local filesystem text files, not URLs or virtual paths.')
     const flags = typeof args.flag === 'string' ? args.flag : ''
     const showLineNumbers = flags.includes('n')
     const rawFormat = flags.includes('r')
@@ -245,6 +254,7 @@ export class ReadTool implements Tool<ToolResult> {
         }
         const result = this.virtualFs.resolve(rel, context)
         if (result != null) {
+          if (args.encoding !== undefined) throw new Error('read encoding is not supported for virtual paths.')
           const content = await result
           if (listMode) {
             const page = this.applyListPaging(content, args)
@@ -257,9 +267,10 @@ export class ReadTool implements Tool<ToolResult> {
     }
 
     // ── URL fetch ──
-    if (URL_RE.test(raw)) return await this.fetchUrl(raw, rawFormat, args, context.signal)
+    if (URL_RE.test(raw)) return await this.fetchUrl(raw, rawFormat, args, context)
 
     if (context.remoteWorkdir) {
+      if (args.encoding !== undefined) throw new Error('Remote read encoding is not supported by this executor. No Main filesystem fallback is allowed.')
       if (isImagePath(raw)) throw new Error('Remote image reads are not supported by this executor. No Main filesystem fallback is allowed.')
       return await this.readRemoteFile(
         raw,
@@ -272,6 +283,7 @@ export class ReadTool implements Tool<ToolResult> {
     // ── File or directory ──
     const resolved = this.resolve(raw, context)
     const stat = await nodeStat(resolved)
+    if (args.encoding !== undefined && (stat.isDirectory() || isImagePath(resolved))) throw new Error('read encoding requires a local text file, not a directory or image.')
     if (stat.isDirectory()) return this.pageText(await this.listDir(resolved), args, showLineNumbers)
     if (!stat.isFile()) throw new Error('Read requires a regular file or directory.')
     if (isImagePath(resolved)) {
@@ -294,7 +306,7 @@ export class ReadTool implements Tool<ToolResult> {
       : undefined
     const mtime = stat.mtime?.getTime() ?? 0
     const sessionId = context.physicalSessionId
-    const cacheKey = `${sessionId}\0${resolved}`
+    const cacheKey = `${sessionId}\0${resolved}\0${encoding}`
     const cached = this.readCache.get(cacheKey)
     if (
       cached &&
@@ -306,10 +318,11 @@ export class ReadTool implements Tool<ToolResult> {
     }
 
     // ── Read file in range ──
-    const { lines, totalLines, clipped } = await readFileInRange(
+    const { lines, totalLines, clipped, encoding: decodedEncoding } = await readFileInRange(
       resolved,
       offset,
       limit,
+      encoding,
     )
 
     const content = lines.join('\n')
@@ -333,6 +346,7 @@ export class ReadTool implements Tool<ToolResult> {
       } of ${totalLines} — use offset=${nextOffset} to read more]`
     }
 
+    if (decodedEncoding !== 'utf-8') result = `[encoding: ${decodedEncoding}]\n` + result
     return result
   }
 
@@ -448,11 +462,12 @@ export class ReadTool implements Tool<ToolResult> {
     url: string,
     rawFormat: boolean,
     args: Record<string, unknown>,
-    signal: AbortSignal,
+    context: ExecutionContext,
   ): Promise<string> {
-    const res = await fetch(url, {
+    const signal = context.signal
+    const res = await sessionWebFetch(url, {
       signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-    })
+    }, context)
     if (!res.ok) return `Error: HTTP ${res.status}`
 
     const contentType = res.headers.get('content-type') ??

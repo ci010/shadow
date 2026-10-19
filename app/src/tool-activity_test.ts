@@ -142,3 +142,39 @@ test('search activity recognizes new handlers and stored legacy calls without tr
   ]).get(0)!.entries
   assert.deepEqual(entries.map(entry => entry.grep), [true, true, false, false])
 })
+
+
+const at = (seconds: number) => new Date(1700000000000 + seconds * 1000).toISOString()
+
+test('timestamp estimates pair IDs and parallel groups use wall time, not sum', () => {
+  const batch = groupToolActivity([
+    { ...call('read', {}), toolCallId: 'a', timestamp: at(0) },
+    { ...call('exec', {}), toolCallId: 'b', timestamp: at(1) },
+    { ...result('Error: failed'), toolCallId: 'b', timestamp: at(4) },
+    { ...result('ok'), toolCallId: 'a', timestamp: at(5) },
+  ]).get(0)!
+  assert.deepEqual(batch.entries.map(e => e.durationMs), [5000, 3000])
+  assert.equal(batch.durationMs, 5000)
+  assert.equal(batch.entries[1].failed, true)
+})
+
+test('missing, orphan, pending, invalid and reversed endpoints are not invented', () => {
+  for (const [start, end] of [[undefined, at(1)], [at(0), undefined], ['invalid', at(1)], [at(2), at(1)]]) {
+    const batch = groupToolActivity([{ ...call('read', {}), timestamp: start }, { ...result('ok'), timestamp: end }]).get(0)!
+    assert.equal(batch.entries[0].durationMs, undefined)
+    assert.equal(batch.durationMs, undefined)
+  }
+  for (const messages of [[{ ...result('orphan'), timestamp: at(2) }], [{ ...call('read', {}), timestamp: at(0) }]]) {
+    const batch = groupToolActivity(messages).get(0)!
+    assert.equal(batch.durationMs, undefined)
+    assert.equal(batch.entries[0].durationMs, undefined)
+  }
+  const zero = groupToolActivity([{ ...call('read', {}), timestamp: at(0) }, { ...result('ok'), timestamp: at(0) }]).get(0)!
+  assert.equal(zero.durationMs, 0)
+})
+
+test('duration formatting explicitly marks rough estimates', async () => {
+  const { formatToolDuration } = await import('./tool-activity.ts')
+  assert.deepEqual([0, 12.7, 999, 1000, 1234, 2400, 60000, 125400].map(formatToolDuration),
+    ['≈ 0 ms', '≈ 13 ms', '≈ 999 ms', '≈ 1.0 s', '≈ 1.2 s', '≈ 2.4 s', '≈ 1m 0s', '≈ 2m 5s'])
+})

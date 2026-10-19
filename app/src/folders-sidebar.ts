@@ -1,4 +1,5 @@
 import { t } from './i18n.ts'
+import { sessionActivity } from './session-activity.ts'
 import type { FolderRecord } from '../../src/folders/contracts.ts'
 import { isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 import { parseAutomationSessionRef, type AutomationSessionRef } from '../../src/cron/contracts.ts'
@@ -22,6 +23,9 @@ export interface SidebarSession {
   topic?: TopicMetadata
   createdBySessionId?: string
   label: string
+  /** Human title shared by sidebar and references; never an identifier fallback. */
+  title?: string
+  lastActivityAt?: string
   description?: string
   folderId?: string
   isDirectChat: boolean
@@ -84,6 +88,15 @@ function flattenSessions(sessions: SidebarSession[]): SidebarSession[] {
   // A malformed lineage must not hide conversations or recurse forever.
   for (const session of sessions) walk(session, 0)
   return result
+}
+
+/** Graph name, coordination and topic titles have the same priority everywhere. */
+export function sessionDisplayTitle(session: { name?: unknown; sessionId?: unknown; title?: unknown }, topic?: TopicMetadata): string {
+  if (typeof session.name === 'string' && session.name.trim()) return session.name
+  if (session.sessionId === ORCHESTRATOR_SESSION_ID) return t('Project coordination')
+  if (topic?.title?.trim()) return topic.title
+  if (typeof session.title === 'string' && session.title.trim()) return session.title
+  return t('New conversation')
 }
 
 export function parseSessionGraph(value: unknown, projectId?: string): SidebarSession[] {
@@ -156,8 +169,9 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       topic,
       createdBySessionId: session.createdBySessionId as string | undefined,
       automation,
-      label: typeof session.name === 'string' ? session.name : session.sessionId === ORCHESTRATOR_SESSION_ID ? t('Project coordination')
-        : topic?.title || (typeof session.title === 'string' && session.title ? session.title : channelAddress?.conversationId || (direct ? session.sessionId.replace('web:', '') : session.sessionId)),
+      title: sessionDisplayTitle(session, topic),
+      label: sessionDisplayTitle(session, topic),
+      lastActivityAt: typeof session.lastActivityAt === 'string' && Number.isFinite(Date.parse(session.lastActivityAt)) ? session.lastActivityAt : undefined,
       description: session.description as string | undefined,
       folderId: session.folderId as string | undefined,
       isDirectChat: direct,
@@ -221,6 +235,7 @@ export function groupFolderSessions(folders: FolderRecord[], sessions: SidebarSe
     automations.set(owner.jobId, group)
   }
   return {
+    unified: flattenSessions(regular),
     folders: folders.map(folder => ({
       folder,
       sessions: flattenSessions(regular.filter(session => session.folderId === folder.id)),
@@ -254,4 +269,44 @@ export function suggestCloneDirectory(url: string): string {
 
 export function isAbsoluteFolderPath(path: string): boolean {
   return /^(?:[a-zA-Z]:[\\/]|\\\\[^\\]+\\[^\\]+|\/)/.test(path.trim())
+}
+
+/** Sidebar-only completion presentation; live and execution outcomes remain authoritative.
+ * Missing activity is the sidebar's inactive fallback, not a persisted status change.
+ * SessionActivity still promotes delegated work over these non-working stages.
+ */
+export function sidebarSessionIconStage(stage: string | undefined, completed: boolean | undefined): string {
+  const displayStage = stage ?? 'inactive'
+  const activity = sessionActivity(displayStage)
+  return activity.kind === 'idle' || activity.kind === 'inactive'
+    ? completed ? 'completed' : 'inactive'
+    : displayStage
+}
+
+export type ChatListSort = 'time' | 'folder'
+export interface ChatListPreferences { folderGrouped: boolean; sort: ChatListSort }
+const chatListKey = (apiBase: string, projectId?: string) => 'shadow:chat-list:' + JSON.stringify([apiBase, projectId ?? ''])
+export function restoreChatListPreferences(storage: Pick<Storage, 'getItem'>, apiBase: string, projectId?: string): ChatListPreferences {
+  try {
+    const value = JSON.parse(storage.getItem(chatListKey(apiBase, projectId)) ?? 'null')
+    return { folderGrouped: value?.folderGrouped === true, sort: value?.sort === 'folder' ? 'folder' : 'time' }
+  } catch { return { folderGrouped: false, sort: 'time' } }
+}
+export function saveChatListPreferences(storage: Pick<Storage, 'setItem'>, apiBase: string, projectId: string | undefined, value: ChatListPreferences) {
+  try { storage.setItem(chatListKey(apiBase, projectId), JSON.stringify(value)) } catch { /* Storage is optional. */ }
+}
+/** lastActivityAt is set when messages are persisted, not when a chat is merely opened. */
+export function sortSidebarChats(sessions: SidebarSession[], folders: ReadonlyMap<string, string>, sort: ChatListSort): SidebarSession[] {
+  const timestamp = (session: SidebarSession) => {
+    const time = Date.parse(session.lastActivityAt ?? '')
+    return Number.isFinite(time) ? time : 0
+  }
+  return [...sessions].sort((a, b) => {
+    if (sort === 'folder') {
+      const folderKey = (session: SidebarSession) => session.folderId ? folders.get(session.folderId) ?? session.folderId : ''
+      const folderOrder = folderKey(a).localeCompare(folderKey(b)) || (a.folderId ?? '').localeCompare(b.folderId ?? '')
+      if (folderOrder) return folderOrder
+    }
+    return timestamp(b) - timestamp(a) || a.sessionId.localeCompare(b.sessionId)
+  })
 }

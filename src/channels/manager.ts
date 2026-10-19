@@ -1,3 +1,5 @@
+import { onBackendNetworkChanged } from '../execution/network/backend.ts'
+import { ownerQuestionCommand } from './owner-questions.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { randomBytes } from 'node:crypto'
 import { ChannelAdmissionError, ChannelConnectionError, type BaseChannel, type ChannelDecision } from './base.ts'
@@ -48,6 +50,28 @@ export class ChannelManager {
   private ownerChallenges = new Map<string, { token: string; expires: number; senderId?: string; chatId?: string }>()
   private channels = new Map<string, BaseChannel>()
   private running = false
+  private unsubscribeNetwork?: () => void
+
+  /** Failed starts are removed from channels, so retry from saved enabled configuration. */
+  refreshFailedDiscordConnections(): Promise<void> {
+    return this.inScope(() => {
+      const operation = this.operations.then(async () => {
+        if (this.closing || !this.running || !this.app) return
+        const ids = this.options
+          ? this.options.instanceStore.list().filter(bot => bot.platform === 'discord' && bot.enabled).map(bot => bot.id)
+          : this.config.channels.discord?.enabled ? ['discord'] : []
+        for (const id of ids) {
+          if (this.cleanupFailed.has(id) || this.needsApply.has(id)) continue
+          if (!['error', 'disconnected'].includes(this.health.get(id)?.state ?? '')) continue
+          if (!await this.stopBot(id)) continue
+          const channel = this.options ? this.installBot(this.options.instanceStore.get(id)) : this.install('discord')
+          await this.startChannel(id, channel)
+        }
+      })
+      this.operations = operation.catch(() => {})
+      return operation
+    })
+  }
   private dispatchController?: AbortController
   private dispatchTask?: Promise<void>
   private transportsStopping = false
@@ -394,6 +418,21 @@ export class ChannelManager {
         }
       }
       if (message.channel !== channel.name) throw new ChannelAdmissionError('Channel identity mismatch', 403)
+      if (bot && scope && /^\/shadow-(?:requests|reply)(?:\s|$)/.test(message.content)) {
+        // Execute only directly admitted human commands, never model-generated replies.
+        const verify = this.options!.instanceStore.accessGuard(bot.id)
+        const content = await ownerQuestionCommand(this.sessionManager, this.options!.instanceStore.get(bot.id), message,
+          { ...scope, conversationId: message.chatId }).catch(error => {
+            if (error instanceof YieldError) return `Question command rejected: ${error.message}`
+            throw error
+          })
+        verify()
+        if (content !== undefined) {
+          await channel.onMessage({ channel: channel.name, chatId: message.chatId, content, event: 'response', done: true,
+            channelAddress: { ...scope, conversationId: message.chatId }, replyTo: message.platformMessageId })
+          return { status: 'accepted', sessionId: channelSessionId({ ...scope, conversationId: message.chatId }), inputId: message.messageId }
+        }
+      }
       return this.receive({
         ...message, ...(scope ? { channelAddress: { ...scope, conversationId: message.chatId } } : {}),
         ...(bot ? { admin: bot.purpose === 'personal' } : {}),
@@ -755,6 +794,9 @@ export class ChannelManager {
     this.app = app
     FeishuChannel.registerRoutes(app, !!this.options)
     this.running = true
+    this.unsubscribeNetwork = onBackendNetworkChanged(() => {
+      void this.refreshFailedDiscordConnections().catch(() => console.error('[channel-manager] Discord network refresh failed'))
+    })
 
     // Start outbound dispatcher
     this.dispatchController = new AbortController()
@@ -797,6 +839,8 @@ export class ChannelManager {
   }
 
   beginShutdown(): void {
+    this.unsubscribeNetwork?.()
+    this.unsubscribeNetwork = undefined
     this.ownerChallenges.clear()
     this.closing = true
   }

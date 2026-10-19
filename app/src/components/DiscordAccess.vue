@@ -1,7 +1,7 @@
 <template>
   <section class="discord-access" :aria-labelledby="`${uid}-title`">
     <header class="access-heading">
-      <div><h4 :id="`${uid}-title`">{{ t('Discord access') }}</h4><p>{{ t('Assign an Agent to each channel. Instructions can be reused; conversations stay separate.') }}</p></div>
+      <div><h4 :id="`${uid}-title`" tabindex="-1">{{ t('Discord access') }}</h4><p>{{ t('Assign an Agent to each channel. Instructions can be reused; conversations stay separate.') }}</p></div>
       <button :disabled="!!busy" @click="reload(true)">{{ t('Refresh configuration') }}</button>
     </header>
     <nav class="access-nav" :aria-label="t('Discord configuration')">
@@ -15,7 +15,7 @@
       <p v-if="formRevision !== overview.revision" class="access-notice">{{ t('Configuration changed. Refresh before creating another review; your unsaved form is preserved for comparison.') }}</p>
       <p v-for="issue in overview.deploymentIssues" :key="issue.agentId" class="access-error" role="alert">{{ agentName(issue.agentId) }} {{ t('is paused:') }} {{ issue.message }}</p>
       <div v-if="tab === 'channels'">
-        <div class="boundary-note"><strong>{{ t('Closed until assigned.') }}</strong> {{ t('Unassigned channels and DMs do not enter an Agent. Legacy admin-chat settings and Discord administrator roles do not grant Shadow access.') }}</div>
+        <div class="boundary-note"><strong>{{ botBindings.length ? t('Saved assignments') + ' · ' + botBindings.length : t('No channels or DMs are assigned to this Bot.') }}</strong> {{ t('Unassigned channels and DMs do not enter an Agent. Legacy admin-chat settings and Discord administrator roles do not grant Shadow access.') }}</div>
         <details v-if="legacy?.legacySessionId || legacy?.adminChats.length"><summary>{{ t('Review previous Discord settings') }}</summary><p>{{ legacy.notice }}</p><p class="muted">{{ t('Choose the server below to resolve saved channel names. Migration copies no administrative permission automatically.') }}</p><div class="choices"><button v-for="id in legacy.adminChats" :key="id" :disabled="!!busy || !directory?.channels.some(channel => channel.id === id && channel.supported && channel.canSend)" @click="prepareLegacy(id)">{{ t('Review') }} {{ directory?.channels.find(channel => channel.id === id)?.name ?? t('saved channel {value1}', { value1: id.slice(-6) }) }}</button></div></details>
         <div class="directory-toolbar">
           <label>{{ t('Server') }}<UiSelect v-model="guildId" :disabled="!!busy" @change="loadDirectory()"><option value="">{{ t('Choose a server') }}</option><option v-for="guild in guilds" :key="guild.id" :value="guild.id">{{ guild.name }} · {{ guild.id.slice(-6) }}</option></UiSelect></label>
@@ -78,7 +78,8 @@
           <h5>{{ t('Saved assignments') }}</h5>
           <p v-if="!botBindings.length" class="muted">{{ t('No channels or DMs are assigned to this Bot.') }}</p>
           <div v-for="binding in botBindings" :key="binding.id" class="saved-row">
-            <div><strong>{{ locationLabel(binding) }}</strong><p>{{ agentName(binding.agentId) }} · {{ binding.enabled ? t('Enabled') : t('Disabled') }} · {{ binding.readDomains.length }} {{ t('additional knowledge domains') }}</p></div>
+            <div><strong>{{ locationLabel(binding) }}</strong><p>{{ agentName(binding.agentId) }} · {{ availability(binding) }} · {{ binding.readDomains.length }} {{ t('additional knowledge domains') }}</p></div>
+            <button v-if="binding.target.kind === 'channel'" type="button" :disabled="!!busy || !connected" @click="syncBinding(binding)">{{ t('Sync this server') }}</button>
             <button type="button" :disabled="!!busy" @click="editBinding(binding)">{{ t('Edit') }}</button>
             <button v-if="binding.enabled" type="button" :disabled="!!busy" @click="propose({ kind: 'bindings.save', bindings: [{ ...binding, enabled: false }] })">{{ t('Review disable') }}</button>
             <button v-if="binding.enabled" type="button" :disabled="!!busy" @click="propose({ kind: 'bindings.save', bindings: [binding] })">{{ t('Start fresh context') }}</button>
@@ -86,6 +87,7 @@
         </section>
         <details class="preview-section">
           <summary>{{ t('Preview applied access for a person') }}</summary>
+          <p>{{ t('Next: preview an allowed person, then mention the Bot in the assigned Discord channel. Preview does not send a message or run a model.') }}</p>
           <p class="muted">{{ t('Checks current membership and permissions, then shows exactly this Agent\'s prompt and tools. It does not call a model or execute tools.') }}</p>
           <form class="form-grid" @submit.prevent="previewAccess">
             <label>{{ t('Assigned conversation') }}<UiSelect v-model="previewChatId" required><option value="">{{ t('Select a conversation') }}</option><option v-for="binding in botBindings.filter(item => item.enabled && item.target.kind === 'channel')" :key="binding.id" :value="binding.target.kind === 'channel' ? binding.target.channelId : ''">{{ locationLabel(binding) }}</option><option v-for="scope in dmScopes" :key="scope.sessionId" :value="scope.conversationId">{{ scope.location.name ?? t('Direct message') }}</option></UiSelect></label>
@@ -165,6 +167,7 @@
           <header><div><h5>{{ changeTitle(draft.change) }}</h5><p>{{ enumLabel(draft.status) }} · {{ localTime(draft.createdAt) }} · {{ draft.actor.kind === 'owner' ? t('Shadow owner') : t('Discord manager') }}</p></div><button @click="reviewId = reviewId === draft.id ? '' : draft.id" :aria-expanded="reviewId === draft.id">{{ reviewId === draft.id ? t('Hide review') : t('Open review') }}</button></header>
           <div v-if="reviewId === draft.id" class="review-body">
             <p class="access-notice">{{ draft.warning }}</p>
+            <p v-if="draft.status === 'applied'" class="boundary-note">{{ t('This is an applied historical review, not current access status.') }} <button @click="tab = 'channels'">{{ t('Return to current assignments and test access') }}</button></p>
             <p>{{ t('Affected assignments:') }} {{ draft.affectedBindings.map(bindingName).join(', ') || t('None yet') }}</p>
             <template v-if="draft.change.kind === 'agent.save'"><strong>{{ draft.change.agent.displayName }} · {{ draft.change.agent.execution }}</strong><p>{{ t('Tools:') }} {{ draft.change.agent.tools.map(toolLabel).join(', ') || t('None') }}</p><p>{{ t('Knowledge:') }} {{ draft.change.agent.readDomains.map(domainNameFor).join(', ') || t('Conversation only') }}</p><pre>{{ draft.change.agent.markdown }}</pre></template>
             <template v-else-if="draft.change.kind === 'bindings.save'"><div v-for="binding in draft.change.bindings" :key="binding.id" class="review-assignment"><strong>{{ locationLabel(binding) }} → {{ agentName(binding.agentId) }}</strong><p>{{ binding.enabled ? t('Enable') : t('Disable') }} · {{ participantNames(binding) }} · {{ binding.trigger === 'all' ? t('Every message') : t('Mentions and replies') }}</p><p>{{ t('Tools:') }} {{ binding.tools.map(toolLabel).join(', ') || t('None') }}</p><p>{{ t('Knowledge:') }} {{ binding.readDomains.map(domainNameFor).join(', ') || t('Conversation only') }}</p></div></template>
@@ -187,18 +190,19 @@ import { enumLabel } from '../display-labels.ts'
 import { t, formatDateTime } from '../i18n.ts'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { BotInstanceStatus } from '../bot-settings.ts'
-import { bindingLabel, createDiscordIntegrationClient, discordIds } from '../discord-integration.ts'
+import { bindingAvailability, bindingLabel, createDiscordIntegrationClient, discordIds } from '../discord-integration.ts'
 import type { DiscordBinding, DiscordDirectory, DiscordMember, IntegrationAgentInput, IntegrationChange, IntegrationDraft, IntegrationOverview, IntegrationPreview } from '../../../src/channels/integration-contract.ts'
 import type { MemorySource } from '../../../src/memory/contracts.ts'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import type { LiveSubscription } from '../live-client.ts'
 
-const props = defineProps<{ apiBase: string; projectId: string; bot: BotInstanceStatus; active: boolean; requestedReviewId?: string }>()
+const props = defineProps<{ apiBase: string; projectId: string; bot: BotInstanceStatus; active: boolean; requestedReviewId?: string; requestedPage?: 'channels' | 'reviews'; navigationKey?: number }>()
 const uid = `discord-access-${props.bot.id}`
 const pages = [{ id: 'channels', get label() { return t('Channels & people') } }, { id: 'agents', get label() { return t('Agents') } }, { id: 'knowledge', get label() { return t('Knowledge') } }, { id: 'reviews', get label() { return t('Reviews') } }] as const
 const tab = ref<(typeof pages)[number]['id']>('channels')
 const overview = ref<IntegrationOverview>()
 const directory = ref<DiscordDirectory>()
+const directories = ref<Record<string, DiscordDirectory>>({})
 const guilds = ref<DiscordDirectory['guilds']>([])
 const guildCursor = ref<string | null>(null)
 const guildId = ref('')
@@ -273,9 +277,11 @@ const agentName = (id: string) => overview.value?.agents.find(agent => agent.id 
 const domainNameFor = (id: string) => overview.value?.domains.find(domain => domain.id === id)?.name ?? t('Unavailable domain')
 const channelParent = (id: string | null) => directory.value?.channels.find(channel => channel.id === id)?.name ?? (id ? t('Parent channel') : t('Server channel'))
 const existingChannel = (id: string) => botBindings.value.find(binding => binding.target.kind === 'channel' && binding.target.channelId === id)
+const savedDirectory = (binding: DiscordBinding) => binding.target.kind === 'channel' ? directories.value[binding.target.guildId] : undefined
+const availability = (binding: DiscordBinding) => bindingAvailability(binding, savedDirectory(binding), connected.value)
 const locationLabel = (binding: DiscordBinding) => {
   const known = overview.value?.sessions.find(scope => scope.bindingId === binding.id && scope.conversationId === (binding.target.kind === 'channel' ? binding.target.channelId : scope.conversationId))
-  return known?.location.name ?? bindingLabel(binding, directory.value?.channels ?? [])
+  return known?.location.name ?? bindingLabel(binding, savedDirectory(binding)?.channels ?? [])
 }
 const bindingName = (id: string) => { const binding = overview.value?.bindings.find(item => item.id === id); return binding ? locationLabel(binding) : t('New assignment') }
 const participantNames = (binding: DiscordBinding) => binding.participants.everyone ? t('Everyone in this channel') :
@@ -318,8 +324,14 @@ async function loadDirectory(after?: string | null) {
     guilds.value = [...new Map([...guilds.value, ...result.guilds].map(guild => [guild.id, guild])).values()]
     guildCursor.value = result.guildCursor
     directory.value = result
+    if (result.guildId) directories.value[result.guildId] = result
     if (!after) selectedChannels.value = []
   })
+}
+async function syncBinding(binding: DiscordBinding) {
+  if (binding.target.kind !== 'channel') return
+  guildId.value = binding.target.guildId
+  await loadDirectory()
 }
 async function findMembers() {
   await run(t('Finding Discord members...'), async signal => {
@@ -431,6 +443,7 @@ function previousData(change: IntegrationChange) {
       : change.kind === 'knowledge.revoke' ? overview.value?.resources.find(resource => resource.id === change.resourceId)
         : t('No existing object is overwritten by this operation.'), null, 2)
 }
+watch([() => props.requestedPage, () => props.navigationKey], ([page]) => { if (page) tab.value = page })
 watch(reviewId, () => { reviewAcknowledged.value = false })
 watch([() => props.requestedReviewId, overview], async ([id, snapshot]) => {
   if (!id) { openedReviewLink = ''; reviewLinkError.value = ''; return }
@@ -447,9 +460,9 @@ watch([() => props.apiBase, () => props.projectId, () => props.bot.id, () => pro
   openedReviewLink = ''; reviewLinkError.value = ''
   liveSubscription?.close(); liveSubscription = undefined; refreshNeeded = false; formRevision.value = undefined
   controller?.abort(); controller = undefined; busy.value = ''
-  overview.value = undefined; directory.value = undefined; guilds.value = []; guildId.value = ''; guildCursor.value = null
+  overview.value = undefined; directory.value = undefined; directories.value = {}; guilds.value = []; guildId.value = ''; guildCursor.value = null
   selectedChannels.value = []; members.value = []; userNames.value = {}; preview.value = undefined; error.value = ''; notice.value = ''
-  tab.value = 'channels'; channelSearch.value = ''; channelFilter.value = 'all'; assignedAgentId.value = ''
+  tab.value = props.requestedPage ?? 'channels'; channelSearch.value = ''; channelFilter.value = 'all'; assignedAgentId.value = ''
   selectedTools.value = []; selectedDomains.value = []; everyone.value = false; roleIds.value = []; userIds.value = ''
   memberQuery.value = ''; memberNotice.value = ''; previewChatId.value = ''; previewSender.value = ''
   editingAgentId.value = ''; agentDraft.value = newAgent(); sourceResource.value = ''; publicationSources.value = []

@@ -44,6 +44,24 @@ The fence is intentionally opt-in; ordinary `html` fences remain code examples.
 Message source remains readable, copyable and persistent. Other channels do not
 advertise this web renderer; use ordinary Markdown for them.
 
+## Math in ordinary Markdown
+
+Chat messages and rendered system-prompt cards use Marked with a shared KaTeX
+extension: `$x^2$` and `\(\mathbf x\)` are inline math; `$$...$$` and
+`\[...\]` are display math (including multiline blocks). Put display delimiters
+on their own lines when separating adjacent paragraphs or list content. Code
+fences, indented code and code spans remain literal. Dollar math requires tight
+non-whitespace edges and cannot close immediately before a digit, avoiding common
+currency such as `$5 and $10`; escape literal dollars as `\$`.
+
+KaTeX runs with `trust: false`, bounded formula length (16,384 characters), macro
+expansion and size; invalid formulas fall back to escaped source. The existing
+DOMPurify boundary still applies. Unclosed delimiters remain ordinary Markdown
+until complete, so streaming may temporarily show Markdown formatting inside an
+unfinished formula. The isolated `answer-html` / `data-md` parser is unchanged:
+its stricter sanitizer forbids MathML and inline styles, so math rendering is not
+enabled there. No sanitizer policy is widened for math.
+
 ## Safety and meaning
 
 The visual fragment uses a restrictive HTML allowlist. Scripts, inline styles, event handlers, frames, forms, SVG and external assets are unsupported. Author <style> blocks and custom classes are supported inside a per-fragment Shadow DOM boundary. CSS is parsed and validated before insertion: no imports, resource URLs (including fonts/images), animations/transitions, custom property definitions, or host/pseudo-element selectors. Responsive @media rules, grid/flex, typography and borders are supported. Use only --answer-* variables in var(); app-private variables are not part of this contract. Paint/layout containment clips oversized or positioned content to the message. No iframe or global observers are used. It is an explanatory surface,

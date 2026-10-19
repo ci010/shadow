@@ -20,8 +20,8 @@
         <button class="mobile-view-close" :aria-label="t('Close {value1}', { value1: knowledgeLabel(entryId) })" @click="closeFile(knowledgeEntryTabKey(entryId), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
       <div v-for="tab in tabs.projectTabs ?? []" :key="tab" class="mobile-view-row">
-        <button :aria-current="tabs.selected === projectTabKey(tab) ? 'page' : undefined" @click="chooseMobileView(projectTabKey(tab))"><span :class="tab === 'settings' ? 'i-lucide-settings-2' : 'i-lucide-bot'" aria-hidden="true" /><span>{{ tab === 'settings' ? t('Project settings') : t('Agents') }}</span></button>
-        <button class="mobile-view-close" :aria-label="t('Close {value1}', { value1: tab === 'settings' ? t('Project settings') : t('Agents') })" @click="closeFile(projectTabKey(tab), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+        <button :aria-current="tabs.selected === projectTabKey(tab) ? 'page' : undefined" @click="chooseMobileView(projectTabKey(tab))"><span class="i-lucide-settings-2" aria-hidden="true" /><span>{{ t('Project settings') }}</span></button>
+        <button class="mobile-view-close" :aria-label="t('Close {value1}', { value1: t('Project settings') })" @click="closeFile(projectTabKey(tab), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
       <div v-for="file in tabs.files" :key="fileTabKey(file)" class="mobile-view-row">
         <button :aria-current="tabs.selected === fileTabKey(file) ? 'page' : undefined" @click="chooseMobileView(fileTabKey(file))"><span :class="file.view === 'diff' ? 'i-lucide-file-diff' : fileIcon(file.entry.name)" aria-hidden="true" /><span>{{ file.path }}{{ file.view === 'diff' ? t(' (changes)') : '' }}</span></button>
@@ -102,9 +102,9 @@
             <button :id="tabId(projectTabKey(tab))" role="tab" :aria-selected="tabs.selected === projectTabKey(tab)"
               :tabindex="tabs.selected === projectTabKey(tab) ? 0 : -1" :aria-controls="panelId(projectTabKey(tab))"
               @click="selectTab(projectTabKey(tab))" @keydown="tabKey($event, projectTabKey(tab))">
-              <span class="document-icon" :class="tab === 'settings' ? 'i-lucide-settings-2' : 'i-lucide-bot'" aria-hidden="true" /><span class="document-name">{{ tab === 'settings' ? t('Project settings') : t('Agents') }}</span>
+              <span class="document-icon i-lucide-settings-2" aria-hidden="true" /><span class="document-name">{{ t('Project settings') }}</span>
             </button>
-            <button class="document-close" :aria-label="t('Close {value1}', { value1: tab === 'settings' ? t('Project settings') : t('Agents') })" @click="closeFile(projectTabKey(tab))"><span class="i-lucide-x" aria-hidden="true" /></button>
+            <button class="document-close" :aria-label="t('Close {value1}', { value1: t('Project settings') })" @click="closeFile(projectTabKey(tab))"><span class="i-lucide-x" aria-hidden="true" /></button>
           </div>
           <div v-for="file in tabs.files" :key="fileTabKey(file)" class="document-tab" :class="{ selected: tabs.selected === fileTabKey(file) }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, fileTabKey(file))" @contextmenu.prevent.stop="openTabMenu($event, fileTabKey(file))">
             <HoverInfo :text="`${file.path}${file.view === 'diff' ? t('\nChanges from HEAD') : ''}`" v-slot="{ triggerProps }">
@@ -154,10 +154,7 @@
           :id="panelId(projectTabKey('settings'))" class="project-document" role="tabpanel" :aria-labelledby="tabId(projectTabKey('settings'))">
           <ProjectSettings :api-base="apiBase" :host-api-base="installation.apiBase" :project-id="projectId ?? ''" />
         </div>
-        <div v-if="tabs.projectTabs?.includes('agents')" v-show="tabs.selected === projectTabKey('agents')"
-          :id="panelId(projectTabKey('agents'))" class="project-document" role="tabpanel" :aria-labelledby="tabId(projectTabKey('agents'))">
-          <div class="agents-document"><AgentsTab :api-base="apiBase" /></div>
-        </div>
+
         <div v-for="file in tabs.files" v-show="tabs.selected === fileTabKey(file)" :id="panelId(fileTabKey(file))" :key="`${contextKey}:${fileTabKey(file)}`" class="file-document" role="tabpanel" :aria-labelledby="tabId(fileTabKey(file))">
           <FileDiffPreview v-if="(sessionId || folderId) && file.view === 'diff'" :api-base="apiBase" :session-id="sessionId" :folder-id="file.source ? file.source.folderId : folderId" :session-workspace="file.source?.sessionWorkspace"
             :path="file.path" :active="active && tabs.selected === fileTabKey(file)" :selection-active="keyboardActive && tabs.selected === fileTabKey(file)"
@@ -188,7 +185,6 @@ import HoverInfo from '../HoverInfo.vue'
 import OverlayTransition from '../OverlayTransition.vue'
 import KnowledgeView from '../KnowledgeView.vue'
 import ProjectSettings from '../ProjectSettings.vue'
-import AgentsTab from '../AgentsTab.vue'
 import MobileSheet from '../MobileSheet.vue'
 import { useMobileHeader } from '../../composables/useMobileChrome.ts'
 import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
@@ -238,7 +234,7 @@ const selectedSource = computed(() => tabs.value.files.find(file => fileTabKey(f
 const selectedFilePath = computed(() => tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.path)
 const revealVersion = ref(0)
 const selectedTitle = computed(() => tabs.value.selected === DIAGNOSIS_TAB_KEY ? t('Diagnosis') : tabs.value.selected === KNOWLEDGE_TAB_KEY ? t('Knowledge')
-  : tabs.value.selected === projectTabKey('settings') ? t('Project settings') : tabs.value.selected === projectTabKey('agents') ? t('Agents')
+  : tabs.value.selected === projectTabKey('settings') ? t('Project settings')
   : knowledgeEntryId(tabs.value.selected) ? knowledgeLabel(knowledgeEntryId(tabs.value.selected)!)
   : tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.entry.name
     ?? props.primaryLabel ?? props.conversationTitle ?? t('Conversation'))
@@ -499,7 +495,7 @@ watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], 
 }, { immediate: true })
 watch(() => [route?.name, route?.params?.projectId, props.active, props.projectId, props.contextKey], () => {
   if (!props.projectNavigationEnabled || !props.active || !props.projectId || route?.params?.projectId !== props.projectId) return
-  const tab = route?.name === 'project-settings' ? 'settings' : route?.name === 'agents' ? 'agents' : undefined
+  const tab = route?.name === 'project-settings' ? 'settings' : route?.name === 'agents' ? 'settings' : undefined
   if (tab && installation.value.uiScopes.includes('main:admin')) tabs.value = openProjectTab(tabs.value, tab)
   else if (projectTabFromKey(tabs.value.selected)) selectTab('')
 }, { immediate: true })
@@ -594,11 +590,9 @@ button:hover { background: var(--c-bg-muted); color: var(--c-text); }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .conversation-document, .diagnosis-document, .file-document, .knowledge-document, .project-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .project-document { overflow-y: auto; }
-.agents-document { flex: 1; width: 100%; height: 100%; min-height: 0; max-width: 1240px; margin: 0 auto; padding: 24px; box-sizing: border-box; }
 .workbench-explorer.drawer { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) auto 0 0; width: min(260px, calc(100% - 32px)); z-index: 9; box-shadow: 8px 0 24px var(--c-shadow-soft); }
 .explorer-backdrop { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) 0 0; border: 0; padding: 0; z-index: 8; background: rgb(0 0 0 / 20%); }
 @media (max-width: 700px) {
-  .agents-document { padding: 12px; }
   .document-menu button { min-height: 44px; }
   .workbench-content.draft-document { padding: 58px 0 28px; }
 }

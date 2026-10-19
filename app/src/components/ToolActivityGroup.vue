@@ -4,6 +4,7 @@
       <span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />
       <span v-if="batch.files" class="activity-icon i-lucide-file-diff" aria-hidden="true" />
       <span class="activity-title">{{ summaryTitle }}</span>
+      <span v-if="batch.durationMs !== undefined" class="tool-duration">{{ formatToolDuration(batch.durationMs) }}</span>
       <LineChangeCounts v-if="batch.changes" :changes="batch.changes" :partial="batch.incomplete" />
       <span v-else-if="batch.files" class="activity-status">{{ t('Line counts unavailable') }}</span>
       <span v-if="hasFailure" class="activity-failed">{{ t('Failed') }}</span>
@@ -25,6 +26,7 @@
           <LineChangeCounts v-if="entry.changes" :changes="entry.changes" />
           <span v-else-if="entry.failed" class="activity-failed">{{ t('Failed') }}</span>
           <span v-else-if="entry.file" class="activity-status">{{ t('Counts unavailable') }}</span>
+          <span v-if="entry.durationMs !== undefined" class="tool-duration">{{ formatToolDuration(entry.durationMs) }}</span>
           <span v-if="entry.summary && !entry.file" class="tool-args-summary">{{ entry.summary }}</span>
         </summary>
         <div v-if="groupOpen && expanded.has(entry.index)" class="tool-entry-content">
@@ -53,7 +55,7 @@
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import { computed, reactive, ref, watch } from 'vue'
-import type { ToolActivity, ToolActivityBatch } from '../tool-activity.ts'
+import { formatToolDuration, type ToolActivity, type ToolActivityBatch } from '../tool-activity.ts'
 import { matchedFileIcon } from '../file-icons.ts'
 import { vDisclosureMotion } from '../disclosure-motion.ts'
 import LineChangeCounts from './LineChangeCounts.vue'
@@ -147,6 +149,7 @@ summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .activity-icon { display: block; flex: 0 0 16px; width: 16px; height: 16px; }
 .tool-args-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: var(--c-text-muted); }
 .tool-name { flex: 0 1 auto; }
+.tool-duration { flex-shrink: 0; color: var(--c-text-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .activity-status { color: var(--c-text-muted); font-size: 12px; }
 .activity-status { flex-shrink: 0; }
 .activity-failed { flex-shrink: 0; color: var(--c-error); font-size: 12px; }

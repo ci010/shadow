@@ -11,6 +11,7 @@
       <h2 v-if="!isRail"><slot v-if="grouped" name="project-name">{{ projectName }}</slot><template v-else><span class="folders-heading-icon w-4 h-4" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : 'i-lucide-folder'" aria-hidden="true" />{{ t('Folders') }}</template></h2>
       <div class="folders-header-actions">
         <slot name="project-actions" />
+        <button type="button" class="folder-action-button" :aria-label="t(folderGrouped ? 'Show unified chats' : 'Group chats by folder')" :title="t(folderGrouped ? 'Show unified chats' : 'Group chats by folder')" :aria-pressed="folderGrouped" @click="folderGrouped = !folderGrouped"><span :class="folderGrouped ? 'i-lucide-list' : 'i-lucide-folders'" class="w-4 h-4" aria-hidden="true" /></button>
         <HoverInfo v-if="!grouped && desktop" :text="isRail ? t('Expand folders') : t('Collapse folders')"><template #default="{ triggerProps }">
           <button class="folder-action-button folders-rail-toggle" v-bind="triggerProps" :aria-label="isRail ? t('Expand folders') : t('Collapse folders')" :aria-expanded="!isRail" aria-controls="folders-navigation" @click="railCollapsed = !railCollapsed">
             <span :class="isRail && loading ? 'i-lucide-loader-circle folder-loading-icon' : isRail ? 'i-lucide-panel-left-open' : 'i-lucide-panel-left-close'" class="w-4 h-4" aria-hidden="true" />
@@ -28,7 +29,8 @@
         <button class="text-action" @click="loadFolders">{{ t('Retry folders') }}</button>
       </div>
       <HoverInfo v-if="error && isRail" :text="error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" :aria-label="t('Folders unavailable. Retry folders')" @click="loadFolders"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
-      <section v-for="group in groups.folders" :key="group.folder.id" class="folder-group">
+      <template v-if="folderGrouped">
+      <section v-for="group in sortedFolders" :key="group.folder.id" class="folder-group">
         <TreeRow class="folder-folder-row" :selected="!activeSessionId && selectedFolderId === group.folder.id"
           :icon-only="isRail"
           :label="group.folder.name" :title="group.folder.kind === 'remote' ? `${group.folder.workdir.nodeId}: ${group.folder.path}` : group.folder.path" :expanded="expandedFolders.has(group.folder.id)" separate-toggle
@@ -56,11 +58,17 @@
           </template>
         </TreeRow>
         <div v-if="!isRail && expandedFolders.has(group.folder.id) && group.sessions.length" class="folder-conversations">
-          <FolderSessionList :sessions="group.sessions" :depth="1" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+          <FolderSessionList :sessions="sortSidebarChats(group.sessions, folderNames, chatSort)" :session-metadata="sessionMetadata" :depth="1" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
         </div>
       </section>
-      <section class="legacy-chats" :aria-labelledby="domId('legacy-chats-heading')">
-        <div class="chats-heading">
+      </template>
+      <section class="legacy-chats" :aria-labelledby="folderGrouped ? domId('legacy-chats-heading') : undefined">
+        <TreeRow v-if="!folderGrouped" class="chat-new-row" button-class="chat-new" :icon-only="isRail"
+          :label="t('New')" :ariaLabel="t('Start from scratch')" :button-attrs="{ 'aria-keyshortcuts': 'Control+N Meta+N' }" @select="startScratchDraft">
+          <template #icon><span class="i-lucide-plus" /></template>
+          <template v-if="!isRail" #meta><kbd class="chat-new-shortcut">Ctrl+N</kbd></template>
+        </TreeRow>
+        <div v-else class="chats-heading">
           <h3 :id="domId('legacy-chats-heading')" :class="{ 'rail-visually-hidden': isRail }">{{ t('Chats') }}</h3>
           <HoverInfo text="Start from scratch"><template #default="{ triggerProps }">
             <button type="button" class="folder-action-button chat-add" v-bind="triggerProps" :aria-label="projectName ? t('New chat in {projectName}', { projectName: projectName }) : t('New chat')" @click="startScratchDraft"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
@@ -69,7 +77,7 @@
         <p v-if="sessionsLoading" class="sidebar-note" :class="{ 'rail-note': isRail, 'rail-visually-hidden': sessions.length > 0 }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">{{ t('Loading conversations…') }}</span></p>
         <div v-if="sessionsError && !isRail" class="sidebar-error" role="alert"><p>{{ sessionsError }}</p><button class="text-action" @click="$emit('reload')">{{ t('Retry conversations') }}</button></div>
         <HoverInfo v-if="sessionsError && isRail" :text="sessionsError"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" :aria-label="t('Conversations unavailable. Retry conversations')" @click="$emit('reload')"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
-        <FolderSessionList :sessions="chatGroups.chats" :depth="1" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+        <FolderSessionList :sessions="sortedChats" :session-metadata="sessionMetadata" :depth="folderGrouped ? 1 : 0" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
       </section>
       <section v-for="bot in chatGroups.bots" :key="bot.id" class="bot-conversations" :data-bot-id="bot.id">
         <TreeRow :label="bot.label" :title="`${bot.label}\n${bot.connection.label}\n${bot.platform}\n${bot.id}`"
@@ -127,8 +135,9 @@
 </template>
 
 <script setup lang="ts">
-import { t } from '../i18n.ts'
+import { formatDateTime, i18n, t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, useId, watch } from 'vue'
+import { formatSidebarActivity } from '../sidebar-chat-time.ts'
 import FolderDialog from './FolderDialog.vue'
 import FolderSessionList from './FolderSessionList.vue'
 import TreeRow from './TreeRow.vue'
@@ -144,7 +153,7 @@ import { prominentWorkingStage } from '../session-activity.ts'
 import { activeSubagentsByOwner, summarizeSubagents } from '../subagent-executions.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { createFoldersClient, type CloneView, type FolderRecord } from '../folders-client.ts'
-import { automationSessionOwners, groupFolderSessions, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
+import { automationSessionOwners, groupFolderSessions, sortSidebarChats, restoreChatListPreferences, saveChatListPreferences, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
 import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import { botPlatformLabel, groupBotConversations, restoreCollapsedBots, saveCollapsedBots, type SidebarBot } from '../bot-sidebar.ts'
 
@@ -184,7 +193,40 @@ const folderActions = computed(() => FOLDER_ACTIONS.filter(action => action.id !
 const folders = ref<FolderRecord[]>([])
 const groups = computed(() => groupFolderSessions(folders.value, props.sessions))
 const executionsByOwner = computed(() => activeSubagentsByOwner(props.sessions, props.stages))
-const chatGroups = computed(() => groupBotConversations(groups.value.chats, props.projectId, props.bots))
+// Independent of grouped: that prop controls project disclosure, not folder presentation.
+const folderGrouped = ref(false)
+const chatSort = 'time' as const
+watch(() => [props.apiBase, props.projectId], () => {
+  let prefs = { folderGrouped: false, sort: 'time' as 'time' | 'folder' }
+  try { prefs = restoreChatListPreferences(window.localStorage, props.apiBase, props.projectId) } catch { /* Browser storage may be denied. */ }
+  folderGrouped.value = prefs.folderGrouped
+}, { immediate: true })
+watch(folderGrouped, () => {
+  try { saveChatListPreferences(window.localStorage, props.apiBase, props.projectId, { folderGrouped: folderGrouped.value, sort: chatSort }) } catch { /* Browser storage may be denied. */ }
+})
+const folderNames = computed(() => new Map(folders.value.map(folder => [folder.id, folder.name])))
+const chatGroups = computed(() => groupBotConversations(folderGrouped.value ? groups.value.chats : groups.value.unified, props.projectId, props.bots))
+const sortedFolders = computed(() => [...groups.value.folders].sort((a, b) =>
+  Math.max(0, ...b.sessions.map(session => Date.parse(session.lastActivityAt ?? '') || 0)) - Math.max(0, ...a.sessions.map(session => Date.parse(session.lastActivityAt ?? '') || 0))))
+const sortedChats = computed(() => sortSidebarChats(chatGroups.value.chats, folderNames.value, chatSort))
+const activityNow = ref(Date.now())
+let activityTimer: ReturnType<typeof setInterval> | undefined
+function startActivityClock() {
+  stopActivityClock()
+  activityNow.value = Date.now()
+  activityTimer = setInterval(() => { activityNow.value = Date.now() }, 15_000)
+}
+function stopActivityClock() {
+  if (activityTimer !== undefined) clearInterval(activityTimer)
+  activityTimer = undefined
+}
+function sessionMetadata(session: SidebarSession) {
+  return {
+    folder: session.folderId ? folderNames.value.get(session.folderId) ?? session.folderId : t('from scratch'),
+    time: formatSidebarActivity(session.lastActivityAt, activityNow.value, i18n.global.locale.value),
+    absoluteTime: session.lastActivityAt ? formatDateTime(session.lastActivityAt) : '',
+  }
+}
 const collapsedBots = ref(new Set<string>())
 watch(() => [props.apiBase, props.projectId], () => {
   try { collapsedBots.value = props.projectId ? restoreCollapsedBots(window.localStorage, props.apiBase, props.projectId) : new Set() }
@@ -354,6 +396,7 @@ function menuKeydown(event: KeyboardEvent) {
   buttons[next]?.focus()
 }
 function deactivate() {
+  stopActivityClock()
   active = false
   resizeActive.value = false
   resizeObserver?.disconnect()
@@ -370,8 +413,8 @@ watch(() => props.folderRevision, () => {
   loading.value = false
   void loadFolders()
 })
-onMounted(() => { observeSidebar(); void loadFolders(); window.addEventListener('resize', closeOnResize) })
-onActivated(() => { active = true; observeSidebar(); void loadFolders() })
+onMounted(() => { startActivityClock(); observeSidebar(); void loadFolders(); window.addEventListener('resize', closeOnResize) })
+onActivated(() => { startActivityClock(); active = true; observeSidebar(); void loadFolders() })
 onDeactivated(deactivate)
 onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnResize) })
 </script>
@@ -416,6 +459,9 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .bot-info-details { display: grid; gap: 12px; margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--c-border-soft); }
 .bot-info-details dt { color: var(--c-text-muted); font-size: 12px; }
 .bot-info-details dd { margin: 2px 0 0; color: var(--c-text); font-size: 13px; }
+.chat-new-row { --tree-row-height: var(--sidebar-chat-row-height, 48px); transition: background-color 150ms ease; }
+.chat-new-shortcut { padding: 1px 4px; border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-bg-soft); color: var(--c-text-secondary); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; font-weight: 400; line-height: 16px; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .chat-new-row { transition: none; } }
 .chats-heading { display: flex; align-items: center; justify-content: flex-end; gap: var(--sidebar-heading-gap); min-height: var(--sidebar-row-height); margin-bottom: var(--sidebar-heading-gap); padding-inline: var(--sidebar-row-inset); }
 .chats-heading h3 { flex: 1; min-width: 0; margin: 0; padding-inline-start: calc(var(--sidebar-disclosure) + var(--sidebar-heading-gap)); font-size: 12px; line-height: 20px; font-weight: 500; color: var(--c-text-secondary); }
 .sidebar-note { margin: 8px 12px 16px; font-size: 12px; color: var(--c-text-secondary); line-height: 1.6; }

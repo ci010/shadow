@@ -50,10 +50,10 @@ import { remoteNodeTargets, type RemoteChatTarget } from '../remote-conversation
 import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
 import { projectFolderTargets, type ExecutionLocation } from '../execution-locations.ts'
 
-const props = defineProps<{ apiBase: string; projectId: string; folder?: FolderRecord; selected?: RemoteChatTarget; disabled?: boolean }>()
+const props = defineProps<{ apiBase: string; projectId: string; folder?: FolderRecord; selected?: RemoteChatTarget; disabled?: boolean; emptyLabel?: string }>()
 const emit = defineEmits<{ select: [target: ExecutionLocation | undefined] }>()
 const popover = ref<InstanceType<typeof ComposerPopover>>()
-const label = computed(() => props.folder?.name ?? (props.selected ? `${props.selected.nodeName} · ${props.selected.displayName}` : t('This computer')))
+const label = computed(() => props.folder?.name ?? (props.selected ? `${props.selected.nodeName} · ${props.selected.displayName}` : props.emptyLabel ?? t('This computer')))
 const nodes = ref<NodeInventoryEntry[]>([])
 const folders = ref<FolderRecord[]>([])
 const folderTargets = computed(() => projectFolderTargets(props.projectId, folders.value, nodes.value))

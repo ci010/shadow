@@ -39,7 +39,8 @@ async function retry(): Promise<void> {
     if (current !== generation || !props.active) return
     pending = result
     applyPending()
-  } catch {
+  } catch (error) {
+    console.warn('File syntax highlighting failed', props.path, error)
     if (current === generation && props.active) emit('error', 'Syntax highlighting is unavailable. Plain text is still available.')
   }
 }

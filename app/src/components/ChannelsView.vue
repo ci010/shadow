@@ -68,6 +68,45 @@
           </div>
           <button v-else :disabled="!!saving" @click="revokeOwner(channel)">{{ t('Revoke owner and disconnect') }}</button>
         </section>
+        <section v-if="channel.platform === 'discord' && channel.purpose === 'service'" class="owner-setup service-setup" :aria-label="t('Service Bot setup')">
+          <header class="owner-setup-heading">
+            <div><span class="setup-eyebrow">{{ t('Service Bot setup') }}</span><h4>{{ t('Connect, invite, assign, then review') }}</h4></div>
+            <span class="setup-badge">{{ t('Explicit access required') }}</span>
+          </header>
+          <p class="setup-summary">{{ t('Connected means signed in to Discord, not installed in a server or ready to serve. Invite this Bot first, then assign an Agent and approve access. Owner pairing is only for personal Bots.') }}</p>
+          <ol class="setup-steps">
+            <li :class="{ 'step-done': channel.state === 'connected', 'step-current': channel.state !== 'connected' }"><span class="step-number">1</span><div><strong>{{ t('Connect platform') }}</strong><small>{{ channelStateLabel(botChannel(channel)) }}</small></div></li>
+            <li :class="{ 'step-current': accessBot !== channel.id && channel.state === 'connected' }"><span class="step-number">2</span><div><strong>{{ t('Invite to a Discord server') }}</strong><small>{{ t('Server installation is not verified here') }}</small></div></li>
+            <li :class="{ 'step-current': accessBot === channel.id && accessPage === 'channels' }"><span class="step-number">3</span><div><button type="button" @click="openAccess(channel.id)">{{ t('Publish and assign an Agent') }}</button><small>{{ t('Choose tools, resources and participants') }}</small></div></li>
+            <li :class="{ 'step-current': accessBot === channel.id && accessPage === 'reviews' }"><span class="step-number">4</span><div><button type="button" @click="openAccess(channel.id, 'reviews')">{{ t('Review and approve access') }}</button><small>{{ t('Open Discord access to load current assignments') }}</small></div></li>
+          </ol>
+          <div class="setup-next setup-install">
+            <button class="channel-primary" @click="openAccess(channel.id)">{{ t('I have invited the Bot — continue to assignments') }}</button>
+            <small>{{ t('Opening configuration does not verify installation or grant access.') }}</small>
+            <strong>{{ t('Invite this Bot from the Developer Portal') }}</strong>
+            <p>{{ t('An application ID verified for this Bot is not available in this view, so Shadow cannot safely generate an invite link. Never paste a Bot token into an invite URL.') }}</p>
+            <ol>
+              <li>{{ t('Open the application that owns this Bot in the Discord Developer Portal. Under Installation, enable Guild Install if needed and copy its Install Link. If no link is provided, use OAuth2 URL Generator with the bot scope and Guild Install.') }}</li>
+              <li>{{ t('Open that link, choose your server, and authorize with a server account allowed to manage the server. Request only the channel permissions this Bot needs, such as View Channels and Send Messages; do not select Administrator.') }}</li>
+              <li>{{ t('Return to Discord access, sync the directory and choose the server and channels. If the server is missing, check installation, the selected application and Discord permissions. Installation alone does not enable Agent access.') }}</li>
+            </ol>
+            <a class="portal-link" href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer" @click.prevent="openPortal(channel)">{{ t('Open Discord Developer Portal') }} ↗</a>
+            <a class="portal-link" href="https://discord.com/developers/docs/resources/application#installation-context" target="_blank" rel="noopener noreferrer" @click.prevent="openExternal(channel, 'https://discord.com/developers/docs/resources/application#installation-context')">{{ t('Discord installation documentation') }} ↗</a>
+          </div>
+          <div class="setup-next">
+            <template v-if="channel.state !== 'connected'">
+              <strong>{{ t('First, connect this Bot') }}</strong>
+              <p v-if="channel.secrets.token">{{ t('A Bot token is saved, but this Bot is not connected. Check the connection error below. Leave the token blank to keep it, or enter a replacement in Configure. Saved access settings remain available separately.') }}</p>
+              <p v-else>{{ t('Save a Bot token and connect before discovering Discord channels and people. Saved access settings remain available separately.') }}</p>
+              <button class="channel-primary" :disabled="!!saving" @click="configure(channel)">{{ t('Configure') }}</button>
+            </template>
+            <template v-else>
+              <strong>{{ t('After inviting: configure service access') }}</strong>
+              <p>{{ t('Use Discord access to sync servers, publish Agents, assign channels or DMs, and review permissions. Connection status does not verify assignments or server installation.') }}</p>
+              <button class="channel-primary" :aria-expanded="accessBot === channel.id" @click="accessBot = accessBot === channel.id ? undefined : channel.id">{{ t('Discord access') }}</button>
+            </template>
+          </div>
+        </section>
         <div v-if="channel.platform === 'wechat' && channel.enabled && !channel.ownerVerified">
           <button :disabled="!!saving" @click="wechatLogin(channel, 'login')">{{ t('Generate WeChat login QR code') }}</button>
           <button :disabled="!!saving" @click="wechatLogin(channel, 'wait')">{{ t('Check WeChat login') }}</button>
@@ -80,11 +119,11 @@
           <fieldset :disabled="!!saving">
             <legend class="sr-only">{{ channel.displayName }} {{ t('connection settings') }}</legend>
             <label class="channel-field bot-name">{{ t('Bot name') }}<input v-model="drafts[channel.id]!.displayName" maxlength="100" required /></label>
-            <div class="channel-instructions">
-              <strong>{{ t('Before you connect') }}</strong>
-              <ol><li v-for="instruction in definition(channel.platform).instructions" :key="instruction">{{ instruction }}</li></ol>
+            <details class="channel-instructions" :open="!channel.configured">
+              <summary>{{ t('Before you connect') }}</summary>
+              <ol><li v-for="instruction in setupInstructions(channel)" :key="instruction">{{ instruction }}</li></ol>
               <button v-if="definition(channel.platform).portal" type="button" class="portal-link" @click="openPortal(channel)">{{ t('Open') }} {{ definition(channel.platform).label }} {{ t('developer portal') }} <span class="i-lucide-arrow-up-right" aria-hidden="true" /></button>
-            </div>
+            </details>
             <div class="channel-fields">
               <template v-for="field in definition(channel.platform).fields.filter(field => !field.advanced)" :key="field.key">
                 <label :class="field.kind === 'checkbox' ? 'channel-checkbox' : 'channel-field'">
@@ -106,6 +145,7 @@
                 <label v-for="field in definition(channel.platform).fields.filter(field => field.advanced)" :key="field.key" class="channel-field">
                   <span>{{ field.label }}</span>
                   <textarea v-if="field.kind === 'list'" :value="String(drafts[channel.id]![field.key] ?? '')" @input="drafts[channel.id]![field.key] = ($event.target as HTMLTextAreaElement).value" :name="field.key" rows="3" spellcheck="false" />
+                  <UiSelect v-else-if="field.kind === 'select'" v-model="drafts[channel.id]![field.key]" :name="field.key"><option v-for="option in field.options" :key="option" :value="option">{{ option === 'mention' ? t('Mentions and direct messages') : option === 'all' ? t('All messages') : option }}</option></UiSelect>
                   <input v-else v-model="drafts[channel.id]![field.key]" :type="field.kind" :name="field.key"
                     :autocomplete="field.kind === 'password' ? 'new-password' : 'off'" :spellcheck="false"
                     :placeholder="field.kind === 'password' && channel.secrets[field.key] ? t('Saved — leave blank to keep') : undefined" />
@@ -120,7 +160,7 @@
             </div>
           </fieldset>
         </form>
-        <DiscordAccess v-if="available && accessBot === channel.id && channel.platform === 'discord' && channel.purpose === 'service'" :api-base="apiBase" :project-id="projectId" :bot="channel" :active="active"
+        <DiscordAccess v-if="available && accessBot === channel.id && channel.platform === 'discord' && channel.purpose === 'service'" :requested-page="accessPage" :navigation-key="accessNavigation" :api-base="apiBase" :project-id="projectId" :bot="channel" :active="active"
           :requested-review-id="requestedReviewId" />
       </article>
     </div>
@@ -131,7 +171,7 @@
 import UiSelect from './UiSelect.vue'
 import BotPairingCommand from './BotPairingCommand.vue'
 import { t } from '../i18n.ts'
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChannelId } from '../../../src/channels/setup-contract.ts'
 import { channelDefinitions, channelStateLabel, type ChannelDraft } from '../channel-settings.ts'
 import { botChannel, botDraft, botPatch, createBotSettingsClient, wechatLoginQr, type BotInstanceStatus } from '../bot-settings.ts'
@@ -143,6 +183,14 @@ const drafts = ref<Partial<Record<string, ChannelDraft>>>({})
 const errors = ref<Partial<Record<string, string>>>({})
 const expanded = ref<string>()
 const accessBot = ref<string>()
+const accessPage = ref<'channels' | 'reviews'>('channels')
+const accessNavigation = ref(0)
+async function openAccess(botId: string, page: 'channels' | 'reviews' = 'channels') {
+  accessNavigation.value++; accessPage.value = page; accessBot.value = botId
+  await nextTick()
+  const heading = document.getElementById(`discord-access-${botId}-title`)
+  heading?.scrollIntoView({ block: 'start' }); heading?.focus({ preventScroll: true })
+}
 const reviewLinkError = ref('')
 const newPlatform = ref<ChannelId>('qq')
 const newName = ref('')
@@ -191,6 +239,12 @@ const listError = ref('')
 const notice = ref('')
 const saving = ref<string>()
 const definition = (id: ChannelId) => channelDefinitions.find(item => item.id === id)!
+function setupInstructions(channel: BotInstanceStatus): string[] {
+  const instructions = definition(channel.platform).instructions
+  return channel.platform === 'discord' && channel.purpose === 'personal'
+    ? [...instructions.slice(0, 2), t('Open configuration to save credentials and connect. Then return here to pair your account.')]
+    : instructions
+}
 let poll: ReturnType<typeof setTimeout> | undefined
 let request: AbortController | undefined
 let mutation: AbortController | undefined
@@ -254,11 +308,13 @@ async function changeConnection(channel: BotInstanceStatus, enabled: boolean) {
   await update(channel, { config: { enabled } }, false)
 }
 async function openPortal(channel: BotInstanceStatus) {
+  await openExternal(channel, definition(channel.platform).portal)
+}
+async function openExternal(channel: BotInstanceStatus, url: string) {
   try {
-    const url = definition(channel.platform).portal
     if (window.shadowDesktop?.openExternal) await window.shadowDesktop.openExternal(url)
     else window.open(url, '_blank', 'noopener,noreferrer')
-  } catch { errors.value[channel.id] = t('Could not open the browser. Open {portal} manually.', { portal: definition(channel.platform).portal }) }
+  } catch { errors.value[channel.id] = t('Could not open the browser. Open {portal} manually.', { portal: url }) }
 }
 async function addBot() {
   if (!newPurpose.value) return
@@ -349,7 +405,7 @@ onBeforeUnmount(() => { stopPolling(); mutation?.abort() })
 .channel-editor { padding-top: 24px; margin-top: 20px; border-top: 1px solid var(--c-border); }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .channel-instructions { margin-bottom: 24px; max-width: 70ch; font-size: 13px; line-height: 1.65; color: var(--c-text-secondary); }
-.channel-instructions strong { color: var(--c-text); font-weight: 500; }
+.channel-instructions summary { cursor: pointer; color: var(--c-text); font-weight: 500; }
 .channel-instructions ol { padding-left: 20px; margin: 8px 0; }
 .channel-instructions li + li { margin-top: 6px; }
 .channel-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 16px; }
@@ -397,6 +453,11 @@ button:where(:not(.ui-select)):focus-visible, input:focus-visible, textarea:focu
 .step-done .step-number { color: var(--c-git-added); }
 .setup-next { border-top: 1px solid var(--c-border); padding-top: 18px; }
 .setup-next > strong { font-size: 14px; }
+.setup-install { margin-bottom: 20px; }
+.setup-install ol { padding-left: 20px; font-size: 13px; line-height: 1.7; color: var(--c-text-secondary); }
+.setup-install li + li { margin-top: 8px; }
+.setup-install .portal-link { display: inline-flex; margin-right: 20px; line-height: 1.7; }
+.service-setup .setup-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .setup-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-@media (max-width: 700px) { .setup-steps { grid-template-columns: 1fr; } .owner-setup { padding: 16px; } }
+@media (max-width: 700px) { .setup-steps, .service-setup .setup-steps { grid-template-columns: 1fr; } .owner-setup { padding: 16px; } }
 </style>

@@ -32,10 +32,10 @@ export const knowledgeEntryTabKey = (id: string) => `\0knowledge-entry:${id}`
 export const knowledgeEntryId = (key: string) => key.startsWith('\0knowledge-entry:') ? key.slice('\0knowledge-entry:'.length) : undefined
 export const DIAGNOSIS_TAB_KEY = '\0diagnosis'
 export const isPermanentDocumentTab = (key: string) => !key || key === DIAGNOSIS_TAB_KEY
-export type ProjectTab = 'settings' | 'agents'
+export type ProjectTab = 'settings'
 export const projectTabKey = (tab: ProjectTab) => `\0project:${tab}`
 export const projectTabFromKey = (key: string): ProjectTab | undefined =>
-  key === projectTabKey('settings') ? 'settings' : key === projectTabKey('agents') ? 'agents' : undefined
+  key === projectTabKey('settings') || key === '\0project:agents' ? 'settings' : undefined
 
 export function withDiagnosisTab(state: FileTabs, enabled: boolean): FileTabs {
   if (enabled) return state.diagnosis ? state : { ...state, diagnosis: true }

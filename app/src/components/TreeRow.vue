@@ -16,7 +16,7 @@
         <span v-if="expanded !== undefined" class="tree-caret i-lucide-chevron-right" :class="{ open: expanded }" />
       </span>
       <span v-if="$slots.icon" class="tree-icon" aria-hidden="true"><slot name="icon" /></span>
-      <span class="tree-label"><slot>{{ label }}</slot></span>
+      <span class="tree-label"><span class="tree-primary"><slot>{{ label }}</slot></span><span v-if="subtitle || $slots.subtitle" class="tree-subtitle"><slot name="subtitle">{{ subtitle }}</slot></span></span>
       <span v-if="$slots.meta && !separateToggle" class="tree-meta"><slot name="meta" /></span>
     </button>
       </template>
@@ -32,6 +32,7 @@ import HoverInfo from './HoverInfo.vue'
 const props = withDefaults(defineProps<{
   as?: 'div' | 'li'
   label: string
+  subtitle?: string
   title?: string
   ariaLabel?: string
   current?: 'page'
@@ -73,6 +74,9 @@ function selectRow(event: MouseEvent, close: () => void) {
 .tree-icon { display: grid; place-items: center; flex: 0 0 16px; width: 16px; height: 16px; color: var(--c-text-secondary); }
 .tree-icon :deep(> *) { display: block; width: 16px; height: 16px; }
 .tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-primary, .tree-subtitle { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-subtitle { color: var(--c-text-secondary); font-size: 11px; line-height: 16px; }
+.tree-item:has(.tree-subtitle) .tree-select { padding-block: 6px; min-height: var(--sidebar-chat-row-height, 48px); }
 .tree-meta { display: flex; align-items: center; flex-shrink: 0; font-size: 11px; color: var(--c-text-faint); }
 .tree-actions { display: flex; align-items: center; flex-shrink: 0; }
 .tree-info-text { white-space: pre-line; }

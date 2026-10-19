@@ -477,7 +477,10 @@ export class BackgroundTaskManager {
     if (this.stopped) return
 
     const reply = task.callback.replyTo ?? sessionReplyAddress(task.callback.sessionId)
-    if (!reply) return
+    // Web renders the persisted session event (also delivered live as session_message).
+    // A response here would create a second, transient assistant message that
+    // disappears on history refresh and can leave the UI in streaming state.
+    if (!reply || reply.channel === 'web') return
     const icon = task.status === 'completed' ? '✅' : '❌'
     const shortTitle = task.title.length > 60 ? task.title.slice(0, 60) + '…' : task.title
     const displayContent = `${icon} [${task.kind}] ${shortTitle} — ${statusLine}`

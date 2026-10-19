@@ -77,6 +77,10 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
       props: ['preview'],
       setup: (props, { emit }) => () => Vue.h('button', { 'data-test': 'confirm-repair', onClick: () => emit('applied', props.preview.sourceId) }, 'Confirm repair stub'),
     }) }
+    if (id === './AgentsTab.vue') return { default: Vue.defineComponent({
+      props: ['apiBase'],
+      setup: props => () => Vue.h('div', { 'data-test': 'agents-browser', apiBase: props.apiBase }),
+    }) }
     if (id.endsWith('.vue')) return { default: Vue.defineComponent({ setup: () => () => Vue.h('div') }) }
     return require(id)
   }, module, module.exports, filename === 'files/FileWorkbench.vue'
@@ -196,7 +200,7 @@ test('workbench renders Knowledge next to Conversation, deduplicates and closes 
   assert.equal(panel(), undefined)
 })
 
-test('project Settings and Agents deep links open independent workbench tabs and return to Conversation', async t => {
+test('project Settings and legacy Agents routes share one workbench tab', async t => {
   const changes: Array<string | undefined> = []
   const view = mount(t, 'files/FileWorkbench.vue', {
     apiBase: 'http://fixture/projects/a', projectId: 'a', sessionId: '', contextKey: 'a:draft',
@@ -209,8 +213,8 @@ test('project Settings and Agents deep links open independent workbench tabs and
   assert.equal(tab(projectTabKey('settings')).props['aria-selected'], true)
   view.route.name = 'agents'
   await settle()
-  assert.equal(tab(projectTabKey('agents')).props['aria-selected'], true)
-  assert.equal(tab(projectTabKey('settings')).props['aria-selected'], false)
+  assert.equal(tab(projectTabKey('settings')).props['aria-selected'], true)
+  assert.equal(tab('\0project:agents'), undefined)
   ;(tab(projectTabKey('settings')).props.onClick as () => void)()
   await settle()
   assert.equal(changes.at(-1), 'settings')
@@ -218,10 +222,10 @@ test('project Settings and Agents deep links open independent workbench tabs and
   await settle()
   assert.equal(tab('').props['aria-selected'], true)
   assert.equal(changes.at(-1), undefined)
-  assert.equal(tab(projectTabKey('agents')).props['aria-selected'], false)
+  assert.equal(tab('\0project:agents'), undefined)
   view.route.name = 'chat'
   await settle()
-  assert.equal(tab(projectTabKey('agents')).props['aria-selected'], false)
+  assert.equal(tab('\0project:agents'), undefined)
 })
 
 test('knowledge navigation moves to the explorer while details and filters stay in sync', async t => {
@@ -665,4 +669,24 @@ test('repair dialog requires explicit confirmation, sends only revision identity
   finish(Response.json({ updated: wiki.id }))
   await settle()
   assert.deepEqual(applied, [wiki.id])
+})
+
+
+test('project settings embeds the existing Agents browser only in the Agents section', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ projects: [], agent: {}, learning: {} }))
+  const view = mount(t, 'ProjectSettings.vue', {
+    apiBase: 'http://fixture/projects/a', hostApiBase: 'http://fixture', projectId: 'a',
+  })
+  view.route.name = 'project-settings'
+  view.route.params.section = 'agents'
+  await settle()
+  const browser = () => view.nodes().find(node => node.props['data-test'] === 'agents-browser')
+  assert.equal(browser()?.props.apiBase, 'http://fixture/projects/a')
+  assert.match(view.text(), /Agents/)
+  view.route.params.section = 'general'
+  await settle()
+  assert.equal(browser(), undefined)
+  view.route.params.section = 'agents'
+  await settle()
+  assert.equal(browser()?.props.apiBase, 'http://fixture/projects/a')
 })

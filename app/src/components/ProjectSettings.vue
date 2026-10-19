@@ -29,6 +29,7 @@
           <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'providers' } }">{{ t('Manage shared provider connections') }}</RouterLink>
           <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'models' } }">{{ t('App model defaults') }}</RouterLink>
         </section>
+        <div v-if="section === 'agents'" class="settings-agents"><AgentsTab :api-base="apiBase" /></div>
         <ChannelsView v-if="botsOpened" v-show="section === 'bots'" :api-base="apiBase" :project-id="projectId" :available="available" :active="section === 'bots' && route.name === 'project-settings' && route.params.projectId === projectId"
           :review-bot-id="typeof route.query.discordBot === 'string' ? route.query.discordBot : undefined"
           :requested-review-id="typeof route.query.discordReview === 'string' ? route.query.discordReview : undefined" />
@@ -41,7 +42,7 @@
           <LearningRuntimeStatus :api-base="apiBase" :project-id="projectId" :revision="learningRevision"
             :active="available && section === 'learning' && route.name === 'project-settings' && route.params.projectId === projectId" />
           <RouterLink class="settings-related" :to="{ name: 'chat', params: { projectId } }">{{ t('View Self-reflection conversations') }}</RouterLink>
-          <RouterLink class="settings-related" :to="{ name: 'agents', params: { projectId } }">{{ t('Project agents and instructions') }}</RouterLink>
+          <RouterLink class="settings-related" :to="{ name: 'project-settings', params: { projectId, section: 'agents' } }">{{ t('Project agents and instructions') }}</RouterLink>
         </form>
       </div>
       <ProjectDeleteDialog v-if="deleting && project" :api-base="hostApiBase" :project="project" @close="deleting = false" @deleted="projectDeleted" />
@@ -53,6 +54,7 @@
 import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import AgentsTab from './AgentsTab.vue'
 import ChannelsView from './ChannelsView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
 import LearningRuntimeStatus from './LearningRuntimeStatus.vue'
@@ -66,7 +68,7 @@ defineOptions({ name: 'ProjectSettings' })
 const route = useRoute()
 const installation = useInstallationContext()
 const available = computed(() => installation.value.mode !== 'child' && installation.value.uiScopes.includes('main:admin'))
-const sections = [{ id: 'general', get label() { return t('General') } }, { id: 'models', get label() { return t('Models') } }, { id: 'bots', get label() { return t('Bots') } }, { id: 'learning', get label() { return t('Learning') } }]
+const sections = [{ id: 'general', get label() { return t('General') } }, { id: 'models', get label() { return t('Models') } }, { id: 'agents', get label() { return t('Agents') } }, { id: 'bots', get label() { return t('Bots') } }, { id: 'learning', get label() { return t('Learning') } }]
 const section = computed(() => typeof route.params.section === 'string' ? route.params.section : 'general')
 const botsOpened = ref(false)
 const modelsOpened = ref(false)
@@ -176,6 +178,7 @@ onUnmounted(() => { request?.abort(); mutation?.abort() })
 .settings-navigation a { padding: 12px; color: var(--c-text-secondary); text-decoration: none; font-size: 14px; }
 .settings-navigation a:hover, .settings-navigation .selected { background: var(--c-bg-muted); color: var(--c-text); }
 .settings-navigation .selected { font-weight: 600; }
+.settings-agents { height: max(520px, calc(100dvh - 230px)); min-width: 0; }
 .settings-content { min-width: 0; }
 .settings-content h2 { margin: 0 0 16px; font-size: 20px; }
 .settings-field { display: grid; gap: 8px; max-width: 600px; margin: 20px 0; font-size: 13px; }
