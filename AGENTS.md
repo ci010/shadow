@@ -10,9 +10,9 @@ workspace's `agents/<type>/`.
 
 - [README](README.md): installation, commands, and local operation.
 - [Architecture](docs/architecture.md): source-backed global view and limitations.
-- [Documentation index](docs/README.md): current references versus design history.
-- [Distributed desktop workstreams](docs/implementation/README.md): **WIP** contracts
-  and historical implementation checkpoints, not a completed multi-device release.
+- [Documentation index](docs/README.md): user and developer references.
+- [Local development](docs/development.md): data isolation, restart, and optional tools.
+- [Localization](docs/localization.md): frontend translation conventions.
 
 Shadow is a personal, local-first LLM agent. One Node backend owns sessions,
 providers, tools, memory, channels, events, and persistence. Vue communicates with
@@ -82,9 +82,7 @@ particular command covers all packages.
 
 Before editing, inspect the worktree and preserve existing edits. Coordinate
 changes to shared composition files such as `src/index.ts`, configuration
-schemas, session contracts, gateway routing, and package manifests. Old workstream
-ownership tables describe that historical effort; they do not supersede the
-current task's explicit ownership.
+schemas, session contracts, gateway routing, and package manifests.
 
 ## Architectural rules
 
@@ -149,5 +147,5 @@ untrusted networks.
 2. Run the smallest relevant existing tests/checks for code changes.
 3. Update current documentation when behavior or commands change.
 4. Report what was verified, what was not, and any WIP integration boundaries.
-5. Preserve historical designs with an explicit status notice rather than
-   rewriting old proposals to look like current implementation.
+5. Keep current documentation source-backed. Remove obsolete plans when their
+   useful guidance is covered by current references; Git retains the history.

@@ -3,7 +3,8 @@ node_modules/
 
 # Environment
 .env
-.env.local
+.env.*
+!.env.example
 /.pin
 /.shadow-release.json
 
@@ -60,6 +61,9 @@ bot.config.json
 /.shadow-test-*/
 /.test-data/
 /.test-artifacts/
+/.test-child-rendered/
+/.device-pairing-integration-*/
+/test-output.txt
 /temp_adapter_qq/
 /temp_botpy/
 

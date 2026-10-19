@@ -1,6 +1,6 @@
 # Fresh automation state persistence
 
-New ordinary fresh-context cron executions and the built-in Work observer/organizer opt into a versioned persistence policy. Existing-session cron, ordinary sessions/tasks/calls, learning pipelines and existing historical state records retain their previous persistence behavior. Eligibility is explicit creation metadata (`mode: task`, an explicit fresh automation reference, and `statePersistence`); agent names and legacy address inference do not enable it.
+New ordinary fresh-context cron executions and the built-in Work organizer opt into a versioned persistence policy. Automatic Work observation has been retired; existing observer history remains historical data. Existing-session cron, ordinary sessions/tasks/calls, learning pipelines and existing historical state records retain their previous persistence behavior. Eligibility is explicit creation metadata (`mode: task`, an explicit fresh automation reference, and `statePersistence`); agent names and legacy address inference do not enable it.
 
 Each execution still has its own session/execution identity, automation run identity and physical logs. A stable job slot is not a reusable conversation. No previous run's transcript is supplied to the next run.
 
@@ -33,5 +33,3 @@ Explicit deletion of new fresh-automation state is not implemented; attempts fai
 ## Tests
 
 Synthetic repository-local tests cover both stores: sequential runs and context isolation; bounded startup with 220 settled runs; stable JSON slots; old JSON bytes/SQLite rows preserved; archive lookup and pagination; overlapping/out-of-order archival and stale writes; archive-first interruption; malformed/foreign records; compact remote ownership claims; report failure and restart recovery; historical HTTP/VFS/details/profile/result reads; mutation denial; and execution-key deduplication after restart. No production Project store or host restart is used by those fixtures.
-
-The original design/audit inventory is retained in [the implementation plan](implementation/fresh-automation-state-plan.md).
