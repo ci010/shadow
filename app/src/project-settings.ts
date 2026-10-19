@@ -1,3 +1,4 @@
+import type { ProviderInstanceLabel } from './model-selection.ts'
 import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { projectJson } from './projects.ts'
@@ -55,12 +56,17 @@ export function createProjectSettingsClient(base: string, request: typeof fetch 
       const next = mergeProjectSettings(current, section, patch)
       return parseProjectConfig(await projectJson(base, '/api/config', { method: 'PATCH', body: JSON.stringify(next), signal }, request))
     },
-    async models(signal?: AbortSignal): Promise<string[]> {
+    async catalog(signal?: AbortSignal): Promise<{ models: string[]; providers: ProviderInstanceLabel[] }> {
       const result = await projectJson(base, '/debug/models', { signal }, request)
-      if (!isRecord(result) || !Array.isArray(result.models) || !result.models.every(model => typeof model === 'string')) {
+      if (!isRecord(result) || !Array.isArray(result.models) || !result.models.every(model => typeof model === 'string')
+        || (result.providers !== undefined && (!Array.isArray(result.providers) || !result.providers.every(item =>
+          isRecord(item) && typeof item.id === 'string' && typeof item.type === 'string' && (item.name === undefined || typeof item.name === 'string'))))) {
         throw new Error(t('Main returned invalid models. Check App provider connections and retry.'))
       }
-      return result.models
+      return { models: result.models, providers: (result.providers ?? []) as ProviderInstanceLabel[] }
+    },
+    async models(signal?: AbortSignal): Promise<string[]> {
+      return (await this.catalog(signal)).models
     },
   }
 }

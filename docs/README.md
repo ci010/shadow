@@ -13,6 +13,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Tools, skills and automations](tools-and-automations.md)
 - [Project conventions and shared Work](project-conventions.md)
 - [GitHub collaboration](github.md)
+- [Provider instances and multiple accounts](provider-instances.md)
 - [Provider cost estimates](provider-cost.md)
 - [Quick Actions](quick-actions.md)
 - [Conversation agent authoring](agent-authoring.md)

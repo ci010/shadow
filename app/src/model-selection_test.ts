@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { filterModelOptions, modelDisplayName, modelProvider, modelSelectionInput } from './model-selection.ts'
+import { modelAccountLabel, modelOptionLabel, filterModelOptions, modelDisplayName, modelProvider, modelSelectionInput } from './model-selection.ts'
 
 test('composer model choice preserves qualified model and provider semantics', () => {
   assert.deepEqual(modelSelectionInput('claude-sonnet-4.6@copilot', 'openai'), {
@@ -28,4 +28,18 @@ test('model search includes the current unavailable model, deduplicates and sear
   assert.deepEqual(filterModelOptions(options, 'custom@openai', ''), ['gpt-5@copilot', 'local-model', 'custom@openai'])
   assert.deepEqual(filterModelOptions(options, '', ' COPILOT '), ['gpt-5@copilot'])
   assert.deepEqual(filterModelOptions(options, '', 'missing'), [])
+})
+
+
+test('same-type account labels and searches never change the qualified selection, including after rename', () => {
+  const options = ['same@account-a', 'same@account-b']
+  const providers = [{ id: 'account-a', type: 'deepseek', name: 'Personal' }, { id: 'account-b', type: 'deepseek', name: 'Work' }]
+  assert.equal(modelAccountLabel(options[0], providers), 'Personal · DeepSeek')
+  assert.equal(modelOptionLabel(options[1], providers), 'same · Work · DeepSeek · account-b')
+  assert.deepEqual(filterModelOptions(options, '', 'work', providers), ['same@account-b'])
+  assert.deepEqual(filterModelOptions(options, '', 'DeepSeek', providers), options)
+  providers[1].name = 'Office'
+  assert.deepEqual(filterModelOptions(options, options[1], 'office', providers), ['same@account-b'])
+  assert.deepEqual(modelSelectionInput(options[1], 'account-a'), { model: 'same@account-b', provider: 'account-b' })
+  assert.equal(modelAccountLabel('old@missing', providers), 'missing')
 })

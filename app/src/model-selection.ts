@@ -1,8 +1,12 @@
 import { inject, provide, type InjectionKey, type Ref } from 'vue'
+import { providerDisplayName } from './provider-setup.ts'
 import type { ProviderSetupInput } from './provider-setup.ts'
 import type { ReasoningSettings } from './session-settings.ts'
 
+export interface ProviderInstanceLabel { id: string; type: string; name?: string }
+
 export interface ModelSelection {
+  providers?: Readonly<Ref<readonly ProviderInstanceLabel[]>>
   current: Readonly<Ref<string>>
   inherited?: Readonly<Ref<string>>
   inheriting?: Readonly<Ref<boolean>>
@@ -39,7 +43,20 @@ export function modelProvider(model: string): string {
   return suffix > 0 ? model.slice(suffix + 1) : ''
 }
 
-export function filterModelOptions(options: readonly string[], current: string, query: string): string[] {
+export function modelAccountLabel(model: string, providers: readonly ProviderInstanceLabel[] = []): string {
+  const id = modelProvider(model)
+  const instance = providers.find(item => item.id === id)
+  if (!instance) return id
+  const type = providerDisplayName(instance.type)
+  return instance.name ? `${instance.name} · ${type}` : type
+}
+
+export function modelOptionLabel(model: string, providers: readonly ProviderInstanceLabel[] = []): string {
+  const account = modelAccountLabel(model, providers)
+  return account ? `${modelDisplayName(model)} · ${account} · ${modelProvider(model)}` : model
+}
+
+export function filterModelOptions(options: readonly string[], current: string, query: string, providers: readonly ProviderInstanceLabel[] = []): string[] {
   const models = [...new Set([...options, ...(current ? [current] : [])])]
-  return models.filter(model => model.toLowerCase().includes(query.trim().toLowerCase()))
+  return models.filter(model => `${model} ${modelAccountLabel(model, providers)}`.toLowerCase().includes(query.trim().toLowerCase()))
 }

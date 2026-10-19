@@ -168,6 +168,7 @@ export interface CopilotAuthStorage {
 }
 
 interface CopilotAuthOptions {
+  isolated?: boolean
   fetch?: typeof fetch
   now?: () => number
   wait?: (ms: number, signal?: AbortSignal) => Promise<void>
@@ -223,7 +224,21 @@ export class CopilotAuthenticator {
   private revision = 0
   private readonly refreshing = new Map<string, { revision: number; promise: Promise<string> }>()
 
-  constructor(tokenDir?: string, options: CopilotAuthOptions = {}) {
+  private readonly instances = new Map<string, CopilotAuthenticator>()
+
+  /** Legacy identity keeps its old files; every additional identity has a separate namespace. */
+  forInstance(id: string): CopilotAuthenticator {
+    if (id === 'copilot') return this
+    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(id)) throw new Error('Invalid provider instance ID')
+    let auth = this.instances.get(id)
+    if (!auth) {
+      auth = new CopilotAuthenticator(join(this.tokenDir, 'instances', id), { ...this.options, isolated: true })
+      this.instances.set(id, auth)
+    }
+    return auth
+  }
+
+  constructor(tokenDir?: string, private readonly options: CopilotAuthOptions = {}) {
     const homeDir = env.HOME || env.USERPROFILE || '.'
     this.tokenDir = tokenDir ??
       env.GITHUB_COPILOT_TOKEN_DIR ??
@@ -231,15 +246,15 @@ export class CopilotAuthenticator {
 
     this.accessTokenFile = join(
       this.tokenDir,
-      env.GITHUB_COPILOT_ACCESS_TOKEN_FILE ?? 'access-token',
+      (!options.isolated ? env.GITHUB_COPILOT_ACCESS_TOKEN_FILE : undefined) ?? 'access-token',
     )
     this.apiKeyFile = join(
       this.tokenDir,
-      env.GITHUB_COPILOT_API_KEY_FILE ?? 'api-key.json',
+      (!options.isolated ? env.GITHUB_COPILOT_API_KEY_FILE : undefined) ?? 'api-key.json',
     )
     this.modelsCacheFile = join(
       this.tokenDir,
-      env.GITHUB_COPILOT_MODELS_CACHE_FILE ?? 'models.json',
+      (!options.isolated ? env.GITHUB_COPILOT_MODELS_CACHE_FILE : undefined) ?? 'models.json',
     )
     this.request = options.fetch ?? fetch
     this.now = options.now ?? Date.now

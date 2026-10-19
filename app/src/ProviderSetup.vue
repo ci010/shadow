@@ -2,11 +2,14 @@
   <section class="provider-setup" aria-labelledby="provider-setup-title">
     <h2 id="provider-setup-title" ref="title" class="setup-title" tabindex="-1">
       <span v-if="mode === 'add'" class="i-lucide-plus" aria-hidden="true" />
-      {{ mode === 'edit' ? t('{value1} settings', { value1: providerDisplayName(status?.provider ?? '') }) : mode === 'add' ? t('Add provider') : t('Connect a model provider') }}
+      {{ mode === 'edit' ? t('{value1} settings', { value1: editingLabel }) : mode === 'add' ? t('Add provider') : t('Connect a model provider') }}
     </h2>
     <p class="lead">{{ lead }}</p>
+    <label>{{ t('Display name') }} <input v-model="displayName" maxlength="100" :disabled="busy || saving"></label>
+    <p v-if="mode === 'edit'" class="help">{{ status?.provider }}</p>
+    <button v-if="mode === 'edit'" :disabled="busy || saving || !displayName.trim()" @click="renameInstance">{{ t('Rename') }}</button>
     <p v-if="error || message" class="notice error" role="alert">{{ error || message }}</p>
-    <p v-if="signedOut" class="notice" role="status">{{ t('Signed out of GitHub Copilot on {host} for this installation. Sign-ins on other hosts are unchanged.', { host: status?.host ?? 'github.com' }) }}</p>
+    <p v-if="signedOut" class="notice" role="status">{{ t('Signed out of Copilot instance {account} on {host}. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged.', { account: accountLabel, host: status?.host ?? 'github.com' }) }}</p>
     <p v-else-if="status?.reason && !status.ready && mode !== 'add' && !busy && !failedLogin && login.state !== 'succeeded'" class="notice error" role="alert">{{ providerDisplayName(status.provider) }} {{ t('is not ready.') }} {{ readinessMessage }}</p>
     <div v-if="mode !== 'edit' && !excludedProviders.includes('copilot')" class="method-tabs" :aria-label="t('Authentication method')">
       <button :aria-pressed="method === 'copilot'" :disabled="busy || saving" @click="method = 'copilot'">GitHub Copilot</button>
@@ -46,7 +49,7 @@
         <button v-if="mode === 'edit' && !confirmSignOut && !signedOut" :disabled="saving" @click="confirmSignOut = true">{{ t('Sign out of GitHub Copilot') }}</button>
       </div>
       <div v-if="confirmSignOut" class="notice" role="group" :aria-label="t('Confirm Copilot sign-out')">
-        <p>{{ t('Remove the saved Copilot sign-in for {host} from this Shadow installation? This affects all projects. Sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.', { host: status?.host ?? 'github.com' }) }}</p>
+        <p>{{ t('Remove the saved Copilot sign-in for instance {account} on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.', { account: accountLabel, host: status?.host ?? 'github.com' }) }}</p>
         <div class="actions">
           <button :disabled="saving" @click="confirmSignOut = false">{{ t('Cancel') }}</button>
           <button :disabled="saving" @click="signOut">{{ saving ? t('Signing out...') : t('Sign out of GitHub Copilot') }}</button>
@@ -81,6 +84,7 @@
 </template>
 
 <script setup lang="ts">
+import { createUuid } from './uuid.ts'
 import UiSelect from './components/UiSelect.vue'
 import { t, formatDateTime } from './i18n.ts'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -98,6 +102,10 @@ const props = withDefaults(defineProps<{
 }>(), { mode: 'setup', excludedProviders: () => [], active: true })
 const emit = defineEmits<{ configured: []; retry: []; close: []; cancel: []; saving: [value: boolean] }>()
 const title = ref<HTMLElement | null>(null)
+const editingLabel = computed(() => props.status?.name
+  ? `${props.status.name} · ${providerDisplayName(props.status.type ?? props.status.provider)}`
+  : providerDisplayName(props.status?.type ?? props.status?.provider ?? ''))
+const accountLabel = computed(() => `${editingLabel.value} (${props.status?.provider ?? instanceId.value})`)
 defineExpose({ focusTitle: () => title.value?.focus() })
 const knownProviders = [...providerPresets.map(item => item.id), 'custom']
 const lead = computed(() => props.mode === 'edit'
@@ -105,10 +113,10 @@ const lead = computed(() => props.mode === 'edit'
   : props.excludedProviders.includes('copilot')
     ? t('Configure an API key or add a named local model endpoint.')
     : t('Sign in with GitHub Copilot, or configure an API key or local model endpoint.'))
-const availablePresets = computed(() => providerPresets.filter(item => props.mode !== 'add' || !props.excludedProviders.includes(item.id)))
+const availablePresets = computed(() => providerPresets)
 const method = ref(props.status?.authMode === 'copilot' && props.mode !== 'add' ? 'copilot' : 'key')
 const initialProvider = props.mode === 'add' ? availablePresets.value[0]?.id ?? 'custom'
-  : props.status?.provider === 'copilot' ? 'openai' : props.status?.provider ?? 'openai'
+  : props.status?.authMode === 'copilot' ? 'openai' : props.status?.type ?? props.status?.provider ?? 'openai'
 const provider = ref(props.status?.authMode === 'none' || !knownProviders.includes(initialProvider) ? 'custom' : initialProvider)
 const customProvider = ref(props.mode !== 'add' && provider.value === 'custom' ? initialProvider : 'local')
 const model = ref(props.mode === 'add' || props.status?.authMode === 'copilot'
@@ -126,6 +134,14 @@ const hostError = computed(() => {
     return ''
   } catch { return t('Enter a valid enterprise hostname such as your-company.ghe.com, without a URL, port or path.') }
 })
+const newId = `account-${createUuid()}`
+const instanceId = computed(() => {
+  if (props.mode === 'edit') return props.status!.provider
+  if (props.mode === 'add') return method.value === 'copilot' ? `${newId}-copilot` : newId
+  if (method.value === 'copilot') return 'copilot'
+  return provider.value === 'custom' ? customProvider.value.trim() : provider.value
+})
+const displayName = ref(props.mode !== 'add' ? props.status?.name ?? '' : '')
 const apiKey = ref('')
 const message = ref('')
 const saving = ref(false)
@@ -135,7 +151,7 @@ const confirmSignOut = ref(false)
 const signedOut = ref(false)
 const login = ref<LoginView>({ state: 'idle' })
 let mounted = true
-const client = createProviderSetupClient(props.apiBase)
+const client = createProviderSetupClient(props.apiBase, fetch, () => instanceId.value)
 const controller = createDeviceLoginController(client, (value) => {
   if (!mounted) return
   login.value = value
@@ -143,7 +159,7 @@ const controller = createDeviceLoginController(client, (value) => {
 })
 const busy = computed(() => ['pending', 'starting', 'cancelling'].includes(login.value.state))
 const failedLogin = computed(() => ['denied', 'expired', 'error'].includes(login.value.state))
-const hasSavedKey = computed(() => props.status?.provider === (provider.value === 'custom' ? customProvider.value : provider.value) && props.status.hasApiKey)
+const hasSavedKey = computed(() => props.status?.provider === instanceId.value && props.status.hasApiKey)
 const readinessMessages: Record<string, string> = {
   get missing_credentials() { return t('Add credentials or choose another provider.') },
   get invalid_credentials() { return t('Credentials were rejected. Update them or sign in again.') },
@@ -171,15 +187,12 @@ function changeProvider() {
 }
 async function saveProvider() {
   const name = provider.value === 'custom' ? customProvider.value.trim() : provider.value
-  if (props.mode === 'add' && props.excludedProviders.includes(name)) {
-    message.value = t('This provider is already configured. Use its card above to update it, or choose a different name.')
-    return
-  }
   saving.value = true
   message.value = ''
   try {
     const result = await client.save({
-      provider: name,
+      provider: instanceId.value, type: props.status?.type ?? name,
+      ...(displayName.value.trim() ? { name: displayName.value.trim() } : {}),
       model: model.value.trim(),
       ...(apiKey.value ? { apiKey: apiKey.value } : {}),
       ...(provider.value === 'custom' ? { baseUrl: baseUrl.value.trim() } : {}),
@@ -202,7 +215,20 @@ async function startLogin() {
   copied.value = false
   confirmSignOut.value = false
   signedOut.value = false
-  await controller.start(undefined, normalizeCopilotHost(selectedCopilotHost.value))
+  saving.value = true
+  try {
+    if (props.mode === 'add' || (props.mode === 'setup' && displayName.value.trim())) await client.instance(instanceId.value, 'copilot', displayName.value.trim() || 'GitHub Copilot')
+    await controller.start(undefined, normalizeCopilotHost(selectedCopilotHost.value))
+  } catch (error) { message.value = error instanceof Error ? error.message : t('Could not save the provider. Please retry.') }
+  finally { saving.value = false }
+}
+async function renameInstance() {
+  saving.value = true
+  try {
+    await client.instance(instanceId.value, props.status?.type ?? props.status?.provider ?? 'copilot', displayName.value.trim())
+    emit('configured')
+  } catch (error) { message.value = error instanceof Error ? error.message : t('Could not save the provider. Please retry.') }
+  finally { saving.value = false }
 }
 async function signOut() {
   saving.value = true

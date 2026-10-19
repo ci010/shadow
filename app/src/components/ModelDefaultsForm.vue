@@ -6,7 +6,7 @@
     <p v-if="error" class="settings-error" role="alert">{{ error }} <button type="button" class="btn btn-sm" :disabled="loading || saving" @click="load">{{ t('Reload defaults') }}</button></p>
     <fieldset :disabled="loading || saving || !state">
       <label class="settings-field">{{ t('Default model') }}
-        <UiCombobox v-model="model" :options="models" :placeholder="t('Follow {parentLabel}: {value2}', { parentLabel: parentLabel, value2: state?.inherited.model ?? '' })" />
+        <UiCombobox v-model="model" :options="models" :labels="modelLabels" :placeholder="t('Follow {parentLabel}: {value2}', { parentLabel: parentLabel, value2: state?.inherited.model ?? '' })" />
       </label>
       <p v-if="modelsError" class="settings-error" role="alert">{{ modelsError }}</p>
       <label class="settings-field">{{ t('Default effort') }}
@@ -34,6 +34,7 @@
 </template>
 
 <script setup lang="ts">
+import { modelOptionLabel, type ProviderInstanceLabel } from '../model-selection.ts'
 import { CONTEXT_WINDOWS } from '../../../src/agent/llm-config.ts'
 import UiSelect from './UiSelect.vue'
 import UiCombobox from './UiCombobox.vue'
@@ -53,6 +54,8 @@ const contextWindow = ref('')
 const temperature = ref<string | number>('')
 const inheritedEffort = computed(() => currentEffort(state.value?.inherited ?? {}))
 const models = ref<string[]>([])
+const providers = ref<ProviderInstanceLabel[]>([])
+const modelLabels = computed(() => Object.fromEntries(models.value.map(model => [model, modelOptionLabel(model, providers.value)])))
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
@@ -75,7 +78,7 @@ async function load() {
   await Promise.all([
     client.load(controller.signal).then(value => { if (!controller.signal.aborted) accept(value) })
       .catch(cause => { if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load defaults.') }),
-    createProjectSettingsClient(props.apiBase).models(controller.signal).then(value => { if (!controller.signal.aborted) models.value = value })
+    createProjectSettingsClient(props.apiBase).catalog(controller.signal).then(value => { if (!controller.signal.aborted) { models.value = value.models; providers.value = value.providers } })
       .catch(cause => { if (!controller.signal.aborted) modelsError.value = cause instanceof Error ? cause.message : t('Could not load model choices.') }),
   ])
   if (request === controller) loading.value = false

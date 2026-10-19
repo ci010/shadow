@@ -254,6 +254,9 @@ to inherit rather than copying the currently resolved value. Provider
 connections belong to **App settings**, while Project defaults belong to
 **Project settings → Models**.
 
+[Multiple provider accounts](provider-instances.md) can share the same provider type.
+Use stable instance IDs for model references and editable display names for labels.
+
 For Copilot accounts on **GitHub Enterprise Cloud (`*.ghe.com`)**, open the
 Copilot provider's sign-in form in **App settings**, choose **GitHub Enterprise
 Cloud**, and enter the host where your account has its Copilot license (for

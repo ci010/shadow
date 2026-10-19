@@ -19,9 +19,10 @@
           <article v-for="item in providers" :key="item.provider" class="provider-card" :data-provider="item.provider">
             <div class="provider-card-heading">
               <span :class="item.authMode === 'copilot' ? 'i-lucide-github' : item.authMode === 'none' ? 'i-lucide-server' : 'i-lucide-key-round'" class="provider-icon" aria-hidden="true" />
-              <h2>{{ providerDisplayName(item.provider) }}</h2>
+              <h2>{{ item.name || providerDisplayName(item.type ?? item.provider) }}</h2>
               <span v-if="item.selected" class="provider-selected">{{ t('Selected') }}</span>
             </div>
+            <p class="provider-endpoint">{{ item.provider }}</p>
             <p class="provider-auth">{{ authLabels[item.authMode] }}</p>
             <p v-if="item.baseUrl" class="provider-endpoint" :title="item.baseUrl">{{ item.baseUrl }}</p>
             <p v-else class="provider-endpoint">{{ item.authMode === 'copilot' ? t('GitHub account') : t('Provider endpoint') }}</p>
@@ -29,14 +30,14 @@
               <span class="provider-state" :class="{ 'needs-attention': item.selected && !status?.ready }">
                 {{ item.selected ? status?.ready ? t('Ready') : t('Needs attention') : t('Configured') }}
               </span>
-              <button :aria-label="t('Configure {value1}', { value1: providerDisplayName(item.provider) })" :aria-pressed="editing === item.provider" :disabled="saving" @click="editProvider(item.provider)">
+              <button :aria-label="t('Configure {value1}', { value1: item.name || providerDisplayName(item.type ?? item.provider) })" :aria-pressed="editing === item.provider" :disabled="saving" @click="editProvider(item.provider)">
                 <span class="i-lucide-settings-2" aria-hidden="true" /> {{ t('Configure') }}
               </button>
             </div>
           </article>
         </div>
         <ProviderSetup
-          :key="apiBase + ':' + (editing ?? formMode) + ':' + providers.map(item => item.provider).join(',')"
+          :key="apiBase + ':' + (editing ?? formMode) + ':' + formGeneration"
           ref="setup"
           class="provider-form"
           :api-base="apiBase"
@@ -44,9 +45,9 @@
           :status="formStatus"
           :error="error"
           :mode="formMode"
-          :excluded-providers="formMode === 'add' ? providers.map(item => item.provider) : []"
+          :excluded-providers="[]"
           :can-close="status?.ready"
-          @configured="$emit('configured')"
+          @configured="configured"
           @retry="$emit('retry')"
           @close="$emit('close')"
           @cancel="finishEditing"
@@ -75,7 +76,13 @@ const props = defineProps<{
   embedded?: boolean
   active?: boolean
 }>()
-defineEmits<{ configured: []; retry: []; close: [] }>()
+const emit = defineEmits<{ configured: []; retry: []; close: [] }>()
+const formGeneration = ref(0)
+function configured() {
+  formGeneration.value++
+  window.dispatchEvent(new CustomEvent('shadow:config-changed', { detail: {} }))
+  emit('configured')
+}
 
 const providers = ref<ConfiguredProvider[]>([])
 const loading = ref(true)
@@ -89,11 +96,11 @@ const formMode = computed(() => editing.value ? 'edit' : props.status?.ready || 
 const formStatus = computed<ProviderSetupStatus | null>(() => {
   const item = providers.value.find(item => item.provider === editing.value)
   if (!item) return formMode.value === 'setup' ? props.status : null
-  if (item.selected && props.status?.provider === item.provider) return props.status
+  if (item.selected && props.status?.provider === item.provider) return { ...props.status, type: item.type, name: item.name }
   return {
-    provider: item.provider, authMode: item.authMode, hasApiKey: item.hasApiKey,
+    provider: item.provider, type: item.type, name: item.name, authMode: item.authMode, hasApiKey: item.hasApiKey,
     baseUrl: item.baseUrl, host: item.host, ready: false,
-    model: item.model ?? providerPresets.find(preset => preset.id === item.provider)?.model ?? '',
+    model: item.model ?? providerPresets.find(preset => preset.id === (item.type ?? item.provider))?.model ?? '',
   }
 })
 let request: AbortController | undefined

@@ -3,6 +3,7 @@
     <template #trigger>
       <span class="model-label">{{ selection.inheriting?.value ? conversationDefaults ? t('Default · ') : t('Project · ') : '' }}{{ modelDisplayName(selection.current.value) || (selection.loading.value ? t('Loading models...') : t('Choose model')) }}</span>
       <span v-if="settings" class="model-effort"><span aria-hidden="true">·</span> {{ effortLabel }}</span>
+      <span v-if="modelProvider(selection.current.value)" class="model-account">{{ modelAccountLabel(selection.current.value, selection.providers?.value) }}</span>
       <span class="model-chevron i-lucide-chevron-down" aria-hidden="true" />
     </template>
     <template #default="{ close }">
@@ -32,7 +33,7 @@
           <span class="model-option-copy"><span>{{ conversationDefaults ? t('Follow configured default') : t('Follow project default') }}</span><small>{{ modelDisplayName(selection.inherited.value) }}</small></span>
         </button>
         <button v-for="model in options" :key="model" class="model-option" :aria-pressed="!selection.inheriting?.value && model === selection.current.value" :title="model" @click="choose(model, close)">
-          <span class="model-option-copy"><span>{{ modelDisplayName(model) }}</span><small v-if="modelProvider(model)">{{ modelProvider(model) }}</small></span>
+          <span class="model-option-copy"><span>{{ modelDisplayName(model) }}</span><small v-if="modelProvider(model)">{{ modelAccountLabel(model, selection.providers?.value) }} · {{ modelProvider(model) }}</small></span>
           <span v-if="!selection.inheriting?.value && model === selection.current.value" class="model-check i-lucide-check" aria-hidden="true" />
         </button>
         <p v-if="!options.length" class="model-empty">{{ t('No matching models.') }}</p>
@@ -56,7 +57,7 @@ import { t } from '../i18n.ts'
 import { computed, nextTick, ref } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import ReasoningControls from './ReasoningControls.vue'
-import { filterModelOptions, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
+import { filterModelOptions, modelAccountLabel, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
 import { contextWindowLabel, currentEffort, effortOptions, type ReasoningSettings } from '../session-settings.ts'
 
 const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean; conversationDefaults?: boolean; futureRuns?: boolean }>()
@@ -80,7 +81,7 @@ const effortLabel = computed(() => {
     : effortOptions.find(option => option.value === choice)!.label
 })
 const triggerTitle = computed(() => `${selection?.current.value || t('Choose model')}${props.settings ? ` · ${effortLabel.value}` : ''}`)
-const options = computed(() => filterModelOptions(selection?.options.value ?? [], selection?.current.value ?? '', query.value))
+const options = computed(() => filterModelOptions(selection?.options.value ?? [], selection?.current.value ?? '', query.value, selection?.providers?.value))
 function resetMenu() {
   page.value = props.settings ? 'menu' : 'model'
   query.value = ''

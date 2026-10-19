@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { setImmediate } from 'node:timers/promises'
 import { Hono } from 'hono'
 import { ConfigSchema, type Config } from '../config/schema.ts'
+import { AppProviderConfigStore } from '../projects/config-store.ts'
 import { ConfigStore } from '../config/store.ts'
 import { configPlugin } from '../config/routes.ts'
 import { CopilotAuthenticator, COPILOT_VERIFICATION_URI } from './copilot.ts'
@@ -71,6 +72,7 @@ function fixture(
   raw: Record<string, unknown>,
   auth = authHarness(),
   request: typeof fetch = (async () => Response.json({ data: [] })) as typeof fetch,
+  appStore = false,
 ) {
   const root = join(process.cwd(), '.test-data', `setup-${randomUUID()}`)
   mkdirSync(root, { recursive: true })
@@ -82,7 +84,7 @@ function fixture(
   let failApply = false
   let activationGate: Promise<void> | undefined
   let releaseActivation: (() => void) | undefined
-  const store = new ConfigStore({
+  const store = new (appStore ? AppProviderConfigStore : ConfigStore)({
     configPath: path, getConfig: () => active,
     onChanged: async (config) => {
       if (failApply) throw new Error('synthetic-activation-secret')
@@ -540,7 +542,7 @@ test('ordinary config change invalidates a pending login before it can select a 
   assert.equal(f.auth.files.size, 0)
 })
 
-test('provider routes read live provider and gate model listing before credentials are ready', async () => {
+test('provider routes list live providers independently of primary readiness', async () => {
   let calls = 0
   let provider: LLMProvider = {
     name: 'first', listModels: async () => { calls++; return ['first'] },
@@ -551,8 +553,8 @@ test('provider routes read live provider and gate model listing before credentia
   providerPlugin(() => provider, async () => ({
     provider: 'openai', model: 'gpt-4o', authMode: 'api-key', ready, hasApiKey: ready,
   }))(app)
-  assert.deepEqual((await (await app.request('/debug/models')).json()).models, [])
-  assert.equal(calls, 0)
+  assert.deepEqual((await (await app.request('/debug/models')).json()).models, ['first'])
+  assert.equal(calls, 1)
   ready = true
   provider = { ...provider, name: 'second', listModels: async () => ['second'] }
   assert.deepEqual((await (await app.request('/debug/models')).json()).models, ['second'])
@@ -787,4 +789,65 @@ test('Agnes rejected credentials and denied permissions block saving without lea
     assert.equal(f.active(), active)
     assert.equal(f.applyCount(), 0)
   }
+})
+
+
+test('instance metadata creation and rename preserve default and secrets; type cannot change', async t => {
+  const f = fixture(t, { agent: { model: 'deepseek-flash@deepseek' }, providers: { deepseek: { apiKey: 'synthetic-first' } } })
+  const metadata = (body: unknown) => f.app.request('/api/provider/instances', { method: 'POST', body: JSON.stringify(body) })
+  assert.equal((await metadata({ provider: 'work', type: 'deepseek', name: 'Work' })).status, 200)
+  assert.equal(f.active().agent.model, 'deepseek-flash@deepseek')
+  assert.equal((await f.setup.save({ provider: 'work', type: 'deepseek', model: 'deepseek-flash', apiKey: 'synthetic-second' })).ready, true)
+  assert.equal((await metadata({ provider: 'work', type: 'deepseek', name: 'Renamed' })).status, 200)
+  assert.equal(f.active().providers.work.apiKey, 'synthetic-second')
+  assert.equal(f.active().providers.deepseek.apiKey, 'synthetic-first')
+  assert.equal(f.active().providers.work.name, 'Renamed')
+  assert.equal((await metadata({ provider: 'work', type: 'copilot', name: 'Wrong type' })).status, 409)
+  assert.equal(f.active().providers.work.type, 'deepseek')
+})
+
+test('Copilot login, cancel, sign-out and status routes are scoped to the instance', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o@work' }, providers: { work: { type: 'copilot' }, personal: { type: 'copilot' } } })
+  const start = async (provider: string, attemptId: string) => {
+    const response = await f.app.request(`/api/auth/login?provider=${provider}`, { method: 'POST', body: JSON.stringify({ attemptId, reauthenticate: true }) })
+    assert.equal(response.status, 200)
+    return await response.json()
+  }
+  const id = randomUUID()
+  assert.equal((await start('work', id)).state, 'pending')
+  assert.equal((await start('personal', id)).state, 'pending', 'same client attempt ID is scoped per instance')
+  await f.app.request(`/api/auth/login/${id}?provider=work`, { method: 'DELETE' })
+  assert.equal((await (await f.app.request(`/api/auth/login/${id}?provider=work`)).json()).state, 'cancelled')
+  assert.equal((await (await f.app.request(`/api/auth/login/${id}?provider=personal`)).json()).state, 'pending')
+  f.auth.releasePoll()
+  for (let i = 0; i < 20; i++) await setImmediate()
+  assert.equal((await (await f.app.request(`/api/auth/login/${id}?provider=personal`)).json()).state, 'succeeded')
+  assert.ok(f.auth.auth.forInstance('personal').hasAccessToken())
+  assert.equal(f.auth.auth.forInstance('work').hasAccessToken(), false)
+  await f.app.request('/api/auth/logout?provider=work', { method: 'POST' })
+  assert.ok(f.auth.auth.forInstance('personal').hasAccessToken())
+  const missing = await f.app.request('/api/auth/login?provider=missing', { method: 'POST', body: '{}' })
+  assert.equal(missing.status, 409)
+})
+
+
+test('Main App store keeps defaults while concurrent Copilot accounts commit independently', async t => {
+  const f = fixture(t, { agent: { model: 'gpt-4o@work' }, providers: { work: { type: 'copilot' }, personal: { type: 'copilot' } } }, authHarness(), undefined, true)
+  const ids = [randomUUID(), randomUUID()]
+  for (const [index, provider] of ['work', 'personal'].entries()) {
+    const response = await f.app.request(`/api/auth/login?provider=${provider}`, { method: 'POST', body: JSON.stringify({ attemptId: ids[index], reauthenticate: true }) })
+    assert.equal((await response.json()).state, 'pending')
+  }
+  f.auth.releasePoll()
+  for (let i = 0; i < 30; i++) await setImmediate()
+  for (const [index, provider] of ['work', 'personal'].entries()) {
+    const status = await (await f.app.request(`/api/auth/login/${ids[index]}?provider=${provider}`)).json()
+    assert.equal(status.state, 'succeeded')
+  }
+  assert.equal(f.active().agent.model, 'gpt-4o@work')
+  assert.equal((await f.setup.status()).ready, true)
+  await f.app.request('/api/auth/logout?provider=work', { method: 'POST' })
+  assert.equal((await f.setup.status()).ready, false, 'selected-account readiness does not reuse pre-logout cache')
+  assert.ok(f.auth.auth.forInstance('personal').hasValidApiKey())
+  assert.equal(f.active().agent.model, 'gpt-4o@work', 'sign-out must not select another account')
 })

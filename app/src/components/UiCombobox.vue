@@ -2,7 +2,7 @@
   <div class="ui-combobox">
     <input ref="input" v-bind="$attrs" :value="modelValue" role="combobox" aria-autocomplete="list" :aria-expanded="open && matches.length > 0" :aria-controls="id" :aria-activedescendant="open && active >= 0 ? `${id}-${active}` : undefined" @input="update" @focus="open = true" @blur="blur" @keydown="keydown" />
     <Teleport to="body"><ul v-if="open && matches.length" ref="panel" :id="id" role="listbox" :style="position">
-      <li v-for="(option, index) in matches" :id="`${id}-${index}`" :key="option" role="option" :aria-selected="index === active" :class="{ active: index === active }" @pointerdown="prepareClick" @click="choose(option)" @pointermove="hover($event, index)">{{ option }}</li>
+      <li v-for="(option, index) in matches" :id="`${id}-${index}`" :key="option" role="option" :aria-selected="index === active" :class="{ active: index === active }" @pointerdown="prepareClick" @click="choose(option)" @pointermove="hover($event, index)">{{ labels?.[option] ?? option }}</li>
     </ul></Teleport>
   </div>
 </template>
@@ -11,7 +11,7 @@
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { selectPopupPosition } from '../select-control.ts'
 defineOptions({ inheritAttrs: false })
-const props = defineProps<{ modelValue: string; options: string[] }>()
+const props = defineProps<{ modelValue: string; options: string[]; labels?: Record<string, string> }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 const id = useId()
 const input = ref<HTMLInputElement>()
@@ -34,7 +34,7 @@ watch(open, value => {
 })
 function cleanup() { window.removeEventListener('resize', place); window.removeEventListener('scroll', dismissOnScroll, true); window.visualViewport?.removeEventListener('resize', place) }
 onUnmounted(cleanup)
-const matches = computed(() => props.options.filter(option => option.toLocaleLowerCase().includes(props.modelValue.toLocaleLowerCase())))
+const matches = computed(() => props.options.filter(option => `${option} ${props.labels?.[option] ?? ""}`.toLocaleLowerCase().includes(props.modelValue.toLocaleLowerCase())))
 function update(event: Event) { emit('update:modelValue', (event.target as HTMLInputElement).value); active.value = -1; open.value = true }
 function choose(value: string) { emit('update:modelValue', value); open.value = false; active.value = -1 }
 let touching = false

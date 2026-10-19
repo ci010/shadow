@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import type { RuntimeDiagnosticLog, ReadinessResult } from '../runtime/diagnostic-log.ts'
 import { normalizeCopilotHost } from '../shared/copilot-host.ts'
@@ -7,7 +8,7 @@ import { ConfigStore, REDACTED_SECRET } from '../config/store.ts'
 import { ConfigSchema, type Config } from '../config/schema.ts'
 import { DEFAULT_COPILOT_MODEL } from '../config/defaults.ts'
 import { parseModelSpec } from './aggregated.ts'
-import { detectProvider, knownProviderNames, resolveProviderSettings } from './factory.ts'
+import { detectProvider, providerType, knownProviderNames, resolveProviderSettings } from './factory.ts'
 import {
   CopilotAuthenticator,
   CopilotAuthError,
@@ -18,6 +19,8 @@ import {
 
 export interface ProviderSetupStatus {
   provider: string
+  type?: string
+  name?: string
   model: string
   authMode: 'api-key' | 'copilot' | 'none'
   ready: boolean
@@ -29,6 +32,8 @@ export interface ProviderSetupStatus {
 
 export interface ConfiguredProvider {
   provider: string
+  type?: string
+  name?: string
   authMode: 'api-key' | 'copilot' | 'none'
   hasApiKey: boolean
   selected: boolean
@@ -55,6 +60,8 @@ const Model = z.string().trim().min(1).max(256).refine((value) => !/[\s\x00-\x1f
 const AttemptId = z.string().uuid()
 const SetupInput = z.object({
   provider: ProviderName,
+  type: ProviderName.optional(),
+  name: z.string().trim().min(1).max(100).optional(),
   model: Model,
   apiKey: z.string().trim().max(16_384).refine((value) => value !== REDACTED_SECRET && !/[\r\n\x00]/.test(value)).optional(),
   baseUrl: z.string().trim().max(2048).refine((value) => {
@@ -91,6 +98,7 @@ interface Flow {
 }
 
 interface SetupOptions {
+  instanceId?: string
   diagnostics?: RuntimeDiagnosticLog
   getConfig: () => Config
   store: ConfigStore
@@ -108,6 +116,11 @@ function selectedModel(input: SetupInput): string {
 function changeSelection(raw: Record<string, unknown>, input: SetupInput): Record<string, unknown> {
   const providers = { ...(raw.providers as Record<string, Record<string, unknown>> ?? {}) }
   const provider = { ...providers[input.provider] }
+  if (input.type !== undefined) {
+    if (providers[input.provider] && (provider.type ?? input.provider) !== input.type) throw new Error('Provider type cannot change')
+    provider.type = input.type
+  }
+  if (input.name !== undefined) provider.name = input.name
   if (input.apiKey !== undefined) provider.apiKey = input.apiKey
   if (input.baseUrl !== undefined) {
     if (input.baseUrl) provider.baseUrl = input.baseUrl
@@ -132,6 +145,19 @@ function safeBaseUrl(baseUrl?: string): string | undefined {
 
 /** Provider-owned authentication lifecycle, independent of any chat channel. */
 export class ProviderSetup {
+  private readonly children = new Map<string, ProviderSetup>()
+  private readonly rootAuth: CopilotAuthenticator
+  private get instanceId(): string { return this.options.instanceId ?? 'copilot' }
+  private instance(id = 'copilot'): ProviderSetup {
+    if (id === this.instanceId) return this
+    if (!ProviderName.safeParse(id).success || providerType(this.options.getConfig(), id) !== 'copilot') throw new Error('Unknown Copilot instance')
+    let child = this.children.get(id)
+    if (!child) {
+      child = new ProviderSetup({ ...this.options, instanceId: id, auth: this.rootAuth })
+      this.children.set(id, child)
+    }
+    return child
+  }
   private readonly auth: CopilotAuthenticator
   private readonly request: typeof fetch
   private readonly now: () => number
@@ -139,10 +165,11 @@ export class ProviderSetup {
   private active?: Flow
   private readonly shutdown = new AbortController()
   private readonly cleanupTimer: ReturnType<typeof setInterval>
-  private readiness?: { host: string; config: Config; until: number; value: Promise<ProviderSetupStatus> }
+  private readiness?: { revision: number; host: string; config: Config; until: number; value: Promise<ProviderSetupStatus> }
 
   constructor(private readonly options: SetupOptions) {
-    this.auth = options.auth ?? new CopilotAuthenticator()
+    this.rootAuth = options.auth ?? new CopilotAuthenticator()
+    this.auth = this.rootAuth.forInstance(this.instanceId)
     this.request = options.fetch ?? fetch
     this.now = options.now ?? Date.now
     this.cleanupTimer = setInterval(() => this.prune(), 30_000)
@@ -151,6 +178,7 @@ export class ProviderSetup {
 
   invalidate(): void {
     this.readiness = undefined
+    for (const child of this.children.values()) child.invalidate()
   }
 
   configured(): ConfiguredProvider[] {
@@ -158,20 +186,22 @@ export class ProviderSetup {
     const spec = parseModelSpec(config.agent.model)
     const selected = spec.provider ?? detectProvider(spec.model)
     const names = new Set([...Object.keys(config.providers), ...knownProviderNames(), selected])
-    const cachedCopilot = this.auth.hasAccessToken() || this.auth.hasValidApiKey()
     const providers: ConfiguredProvider[] = []
     for (const provider of names) {
       const entry = config.providers[provider]
+      const type = providerType(config, provider)
+      const auth = type === 'copilot' ? this.rootAuth.forInstance(provider) : undefined
+      const cachedCopilot = auth && (auth.hasAccessToken() || auth.hasValidApiKey())
       const settings = resolveProviderSettings(config, provider)
-      const explicit = entry && (provider === 'copilot' || entry.apiKey?.trim() ||
+      const explicit = entry && (entry.type || type === 'copilot' || entry.apiKey?.trim() ||
         entry.baseUrl?.trim() || entry.quickModel?.trim() ||
         Object.keys(entry.modelContextWindows ?? {}).length > 0)
-      if (!explicit && !settings.apiKey.trim() && !(provider === 'copilot' && cachedCopilot)) continue
+      if (!explicit && !settings.apiKey.trim() && !(type === 'copilot' && cachedCopilot)) continue
       const baseUrl = safeBaseUrl(settings.baseUrl)
       providers.push({
-        provider,
+        provider, ...(entry?.type ? { type } : {}), ...(entry?.name ? { name: entry.name } : {}),
         authMode: settings.authMode,
-        ...(provider === 'copilot' ? { host: this.auth.getHost() } : {}),
+        ...(type === 'copilot' ? { host: auth!.getHost() } : {}),
         hasApiKey: !!settings.apiKey,
         selected: provider === selected,
         ...(baseUrl ? { baseUrl } : {}),
@@ -183,18 +213,23 @@ export class ProviderSetup {
 
   async status(refresh = false): Promise<ProviderSetupStatus> {
     const config = this.options.getConfig()
-    if (!refresh && this.readiness?.host === this.auth.getHost() && this.readiness.config === config && this.readiness.until > this.now()) return this.readiness.value
+    const selected = parseModelSpec(config.agent.model)
+    const selectedId = selected.provider ?? detectProvider(selected.model)
+    const auth = this.rootAuth.forInstance(providerType(config, selectedId) === 'copilot' ? selectedId : 'copilot')
+    if (!refresh && this.readiness?.revision === auth.getRevision() && this.readiness?.host === auth.getHost() && this.readiness.config === config && this.readiness.until > this.now()) return this.readiness.value
     const value = this.check(config, this.shutdown.signal, refresh)
-    this.readiness = { host: this.auth.getHost(), config, until: this.now() + 30_000, value }
+    this.readiness = { revision: auth.getRevision(), host: auth.getHost(), config, until: this.now() + 30_000, value }
     return value
   }
 
   private async check(config: Config, signal = this.shutdown.signal, refresh = false): Promise<ProviderSetupStatus> {
     const spec = parseModelSpec(config.agent.model)
     const provider = spec.provider ?? detectProvider(spec.model)
+    const type = providerType(config, provider)
+    const auth = type === 'copilot' ? this.rootAuth.forInstance(provider) : this.auth
     const settings = resolveProviderSettings(config, provider)
     const status: ProviderSetupStatus = {
-      provider,
+      provider, type, name: config.providers[provider]?.name,
       model: config.agent.model,
       authMode: settings.authMode,
       ready: false,
@@ -202,10 +237,10 @@ export class ProviderSetup {
       hasApiKey: !!settings.apiKey,
     }
     if (settings.authMode === 'copilot') {
-      status.host = this.auth.getHost()
+      status.host = auth.getHost()
       try {
-        await this.auth.getApiKey(signal, refresh)
-        if (status.host !== this.auth.getHost()) throw new CopilotAuthError('cancelled')
+        await auth.getApiKey(signal, refresh)
+        if (status.host !== auth.getHost()) throw new CopilotAuthError('cancelled')
         status.ready = true
       } catch (error) {
         const code = error instanceof CopilotAuthError ? error.code : 'network'
@@ -225,7 +260,7 @@ export class ProviderSetup {
       return result === 'ready' ? { ...status, ready: true } : { ...status, reason: result }
     }
     try {
-      const headers: Record<string, string> = provider === 'anthropic'
+      const headers: Record<string, string> = type === 'anthropic'
         ? { 'x-api-key': settings.apiKey, 'anthropic-version': '2023-06-01' }
         : { authorization: `Bearer ${settings.apiKey}` }
       const response = await this.request(`${status.baseUrl.replace(/\/+$/, '')}/models`, {
@@ -237,7 +272,7 @@ export class ProviderSetup {
       if (response.status === 401) return finish('invalid_credentials')
       // Agnes account/API-key permissions can deny access without rejecting the key.
       // Do not present a forbidden model listing as proof that credentials are wrong.
-      if (response.status === 403) return finish(provider === 'agnes' ? 'permission_denied' : 'invalid_credentials')
+      if (response.status === 403) return finish(type === 'agnes' ? 'permission_denied' : 'invalid_credentials')
       if (!response.ok && response.status !== 404 && response.status !== 405) return finish('network_error')
       return finish('ready')
     } catch {
@@ -285,11 +320,11 @@ export class ProviderSetup {
     }
     const current = parseModelSpec(this.options.getConfig().agent.model)
     const requested = model ? parseModelSpec(model) : undefined
-    if (requested?.provider && requested.provider !== 'copilot') return Promise.reject(new Error('Select a Copilot model.'))
+    if (requested?.provider && requested.provider !== this.instanceId) return Promise.reject(new Error('Select a Copilot model.'))
     const flow: Flow = {
       reauthenticate, host: targetHost,
       status: { loginId: attemptId, state: 'pending', host: targetHost },
-      model: `${requested?.model ?? ((current.provider ?? detectProvider(current.model)) === 'copilot' ? current.model : DEFAULT_COPILOT_MODEL)}@copilot`,
+      model: `${requested?.model ?? ((current.provider ?? detectProvider(current.model)) === this.instanceId ? current.model : DEFAULT_COPILOT_MODEL)}@${this.instanceId}`,
       controller: new AbortController(),
       config: this.options.getConfig(),
       createdAt: this.now(),
@@ -352,12 +387,12 @@ export class ProviderSetup {
   }
 
   private async commit(flow: Flow, grant?: CopilotGrant, signal = flow.controller.signal): Promise<ProviderSetupStatus> {
-    const input = { provider: 'copilot', model: flow.model }
+    const input = { provider: this.instanceId, model: flow.model }
     let rollback: (() => void) | undefined
     try {
       await this.options.store.update((raw) => {
         signal.throwIfAborted()
-        if (flow.config !== this.options.getConfig() || (!grant && flow.host !== this.auth.getHost())) {
+        if ((!isDeepStrictEqual(flow.config?.providers[this.instanceId], this.options.getConfig().providers[this.instanceId]) || flow.config?.agent.model !== this.options.getConfig().agent.model) || (!grant && flow.host !== this.auth.getHost())) {
           throw new CopilotAuthError('cancelled')
         }
         if (grant) rollback = this.auth.persistGrant(grant, signal)
@@ -369,7 +404,7 @@ export class ProviderSetup {
       throw error
     }
     this.invalidate()
-    return { provider: 'copilot', model: flow.model, authMode: 'copilot', ready: true, hasApiKey: false, host: this.auth.getHost() }
+    return { provider: this.instanceId, model: flow.model, authMode: 'copilot', ready: true, hasApiKey: false, host: this.auth.getHost() }
   }
 
   private fail(flow: Flow, error: unknown): void {
@@ -437,6 +472,7 @@ export class ProviderSetup {
   }
 
   async dispose(): Promise<void> {
+    await Promise.all([...this.children.values()].map(child => child.dispose()))
     clearInterval(this.cleanupTimer)
     this.shutdown.abort()
     this.cancelActive()
@@ -447,6 +483,21 @@ export class ProviderSetup {
     return (app) => {
       app.use('/api/provider/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next() })
       app.use('/api/auth/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next() })
+      app.post('/api/provider/instances', async (c) => {
+        const input = z.object({ provider: ProviderName, type: ProviderName, name: z.string().trim().min(1).max(100) }).strict().safeParse(await c.req.json().catch(() => null))
+        if (!input.success) return c.json({ error: 'Invalid instance settings.' }, 400)
+        try {
+          await this.options.store.update(raw => {
+            const providers = { ...(raw.providers as Record<string, Record<string, unknown>> ?? {}) }
+            const old = providers[input.data.provider]
+            if (old && (old.type ?? input.data.provider) !== input.data.type) throw new Error('Provider type cannot change')
+            providers[input.data.provider] = { ...old, type: input.data.type, name: input.data.name }
+            return { ...raw, providers }
+          }, c.req.raw.signal)
+          this.invalidate()
+          return c.json({ provider: input.data.provider })
+        } catch { return c.json({ error: 'Instance could not be saved.' }, 409) }
+      })
       app.get('/api/provider/configured', (c) => c.json({ providers: this.configured() }))
       app.get('/api/provider/setup', async (c) => c.json(await this.status(c.req.query('refresh') === 'true')))
       app.post('/api/provider/setup', async (c) => {
@@ -459,33 +510,33 @@ export class ProviderSetup {
       app.get('/api/auth', async (c) => {
         c.header('Cache-Control', 'no-store')
         try {
-          await this.auth.getApiKey(this.shutdown.signal)
+          await this.instance(c.req.query('provider')).auth.getApiKey(this.shutdown.signal)
           return c.json({ authenticated: true, apiKeyValid: true })
         } catch { return c.json({ authenticated: false, apiKeyValid: false }) }
       })
       app.post('/api/auth/login', async (c) => {
         const input = LoginInput.safeParse(await c.req.json().catch(() => null))
         if (!input.success) return c.json({ error: 'Invalid sign-in request.' }, 400)
-        try { return c.json(await this.start(input.data.model, input.data.attemptId, c.req.raw.signal, input.data.reauthenticate, input.data.host)) } catch {
+        try { return c.json(await this.instance(c.req.query('provider')).start(input.data.model, input.data.attemptId, c.req.raw.signal, input.data.reauthenticate, input.data.host)) } catch {
           return c.json({ error: 'Sign-in could not be started. Cancel the current attempt and try again.' }, 409)
         }
       })
       app.post('/api/auth/logout', (c) => {
         try {
-          this.signOut()
+          this.instance(c.req.query('provider')).signOut()
           return c.json({ authenticated: false })
         } catch {
           return c.json({ error: 'Copilot credentials could not be removed. Check access to the application data directory and retry.' }, 500)
         }
       })
       app.get('/api/auth/login/:loginId', (c) => {
-        const status = this.get(c.req.param('loginId'))
+        const status = this.instance(c.req.query('provider')).get(c.req.param('loginId'))
         return status ? c.json(status) : c.json({ error: 'Unknown sign-in attempt.' }, 404)
       })
       app.delete('/api/auth/login/:loginId', (c) => {
         const id = AttemptId.safeParse(c.req.param('loginId'))
         if (!id.success) return c.json({ error: 'Invalid sign-in identifier.' }, 400)
-        try { return c.json(this.cancel(id.data)) } catch {
+        try { return c.json(this.instance(c.req.query('provider')).cancel(id.data)) } catch {
           return c.json({ error: 'Sign-in attempt limit reached.' }, 409)
         }
       })

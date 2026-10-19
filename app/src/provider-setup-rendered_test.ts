@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import test, { type TestContext } from 'node:test'
-import { createRenderer, defineComponent, h, nextTick, type Component } from 'vue'
+import { createRenderer, defineComponent, h, nextTick, ref, type Component } from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
+const { provideModelSelection } = createRequire(import.meta.url)('./model-selection.ts') as typeof import('./model-selection.ts')
 
 
 interface Element {
@@ -30,7 +31,9 @@ function loadComponent(url: URL): Component {
   const module = { exports: {} as { default: Component } }
   const require = createRequire(url)
   new Function('require', 'module', 'exports', outputText)(
-    (id: string) => id.endsWith('/UiSelect.vue') ? { default: defineComponent({
+    (id: string) => id.endsWith('/ComposerPopover.vue') ? { default: defineComponent({
+      setup(_props, { slots }) { return () => h('div', [slots.trigger?.(), slots.default?.({ close() {} })]) },
+    }) } : id.endsWith('/UiSelect.vue') ? { default: defineComponent({
       props: ['modelValue', 'disabled'], emits: ['update:modelValue'],
       setup(props, { emit, slots }) {
         return () => h('select', { value: props.modelValue, disabled: props.disabled,
@@ -42,7 +45,7 @@ function loadComponent(url: URL): Component {
   return module.exports.default
 }
 
-function mount(t: TestContext, props: Record<string, unknown> = {}, shadowDesktop?: unknown, open: (...args: unknown[]) => void = () => {}) {
+function mount(t: TestContext, props: Record<string, unknown> = {}, shadowDesktop?: unknown, open: (...args: unknown[]) => void = () => {}, component?: Component) {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
   const previousDocumentType = Object.getOwnPropertyDescriptor(globalThis, 'Document')
@@ -68,7 +71,7 @@ function mount(t: TestContext, props: Record<string, unknown> = {}, shadowDeskto
   })
   const root = element('root')
   // Render the production ProviderSetup template; only the generic select widget is stubbed.
-  const app = renderer.createApp(loadComponent(new URL('./ProviderSetup.vue', import.meta.url)), props)
+  const app = renderer.createApp(component ?? loadComponent(new URL('./ProviderSetup.vue', import.meta.url)), props)
   app.mount(root)
   t.after(() => {
     app.unmount()
@@ -116,7 +119,7 @@ for (const host of ['github.com', 'octocat.ghe.com']) {
       assert.match(view.text(), new RegExp(`Current Copilot host: ${host.replaceAll('.', '\\.')}`))
       const select = () => view.nodes().find(node => node.tag === 'select')!
       assert.equal(select().props.value, host === 'github.com' ? 'github' : 'enterprise')
-      if (host !== 'github.com') assert.equal(view.nodes().find(node => node.tag === 'input')?.value, host)
+      if (host !== 'github.com') assert.equal(view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'your-company.ghe.com')?.value, host)
       const starting = view.click('Sign in with GitHub Copilot')
       await nextTick()
       assert.equal(select().props.disabled, true, 'host is locked while POST is outstanding')
@@ -125,7 +128,7 @@ for (const host of ['github.com', 'octocat.ghe.com']) {
       await starting
       assert.equal(posts[0]?.host, host)
       assert.equal(select().props.disabled, true)
-      if (host !== 'github.com') assert.equal(view.nodes().find(node => node.tag === 'input')?.props.disabled, true)
+      if (host !== 'github.com') assert.equal(view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'your-company.ghe.com')?.props.disabled, true)
       await view.click(`Open ${host}/login/device`)
       assert.deepEqual(opened, desktop ? [[`https://${host}/login/device`]] : [[`https://${host}/login/device`, '_blank', 'noopener,noreferrer']])
       await view.click('Cancel login')
@@ -144,7 +147,7 @@ for (const host of ['github.com', 'octocat.ghe.com']) {
 test('enterprise picker blocks invalid input, preserves it on retry, and sign-out identifies active rather than selected host', async t => {
   const posts: Record<string, unknown>[] = []
   t.mock.method(globalThis, 'fetch', async (input, init) => {
-    if (String(input).endsWith('/logout')) return Response.json({ authenticated: false })
+    if (new URL(String(input)).pathname.endsWith('/logout')) return Response.json({ authenticated: false })
     posts.push(JSON.parse(String(init?.body)))
     return Response.json({ loginId: posts.at(-1)!.attemptId, state: 'expired', host: posts.at(-1)!.host, errorCode: 'expired' })
   })
@@ -152,7 +155,7 @@ test('enterprise picker blocks invalid input, preserves it on retry, and sign-ou
   const select = view.nodes().find(node => node.tag === 'select')!
   ;(select.props.onChange as (value: string) => void)('enterprise')
   await nextTick()
-  const input = view.nodes().find(node => node.tag === 'input')!
+  const input = view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'your-company.ghe.com')!
   const setHost = async (value: string) => {
     ;(input.props['onUpdate:modelValue'] as (value: string) => void)(value)
     await nextTick()
@@ -170,11 +173,11 @@ test('enterprise picker blocks invalid input, preserves it on retry, and sign-ou
   await view.click('Retry GitHub Copilot login')
   assert.equal(posts[1]?.host, 'octocat.ghe.com')
   await view.click('Sign out of GitHub Copilot')
-  assert.match(view.text(), /Remove the saved Copilot sign-in for github.com/)
-  assert.match(view.text(), /Sign-ins on other hosts are unchanged/)
+  assert.match(view.text(), /Remove the saved Copilot sign-in for instance .* on github.com/)
+  assert.match(view.text(), /Other instances, including accounts on the same host/)
   await view.click('Sign out of GitHub Copilot')
   await flush()
-  assert.match(view.text(), /Signed out of GitHub Copilot on github.com/)
+  assert.match(view.text(), /Signed out of Copilot instance .* on github.com/)
 })
 
 test('provider edit mapping retains host when Copilot is not the selected provider', () => {
@@ -253,4 +256,93 @@ test('Agnes permission denial is distinct from invalid credentials in the save f
   await nextTick()
   assert.match(view.text(), /provider denied access/i)
   assert.doesNotMatch(view.text(), /Credentials were rejected/)
+})
+
+
+test('named DeepSeek edit keeps stable identity, type and key while renaming', async t => {
+  const bodies: Record<string, unknown>[] = []
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)))
+    return Response.json({ provider: 'work', type: 'deepseek', authMode: 'api-key', ready: true, hasApiKey: true, model: 'deepseek-flash@work' })
+  })
+  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'edit', status: {
+    provider: 'work', type: 'deepseek', name: 'Work account', authMode: 'api-key', ready: true, hasApiKey: true, model: 'deepseek-flash@work',
+  } })
+  const name = view.nodes().find(node => node.tag === 'input' && node.props.maxlength === '100')!
+  ;(name.props['onUpdate:modelValue'] as (value: string) => void)('Renamed')
+  await nextTick()
+  await view.click('Rename')
+  assert.deepEqual(bodies[0], { provider: 'work', type: 'deepseek', name: 'Renamed' })
+  const form = view.nodes().find(node => node.tag === 'form')!
+  await (form.props.onSubmit as (event: unknown) => Promise<void>)({ preventDefault() {} })
+  assert.equal(bodies[1].provider, 'work')
+  assert.equal(bodies[1].type, 'deepseek')
+  assert.equal(bodies[1].apiKey, undefined)
+  assert.equal(bodies[1].model, 'deepseek-flash@work')
+})
+
+
+test('adding the same provider type twice generates distinct stable instance IDs', async t => {
+  const ids: string[] = []
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    const input = JSON.parse(String(init?.body))
+    assert.equal(input.type, 'deepseek')
+    ids.push(input.provider)
+    return Response.json({ provider: input.provider, type: input.type, authMode: 'api-key', ready: true, hasApiKey: true, model: 'deepseek-flash' })
+  })
+  for (let i = 0; i < 2; i++) await t.test(`connection ${i}`, async child => {
+    const view = mount(child, { apiBase: 'http://fixture.invalid', mode: 'add', status: null, excludedProviders: ['deepseek'] })
+    const select = view.nodes().find(node => node.tag === 'select')!
+    const handlers = Array.isArray(select.props.onChange) ? select.props.onChange : [select.props.onChange]
+    for (const handler of handlers) (handler as (value: string) => void)('deepseek')
+    await nextTick()
+    const form = view.nodes().find(node => node.tag === 'form')!
+    await (form.props.onSubmit as (event: unknown) => Promise<void>)({ preventDefault() {} })
+  })
+  assert.equal(ids.length, 2)
+  assert.notEqual(ids[0], ids[1])
+  assert.match(ids[0], /^account-/)
+})
+
+
+test('rendered model menu distinguishes same-type accounts and renames without changing selection', async t => {
+  const current = ref('same@account-a')
+  const providers = ref([{ id: 'account-a', type: 'deepseek', name: 'Personal' }, { id: 'account-b', type: 'deepseek', name: 'Work' }])
+  const selector = loadComponent(new URL('./components/ModelSelector.vue', import.meta.url))
+  const wrapper = defineComponent({ setup() {
+    provideModelSelection({ current, providers, options: ref(['same@account-a', 'same@account-b']),
+      disabled: ref(false), loading: ref(false), error: ref(''), async select(value) { current.value = value } })
+    return () => h(selector)
+  } })
+  const view = mount(t, {}, undefined, undefined, wrapper)
+  assert.match(view.text(), /Personal · DeepSeek/)
+  assert.match(view.text(), /Work · DeepSeek/)
+  const search = view.nodes().find(node => node.tag === 'input' && node.props.type === 'search')!
+  ;(search.props['onUpdate:modelValue'] as (value: string) => void)('work')
+  await nextTick()
+  const options = () => view.nodes().filter(node => node.tag === 'button' && String(node.props.class).includes('model-option'))
+  assert.equal(options().length, 1)
+  await (options()[0].props.onClick as () => Promise<void>)()
+  await nextTick()
+  assert.equal(current.value, 'same@account-b')
+  providers.value[1].name = 'Office'
+  ;(search.props['onUpdate:modelValue'] as (value: string) => void)('office')
+  await nextTick()
+  assert.equal(current.value, 'same@account-b')
+  assert.equal(options().length, 1)
+  assert.match(view.text(), /Office · DeepSeek/)
+  assert.match(view.text(), /account-b/)
+})
+
+test('named Copilot title and sign-out identify the instance and preserve same-host accounts', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ authenticated: false }))
+  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'edit', status: {
+    ...status, provider: 'account-work', type: 'copilot', name: 'Work GitHub', host: 'github.com',
+  } })
+  assert.match(view.text(), /Work GitHub · GitHub Copilot settings/)
+  await view.click('Sign out of GitHub Copilot')
+  assert.match(view.text(), /instance Work GitHub · GitHub Copilot \(account-work\) on github.com/)
+  assert.match(view.text(), /Other instances, including accounts on the same host/)
+  await view.click('Sign out of GitHub Copilot')
+  assert.match(view.text(), /Signed out of Copilot instance Work GitHub/)
 })

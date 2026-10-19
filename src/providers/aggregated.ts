@@ -49,6 +49,7 @@ export class AggregatedProvider implements LLMProvider {
   constructor(
     private readonly providers: Map<string, LLMProvider>,
     private readonly primaryProviderName: string,
+    readonly instances: ReadonlyArray<{ id: string; type: string; name?: string }> = [],
   ) {}
 
   // ── LLMProvider interface ─────────────────────────────────────────────
@@ -65,7 +66,10 @@ export class AggregatedProvider implements LLMProvider {
   async listModels(): Promise<string[]> {
     const results: string[] = []
     const entries = Array.from(this.providers.entries())
-    const lists = await Promise.all(entries.map(([, p]) => p.listModels()))
+    // Discovery is best-effort per identity; chat routing below never fails over.
+    const lists = await Promise.all(entries.map(async ([, p]) => {
+      try { return await p.listModels() } catch { return [] }
+    }))
     for (let i = 0; i < entries.length; i++) {
       const [name] = entries[i]
       for (const model of lists[i]) {
@@ -79,13 +83,13 @@ export class AggregatedProvider implements LLMProvider {
   async listModelInfos(): Promise<ModelInfo[]> {
     const entries = Array.from(this.providers.entries())
     const lists = await Promise.all(
-      entries.map(([, p]) =>
-        p.listModelInfos
-          ? p.listModelInfos()
-          : Promise.resolve(p.listModels()).then((ids) =>
-            ids.map((id): ModelInfo => ({ id }))
-          )
-      ),
+      entries.map(async ([, p]) => {
+        try {
+          return p.listModelInfos
+            ? await p.listModelInfos()
+            : (await p.listModels()).map((id): ModelInfo => ({ id }))
+        } catch { return [] }
+      }),
     )
     const results: ModelInfo[] = []
     for (let i = 0; i < entries.length; i++) {

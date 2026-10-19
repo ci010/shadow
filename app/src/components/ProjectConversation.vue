@@ -34,7 +34,7 @@ import ProjectDashboard from './ProjectDashboard.vue'
 import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import { createProjectSettingsClient, configReasoning } from '../project-settings.ts'
 import type { ReasoningSettings } from '../session-settings.ts'
-import { provideModelSelection } from '../model-selection.ts'
+import { provideModelSelection, type ProviderInstanceLabel } from '../model-selection.ts'
 import type { FolderRecord } from '../folders-client.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
@@ -50,11 +50,13 @@ const dashboard = ref<InstanceType<typeof ProjectDashboard>>()
 const current = ref('')
 const defaultReasoning = ref<ReasoningSettings>({})
 const options = ref<string[]>([])
+const providers = ref<ProviderInstanceLabel[]>([])
 const error = ref('')
 const loading = ref(false)
 let request: AbortController | undefined
+let previousDefault: string | undefined
 provideModelSelection({
-  current, defaultReasoning, options, error, loading, disabled: computed(() => loading.value),
+  current, defaultReasoning, options, providers, error, loading, disabled: computed(() => loading.value),
   async select(model) {
     if (!model.trim()) { error.value = t('Choose a model for this conversation.'); return }
     current.value = model
@@ -69,11 +71,13 @@ async function load() {
   error.value = ''
   const client = createProjectSettingsClient(props.apiBase)
   try {
-    const [config, models] = await Promise.all([client.load(controller.signal), client.models(controller.signal)])
+    const [config, models] = await Promise.all([client.load(controller.signal), client.catalog(controller.signal)])
     if (controller.signal.aborted) return
-    current.value = config.agent.model
+    if (!current.value || current.value === previousDefault) current.value = config.agent.model
+    previousDefault = config.agent.model
     defaultReasoning.value = configReasoning(config)
-    options.value = models
+    options.value = models.models
+    providers.value = models.providers
   } catch (cause) {
     if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load project models. Retry.')
   } finally { if (request === controller) loading.value = false }

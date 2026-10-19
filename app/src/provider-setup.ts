@@ -8,6 +8,8 @@ export { normalizeCopilotHost } from '../../src/shared/copilot-host.ts'
 export interface ProviderSetupStatus {
   host?: string
   provider: string
+  type?: string
+  name?: string
   model: string
   authMode: 'api-key' | 'copilot' | 'none'
   ready: boolean
@@ -18,6 +20,8 @@ export interface ProviderSetupStatus {
 
 export interface ProviderSetupInput {
   provider: string
+  type?: string
+  name?: string
   model: string
   apiKey?: string
   baseUrl?: string
@@ -26,6 +30,8 @@ export interface ProviderSetupInput {
 export interface ConfiguredProvider {
   host?: string
   provider: string
+  type?: string
+  name?: string
   authMode: ProviderSetupStatus['authMode']
   hasApiKey: boolean
   selected: boolean
@@ -80,6 +86,8 @@ export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
   let selected = false
   return value.providers.map((item: unknown) => {
     if (!isRecord(item) || typeof item.provider !== 'string' || !item.provider
+      || (item.type !== undefined && typeof item.type !== 'string')
+      || (item.name !== undefined && typeof item.name !== 'string')
       || names.has(item.provider) || typeof item.selected !== 'boolean'
       || (item.selected && selected) || typeof item.hasApiKey !== 'boolean'
       || !['api-key', 'copilot', 'none'].includes(String(item.authMode))
@@ -92,6 +100,8 @@ export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
     selected ||= item.selected
     return {
       provider: item.provider,
+      ...(typeof item.type === 'string' ? { type: item.type } : {}),
+      ...(typeof item.name === 'string' ? { name: item.name } : {}),
       ...(item.host !== undefined ? { host: normalizeCopilotHost(item.host) } : {}),
       selected: item.selected,
       hasApiKey: item.hasApiKey,
@@ -127,6 +137,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function parseProviderSetup(value: unknown): ProviderSetupStatus {
   if (!isRecord(value) || typeof value.provider !== 'string' || typeof value.model !== 'string'
+    || (value.type !== undefined && typeof value.type !== 'string')
+    || (value.name !== undefined && typeof value.name !== 'string')
     || typeof value.ready !== 'boolean' || typeof value.hasApiKey !== 'boolean'
     || !['api-key', 'copilot', 'none'].includes(String(value.authMode))
     || (value.host !== undefined && (value.authMode !== 'copilot' || !isCopilotHost(value.host)))
@@ -136,6 +148,8 @@ export function parseProviderSetup(value: unknown): ProviderSetupStatus {
   }
   return {
     provider: value.provider,
+    ...(typeof value.type === 'string' ? { type: value.type } : {}),
+    ...(typeof value.name === 'string' ? { name: value.name } : {}),
     ...(value.host !== undefined ? { host: normalizeCopilotHost(value.host) } : {}),
     model: value.model,
     ready: value.ready,
@@ -185,8 +199,9 @@ export class ProviderRequestError extends Error {
   }
 }
 
-export function createProviderSetupClient(apiBase: string, request: typeof fetch = fetch) {
+export function createProviderSetupClient(apiBase: string, request: typeof fetch = fetch, instance?: () => string) {
   async function json(path: string, init?: RequestInit): Promise<unknown> {
+    if (instance && path.startsWith('/api/auth')) path += `?provider=${encodeURIComponent(instance())}`
     let response: Response
     try {
       response = await request(apiUrl(apiBase, path).toString(), {
@@ -203,6 +218,9 @@ export function createProviderSetupClient(apiBase: string, request: typeof fetch
     catch { throw new ProviderRequestError(502) }
   }
   return {
+    async instance(provider: string, type: string, name: string) {
+      await json('/api/provider/instances', { method: 'POST', body: JSON.stringify({ provider, type, name }) })
+    },
     async configured(signal?: AbortSignal) {
       return parseConfiguredProviders(await json('/api/provider/configured', { signal }))
     },

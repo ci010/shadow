@@ -319,3 +319,24 @@ test('poll cannot silently change the selected login host', async () => {
   assert.equal(views.some(view => view.state === 'succeeded'), false)
   assert.deepEqual(cancelled, [pending.loginId])
 })
+
+
+test('instance-scoped client sends login, polling, cancel and logout to the same stable identity', async () => {
+  const paths: string[] = []
+  const client = createProviderSetupClient('http://fixture.invalid', async (url, init) => {
+    const parsed = new URL(String(url))
+    assert.equal(parsed.searchParams.get('provider'), 'work-copilot')
+    paths.push(`${init?.method ?? 'GET'} ${parsed.pathname}`)
+    return Response.json(parsed.pathname.endsWith('/logout') ? { authenticated: false } : pending)
+  }, () => 'work-copilot')
+  await client.start(undefined, pending.loginId)
+  await client.poll(pending.loginId)
+  await client.cancel(pending.loginId)
+  await client.signOut()
+  assert.equal(paths.length, 4)
+  const parsed = parseConfiguredProviders({ providers: [
+    { provider: 'a', type: 'deepseek', name: 'Work', authMode: 'api-key', hasApiKey: true, selected: true },
+    { provider: 'b', type: 'deepseek', name: 'Home', authMode: 'api-key', hasApiKey: true, selected: false },
+  ] })
+  assert.deepEqual(parsed.map(item => [item.provider, item.type, item.name]), [['a', 'deepseek', 'Work'], ['b', 'deepseek', 'Home']])
+})

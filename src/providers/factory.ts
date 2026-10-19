@@ -3,7 +3,7 @@ import type { Config } from '../config/schema.ts'
 import { env } from 'node:process'
 import { OpenAICompatibleProvider } from './openai-compatible.ts'
 import { AnthropicProvider } from './anthropic.ts'
-import { CopilotProvider, type CopilotAuthenticator } from './copilot.ts'
+import { CopilotProvider, CopilotAuthenticator } from './copilot.ts'
 import { DeepSeekProvider } from './deepseek.ts'
 import { AgnesProvider } from './agnes.ts'
 import { AggregatedProvider, parseModelSpec } from './aggregated.ts'
@@ -54,6 +54,10 @@ const PROVIDER_DEFAULTS: Record<string, {
   },
 }
 
+export function providerType(config: Config, id: string): string {
+  return config.providers[id]?.type ?? id
+}
+
 export function knownProviderNames(): string[] {
   return Object.keys(PROVIDER_DEFAULTS)
 }
@@ -95,15 +99,16 @@ export function resolveProviderSettings(config: Config, name: string): {
   authMode: 'api-key' | 'copilot' | 'none'
 } {
   const configured = config.providers[name] ?? {}
-  const defaults = PROVIDER_DEFAULTS[name]
+  const type = providerType(config, name)
+  const defaults = PROVIDER_DEFAULTS[type]
   const apiKey = configured.apiKey ??
-    (defaults?.apiKeyEnv ? env[defaults.apiKeyEnv] : undefined) ?? ''
+    (name === type && defaults?.apiKeyEnv ? env[defaults.apiKeyEnv] : undefined) ?? ''
   const baseUrl = configured.baseUrl ?? defaults?.baseUrl
   const customEndpoint = !!configured.baseUrl &&
     configured.baseUrl.replace(/\/+$/, '') !== defaults?.baseUrl?.replace(/\/+$/, '')
   return {
     apiKey, baseUrl,
-    authMode: name === 'copilot' ? 'copilot'
+    authMode: type === 'copilot' ? 'copilot'
       : !apiKey && customEndpoint ? 'none' : 'api-key',
   }
 }
@@ -124,10 +129,12 @@ export function createProvider(
   copilotAuth?: CopilotAuthenticator,
 ): LLMProvider {
   const name = providerName ?? detectProvider(model)
+  if (providerName && !config.providers[name] && !PROVIDER_DEFAULTS[name]) throw new Error(`Unknown provider instance "${name}"`)
+  const type = providerType(config, name)
   const { apiKey, baseUrl } = resolveProviderSettings(config, name)
 
   // --- Anthropic (non-OpenAI API) ---
-  if (name === 'anthropic') {
+  if (type === 'anthropic') {
     return new AnthropicProvider({
       apiKey,
       baseUrl,
@@ -135,15 +142,15 @@ export function createProvider(
   }
 
   // --- Copilot (OpenAI-compatible but with custom OAuth auth) ---
-  if (name === 'copilot') {
-    return new CopilotProvider(copilotAuth)
+  if (type === 'copilot') {
+    return new CopilotProvider((copilotAuth ?? new CopilotAuthenticator()).forInstance(name))
   }
 
-  if (name === 'deepseek') {
+  if (type === 'deepseek') {
     return new DeepSeekProvider(model, { apiKey, baseUrl })
   }
 
-  if (name === 'agnes') return new AgnesProvider(model, { apiKey, baseUrl })
+  if (type === 'agnes') return new AgnesProvider(model, { apiKey, baseUrl })
 
   // --- All other OpenAI-compatible providers ---
   if (!baseUrl) {
@@ -185,7 +192,7 @@ export function createAggregatedProvider(config: Config, copilotAuth?: CopilotAu
   // Providers with explicit config entries. Copilot authenticates via OAuth
   // (no apiKey/baseUrl), so an empty `providers.copilot: {}` entry enables it.
   for (const [name, pc] of Object.entries(config.providers)) {
-    if (name === 'copilot' || pc.apiKey || pc.baseUrl) names.add(name)
+    if (providerType(config, name) === 'copilot' || pc.apiKey || pc.baseUrl) names.add(name)
   }
 
   // Instantiate each provider
@@ -212,5 +219,7 @@ export function createAggregatedProvider(config: Config, copilotAuth?: CopilotAu
     )
   }
 
-  return new AggregatedProvider(providers, primaryName)
+  return new AggregatedProvider(providers, primaryName, [...providers.keys()].map(id => ({
+    id, type: providerType(config, id), name: config.providers[id]?.name,
+  })))
 }

@@ -10,6 +10,9 @@ import { organizationConfigSchema } from '../projects/organization-controller.ts
 // ── Provider configs ────────────────────────────────────────────────────────
 
 export const ProviderConfigSchema = z.object({
+  /** Stable identity is the record key; omitted type retains legacy key-as-type behavior. */
+  type: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
+  name: z.string().trim().min(1).max(100).optional(),
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),
   /** Lightweight model used for fast classifications (e.g. intent routing). */

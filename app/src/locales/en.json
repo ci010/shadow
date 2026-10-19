@@ -1,4 +1,7 @@
 {
+  "Signed out of Copilot instance {account} on {host}. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged.": "Signed out of Copilot instance {account} on {host}. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged.",
+  "Remove the saved Copilot sign-in for instance {account} on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.": "Remove the saved Copilot sign-in for instance {account} on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.",
+  "Rename": "Rename",
   "No matching conversations.": "No matching conversations.",
   "Reference a conversation": "Reference a conversation",
   "New": "New",

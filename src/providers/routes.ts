@@ -1,3 +1,4 @@
+import { AggregatedProvider } from './aggregated.ts'
 import type {
   ChatMessage,
   LLMProvider,
@@ -16,21 +17,17 @@ export function providerPlugin(
   const current = () => typeof source === 'function' ? source() : source
   return (app) => {
     app.get('/debug/models', async (c) => {
-      const setup = await readiness?.()
-      if (setup && !setup.ready) return c.json({ models: [], infos: [], setup })
       const provider = current()
       const models = await (provider?.listModels() ?? [])
       const infos = provider?.listModelInfos
         ? await provider.listModelInfos()
         : models.map((id) => ({ id }))
-      return c.json({ models, infos }, 200)
+      return c.json({ models, infos, ...(provider instanceof AggregatedProvider ? { providers: provider.instances } : {}) }, 200)
     })
 
     // ── OpenAI-compatible LLM API ────────────────────────────────────────────
 
     app.get('/v1/models', async (c) => {
-      const setup = await readiness?.()
-      if (setup && !setup.ready) return c.json({ object: 'list', data: [], setup })
       const provider = current()
       const models = await (provider?.listModels() ?? [])
       return c.json({
@@ -47,14 +44,16 @@ export function providerPlugin(
 
     app.post('/v1/chat/completions', async (c) => {
       const provider = current()
-      const setup = await readiness?.()
-      if (setup && !setup.ready) return c.json({ error: 'provider_setup_required', setup }, 409)
       if (!provider) return c.json({ error: 'provider_unavailable' }, 501)
       let body: Record<string, unknown>
       try {
         body = await c.req.json()
       } catch {
         return c.json({ error: 'invalid_json' }, 400)
+      }
+      if (typeof body.model !== 'string' || !body.model.includes('@')) {
+        const setup = await readiness?.()
+        if (setup && !setup.ready) return c.json({ error: 'provider_setup_required', setup }, 409)
       }
       const messages = (body.messages ?? []) as ChatMessage[]
       const tools = (body.tools ?? []) as ToolDefinition[]
