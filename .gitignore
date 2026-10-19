@@ -8,6 +8,11 @@ node_modules/
 /.pin
 /.shadow-release.json
 
+# Environment-specific package registry and download hooks
+/.npmrc
+/.pnpmfile.cjs
+/.corepack.env
+
 # Build outputs
 build/
 dist/
