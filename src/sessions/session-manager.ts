@@ -9,6 +9,7 @@ import { parseSessionName, SESSION_NAME_MAX_LENGTH } from './session-name.ts'
 import { parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
 import { readSessionFileChanges } from './file-changes.ts'
 import { readAutomationUsage } from './automation-usage.ts'
+import { readProjectUsage, readProjectUsagePage } from './project-usage.ts'
 import { readPresentationEvidence } from './presentation-evidence.ts'
 import { mkdir } from 'node:fs/promises'
 import { isCommandReceipt, type CommandReceipt } from '../slash-commands/receipt.ts'
@@ -2963,6 +2964,16 @@ ${JSON.stringify(request)}`,
   /** Aggregate persisted source events; caller cannot select another Project. Includes exact child lineage. */
   async getAutomationUsage(sessionIds: string[], from: number, asOf: number, signal?: AbortSignal) {
     return this.getProfileUsage(sessionIds, from, asOf, signal)
+  }
+
+  async getProjectUsagePage(page: number, signal?: AbortSignal) {
+    if (!this.deps.projectId) throw new Error('Project scope required')
+    return readProjectUsagePage(this.store, await this.listHistoryStates(), this.deps.projectId, Date.now(), page, signal)
+  }
+
+  async getProjectUsage(signal?: AbortSignal) {
+    if (!this.deps.projectId) throw new Error('Project scope required')
+    return readProjectUsage(this.store, await this.listHistoryStates(), this.deps.projectId, Date.now(), signal)
   }
 
   async getProfileUsage(sessionIds: string[], from: number, asOf: number, signal?: AbortSignal, includeDescendants = true) {

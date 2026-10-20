@@ -7,18 +7,19 @@
         <div class="work-view-switch" role="group" :aria-label="t('Work view')">
           <button type="button" :aria-pressed="view === 'history'" @click="view = 'history'">{{ t('Dashboard') }}</button>
           <button type="button" :aria-pressed="view === 'board'" @click="view = 'board'">{{ t('Board') }}</button>
+          <button type="button" :aria-pressed="view === 'usage'" @click="view = 'usage'; panel = ''">{{ t('Usage') }}</button>
         </div>
         <button v-if="canWrite && view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :title="t('Uses multiple bounded model requests and saves valid patches progressively; no calls on opening.')" :aria-describedby="modelCallNoticeId" @click="organizeTopics('full')">{{ organizing ? t('Organizing…') : t('Reorganize recent topics') }}</button>
         <button v-if="canWrite && view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :aria-describedby="modelCallNoticeId" @click="organizeTopics('delta')">{{ t('Update changed topics') }}</button>
         <span :id="modelCallNoticeId" class="model-call-description">{{ t('Up to 8 model requests, 24 tool calls and 120 seconds. Valid patches are saved immediately.') }}</span>
-        <button type="button" :aria-expanded="diagnosticsOpen" @click="diagnosticsOpen = !diagnosticsOpen">{{ t('Agent diagnostics') }}</button>
-        <span v-if="view !== 'history'" class="work-count">{{ filtered.length }} {{ t('of') }} {{ data?.items.length ?? 0 }} {{ t('items') }}</span>
-        <button type="button" class="work-refresh" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
-        <button v-if="canWrite" type="button" class="new-work" @click="newWork">{{ t('New work') }}</button>
+        <button v-if="view !== 'usage'" type="button" :aria-expanded="diagnosticsOpen" @click="diagnosticsOpen = !diagnosticsOpen">{{ t('Agent diagnostics') }}</button>
+        <span v-if="view === 'board'" class="work-count">{{ filtered.length }} {{ t('of') }} {{ data?.items.length ?? 0 }} {{ t('items') }}</span>
+        <button v-if="view !== 'usage'" type="button" class="work-refresh" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
+        <button v-if="canWrite && view !== 'usage'" type="button" class="new-work" @click="newWork">{{ t('New work') }}</button>
       </div>
       <div class="workbench-integrations">
         <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? t('Back to work') : t('Apps') }}</button>
-        <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; panel = panel === 'github' ? '' : 'github'">GitHub</button>
+        <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; view = view === 'usage' ? 'history' : view; panel = panel === 'github' ? '' : 'github'">GitHub</button>
       </div>
       <div v-if="!appsVisible && view === 'history' && organizationDisabled" class="organization-status" role="status">{{ t('Topic organization is disabled. Enable it in Automations to organize topics.') }} <RouterLink :to="automationChatLocation(projectId, 'system:work-organizer')">{{ t('Automation details') }}</RouterLink></div>
       <div v-if="!appsVisible && view === 'history' && organizationProgress" class="organization-status" role="status" aria-live="polite">{{ organizationProgress }}</div>
@@ -26,7 +27,8 @@
     </header>
     <QuickActions :api-base="apiBase" :project-id="projectId" :active="visible" :can-write="installation.uiScopes.includes('main:admin')" pinned-only />
     <ProjectMicroApps v-if="appsVisible" :api-base="apiBase" :active="visible" :can-write="canWrite" @compose="discussApp" />
-    <div v-show="!appsVisible" class="workbench-body">
+    <ProjectUsage v-if="view === 'usage' && !appsVisible" :api-base="apiBase" :project-id="projectId" :active="visible" />
+    <div v-show="!appsVisible && view !== 'usage'" class="workbench-body">
       <main v-show="wide || !panel || view === 'history'" class="workbench-main">
         <form v-if="view === 'board'" class="work-filters" :aria-label="t('Filter work')" @submit.prevent>
           <label class="work-search">{{ t('Search') }}<input v-model="filter.query" type="search" :placeholder="t('Find work…')" /></label>
@@ -138,6 +140,7 @@ import WorkAlignment from './WorkAlignment.vue'
 import DecisionOwner from './DecisionOwner.vue'
 import ProjectGitHub from './ProjectGitHub.vue'
 import ProjectMicroApps from './ProjectMicroApps.vue'
+import ProjectUsage from './ProjectUsage.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 
@@ -151,7 +154,7 @@ const data = computed(() => organizationSnapshot.value ?? lease.value?.work.stat
 const error = computed(() => lease.value?.work.state.error)
 const loading = computed(() => lease.value?.work.state.loading)
 const canWrite = computed(() => installation.value.uiScopes.includes('chat:write'))
-const view = ref<'history' | 'board'>('history'), panel = ref<'work' | 'github' | ''>('')
+const view = ref<'history' | 'board' | 'usage'>('history'), panel = ref<'work' | 'github' | ''>('')
 
 const selected = ref(''), editing = ref(false), wide = ref(false)
 
@@ -289,6 +292,7 @@ watch(() => [props.apiBase, props.projectId, props.visible] as const, ([apiBase,
 }, { immediate: true })
 watch(() => route.query.work, key => {
   if (props.visible && typeof key === 'string' && key !== selected.value) {
+    if (view.value === 'usage') view.value = 'history'
     editing.value = false; selected.value = key; panel.value = 'work'
   }
 }, { immediate: true })

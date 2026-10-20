@@ -196,7 +196,8 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         const disabledApp = new Hono()
         const disabled = createA2aRuntime({ projectId: 'p', workspace, sessions, bus, agentTypes, app: disabledApp })
         assert.equal((await disabledApp.request('/a2a/.well-known/agent-card.json')).status, 404)
-        assert.equal(disabled.tools.length, 0)
+        assert.ok(disabled.tools.some(tool => tool.name === 'a2a_setup'))
+        assert.ok(disabled.sessions)
         await disabled.close()
         const warnings: string[] = []
         const warning = t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args.map(String).join(' ')) })

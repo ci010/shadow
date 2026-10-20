@@ -49,6 +49,12 @@ The backend build emits `dist/src`; the web build emits `app/dist`. The
 gateway serves the built UI on `http://localhost:3123` when present.
 Keep the build outputs and installed runtime dependencies together when
 deploying headlessly.
+The backend build copies TypeScript (including its standard-library declarations)
+and esbuild (including the current platform's native executable) into
+`dist/node_modules`. Keep these packages external to the ESM bundle: their
+CommonJS loaders and adjacent runtime files must retain their original layout.
+Build on the target platform; copying this output to another OS or architecture
+does not replace esbuild's native executable.
 
 ### Local download tool
 
@@ -76,3 +82,28 @@ upstream binary when absent. It still validates the complete aria2 package.
 After changing the executable path or rebuilding backend code, restart the
 backend and use `download` with `action: "status"` to verify availability.
 The rest of Shadow can run without aria2; only new downloads require it.
+
+### Message attachment previews and desktop reveal
+
+Message file cards open the existing file preview directly through their authorized
+`/api/media` URL; a file need not belong to the file tree or a registered Folder.
+Text previews read at most 64 KiB; document-viewer inputs are capped at 64 MiB.
+Attachment HTML is shown as source, and attachment Markdown does not load sibling
+assets: a single-file media grant is not a directory/static-site grant. Downloads
+remain available independently of preview support.
+
+“Show in file explorer” on message attachments requires an attestation from a
+backend launched by the current Electron host. The host creates a process-private
+random key and passes it only to its Main sidecar. After the normal media
+resolution/authorization succeeds, `reveal=1` returns a 60-second signed resolved
+path. The existing trusted-window file-explorer IPC verifies this proof before
+checking file existence and revealing it. Neither Electron detection, loopback
+URLs, workdir display paths, nor matching filenames prove locality. Pure Web,
+remote backends, and independently launched local backends therefore do not show
+this action; they can still preview/download authorized attachments. No additional
+folder registration or arbitrary-path media API is introduced.
+
+These changes require rebuilding the app/backend/desktop and relaunching Electron
+(and its owned Main sidecar). Updating only the renderer cannot establish the
+host/sidecar attestation. Development or tests must not log or persist the private
+`SHADOW_DESKTOP_MEDIA_KEY` environment value.

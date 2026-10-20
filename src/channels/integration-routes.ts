@@ -1,3 +1,5 @@
+import { ClassifierPolicySchema } from '../events/input-classifier-contract.ts'
+import { checkProcessor, testProcessor, processorAuthoringGuide } from '../events/input-processor-authoring.ts'
 import { z } from 'zod'
 import { bodyLimit } from 'hono/body-limit'
 import type { GatewayPlugin } from '../gateway/types.ts'
@@ -113,9 +115,11 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
   return {
     name: 'channel_config', optIn: true,
     description: 'Owner-only Bot configuration discovery and Discord draft creation. list includes QQ/Feishu authoring routes; use authoring_change for their Agent Markdown, tools and bindings, not Discord proposals. Read schema for formats. Discord directory/members resolve names; propose with botId returns a reviewUrl to show the user. Never approves changes.',
-    parameters: { type: 'object', properties: { action: { type: 'string', enum: ['schema', 'list', 'directory', 'members', 'resource', 'agent_file', 'propose'] },
+    parameters: { type: 'object', properties: { action: { type: 'string', enum: ['schema', 'processor_resource', 'list', 'directory', 'members', 'resource', 'agent_file', 'propose', 'processor_check', 'processor_test', 'processor_propose', 'observation_propose'] },
       botId: { type: 'string' }, guildId: { type: 'string' }, after: { type: 'string' }, query: { type: 'string' },
-      resourceId: { type: 'string' }, agentId: { type: 'string' },
+      resourceName: { type: 'string', description: 'processor_resource: documentation, types, example, fixtures, observation/processor.ts, observation/signature.ts or observation/fixtures.json' }, resourceId: { type: 'string' }, agentId: { type: 'string' },
+      enabled: { type: 'boolean' }, channelIds: { type: 'array',items:{type:'string'} },
+      path: { type: 'string' }, fixturePath: { type: 'string' }, bindingId: { type: 'string' }, delayMs: { type: 'integer' }, includeBots: { type: 'boolean' },
       baseRevision: { type: 'integer' }, changeJson: { type: 'string', description: 'Exact change format from schema; proposals are not approval.' } }, required: ['action'], additionalProperties: false },
     execute: async (raw, context) => {
       context.signal.throwIfAborted()
@@ -124,6 +128,11 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
         context.projectId !== store.options.projectId || context.memoryAccess) throw new IntegrationError('owner_required', 'Use an authenticated owner conversation.', 403)
       const input = z.discriminatedUnion('action', [
         z.object({ action: z.literal('schema') }).strict(),
+        z.object({ action: z.literal('processor_resource'), resourceName: z.enum(['documentation','types','example','fixtures','observation/processor.ts','observation/signature.ts','observation/fixtures.json','classifier/processor.ts','classifier/policy.json','classifier/fixtures.json']) }).strict(),
+        z.object({ action: z.literal('processor_check'), path: z.string() }).strict(),
+        z.object({ action: z.literal('processor_test'), path: z.string(), fixturePath: z.string() }).strict(),
+        z.object({ action: z.literal('processor_propose'), path: z.string(), bindingId: z.string().uuid(), baseRevision: z.number().int().nonnegative(), delayMs: z.number().int().min(10).max(60000), includeBots: z.boolean().optional() }).strict(),
+        z.object({ action: z.literal('observation_propose'), path:z.string(), bindingId:z.string().uuid(),baseRevision:z.number().int().nonnegative(),delayMs:z.number().int().min(10).max(60000),includeBots:z.boolean().optional(),classifier:ClassifierPolicySchema.optional(),enabled:z.boolean().default(false),guildId:z.string().regex(/^[0-9]{1,20}$/),channelIds:z.array(z.string().regex(/^[0-9]{1,20}$/)).min(2).max(20) }).strict(),
         z.object({ action: z.literal('list') }).strict(),
         z.object({ action: z.literal('directory'), botId: z.string().min(1),
           guildId: z.string().regex(/^[0-9]{1,20}$/).optional(), after: z.string().regex(/^[0-9]{1,20}$/).optional() }).strict(),
@@ -134,7 +143,32 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
         z.object({ action: z.literal('propose'), botId: z.string().min(1).optional(),
           baseRevision: z.number().int().nonnegative(), changeJson: z.string().max(2 * 1024 * 1024) }).strict(),
       ]).parse(raw)
-      if (input.action === 'schema') return JSON.stringify(integrationConfigurationGuide)
+      if (input.action === 'schema') {
+        const { resources, typeDefinitions, ...guide } = processorAuthoringGuide
+        return JSON.stringify({ ...integrationConfigurationGuide, processorAuthoring: { ...guide,
+          resources: { action: 'processor_resource', resourceName: ['documentation','types','example','fixtures','observation/processor.ts','observation/signature.ts','observation/fixtures.json','classifier/processor.ts','classifier/policy.json','classifier/fixtures.json'],
+            instructions: 'Fetch each named resource separately with channel_config; complete UTF-8 content, no repository access needed. This avoids model tool-result truncation.' } } })
+      }
+      if (input.action === 'processor_resource') {
+        const name = input.resourceName
+        return name.startsWith('classifier/') ? processorAuthoringGuide.resources.classifierFiles[name.slice('classifier/'.length) as keyof typeof processorAuthoringGuide.resources.classifierFiles] : name.startsWith('observation/')
+          ? processorAuthoringGuide.resources.observationFiles[name.slice('observation/'.length) as keyof typeof processorAuthoringGuide.resources.observationFiles]
+          : processorAuthoringGuide.resources[name as 'documentation'|'types'|'example'|'fixtures']
+      }
+      if (input.action === 'processor_check' || input.action === 'processor_test' || input.action === 'processor_propose' || input.action === 'observation_propose') {
+        if (!context.cwd) throw new Error('Local workspace cwd is required')
+        if (input.action === 'processor_test') return JSON.stringify(await testProcessor(context.cwd, input.path, input.fixturePath, context.signal))
+        const checked = await checkProcessor(context.cwd, input.path)
+        if (input.action === 'processor_check' || !checked.ok) return JSON.stringify({ ok: checked.ok, sha256: checked.sha256, diagnostics: checked.diagnostics })
+        const binding = store.snapshot().bindings.find(item => item.id === input.bindingId)
+        if (!binding) throw new Error('Unknown binding')
+        const processor = { code: checked.code, source: checked.source, sourceSha256: checked.sha256, snapshot: checked.snapshot, codeSha256: checked.codeSha256, delayMs: input.delayMs, includeBots: input.includeBots ?? false, ...(input.action === 'observation_propose' && input.classifier ? {classifier:input.classifier} : {}) }
+        if (input.action === 'observation_propose' && (binding.target.kind !== 'channel' || binding.target.guildId !== input.guildId)) throw new Error('Dedicated audience binding must be in the exact observation guild')
+        const {processor: _ordinaryProcessor,...serviceBinding} = binding
+        const next = input.action === 'observation_propose' ? { ...serviceBinding,observation:{enabled:input.enabled,guildId:input.guildId,channelIds:input.channelIds,audienceChannelId:binding.target.kind === 'channel' ? binding.target.channelId : '',processor} } : {...binding,processor}
+        const draft = await store.propose({ kind: 'owner', id: 'shadow-owner' }, { kind: 'bindings.save', bindings: [next] }, input.baseRevision, context.signal)
+        return JSON.stringify({ ...draft, sourceSha256: checked.sha256, reviewUrl: '/projects/' + encodeURIComponent(store.options.projectId) + '/settings/bots?discordReview=' + draft.id })
+      }
       if (input.action === 'list') return JSON.stringify({ ...store.snapshot(), projectId: store.options.projectId,
         bots: store.options.bots.list().filter(bot => bot.platform === 'discord').map(bot => ({
           id: bot.id, displayName: bot.displayName, platform: bot.platform, enabled: bot.enabled,

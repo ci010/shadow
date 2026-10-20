@@ -90,8 +90,9 @@ test('heading renders accessible capacity, actual low/high thresholds and unknow
   assert.doesNotMatch(view.text(), /Subagents/)
   assert.match(view.text(), /400K limit/)
   assert.match(view.text(), /300K remaining/)
-  assert.match(view.text(), /60%.*240K/)
-  assert.match(view.text(), /90%.*360K/)
+  assert.match(view.text(), /Low threshold: 60%.*240K/)
+  assert.match(view.text(), /High threshold: 90%.*360K/)
+  assert.doesNotMatch(view.text(), /between turns|during turn/)
   assert.doesNotMatch(view.text(), /Total includes this conversation|Partial usage:|Auto handoff|separate token counts are not reported|Last reported context/)
   const bar = view.nodes().find(node => node.props.role === 'img')!
   assert.equal(bar.props['aria-label'], '25% context used')
@@ -155,15 +156,16 @@ test('heading displays estimated currency and AI credits without merging units',
   const view = mount(t, 'SessionHeading.vue', { apiBase: 'http://fixture', sessionId: 'web:cost',
     name: 'Fixture', physicalId: null, revision: 0, active: true })
   await settle()
-  assert.match(view.text(), /Known cost subtotal \(incomplete\): USD 0\.00012/)
-  assert.match(view.text(), /Known cost subtotal \(incomplete\): 1\.25 AI credits/)
+  assert.match(view.text(), /0\.00012\s+USD/)
+  assert.match(view.text(), /1\.25\s+AI credits/)
   assert.match(view.text(), /Cost estimate incomplete/)
   assert.ok(view.nodes().some(node => node.props.title === 'Estimated cost, not a bill. Plan allowances and discounts may differ.'))
-  assert.doesNotMatch(view.text(), /Estimated cost:/)
+  assert.doesNotMatch(view.text(), /Estimated cost:|Known cost subtotal/)
+  assert.equal(view.nodes().filter(node => node.props.class === 'i-lucide-coins').length, 2)
   incomplete = false
   view.state.revision = 1
   await settle(); await settle()
-  assert.match(view.text(), /Estimated cost: USD 0\.00012/)
+  assert.match(view.text(), /0\.00012\s+USD/)
   assert.doesNotMatch(view.text(), /Known cost subtotal/)
   costs = undefined
   incomplete = true

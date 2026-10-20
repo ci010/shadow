@@ -178,8 +178,17 @@ export class IntegrationStore {
       throw new IntegrationError('permission_ceiling', 'Channel permissions cannot exceed the Agent permissions.')
     }
     if (binding.enabled) for (const id of binding.readDomains) this.options.memory.domain(id)
-    if (!binding.participants.everyone && !binding.participants.userIds.length && !binding.participants.roleIds.length) {
+    if (!binding.observation && !binding.participants.everyone && !binding.participants.userIds.length && !binding.participants.roleIds.length) {
       throw new IntegrationError('empty_participants', 'Select at least one allowed user or role.')
+    }
+    if (binding.processor?.classifier) throw new IntegrationError('classifier_scope','Classifier capability is restricted to independently reviewed observation scopes.')
+    if (binding.observation) {
+      const scope = binding.observation
+      if (bot.purpose !== 'service' || binding.target.kind !== 'channel' || binding.target.guildId !== scope.guildId || binding.target.channelId !== scope.audienceChannelId ||
+        binding.manage || binding.inheritThreads || binding.processor || agent.execution !== 'restricted' || agent.tools.length || agent.readDomains.length ||
+        binding.tools.length || binding.readDomains.length || binding.participants.everyone || binding.participants.userIds.length || binding.participants.roleIds.length) {
+        throw new IntegrationError('observation_scope', 'Observation requires a dedicated same-guild output channel binding, restricted tool/domain-free Agent, no participants, management, threads or ordinary processor.')
+      }
     }
     if ((agent.execution === 'trusted' || binding.manage) && binding.participants.everyone) {
       throw new IntegrationError('public_privileged_agent', 'Trusted execution and configuration management require explicitly selected users or roles.')
@@ -236,6 +245,14 @@ export class IntegrationStore {
         if (live.botUserId !== binding.botUserId) throw new IntegrationError('bot_identity_changed', 'The connected Bot identity changed. Refresh before assigning channels.', 409)
         if (binding.participants.roleIds.some(role => !live.roleIds.includes(role))) throw new IntegrationError('role_missing', 'An allowed role is no longer present in this server.', 409)
         inspected.push({ id: binding.id, bot: live.botUserId, roles: binding.participants.roleIds })
+        if (binding.observation?.enabled) {
+          for (const channelId of binding.observation.channelIds) {
+            const location = await this.transport.inspect(binding.botInstanceId,channelId,binding.botUserId,signal)
+            if (location.botUserId !== binding.botUserId || location.location.guildId !== binding.observation.guildId ||
+              location.location.id !== channelId || !location.canView) throw new IntegrationError('observation_permission','Bot cannot observe an exact selected channel.')
+            inspected.push({scope:binding.id,channelId,guildId:location.location.guildId})
+          }
+        }
       }
     }
     if (change.kind === 'knowledge.publish') {
@@ -270,6 +287,10 @@ export class IntegrationStore {
   async propose(actor: IntegrationActor, raw: unknown, baseRevision: number, signal: AbortSignal): Promise<IntegrationDraft> {
     const change = IntegrationChangeSchema.parse(raw)
     const before = this.snapshot()
+    if (actor.kind !== 'owner' && (change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation || before.bindings.find(old => old.id === binding.id)?.observation) ||
+      change.kind === 'agent.save' && before.bindings.some(binding => binding.observation && binding.agentId === change.agent.id))) {
+      throw new IntegrationError('observation_owner_review','Observation scopes and their Agents require owner review.')
+    }
     if (before.drafts.some(draft => draft.status === 'applying')) throw new IntegrationError('recovery_required', 'An approved change needs recovery. Retry or resolve it in Reviews before proposing another change.', 409)
     if (this.committing || before.revision !== baseRevision) throw new IntegrationError('revision_conflict', 'Configuration changed. Refresh and review your changes again.', 409)
     const validation = await this.validate(change, signal)
@@ -285,7 +306,9 @@ export class IntegrationStore {
       ...(change.kind === 'agent.save' ? { agentFileHash: validation.fileRevision } : {}),
       createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
       status: 'pending', affectedBindings: this.affected(change, state),
-      warning: change.kind === 'knowledge.publish'
+      warning: change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation)
+        ? 'Owner-only observation review: selected source channels permit observation of nonparticipants but grant them no commands/tools. Evidence enters only a dedicated restricted service context and can be reported to the exact binding output audience, whose readers may differ from participants. Review source guild/channels, output privacy, frozen program, enable flag and model before approving. Metadata signatures are not visual hashes.'
+        : change.kind === 'knowledge.publish'
         ? 'This approves a fixed copy for the selected domain audience. Source permissions will not automatically revoke this approved copy; revoke its publication explicitly.'
         : change.kind === 'agent.save' && change.agent.execution === 'trusted'
         ? 'Trusted host execution is not a sandbox. Removed Agent permissions are also removed from every assignment. Agent or access changes start a fresh context; previous history remains available to the owner.'

@@ -1,3 +1,4 @@
+import { InputProcessorSchema } from '../events/input-processor-contract.ts'
 import { z } from 'zod'
 import { MemorySourceSchema, MemoryDomainSchema, MemoryResourceSchema } from '../memory/contracts.ts'
 
@@ -28,11 +29,25 @@ export const DiscordTargetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('channel'), guildId: snowflake, channelId: snowflake }).strict(),
   z.object({ kind: z.literal('dm'), userId: snowflake }).strict(),
 ])
+/** Separate owner-reviewed observation authority; never participant authority. */
+export const DiscordObservationSchema = z.object({
+  enabled: z.boolean().default(false),
+  guildId: snowflake,
+  channelIds: z.array(snowflake).min(2).max(20).refine(ids => new Set(ids).size === ids.length, 'Unique observation channels required'),
+  audienceChannelId: snowflake,
+  processor: InputProcessorSchema,
+}).strict()
+export type DiscordObservation = z.infer<typeof DiscordObservationSchema>
+export interface DiscordObservationProof {
+  scopeId: string; revision: string; botUserId: string; guildId: string; policy: z.infer<typeof InputProcessorSchema>
+}
 export const DiscordBindingSchema = z.object({
   id: z.string().uuid(), botInstanceId: id, botUserId: snowflake,
   target: DiscordTargetSchema,
   enabled: z.boolean(), agentId: z.string().uuid(),
   trigger: z.enum(['mention', 'all']),
+  processor: InputProcessorSchema.optional(),
+  observation: DiscordObservationSchema.optional(),
   participants: z.object({
     everyone: z.boolean(), userIds: z.array(snowflake).max(1000), roleIds: z.array(snowflake).max(250),
   }).strict(),
@@ -69,11 +84,25 @@ export const integrationConfigurationGuide = {
   },
   changes: {
     'agent.save': '{kind:"agent.save",agent:{id:<new UUID or existing Agent ID>,name:<stable lowercase name>,displayName,markdown,execution:"restricted"|"trusted",tools:[...],readDomains:[<domain UUID>],skills:[{name,content}]}}. markdown is AGENT.md with matching name and defaultMode: session. Omit server-owned version, publishedAt and managementBindingId when editing a listed Agent.',
-    'bindings.save': '{kind:"bindings.save",bindings:[{id:<new UUID or existing binding ID>,botInstanceId,botUserId,target:{kind:"channel",guildId,channelId}|{kind:"dm",userId},enabled,agentId,trigger:"mention"|"all",participants:{everyone,userIds:[...],roleIds:[...]},tools:[...],readDomains:[...],inheritThreads,manage}]}. botUserId comes from directory. Every save, including an unchanged save, starts fresh context. Omitted bindings are unchanged.',
+    'bindings.save': '{kind:"bindings.save",bindings:[{id:<new UUID or existing binding ID>,botInstanceId,botUserId,target:{kind:"channel",guildId,channelId}|{kind:"dm",userId},enabled,agentId,trigger:"mention"|"all",participants:{everyone,userIds:[...],roleIds:[...]},tools:[...],readDomains:[...],inheritThreads,manage,processor?:{code,delayMs,includeBots?:boolean}}]}. processor runs restricted export async function run({event}) returning {action:"ignore"|"buffer"|"emit"}; no imports or tools. includeBots defaults false; self messages are always ignored and other bots have a 60s per-conversation cooldown. Windows are per sender and conversation, at most 60s; managed pending messages use a bounded private durable inbox with fresh authorization on recovery; no exactly-once guarantee. botUserId comes from directory. Every save, including an unchanged save, starts fresh context. Omitted bindings are unchanged.',
     'domain.create': '{kind:"domain.create",name,domainKind:"shared"|"agent-private"}. Review before referring to the returned domain ID; a domain name grants no access.',
     'knowledge.publish': '{kind:"knowledge.publish",domainId,title,content,sources:[{domain:{id,revision},resourceId?,version?,sessionId?,epoch?}],resourceKind?:"note"|"skill"}. Reference exact observed sources; resourceId/version and sessionId/epoch are pairs. [] is for genuinely new owner-provided text, never removal of known provenance. Publication copies the reviewed content; it does not expose the original or future edits.',
     'knowledge.revoke': 'Owner only: {kind:"knowledge.revoke",resourceId}. Revokes future access, not content already delivered.',
     'domain.revoke': 'Owner only: {kind:"domain.revoke",domainId}. Revokes future access and dependent executions.',
+  },
+  observation: {
+    review:'Owner-only exact bindings.save review. observation.enabled defaults false. Dedicated service binding must have no participants, tools, domains, management, ordinary processor or inherited threads; its published Agent must be restricted and tool/domain-free. Configuration actor is not the observed sender or service execution principal.',
+    configuration:'observation:{enabled:false,guildId,channelIds:[2..20 unique exact same-guild channels],audienceChannelId:<binding target channel>,processor:{code,delayMs,includeBots?,source?,sourceSha256?,snapshot?,codeSha256?}}. No implicit descendants or other guilds. The dedicated binding target is the explicitly reviewed output audience, not a sender permission grant.',
+    execution:'Gateway observation runs before participant admission without weakening it. Only emit plus semantic:{type,data} wakes the isolated discord-observation service context through a host-owned event capability. Observed accounts need no participant grants and never receive tools or command authority. Bot identity owns execution/output; self messages are excluded and other bots require reviewed includeBots. Evidence is not broadcast through EventService subscriptions.',
+    safety:'Every observation and wake checks current scope revision and live Bot visibility across selected channels plus audience send permission. Before inference/output/delivery these are rechecked; changes invalidate context and output leases. State partitions include scope, revision, guild and sender; programs also have a code-hash partition. Stop/timeout fail closed. At-least-once event admission is not exactly-once model execution or moderation.',
+    authoring:'processor_check / processor_test work with semantic outputs. observation_propose freezes the complete dependency graph on an existing dedicated audience binding; enabled defaults false and proposal alone never activates. Schema resources include complete standalone observationFiles. Example requires four matching metadata image signatures in three distinct channels within 20 seconds, then one event and 60-second cooldown. Metadata is not a visual hash.',
+  },
+  classifier: {
+    scope:'Owner-only optional observation.processor.classifier; not ordinary participant processors. Exact bindings.save review freezes policy with all program sources. observation_propose accepts classifier object; enabled defaults false.',
+    policy:'Strict mandatory fields: model (configured catalog ID, <=256 chars), instructions (<=4000 chars), fields ([content and/or attachments]), maxInputBytes (1..16000), maxTokens (32..1024), maxRequests (1..100), maxWindowTokens (100..1000000), windowMs (1000..86400000), deadlineMs (10..1500), minConfidence (0..1). Output schema is fixed, not message-selected.',
+    program:'Return classify:true for a two-phase run. Host selects original content and MIME/dimensions/size only, never URLs, names or other scope history. Second run receives classification:{label:ignore|buffer|semanticwake|unknown,confidence:0..1}; recursive classify is denied and emit requires semanticwake. Unknown/low confidence/budget/timeout/schema/revocation fail closed without strong-model fallback.',
+    billing:'Per scope/revision/policy sliding budgets reserve serialized system/input UTF-8 bytes plus maxTokens before dispatch. Durable reservation dedupes retries/restart; uncertain calls become unknown, never automatic paid replay. No exactly-once billing or remote cancellation guarantee. Ledger capacity fails closed. No idle model calls; rule campaign path remains zero-call.',
+    resources:'processor_resource: classifier/processor.ts, classifier/policy.json, classifier/fixtures.json. Fake fixture provider uses real host contract, no network/fees. Full limits/recovery: docs/event-input-processing.md.',
   },
   tools: integrationToolNames,
   boundaries: [
@@ -175,6 +204,9 @@ export interface DiscordIngressResult {
   trigger: DiscordBinding['trigger']
   location: DiscordLocation
   admissionId: string
+  processor?: z.infer<typeof InputProcessorSchema>
+  processorRevision?: string
+  botUserId?: string
 }
 export interface DiscordIngress {
   chatId: string
@@ -189,6 +221,10 @@ export interface DiscordIntegrationTransport {
 }
 
 export interface DiscordAdapterIntegration {
+  processorStorageId?: string
+  classifyObservation?(proof:DiscordObservationProof,data:Record<string,unknown>,signal:AbortSignal):Promise<import('../events/input-classifier.ts').Classification>
+  observe?(data: Record<string, unknown>, signal: AbortSignal): Promise<DiscordObservationProof[]>
+  wakeObservation?(proof: DiscordObservationProof, items: Record<string, unknown>[], semantic: {type:string;data:Record<string,unknown>}, signal: AbortSignal): Promise<void>
   admit(input: DiscordIngress, signal: AbortSignal): Promise<DiscordIngressResult>
   discard(admissionId: string): void
   confirm(chatId: string, senderId: string, draftId: string, hash: string, signal: AbortSignal): Promise<void>

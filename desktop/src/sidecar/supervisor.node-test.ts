@@ -1,3 +1,4 @@
+import { desktopMediaKey } from '../media-reveal-key.js'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
@@ -148,6 +149,7 @@ test('production child sidecar uses the exact child startup contract', async () 
   assert.deepEqual(calls[0]?.options.env, {
     EXISTING_ENV: 'preserved',
     ELECTRON_RUN_AS_NODE: '1',
+    SHADOW_DESKTOP_MEDIA_KEY: undefined,
     GATEWAY_PORT: '43123',
     WINDOWS_USE_LAUNCH_TOKEN: request.launchToken,
   })
@@ -175,6 +177,7 @@ test('production main sidecar uses the exact server startup contract with local 
   assert.deepEqual(calls[0]?.options.env, {
     EXISTING_ENV: 'preserved',
     ELECTRON_RUN_AS_NODE: '1',
+    SHADOW_DESKTOP_MEDIA_KEY: desktopMediaKey,
     GATEWAY_PORT: '43123',
     WINDOWS_USE_LAUNCH_TOKEN: mainRequest.launchToken,
   })

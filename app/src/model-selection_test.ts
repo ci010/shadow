@@ -43,3 +43,20 @@ test('same-type account labels and searches never change the qualified selection
   assert.deepEqual(modelSelectionInput(options[1], 'account-a'), { model: 'same@account-b', provider: 'account-b' })
   assert.equal(modelAccountLabel('old@missing', providers), 'missing')
 })
+
+test('provider tags group accounts by type and leave small catalogs simple', async () => {
+  const { modelProviderFilters, modelProviderGroup, modelCompactAccountLabel } = await import('./model-selection.ts')
+  const providers = [{ id: 'a', type: 'deepseek', name: 'Work' }, { id: 'b', type: 'deepseek', name: 'Work' }, { id: 'c', type: 'openai' }]
+  assert.deepEqual(modelProviderFilters(['one@a', 'two@c'], providers), [])
+  assert.deepEqual(modelProviderFilters(['one@a', 'one@b'], providers), [])
+  assert.deepEqual(modelProviderFilters(['one@a', 'one@b', 'two@c', 'one@a'], providers), [
+    { id: 'deepseek', label: 'DeepSeek', count: 2 }, { id: 'openai', label: 'OpenAI', count: 1 },
+  ])
+  assert.equal(modelProviderGroup('vendor/model@b', providers), 'deepseek')
+  assert.equal(modelCompactAccountLabel('one@a', providers), 'Work · DeepSeek · #1')
+  assert.equal(modelCompactAccountLabel('one@b', providers), 'Work · DeepSeek · #2')
+  assert.equal(modelCompactAccountLabel('two@c', providers), 'OpenAI')
+  const large = Array.from({ length: 5 }, (_, i) => `model-${i}@a`)
+  assert.equal(modelProviderFilters([...large, 'two@c'], providers).length, 2)
+  assert.equal(modelProviderGroup('old@missing', providers), 'missing')
+})

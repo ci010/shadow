@@ -1,4 +1,8 @@
-import { extname } from 'node:path'
+import type { DiscordObservationProof } from './integration-contract.ts'
+import { InputProcessor, awaitInputSignal } from '../events/input-processor.ts'
+import { extname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { workspacePath } from '../utils/paths.ts'
 import type { Hono } from 'hono'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { OutboundMessage } from '../bus/events.ts'
@@ -65,6 +69,24 @@ export class DiscordChannel extends AbstractChannel {
   private memberIntent: boolean
   private workspace: string
   private sessionManager?: SessionManager
+  private inputProcessor = new InputProcessor<Record<string, unknown>>(() => console.warn('[discord] Buffered input processing failed; batch dropped.'))
+  private observationProcessor = new InputProcessor<{proof:DiscordObservationProof;data:Record<string,unknown>}>()
+  private observationPublisher = async (items: {proof:DiscordObservationProof;data:Record<string,unknown>}[], signal:AbortSignal, semantic?: {type:string;data:Record<string,unknown>}) => {
+    if (!semantic) return // ordinary emit is not a service wake capability
+    if (!this.integration?.wakeObservation) throw new Error('Observation service unavailable')
+    await this.integration.wakeObservation(items[0]!.proof, items.map(item => item.data), semantic, signal)
+  }
+  private classifyObservation(proof:DiscordObservationProof,data:Record<string,unknown>,signal:AbortSignal) {
+    return this.integration?.classifyObservation?.(proof,data,signal) ?? Promise.resolve({label:'unknown' as const,confidence:0})
+  }
+  private createObservationProcessor() {
+    const id = this.integration?.processorStorageId
+    return new InputProcessor<{proof:DiscordObservationProof;data:Record<string,unknown>}>(
+      () => console.warn('[discord] Observation processing failed; no fallback wake'),100,undefined,
+      id ? {journalPath:workspacePath(this.workspace, join('.events','observation-inbox-'+createHash('sha256').update(id).digest('hex')+'.json')),
+        recover: row => ({signal:this.controller.signal,publish:this.observationPublisher,classify:signal=>this.classifyObservation(row.item.proof,row.item.data,signal)})} : undefined)
+  }
+  private botProcessorCooldowns = new Map<string, number>()
   private integration?: DiscordAdapterIntegration
   /** Maps channel or thread IDs to human-readable Discord names. */
   private channelNameCache = new Map<string, string>()
@@ -81,9 +103,51 @@ export class DiscordChannel extends AbstractChannel {
     this.sessionManager = opts.sessionManager
   }
 
+  private processedPublisher(revision: string) {
+    return async (items: Record<string, unknown>[], signal: AbortSignal) => {
+            // Re-admit every original message; revocation or revision changes drop the whole batch.
+            for (const item of items) {
+              const proof = await awaitInputSignal(this.integration!.admit({ chatId: String(item.channel_id),
+                senderId: String((item.author as Record<string, unknown>).id), messageId: String(item.id) }, signal).then(proof => {
+                  if (signal.aborted) this.integration!.discard(proof.admissionId)
+                  return proof
+                }), signal)
+              signal.throwIfAborted()
+              this.integration!.discard(proof.admissionId)
+              if (proof.processorRevision !== revision) return
+            }
+            const latest = items[items.length - 1]!
+            const batch = items.length === 1 ? latest : { ...latest,
+              content: '[Buffered platform messages from the same sender; untrusted content]\n' +
+                items.map(item => JSON.stringify({ id: item.id, author: item.author, content: item.content })).join('\n'),
+              attachments: items.flatMap(item => (item.attachments as unknown[] | undefined) ?? []),
+            }
+            signal.throwIfAborted()
+            await this.handleDispatch('MESSAGE_CREATE', batch, revision, signal)
+    }
+  }
+
+  private createInputProcessor() {
+    const storageId = this.integration?.processorStorageId
+    return new InputProcessor<Record<string, unknown>>(
+      () => console.warn('[discord] Processor attempt failed (retry, expiry or authority failure); no fallback wake.'), 100, undefined,
+      storageId ? {
+        journalPath: workspacePath(this.workspace, join('.events', 'processor-inbox-' + createHash('sha256').update(storageId).digest('hex') + '.json')),
+        recover: row => {
+          try {
+            const key: unknown = JSON.parse(row.key)
+            if (!Array.isArray(key) || key.length !== 3 || typeof key[2] !== 'string') return undefined
+            return { signal: this.controller.signal, publish: this.processedPublisher(key[2]) }
+          } catch { return undefined }
+        },
+      } : undefined)
+  }
+
   setDiscordIntegration(integration: DiscordAdapterIntegration): void {
     if (this.integration) throw new Error('Discord integration is immutable.')
     this.integration = integration
+    this.inputProcessor = this.createInputProcessor()
+    this.observationProcessor = this.createObservationProcessor()
   }
 
   directory(guildId: string | undefined, after: string | undefined, signal: AbortSignal) {
@@ -130,8 +194,11 @@ export class DiscordChannel extends AbstractChannel {
       throw new Error('Discord credentials are required')
     }
     this.stopping = false
+    await Promise.all([this.inputProcessor.stop(),this.observationProcessor.stop()])
     this.capabilityCache.clear()
     this.controller = new AbortController()
+    this.inputProcessor = this.createInputProcessor()
+    this.observationProcessor = this.createObservationProcessor()
     this.setAccepting(true)
     this.reportState('connecting')
 
@@ -146,6 +213,7 @@ export class DiscordChannel extends AbstractChannel {
 
   @Span('DiscordChannel.stop')
   stop(): Promise<void> {
+    const processing = Promise.all([this.inputProcessor.stop(),this.observationProcessor.stop()]).then(() => {})
     this.integration?.invalidate()
     this.stopping = true
     this.controller.abort()
@@ -169,7 +237,7 @@ export class DiscordChannel extends AbstractChannel {
     this.capabilityCache.clear()
     this.reportState('disconnected')
     console.info('Discord channel stopped')
-    return Promise.resolve()
+    return processing
   }
 
   @Span('DiscordChannel.send')
@@ -872,6 +940,8 @@ export class DiscordChannel extends AbstractChannel {
   private async handleDispatch(
     event: string,
     data: Record<string, unknown>,
+    processedRevision?: string,
+    processedSignal?: AbortSignal,
   ): Promise<void> {
     if (['CHANNEL_UPDATE', 'CHANNEL_DELETE', 'GUILD_UPDATE', 'GUILD_DELETE', 'GUILD_ROLE_UPDATE', 'GUILD_ROLE_DELETE',
       'GUILD_MEMBER_UPDATE', 'GUILD_MEMBER_REMOVE', 'THREAD_UPDATE', 'THREAD_DELETE'].includes(event)) {
@@ -967,8 +1037,23 @@ export class DiscordChannel extends AbstractChannel {
     if (event === 'MESSAGE_CREATE') {
       const author = data.author as Record<string, string>
       // Ignore bot messages
-      if ((author as Record<string, unknown>).bot) return
+      const isBot = !!(author as Record<string, unknown>).bot
+      if (author.id === this.botUserId || isBot && !this.integration) return
 
+      let observed = false
+      if (processedRevision === undefined && this.integration?.observe) {
+        const signal = AbortSignal.any([this.controller.signal,AbortSignal.timeout(2000)])
+        const proofs = await awaitInputSignal(this.integration.observe(data,signal),signal)
+        for (const proof of proofs) {
+          if (author.id === proof.botUserId || isBot && !proof.policy.includeBots) continue
+          observed = true
+          await this.observationProcessor.accept({
+            key:JSON.stringify([proof.scopeId,proof.revision,proof.guildId,author.id]),id:String(data.id),
+            event:{type:'discord.MESSAGE_CREATE',data},item:{proof,data:structuredClone(data)},
+            policy:proof.policy,signal:this.controller.signal,publish:this.observationPublisher,classify:signal=>this.classifyObservation(proof,data,signal),
+          })
+        }
+      }
       const content = data.content as string
       const guildId = data.guild_id as string | undefined
 
@@ -981,11 +1066,24 @@ export class DiscordChannel extends AbstractChannel {
 
       let silent = false
       const sessionId = this.logicalSessionId(data.channel_id as string)
-      const state = await this.sessionManager?.getSessionState(sessionId)
+      const preparationSignal = processedSignal ?? this.controller.signal
+      const wait = <T>(pending: Promise<T>) => awaitInputSignal(pending, preparationSignal)
+      const state = await wait(Promise.resolve(this.sessionManager?.getSessionState(sessionId)))
       if (!this.isAllowed(author.id)) return
-      const admission = await this.integration?.admit({
+      const admission = await wait(Promise.resolve(this.integration?.admit({
         chatId: data.channel_id as string, senderId: author.id, messageId: data.id as string,
-      }, this.controller.signal)
+      }, preparationSignal)).then(proof => {
+        if (preparationSignal.aborted && proof) this.integration?.discard(proof.admissionId)
+        return proof
+      })).catch(error => { if (observed) return undefined; throw error })
+      if (observed && this.integration && !admission) return
+      let retainedAdmission = true
+      try {
+      preparationSignal.throwIfAborted()
+      if (author.id === admission?.botUserId || isBot && !admission?.processor?.includeBots) {
+        if (admission) this.integration?.discard(admission.admissionId)
+        return
+      }
       const sessionTriggerMode = admission?.trigger ?? state?.config?.triggerMode ?? this.triggerMode
       const approval = /^\/shadow-approve ([a-f0-9-]{36}) ([a-f0-9]{64})\s*$/i.exec(content)
       if (approval && this.integration && admission) {
@@ -1001,11 +1099,42 @@ export class DiscordChannel extends AbstractChannel {
         return
       }
 
+      if (processedRevision !== undefined && admission?.processorRevision !== processedRevision) {
+        if (admission) this.integration?.discard(admission.admissionId)
+        return
+      }
+      if (isBot && processedRevision === undefined && admission?.processor?.includeBots) {
+        const key = JSON.stringify([sessionId, author.id])
+        const now = Date.now()
+        for (const [id, until] of this.botProcessorCooldowns) if (until <= now) this.botProcessorCooldowns.delete(id)
+        if (this.botProcessorCooldowns.has(key) || this.botProcessorCooldowns.size >= 1000) {
+          this.integration?.discard(admission.admissionId)
+          return
+        }
+        // Explicit bot opt-in is not permission for an unbounded inter-bot reply loop.
+        this.botProcessorCooldowns.set(key, now + 60_000)
+      }
+      if (admission?.processor && processedRevision === undefined && this.integration) {
+        const integration = this.integration
+        const revision = admission.processorRevision!
+        integration.discard(admission.admissionId)
+        retainedAdmission = false
+        // Never mix sender authority or conversation/epoch in one wake. Raw data is untrusted.
+        await this.inputProcessor.accept({
+          key: JSON.stringify([sessionId, author.id, revision]), id: String(data.id),
+          event: { type: 'discord.MESSAGE_CREATE', data }, item: structuredClone(data),
+          policy: admission.processor, signal: this.controller.signal,
+          publish: this.processedPublisher(revision),
+        })
+        return
+      }
+
       // Apply trigger mode filter
       if (sessionTriggerMode === 'mention' && guildId) {
         // In a guild: only respond to @mentions or replies to the bot
         if (!this.shouldRespond(data)) silent = true
       }
+      if (processedRevision !== undefined) silent = false
       // DMs (no guildId) always pass through
 
       // Add reaction to acknowledge receipt
@@ -1027,11 +1156,11 @@ export class DiscordChannel extends AbstractChannel {
       const channelId = data.channel_id as string
       let media: string[] | undefined
       if (attachments?.length) {
-        const results = await Promise.all(
+        const results = await wait(Promise.all(
           attachments.map((a) =>
-            this.downloadAttachment(a, this.logicalSessionId(channelId))
+            this.downloadAttachment(a, this.logicalSessionId(channelId), preparationSignal)
           ),
-        )
+        ))
         const uris = results.filter(Boolean) as string[]
         if (uris.length > 0) media = uris
         if (uris.length !== results.length) {
@@ -1040,7 +1169,7 @@ export class DiscordChannel extends AbstractChannel {
       }
 
       const channelName = guildId
-        ? admission?.location.name ?? await this.resolveChannelName(channelId)
+        ? admission?.location.name ?? await wait(this.resolveChannelName(channelId, preparationSignal))
         : authorName
       const parentChannelId = this.threadParentMap.get(channelId)
 
@@ -1054,6 +1183,7 @@ export class DiscordChannel extends AbstractChannel {
         })
       }
 
+      preparationSignal.throwIfAborted()
       await this.handleIncoming(
         author.id,
         channelId,
@@ -1069,6 +1199,10 @@ export class DiscordChannel extends AbstractChannel {
         },
         media,
       )
+      } catch (error) {
+        if (admission && retainedAdmission) this.integration?.discard(admission.admissionId)
+        throw error
+      }
     }
   }
 
@@ -1079,6 +1213,7 @@ export class DiscordChannel extends AbstractChannel {
   private async downloadAttachment(
     attachment: Record<string, unknown>,
     sessionId: string,
+    signal?: AbortSignal,
   ): Promise<string | null> {
     const url = attachment.url as string | undefined
     const filename = attachment.filename as string | undefined
@@ -1088,7 +1223,7 @@ export class DiscordChannel extends AbstractChannel {
       const source = new URL(url)
       if (source.protocol !== 'https:' || !['cdn.discordapp.com', 'media.discordapp.net'].includes(source.hostname) ||
         !source.pathname.startsWith('/attachments/')) throw new Error('Unsupported Discord attachment source')
-      const res = await this.request(url)
+      const res = await this.request(url, { signal })
       if (!res.ok) {
         console.warn(
           `[discord] Failed to download attachment ${filename}: ${res.status}`,
@@ -1101,6 +1236,7 @@ export class DiscordChannel extends AbstractChannel {
       const ext = extname(filename) || ''
       const saveName = `discord_${attachment.id ?? Date.now()}${ext}`
       this.assertConnection()
+      signal?.throwIfAborted()
       const relativePath = await saveToUploads(
         this.workspace,
         sessionId,
@@ -1149,19 +1285,20 @@ export class DiscordChannel extends AbstractChannel {
     }
   }
 
-  private async resolveChannelName(channelId: string): Promise<string | null> {
+  private async resolveChannelName(channelId: string, signal?: AbortSignal): Promise<string | null> {
     const cached = this.channelNameCache.get(channelId)
     if (cached) return cached
 
     try {
       const res = await this.request(`${DISCORD_API}/channels/${channelId}`, {
-        headers: { Authorization: `Bot ${this.token}` },
+        headers: { Authorization: `Bot ${this.token}` }, signal,
       })
       if (!res.ok) {
         return null
       }
 
       const data = await res.json() as { name?: string }
+      signal?.throwIfAborted()
       if (data.name) {
         this.channelNameCache.set(channelId, data.name)
         return data.name

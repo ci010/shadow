@@ -38,12 +38,13 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
   try {
     const target = join(root, 'resources/backend')
     const prepared = join(root, 'prepared')
-    await compileBackend(repository, join(prepared, 'dist'))
+    await compileBackend(repository, join(prepared, 'dist'), [...backendEntries, 'events/input-processor-compiler'])
     const fingerprint = await directoryFingerprint(join(prepared, 'dist'))
     await stageBackend(prepared, target)
     assert.equal(await directoryFingerprint(join(target, 'dist')), fingerprint)
     await rm(prepared, { recursive: true, force: true })
-    assert.deepEqual((await readdir(join(target, 'dist/node_modules'))).sort(), ['@jsquash', 'wasm-feature-detect'])
+    assert.deepEqual((await readdir(join(target, 'dist/node_modules'))).sort(),
+      ['@esbuild', '@jsquash', 'esbuild', 'typescript', 'wasm-feature-detect'])
     assert.match(await readFile(join(target, 'dist/THIRD-PARTY-NOTICES.txt'), 'utf8'), /hono@/)
     assert.ok((await readdir(join(target, 'dist/_chunks'))).length > 1, 'entries should share chunks')
     for (const entry of backendEntries) {
@@ -52,6 +53,18 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
       assert.doesNotMatch(code, /__shadow_module_(?:url|dir)__/)
       execFileSync(process.execPath, ['--check', file], { cwd: root, stdio: 'pipe' })
     }
+    // Unknown wire operations are rejected before addon load. Do not use an
+    // actual foreground/observe request to probe packaging without a user grant.
+    const nativeId = '11111111-1111-4111-8111-111111111111'
+    assert.throws(() => execFileSync(process.execPath,
+      [join(target, 'dist/src/execution/computer/agent-desktop-worker.js')], {
+        cwd: root, encoding: 'utf8', timeout: 5000,
+        input: JSON.stringify({ id: nativeId, method: '__invalid_wire_probe__' }) + '\n',
+        env: { ...process.env, NODE_OPTIONS: '' },
+      }), (error: unknown) => {
+        const failure = error as { status?: number; stdout?: string }
+        return failure.status === 2 && String(failure.stdout) === ''
+      })
     const chunks = await readdir(join(target, 'dist/_chunks'))
     for (const chunk of chunks) {
       assert.doesNotMatch(await readFile(join(target, 'dist/_chunks', chunk), 'utf8'), /__shadow_module_(?:url|dir)__/)
@@ -73,6 +86,29 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
     const plan = execFileSync(process.execPath, [entry, 'data-migration', '--data-dir', data, '--plan'], { cwd: root, encoding: 'utf8', stdio: 'pipe' })
     assert.match(plan, /"preliminary":true/)
     const electron: string = createRequire(new URL('../desktop/package.json', import.meta.url))('electron')
+    const processor = join(root, 'processor')
+    await mkdir(processor)
+    await writeFile(join(processor, 'valid.ts'),
+      'export function run() { const ids: Array<string> = ["fixture"]; return { action: "ignore" as const, state: { ids } } }')
+    await writeFile(join(processor, 'invalid.ts'), 'export function run() { return { action: "invalid" as const } }')
+    const compilerUrl = pathToFileURL(join(target, 'dist/src/events/input-processor-compiler.js')).href
+    const checkCompiler = `
+      import assert from 'node:assert/strict';
+      const { compileProcessor } = await import(${JSON.stringify(compilerUrl)});
+      const valid = await compileProcessor(${JSON.stringify(processor)}, 'valid.ts');
+      assert.equal(valid.ok, true, JSON.stringify(valid.diagnostics));
+      assert.match(valid.code, /function run/);
+      const invalid = await compileProcessor(${JSON.stringify(processor)}, 'invalid.ts');
+      assert.equal(invalid.ok, false);
+      assert.ok(invalid.diagnostics.length);
+      assert.equal(invalid.code, '');
+    `
+    for (const executable of [process.execPath, electron]) {
+      execFileSync(executable, ['--input-type=module', '-e', checkCompiler], {
+        cwd: root, encoding: 'utf8', stdio: 'pipe',
+        env: { ...process.env, NODE_OPTIONS: '', ELECTRON_RUN_AS_NODE: '1', ESBUILD_BINARY_PATH: '' },
+      })
+    }
     const electronPlan = execFileSync(electron, [entry, 'data-migration', '--data-dir', data, '--plan'], {
       cwd: root, encoding: 'utf8', stdio: 'pipe', env: { ...process.env, NODE_OPTIONS: '', ELECTRON_RUN_AS_NODE: '1' },
     })

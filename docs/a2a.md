@@ -2,8 +2,8 @@
 
 Project-scoped A2A 1.0 text tasks over JSON-RPC, SSE task updates, persistent
 lookup, cancellation, requested-input continuation and outbound agent tools.
-Standalone official-SDK bridges expose Claude Code, Codex and GitHub Copilot as
-A2A agents. A stdio MCP bridge lets those coding clients call Shadow or another
+Standalone CLI bridges expose user-installed Claude Code and Codex as
+A2A agents. Copilot is currently unsupported (see below). A stdio MCP bridge lets those coding clients call Shadow or another
 configured A2A agent. **Disabled by default.** This is a trusted-operator text
 integration, not every optional A2A binding or a public multi-tenant service.
 
@@ -12,7 +12,7 @@ dependency registry when this integration was implemented. SDK version and
 protocol version are different. The routes use Hono, not Express or gRPC.
 
 ```text
-Shadow session -- subagent/message --> A2A JSON-RPC --> coding SDK bridge --> coding agent
+Shadow session -- subagent/message --> A2A JSON-RPC --> coding CLI bridge --> coding agent
 Coding client -- stdio MCP --> A2A JSON-RPC --> Shadow Project --> SessionManager
 ```
 
@@ -128,7 +128,7 @@ compatibility are not supported.
 
 The first response supplies a server-generated `contextId`. Reuse it with a new
 `messageId` for a new task in the same conversation. One active task is allowed
-per context. Coding SDK user questions produce `TASK_STATE_INPUT_REQUIRED` with
+per context. Native Shadow user questions produce `TASK_STATE_INPUT_REQUIRED` with
 the question in `status.message`. Reply with a new `messageId` and the same
 `taskId` (and optionally its matching `contextId`) to resume that task. Duplicate
 replies are deduplicated, including after restart. A stream or blocking request
@@ -249,22 +249,21 @@ interrupted tool call. `a2a_reply` returns a new durable handle: follow that han
 for the resumed task. A running context cannot silently start a second task.
 Remote-workdir invocation through `invoke_tool` retains its existing restrictions.
 
-## Call Claude Code, Codex or GitHub Copilot
+## Call user-installed Claude Code or Codex
 
-The separate `integrations/a2a` workspace uses official SDKs pinned to
-`@anthropic-ai/claude-agent-sdk` 0.3.276, `@openai/codex-sdk` 0.155.0 and
-`@github/copilot-sdk` 1.0.14. Root `pnpm install` installs them, including supported
-platform CLI binaries. They are **not** imported by Shadow's backend or Electron
-host. Copilot uses its stdio runtime, not in-process FFI; the unused `koffi`
-build script is explicitly disabled. Run bridges from the repository checkout.
+The separate `integrations/a2a` workspace launches **user-installed CLIs**, not
+vendor SDKs. Shadow does not install, bundle, download, update, or log in coding
+agents. Install and authenticate the official CLI yourself before starting a
+bridge. Normal subscription/CLI authentication is supported; SDK API keys are
+not required. Run bridges from the repository checkout.
 
-Create an operator-owned JSON configuration outside source control, for example:
+Create an operator-owned JSON configuration outside source control:
 
 ```json
 {
   "projectId": "coding",
-  "stateDirectory": "C:\\a2a-data\\claude",
-  "cwd": "C:\\code\\my-project",
+  "stateDirectory": "C:/a2a-data/claude",
+  "cwd": "C:/code/my-project",
   "port": 3001,
   "server": {
     "url": "http://127.0.0.1:3001/projects/coding/a2a",
@@ -272,43 +271,82 @@ Create an operator-owned JSON configuration outside source control, for example:
     "timeoutMs": 300000
   },
   "backend": { "type": "claude", "tools": [] },
-  "environment": ["ANTHROPIC_API_KEY"]
+  "environment": []
 }
 ```
 
-Use existing absolute paths appropriate to your OS. `cwd` is the explicitly
-authorized local resource directory, never a model-provided path. The directory
-can contain project instructions; register only resources trusted for this agent.
-`stateDirectory` must be dedicated to **one** bridge and outside its coding
-workdir. Provide the referenced A2A and provider environment variables to the
-process, then start it:
+Use absolute local paths appropriate to your OS. `cwd` is operator-authorized,
+never remote-controlled. `stateDirectory` must be dedicated to one bridge and
+outside its coding workdir. Set the A2A caller token in the bridge environment:
 
 ```powershell
-pnpm a2a:bridge --config C:\a2a-config\claude.json
+pnpm a2a:bridge --config C:/a2a-config/claude.json
 ```
 
-The listener always binds `127.0.0.1`; it never listens on an untrusted interface.
-The public URL remains explicitly configured for reverse-proxy deployments.
-Use a different state directory, port and caller credential for each bridge.
-The default concurrency is one because coding tasks may share a workdir.
+Optional `executable` is an absolute path to a native CLI executable or its
+official `.js`/`.mjs` entrypoint. Otherwise Shadow resolves `claude` or `codex`
+from PATH (including Windows `Path`). Windows npm `.cmd` shims are never run
+through a shell: only a known sibling official JS entrypoint is supported;
+other shims require an explicit executable path. Prompts are written to stdin,
+not interpolated into shell commands. The listener binds only `127.0.0.1`.
+Use distinct state directories, ports and caller credentials per bridge.
 
-| Backend | `backend` configuration | Provider environment | Permission behavior |
-| --- | --- | --- | --- |
-| Claude Code | `{"type":"claude","tools":[]}` | `["ANTHROPIC_API_KEY"]` | Only text and `AskUserQuestion` by default. Explicit operator tool names may be added; further permission requests are denied. Project/user MCP settings are not loaded. |
-| Codex | `{"type":"codex","sandbox":"read-only"}` | `["CODEX_API_KEY"]` | Network/web search disabled, approval escalation forbidden. `workspace-write` must be explicitly selected by the operator; no `danger-full-access` option. |
-| GitHub Copilot | `{"type":"copilot","tools":[]}` | `["COPILOT_GITHUB_TOKEN"]` | Empty SDK mode, text and `ask_user` by default; explicit tool availability does not grant requested permissions. Permission requests are rejected, including managed-policy requests. |
+- Claude: `{"type":"claude","tools":[]}` defaults to text-only. Print JSON
+  mode uses `--restricted` (Claude Code **v2.1.248+**), `dontAsk`, empty setting
+  sources, disabled hooks/skills and strict empty MCP configuration. Explicit
+  operator tools can be selected from Read, Edit, Write, Glob, Grep, Bash,
+  WebFetch, WebSearch and NotebookEdit. These are real grants, not a sandbox;
+  Bash is particularly powerful. No wildcard/default tool preset, subagent,
+  skill, or permission-bypass mode is exposed. Permission denials fail the task.
+  Normal CLI credential storage and session storage are used; Shadow generates
+  a fresh UUID and resumes only its owner/policy-bound saved UUID. Managed
+  enterprise settings are still authoritative and must be operator-trusted.
+- Codex: `{"type":"codex","sandbox":"read-only"}` uses `exec --json`, never
+  approval escalation, disabled web search and workspace network access. Only
+  explicit `workspace-write` may widen the sandbox; no full-access mode exists.
+  A private `CODEX_HOME` under bridge state excludes ordinary user config, MCP
+  servers and existing session inventory. Before each task, Shadow refreshes a
+  private copy of the ordinary CLI's `auth.json` from the operator's `CODEX_HOME`
+  or `~/.codex`; protect bridge state as credential material. This does not copy
+  config or conversations. CLI keyring-only/custom-provider authentication is
+  not automatically migrated: unsupported auth fails, without login or fallback.
+  Project instructions in the authorized cwd may still be read. Do not mark
+  untrusted project configuration trusted in this dedicated Codex home.
+- Copilot: **unsupported, rejected at startup**. The installed GitHub Copilot
+  CLI 1.0.99-2 help says prompt mode requires `--allow-all-tools`, and additional
+  MCP configuration augments user configuration. This is not a verified safe
+  replacement for the old SDK permission callbacks. No permissive CLI fallback
+  is used. Existing Copilot bridge configurations must not be treated as working.
 
-An optional top-level `model` selects the coding SDK model. Model providers and
-account subscriptions still determine what is available and billable. The
-bridge passes only basic OS environment plus the named `environment` entries.
-It does not forward inbound A2A credentials or ambient provider secrets.
-Provider config/session directories are isolated under its state directory.
-No existing Claude/Codex/Copilot user sessions are adopted.
+Optional `model` selects the CLI model. Only basic OS environment plus explicitly
+named `environment` entries are passed. Provider API keys are optional opt-ins,
+not required bridge credentials. Ambient A2A secrets are not forwarded.
+CLI account identity/authentication is reused, **not arbitrary user chats**.
+Context IDs are generated by A2A, native UUIDs are private and bound to caller,
+workdir, backend, executable, model and environment policy. Policy changes,
+including migration from SDK bridges, require a fresh A2A context. No `--last`,
+`--continue` or caller-supplied native session selector is accepted.
 
-Native session IDs are saved against the authenticated A2A context, workdir and
-backend policy. A changed policy cannot silently resume an old context. New tasks
-in the same context resume the native SDK session; a restart does not replay an
-unfinished turn. SDK subprocesses are stopped on cancellation/shutdown.
+Structured results and a zero process exit are both required for success.
+Missing final completion, invalid JSON, permission denials and nonzero exits fail
+closed. Output is bounded; private stderr/tool events are not published as A2A
+artifacts. Cancellation kills the CLI process group (POSIX) or process tree
+(Windows taskkill) and waits for process close; cleanup errors remain failures.
+This cannot roll back effects or control processes deliberately detached by tools.
+After hard bridge termination, operators must inspect orphan processes before
+restarting. The bridge does not supply an OS/container security boundary.
+
+**CLI limitations:** no verified print-mode interactive question/permission
+callback is available here. Coding CLI final questions are ordinary completed
+text, not `INPUT_REQUIRED`; send a new task in the same A2A context to answer.
+No remote text is interpreted as tool approval. The A2A service and Shadow/MCP
+requested-input protocol remain unchanged; SDK-specific question callbacks are
+not silently approximated. No paid CLI smoke test was run. Claude/Codex binaries
+were unavailable locally; argv/output contracts were checked against official
+[Claude CLI reference](https://code.claude.com/docs/en/cli-reference) and
+[Codex CLI reference](https://developers.openai.com/codex/cli/reference/), with
+Copilot `--help`/`--version` checked locally. Older CLIs may reject flags; update
+manually rather than dropping safety flags.
 
 To call this bridge, add an agent in the Shadow Project:
 
@@ -328,11 +366,7 @@ To call this bridge, add an agent in the Shadow Project:
 
 Restart Shadow, discover `a2a:claude` in `v:agents`, and delegate with `subagent`.
 The compatibility equivalent is `a2a_send` with `agent: "claude"`. Repeat the same
-pattern for Codex and Copilot. Tool permissions are real operator grants, not
-sandbox guarantees. Do not turn on unrestricted coding tools for untrusted
-callers. SDK questions only solicit task input; they do not authorize new tools.
-Codex's TypeScript SDK has no interactive question callback; its final questions
-are ordinary completed text results, followed by a new task in the same context.
+pattern for Codex. Do not expose tool-enabled bridges to untrusted callers.
 
 ## Let coding clients call Shadow through MCP
 
@@ -447,8 +481,8 @@ place. `sessionA2aRunner` delegates to `SessionManager.deliver()` and correlates
 completion facts instead of treating input acceptance as completion.
 
 Focused tests exercise live loopback HTTP, official A2A and MCP transports,
-requested-input continuation, notification recovery, coding SDK adapter
-contracts, official SDK loading, and the actual SessionManager runner with both
+requested-input continuation, notification recovery, mocked CLI process adapter
+contracts, fail-closed unsupported backends, and the actual SessionManager runner with both
 session stores using a synthetic provider. Typechecking includes the separate
 bridge workspace. These tests do not exercise real paid provider accounts,
 certify every A2A implementation, or validate public TLS or native desktop

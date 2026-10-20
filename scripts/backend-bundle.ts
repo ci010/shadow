@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { build, type Plugin } from 'vite'
 import { transform } from 'esbuild'
+import { copyAgentDesktopAssets } from './agent-desktop-assets.ts'
 
 // Keep every out-of-graph process entry: Node cannot discover these from imports.
 export const backendEntries = [
@@ -10,9 +11,10 @@ export const backendEntries = [
   'execution/processes/guardian-worker', 'execution/processes/posix-controller',
   'execution/network/proxy-preload', 'utils/image-codec-worker',
   'runtime/startup-profile-preload', 'script-runtime/runtime', 'channels/feishu-transport',
+  'execution/computer/agent-desktop-worker',
 ]
-// Browser-oriented WASM loaders resolve adjacent binaries and choose SIMD loaders at runtime.
-export const backendExternals = ['@jsquash/png', '@jsquash/webp']
+// These packages resolve adjacent WASM, compiler libraries or native executables at runtime.
+export const backendExternals = ['@jsquash/png', '@jsquash/webp', 'typescript', 'esbuild']
 
 /** Compile direct TS entries into the same relocatable layout used in dev and production.
  * Additional entries are useful for native-Node integration tests of exported APIs.
@@ -103,7 +105,7 @@ export async function compileBackend(root: string, output: string, entries = bac
       minify: false, sourcemap: false,
       rollupOptions: {
         input: Object.fromEntries(entries.map(name => ['src/' + name,
-          join(src, name + (name === 'utils/image-codec-worker' ? '.js' : '.ts'))])),
+          join(src, name + (['utils/image-codec-worker', 'execution/computer/agent-desktop-worker'].includes(name) ? '.js' : '.ts'))])),
         external: id => id.startsWith('node:') || builtinModules.includes(id)
           || backendExternals.some(name => id === name || id.startsWith(name + '/')),
         output: { format: 'es', entryFileNames: '[name].js', chunkFileNames: '_chunks/[name]-[hash].js' },
@@ -116,6 +118,7 @@ export async function compileBackend(root: string, output: string, entries = bac
     ssr: { noExternal: true },
   })
   await copyAssets(join(root, 'src'), join(output, 'src'))
+  await copyAgentDesktopAssets(root, output)
   const copied = new Map<string, string>()
   async function copyPackage(name: string, from: string): Promise<void> {
     const manifest = createRequire(join(from, 'package.json')).resolve(name + '/package.json')
@@ -128,6 +131,7 @@ export async function compileBackend(root: string, output: string, entries = bac
     const packageRoot = dirname(manifest)
     await cp(packageRoot, join(output, 'node_modules', name), { recursive: true, dereference: true })
     for (const dependency of Object.keys(metadata.dependencies ?? {})) await copyPackage(dependency, packageRoot)
+    if (name === 'esbuild') await copyPackage(`@esbuild/${process.platform}-${process.arch}`, packageRoot)
   }
   for (const name of backendExternals) await copyPackage(name, root)
   await writeFile(join(output, 'package.json'), JSON.stringify({ name: '@shadow/backend-bundle', private: true, type: 'module' }, null, 2) + '\n')

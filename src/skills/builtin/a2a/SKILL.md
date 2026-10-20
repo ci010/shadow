@@ -1,6 +1,6 @@
 ---
 name: a2a
-description: "Delegate to remote agents such as Claude Code, Codex, and GitHub Copilot using A2A through agent discovery, subagent, message, session reads, and execution cancellation."
+description: "Delegate to remote agents such as Claude Code and Codex using A2A through agent discovery, subagent, message, session reads, and execution cancellation."
 metadata:
   category: tools
 ---
@@ -9,7 +9,7 @@ metadata:
 
 Use the same discovery, delegation, messaging and reading tools as local work.
 A2A is the remote transport, not a second set of session-management tools.
-SDK bridges create independent coding sessions; they do not send messages to
+Installed-CLI bridges create independent coding sessions; they do not send messages to
 an existing coding application's UI chat.
 
 ## Discover a target
@@ -20,7 +20,7 @@ search({ handler: "grep", path: "v:agents", query: "remote" })
 ```
 
 Local entries describe agent roles. Remote entries use names such as
-`a2a:copilot` and describe configured external endpoints. Use a returned name,
+`a2a:codex` and describe configured external endpoints. Use a returned name,
 not a guessed model, URL or account name. An entry is configuration, not proof
 that the endpoint is online.
 
@@ -30,10 +30,10 @@ dynamic-tool permissions. A role with only local subagent/message/read access
 does not gain remote access from these instructions. The `a2a-text` role still
 has no tools. Remote-workdir and blocking leaf-call execution are unsupported.
 
-If a remote target is missing, ask the operator to configure it. Do not bypass
+If a remote target is missing, read `v:skills/a2a-setup` for local admin setup of an installed Codex/Claude CLI. Copilot is explicitly unsupported. Do not bypass
 discovery with shell/HTTP commands, collect credentials in chat, or silently
 fall back to a local model. The Shadow backend and remote bridge must be running;
-an independently hosted SDK bridge does not require the coding application's UI.
+an independently hosted CLI bridge does not require the coding application's UI.
 
 ## Delegate and continue
 
@@ -41,7 +41,7 @@ Use a discovered remote agent name with asynchronous task mode:
 
 ```javascript
 subagent({
-  agent_type: "a2a:copilot",
+  agent_type: "a2a:codex",
   mode: "task",
   description: "Review the supplied design",
   task: "Review only this explicitly supplied design: ..."

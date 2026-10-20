@@ -1887,8 +1887,16 @@ remain deferred even when explicitly selected; browser_setup initializes them.
 Installed MCP global search remains offline.
 Invoke the known setup ID with `args: {action: "launch", browser: "edge"}` to
 select `edge`, `brave`, `chrome`, or `default`, or supply `executablePath` instead
-of `browser`. Explicit selections fail without fallback. Each owned launch gets
-a fresh private profile; host profiles are never copied and Project configuration
+of `browser`. Explicit selections fail without fallback. Each owned instance
+exclusively leases one persistent Project slot (default 3 total across browser
+types, `tools.chrome.slotCount` integer 1–16). Idle compatible slots rotate; the
+first initialization snapshots the selected executable's user data (or creates a
+new profile if absent), subsequent rentals reuse that copy. Executable identities
+never mix. The source is read-only and never synchronized back.
+Local State and standard profiles are preserved and the last-used profile selected.
+Source locks, unknown executable identity, and copy errors fail explicitly rather
+than falling back to an empty profile. OS/app-bound cookie encryption may prevent
+login portability. Project configuration
 is unchanged. Without setup, automatic lazy default launch remains available
 on invocation in an owning session.
 
@@ -2057,9 +2065,12 @@ as external events. Uncertain submissions and notification deliveries are not
 blindly replayed.
 
 The independent [`integrations/a2a/`](../integrations/a2a/) workspace hosts
-official Claude, Codex and Copilot SDKs behind the same protocol service. These
-processes own explicit local workdirs and private SDK state, never replacing
-Shadow's session loop or importing those SDKs into Electron. A stdio MCP entry
+user-installed Claude Code and Codex CLIs behind the same protocol service. No
+vendor SDK or coding runtime is installed/bundled by Shadow; Copilot currently
+fails closed because its CLI permission contract is insufficient. These bridges
+own explicit local workdirs and owner/policy-bound native session mappings, reuse
+normal CLI authentication, and never adopt arbitrary user chats or replace
+Shadow's session loop. A stdio MCP entry
 lets external coding clients call configured A2A endpoints. Text input does not
 grant permissions. This is not a general remote-workdir capability or complete
 A2A binding parity. See [A2A setup and limitations](a2a.md).
@@ -3239,3 +3250,27 @@ Important differences from older plans:
 Keep these distinctions when updating documentation: local behavior,
 implemented-but-WIP infrastructure, and planned design each need their own
 evidence.
+
+### Managed browser slot persistence and concurrency
+
+Production constructs ChromeManager in Main's project runtime; load-tool allocates
+by opaque instance allocation key, not conversation identity. Attach bypasses the
+manager allocation. Pools live in Project `state/browser/slots`, not session cwd.
+Atomic mkdir `allocation.lock` serializes pool metadata/cursor changes across
+managers and host processes sharing a local Project home. Per-slot `lease`
+directories persist throughout browser lifetime. No TTL or PID-based stealing is
+used. Full/busy/incompatible/quarantined pools return an explicit capacity error.
+Metadata records executable identity, initialization/profile selection, owner PID
+and browser PID when known. Browser Singleton/lockfile remnants also block reuse.
+Release sends stop, polls owned PID exit (3s maximum), then clears the claim; stop
+failure or still-live PID retains it. Unknown launch errors/cancellation retain
+both slot and port reservation because a process may still become active. A host
+crash leaves leases quarantined even if PID checks appear negative; no old process
+is automatically killed. Recovery is intentionally conservative: stop managers,
+verify no browser/descendant uses that slot, then manually clear stale lease/locks.
+A crash in metadata allocation can leave allocation.lock; it too requires stopped
+managers before manual removal. Corrupt metadata fails closed. Local atomic mkdir
+semantics are required; network-shared Project homes are not a supported lock boundary.
+The persisted cap must match configured slotCount; resizing requires explicit
+offline migration preserving metadata and profiles. No old UUID profile, slot
+profile, or incompatible browser data is silently removed or migrated.

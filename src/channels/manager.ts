@@ -373,7 +373,11 @@ export class ChannelManager {
     if (integration && bot?.platform === 'discord' && bot.purpose === 'service') {
       if (!channel.setDiscordIntegration) throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
       channel.setDiscordIntegration({
+        processorStorageId: bot.id,
         admit: (input, signal) => integration.prepareIngress(bot.id, input, signal),
+        classifyObservation: (proof,data,signal) => integration.classifyObservation(bot.id,proof,data,signal),
+        observe: (data,signal) => integration.observe(bot.id,data,signal),
+        wakeObservation: (proof,items,semantic,signal) => integration.wakeObservation(bot.id,proof,items,semantic,signal),
         discard: id => integration.discardAdmission(id),
         confirm: async (chatId, senderId, draftId, hash, signal) => { await integration.confirmChat(bot.id, chatId, senderId, draftId, hash, signal) },
         invalidate: () => integration.invalidateBot(bot.id),

@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto'
+import { desktopMediaKey } from './media-reveal-key.js'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { fileURLToPath } from 'node:url'
@@ -10,7 +12,7 @@ test('file explorer preload exposes only a frozen reveal capability', async () =
   const calls: unknown[][] = []
   const api = createFileExplorerApi({ invoke: async (...args) => { calls.push(args) } })
   assert(Object.isFrozen(api))
-  assert.deepEqual(Object.keys(api), ['showInFolder'])
+  assert.deepEqual(Object.keys(api), ['attachment', 'showInFolder'])
   await api.showInFolder('/project/a.txt')
   assert.deepEqual(calls, [[FILE_EXPLORER_CHANNEL, '/project/a.txt']])
 })
@@ -31,7 +33,16 @@ test('file explorer validates sender, document, path and existence and cleans up
   const handler = handlers.get(FILE_EXPLORER_CHANNEL)!
   const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame } as unknown as IpcMainInvokeEvent
   const path = fileURLToPath(import.meta.url)
-  await handler(event, path)
+  const expires = Date.now() + 60_000
+  const proof = { path, expires, signature: createHmac('sha256', desktopMediaKey).update(JSON.stringify([path, expires])).digest('hex') }
+  assert.equal(await handler(event, { proof, reveal: false }), true)
+  assert.deepEqual(shown, [])
+  assert.equal(await handler(event, { proof: { ...proof, path: path + '.other' }, reveal: true }), false)
+  assert.equal(await handler(event, { proof: { ...proof, signature: '0'.repeat(64) }, reveal: true }), false)
+  assert.equal(await handler(event, { proof: { ...proof, expires: 0 }, reveal: true }), false)
+  assert.equal(await handler(event, { proof: { path }, reveal: true }), false)
+  assert.deepEqual(shown, [])
+  assert.equal(await handler(event, { proof, reveal: true }), true)
   assert.deepEqual(shown, [path])
   for (const args of [[], [null], ['relative.txt'], [path, path], [`${path}\0`]]) {
     await assert.rejects(handler(event, ...args), /Invalid/)

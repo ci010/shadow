@@ -54,7 +54,18 @@ invoke_tool({ name: "browser_setup", args: { action: "launch", browser: "edge" }
 
 `browser` accepts `edge`, `brave`, `chrome`, or `default`. Alternatively pass
 `executablePath` instead of `browser`. An explicit choice never falls back.
-Each owned launch uses a fresh private profile, never copied host profiles.
+Each owned instance exclusively leases one persistent Project browser slot (default 3 total,
+across all browser types; tools.chrome.slotCount accepts 1–16). Idle slots rotate.
+The first use copies the selected browser's user data; later uses preserve and reuse
+the slot copy. A slot is pinned to its executable identity, never shared concurrently.
+The original profile is read-only: changes are never synchronized back. Local State
+and all standard profiles are copied; the last-used profile is selected (Default
+when no last-used selection exists). Close the source browser before first initializing a slot:
+locks or copy failures are errors, never a silent blank-profile fallback. If no
+user profile exists, a new independent profile is created. Unrecognized custom
+executables fail source detection instead of guessing another browser's profile.
+Cookies and saved logins may still be unavailable because OS/browser encryption
+(including app-bound encryption) is not guaranteed portable to a copy.
 Managed launches disable browser sync and extensions and start at `about:blank`
 instead of a network new-tab feed. Do not accept browser/vendor account sign-in
 or data-import prompts during automation. A managed profile is not an OS-account
@@ -184,3 +195,19 @@ Read `references/mcp-args.md` only for managed startup/configuration problems;
 it is not an alternative browser-operation CLI. The built-in catalog entry
 already exists: do not replace it with external MCP configuration.
 Browser/host tests are synthetic, not actual browser end-to-end verification.
+
+### Slot capacity and recovery
+
+When all slots are busy, incompatible, or quarantined, launch fails explicitly; it
+does not evict another instance or erase its data. Close an owned instance or use
+a compatible browser. Attach uses no slot and does not change target lifecycle.
+Release returns a slot only after the owned PID is confirmed exited. Unknown
+startup/cancellation outcomes and failed stops keep slots unavailable.
+Persistent lease directories are not automatically stolen on restart, even if an
+owner PID appears dead: descendants/PID reuse make that insufficient proof. Never
+automatically kill old processes. An operator must stop managers, verify no browser
+uses the slot, then clear stale lease/browser lock remnants. A stale allocation.lock
+also requires stopped managers before removal. Profiles and old UUID directories
+are retained; no automatic migration, deletion, or source write-back occurs.
+The persisted pool cap must match slotCount; changing an initialized cap requires
+an explicit offline migration preserving existing slot metadata/data.

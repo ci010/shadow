@@ -7,7 +7,7 @@ export const PROFILE_LIMITATIONS = [
   'Missing telemetry is unknown, not zero. Tokens are known subtotals when usage is incomplete.',
   'Physical segments are included once per logical session; own and inclusive scopes overlap and must not be added.',
   'Rolling 24h counts completed source events in UTC [asOf - 24h, asOf); conversation total counts dated source events before asOf.',
-  'Cached/reasoning breakdowns, costs and call durations are not persisted by this source.',
+  'This profile does not expose cached/reasoning breakdowns, costs or call durations; Project Usage shows persisted cost estimates and available durations.',
 ]
 export class SessionProfileService {
   constructor(private sessions: SessionManager, readonly projectId: string, private now: () => number = Date.now) {}

@@ -37,9 +37,9 @@
         <div v-else-if="archiveContainer" class="file-modal-note">
           {{ t('Expand this archive in the file tree to browse its contents, or use Download to save it.') }}
         </div>
-        <FileViewerPreview v-else-if="viewerFormat" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" :session-workspace="sessionWorkspace"
+        <FileViewerPreview v-else-if="viewerFormat && (!attachmentUrl || loaded)" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" :session-workspace="sessionWorkspace"
           :path="path" :name="entry.name" :active="active" :source-blob="archiveBlob" />
-        <div v-else-if="remote && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
+        <div v-else-if="(remote || attachmentUrl) && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
           {{ error || t('Loading…') }} <button v-if="error" class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button>
         </div>
         <img v-else-if="kind === 'image' && entry.archive" :src="rawSource" :alt="entry.name" class="file-modal-media"
@@ -87,6 +87,7 @@
 </template>
 
 <script setup lang="ts">
+import { readAttachmentBytes } from '../../attachment-preview.ts'
 import UiSelect from '../UiSelect.vue'
 import { t } from '../../i18n.ts'
 import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
@@ -118,6 +119,7 @@ import {
 } from '../../composables/useSessionFiles'
 
 const props = withDefaults(defineProps<{
+  attachmentUrl?: string
   apiBase: string
   sessionId: string
   sessionWorkspace?: boolean; folderId?: string
@@ -149,8 +151,8 @@ function releaseArchive() {
 const isMarkdown = computed(() => !props.entry.archive && ['.md', '.markdown'].includes(props.entry.ext.toLowerCase()))
 const isMemoryEvents = computed(() => !props.entry.archive && isMemoryEventFile(path.value))
 const sourceView = ref(false)
-const textMode = computed(() => !archiveContainer.value && !viewerFormat.value && (kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native || !!props.entry.archive))))
-const rawSource = computed(() => props.entry.archive ? archiveUrl.value : files.value.rawUrl(props.sessionId, path.value))
+const textMode = computed(() => !archiveContainer.value && !viewerFormat.value && (kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native || !!props.entry.archive || !!props.attachmentUrl))))
+const rawSource = computed(() => props.attachmentUrl ?? (props.entry.archive ? archiveUrl.value : files.value.rawUrl(props.sessionId, path.value)))
 const raw = computed(() => resources.resolve(rawSource.value))
 const staticSrc = computed(() => files.value.staticUrl(props.sessionId, path.value))
 
@@ -204,7 +206,9 @@ function sanitizeMarkdown(html: string): string {
   for (const element of fragment.querySelectorAll('a[href], img[src]')) {
     const attribute = element.tagName === 'A' ? 'href' : 'src'
     const value = element.getAttribute(attribute)!
-    const url = fileMarkdownUrl(value, attribute, staticSrc.value, root.href)
+    const url = props.attachmentUrl
+      ? (/^https?:\/\//i.test(value) && attribute === 'href' ? value : undefined)
+      : fileMarkdownUrl(value, attribute, staticSrc.value, root.href)
     if (!url) {
       element.removeAttribute(attribute)
       continue
@@ -234,11 +238,29 @@ async function loadText(): Promise<void> {
   loaded.value = false
   highlightError.value = ''
   if (!props.active || !(props.folderId || props.sessionId)) return
-  if (!props.entry.archive && (archiveContainer.value || viewerFormat.value || (!textMode.value && !props.remote))) return
+  if (!props.attachmentUrl && !props.entry.archive && (archiveContainer.value || viewerFormat.value || (!textMode.value && !props.remote))) return
   const controller = new AbortController()
   request = controller
   loading.value = true
   try {
+    if (props.attachmentUrl) {
+      if (textMode.value) {
+        const result = await readAttachmentBytes(props.attachmentUrl, controller.signal)
+        const decoded = decodeTextPreview(result.bytes, encoding.value, result.truncated)
+        if (controller.signal.aborted) return
+        truncated.value = result.truncated
+        binary.value = decoded.binary
+        textContent.value = decoded.content ?? ''
+        encodingWarning.value = decoded.encodingWarning ?? ''
+      } else if (viewerFormat.value) {
+        const result = await readAttachmentBytes(props.attachmentUrl, controller.signal, 64 * 1024 * 1024)
+        if (result.truncated) throw new Error('Attachment too large to preview. Use Download.')
+        if (controller.signal.aborted) return
+        archiveBlob.value = new Blob([result.bytes as Uint8Array<ArrayBuffer>])
+      }
+      loaded.value = true
+      return
+    }
     if (props.entry.archive) {
       if (!archiveBlob.value) {
         const blob = await readArchiveEntry(props.apiBase, props.sessionId, props.folderId, props.entry.archive, controller.signal, props.sessionWorkspace)
@@ -289,7 +311,7 @@ async function loadText(): Promise<void> {
   }
 }
 
-watch(() => [props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, path.value, kind.value, props.remote, props.entry.archive], () => {
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, path.value, kind.value, props.remote, props.entry.archive, props.attachmentUrl], () => {
   releaseArchive()
   downloads.reset()
   encoding.value = 'auto'

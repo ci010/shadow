@@ -60,3 +60,35 @@ export function filterModelOptions(options: readonly string[], current: string, 
   const models = [...new Set([...options, ...(current ? [current] : [])])]
   return models.filter(model => `${model} ${modelAccountLabel(model, providers)}`.toLowerCase().includes(query.trim().toLowerCase()))
 }
+
+/** Group by provider type, never by account ID or the model vendor prefix. */
+export function modelProviderGroup(model: string, providers: readonly ProviderInstanceLabel[] = []): string {
+  const id = modelProvider(model)
+  return providers.find(item => item.id === id)?.type ?? id
+}
+
+export function modelProviderFilters(models: readonly string[], providers: readonly ProviderInstanceLabel[] = []): { id: string; label: string; count: number }[] {
+  const groups = new Map<string, { id: string; label: string; count: number; names: Set<string>; accounts: Set<string> }>()
+  for (const model of new Set(models)) {
+    const id = modelProviderGroup(model, providers)
+    if (!id) continue
+    const group = groups.get(id) ?? { id, label: providerDisplayName(id), count: 0, names: new Set<string>(), accounts: new Set<string>() }
+    group.count++
+    group.names.add(modelDisplayName(model))
+    group.accounts.add(modelProvider(model))
+    groups.set(id, group)
+  }
+  // Small catalogs need no extra navigation; repeated accounts still benefit.
+  if (groups.size < 2 || ![...groups.values()].some(group => group.names.size >= 5 || group.accounts.size > 1)) return []
+  return [...groups.values()].map(({ id, label, count }) => ({ id, label, count }))
+}
+
+/** Keep opaque account IDs out of the compact list, but retain them in tooltips/search. */
+export function modelCompactAccountLabel(model: string, providers: readonly ProviderInstanceLabel[] = []): string {
+  const id = modelProvider(model)
+  const instance = providers.find(item => item.id === id)
+  if (!instance) return id
+  const peers = providers.filter(item => item.type === instance.type)
+  const label = modelAccountLabel(model, providers)
+  return peers.length > 1 ? `${label} · #${peers.findIndex(item => item.id === id) + 1}` : label
+}

@@ -56,7 +56,7 @@
                   <span :title="t('Cache-read tokens / input tokens')"><span class="i-lucide-database" aria-hidden="true" /><span :title="column.usage.cachedTokens === undefined ? undefined : formatNumber(column.usage.cachedTokens)">{{ column.usage.cachedTokens === undefined ? t('Not reported') : formatTokenCount(column.usage.cachedTokens) }}</span> <small :aria-label="t('Cache rate')">({{ cacheRate(column.usage) === null ? t('Not reported') : `${cacheRate(column.usage)}%` }})</small> <small>{{ t('cache') }}</small></span>
                   <small v-if="column.usage.cacheReportedPromptTokens !== undefined" class="details-note">{{ t('Partial cache report: {reported} / {total} input tokens. Rate covers reported inputs only.', { reported: formatTokenCount(column.usage.cacheReportedPromptTokens), total: formatTokenCount(column.usage.promptTokens) }) }}</small>
                   <span :title="t('{value1} output tokens', { value1: formatNumber(column.usage.completionTokens) })"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ formatTokenCount(column.usage.completionTokens) }} <small>{{ t('output') }}</small></span>
-                  <span v-for="cost in column.usage.costs" :key="cost.currency" :title="t('Estimated cost, not a bill. Plan allowances and discounts may differ.')">{{ t(column.usage.costIncomplete ? 'Known cost subtotal (incomplete)' : 'Estimated cost') }}: {{ formatUsageCost(cost) }}</span>
+                  <span v-for="cost in column.usage.costs" :key="cost.currency" :title="t('Estimated cost, not a bill. Plan allowances and discounts may differ.')"><span class="i-lucide-coins" aria-hidden="true" />{{ formatNumber(cost.amount, { maximumSignificantDigits: 6 }) }} <small>{{ cost.currency === 'AI_CREDITS' ? t('AI credits') : cost.currency }}</small></span>
                   <small v-if="column.usage.costIncomplete" class="details-note">{{ t(column.usage.costs?.length ? 'Cost estimate incomplete' : 'Cost could not be estimated') }}</small>
                 </dd>
                 <dd v-else>{{ t('Not reported') }}</dd>
@@ -81,7 +81,7 @@
             </ul>
             <p v-if="capacity.overflowTokens" class="details-note">{{ t('{value1} over capacity', { value1: formatTokenCount(capacity.overflowTokens) }) }}</p>
             <ul v-if="capacity.markers.length" class="context-legend">
-              <li v-for="marker in capacity.markers" :key="marker.kind"><span class="context-swatch" :class="marker.kind" aria-hidden="true" />{{ marker.kind === 'low' ? t('Low (between turns)') : t('High (during turn)') }}: {{ Math.round(marker.ratio * 1000) / 10 }}% · {{ formatTokenCount(marker.tokens) }}</li>
+              <li v-for="marker in capacity.markers" :key="marker.kind"><span class="context-swatch" :class="marker.kind" aria-hidden="true" />{{ marker.kind === 'low' ? t('Low threshold') : t('High threshold') }}: {{ Math.round(marker.ratio * 1000) / 10 }}% · {{ formatTokenCount(marker.tokens) }}</li>
             </ul>
           </div>
         </div>
@@ -92,7 +92,6 @@
 
 <script setup lang="ts">
 import { t, formatNumber } from '../i18n.ts'
-import { formatUsageCost } from '../usage-cost.ts'
 import { apiUrl } from '../api-url.ts'
 import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from '../../../src/sessions/session-name.ts'

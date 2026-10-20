@@ -13,35 +13,41 @@
         v-mobile-media="resources.native ? item.path : undefined"
         :src="item.url" controls preload="none" :aria-label="item.name" @error="failed.add(item.path)" />
       <div v-if="item.kind !== 'image' || !item.url || failed.has(item.path)" class="attachment-details">
-        <component :is="item.file ? 'button' : 'div'" class="attachment-main" :class="{ 'attachment-open': item.file }"
-          :type="item.file ? 'button' : undefined" :aria-label="item.file ? t('Open {name} in tab', { name: item.name }) : undefined"
-          @click="item.file && $emit('open', item.file)">
+        <component :is="item.url ? 'button' : 'div'" class="attachment-main" :class="{ 'attachment-open': item.url }"
+          :type="item.url ? 'button' : undefined" :aria-label="item.url ? t('Preview {name}', { name: item.name }) : undefined"
+          @click="openAttachment(item)">
           <span class="attachment-icon" :class="item.kind === 'video' ? 'i-lucide-file-video' : item.kind === 'audio' ? 'i-lucide-file-audio' : 'i-lucide-file'" aria-hidden="true" />
           <span class="attachment-description">
             <span class="attachment-name" :title="item.name">{{ item.name }}</span>
             <span class="attachment-type">{{ item.extension ? item.extension.toUpperCase() + t(' file') : t('File') }}</span>
           </span>
         </component>
+        <button v-if="revealable.has(item.path)" class="attachment-download" type="button" @click="reveal(item)">{{ t('Show in file explorer') }}</button>
         <a v-if="item.downloadUrl" class="attachment-download" :href="item.downloadUrl" :download="item.name" :aria-label="t('Download {name}', { name: item.name })" :title="t('Download {name}', { name: item.name })" referrerpolicy="no-referrer"
           :aria-busy="downloads.pending.has(item.downloadUrl)" :aria-disabled="downloads.pending.has(item.downloadUrl)"
           @click="downloads.download($event, item.downloadUrl, item.name)">
           <span :class="downloads.pending.has(item.downloadUrl) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-download'" aria-hidden="true" /><span>{{ downloads.pending.has(item.downloadUrl) ? t('Downloading...') : t('Download') }}</span>
         </a>
       </div>
+      <button v-if="item.kind === 'image' && item.url && !failed.has(item.path) && revealable.has(item.path)" class="attachment-download" type="button" @click="reveal(item)">{{ t('Show in file explorer') }}</button>
       <p v-if="!item.url" class="attachment-error" role="status">{{ t('Attachment unavailable in this conversation.') }}</p>
       <p v-else-if="failed.has(item.path)" class="attachment-error" role="status">{{ t('Preview unavailable. Download the file to open it on your device.') }}</p>
       <p v-if="item.downloadUrl && downloads.errors.has(item.downloadUrl)" class="attachment-error" role="alert">{{ downloads.errors.get(item.downloadUrl) }}</p>
     </div>
+    <p v-if="revealError" class="attachment-error" role="alert">{{ revealError }}</p>
+    <FilePreviewModal v-if="preview" :api-base="apiBase" :session-id="sessionId" :entry="preview.entry" dir="" :attachment-url="preview.url" @close="preview = undefined" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { computed, reactive, watch } from 'vue'
+import FilePreviewModal from './files/FilePreviewModal.vue'
+import type { FileEntry } from '../composables/useSessionFiles.ts'
+import { computed, reactive, ref, watch } from 'vue'
 import { useFileDownload } from '../composables/useFileDownload.ts'
-import { buildMediaUrl, chatIdForMediaSession } from '../media-url.ts'
+import { buildMediaUrl } from '../media-url.ts'
 import { useMobileResources, vMobileMedia } from '../mobile-resources.ts'
-import { attachmentExtension, attachmentFile, attachmentKind, attachmentName } from '../message-attachments.ts'
+import { attachmentExtension, attachmentKind, attachmentName } from '../message-attachments.ts'
 import type { ImagePreview } from '../image-viewer.ts'
 import type { OpenFile } from '../file-workbench.ts'
 import type { SessionDetails } from '../session-details.ts'
@@ -54,10 +60,45 @@ const downloads = useFileDownload()
 watch(() => JSON.stringify([props.apiBase, props.sessionId, props.paths]), () => { downloads.reset(); failed.clear() })
 const items = computed(() => props.paths.map(path => ({
   path, name: attachmentName(path), kind: attachmentKind(path), extension: attachmentExtension(path),
-  file: attachmentKind(path) === 'file' && chatIdForMediaSession(props.sessionId) ? attachmentFile(path, props.workdir) : undefined,
   url: resources.resolve(buildMediaUrl(props.apiBase, props.sessionId, path)),
   downloadUrl: resources.resolve(buildMediaUrl(props.apiBase, props.sessionId, path, true)),
 })))
+const preview = ref<{ url: string; entry: FileEntry }>()
+type Item = typeof items.value[number]
+function openAttachment(item: Item) {
+  if (!item.url) return
+  preview.value = { url: item.url, entry: { name: item.name, ext: item.extension ? `.${item.extension}` : '', type: 'file', size: 0, mtime: null } }
+}
+const desktop = typeof window === 'undefined' ? undefined : window.shadowDesktop?.fileExplorer
+const revealable = reactive(new Set<string>())
+const revealError = ref('')
+async function proofFor(item: Item, signal?: AbortSignal): Promise<unknown> {
+  if (!item.url) return undefined
+  const url = new URL(item.url, window.location.href)
+  url.searchParams.set('reveal', '1')
+  const response = await fetch(url, { signal, cache: 'no-store' })
+  return response.ok ? (await response.json()).proof : undefined
+}
+watch(items, (current, _, cleanup) => {
+  preview.value = undefined
+  revealable.clear()
+  revealError.value = ''
+  const controller = new AbortController()
+  cleanup(() => controller.abort())
+  if (!desktop?.attachment) return
+  for (const item of current) {
+    if (!item.url || /^(https?:|data:)/i.test(item.path)) continue
+    void proofFor(item, controller.signal).then(async proof => {
+      if (await desktop.attachment(proof, false) && !controller.signal.aborted) revealable.add(item.path)
+    }).catch(() => {})
+  }
+}, { immediate: true })
+async function reveal(item: Item) {
+  revealError.value = ''
+  try {
+    if (!desktop?.attachment || !await desktop.attachment(await proofFor(item), true)) throw new Error('Not local')
+  } catch { revealError.value = t('Could not show this path in file explorer. It may have moved or been deleted.') }
+}
 </script>
 
 <style scoped>

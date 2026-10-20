@@ -1,0 +1,295 @@
+{
+  "delayMs": 1000,
+  "steps": [
+    {
+      "kind": "input",
+      "key": "scope:100:500",
+      "id": "1",
+      "event": {
+        "type": "discord.MESSAGE_CREATE",
+        "data": {
+          "id": "1",
+          "channel_id": "201",
+          "guild_id": "100",
+          "author": {
+            "id": "500",
+            "bot": false
+          },
+          "content": "Campaign same text",
+          "attachments": [
+            {
+              "id": "1",
+              "content_type": "image/png",
+              "size": 101,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "2",
+              "content_type": "image/png",
+              "size": 102,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "3",
+              "content_type": "image/png",
+              "size": 103,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "4",
+              "content_type": "image/png",
+              "size": 104,
+              "width": 400,
+              "height": 300
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "advance",
+      "ms": 500
+    },
+    {
+      "kind": "input",
+      "key": "scope:100:500",
+      "id": "2",
+      "event": {
+        "type": "discord.MESSAGE_CREATE",
+        "data": {
+          "id": "2",
+          "channel_id": "202",
+          "guild_id": "100",
+          "author": {
+            "id": "500",
+            "bot": false
+          },
+          "content": "Campaign same text",
+          "attachments": [
+            {
+              "id": "1",
+              "content_type": "image/png",
+              "size": 101,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "2",
+              "content_type": "image/png",
+              "size": 102,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "3",
+              "content_type": "image/png",
+              "size": 103,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "4",
+              "content_type": "image/png",
+              "size": 104,
+              "width": 400,
+              "height": 300
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "advance",
+      "ms": 500
+    },
+    {
+      "kind": "input",
+      "key": "scope:100:500",
+      "id": "3",
+      "event": {
+        "type": "discord.MESSAGE_CREATE",
+        "data": {
+          "id": "3",
+          "channel_id": "205",
+          "guild_id": "100",
+          "author": {
+            "id": "500",
+            "bot": false
+          },
+          "content": "Campaign same text",
+          "attachments": [
+            {
+              "id": "1",
+              "content_type": "image/png",
+              "size": 101,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "2",
+              "content_type": "image/png",
+              "size": 102,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "3",
+              "content_type": "image/png",
+              "size": 103,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "4",
+              "content_type": "image/png",
+              "size": 104,
+              "width": 400,
+              "height": 300
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "input",
+      "key": "scope:100:500",
+      "id": "4",
+      "event": {
+        "type": "discord.MESSAGE_CREATE",
+        "data": {
+          "id": "4",
+          "channel_id": "201",
+          "guild_id": "100",
+          "author": {
+            "id": "500",
+            "bot": false
+          },
+          "content": "Campaign same text",
+          "attachments": [
+            {
+              "id": "1",
+              "content_type": "image/png",
+              "size": 101,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "2",
+              "content_type": "image/png",
+              "size": 102,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "3",
+              "content_type": "image/png",
+              "size": 103,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "4",
+              "content_type": "image/png",
+              "size": 104,
+              "width": 400,
+              "height": 300
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "input",
+      "key": "scope:100:501",
+      "id": "5",
+      "event": {
+        "type": "discord.MESSAGE_CREATE",
+        "data": {
+          "id": "5",
+          "channel_id": "201",
+          "guild_id": "100",
+          "author": {
+            "id": "501",
+            "bot": false
+          },
+          "content": "Campaign same text",
+          "attachments": [
+            {
+              "id": "1",
+              "content_type": "image/png",
+              "size": 101,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "2",
+              "content_type": "image/png",
+              "size": 102,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "3",
+              "content_type": "image/png",
+              "size": 103,
+              "width": 400,
+              "height": 300
+            },
+            {
+              "id": "4",
+              "content_type": "image/png",
+              "size": 104,
+              "width": 400,
+              "height": 300
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "advance",
+      "ms": 60000
+    }
+  ],
+  "expected": [
+    {
+      "at": 1000,
+      "ids": [
+        "3"
+      ],
+      "semantic": {
+        "type": "advertising.campaign",
+        "data": {
+          "signatureKind": "metadata-only",
+          "guildId": "100",
+          "observedSenderId": "500",
+          "channelIds": [
+            "201",
+            "202",
+            "205"
+          ],
+          "evidence": [
+            {
+              "messageId": "1",
+              "channelId": "201",
+              "content": "Campaign same text"
+            },
+            {
+              "messageId": "2",
+              "channelId": "202",
+              "content": "Campaign same text"
+            },
+            {
+              "messageId": "3",
+              "channelId": "205",
+              "content": "Campaign same text"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

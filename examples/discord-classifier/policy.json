@@ -1,0 +1,15 @@
+{
+  "model": "REPLACE_WITH_CONFIGURED_MODEL",
+  "instructions": "Detect suspected promotional campaigns. Ordinary questions should buffer; acknowledgements ignore. Use semanticwake only for compelling suspicious promotion evidence; otherwise unknown. Attachment metadata is not image content.",
+  "fields": [
+    "content",
+    "attachments"
+  ],
+  "maxInputBytes": 2000,
+  "maxTokens": 128,
+  "maxRequests": 5,
+  "maxWindowTokens": 20000,
+  "windowMs": 60000,
+  "deadlineMs": 1000,
+  "minConfidence": 0.95
+}

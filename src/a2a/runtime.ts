@@ -4,6 +4,7 @@ import type { Bus } from '../bus/bus.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { AgentTypesManager } from '../agent/types/manager.ts'
 import type { SessionTurnFact } from '../sessions/input.ts'
+import { A2aSetup } from './setup.ts'
 import { A2aStore } from './store.ts'
 import { A2aService, type A2aRunner } from './service.ts'
 import { A2aClientTools } from './client.ts'
@@ -68,11 +69,7 @@ export function createA2aRuntime(options: {
   sessions: SessionManager; bus: Bus; agentTypes: AgentTypesManager
 }) {
   const { projectId, workspace, app, sessions, bus, agentTypes } = options
-  const config = options.config
-  if (!config) {
-    registerA2aRoutes(app, undefined, () => undefined)
-    return { tools: [], sessions: undefined, hasPendingOwner: (_id: string) => false, authorize: () => false, validate: () => {}, close: async () => {} }
-  }
+  const config: A2aConfig = { ...options.config, agents: { ...options.config?.agents } }
   const store = new A2aStore(projectStoragePath(workspace, '.a2a'))
   store.init()
   let inboundUnavailable = false
@@ -103,6 +100,11 @@ export function createA2aRuntime(options: {
       })
     },
   })
+  const setup = new A2aSetup(projectId, projectStoragePath(workspace, '.a2a-bridges'), config, (name, token) => client.setLocalToken(name, token), context => {
+    const state = sessions.getSessionState(context.sessionId)
+    if (!state || state.mode !== 'session') throw new Error('Setup requires a durable owning session.')
+    sessions.assertFolderAccess(context.sessionId)
+  })
   registerA2aRoutes(app, service, authenticate, () => inboundUnavailable)
   const remoteSessions = new A2aSessions(projectId, config, store, client, context => {
     const state = sessions.getSessionState(context.sessionId)
@@ -110,7 +112,7 @@ export function createA2aRuntime(options: {
     sessions.assertFolderAccess(context.sessionId)
   })
   return {
-    tools: client.tools().filter(tool => tool.name !== 'reply'),
+    tools: [...client.tools().filter(tool => tool.name !== 'reply'), setup],
     hasPendingOwner: (id: string) => [...store.outbound.values()].some(call => call.owner === id &&
       (!['completed', 'failed', 'cancelled', 'rejected'].includes(call.status) || call.notification !== 'delivered')),
     sessions: remoteSessions,
@@ -126,6 +128,6 @@ export function createA2aRuntime(options: {
       client.start()
     },
     authorize: (request: Request) => !inboundUnavailable && !!service && a2aRequestProject(request) === projectId && !!authenticate(request),
-    close: async () => { await client.close(); await service?.close() },
+    close: async () => { await client.close(); await setup.close(); await service?.close() },
   }
 }

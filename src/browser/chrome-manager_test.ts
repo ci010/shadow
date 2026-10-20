@@ -50,6 +50,7 @@ test('two project browsers use distinct managed profiles and shared port leases 
     const stopped: number[] = []
     let pid = 1000
     const runtime: ChromeRuntimeOperations = {
+      getUserDataDir: () => null,
       detectChrome: async () => 'synthetic-browser',
       isDebugPortActive: async (port) => active.has(port),
       isProcessAlive: (pid) => [...active.values()].includes(pid),
@@ -133,8 +134,9 @@ test('project browser shutdown aborts pending launch and releases its lease with
     const stopped: number[] = []
     const allocator = new ChromePortAllocator(async () => true)
     const runtime: ChromeRuntimeOperations = {
+      getUserDataDir: () => null,
       detectChrome: async () => 'synthetic-browser', isDebugPortActive: async () => false,
-      isProcessAlive: () => true,
+      isProcessAlive: () => !stopped.includes(1234),
       async launchChrome(_exe, _port, _profile, signal) {
         entered.resolve(signal)
         await release.promise
@@ -175,6 +177,7 @@ function syntheticRuntime(overrides: Partial<ChromeRuntimeOperations> = {}) {
   const stopped: number[] = []
   let nextPid = 2000
   const runtime: ChromeRuntimeOperations = {
+      getUserDataDir: () => null,
     async detectChrome(path, browser) {
       detections.push({ path, browser })
       return path ?? `${browser ?? 'default'}-executable`
@@ -196,10 +199,10 @@ function syntheticRuntime(overrides: Partial<ChromeRuntimeOperations> = {}) {
   return { runtime, active, detections, launches, stopped }
 }
 
-test('project sessions pin independent browser choices without changing the project default or copying profiles', async () => {
+test('project sessions pin independent browser choices without changing the project default (no source profile fixture)', async () => {
   await withTempWorkspace(async (home) => {
     const fixture = syntheticRuntime()
-    const config = Object.freeze({ basePort: 9222, executablePath: 'project-default-executable' })
+    const config = Object.freeze({ basePort: 9222, slotCount: 8, executablePath: 'project-default-executable' })
     const manager = new ChromeManager(home, () => config, {
       projectId: 'a', portAllocator: new ChromePortAllocator(async () => true), runtime: fixture.runtime,
     })
@@ -319,7 +322,7 @@ test('default options preserve configured-executable fallback and executable cac
         return path === 'missing' ? null : path ?? 'auto-detected'
       },
     })
-    const config = { basePort: 9222, executablePath: 'missing' }
+    const config = { basePort: 9222, slotCount: 4, executablePath: 'missing' }
     const manager = new ChromeManager(home, () => config, {
       projectId: 'a', portAllocator: new ChromePortAllocator(async () => true), runtime: fixture.runtime,
     })
@@ -460,7 +463,7 @@ test('caller cancellation during startup or immediately after launch terminates 
   }
 })
 
-test('cancellation of a matching pending caller is propagated and failed startup releases its lease', async () => {
+test('cancellation of a matching pending caller propagates and unknown startup retains its lease', async () => {
   await withTempWorkspace(async (home) => {
     const entered = Promise.withResolvers<AbortSignal>()
     const allocator = new ChromePortAllocator(async () => true)
@@ -483,8 +486,7 @@ test('cancellation of a matching pending caller is propagated and failed startup
       const results = await Promise.all([pending, duplicate])
       assert.deepEqual(results, [{ error: 'startup cancelled' }, { error: 'startup cancelled' }])
       assert.deepEqual(fixture.stopped, [])
-      const lease = await allocator.reserve(9222, 9222)
-      lease.release()
+      await assert.rejects(allocator.reserve(9222, 9222), /No unreserved/)
     } finally {
       await manager.releaseAll()
     }

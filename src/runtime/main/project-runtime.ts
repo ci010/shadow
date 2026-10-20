@@ -162,6 +162,7 @@ import {
   createAggregatedProvider,
   detectProvider,
 } from '../../providers/factory.ts'
+import { InputClassifier } from '../../events/input-classifier.ts'
 import { parseModelSpec } from '../../providers/aggregated.ts'
 import { MODEL_CONTEXT_WINDOWS, resolveContextWindow } from '../../providers/model-registry.ts'
 import { providerPlugin } from '../../providers/routes.ts'
@@ -203,7 +204,7 @@ import { CoordinatorExecutionPolicy } from '../../execution/coordinator-policy.t
 import { ComputerService } from '../../computer/service.ts'
 import { registerComputerRoutes } from '../../computer/routes.ts'
 import { ComputerError } from '../../execution/computer/contracts.ts'
-import { WindowsComputerDesktop } from '../../execution/computer/windows.ts'
+import { createComputerDesktop } from '../../execution/computer/factory.ts'
 import { computerTools } from '../../tools/computer.ts'
 
 function resolvePrimaryProviderName(modelSpec: string): string {
@@ -304,7 +305,7 @@ export async function createProjectRuntime(
   const vfs = new VirtualFs()
   const tools = new Tools(workspace)
   const coordinator = dependencies.localExecutor === false ? new CoordinatorExecutionPolicy() : undefined
-  const computer = dependencies.computer ?? new ComputerService(new WindowsComputerDesktop(), { enabled: !coordinator })
+  const computer = dependencies.computer ?? new ComputerService(createComputerDesktop(), { enabled: !coordinator })
   const stopComputer = () => dependencies.computer ? computer.stopProject(project.id) : computer.close()
   const releaseComputerSession = (sessionId: string) => {
     void computer.release({ projectId: project.id, sessionId })
@@ -411,6 +412,7 @@ export async function createProjectRuntime(
   // Chrome config getter that re-reads from the config file so edits take effect
   // without a process restart (e.g. user sets tools.chrome.executablePath).
   const chromeConfigGetter = (): {
+    slotCount?: number
     executablePath?: string
     basePort: number
   } => {
@@ -508,7 +510,9 @@ export async function createProjectRuntime(
   const channelIntegrations = new IntegrationStore({
     projectId: project.id, workspace, directory: integrationDirectory, bots: botStore, agents: agentTypes, memory: memoryDomains,
   })
+  const classifier = new InputClassifier(() => provider, resolve(integrationDirectory, 'classifier-ledger.json'))
   const discordIntegration = new DiscordIntegration({
+    classifier,
     store: channelIntegrations, memory: memoryDomains, bots: botStore, workspace, projectId: project.id, baseTools: tools,
   })
   cleanup.push(channelIntegrations.onChange(() => realtime.invalidateIntegrations?.()))

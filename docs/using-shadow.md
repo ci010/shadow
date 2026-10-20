@@ -580,3 +580,60 @@ pending request shows a waiting state. A missing or unrecognized receipt means
 cancellation remains unconfirmed. Raw question records remain available in the
 card disclosure. Historical records without a tool call in the loaded segment
 are not reconstructed from a separate input-history service.
+
+## Project usage statistics
+
+Open **Project Dashboard → Usage** for Project-wide all-time, today, past-seven-day
+and current-month tokens, estimated costs, and provider time. Daily details show
+recent 31 calendar days (including inactive days) and older active dates, with bars
+for known tokens. **Refresh** recomputes the statistics; opening this view does not
+make model requests. The summary defaults to **Past 7 days**; choose a period to
+update the four cards (tokens, estimated cost, model call time, and call count).
+Large values are compact; hover a value for its precise known subtotal. Currency
+and credit amounts stay on separate lines. The trend charts have their own **7/30
+day** window, independent of the summary selection. **Data completeness** expands
+missing-call counts and tracking coverage; **How usage is measured** expands the
+statistical definitions below. Both are collapsed initially.
+
+- All dates and boundaries use **UTC**. Seven days means today plus the previous six
+  calendar dates, not a rolling 168-hour window. Events completed before the shown
+  “as of” instant are included, and charged entirely to their completion date.
+- Tokens and costs come from persisted `model_usage` source events, deduplicated
+  across physical segments within each logical conversation. Project conversations,
+  child calls and automations are included once; inherited assistant snapshots are
+  not summed. No other Project's history is included.
+- Costs reuse the provider/model estimates recorded at call time, not today's price
+  list. They are not invoices; USD, CNY and AI credits remain separate. Unpriced or
+  incompletely priced calls are marked partial. Missing estimates are not zero.
+- Provider time is the sum of elapsed model-call durations, including failed calls,
+  excluding tool execution, user waiting and persistence. Concurrent calls overlap,
+  so this is **not elapsed Project work time**. New calls record duration in both
+  JSONL and SQLite; older events without duration remain unavailable/partial.
+- Values are known subtotals, not reconstructed historical bills. Historical
+  sessions without source tracking, undated events and scans capped at 100,000
+  source records are disclosed. Capped aggregates are lower bounds; calls without
+  usage or duration remain unknown. Inactive dates with no recorded calls show
+  no known token/cost/time value, rather than implying complete telemetry.
+
+The Project-bound `GET /api/project/usage` endpoint requires the same context-read
+permission as session profiles, rejects requests when authorization is unavailable,
+forwards request cancellation, and returns `Cache-Control: no-store`. It accepts no
+Project selector or pricing overrides. The gateway's existing Project route selects
+the runtime; statistics are computed from that runtime's SessionManager/store.
+
+### Daily usage pagination
+
+The summary endpoint returns only the latest 31 UTC calendar dates for charts,
+while cumulative totals still include historical source events. Daily history is
+loaded only after **Load daily history**, via the context-authorized, Project-bound
+`GET /api/project/usage/daily?page=1` endpoint (10 dates per page, newest first).
+Completeness details use that same current page, never all history. Refresh and
+Project switching clear the page. Page responses include total dates, hasMore and
+snapshot asOf; no HTTP caching is permitted. Valid pages are decimal integers
+1–100000; beyond-end pages are empty and have hasMore=false.
+
+Aggregation still scans up to 100,000 source-log records, explicitly reporting
+truncation. An in-memory snapshot per store/Project (up to eight Projects, 60-second
+TTL) avoids rescanning source logs on every page. Refresh rebuilds it; expired
+snapshots can shift pages as new records arrive. No persistent index/migration is
+introduced. Recent zero-activity dates and older active dates comprise daily history.

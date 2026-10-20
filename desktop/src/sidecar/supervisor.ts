@@ -1,3 +1,4 @@
+import { desktopMediaKey } from '../media-reveal-key.js'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process'
@@ -192,6 +193,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
         env: {
           ...this.environment,
           ELECTRON_RUN_AS_NODE: '1',
+          SHADOW_DESKTOP_MEDIA_KEY: request.role === 'main' ? desktopMediaKey : undefined,
           GATEWAY_PORT: String(request.port),
           WINDOWS_USE_LAUNCH_TOKEN: request.launchToken,
         },

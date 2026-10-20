@@ -95,6 +95,11 @@ export class A2aClientTools {
     }
   }
 
+  setLocalToken(name: string, token?: string): void {
+    if (token) this.tokens.set(name, token)
+    else this.tokens.delete(name)
+  }
+
   private async client(name: string, signal: AbortSignal): Promise<Client> {
     if (!Object.hasOwn(this.config.agents, name)) throw new Error('Unknown configured A2A agent.')
     const agent = this.config.agents[name]

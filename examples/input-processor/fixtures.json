@@ -1,0 +1,12 @@
+{
+  "delayMs": 1000,
+  "steps": [
+    {"kind":"input","key":"alice","id":"1","event":{"type":"discord.MESSAGE_CREATE","data":{"content":"ok"}}},
+    {"kind":"input","key":"alice","id":"2","event":{"type":"discord.MESSAGE_CREATE","data":{"content":"crypto"}}},
+    {"kind":"input","key":"alice","id":"3","event":{"type":"discord.MESSAGE_CREATE","data":{"content":"question"}}},
+    {"kind":"advance","ms":500},
+    {"kind":"input","key":"alice","id":"4","event":{"type":"discord.MESSAGE_CREATE","data":{"content":"more"}}},
+    {"kind":"advance","ms":500}
+  ],
+  "expected":[{"at":0,"ids":["2"]},{"at":1000,"ids":["3","4"]}]
+}

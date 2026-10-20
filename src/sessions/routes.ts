@@ -1,3 +1,4 @@
+import { projectUsagePageQuerySchema } from '../projects/usage-contract.ts'
 import { SessionProfileService } from './profile.ts'
 import type { Hono } from 'hono'
 import { channelAddressFromSessionId } from '../bus/events.ts'
@@ -341,6 +342,22 @@ export function sessionsApiPlugin(
       if (!query.success) return c.json({ error: 'invalid_file_changes_query', message: 'Use a nonnegative offset, a limit between 1 and 30, and a nonempty toolCallId of at most 4096 characters when filtering.' }, 400)
       const page = await sessions.getFileChanges(c.req.param('key'), query.data.offset, query.data.limit, c.req.raw.signal, query.data.toolCallId)
       return page ? c.json(page) : c.json({ error: 'session_not_found' }, 404)
+    })
+
+    app.get('/api/project/usage/daily', async c => {
+      c.header('Cache-Control', 'no-store')
+      if (!options.authorizeContext || !await options.authorizeContext(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
+      if (!sessions?.projectId) return c.json({ error: 'project_not_found' }, 404)
+      const query = projectUsagePageQuerySchema.safeParse(c.req.query())
+      if (!query.success) return c.json({ error: 'invalid_usage_page' }, 400)
+      return c.json(await sessions.getProjectUsagePage(query.data.page, c.req.raw.signal))
+    })
+
+    app.get('/api/project/usage', async c => {
+      c.header('Cache-Control', 'no-store')
+      if (!options.authorizeContext || !await options.authorizeContext(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
+      if (!sessions?.projectId) return c.json({ error: 'project_not_found' }, 404)
+      return c.json(await sessions.getProjectUsage(c.req.raw.signal))
     })
 
     app.get('/api/sessions/:key/profile', async c => {

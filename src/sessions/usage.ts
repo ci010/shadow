@@ -73,9 +73,10 @@ export function usageProvider(
     ...(provider.listModelInfos ? { listModelInfos: () => provider.listModelInfos!() } : {}),
     async chat(...args) {
       const destination = owner()
+      const started = performance.now()
       const record = (usage: LLMResponseUsage | null) => store.appendRawEvents(destination.physicalId, [{
         type: 'model_usage', id: randomUUID(), sessionId: destination.sessionId,
-        timestamp: new Date().toISOString(), usage,
+        timestamp: new Date().toISOString(), usage, durationMs: Math.max(0, performance.now() - started),
       }])
       let response
       try { response = await provider.chat(...args) }

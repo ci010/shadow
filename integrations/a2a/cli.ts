@@ -7,9 +7,10 @@ import { A2aService } from '../../src/a2a/service.ts'
 import { a2aAuthenticator, registerA2aRoutes } from '../../src/a2a/routes.ts'
 import { lockA2aDirectory, readA2aConfig } from '../../src/a2a/cli-support.ts'
 import { CodingBridgeConfigSchema, type CodingBridgeConfig } from './config.ts'
-import { codingRunner, officialCodingSdks, type CodingSdks } from './providers.ts'
+import { codingRunner, spawnCli, validateBackend, type SpawnCli } from './providers.ts'
 
-export async function startCodingBridge(config: CodingBridgeConfig, sdks: Partial<CodingSdks>) {
+export async function startCodingBridge(config: CodingBridgeConfig, launch: SpawnCli = spawnCli) {
+  validateBackend(config)
   if (!(await stat(config.cwd)).isDirectory()) throw new Error('Coding bridge cwd must be an existing local directory.')
   const authenticate = a2aAuthenticator(config.server.callers)
   await mkdir(config.stateDirectory, { recursive: true, mode: 0o700 })
@@ -25,7 +26,7 @@ export async function startCodingBridge(config: CodingBridgeConfig, sdks: Partia
     const store = new A2aStore(config.stateDirectory)
     store.init()
     service = new A2aService(config.projectId, { ...config.server, agentType: config.backend.type },
-      store, codingRunner(config, sdks))
+      store, codingRunner(config, launch))
     const app = new Hono()
     const project = new Hono()
     registerA2aRoutes(project, service, authenticate)
@@ -59,7 +60,7 @@ async function main() {
   const raw = await readA2aConfig()
   if (raw === undefined) return
   const config = CodingBridgeConfigSchema.parse(raw)
-  const server = await startCodingBridge(config, await officialCodingSdks.load(config.backend.type))
+  const server = await startCodingBridge(config)
   const shutdown = () => { void server.close().catch(error => { console.error('[a2a:bridge] Shutdown failed', error); process.exitCode = 1 }) }
   process.once('SIGINT', shutdown)
   process.once('SIGTERM', shutdown)

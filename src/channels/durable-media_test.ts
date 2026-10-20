@@ -1,3 +1,4 @@
+import { verifyMediaReveal } from '../utils/media-reveal.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdir, writeFile, rm, symlink } from 'node:fs/promises'
@@ -55,7 +56,10 @@ test('durable media rejects junction escape and a redirected Shadow root', async
   } finally { await rm(workspace, { recursive: true, force: true }) }
 })
 
-test('media route serves historical durable Chinese attachments with GET/HEAD/range and preserves session isolation', async () => {
+test('media route serves historical durable Chinese attachments with GET/HEAD/range and preserves session isolation', async t => {
+  const oldKey = process.env.SHADOW_DESKTOP_MEDIA_KEY
+  process.env.SHADOW_DESKTOP_MEDIA_KEY = 'synthetic-desktop-key'
+  t.after(() => { if (oldKey === undefined) delete process.env.SHADOW_DESKTOP_MEDIA_KEY; else process.env.SHADOW_DESKTOP_MEDIA_KEY = oldKey })
   const workspace = await createTempWorkspace()
   const root = join(workspace, 'Documents', 'Shadow')
   const file = join(root, '测试 报告.md')
@@ -78,6 +82,12 @@ test('media route serves historical durable Chinese attachments with GET/HEAD/ra
       assert.match(response.headers.get('Content-Disposition')!, /attachment;/)
       assert.equal(await response.text(), method === 'HEAD' ? '' : 'synthetic report')
     }
+    const metadata = await app.request(url('owner') + '&reveal=1')
+    const { proof } = await metadata.json()
+    assert.equal(verifyMediaReveal(proof, 'synthetic-desktop-key'), true)
+    assert.equal(proof.path, file)
+    assert.equal(verifyMediaReveal(proof, 'another-electron-host'), false)
+    for (const chat of ['other', 'missing']) assert.equal((await app.request(url(chat) + '&reveal=1')).status, 404)
     const range = await app.request(url('owner'), { headers: { Range: 'bytes=0-4' } })
     assert.equal(range.status, 206)
     assert.equal(await range.text(), 'synth')

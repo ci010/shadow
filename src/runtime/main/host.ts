@@ -41,7 +41,7 @@ import { MobileAccess, mobileGatewayConfig } from '../../gateway/mobile-access.t
 import { a2aRequestProject } from '../../a2a/config.ts'
 import { FolderError } from '../../folders/registry.ts'
 import { ComputerService } from '../../computer/service.ts'
-import { WindowsComputerDesktop } from '../../execution/computer/windows.ts'
+import { createComputerDesktop } from '../../execution/computer/factory.ts'
 
 export async function startProjectHost(
   config: Config,
@@ -117,7 +117,7 @@ export async function startProjectHost(
   let activeConfig = config
   const copilotAuth = new CopilotAuthenticatorV2()
   const chromePortAllocator = new ChromePortAllocator()
-  const computer = new ComputerService(new WindowsComputerDesktop(), { enabled: options.localExecutor !== false })
+  const computer = new ComputerService(createComputerDesktop(), { enabled: options.localExecutor !== false })
   cleanup.push(() => computer.close())
   const authorizeComputer = async (request: Request) => isLoopbackGatewayRequest(request, clientAddresses)
     && !mobileAccess?.authorizeMain(request) && !!await authorize(request)

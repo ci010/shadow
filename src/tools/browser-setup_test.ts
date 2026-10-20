@@ -6,7 +6,19 @@ import test, { type TestContext } from 'node:test'
 import { ChromeManager, ChromePortAllocator, type ChromeRuntimeOperations } from '../browser/chrome-manager.ts'
 import { McpConnection } from '../mcp/client.ts'
 import { CallTools } from '../sessions/call-tools.ts'
-import { withTempWorkspace } from '../testing/workspace.ts'
+import { withTempWorkspace as withBaseWorkspace } from '../testing/workspace.ts'
+
+// Resource cleanup must precede deleting the now-persistent slot metadata.
+const workspaceCleanups = new Map<string, Array<() => Promise<void>>>()
+async function withTempWorkspace(fn: (home: string) => Promise<void>): Promise<void> {
+  await withBaseWorkspace(async home => {
+    workspaceCleanups.set(home, [])
+    try { await fn(home) } finally {
+      try { for (const cleanup of workspaceCleanups.get(home)!) await cleanup() }
+      finally { workspaceCleanups.delete(home) }
+    }
+  })
+}
 import type { ExecutionContext } from './context.ts'
 import { ImportTool, type LoadableEntry } from './load-tool.ts'
 import { InvokeTool } from './invoke-tool.ts'
@@ -27,6 +39,7 @@ function fixture(t: TestContext, home: string) {
   const profiles: string[] = []
   let pid = 100
   const runtime: ChromeRuntimeOperations = {
+      getUserDataDir: () => null,
     detectChrome: async (path, browser) => path ?? browser ?? 'default',
     isDebugPortActive: async port => live.has(port),
     isProcessAlive: id => [...live.values()].some(value => value.pid === id),
@@ -96,7 +109,7 @@ function fixture(t: TestContext, home: string) {
       JSON.parse(requireToolText(await context.tools.execute('read', { path }, context)))))
     return JSON.stringify({ tools })
   }
-  t.after(async () => {
+  workspaceCleanups.get(home)!.push(async () => {
     for (const tools of sessions) await tools.resetDynamicAndWait()
     await manager.releaseAll()
   })

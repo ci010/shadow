@@ -44,7 +44,7 @@ test('browser capabilities are visible in the compact summary before tool discov
         /name: "browser_setup", args: \{ action: "launch", browser: "edge" \}/,
         /`browser` accepts `edge`, `brave`, `chrome`, or `default`/,
         /`executablePath` instead of `browser`.*explicit choice never falls back/,
-        /fresh private profile, never copied host profiles/,
+        /exclusively leases one persistent Project browser slot/,
         /Setup does not change Project configuration/,
         /action: "attach", endpoint: "http:\/\/127\.0\.0\.1:9222"/,
         /loopback HTTP\(S\)\/WS\(S\)/,

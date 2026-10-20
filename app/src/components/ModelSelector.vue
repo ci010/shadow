@@ -28,12 +28,16 @@
       </div>
       <template v-if="page === 'model'">
       <input ref="search" v-model="query" class="model-search" type="search" :placeholder="t('Search models...')" :aria-label="t('Search models')" />
+      <div v-if="providerFilters.length" class="model-provider-filters" role="group" :aria-label="t('Filter by provider')">
+        <button type="button" class="model-provider-tag" :aria-pressed="!activeProvider" @click="activeProvider = ''">{{ t('All') }}</button>
+        <button v-for="provider in providerFilters" :key="provider.id" type="button" class="model-provider-tag" :aria-pressed="activeProvider === provider.id" @click="activeProvider = provider.id">{{ provider.label }} <span class="model-provider-count">{{ provider.count }}</span></button>
+      </div>
       <div class="model-options" role="group" :aria-label="t('Available models')">
-        <button v-if="selection.inherited && !query.trim()" class="model-option" :aria-pressed="selection.inheriting?.value" @click="choose('', close)">
+        <button v-if="selection.inherited && !query.trim() && !activeProvider" class="model-option" :aria-pressed="selection.inheriting?.value" @click="choose('', close)">
           <span class="model-option-copy"><span>{{ conversationDefaults ? t('Follow configured default') : t('Follow project default') }}</span><small>{{ modelDisplayName(selection.inherited.value) }}</small></span>
         </button>
         <button v-for="model in options" :key="model" class="model-option" :aria-pressed="!selection.inheriting?.value && model === selection.current.value" :title="model" @click="choose(model, close)">
-          <span class="model-option-copy"><span>{{ modelDisplayName(model) }}</span><small v-if="modelProvider(model)">{{ modelAccountLabel(model, selection.providers?.value) }} · {{ modelProvider(model) }}</small></span>
+          <span class="model-option-copy"><span>{{ modelDisplayName(model) }}</span><small v-if="modelProvider(model)">{{ modelCompactAccountLabel(model, selection.providers?.value) }}</small></span>
           <span v-if="!selection.inheriting?.value && model === selection.current.value" class="model-check i-lucide-check" aria-hidden="true" />
         </button>
         <p v-if="!options.length" class="model-empty">{{ t('No matching models.') }}</p>
@@ -57,13 +61,14 @@ import { t } from '../i18n.ts'
 import { computed, nextTick, ref } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import ReasoningControls from './ReasoningControls.vue'
-import { filterModelOptions, modelAccountLabel, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
+import { filterModelOptions, modelProviderFilters, modelProviderGroup, modelCompactAccountLabel, modelAccountLabel, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
 import { contextWindowLabel, currentEffort, effortOptions, type ReasoningSettings } from '../session-settings.ts'
 
 const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean; conversationDefaults?: boolean; futureRuns?: boolean }>()
 const emit = defineEmits<{ 'change-settings': [patch: ReasoningSettings] }>()
 const selection = useModelSelection()
 const query = ref('')
+const activeProvider = ref('')
 const page = ref<'menu' | 'model' | 'effort' | 'context'>(props.settings ? 'menu' : 'model')
 const contextRow = ref<HTMLButtonElement>()
 const contextLabel = computed(() => `${props.settings?.contextWindow == null ? t("Default · ") : ""}${contextWindowLabel(props.settings?.contextWindow ?? selection?.defaultReasoning?.value.contextWindow)}`)
@@ -81,8 +86,12 @@ const effortLabel = computed(() => {
     : effortOptions.find(option => option.value === choice)!.label
 })
 const triggerTitle = computed(() => `${selection?.current.value || t('Choose model')}${props.settings ? ` · ${effortLabel.value}` : ''}`)
-const options = computed(() => filterModelOptions(selection?.options.value ?? [], selection?.current.value ?? '', query.value, selection?.providers?.value))
+const allOptions = computed(() => filterModelOptions(selection?.options.value ?? [], selection?.current.value ?? '', '', selection?.providers?.value))
+const providerFilters = computed(() => modelProviderFilters(allOptions.value, selection?.providers?.value))
+const options = computed(() => filterModelOptions(allOptions.value, '', query.value, selection?.providers?.value)
+  .filter(model => !activeProvider.value || !providerFilters.value.some(provider => provider.id === activeProvider.value) || modelProviderGroup(model, selection?.providers?.value) === activeProvider.value))
 function resetMenu() {
+  activeProvider.value = ''
   page.value = props.settings ? 'menu' : 'model'
   query.value = ''
 }
@@ -139,6 +148,11 @@ function chooseEffort(patch: ReasoningSettings, close: () => void) {
 .model-menu-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 8px 9px 12px; font-size: 13px; font-weight: 600; }
 .model-scope { color: var(--c-text-secondary); font-size: 11px; font-weight: 400; }
 .model-search { flex-shrink: 0; box-sizing: border-box; width: calc(100% - 8px); margin: 0 4px 8px; padding: 9px 10px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; }
+.model-provider-filters { display: flex; gap: 6px; overflow-x: auto; flex-shrink: 0; padding: 2px 4px 8px; }
+.model-provider-tag { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--c-control-border); border-radius: 999px; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.model-provider-tag:hover { background: var(--c-bg-muted); }
+.model-provider-tag[aria-pressed="true"] { background: var(--c-selection-bg); color: var(--c-primary); border-color: currentColor; }
+.model-provider-count { font-size: 11px; opacity: .75; }
 .model-options { overflow-y: auto; min-height: 0; max-height: 280px; }
 .model-option { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px; padding: 9px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); text-align: left; cursor: pointer; }
 .model-option:hover { background: var(--c-bg-muted); }

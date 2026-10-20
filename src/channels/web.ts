@@ -14,6 +14,7 @@ import { isConfigObject, parseSessionConfigPatch, type SessionConfigPatch } from
 import type { RealtimePublisher } from '../realtime/hub.ts'
 import type { RealtimeTurnFinishedPayload } from '../realtime/protocol.ts'
 import { isCommandReceipt } from '../slash-commands/receipt.ts'
+import { signMediaReveal } from '../utils/media-reveal.ts'
 import { isMissingMediaFile, mediaFileResponse } from './media-response.ts'
 import { durableMediaRoots, isDurableMediaCandidate, resolveDurableMedia } from './durable-media.ts'
 
@@ -524,6 +525,10 @@ export class WebChannel extends AbstractChannel {
       }
       if (!resolved) return c.json({ error: 'Media unavailable' }, 404)
 
+      if (c.req.query('reveal') === '1') {
+        const key = process.env.SHADOW_DESKTOP_MEDIA_KEY
+        return c.json({ proof: key ? signMediaReveal(resolved, key) : null }, 200, { 'Cache-Control': 'no-store' })
+      }
       return mediaFileResponse(resolved, c.req.raw, c.req.query('download') === '1')
     })
 

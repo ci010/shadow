@@ -1,27 +1,29 @@
+import { rentBrowserSlot, type BrowserSlot } from './slot-pool.ts'
+import { copyUserProfile, getDefaultUserDataDir } from './profile-copy.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { resolve } from 'node:path'
 import { spawn as childSpawn } from 'node:child_process'
 import { Buffer } from 'node:buffer'
 import { copyFile, mkdir, readdir, stat as nodeStat } from 'node:fs/promises'
 import process from 'node:process'
-import { env } from 'node:process'
 import { getOs } from '../utils/runtime.ts'
 import type { z } from 'zod'
 import type { ChromeToolSchema } from '../config/schema.ts'
 import { createServer } from 'node:net'
 import { getProjectScope } from '../projects/scope.ts'
 
-type ChromeConfig = z.infer<typeof ChromeToolSchema>
+type ChromeConfig = Omit<z.infer<typeof ChromeToolSchema>, 'slotCount'> & { slotCount?: number }
 
 export type BrowserKind = 'default' | 'chrome' | 'edge' | 'brave'
 
-export function browserProcessArguments(port: number, userDataDir: string | undefined, isolated: boolean): string[] {
+export function browserProcessArguments(port: number, userDataDir: string | undefined, isolated: boolean, profileDirectory?: string): string[] {
   if (isolated && !userDataDir) throw new Error('Isolated browser launch requires a managed profile')
   return [
     `--remote-debugging-port=${port}`,
     '--remote-debugging-address=127.0.0.1',
     '--no-first-run',
     ...(userDataDir ? [`--user-data-dir=${userDataDir}`] : []),
+    ...(profileDirectory ? [`--profile-directory=${profileDirectory}`] : []),
     ...(isolated ? ['--disable-sync', '--disable-extensions', '--no-default-browser-check', 'about:blank'] : []),
   ]
 }
@@ -32,6 +34,7 @@ export interface BrowserLaunchOptions {
 }
 
 interface ChromeSession {
+  slot?: BrowserSlot
   launchOptions?: BrowserLaunchOptions
   lease?: ChromePortLease
   port: number
@@ -120,10 +123,12 @@ export class ChromePortAllocator {
 }
 
 export interface ChromeRuntimeOperations {
+  /** Synthetic fixtures may return null to model an absent user profile. */
+  getUserDataDir?(executable: string): string | null
   detectChrome(path?: string, browser?: BrowserKind): Promise<string | null>
   isDebugPortActive(port: number): Promise<boolean>
   isProcessAlive(pid: number): boolean | Promise<boolean>
-  launchChrome(path: string, port: number, userDataDir: string, signal: AbortSignal): Promise<{ pid: number } | { error: string }>
+  launchChrome(path: string, port: number, userDataDir: string, signal: AbortSignal, profileDirectory?: string): Promise<{ pid: number } | { error: string }>
   terminateChrome(pid: number): void | Promise<void>
 }
 
@@ -249,33 +254,6 @@ export async function detectChrome(configExePath?: string, browser: BrowserKind 
 /**
  * Get the default user data directory for the detected browser.
  */
-function getDefaultUserDataDir(exePath: string): string | null {
-  const os = getOs()
-  const lower = exePath.toLowerCase()
-
-  if (os === 'windows') {
-    const localAppData = env.LOCALAPPDATA
-    if (!localAppData) return null
-    if (lower.includes('edge')) return resolve(localAppData, 'Microsoft', 'Edge', 'User Data')
-    if (lower.includes('brave')) return resolve(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data')
-    if (lower.includes('chrome')) return resolve(localAppData, 'Google', 'Chrome', 'User Data')
-  } else if (os === 'darwin') {
-    const home = env.HOME
-    if (!home) return null
-    if (lower.includes('edge')) return resolve(home, 'Library/Application Support/Microsoft Edge')
-    if (lower.includes('brave')) return resolve(home, 'Library/Application Support/BraveSoftware/Brave-Browser')
-    if (lower.includes('chrome')) return resolve(home, 'Library/Application Support/Google/Chrome')
-  } else if (os === 'linux') {
-    const home = env.HOME
-    if (!home) return null
-    if (lower.includes('edge')) return resolve(home, '.config/microsoft-edge')
-    if (lower.includes('brave')) return resolve(home, '.config/BraveSoftware/Brave-Browser')
-    return resolve(home, '.config/google-chrome')
-  }
-
-  return null
-}
-
 /**
  * Check whether a Chrome debug port is responding.
  */
@@ -480,20 +458,40 @@ export class ChromeManager {
           : 'Chrome/Edge/Brave executable not found. Configure tools.chrome.executablePath.' }
     }
     let lease: ChromePortLease | undefined
+    let slot: BrowserSlot | undefined
+    let launchStarted = false
     try {
       lease = await this.options.portAllocator!.reserve(this.config.basePort ?? 9222, explicitPort)
       signal.throwIfAborted()
       if (await active(lease.port)) return { error: 'Reserved Chrome port is occupied; refusing to attach an unowned browser' }
       signal.throwIfAborted()
-      const userDataDir = projectStoragePath(this.workspace, '.browser', crypto.randomUUID())
-      await mkdir(userDataDir, { recursive: true })
+      const identity = process.platform === 'win32' ? resolve(exePath).toLowerCase() : resolve(exePath)
+      slot = await rentBrowserSlot(projectStoragePath(this.workspace, '.browser', 'slots'), this.config.slotCount ?? 3, identity)
+      const userDataDir = slot.directory
+      let snapshot = { fresh: false, profileDirectory: slot.state.profileDirectory }
+      if (!slot.state.initialized) {
+        const source = this.options.runtime?.getUserDataDir
+          ? this.options.runtime.getUserDataDir(exePath)
+          : getDefaultUserDataDir(exePath)
+        const copied = source ? await copyUserProfile(source, userDataDir, signal) : { fresh: true, profileDirectory: undefined }
+        if (!source) await mkdir(userDataDir, { recursive: true, mode: 0o700 })
+        snapshot = { fresh: copied.fresh, profileDirectory: copied.profileDirectory }
+        slot.state.initialized = true
+        slot.state.profileDirectory = snapshot.profileDirectory
+        await slot.save()
+      }
+      if (snapshot.fresh) console.info('[chrome-manager] No existing user profile found; creating a new independent managed profile')
       signal.throwIfAborted()
+      launchStarted = true
       const result = this.options.runtime
-        ? await this.options.runtime.launchChrome(exePath, lease.port, userDataDir, signal)
-        : await this.launchChrome(exePath, lease.port, userDataDir, signal)
+        ? await this.options.runtime.launchChrome(exePath, lease.port, userDataDir, signal, snapshot.profileDirectory)
+        : await this.launchChrome(exePath, lease.port, userDataDir, signal, snapshot.profileDirectory)
       if ('error' in result) return result
+      slot.state.pid = result.pid
+      await slot.save()
       const port = lease.port
-      this.sessions.set(sessionKey, { port, userDataDir, pid: result.pid, owned: true, lease, launchOptions })
+      this.sessions.set(sessionKey, { port, userDataDir, pid: result.pid, owned: true, lease, launchOptions, slot })
+      slot = undefined
       lease = undefined
       if (signal.aborted) {
         await this.releaseAllocated(sessionKey)
@@ -503,7 +501,9 @@ export class ChromeManager {
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     } finally {
-      lease?.release()
+      if (!launchStarted || !slot) lease?.release()
+      // Unknown launch outcomes retain the durable claim: never reuse a possibly live browser.
+      if (slot && !launchStarted) await slot.release()
     }
   }
 
@@ -626,7 +626,7 @@ export class ChromeManager {
     if (session.owned && session.pid !== undefined) {
       try {
         await this.terminateChrome(session.pid)
-        console.info(`[chrome-manager] Killed Chrome process ${session.pid} on port ${session.port}`)
+        console.info(`[chrome-manager] Sent stop to Chrome process ${session.pid} on port ${session.port}`)
       } catch (error) {
         if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) {
           console.error(`[chrome-manager] Failed to stop owned Chrome process ${session.pid}`, error)
@@ -634,6 +634,14 @@ export class ChromeManager {
         }
       }
     }
+    if (session.owned && session.pid !== undefined) {
+      const deadline = Date.now() + 3000
+      while (await this.isProcessAlive(session.pid)) {
+        if (Date.now() >= deadline) throw new Error(`Owned browser ${session.pid} has not exited; slot remains leased`)
+        await new Promise(r => setTimeout(r, 50))
+      }
+    }
+    await session.slot?.release()
     this.sessions.delete(sessionKey)
     session.lease?.release()
   }
@@ -724,8 +732,9 @@ export class ChromeManager {
     port: number,
     userDataDir?: string,
     signal?: AbortSignal,
+    profileDirectory?: string,
   ): Promise<{ pid: number } | { error: string }> {
-    const args = browserProcessArguments(port, userDataDir, this.projectId !== undefined)
+    const args = browserProcessArguments(port, userDataDir, this.projectId !== undefined, profileDirectory)
 
     console.info(`[chrome-manager] Launching Chrome: ${exePath} ${args.join(' ')}`)
 

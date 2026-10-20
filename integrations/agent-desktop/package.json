@@ -1,0 +1,13 @@
+{
+  "name": "@shadow/agent-desktop-native",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "fetch": "node scripts/fetch.mjs",
+    "build": "node scripts/build.mjs",
+    "test:source": "node --test scripts/source-test.mjs",
+    "test:identity": "node scripts/identity.mjs"
+  }
+}

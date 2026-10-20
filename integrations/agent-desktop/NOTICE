@@ -1,0 +1,33 @@
+Shadow optional agent-desktop native integration
+Copyright 2026 Shadow contributors
+
+This integration obtains agent-desktop v0.10.1 from
+https://github.com/lahfir/agent-desktop
+at revision 5a2c9ad43e269164a8adc8978a733c40b1d38a8b.
+Upstream is licensed under Apache License 2.0; see LICENSE.
+Its Windows crate is publish=false: build from the pinned source checkout,
+not a fabricated crates.io package.
+
+Modification: scripts/fetch.mjs adds patches/shadow_observe.rs as a new
+Windows module. This extends the real WindowsAdapter with restricted,
+password-first observation and root identity APIs. It does not replace or
+silently claim the safety of the unmodified get_tree implementation.
+
+Retain upstream LICENSE and any upstream notices in binary distributions.
+Audit and include third-party dependency licenses with each actual release;
+this source milestone has not generated a complete dependency license bundle.
+
+The restricted module now also contains the exact single-pattern UIA action and
+foreground target/focus/ancestry verification APIs. The native bridge uses an
+independent shadow-input-guard.exe artifact for approved physical input, not
+upstream's keyboard_send/mouse_send paths.
+
+shadow-input-guard.exe is AOT-compiled from the existing Shadow source
+src/execution/computer/windows-input.cs by scripts/agent-desktop-input-guard.ts,
+with the old runtime PowerShell launcher removed and named-event cancellation
+added. That existing Shadow C# source is distinct from agent-desktop upstream;
+the upstream Apache-2.0 notice does not automatically relicense that source or
+the guard binary under Apache-2.0. Distribution must retain applicable Shadow
+repository/source licensing and notices in addition to upstream/dependency ones.
+The guard also requires the Windows .NET Framework runtime/system assemblies;
+these are system prerequisites, not bundled upstream Apache-licensed code.

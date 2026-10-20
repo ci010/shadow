@@ -1,3 +1,4 @@
+import { desktopMediaKey, verifyMediaReveal } from './media-reveal-key.js'
 import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import type { BrowserWindow, IpcMain } from 'electron'
@@ -60,7 +61,18 @@ export function installFileExplorer(
     && trustedUrl !== undefined && sameUrl(contents.mainFrame.url, trustedUrl)
   ipc.handle(FILE_EXPLORER_CHANNEL, async (event, ...args: unknown[]) => {
     if (!trusted(event)) throw new TypeError('File explorer requires the trusted Main window')
-    const path = args[0]
+    const input = args[0]
+    if (args.length === 1 && input && typeof input === 'object') {
+      const { proof, reveal } = input as { proof?: unknown; reveal?: unknown }
+      if (!verifyMediaReveal(proof, desktopMediaKey) || !isAbsolute(proof.path)) return false
+      if (reveal === false) return true
+      if (reveal !== true) return false
+      await stat(proof.path)
+      if (!trusted(event)) throw new TypeError('File explorer window is no longer available')
+      show(proof.path)
+      return true
+    }
+    const path = input
     if (args.length !== 1 || typeof path !== 'string' || path.length > 32_768
       || path.includes('\0') || !isAbsolute(path)) throw new TypeError('Invalid file explorer path')
     await stat(path)

@@ -9,8 +9,18 @@ define the available actions and arguments.
 Discover `browser_setup` through global tool search or invoke its known ID.
 `{ action: "launch", browser: "edge" | "brave" | "chrome" | "default" }` selects a
 browser; use `executablePath` instead of `browser` for an explicit executable.
-Explicit selections fail without fallback. Launch creates a fresh private profile
-without copying host data or changing Project configuration.
+Explicit selections fail without fallback. Launch exclusively rents one persistent
+Project slot (default 3 total across browser types; tools.chrome.slotCount: 1–16).
+First use snapshots the selected browser user profile read-only; subsequent uses
+reuse that copy, never write it back. Idle slots rotate; executable identities do
+not mix. Capacity failure never evicts or deletes. Attach rents no slot.
+Release requires confirmed owned-process exit. Failed stops/unknown startup or
+cancellation leave a durable lease quarantined across restart. Do not auto-kill
+old processes or clear leases based only on PID absence. Recovery requires stopped
+managers and operator verification that no browser uses the slot before clearing
+stale lease/lock directories. Old UUID profiles are retained, not migrated/deleted.
+Changing the persisted slot cap requires explicit offline migration; restore the
+recorded slotCount if configuration disagrees. Setup never changes configuration.
 
 `{ action: "attach", endpoint }` accepts only loopback HTTP(S)/WS(S) CDP endpoints,
 including preenabled compatible Electron targets. For example,
@@ -67,5 +77,6 @@ that limitation. Do not silently change category or telemetry settings.
 
 Upstream may support additional flags, but that does not make them permissible
 in a Project runtime. Do not run a separate server, use `--help` to infer browser
-action syntax, or copy host profiles to work around a managed configuration
-error. External MCP setup is a different task covered by `v:skills/mcp-config`.
+action syntax, or manually copy host profiles to work around a managed configuration
+error. Managed launch performs its own read-only profile snapshot; copy/lock
+failures must be resolved explicitly, not bypassed with a blank profile. External MCP setup is a different task covered by `v:skills/mcp-config`.

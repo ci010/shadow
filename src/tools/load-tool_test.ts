@@ -115,6 +115,7 @@ test('managed imports allocate distinct browsers per org and session, reuse conn
     const terminated: number[] = []
     let nextPid = 100
     const runtime: ChromeRuntimeOperations = {
+      getUserDataDir: () => null,
       detectChrome: async () => 'synthetic-browser',
       isDebugPortActive: async (port) => live.has(port),
       isProcessAlive: (pid) => [...live.values()].includes(pid),

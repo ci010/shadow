@@ -1,6 +1,7 @@
 import assert, { deepEqual as assertEquals } from 'node:assert/strict'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { workspacePath } from '../utils/paths.ts'
 import { test } from 'node:test'
 import { Bus } from '../bus/bus.ts'
 import type { InboundMessage } from '../bus/events.ts'
@@ -579,8 +580,8 @@ test('source registry retains builtins, custom registration/removal, and ownersh
 
 test('persisted legacy subscriptions and source defaults load without schema changes', async () => {
   await withTempWorkspace(async (workspace) => {
-    const folder = join(workspace, '.events')
-    await mkdir(folder)
+    const folder = workspacePath(workspace, '.events')
+    await mkdir(folder, { recursive: true })
     await writeFile(join(folder, 'subscriptions.json'), JSON.stringify([
       { id: 'old-sub', sessionId: 'legacy', event: 'tick', source: 'clock', cronJobId: 'job-1', createdAt: timestamp },
       { id: 'old-default', sessionId: 'default', event: 'plain', createdAt: timestamp },
@@ -631,9 +632,9 @@ test('flush serializes definition changes and restart sees the final subscriptio
       const kept = events.subscribe({ sessionId: 'kept', event: 'final', delivery: { urgency: 'steering' } })
       events.registerSource({ source: 'custom:final', kind: 'custom', delivery: { urgency: 'queue' } })
       await flushing
-      const persisted = JSON.parse(await readFile(join(workspace, '.events', 'subscriptions.json'), 'utf8'))
+      const persisted = JSON.parse(await readFile(workspacePath(workspace, '.events', 'subscriptions.json'), 'utf8'))
       assertEquals(persisted, JSON.parse(JSON.stringify([kept])))
-      const persistedSources = JSON.parse(await readFile(join(workspace, '.events', 'sources.json'), 'utf8'))
+      const persistedSources = JSON.parse(await readFile(workspacePath(workspace, '.events', 'sources.json'), 'utf8'))
       assertEquals(persistedSources, JSON.parse(JSON.stringify(events.listSources().filter((s) => s.kind !== 'system'))))
       await events.stop()
       const restarted = new EventService(workspace, new Bus(), accepted)
@@ -655,7 +656,8 @@ test('persistence failures are reported and stop rejects rather than claiming du
   t.mock.method(console, 'error', (...args: unknown[]) => { logs.push(args) })
   await withTempWorkspace(async (workspace) => {
     const { events } = await setup(workspace)
-    await writeFile(join(workspace, '.events'), 'synthetic write obstruction')
+    await mkdir(dirname(workspacePath(workspace, '.events')), { recursive: true })
+    await writeFile(workspacePath(workspace, '.events'), 'synthetic write obstruction')
     events.subscribe({ sessionId: 'target', event: 'tick' })
     events.registerSource({ source: 'custom:failed', kind: 'custom' })
     try {
@@ -678,13 +680,14 @@ test('a successful replacement save clears the recorded failure for that definit
   t.mock.method(console, 'error', () => {})
   await withTempWorkspace(async (workspace) => {
     const { events } = await setup(workspace)
-    await writeFile(join(workspace, '.events'), 'synthetic write obstruction')
+    await mkdir(dirname(workspacePath(workspace, '.events')), { recursive: true })
+    await writeFile(workspacePath(workspace, '.events'), 'synthetic write obstruction')
     const first = events.subscribe({ sessionId: 'first', event: 'tick' })
     await assert.rejects(events.flush(), AggregateError)
-    await rm(join(workspace, '.events'))
+    await rm(workspacePath(workspace, '.events'))
     events.subscribe({ sessionId: 'second', event: 'tick' })
     await events.stop()
-    const persisted = JSON.parse(await readFile(join(workspace, '.events', 'subscriptions.json'), 'utf8'))
+    const persisted = JSON.parse(await readFile(workspacePath(workspace, '.events', 'subscriptions.json'), 'utf8'))
     assertEquals(persisted.map((s: { sessionId: string }) => s.sessionId), ['first', 'second'])
     assertEquals(persisted[0].id, first.id)
   })

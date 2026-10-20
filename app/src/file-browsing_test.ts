@@ -1216,3 +1216,51 @@ test('two file spaces retain distinct tabs and preview source through switching 
   await nextTick()
   assert.equal(state().fileSpace, 'session')
 })
+
+
+test('tree-external Chinese attachment previews reuse text and document viewers without any tree request', async t => {
+  const calls: string[] = []
+  t.mock.method(globalThis, 'fetch', async (input: string) => {
+    calls.push(String(input))
+    return new Response('报告内容')
+  })
+  const url = 'http://localhost/api/media?chatId=test&path=' + encodeURIComponent('C:\\Users\\test\\Documents\\Shadow\\报告.txt')
+  const { props, state } = mount(t, 'FilePreviewModal', {
+    apiBase: 'http://localhost', sessionId: 'web:test', attachmentUrl: url,
+    dir: '', entry: { name: '报告.txt', ext: '.txt', type: 'file', size: 0, mtime: null },
+  })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(state().textContent, '报告内容')
+  assert.equal(state().rawSource, url)
+  assert.deepEqual(calls, [url])
+  props.entry = { name: '报告.pdf', ext: '.pdf', type: 'file', size: 0, mtime: null }
+  await nextTick()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(state().loaded, true)
+  assert.ok(state().archiveBlob instanceof Blob)
+  assert.deepEqual(calls, [url, url])
+})
+
+
+test('attachment reveal is absent on Web and remote Electron and shown only after host verification', async t => {
+  const initial = { paths: ['C:\\Documents\\Shadow\\report.txt'], apiBase: 'http://localhost', sessionId: 'web:test' }
+  const web = mount(t, '../MessageAttachments', initial)
+  assert.equal(web.state().revealable.size, 0)
+  let local = false
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    location: { href: 'http://localhost/' }, shadowDesktop: { fileExplorer: { attachment: async () => local } },
+  } })
+  t.after(() => { if (previous) Object.defineProperty(globalThis, 'window', previous); else Reflect.deleteProperty(globalThis, 'window') })
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ proof: { path: initial.paths[0] } }))
+  const remote = mount(t, '../MessageAttachments', initial)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(remote.state().revealable.size, 0)
+  local = true
+  const owned = mount(t, '../MessageAttachments', initial)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(owned.state().revealable.has(initial.paths[0]), true)
+  owned.state().openAttachment(owned.state().items[0])
+  assert.match(owned.state().preview.url, /api\/media/)
+  assert.equal(owned.state().preview.entry.name, 'report.txt')
+})
