@@ -31,11 +31,14 @@ test('Child wizard validates consent and retries; local shell is honest offline 
         import { createApp } from 'vue';
         import Wizard from '/src/FirstRunWizard.vue';
         import Child from '/src/ChildDesktop.vue';
+        import RoleSettings from '/src/components/DesktopRoleSettings.vue';
         import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
-        const f = window.fixture = { requests: [], pairs: [], fail: true, completed: false, connection: 'offline', statusFailure: false };
+        const f = window.fixture = { requests: [], pairs: [], fail: true, completed: false, connection: 'offline', statusFailure: false, role:'child', switches:[], switchFails:false };
         const info = { endpoint:'http://192.168.1.5:43125',dataDir:'C:\\\\Child-home',workdir:'C:\\\\Work',
           displayName:'Child laptop',allowInsecureLocalTransport:true,saved:false };
-        const api = { folders:{selectDirectory:async()=>null}, bootstrap:{
+        const api = window.shadowDesktop = { folders:{selectDirectory:async()=>null}, bootstrap:{
+          load: async()=>({version:1,revision:1,mode:f.role,step:'complete'}),
+          switchRole: async(role,executionConsent)=>{f.switches.push({role,executionConsent});if(f.switchFails)throw new Error('synthetic failure');return {restart:true}},
           dispatch: async event => ({version:1,revision:1,mode:event.mode,step:'enter-pairing-offer'}),
           childSetup: async()=>info,
           pairChild: async input => { f.pairs.push(input); if(f.fail) throw new Error('Pairing failed. Check Main and retry.');
@@ -56,6 +59,7 @@ test('Child wizard validates consent and retries; local shell is honest offline 
             connection:f.connection === 'connected' ? 'connected':'offline',capabilities:[{capabilityId:'desktop-workdir',kind:'workdir',displayName:'Shared work folder',displayPath:info.workdir,online:true}]}]});
           throw new Error('Unexpected Main API request: '+url);
         };
+        f.openRoleSettings = role => { f.role=role; mounted.unmount(); mounted=createApp(RoleSettings);mounted.mount('#app'); };
         f.openChild = () => { mounted.unmount(); mounted = createApp(Child,{apiBase:location.origin})
           .use(createInstallationContextProvider({version:1,mode:'child',localNodeId:'child-1',mainConnection:'connecting',mainLatencyMs:null,uiScopes:[],apiBase:location.origin}));
           mounted.mount('#app'); };

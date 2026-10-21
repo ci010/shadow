@@ -85,6 +85,7 @@ export class BootstrapCoordinator {
   private readonly selections = new Map<string, string>()
   private selectedDirectory: string | undefined
   private operation: Promise<unknown> = Promise.resolve()
+  private switchingRole = false
 
   constructor(
     private readonly storage: BootstrapStateStorage,
@@ -96,6 +97,7 @@ export class BootstrapCoordinator {
     private readonly getDefaultDirectory: () => string = defaultMainDirectory,
     private readonly childBootstrap?: ChildBootstrap,
     private readonly dataLayout?: DataLayoutController,
+    private readonly validateMainDirectory?: (paths: readonly string[]) => Promise<void>,
   ) {}
 
   async dataLayoutStatus(): Promise<DataLayoutView | null> {
@@ -105,13 +107,16 @@ export class BootstrapCoordinator {
       try { root = (await this.configReader.readMain()).dataDir }
       catch (error) { if (!isMissingRuntimeConfig(error)) throw error; root = this.getDefaultDirectory() }
     }
+    await this.validateMainDirectory?.([root])
     return this.dataLayout.inspect(root)
   }
 
-  async upgradeDataLayout(): Promise<DataLayoutView> {
-    if (!this.dataLayout || (await this.load()).mode !== 'main') throw new Error('Main upgrade is unavailable')
-    if (!this.dataLayout.current()) await this.dataLayoutStatus()
-    return this.dataLayout.start()
+  upgradeDataLayout(): Promise<DataLayoutView> {
+    return this.serialize(async () => {
+      if (!this.dataLayout || (await this.load()).mode !== 'main') throw new Error('Main upgrade is unavailable')
+      await this.dataLayoutStatus()
+      return this.dataLayout.start()
+    })
   }
 
   private async layoutReady(root?: string): Promise<boolean> {
@@ -218,6 +223,7 @@ export class BootstrapCoordinator {
       if (dataDir === undefined) {
         return { ok: false, code: 'invalid-selection', state: current }
       }
+      await this.validateMainDirectory?.([dataDir])
       if (!await this.layoutReady(dataDir)) return { ok: false, code: 'migration-required', state: current }
       this.selections.delete(selectionId)
       try {
@@ -333,6 +339,7 @@ export class BootstrapCoordinator {
         ? await this.childBootstrap?.readConfig()
         : await this.configReader.readMain()
       if (!config) return { ok: false, code: 'runtime-unavailable' }
+      if (current.mode === 'main') await this.validateMainDirectory?.([config.dataDir])
       if (current.mode === 'main' && !await this.layoutReady()) return { ok: false, code: 'runtime-unavailable' }
       const status = await this.runtimeHost.start(profile)
       if (status.phase !== 'ready' || status.apiBase === undefined) {
@@ -361,8 +368,24 @@ export class BootstrapCoordinator {
     }
   }
 
+  /** Serialize with setup/start commands; once stopping begins, only reopening the app can resume. */
+  switchRole(target: 'main' | 'child', stopAndSelect: (current: 'main' | 'child') => Promise<void>): Promise<void> {
+    return this.serialize(async () => {
+      const current = await this.load()
+      if (!current.mode || current.mode === target) throw new Error('Choose a different desktop role')
+      const layout = await this.dataLayoutStatus()
+      if (layout?.running || layout && layout.status !== 'ready') throw new Error('Finish data-layout recovery before switching roles')
+      this.switchingRole = true
+      await stopAndSelect(current.mode)
+    })
+  }
+
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.operation.then(operation, operation)
+    const guarded = () => {
+      if (this.switchingRole) throw new Error('Desktop role switch is in progress. Close and reopen Shadow if it could not restart.')
+      return operation()
+    }
+    const result = this.operation.then(guarded, guarded)
     this.operation = result.then(() => undefined, () => undefined)
     return result
   }

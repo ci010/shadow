@@ -37,6 +37,8 @@ import { DataLayoutController } from './bootstrap/data-layout-controller.js'
 import { createDataLayoutCommand } from './bootstrap/data-layout-command.js'
 import { detectDataLayout } from './bootstrap/data-layout-startup.js'
 import { BootstrapCoordinator } from './bootstrap/coordinator.js'
+import { assertRoleDataIsolation } from './bootstrap/role-data-isolation.js'
+import { DesktopRoleProfiles, parseRoleSwitchArguments } from './bootstrap/role-profiles.js'
 import { RuntimeStartup } from './bootstrap/runtime-startup.js'
 import { createUtilityProcessSpawn } from './sidecar/utility-process.js'
 import { createBackendPairingCommand, FileChildBootstrap } from './bootstrap/child.js'
@@ -234,7 +236,7 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: 
   )
 }
 
-export function createMainWindow(target: RendererTarget, showOnReady = true): BrowserWindow {
+export function createMainWindow(target: RendererTarget, showOnReady = true, runtimeUserDataPath = app.getPath('userData')): BrowserWindow {
   const window = new BrowserWindow(framelessWindowOptions(join(import.meta.dirname, 'preload.cjs')))
   window.setMaxListeners(MAIN_WINDOW_MAX_LISTENERS)
   installMediaPermissions(ipcMain, window, target, {
@@ -248,7 +250,7 @@ export function createMainWindow(target: RendererTarget, showOnReady = true): Br
   installWindowControls(ipcMain, window)
   installFileExplorer(ipcMain, window, target, path => shell.showItemInFolder(path))
   installStartupDiagnostics(ipcMain, window, () => {
-    const path = startupLogPath(app.getPath('userData'))
+    const path = startupLogPath(runtimeUserDataPath)
     if (!existsSync(path)) throw new Error('Startup log is not available')
     shell.showItemInFolder(path)
   })
@@ -288,10 +290,18 @@ async function start(): Promise<void> {
   if (app.commandLine.hasSwitch('service-connection') || process.env.SHADOW_SERVICE_CONNECTION !== undefined) {
     throw new Error('Desktop service attachment is no longer supported. Use browser pairing for independent services, or configure this desktop as Main or Child.')
   }
-  const configPath = runtimeConfigPath(userDataPath)
+  const roles = await DesktopRoleProfiles.load(userDataPath)
+  const roleUserDataPath = roles.userDataPath
+  const configPath = runtimeConfigPath(roleUserDataPath)
   const storage = new AtomicFileBootstrapStateStorage(
-    bootstrapStatePath(userDataPath),
+    bootstrapStatePath(roleUserDataPath),
   )
+  const otherRoleConfigPath = async (role: 'main' | 'child'): Promise<string> => {
+    // Before the first switch, the original wizard may select either role.
+    const current = (await storage.load())?.mode ?? roles.role
+    return runtimeConfigPath(roles.explicit ? roles.pathFor(role)
+      : current === role ? userDataPath : join(userDataPath, 'roles', role))
+  }
   const onAuthorizationChanged = installRuntimeRequestAuthorization(
     session.defaultSession,
     (details) => details.webContentsId === mainWindow?.webContents.id,
@@ -324,7 +334,7 @@ async function start(): Promise<void> {
     executablePath: process.execPath,
     appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath,
-    userDataPath,
+    userDataPath: roleUserDataPath,
     packaged: app.isPackaged,
   }, (authorization): void => {
     onAuthorizationChanged(authorization)
@@ -339,27 +349,35 @@ async function start(): Promise<void> {
   }, createUtilityProcessSpawn((entry, args, options) => utilityProcess.fork(entry, args, options), undefined, restart))
   const childPairingCommand = createBackendPairingCommand({
     executablePath: process.execPath, appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath, userDataPath, packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath, userDataPath: roleUserDataPath, packaged: app.isPackaged,
   })
   const dataLayoutCommand = createDataLayoutCommand({
     executablePath: process.execPath, appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath, userDataPath, packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath, userDataPath: roleUserDataPath, packaged: app.isPackaged,
   })
   const coordinator = new BootstrapCoordinator(
     storage,
     new AtomicRuntimeConfigWriter(configPath),
     new AtomicMainAgentConfigInitializer(configPath),
     runtimeHost,
-    new AtomicLaunchProfileStore(launchProfilePath(userDataPath)),
+    new AtomicLaunchProfileStore(launchProfilePath(roleUserDataPath)),
     new FileRuntimeConfigReader(configPath),
     () => resolveDesktopMainDirectory(
       app.getAppPath(),
       app.isPackaged,
       process.env.SHADOW_DESKTOP_DEV_MAIN_DIRECTORY,
     ),
-    new FileChildBootstrap(configPath, childPairingCommand),
+    new FileChildBootstrap(configPath, childPairingCommand, undefined, undefined,
+      async paths => assertRoleDataIsolation(paths, await otherRoleConfigPath('main'), 'main')),
     new DataLayoutController(detectDataLayout, dataLayoutCommand),
+    async paths => assertRoleDataIsolation(paths, await otherRoleConfigPath('child'), 'child'),
   )
+  if (roles.explicit) {
+    const state = await coordinator.load()
+    if (managedDeployment && roles.role !== 'main') throw new Error('Managed deployments require the Main role')
+    if (state.mode === null) await coordinator.dispatch({ type: 'select-role', mode: roles.role })
+    else if (state.mode !== roles.role) throw new Error('Saved role selection and setup disagree; existing profiles were not changed')
+  }
   if (managedDeployment) {
     const state = await coordinator.load()
     if (state.mode === null) await coordinator.dispatch({ type: 'select-role', mode: 'main' })
@@ -376,6 +394,25 @@ async function start(): Promise<void> {
   const startup = new RuntimeStartup(() => coordinator.ensureRuntime(), () => runtimeHost.status)
   if ((await coordinator.load()).step === 'complete') void startup.start()
   registerIpcHandlers(coordinator, startup)
+  ipcMain.handle(IPC_CHANNELS.switchRole, async (event, ...args: unknown[]) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+      throw new Error('Role switching requires the desktop main frame')
+    }
+    if (managedDeployment) throw new Error('Managed Main deployments cannot switch roles')
+    const targetRole = parseRoleSwitchArguments(args)
+    await startup.current() // A pending startup must finish before the stop boundary.
+    await coordinator.switchRole(targetRole, async current => {
+      await microApps?.shutdown()
+      await Promise.all([runtimeHost.stop(), childPairingCommand.stop(), dataLayoutCommand.stop()])
+      await roles.select(targetRole, current)
+    })
+    // User initiated only. The normal quit lifecycle completes before another runtime starts.
+    setTimeout(() => {
+      if (restart) restart()
+      else { if (app.isPackaged) app.relaunch(); app.quit() }
+    }, 200)
+    return { restart: app.isPackaged || !!restart }
+  })
   const developmentUrl = process.env.VITE_DEV_URL?.trim()
   const target = resolveRendererTarget({
     rendererDistPath: app.isPackaged
@@ -383,7 +420,7 @@ async function start(): Promise<void> {
       : join(app.getAppPath(), '..', 'app', 'dist'),
     ...(developmentUrl ? { developmentUrl } : {}),
   })
-  mainWindow = createMainWindow(target, !initialApp)
+  mainWindow = createMainWindow(target, !initialApp, roleUserDataPath)
   installTaskNotifications(ipcMain, mainWindow, target, {
     supported: () => Notification.isSupported(),
     create: message => new Notification({ ...message, icon: desktopIconPath(), silent: true }),

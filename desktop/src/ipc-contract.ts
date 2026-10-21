@@ -11,6 +11,7 @@ import type { DesktopTaskNotificationsApi } from './task-notifications-contract.
 import type { DesktopFileExplorerApi } from './file-explorer-contract.js'
 
 export const IPC_CHANNELS = {
+  switchRole: 'shadow:bootstrap:switch-role',
   dataLayoutStatus: 'shadow:bootstrap:data-layout-status',
   upgradeDataLayout: 'shadow:bootstrap:upgrade-data-layout',
   loadWizard: 'shadow:bootstrap:load',
@@ -83,6 +84,7 @@ export interface ShadowDesktopApi {
     readonly selectFolders: () => Promise<string[]>
   }
   readonly bootstrap: {
+    switchRole?(role: 'main' | 'child', executionConsent: boolean): Promise<{ restart: boolean }>
     dataLayoutStatus(): Promise<DataLayoutView | null>
     upgradeDataLayout(): Promise<DataLayoutView>
     load(): Promise<WizardState>

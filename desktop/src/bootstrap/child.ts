@@ -1,3 +1,4 @@
+import { childTransportError } from './pairing-transport.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { randomUUID } from 'node:crypto'
@@ -53,6 +54,8 @@ export function parseChildPairInput(value: unknown): ChildPairInput {
     || typeof v.allowInsecureLocalTransport !== 'boolean' || v.executionConsent !== true) {
     throw new TypeError('Provide an endpoint, offer ID, six-digit PIN, device name and explicit execution consent')
   }
+  const transportError = childTransportError(v.endpoint, v.allowInsecureLocalTransport)
+  if (transportError) throw new TypeError(transportError)
   const endpoint = new URL(v.endpoint)
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash
     || (endpoint.protocol === 'http:' && !v.allowInsecureLocalTransport)) {
@@ -84,6 +87,7 @@ export class FileChildBootstrap implements ChildBootstrap {
     readonly runPairing: (input: Pick<ChildPairInput, 'offerId' | 'pin' | 'displayName'>) => Promise<void>,
     readonly defaultHome = join(homedir(), '.shadow-child'),
     readonly defaultWorkdir = join(homedir(), 'Shadow-work'),
+    readonly validateFolders?: (paths: readonly string[]) => Promise<void>,
   ) {}
 
   async info(): Promise<ChildSetupInfo> {
@@ -113,6 +117,7 @@ export class FileChildBootstrap implements ChildBootstrap {
     parseChildPairInput({ endpoint: value.mainEndpoint, offerId: 'validate', pin: '000000', displayName: 'Child',
       dataDir: value.dataDir, workdir: value.workdirs[0].rootPath,
       allowInsecureLocalTransport: value.allowInsecureLocalTransport, executionConsent: true })
+    await this.validateFolders?.([value.dataDir, value.workdirs[0].rootPath])
     return value
   }
 
@@ -131,6 +136,7 @@ export class FileChildBootstrap implements ChildBootstrap {
         throw new Error('This Child has already paired. Restore its saved endpoint and folders to resume safely.')
       } catch (error) { if (!isMissingRuntimeConfig(error)) throw error }
     }
+    await this.validateFolders?.([input.dataDir, input.workdir])
     await mkdir(input.dataDir, { recursive: true })
     await mkdir(input.workdir, { recursive: true })
     const actualHome = await realpath(input.dataDir)
@@ -152,6 +158,21 @@ export class FileChildBootstrap implements ChildBootstrap {
     }
     await this.runPairing({ offerId: input.offerId, pin: input.pin, displayName: input.displayName })
   }
+}
+
+export function pairingDiagnostic(output: string): string {
+  let code: unknown
+  try { const value = JSON.parse(output); if (value.version === 1 && value.state === 'failed') code = value.code } catch { /* Unstructured output is never displayed. */ }
+  const messages: Record<string, string> = {
+    'network': 'Cannot reach Main or verify its TLS certificate. Check the address, listener, firewall and trusted certificate; do not disable TLS verification.',
+    'timeout': 'Main pairing timed out. Check connectivity and whether Main already lists this device before retrying.',
+    'key-store': 'The protected OS key store is unavailable or could not unlock this identity. Check the signed-in OS account and key-store permissions.',
+    'offer-rejected': 'Main rejected the pairing request. Create a fresh invitation, check its PIN and expiry, and check Main for an existing pending device.',
+    'main-response': 'Main returned an unexpected pairing response. Check Main availability and that both devices use compatible Shadow versions.',
+    'configuration': 'The Child configuration or identity is invalid. Check the saved endpoint and folders; do not delete the existing identity.',
+    'storage': 'The Child identity could not be saved. Check folder permissions and free disk space before retrying.',
+  }
+  return `${typeof code === 'string' && Object.hasOwn(messages, code) ? messages[code] : 'Pairing failed. Check Main, the endpoint and protected OS key store.'} If Main already shows this device, compare its fingerprint before approving. The saved identity is retained.`
 }
 
 export type BackendPairingCommand = FileChildBootstrap['runPairing'] & { stop(): Promise<void> }
@@ -177,7 +198,7 @@ export function createBackendPairingCommand(pathsInput: RuntimePathsInput): Back
       active.delete(child)
       clearTimeout(timer)
       if (code === 0 && output.trim() === '{"version":1,"state":"pending"}') resolve()
-      else reject(new Error('Pairing failed. Check the endpoint, offer/PIN and OS key store, then retry. If Main already shows this device, compare its fingerprint before approving.'))
+      else reject(new Error(pairingDiagnostic(output)))
     })
     child.stdin.end(JSON.stringify(input))
   })

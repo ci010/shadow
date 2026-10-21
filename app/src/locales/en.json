@@ -3859,5 +3859,17 @@
   "Page {page} · {total} dates": "Page {page} · {total} dates",
   "Loading daily history…": "Loading daily history…",
   "Could not load daily history.": "Could not load daily history.",
-  "No known cost in this window for this unit.": "No known cost in this window for this unit."
+  "No known cost in this window for this unit.": "No known cost in this window for this unit.",
+  "Desktop role": "Desktop role",
+  "Current role: {role}": "Current role: {role}",
+  "Main and Child keep separate settings and identities. Only one role runs at a time. Switching stops this runtime and restarts Shadow; running work may be interrupted. No existing data is moved or deleted.": "Main and Child keep separate settings and identities. Only one role runs at a time. Switching stops this runtime and restarts Shadow; running work may be interrupted. No existing data is moved or deleted.",
+  "Switch to {role}? First-time setup opens automatically; an existing role resumes its saved configuration.": "Switch to {role}? First-time setup opens automatically; an existing role resumes its saved configuration.",
+  "If automatic restart is unavailable in a development launch, reopen Shadow manually after it closes.": "If automatic restart is unavailable in a development launch, reopen Shadow manually after it closes.",
+  "Stop and switch role": "Stop and switch role",
+  "Switch to {role}": "Switch to {role}",
+  "Role switching could not finish. Your saved profiles are retained. Close and reopen Shadow before retrying; managed Main deployments cannot switch roles.": "Role switching could not finish. Your saved profiles are retained. Close and reopen Shadow before retrying; managed Main deployments cannot switch roles.",
+  "Enter a valid Main HTTP(S) endpoint.": "Enter a valid Main HTTP(S) endpoint.",
+  "Use an HTTP(S) endpoint without credentials, query or fragment.": "Use an HTTP(S) endpoint without credentials, query or fragment.",
+  "Public or DNS HTTP endpoints are not allowed. Use HTTPS, or a private LAN/VPN IP address.": "Public or DNS HTTP endpoints are not allowed. Use HTTPS, or a private LAN/VPN IP address.",
+  "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.": "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing."
 }

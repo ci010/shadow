@@ -46,7 +46,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Startup profiling](startup-profiling.md)
 - [Desktop release verification](release.md) and [desktop bundling](desktop-bundling.md)
 - [Data migration](data-migration.md) and [desktop data upgrade](desktop-data-upgrade.md)
-- [Two-device Electron pairing](desktop-pairing.md)
+- [Two-device Electron pairing](desktop-pairing.md) and [desktop Main / Child profiles](desktop-roles.md)
 - [Live event-wait acceptance](event-wait-acceptance.md)
 
 ## Scope

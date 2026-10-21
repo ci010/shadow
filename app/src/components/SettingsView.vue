@@ -1,6 +1,7 @@
 <template>
   <div class="settings-view">
     <header class="settings-heading"><h1>{{ t('App settings') }}</h1><p>{{ t('Provider connections and web search settings are shared across Projects. Model defaults can be overridden by Projects and conversations.') }}</p></header>
+    <DesktopRoleSettings />
     <p v-if="!available" role="status">{{ t('Settings are managed by Main administrators.') }}</p>
     <div v-else class="settings-layout">
       <nav class="settings-navigation" :aria-label="t('Settings sections')">
@@ -28,6 +29,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import DesktopRoleSettings from './DesktopRoleSettings.vue'
 import { RouterLink, useRoute } from 'vue-router'
 import type { ProviderSetupStatus } from '../provider-setup.ts'
 import ProvidersView from './ProvidersView.vue'

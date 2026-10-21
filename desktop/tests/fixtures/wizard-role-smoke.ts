@@ -117,7 +117,8 @@ async function main() {
     assert.deepEqual(await run('fixture.events'), [{ type: 'select-role', mode: 'main', localExecutor: true }, { type: 'provider-configured' }])
     assert.deepEqual(await run('fixture.calls.slice(-3)'), ['POST /api/provider/setup', 'GET /api/provider/setup?refresh=true', 'provider-configured'])
     assert.deepEqual(await run(`fixture.requests.filter(r=>r.method==='POST' && r.path==='/api/provider/setup').at(-1).body`),
-      { provider: 'openai', model: 'gpt-4.1', apiKey: 'fixture-not-a-real-key', baseUrl: '' })
+      // Presets send their adapter type; only custom providers submit a base URL.
+      { provider: 'openai', type: 'openai', model: 'gpt-4.1', apiKey: 'fixture-not-a-real-key' })
     assert.equal(await run(`JSON.stringify({...localStorage}).includes('fixture-not-a-real-key')`), false)
     await responsive('ready summary')
     await run('fixture.failLaunch=true')

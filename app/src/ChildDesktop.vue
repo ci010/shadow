@@ -2,6 +2,7 @@
   <DesktopFrame>
     <template #navigation><span class="child-role">{{ t('Child · Local status and nodes') }}</span></template>
     <main class="child-shell">
+      <DesktopRoleSettings />
       <section class="child-status" aria-labelledby="child-title">
         <header><h1 id="child-title">{{ t('This Child') }}</h1><button class="btn" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : error ? t('Retry local connection') : t('Refresh status') }}</button></header>
         <p v-if="error" role="alert" class="status-error">{{ error }} {{ t('Main connection is unknown; no connected state is assumed.') }}</p>
@@ -28,6 +29,7 @@
 </template>
 
 <script setup lang="ts">
+import DesktopRoleSettings from './components/DesktopRoleSettings.vue'
 import { t } from './i18n.ts'
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import DesktopFrame from './DesktopFrame.vue'

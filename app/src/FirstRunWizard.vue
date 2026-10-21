@@ -21,6 +21,7 @@
 			</div>
 
 			<template v-else-if="state">
+				<DesktopRoleSettings v-if="state.mode" />
 				<div v-if="showRoleChoice" class="setup-content">
 					<p class="lead">{{ t('Connect a model service and start chatting. Recommended settings are already selected.') }}</p>
 					<p class="field-help">{{ t('Your data folder is set up automatically. You can choose a different location in advanced settings.') }}</p>
@@ -92,6 +93,7 @@
 						</template>
 						<button type="button" class="secondary-button" :disabled="busy" @click="togglePairingMode">{{ manualPairing ? t('Paste invitation instead') : t('Enter details manually') }}</button>
 						<label class="consent-row"><input v-model="child.allowInsecureLocalTransport" type="checkbox" :disabled="busy"><span>{{ t('Use HTTP on a trusted LAN/VPN for testing only. Traffic and the PIN are not encrypted. Never use this on the public internet; device authentication remains required.') }}</span></label>
+						<p v-if="transportError" class="notice error-notice" role="alert">{{ t(transportError) }}</p>
 						<label class="field-label" for="child-name">{{ t('Device name') }}</label>
 						<input id="child-name" v-model="child.displayName" class="directory-input" required maxlength="128" :disabled="busy">
 						<label class="field-label" for="child-home">{{ t('Child home — protected identity and managed session data') }}</label>
@@ -100,7 +102,7 @@
 						<div class="directory-field"><input id="child-workdir" v-model="child.workdir" class="directory-input" required :disabled="busy"><button type="button" class="secondary-button" :disabled="busy" @click="pickChildFolder('workdir')">{{ t('Browse…') }}</button></div>
 						<p class="field-help">{{ t('Use separate folders, not a drive root. Child home stays fixed after the first attempt so retries retain this device\'s identity. You can correct the endpoint and work folder until pairing succeeds. No existing data is moved or deleted.') }}</p>
 						<label class="consent-row"><input v-model="executionConsent" type="checkbox" :disabled="busy" required><span>{{ t('I allow the approved Main to read/write the work folder, create managed workdirs under Child home, and execute commands as my OS account.') }} <strong>{{ t('Shell access is not a sandbox and can access other host files.') }}</strong> {{ t('Pair only with a Main you trust with this access.') }}</span></label>
-						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || !executionConsent">{{ busy ? t('Submitting pairing request…') : t('Pair and open local status') }}</button></div>
+						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || !executionConsent || !!transportError || !manualPairing && !!invitationPreview.error">{{ busy ? t('Submitting pairing request…') : t('Pair and open local status') }}</button></div>
 					</form>
 				</div>
 
@@ -160,6 +162,7 @@
 </template>
 
 <script setup lang="ts">
+import DesktopRoleSettings from './components/DesktopRoleSettings.vue'
 import { t } from './i18n.ts'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import DataLayoutUpgrade from './DataLayoutUpgrade.vue'
@@ -168,6 +171,7 @@ import ProviderSetup from './ProviderSetup.vue'
 import { createProviderSetupClient, providerDisplayName, type ProviderSetupStatus } from './provider-setup.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
 import shadowLogo from './assets/shadow-logo.png'
+import { childTransportError } from '../../desktop/src/bootstrap/pairing-transport.ts'
 import { decodeChildInvitation } from './device-pairing-invitation.ts'
 import {
 	commitMainDirectoryChoice,
@@ -232,6 +236,10 @@ const invitationPreview = computed(() => {
 	if (!invitationText.value.trim()) return { endpoint: '', error: '' }
 	try { return { endpoint: decodeChildInvitation(invitationText.value).endpoint, error: '' } }
 	catch (error) { return { endpoint: '', error: error instanceof Error ? error.message : t('Invalid Child invitation.') } }
+})
+const transportError = computed(() => {
+	const endpoint = manualPairing.value ? child.value.endpoint : invitationPreview.value.endpoint
+	return endpoint ? childTransportError(endpoint, child.value.allowInsecureLocalTransport) : null
 })
 const child = ref({ endpoint: '', offerId: '', pin: '', displayName: '', dataDir: '', workdir: '', allowInsecureLocalTransport: false })
 
@@ -315,7 +323,7 @@ async function pickChildFolder(field: 'dataDir' | 'workdir'): Promise<void> {
 }
 
 async function pairChild(): Promise<void> {
-	if (busy.value || !executionConsent.value) return
+	if (busy.value || !executionConsent.value || transportError.value) return
 	busy.value = true
 	actionError.value = ''
 	try {

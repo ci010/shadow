@@ -81,6 +81,7 @@ export interface ShadowDesktopApi {
 		readonly selectFolders: () => Promise<string[]>
 	}
 	readonly bootstrap: {
+		switchRole?(role: 'main' | 'child', executionConsent: boolean): Promise<{ restart: boolean }>
 		dataLayoutStatus?(): Promise<DataLayoutView | null>
 		upgradeDataLayout?(): Promise<DataLayoutView>
 		load(): Promise<WizardState>

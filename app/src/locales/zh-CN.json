@@ -3859,5 +3859,17 @@
   "Page {page} · {total} dates": "第 {page} 页 · 共 {total} 个日期",
   "Loading daily history…": "正在加载每日历史…",
   "Could not load daily history.": "无法加载每日历史。",
-  "No known cost in this window for this unit.": "此时间范围内没有该单位的已知费用。"
+  "No known cost in this window for this unit.": "此时间范围内没有该单位的已知费用。",
+  "Desktop role": "桌面角色",
+  "Current role: {role}": "当前角色：{role}",
+  "Main and Child keep separate settings and identities. Only one role runs at a time. Switching stops this runtime and restarts Shadow; running work may be interrupted. No existing data is moved or deleted.": "Main 与 Child 保留各自的设置和身份，每次仅运行一个角色。切换会停止当前运行时并重启 Shadow，正在执行的工作可能中断。不会移动或删除现有数据。",
+  "Switch to {role}? First-time setup opens automatically; an existing role resumes its saved configuration.": "切换为 {role}？首次切换将自动进入设置向导；已设置的角色将恢复保存的配置。",
+  "If automatic restart is unavailable in a development launch, reopen Shadow manually after it closes.": "开发启动若不支持自动重启，请在应用关闭后手动重新打开 Shadow。",
+  "Stop and switch role": "停止并切换角色",
+  "Switch to {role}": "切换为 {role}",
+  "Role switching could not finish. Your saved profiles are retained. Close and reopen Shadow before retrying; managed Main deployments cannot switch roles.": "角色切换未能完成，已保存的配置仍保留。请关闭并重新打开 Shadow 后重试；托管 Main 部署不支持角色切换。",
+  "Enter a valid Main HTTP(S) endpoint.": "请输入有效的 Main HTTP(S) 地址。",
+  "Use an HTTP(S) endpoint without credentials, query or fragment.": "请使用不含凭据、查询参数或片段的 HTTP(S) 地址。",
+  "Public or DNS HTTP endpoints are not allowed. Use HTTPS, or a private LAN/VPN IP address.": "不允许公网或域名 HTTP 地址。请使用 HTTPS，或私有局域网/VPN IP 地址。",
+  "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.": "HTTP 将以明文传输 PIN 和流量。配对前请明确允许可信局域网/VPN HTTP。"
 }

@@ -7,6 +7,7 @@
 				<p class="message">{{ reason }} {{ t('Your setup is still saved.') }}</p>
 				<p v-if="duration" class="message">{{ duration }}</p>
 			</div>
+			<DesktopRoleSettings />
 			<p v-if="actionFailed" class="notice" role="alert">{{ actionFailed }}</p>
 			<p v-if="busy" class="status" role="status">{{ activeAction === 'retry' ? t('Starting the runtime again…') : activeAction === 'log' ? t('Locating the startup log…') : t('Resetting setup…') }}</p>
 			<div v-if="revealLog" class="diagnostics">
@@ -26,6 +27,7 @@
 </template>
 
 <script setup lang="ts">
+import DesktopRoleSettings from './components/DesktopRoleSettings.vue'
 import { t } from './i18n.ts'
 import { computed, ref } from 'vue'
 import shadowLogo from './assets/shadow-logo.png'

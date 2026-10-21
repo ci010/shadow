@@ -40,6 +40,7 @@ const api: ShadowDesktopApi = Object.freeze({
   folders: createFolderDirectoriesApi(ipcRenderer),
   chatContext: createChatContextApi(ipcRenderer),
   bootstrap: Object.freeze({
+    switchRole: (role: 'main' | 'child', executionConsent: boolean) => ipcRenderer.invoke(IPC_CHANNELS.switchRole, role, executionConsent),
     dataLayoutStatus: () => ipcRenderer.invoke(IPC_CHANNELS.dataLayoutStatus),
     upgradeDataLayout: () => ipcRenderer.invoke(IPC_CHANNELS.upgradeDataLayout),
     load: () =>

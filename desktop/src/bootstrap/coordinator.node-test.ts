@@ -494,3 +494,32 @@ test('complete legacy profile is detected before backend starts; upgraded profil
   assert.equal((await coordinator.ensureRuntime()).ok, true)
   assert.equal(starts, 1)
 })
+
+
+test('role switch waits for in-flight runtime start, freezes later writes and never starts the target in-process', async () => {
+  const storage = new MemoryStorage({ version: 1, revision: 4, mode: 'main', step: 'complete' })
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const order: string[] = []
+  const coordinator = createCoordinator(storage, { start: async () => {
+    order.push('start'); await pending; order.push('ready'); return { phase: 'ready', apiBase: 'http://127.0.0.1:43123' }
+  } }, new MemoryLaunchProfiles({ version: 1, role: 'main', port: 43123, localExecutor: false }))
+  const starting = coordinator.ensureRuntime()
+  const switching = coordinator.switchRole('child', async current => { assert.equal(current, 'main'); order.push('stop'); order.push('commit-pointer') })
+  const later = coordinator.clear()
+  release()
+  await starting
+  await switching
+  await assert.rejects(later, /switch is in progress/)
+  assert.deepEqual(order, ['start', 'ready', 'stop', 'commit-pointer'])
+  assert.equal((await storage.load())?.mode, 'main')
+  await assert.rejects(coordinator.ensureRuntime(), /switch is in progress/)
+})
+
+test('failed role stop/commit retains original state and requires reopening rather than spawning concurrent writers', async () => {
+  const storage = new MemoryStorage({ version: 1, revision: 4, mode: 'child', step: 'enter-pairing-offer' })
+  const coordinator = createCoordinator(storage)
+  await assert.rejects(coordinator.switchRole('main', async () => { throw new Error('stop failed') }), /stop failed/)
+  assert.equal((await storage.load())?.mode, 'child')
+  await assert.rejects(coordinator.clear(), /switch is in progress/)
+})

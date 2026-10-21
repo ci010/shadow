@@ -18,6 +18,7 @@ import { runWebPair } from '../web-pairing-cli.ts'
 import { loadBrowserPinHash } from '../../gateway/browser-pin.ts'
 import type { MainRuntimeOptions } from './contracts.ts'
 import type { Config } from '../../config/schema.ts'
+import { childPairingFailureCode } from '../child-pairing-diagnostics.ts'
 import { runChildPairingCli } from '../child-pairing-cli.ts'
 
 async function startLocalMainRuntime(config: Config, options: MainRuntimeOptions) {
@@ -53,7 +54,10 @@ export async function runRootProcessEntry(
   }
   if (runtimeArgs[0] === 'child' && runtimeArgs[1] === 'pair') {
     try { await runChildPairingCli(runtimeArgs.slice(2)) }
-    catch { throw new Error('Child pairing failed; verify the offer, endpoint and protected OS key store, then retry') }
+    catch (error) {
+      process.stdout.write(JSON.stringify({ version: 1, state: 'failed', code: childPairingFailureCode(error) }) + '\n')
+      throw new Error('Child pairing failed; verify the offer, endpoint and protected OS key store, then retry')
+    }
     return { route: 'child-pair' }
   }
   if (runtimeArgs[0] === 'web') {
