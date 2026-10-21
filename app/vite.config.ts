@@ -110,6 +110,9 @@ function archiveLicenses(): Plugin {
 
 export default defineConfig({
   base: './',
+  // Component tests that use configFile:false may rebuild Vite's default cache.
+  // Keep the running app's optimized modules out of that shared directory.
+  cacheDir: 'node_modules/.vite-shadow-app',
   plugins: [routing.plugin, pdfViewerAssets(), archiveLicenses(), vue(), UnoCSS({
     configFile: fileURLToPath(new URL('./unocss.config.ts', import.meta.url)),
   })],

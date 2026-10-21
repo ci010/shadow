@@ -35,7 +35,9 @@ test('real Vite browser lazy Shiki imports stay valid across language loads and 
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   // Never share the running dev server's optimizer cache. This test uses the real
   // app config and source graph, but all generated optimizer files are disposable.
-  const liveMetadata = resolve(root, 'app/node_modules/.vite/deps/_metadata.json')
+  const configSource = await readFile(resolve(root, 'app/vite.config.ts'), 'utf8')
+  assert.match(configSource, /cacheDir: 'node_modules\/\.vite-shadow-app'/, 'The app must not share the default component-test optimizer cache')
+  const liveMetadata = resolve(root, 'app/node_modules/.vite-shadow-app/deps/_metadata.json')
   const before = await readFile(liveMetadata, 'utf8').catch(() => undefined)
   const server = await createServer({ root: resolve(root, 'app'), configFile: resolve(root, 'app/vite.config.ts'),
     cacheDir: resolve(directory, 'vite-cache'), server: { host: '127.0.0.1', port: 0, strictPort: false, open: false } })
@@ -53,6 +55,13 @@ test('real Vite browser lazy Shiki imports stay valid across language loads and 
     for(const [path,source] of ${JSON.stringify([['payload.json', '{"ok":true}'], ['file.ts', 'const value: number = 1'], ['file.md', '# title\n\n~~~python\nprint(1)\n~~~']])}){
       const tokens=await highlightFile(source,path);
       if(tokens.map(t=>t.text).join('')!==source||!tokens.some(t=>t.light&&t.dark))throw Error('Missing highlighting: '+path);
+    }
+    const {highlightDiffHunks}=await import('/src/tool-file-diff.ts');
+    for(const path of ['ToolPayload.vue','tool-payload-source_test.ts']){
+      const lines=[' import { computed } from "vue"','+const highlightSource = computed(() => splitToolPayloadSource(props.source))',' const imageError = ref(false)'];
+      const result=await highlightDiffHunks([{oldStart:22,oldLines:2,newStart:22,newLines:3,lines}],path);
+      if(result[0].length!==3||!result[0].flat().some(t=>t.light&&t.dark))throw Error('Missing diff highlighting: '+path);
+      for(let i=0;i<lines.length;i++)if(result[0][i].map(t=>t.text).join('')!==lines[i].slice(1))throw Error('Changed diff text');
     }
   })()`
   await writeFile(main, `const {app,BrowserWindow}=require('electron');
