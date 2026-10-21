@@ -28,9 +28,11 @@ test('Child wizard validates consent and retries; local shell is honest offline 
       resolveId: id => id === '/child-fixture.ts' ? '\0child-fixture' : undefined,
       load: id => id !== '\0child-fixture' ? undefined : `
         import 'uno.css'; import '/src/styles.css';
-        import { createApp } from 'vue';
+        import { createApp, h } from 'vue';
         import Wizard from '/src/FirstRunWizard.vue';
         import Child from '/src/ChildDesktop.vue';
+        import Recovery from '/src/RuntimeRecovery.vue';
+        import DesktopFrame from '/src/DesktopFrame.vue';
         import RoleSettings from '/src/components/DesktopRoleSettings.vue';
         import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
         const f = window.fixture = { requests: [], pairs: [], fail: true, completed: false, connection: 'offline', statusFailure: false, role:'child', switches:[], switchFails:false };
@@ -59,6 +61,7 @@ test('Child wizard validates consent and retries; local shell is honest offline 
             connection:f.connection === 'connected' ? 'connected':'offline',capabilities:[{capabilityId:'desktop-workdir',kind:'workdir',displayName:'Shared work folder',displayPath:info.workdir,online:true}]}]});
           throw new Error('Unexpected Main API request: '+url);
         };
+        f.openRecovery = () => { f.role='child'; mounted.unmount(); mounted=createApp({render:()=>h(DesktopFrame,null,{default:()=>h(Recovery,{canReset:false,role:'child',code:'spawn-error',retry:async()=>{}})})});mounted.mount('#app'); };
         f.openRoleSettings = role => { f.role=role; mounted.unmount(); mounted=createApp(RoleSettings);mounted.mount('#app'); };
         f.openChild = () => { mounted.unmount(); mounted = createApp(Child,{apiBase:location.origin})
           .use(createInstallationContextProvider({version:1,mode:'child',localNodeId:'child-1',mainConnection:'connecting',mainLatencyMs:null,uiScopes:[],apiBase:location.origin}));

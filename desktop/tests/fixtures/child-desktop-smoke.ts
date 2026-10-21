@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
-import { app, BrowserWindow, session } from 'electron'
+import { app, BrowserWindow, session, utilityProcess } from 'electron'
+import { writeFile } from 'node:fs/promises'
+import { once } from 'node:events'
+import { createUtilityProcessSpawn } from '../../src/sidecar/utility-process.js'
 import { installBackgroundWindow } from '../../src/background-window.js'
 
 app.setPath('userData', join(process.cwd(), 'profile'))
@@ -10,6 +13,14 @@ app.on('window-all-closed', () => {})
 
 async function main() {
   await app.whenReady()
+  // Exercise the real Electron API: undefined Child-only env entries used to
+  // synchronously throw "Invalid value for env", before any backend was run.
+  const utilityEntry = join(process.cwd(), 'utility-child.cjs')
+  await writeFile(utilityEntry, 'process.exit(0)')
+  const spawnUtility = createUtilityProcessSpawn((entry, args, options) => utilityProcess.fork(entry, args, options))
+  const utility = spawnUtility('unused', [utilityEntry], { env: { ...process.env, SHADOW_DESKTOP_MEDIA_KEY: undefined } })
+  const [utilityExit] = await once(utility, 'exit')
+  assert.equal(utilityExit, 0, 'Child utility must start with an absent Main media key')
   const base = process.env.CHILD_SMOKE_URL!
   session.defaultSession.webRequest.onBeforeRequest((details, done) => done({ cancel: !details.url.startsWith(base) }))
   const window = new BrowserWindow({ show: false, width: 1100, height: 900,
@@ -74,6 +85,9 @@ async function main() {
     for (const width of [1100, 400]) {
       window.setSize(width, 900)
       assert.equal(await run(`new Promise(r=>setTimeout(()=>r(document.documentElement.scrollWidth<=innerWidth+1),60))`), true, `Child shell overflow at ${width}`)
+      const layout = await run(`(() => { const role=document.querySelector('.desktop-role-settings').getBoundingClientRect(); const status=document.querySelector('.child-status').getBoundingClientRect(); return {roleWidth:role.width,statusWidth:status.width,roleBottom:role.bottom,statusTop:status.top,shellDisplay:getComputedStyle(document.querySelector('.child-shell')).display}; })()`)
+      assert.ok(layout.roleWidth >= width - 100, `Role card must fill Child shell at ${width}: ${JSON.stringify(layout)}`)
+      assert.ok(layout.statusTop >= layout.roleBottom, `Child sections must stack: ${JSON.stringify(layout)}`)
     }
     await run(`fixture.connection='connected';document.querySelector('.child-status button').click();new Promise(r=>setTimeout(r,100))`)
     assert.match(await run('document.body.innerText'), /Connected to Main/)
@@ -107,6 +121,14 @@ async function main() {
     await run(`fixture.switchFails=true;document.querySelector('.desktop-role-settings button').click();new Promise(r=>setTimeout(r,30))`)
     assert.match(await run('document.body.innerText'), /Close and reopen Shadow/)
     assert.deepEqual(await run('fixture.switches[1]'), { role: 'main', executionConsent: false })
+    await run(`fixture.openRecovery();new Promise(r=>setTimeout(r,80))`)
+    for (const width of [1100, 400]) {
+      window.setSize(width, 900)
+      await run(`new Promise(r=>setTimeout(r,60))`)
+      const recoveryLayout = await run(`(() => { const role=document.querySelector('.desktop-role-settings'); const panel=document.querySelector('.recovery-panel'); return {width:role.getBoundingClientRect().width,panelWidth:panel.getBoundingClientRect().width,column:getComputedStyle(role).gridColumn}; })()`)
+      assert.ok(recoveryLayout.width >= recoveryLayout.panelWidth - 65, `Recovery role card must span the brand and text columns at ${width}: ${JSON.stringify(recoveryLayout)}`)
+      assert.equal(recoveryLayout.column, '1 / -1')
+    }
     console.log('CHILD_SMOKE_OK')
   } finally { window.destroy() }
   app.exit(0)
