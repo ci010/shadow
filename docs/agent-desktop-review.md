@@ -3,9 +3,9 @@
 ## 当前交付边界
 
 - 既有 `ComputerDesktop` 的 list/bind/observe/foreground/release，以及全部 11 种动作已有实际实现；未开放上游其余命令。
-- 默认 backend 未改变。显式 `SHADOW_COMPUTER_BACKEND=agent-desktop` 才启用；缺失/不兼容 addon 或 guard 不隐式回退 PowerShell。
+- Windows 默认且唯一 backend 为 native agent-desktop，无 backend 环境变量开关；缺失/不兼容 addon 或 guard 直接失败，不回退。Windows 构建缺产物时给出明确的 native 构建命令。
 - 当前宿主未重启、未热切换。没有通过 exec 执行真实 UIA、截图、键鼠输入或启动交互测试应用。
-- 已完成构建、模拟和无 UI 加载验证，**不等于真实窗口截图/输入验收通过**。下一步必须由用户一次切换宿主后，通过 computer-use 选择窗口与逐动作审批测试。
+- 已完成构建、模拟和无 UI 加载验证，**不等于真实窗口截图/输入验收通过**。下一步必须由用户正常重启宿主后，通过 computer-use 选择窗口与逐动作审批测试。
 
 ## 实际产物
 
@@ -30,11 +30,23 @@
 - 普通动作使用真实 WindowsAdapter 内的单 UIA pattern 扩展，避免上游 dispatcher 的 Legacy/物理回退和 Select 搜索链。
 - 密码未知/秘密先剪枝；内容读取前立即短路。观察含 TextPattern 有界 fallback、真实 bounds、readonly/原始长度判断；offscreen 内容仍参与 SHA-256 指纹但不 advertise actions。
 - root/element runtime ID、进程创建时间与窗口前后校验；120 秒快照、单次消费、防重放；每次 dispatch 前检查 deadline 与不可重置取消标志，dispatch 后失败/取消为 `outcome_unknown`。
-- 上游低层 SendInput 不提供等同原 guard 的独立 marker/hooks/owner-death 清理，因此 AOT 复用既有 C# guard。没有运行时 C# 编译或 PowerShell launcher。
+- 上游低层 SendInput 不提供等同原 guard 的独立 marker/hooks/owner-death 清理，因此 AOT 复用既有 C# guard。没有运行时 C# 编译或 shell launcher；保留 windows-input.cs 和 AOT 构建。
 - Node child 主 stdio isolate 可独立调用快速 `cancelInput()`；真正 COM/UIA 留在专用 owner 线程。命名事件仅取消，不能提交输入。guard 使用私有 stdio、独立 EOF/父死亡监听和 held 输入释放。
 - native 验证 guard metadata、严格按方法校验返回值、单条有界队列；损坏/未知响应 poison 实例，不继续复用。
 
 ## 验证结果
+
+### 默认唯一 native 路径变更后
+
+- `src/execution/computer/*_test.ts`：26/26，无 skip；缺 addon 测试隔离生产 worker，仅发 release，不执行 UIA。
+- asset/backend-bundle 回归：4/4；asset/AOT guard/fixture 组合：7/7（有重复，不累加）；relocated 完整 backend 构建成功。
+- `pnpm exec tsc --noEmit`、`pnpm build`、`git diff --check` 通过。
+- 默认 dist 包含 addon 与 AOT guard，不含 windows-host.cs 或旧运行时编译 launcher。
+- 删除 windows.ts、windows-host.cs 及旧 backend GUI 测试；保留 stdio-transport.ts（强制传入 worker launcher）及 fake guard/stdio 回归。
+- 首次 fake guard 测试因环境失效 MSVC LIB 路径失败；仅测试编译子进程清空 LIB/LIBPATH 后通过。
+- 保留 windows-input.cs、AOT 构建及 testing/window.cs fixture 来源。未重启或执行真实 UI。
+
+### 此前全桥接验证（历史批次）
 
 - 最终组合 focused Node 测试：**54 pass / 1 skip / 0 fail**（55 项）。
   - skip 是已有 native 时避免真实 observe 的 missing-addon 用例；缺 addon/guard 的构建诊断与真实 relocated worker 缺文件失败另有测试，均通过。
@@ -48,7 +60,7 @@
 - focused strict TypeScript：成功；相关共享文件 `git diff --check` 成功。
 - 不是全仓测试/typecheck 声明；没有 ARM64 或真实 provider/输入/截图验收声明。
 
-命令见 `docs/agent-desktop.md` 及 native README。唯一人工启动步骤也在那里：正常退出旧宿主，在仓库 PowerShell 设置 backend 与 loopback Vite host，运行 `pnpm dev`；手动打开测试窗口，再通过 computer-use 测试。
+命令见 `docs/agent-desktop.md` 及 native README。唯一人工启动步骤也在那里：正常退出旧宿主，在仓库 PowerShell 设置 loopback Vite host，运行 `pnpm dev`；手动打开测试窗口，再通过 computer-use 测试。
 
 ## 源文件清单
 

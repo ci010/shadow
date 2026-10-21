@@ -6,7 +6,7 @@ import {
   ComputerActionSchema, ComputerActionResultSchema, ComputerError, ComputerObservationSchema, isForegroundAction,
   ComputerTargetSchema, ComputerWindowsSchema, type ComputerDesktop, type DesktopRequest,
 } from './contracts.ts'
-import { WindowsComputerDesktop } from './windows.ts'
+import { DesktopStdioTransport } from './stdio-transport.ts'
 
 const uuid = z.string().uuid()
 export const AgentDesktopRequestSchema = z.discriminatedUnion('method', [
@@ -18,19 +18,18 @@ export const AgentDesktopRequestSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('release'), targetId: uuid }).strict(),
 ])
 
-/** Opt-in native backend. Only the private stdio supervisor is reused from the
- * old implementation, never its PowerShell launcher. Authorization and immutable
+/** The native desktop backend. Authorization and immutable
  * per-action approval remain in ComputerService; native checks are additional. */
 export class AgentDesktopComputerDesktop implements ComputerDesktop {
   readonly available = process.platform === 'win32' && ['x64', 'arm64'].includes(process.arch)
-  private readonly transport: WindowsComputerDesktop
+  private readonly transport: DesktopStdioTransport
   private inFlight = false
   private guardRisk = false
   private retiring?: Promise<void>
   get generation(): number { return this.transport.generation }
 
   constructor(options: { timeoutMs?: number; spawnWorker?: () => ChildProcessWithoutNullStreams } = {}) {
-    this.transport = new WindowsComputerDesktop({
+    this.transport = new DesktopStdioTransport({
       timeoutMs: options.timeoutMs,
       spawnHost: options.spawnWorker ?? (() => spawn(process.execPath,
         [fileURLToPath(new URL('./agent-desktop-worker.js', import.meta.url))], {

@@ -169,67 +169,64 @@ Local-owner-only routes live beneath `/projects/<id>/api/computer`; mobile/devic
 credentials cannot authorize them. The Vue control uses those routes, not
 agent messages or generic question answers.
 
-`src/execution/computer/windows.ts` starts a hidden, isolated Windows PowerShell
-process lazily and compiles the bundled `windows-host.cs` and `windows-input.cs` with the OS-provided
-.NET Framework compiler. No PowerShell profile, policy-bypass switch, downloaded
-module, .NET SDK or TCP listener is used. Private inherited stdio is the transport.
-The helper watches its owning backend process and exits if it dies. Foreground
-input lazily starts a second private-stdio process running the input guard,
-independent of blocking UIA/COM calls. Its active lease is bounded to ten seconds.
-Cancellation closes stdin first so the guard can release input; after a
-two-second grace period the backend can terminate the UIA host. The guard also
-watches its own parent and releases input independently on parent death.
-Windows PowerShell/.NET/UIAutomation must be available under host policy; do not
-disable policy to make the bridge work.
+The sole Windows backend is native agent-desktop. The backend factory creates
+an isolated Node stdio child through `stdio-transport.ts`; the main backend and
+Electron main process never load the addon. The child validates wire requests,
+loads the napi-rs addon in a Worker and runs UIA/COM on a dedicated native owner
+thread. There is no backend selection environment variable, PowerShell launcher,
+runtime C# compilation or fallback backend. Missing or incompatible native
+artifacts fail closed.
 
-The native helper binds an opaque target to a process start time and window
-identity. A fresh bounded snapshot (200 controls, about 32,000 serialized tree
-characters, depth 20) is compared before every operation, including hashes of
-bounded UIA-reported values and runtime identities. This is not a comparison of hidden
-application state. An action consumes its observation. Screenshots
-use `PrintWindow` for the selected window only, at most 1600 pixels on the longest
-side. A returned `executed` result is not a business-success receipt; `verified`
-only checks immediate value/toggle/selection/scroll state.
+Foreground input uses the independent AOT `shadow-input-guard.exe`, built from
+`windows-input.cs`. Its private stdio, marker-aware hooks, bounded lease,
+held-input release, EOF and owner-death watchers remain independent of blocked
+UIA. Sticky named-event cancellation stops input before bounded worker teardown;
+it cannot submit input or be reset for another action. No TCP listener or
+Electron preload capability is introduced.
 
-The backend build copies the C# source and bundled Skill as ordinary assets;
-test fixtures are excluded. No new Electron preload API or second agent engine
-is introduced.
+The native helper binds opaque targets to process generation and window/root
+identity. Bounded password-first snapshots (200 controls, 32,000 serialized bytes,
+depth 20) include runtime identities and hidden hashes of original values.
+Freshness is checked before each operation; observations are consumed once.
+This is not a comparison of hidden application state. Screenshots use upstream
+ExactWindow capture: WGC may fall back only to PrintWindow on the same HWND,
+never desktop capture. Output is bounded to a 1600-pixel longest edge. An
+`executed` result is not a business-success receipt; `verified` only checks
+immediate value/toggle/selection/scroll state.
+
+Windows builds require and copy the matching native addon and AOT guard plus
+LICENSE/NOTICE. Missing or invalid assets produce an actionable native build
+error. The C# guard source/build helper remain; test fixtures and native private
+build state are excluded from release assets. See `agent-desktop.md` and
+`../integrations/agent-desktop/README.md` for build prerequisites and details.
 
 ## Verification boundary
 
-Focused tests cover owner isolation, immutable/single-use decisions, expiry,
-cancellation, unknown outcomes, strict HTTP inputs, lazy tool routing, and
-transient observations through both persistence backends. A real Windows
-WinForms fixture exercises UIA observation, window screenshots, field changes,
-toggle/invoke, list selection/scrolling, password omission, stale-state and
-bounded-field rejection without operating on user applications.
-Rendered Electron tests exercise the control with synthetic
-HTTP data at desktop/mobile widths and in English/Chinese.
+Focused pure/mock tests cover authorization, immutable/single-use decisions,
+expiry, cancellation, unknown outcomes, strict HTTP inputs, tool routing and
+transient observations. Rendered Electron tests use synthetic HTTP data.
+Native source/build, isolated Node/Electron-as-Node ABI and relocated packaging
+tests do not establish real provider, screenshot or input acceptance.
 
-The native guard also has a fake desktop/input environment covering packet
-layout, Unicode pairing, screenshot mapping and negative monitor origins,
-delayed focus activation/restoration, partial input, interruption and release.
-It never calls `SendInput`. Normal test runs leave the real foreground test
-disabled; the UIA fixture does not deliberately activate a window.
+The retained guard fake environment tests packet layout, Unicode, screenshot
+mapping, focus, interruption and held-input release without calling SendInput.
+Metadata/idle lifecycle probes do not begin an input lease. These tests are not
+evidence of actual OS key/button release.
 
-A separately opted-in foreground fixture creates its own window and checks
-Unicode insertion, key chords, mouse buttons/double clicks, movement, modified
-dragging, vertical wheel input, protected/non-client point rejection, and
-cancellation with actual key/button release. It briefly changes focus and moves
-the pointer. Only with the user's permission and an idle desktop, run it by
-itself, not alongside other UI tests:
+`scripts/agent-desktop-fixture.ts` builds a synthetic WinForms application from
+`src/execution/computer/testing/window.cs` but does not launch its GUI. There is
+no legacy opt-in shell-driven UIA/foreground test command. For real acceptance,
+the owner must separately authorize any normal host restart, manually open the
+fixture or another non-sensitive application, and use the existing computer-use
+host to select the exact window. Observe password pruning and field constraints;
+approve each ordinary action individually. Enable foreground permission
+separately, obtain a fresh screenshot and approve each physical action. Test
+Stop/human takeover only on an idle desktop under controlled approval. Unknown
+outcomes require inspection and a fresh grant, never automatic replay. Detailed
+steps and fixture location are in `agent-desktop.md`.
 
-```powershell
-$env:SHADOW_COMPUTER_FOREGROUND_TEST = '1'
-try {
-  pnpm exec node --import tsx --test --test-name-pattern='Windows foreground fixture' src\execution\computer\windows_test.ts
-} finally {
-  Remove-Item Env:\SHADOW_COMPUTER_FOREGROUND_TEST
-}
-```
-
-These fixtures do not establish compatibility with Office, third-party editors,
-every UIA provider, physical multi-monitor/DPI configurations, enterprise
-PowerShell policies, installed/signature acceptance, or real-model task success.
-Those remain application/platform acceptance work rather than claims made by
-these tests.
+Real UIA provider behavior, screenshots, all physical actions and held-input
+cancellation remain separate acceptance gates. These tests do not establish
+compatibility with Office, third-party editors, every UIA provider, physical
+multi-monitor/DPI configurations, enterprise host policies, signing/installation
+or real-model task success.

@@ -2,17 +2,16 @@ import { copyFile, mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /** Allowlist only reviewed release artifacts; never copy Rust sources, target/,
- * refs_store, downloaded upstream checkout, or other private native state. */
+ * refs_store, downloaded upstream checkout, or other private native state.
+ * Windows builds require the sole native backend; other platforms omit it. */
 export async function copyAgentDesktopAssets(root: string, output: string, options: {
-  required?: boolean; platform?: string; arch?: string; warn?: (message: string) => void
+  platform?: string; arch?: string
 } = {}): Promise<boolean> {
   const platform = options.platform ?? process.platform
   const arch = options.arch ?? process.arch
-  const required = options.required ?? process.env.SHADOW_COMPUTER_BACKEND === 'agent-desktop'
-  const warn = options.warn ?? console.warn
-  if (platform !== 'win32' || !['x64', 'arm64'].includes(arch)) {
-    if (required) throw new Error('agent-desktop native packaging supports only win32-x64 and win32-arm64.')
-    return false
+  if (platform !== 'win32') return false
+  if (!['x64', 'arm64'].includes(arch)) {
+    throw new Error('agent-desktop native packaging supports only win32-x64 and win32-arm64.')
   }
   const source = join(root, 'integrations/agent-desktop')
   const name = 'shadow-agent-desktop.node'
@@ -25,11 +24,8 @@ export async function copyAgentDesktopAssets(root: string, output: string, optio
       if (!info.isFile() || info.size === 0) throw new Error(`Invalid agent-desktop release asset: ${file}`)
     }
   } catch (error) {
-    if (required || !(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') {
-      throw new Error(`agent-desktop native assets are missing or invalid for ${platform}-${arch}; build integrations/agent-desktop before native packaging.`, { cause: error })
-    }
-    warn(`[build] Optional agent-desktop addon/guard assets absent for ${platform}-${arch}; packaged native backend will fail closed. Default PowerShell backend is unchanged.`)
-    return false
+    const triple = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
+    throw new Error(`agent-desktop native assets are missing or invalid for ${platform}-${arch}. From integrations/agent-desktop, run node scripts/fetch.mjs and node scripts/build.mjs ${triple} in a VS developer shell; then rebuild the backend. See integrations/agent-desktop/README.md.`, { cause: error })
   }
   for (const file of files) {
     const target = join(output, 'integrations/agent-desktop', file)

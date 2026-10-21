@@ -10,28 +10,29 @@ import test from 'node:test'
 import { copyAgentDesktopAssets } from './agent-desktop-assets.ts'
 import { compileBackend } from './backend-bundle.ts'
 
-test('native asset staging is optional by default, required explicitly, and allowlisted', async () => {
+test('native asset staging is required on Windows by default and allowlisted', async () => {
   const root = await mkdtemp(join(tmpdir(), 'shadow-native-assets-'))
   try {
     const output = join(root, 'dist')
-    const warnings: string[] = []
-    const opts = { platform: 'win32', arch: 'x64', warn: (text: string) => warnings.push(text) }
-    assert.equal(await copyAgentDesktopAssets(root, output, { ...opts, required: false }), false)
-    assert.match(warnings[0]!, /fail closed/)
-    await assert.rejects(copyAgentDesktopAssets(root, output, { ...opts, required: true }), /build integrations\/agent-desktop/)
+    const opts = { platform: 'win32', arch: 'x64' }
+    await assert.rejects(copyAgentDesktopAssets(root, output, opts), /node scripts\/build\.mjs x86_64-pc-windows-msvc/)
     const source = join(root, 'integrations/agent-desktop')
     await mkdir(join(source, 'artifacts/win32-x64'), { recursive: true })
     await writeFile(join(source, 'artifacts/win32-x64/shadow-agent-desktop.node'), 'synthetic non-executable artifact; never load')
     await writeFile(join(source, 'LICENSE'), 'synthetic license')
     await writeFile(join(source, 'NOTICE'), 'synthetic notice')
-    await assert.rejects(copyAgentDesktopAssets(root, output, { ...opts, required: true }), /missing or invalid/)
+    await assert.rejects(copyAgentDesktopAssets(root, output, opts), /missing or invalid/)
     await writeFile(join(source, 'artifacts/win32-x64/shadow-input-guard.exe'), 'synthetic guard; never execute')
     await writeFile(join(source, 'private-state.json'), 'must not copy')
     await writeFile(join(source, 'artifacts/win32-x64/secret.json'), 'must not copy')
-    assert.equal(await copyAgentDesktopAssets(root, output, { ...opts, required: true }), true)
+    assert.equal(await copyAgentDesktopAssets(root, output, opts), true)
     assert.deepEqual((await readdir(join(output, 'integrations/agent-desktop'))).sort(), ['LICENSE', 'NOTICE', 'artifacts'])
     assert.deepEqual((await readdir(join(output, 'integrations/agent-desktop/artifacts/win32-x64'))).sort(), ['shadow-agent-desktop.node', 'shadow-input-guard.exe'])
-    await assert.rejects(copyAgentDesktopAssets(root, output, { required: true, platform: 'linux' }), /supports only/)
+    await writeFile(join(source, 'artifacts/win32-x64/shadow-input-guard.exe'), '')
+    await assert.rejects(copyAgentDesktopAssets(root, output, opts), /missing or invalid/)
+    await assert.rejects(copyAgentDesktopAssets(root, output, { platform: 'win32', arch: 'ia32' }), /supports only/)
+    await assert.rejects(copyAgentDesktopAssets(root, output, { platform: 'win32', arch: 'arm64' }), /aarch64-pc-windows-msvc/)
+    assert.equal(await copyAgentDesktopAssets(root, output, { platform: 'linux' }), false)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -55,7 +56,8 @@ test('relocated isolated worker bundles zod and starts without repository node_m
     })
     const artifact = join(root, `integrations/agent-desktop/artifacts/win32-${process.arch}/shadow-agent-desktop.node`)
     const { existsSync } = await import('node:fs')
-    if (process.platform === 'win32' && existsSync(artifact)) {
+    if (process.platform === 'win32') {
+      assert.ok(existsSync(artifact), 'default Windows build must copy the native addon')
       const identity = execFileSync(process.execPath,
         [join(repository, 'integrations/agent-desktop/scripts/identity.mjs'), artifact],
         { cwd: root, encoding: 'utf8', timeout: 15000, env: { ...process.env, NODE_OPTIONS: '' } })

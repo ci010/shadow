@@ -70,8 +70,9 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
       assert.doesNotMatch(await readFile(join(target, 'dist/_chunks', chunk), 'utf8'), /__shadow_module_(?:url|dir)__/)
     }
     for (const asset of ['agent/context/AGENTS.tools.md', 'sessions/handoff/HANDOFF.md',
-      'execution/processes/windows-guardian.ps1', 'execution/computer/windows-host.cs', 'execution/computer/windows-input.cs',
+      'execution/processes/windows-guardian.ps1', 'execution/computer/windows-input.cs',
       'skills/builtin/computer-use/SKILL.md', 'microapps/sdk.js']) assert.ok(await readFile(join(target, 'dist/src', asset)))
+    await assert.rejects(readFile(join(target, 'dist/src/execution/computer/windows-host.cs')), { code: 'ENOENT' })
     await assert.rejects(readFile(join(target, 'dist/src/execution/computer/testing/window.cs')), { code: 'ENOENT' })
     await assert.rejects(readFile(join(target, 'dist/src/execution/computer/testing/input.cs')), { code: 'ENOENT' })
     const entry = join(target, 'dist/src/index.js')

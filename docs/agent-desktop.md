@@ -1,10 +1,11 @@
 # Isolated agent-desktop backend
 
-The optional native backend bridges the **existing ComputerDesktop contract**:
+The native backend bridges the **existing ComputerDesktop contract**:
 list, bind, observe, release, foreground permission, and all eleven existing
-operations. It does not expose agent-desktop's other commands. The default remains
-the legacy backend until actual desktop acceptance is complete. No automatic
-PowerShell fallback masks a missing native artifact.
+operations. It does not expose agent-desktop's other commands. This is the sole
+default Windows backend; no environment switch or legacy backend fallback exists.
+Missing or incompatible native artifacts fail closed. Real desktop acceptance
+remains a separate verification gate.
 
 ## Capability / verification boundary
 
@@ -71,8 +72,8 @@ same observation's frame hash, dimensions and original bounds.
 The upstream keyboard/mouse send seams use `dwExtraInfo:0` and process-local Drop;
 that does not preserve held-input cleanup after a killed Node process. The bridge
 therefore reuses Shadow's existing `windows-input.cs` safety guard, compiled ahead
-of time as `shadow-input-guard.exe`. The unused PowerShell launcher is stripped;
-there is no runtime C# compilation or PowerShell invocation.
+of time as `shadow-input-guard.exe`. There is no runtime C# compilation or shell
+launcher; the C# source and AOT build helper remain required.
 
 The guard keeps marker-aware hooks, user-takeover checks, focus/client-area/
 occlusion checks, per-packet validation and held-key/button release. Its only
@@ -106,8 +107,9 @@ The build has its own retained `Cargo.lock` and uses `--locked`; root pnpm lock 
 not changed. `compileBackend` bundles the worker (including zod/action schema)
 and copies only the matching artifact pair plus LICENSE/NOTICE. No Rust source,
 `target`, upstream checkout, test fixture, ref store or private state is packaged.
-Default builds without optional native assets warn and keep the old backend;
-explicit native builds fail with a clear missing-artifact diagnostic.
+Every Windows build requires the matching native assets and fails with an
+actionable build command if any artifact or license file is missing or invalid.
+Non-Windows builds omit these Windows-only assets. There is no fallback backend.
 
 Runtime dependencies: interactive supported Windows APIs/UI Automation/D3D,
 MSVC runtime, and .NET Framework 4.x with System/Core/Web.Extensions for the guard.
@@ -115,12 +117,9 @@ The C# guard remains existing Shadow code; upstream's Apache declaration is not
 an automatic relicensing of it. ARM64 device acceptance, full dependency-license
 audit, signatures and a production distribution remain separate release gates.
 
-## One switch, then real desktop testing
+## Owner-controlled launch, then real desktop testing
 
-Source inspection found **no supported hot backend switch**: the factory is read
-once when host/project `ComputerService` is constructed; existing computer routes
-have no backend replacement endpoint. A separate desktop profile is supported by
-`SHADOW_DESKTOP_USER_DATA`, but does not change this running session's service.
+The native backend is constructed when the host/project `ComputerService` starts.
 Do not kill/restart the current host programmatically or use a temporary server
 as a substitute authorization path.
 
@@ -129,14 +128,13 @@ Shadow normally, then start from this repository in PowerShell:
 
 ```powershell
 Set-Location 'C:\Users\ci010-4090\Workspace\shadow'
-$env:SHADOW_COMPUTER_BACKEND = 'agent-desktop'
 $env:VITE_DEV_HOST = '127.0.0.1'
 pnpm dev
 ```
 
 `pnpm dev` builds backend/Electron and copies the artifact pair before launch.
-Unset the environment variable (or use `powershell`) on a later owner-controlled
-launch to restore the legacy backend. Unknown backend values are errors.
+No backend selection variable is needed or supported. Missing native artifacts
+stop the Windows build rather than selecting another implementation.
 
 For a controlled test window, `scripts/agent-desktop-fixture.ts` builds a local
 synthetic WinForms application but **does not launch it**. The owner may open

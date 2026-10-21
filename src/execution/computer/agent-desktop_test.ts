@@ -83,12 +83,22 @@ test('timeout retires child without automatic restart', async t => {
 })
 
 test('missing artifact fails explicitly with no PowerShell fallback', async t => {
-  const { existsSync } = await import('node:fs')
-  const artifact = fileURLToPath(new URL(`../../../integrations/agent-desktop/artifacts/win32-${process.arch}/shadow-agent-desktop.node`, import.meta.url))
-  if (existsSync(artifact)) { t.skip('No real desktop calls allowed'); return }
-  const desktop = new AgentDesktopComputerDesktop()
+  const { mkdtemp, mkdir, copyFile, rm } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+  // Isolate the production worker from installed native artifacts, but retain
+  // normal package resolution. release never observes or interacts with a UI.
+  const root = await mkdtemp(fileURLToPath(new URL('../../../.agent-desktop-missing-', import.meta.url)))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const directory = join(root, 'src/execution/computer')
+  await mkdir(directory, { recursive: true })
+  for (const name of ['agent-desktop-worker.js', 'agent-desktop-actions.js']) {
+    await copyFile(fileURLToPath(new URL(name, import.meta.url)), join(directory, name))
+  }
+  const desktop = new AgentDesktopComputerDesktop({ spawnWorker: () => spawn(process.execPath,
+    [join(directory, 'agent-desktop-worker.js')], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }) })
   t.after(() => desktop.interrupt())
-  await assert.rejects(desktop.request({ method: 'observe', targetId: randomUUID(), screenshot: false }, signal()), error => code('host_failure')(error) && /no PowerShell fallback/.test(String(error)))
+  await assert.rejects(desktop.request({ method: 'release', targetId: randomUUID() }, signal()),
+    error => code('host_failure')(error) && /matching native artifact; no PowerShell fallback/.test(String(error)))
 })
 
 test('worker rejects unknown wire fields without loading native code', async () => {

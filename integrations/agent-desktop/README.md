@@ -1,6 +1,12 @@
-# Optional agent-desktop napi-rs addon (restricted experimental backend)
+# agent-desktop napi-rs addon (sole Windows backend)
 
-Independent Cargo package; default-off. Pinned upstream:
+Independent Cargo package; the default and sole Windows ComputerDesktop backend.
+No backend selection environment variable or legacy fallback is supported. Windows
+backend builds require the matching addon, AOT guard, LICENSE and NOTICE; missing
+or invalid files fail with an actionable native build command. Non-Windows builds
+omit these Windows-only assets. Real desktop acceptance remains pending.
+
+Pinned upstream:
 `5a2c9ad43e269164a8adc8978a733c40b1d38a8b` (Apache-2.0).
 Windows x64 release compilation and pure tests pass. **No actual UIA enumeration,
 observation, action, capture, input or fixture-window launch was performed.**
@@ -204,7 +210,7 @@ addition of 504911232000000000. Handles, times and focus use decimal-string fiel
 
 The build script calls the root builtins-only `buildInputGuard` helper after a
 successful locked Cargo release build. It AOT-compiles the existing marker-aware
-monitor/lease host without the old PowerShell launcher. Its original physical
+monitor/lease host directly, without a shell launcher. Its original physical
 interruption, held-input release, client/occlusion, focus, EOF and owner watchdog
 remain, plus independent named-event cancellation. Build requires Windows .NET
 Framework csc; runtime requires .NET Framework 4.x (System, System.Core,

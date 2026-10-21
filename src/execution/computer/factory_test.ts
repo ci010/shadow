@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createComputerDesktop } from './factory.ts'
 import { AgentDesktopComputerDesktop } from './agent-desktop.ts'
-import { WindowsComputerDesktop } from './windows.ts'
+import { createComputerDesktop } from './factory.ts'
 
-test('backend selection is explicit and defaults to unchanged existing host without starting it', () => {
-  assert.ok(createComputerDesktop({}) instanceof WindowsComputerDesktop)
-  assert.ok(createComputerDesktop({ SHADOW_COMPUTER_BACKEND: '' }) instanceof WindowsComputerDesktop)
-  assert.ok(createComputerDesktop({ SHADOW_COMPUTER_BACKEND: 'powershell' }) instanceof WindowsComputerDesktop)
-  assert.ok(createComputerDesktop({ SHADOW_COMPUTER_BACKEND: 'agent-desktop' }) instanceof AgentDesktopComputerDesktop)
-})
-
-test('unknown backends fail closed rather than quietly falling back', () => {
-  for (const value of ['Agent-Desktop', 'native', ' agent-desktop ', 'false']) {
-    assert.throws(() => createComputerDesktop({ SHADOW_COMPUTER_BACKEND: value }), /Invalid SHADOW_COMPUTER_BACKEND/)
+test('default desktop is always native, regardless of obsolete environment values', () => {
+  const previous = process.env.SHADOW_COMPUTER_BACKEND
+  try {
+    for (const value of [undefined, '', 'powershell', 'agent-desktop', 'invalid']) {
+      if (value === undefined) delete process.env.SHADOW_COMPUTER_BACKEND
+      else process.env.SHADOW_COMPUTER_BACKEND = value
+      assert.ok(createComputerDesktop() instanceof AgentDesktopComputerDesktop)
+    }
+  } finally {
+    if (previous === undefined) delete process.env.SHADOW_COMPUTER_BACKEND
+    else process.env.SHADOW_COMPUTER_BACKEND = previous
   }
 })

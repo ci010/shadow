@@ -1,7 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { ComputerError, type ComputerDesktop, type DesktopRequest } from './contracts.ts'
 
@@ -41,7 +39,7 @@ const messages: Record<string, string> = {
   outcome_unknown: 'The operation may have taken effect. It was not replayed. Inspect the application before continuing.',
   invalid_request: 'The desktop host rejected an invalid request.',
   capture_failed: 'This window could not be captured. No desktop-wide fallback was used.',
-  host_failure: 'The Windows desktop bridge could not start or disconnected. Windows PowerShell, .NET and UI Automation must be available under host policy.',
+  host_failure: 'The native agent-desktop worker could not start or disconnected. Build/install the matching native addon and input guard; no legacy fallback is available.',
 }
 
 interface Pending {
@@ -52,8 +50,8 @@ interface Pending {
   cleanup(): void
 }
 
-/** The C# bridge uses the OS-provided .NET runtime, in a private stdio child. */
-export class WindowsComputerDesktop implements ComputerDesktop {
+/** Private, bounded stdio transport. The caller must supply the native worker launcher. */
+export class DesktopStdioTransport implements ComputerDesktop {
   readonly available = process.platform === 'win32'
   generation = 0
   private child?: ChildProcessWithoutNullStreams
@@ -62,11 +60,9 @@ export class WindowsComputerDesktop implements ComputerDesktop {
   private buffer = ''
 
   constructor(private readonly options: {
-    source?: string
-    inputSource?: string
     timeoutMs?: number
-    spawnHost?: () => ChildProcessWithoutNullStreams
-  } = {}) {}
+    spawnHost: () => ChildProcessWithoutNullStreams
+  }) {}
 
   async request(request: DesktopRequest, signal: AbortSignal): Promise<unknown> {
     signal.throwIfAborted()
@@ -89,21 +85,7 @@ export class WindowsComputerDesktop implements ComputerDesktop {
   }
 
   private start(): ChildProcessWithoutNullStreams {
-    const source = this.options.source ?? fileURLToPath(new URL('./windows-host.cs', import.meta.url))
-    const inputSource = this.options.inputSource ?? fileURLToPath(new URL('./windows-input.cs', import.meta.url))
-    const quote = (path: string) => `'${path.replaceAll("'", "''")}'`
-    const command = [
-      "$ErrorActionPreference = 'Stop'",
-      '[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)',
-      '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)',
-      `Add-Type -TypeDefinition ([IO.File]::ReadAllText(${quote(source)}) + [Environment]::NewLine + [IO.File]::ReadAllText(${quote(inputSource)})) -ReferencedAssemblies @('System','System.Core','System.Drawing','System.Windows.Forms','System.Web.Extensions','UIAutomationClient','UIAutomationTypes','WindowsBase')`,
-      `[Shadow.ComputerHost]::Run(${process.pid}, ${quote(inputSource)})`,
-    ].join('; ')
-    const child = this.options.spawnHost?.() ?? spawn(
-      join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Mta', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')],
-      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
-    )
+    const child = this.options.spawnHost()
     this.child = child
     this.buffer = ''
     child.stdout.setEncoding('utf8')
