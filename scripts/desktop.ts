@@ -1,6 +1,7 @@
 import { consumeStartupProfileArm } from './startup-profile.ts'
 import { createRequire } from 'node:module'
 import { stageBackend } from './backend-bundle.ts'
+import { copyAgentDesktopAssets } from './agent-desktop-assets.ts'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { pnpmInvocation, runPnpm } from './processes.ts'
@@ -28,6 +29,9 @@ if (target) {
   if (mode !== 'package') await runPnpm(['build:app'])
   // Reuse the same checked Vite output as development (or the verified prepared build).
   await stageBackend(process.cwd(), resolve('desktop/backend'))
+  // Prepared JS comes from Linux; native resources come from this target runner.
+  // Stage them only after verification, without mutating the prepared outputs.
+  await copyAgentDesktopAssets(process.cwd(), resolve('desktop/backend/dist'))
   const electronDist = await prepareReleaseDownloads(process.cwd(), process.env, target)
   await verifyAria2Package(process.cwd(), target)
   await prepareAria2Signing(process.cwd(), target)

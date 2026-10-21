@@ -39,7 +39,7 @@ test('mobile gating and policy cannot become desktop, browser admin, or executio
   const context = createMobileClientContext('https://main.example')
   assert.equal(context.mode, 'client')
   assert.equal(context.uiScopes.includes('nodes:admin'), false)
-  assert.deepEqual(navigationFor(context).map(item => item.name), ['chat', 'settings', 'agents', 'spans', 'logs'])
+  assert.deepEqual(navigationFor(context).map(item => item.name), ['chat', 'settings', 'spans', 'logs'])
   const main = await readFile(new URL('./main.ts', import.meta.url), 'utf8')
   assert.match(main, /if \(import\.meta\.env\.MODE !== 'mobile'\) void registerBrowserPwa/)
   assert.match(main, /if \(import\.meta\.env\.MODE === 'mobile'\)[\s\S]*?await import\('\.\/mobile-bootstrap\.ts'\)[\s\S]*?else if \(desktopApi\)/)
