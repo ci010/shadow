@@ -7,7 +7,7 @@ import { ARIA2_VERSION, aria2Executable } from './aria2-package.ts'
 import { desktopTarget } from './desktop-target.ts'
 import {
   assertMacIconEncoding, assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded,
-  killProcessTree, nodeModeProbe, packagedEvalCommand, prepareRendererSmoke, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, snapshotProcesses,
+  killProcessTree, nodeModeProbe, packagedEvalCommand, prepareRendererSmoke, prepareVerificationData, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, snapshotProcesses,
   serviceEnvironment, startProcess, terminateProcess, verifyRendererArtifacts, waitForOutput, waitReady, waitSuccessful,
   type ManagedProcess, type ProcessIdentity,
 } from './packaged-verification.ts'
@@ -65,15 +65,11 @@ try {
 
   const dataDir = join(scratch, 'data')
   const bootstrap = join(scratch, 'bootstrap.json')
-  await mkdir(join(dataDir, 'config'), { recursive: true })
+  await prepareVerificationData(dataDir)
   await mkdir(join(scratch, 'profile', 'roaming'), { recursive: true })
   await mkdir(join(scratch, 'profile', 'local'), { recursive: true })
   await writeFile(bootstrap, JSON.stringify({
     version: 1, mode: 'main', dataDir, localNodeId: 'packaging-smoke',
-  }))
-  await writeFile(join(dataDir, 'config', 'bot.config.json'), JSON.stringify({
-    agent: { workspace: join(dataDir, 'workspace'), model: 'gpt-4.1', sessionStorage: 'sqlite' },
-    channels: {}, mcp: {},
   }))
   const port = await reservePort()
   const credentialFile = join(scratch, 'service-credential')

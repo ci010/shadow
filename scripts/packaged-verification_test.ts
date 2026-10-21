@@ -12,14 +12,31 @@ import { createContext, runInContext, type Context } from 'node:vm'
 import { compileBackend } from './backend-bundle.ts'
 import {
   assertMacIconEncoding, assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded, isolatedEnvironment,
-  killPosixTree, nodeModeProbe, packagedEvalCommand, parsePosixProcesses, prepareRendererSmoke, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, serviceEnvironment, startProcess, terminateProcess,
+  killPosixTree, nodeModeProbe, packagedEvalCommand, parsePosixProcesses, prepareRendererSmoke, prepareVerificationData, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, serviceEnvironment, startProcess, terminateProcess,
   verifyRendererArtifacts, waitForOutput, waitReady, waitSuccessful,
   type ManagedProcess, type ProcessIdentity,
 } from './packaged-verification.ts'
 import { desktopTarget } from './desktop-target.ts'
 import { localProxyConfiguration, proxyForUrl } from '../src/execution/network/proxy.ts'
 
+import { assertDataLayoutReady } from '../src/storage/data-layout-startup.ts'
+
 const windows = desktopTarget('win32', 'x64')
+
+test('packaged smoke config uses the fresh layout accepted by the startup gate', async t => {
+  const root = await createVerificationDirectory()
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const data = join(root, 'data')
+  await prepareVerificationData(data)
+  await assertDataLayoutReady(data)
+  const config = JSON.parse(await readFile(join(data, 'app.json'), 'utf8'))
+  assert.equal(config.agent.workspace, data)
+  assert.equal(config.agent.sessionStorage, 'sqlite')
+  await assert.rejects(readFile(join(data, 'config', 'bot.config.json')), { code: 'ENOENT' })
+  // Keep the real legacy-layout rejection covered; the smoke must adapt to it.
+  await mkdir(join(data, 'config'))
+  await assert.rejects(assertDataLayoutReady(data), /Legacy data layout detected/)
+})
 
 test('macOS icon verification rejects the legacy PNG chunks that render as Finder noise', () => {
   const argb = (size: number) => {

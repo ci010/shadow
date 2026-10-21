@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execFileSync, fork } from 'node:child_process'
 import { once } from 'node:events'
 import { createRequire } from 'node:module'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
@@ -34,7 +34,9 @@ import { directoryFingerprint } from './release-manifest.ts'
 // Relocate outside the repository: dependencies cannot resolve from development.
 test('relocated Vite backend preserves CLI, assets, WASM and isolated script entry', { timeout: 120_000 }, async () => {
   const repository = fileURLToPath(new URL('..', import.meta.url))
-  const root = await mkdtemp(join(tmpdir(), 'shadow-bundle-relocated-'))
+  // macOS exposes tmpdir() through /var -> /private/var. Migration correctly
+  // refuses linked ancestors, so canonicalize this synthetic root, not the gate.
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'shadow-bundle-relocated-'))
   try {
     const target = join(root, 'resources/backend')
     const prepared = join(root, 'prepared')
