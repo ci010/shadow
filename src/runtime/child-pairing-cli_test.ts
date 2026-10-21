@@ -9,7 +9,7 @@ import { createRequire } from 'node:module'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ProtectedDeviceKeyStore } from '../cluster/device-credentials.ts'
-import { runChildPairingCli } from './child-pairing-cli.ts'
+import { restoreChildIdentity, runChildPairingCli } from './child-pairing-cli.ts'
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
   const directory = resolve('.test-child-pairing', randomUUID())
@@ -32,6 +32,7 @@ test('packaged child pair entry uses real production pairing, persists reference
   const output: string[] = []
   const run = () => runChildPairingCli(['--config', f.configPath], f.input(), text => output.push(text), {
     keyStore: f.keyStore,
+    fetchChallenge: async (_url, init) => Response.json({ ...JSON.parse(init?.body as string), challengeId: 'challenge-1', audience: 'ws://main.test/cluster/v1/node', nonce: 'bm9uY2U', expiresAt: new Date(Date.now() + 60000).toISOString() }),
     fetchPairing: async (url, init) => {
       requests++
       assert.equal(String(url), 'http://main.test:43125/pair/v1/present')
@@ -99,6 +100,11 @@ test('compiled root child pair command uses real DPAPI under Electron Node and r
     const chunks: Buffer[] = []
     for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    if (request.url === '/cluster/v1/challenges') {
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ ...body, challengeId: 'test-challenge', audience: 'ws://localhost/cluster/v1/node', nonce: 'bm9uY2U', expiresAt: new Date(Date.now() + 60000).toISOString() }))
+      return
+    }
     requests++
     response.writeHead(202, { 'Content-Type': 'application/json' })
     response.end(JSON.stringify({ version: 1, state: 'pending', pendingId: body.pendingId, requestedAt: new Date().toISOString() }))
@@ -132,4 +138,33 @@ test('compiled root child pair command uses real DPAPI under Electron Node and r
   await run(process.execPath)
   assert.equal(await readFile(referencePath, 'utf8'), original)
   assert.equal(requests, 1)
+})
+
+test('explicit identity restoration verifies protected key before changing config and preserves all other fields', async t => {
+  const f = await fixture(t)
+  await runChildPairingCli(['--config', f.configPath], f.input(), () => {}, { keyStore: f.keyStore,
+    fetchPairing: async (_url, init) => Response.json({ version: 1, state: 'pending', pendingId: JSON.parse(init?.body as string).pendingId, requestedAt: new Date().toISOString() }) })
+  const original = JSON.parse(await readFile(f.configPath, 'utf8'))
+  await writeFile(f.configPath, JSON.stringify({ ...original, localNodeId: 'wrong-node' }))
+  const wrong = await readFile(f.configPath, 'utf8')
+  await assert.rejects(restoreChildIdentity(f.configPath, { ...f.keyStore, load: async () => null }), /not found/)
+  assert.equal(await readFile(f.configPath, 'utf8'), wrong)
+  await restoreChildIdentity(f.configPath, f.keyStore)
+  assert.deepEqual(JSON.parse(await readFile(f.configPath, 'utf8')), original)
+})
+
+test('existing credential contacts Main, re-presents same identity only on explicit unavailable approval, and fails closed on network errors', async t => {
+  const f = await fixture(t)
+  const bodies: Record<string, string>[] = []
+  const fetchPairing = async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(init?.body as string); bodies.push(body)
+    return Response.json({ version: 1, state: 'pending', pendingId: body.pendingId, requestedAt: new Date().toISOString() })
+  }
+  await runChildPairingCli(['--config', f.configPath], f.input(), () => {}, { keyStore: f.keyStore, fetchPairing })
+  await runChildPairingCli(['--config', f.configPath], f.input(), () => {}, { keyStore: f.keyStore, fetchPairing,
+    fetchChallenge: async () => Response.json({ error: 'credential_not_available' }, { status: 404 }) })
+  for (const field of ['deviceId', 'nodeId', 'credentialId', 'devicePublicKey', 'deviceIdentityFingerprint']) assert.equal(bodies[0][field], bodies[1][field])
+  await assert.rejects(runChildPairingCli(['--config', f.configPath], f.input(), () => {}, { keyStore: f.keyStore, fetchPairing,
+    fetchChallenge: async () => { throw new Error('network unavailable') } }), /network unavailable/)
+  assert.equal(bodies.length, 2)
 })

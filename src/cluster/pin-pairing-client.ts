@@ -10,6 +10,7 @@ export type PairingFetch = (
 ) => Promise<Response>
 
 export interface PinPairingClientOptions {
+  readonly existingReference?: DeviceCredentialReferenceV1
   readonly endpoint: string
   readonly offerId: string
   readonly pin: string
@@ -35,10 +36,14 @@ export async function presentPinPairing(
   const url = pairingUrl(options.endpoint, options.allowInsecureHttp ?? false)
   const signal = options.signal ?? new AbortController().signal
   const idFactory = options.idFactory ?? (() => crypto.randomUUID())
-  const deviceId = idFactory()
+  const deviceId = options.existingReference?.deviceId ?? idFactory()
   const pendingId = idFactory()
-  const credentialId = idFactory()
-  const keyId = `device-key-${deviceId}`
+  const credentialId = options.existingReference?.credentialId ?? idFactory()
+  const keyId = options.existingReference?.keyId ?? `device-key-${deviceId}`
+  if (options.existingReference) {
+    await options.credentialProvider.resolve(options.existingReference, { endpoint: options.endpoint, localNodeId: options.localNodeId, signal })
+    if (options.existingReference.nodeId !== options.localNodeId) throw new TypeError('Saved credential does not match this node')
+  }
   const identity = await options.credentialProvider.loadOrCreateKey(keyId, signal)
   signal.throwIfAborted()
 

@@ -11,6 +11,8 @@ export type ChallengeFetch = (
   init?: RequestInit,
 ) => Promise<Response>
 
+export class DeviceApprovalUnavailableError extends Error {}
+
 export async function requestDeviceChallengeProtocol(
   endpoint: string,
   authentication: DeviceAuthenticationV1,
@@ -33,6 +35,10 @@ export async function requestDeviceChallengeProtocol(
     signal,
   })
   if (!response.ok) {
+    if (response.status === 404) {
+      const body = await response.json().catch(() => null)
+      if (body?.error === 'credential_not_available') throw new DeviceApprovalUnavailableError('Main approval is unavailable for this credential')
+    }
     throw new Error(
       `Main challenge request failed with status ${response.status}`,
     )

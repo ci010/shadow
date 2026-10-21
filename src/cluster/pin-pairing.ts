@@ -146,9 +146,9 @@ export class PinPairingService {
         throw new PinPairingError('pin-invalid', 'Pairing PIN is invalid')
       }
 
-      this.#active.delete(presentation.offerId)
       const { pin: _pin, ...registryPresentation } = presentation
       const pending = this.registry.presentOffer(registryPresentation, now)
+      this.#active.delete(presentation.offerId)
       await this.#onRegistryMutation(now)
       return pending
     })

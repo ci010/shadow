@@ -350,3 +350,21 @@ test('registry snapshot restore rejects invalid state atomically', () => {
     }, baseTime))
   registry.authenticate(auth)
 })
+
+test('revoked exact key-bound identity requires a fresh offer and explicit reapproval; conflicting identity is denied', () => {
+  const registry = new InMemoryPairingNodeRegistry()
+  const presentation = { ...auth, offerId: 'first', pendingId: 'pending-first', deviceIdentityFingerprint: 'fingerprint-1', devicePublicKey: 'A'.repeat(43), displayName: 'Child' }
+  registry.createOffer('first', baseTime, new Date(baseTime.getTime() + 60000))
+  registry.presentOffer(presentation, baseTime)
+  registry.approve({ pendingId: presentation.pendingId, expectedDeviceIdentityFingerprint: 'fingerprint-1', credentialId: auth.credentialId }, baseTime)
+  registry.revoke(auth, 'operator revoked', baseTime)
+  registry.createOffer('fresh', baseTime, new Date(baseTime.getTime() + 60000))
+  expectCode('identity-conflict', () => registry.presentOffer({ ...presentation, offerId: 'fresh', pendingId: 'pending-new', devicePublicKey: 'B'.repeat(43) }, baseTime))
+  registry.presentOffer({ ...presentation, offerId: 'fresh', pendingId: 'pending-new' }, baseTime)
+  expectCode('node-revoked', () => registry.authenticate(auth))
+  const restored = new InMemoryPairingNodeRegistry()
+  restored.restoreSnapshot(registry.exportSnapshot(baseTime), baseTime)
+  expectCode('node-revoked', () => restored.authenticate(auth))
+  restored.approve({ pendingId: 'pending-new', expectedDeviceIdentityFingerprint: 'fingerprint-1', credentialId: auth.credentialId }, baseTime)
+  assertEquals(restored.authenticate(auth).nodeId, auth.nodeId)
+})

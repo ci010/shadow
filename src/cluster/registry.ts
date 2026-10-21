@@ -153,13 +153,33 @@ export class InMemoryPairingNodeRegistry {
       this.#consumedOffers.add(presentation.offerId)
       throw new RegistryError('offer-expired', 'pairing offer has expired')
     }
+    const retry = this.#pending.get(presentation.pendingId)
+    if (retry && retry.deviceId === presentation.deviceId && retry.nodeId === presentation.nodeId
+      && retry.credentialId === presentation.credentialId && !!retry.devicePublicKey
+      && retry.devicePublicKey === presentation.devicePublicKey
+      && retry.deviceIdentityFingerprint === presentation.deviceIdentityFingerprint) {
+      this.#offers.delete(presentation.offerId)
+      this.#consumedOffers.add(presentation.offerId)
+      return structuredClone(retry)
+    }
     if (this.#pending.has(presentation.pendingId)) {
       throw new RegistryError(
         'duplicate-identifier',
         'pending pairing identifier already exists',
       )
     }
-    if (this.#identityExists(presentation.deviceId, presentation.nodeId)) {
+    // A fresh Main-issued invitation may request reauthorization of the exact
+    // revoked identity. The tombstone remains authoritative until explicit approval.
+    const revoked = this.#nodes.get(nodeKey(presentation.deviceId, presentation.nodeId))
+    const reauthorization = revoked?.state === 'revoked'
+      && revoked.credentialId === presentation.credentialId
+      && revoked.deviceIdentityFingerprint === presentation.deviceIdentityFingerprint
+      && revoked.devicePublicKey === presentation.devicePublicKey
+      && !!revoked.devicePublicKey
+    const otherConflict = [...this.#pending.values(), ...this.#nodes.values()].some(record =>
+      (record.deviceId === presentation.deviceId || record.nodeId === presentation.nodeId)
+      && record !== revoked)
+    if (this.#identityExists(presentation.deviceId, presentation.nodeId) && (!reauthorization || otherConflict)) {
       throw new RegistryError(
         'identity-conflict',
         'device or node identity already exists',
@@ -216,7 +236,10 @@ export class InMemoryPairingNodeRegistry {
     }
     if (
       [...this.#nodes.values()].some((record) =>
-        record.credentialId === approval.credentialId
+        record.credentialId === approval.credentialId && !(record.state === 'revoked'
+          && record.deviceId === pending.deviceId && record.nodeId === pending.nodeId
+          && record.deviceIdentityFingerprint === pending.deviceIdentityFingerprint
+          && !!record.devicePublicKey && record.devicePublicKey === pending.devicePublicKey)
       )
     ) {
       throw new RegistryError(
@@ -411,13 +434,17 @@ export class InMemoryPairingNodeRegistry {
     const duplicatePendingId = duplicate(
       snapshot.pending.map((record) => record.pendingId),
     )
+    const identityNodes = snapshot.nodes.filter(record => !(record.state === 'revoked' && !!record.devicePublicKey
+      && snapshot.pending.some(pending => pending.deviceId === record.deviceId && pending.nodeId === record.nodeId
+        && pending.credentialId === record.credentialId && pending.devicePublicKey === record.devicePublicKey
+        && pending.deviceIdentityFingerprint === record.deviceIdentityFingerprint)))
     const duplicateDeviceId = duplicate([
       ...snapshot.pending.map((record) => record.deviceId),
-      ...snapshot.nodes.map((record) => record.deviceId),
+      ...identityNodes.map((record) => record.deviceId),
     ])
     const duplicateNodeId = duplicate([
       ...snapshot.pending.map((record) => record.nodeId),
-      ...snapshot.nodes.map((record) => record.nodeId),
+      ...identityNodes.map((record) => record.nodeId),
     ])
     const duplicateCredentialId = duplicate(
       snapshot.nodes.map((record) => record.credentialId),
