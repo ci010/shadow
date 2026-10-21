@@ -42,7 +42,7 @@ current references from historical proposals.
 | Tools | Files, text editing, search, shell processes, background continuations, messaging, plans, conventions, dynamic script tools, and MCP adapters |
 | Skills and agent types | Built-in definitions plus watched workspace overrides; progressive skill disclosure and per-type tool filtering |
 | Channels | Web plus project-owned Discord, Feishu, and QQ bot instances; legacy WeChat/iLink implementation is not started by project runtimes |
-| Browser automation | Lazy Chrome DevTools MCP with session-local launch/attach instances; requires a usable browser/CDP target and MCP process |
+| Browser automation | Chrome DevTools MCP with explicit session-local user-owned bindings; requires a usable browser/CDP target and MCP process |
 | Windows computer use | Opt-in local window; UIA first, separately enabled guarded foreground keyboard/mouse, window-only screenshots, single-use owner approvals and transient observations; no automatic fallback or remote desktop |
 | Web application | Vue chat/session/files UI, agent views, logs and traces; Nodes reads device/capability inventory and provides Main desktop pairing controls; paired nodes execute without operation approvals |
 | Electron | Main/Child bootstrap, persisted launch profile, backend supervision, narrow preload API and renderer setup/recovery; separate-device/native-platform acceptance remains required |
@@ -1885,49 +1885,37 @@ initializing browsers. Global VFS search includes already-loaded browser contrac
 under instance-specific paths without reconnecting. Uninitialized browser sources
 remain deferred even when explicitly selected; browser_setup initializes them.
 Installed MCP global search remains offline.
-Invoke the known setup ID with `args: {action: "launch", browser: "edge"}` to
-select `edge`, `brave`, `chrome`, or `default`, or supply `executablePath` instead
-of `browser`. Explicit selections fail without fallback. Each owned instance
-exclusively leases one persistent Project slot (default 3 total across browser
-types, `tools.chrome.slotCount` integer 1–16). Idle compatible slots rotate; the
-first initialization snapshots the selected executable's user data (or creates a
-new profile if absent), subsequent rentals reuse that copy. Executable identities
-never mix. The source is read-only and never synchronized back.
-Local State and standard profiles are preserved and the last-used profile selected.
-Source locks, unknown executable identity, and copy errors fail explicitly rather
-than falling back to an empty profile. OS/app-bound cookie encryption may prevent
-login portability. Project configuration
-is unchanged. Without setup, automatic lazy default launch remains available
-on invocation in an owning session.
+Use `browser_setup` with `{action: "discover"}` to guide the user's choice of
+running browser/profile. Chrome 144+ offers user-enabled remote debugging at
+`chrome://inspect/#remote-debugging`: after the user enables it and approves access,
+bind `{action: "autoConnect", channel: "stable"}` (or beta/dev/canary).
+An optional user-identified absolute `userDataDir` selects a data root, not a
+security boundary or a single profile. Alternatively `{action: "attach", endpoint}`
+binds an already-enabled loopback HTTP(S)/browser WS(S) CDP endpoint, including
+compatible Edge, Brave or Electron. Shadow never scans ports, launches browsers,
+copies profiles, enables debugging, or stops/restarts user browsers. Chrome 136+
+restrictions on command-line debugging of the default data directory must be respected.
 
-Explicit `{action: "attach", endpoint}` accepts only loopback HTTP(S)/WS(S)
-preenabled CDP targets, including compatible Electron. Examples are
-`http://127.0.0.1:9222` and `ws://127.0.0.1:9222/devtools/browser/...`.
-This is separate from import arguments: raw endpoint/profile/executable flags
-remain rejected. Startup import/preload arguments are pinned per instance;
-changing arguments cannot silently create a second browser. Empty
-`preload_tools: { "chrome-devtools": [] }` still works.
+CDP access is browser-wide and may expose multiple profiles/tabs. Confirm that
+boundary, then use `list_pages` and explicit `pageId` for every page operation.
+`select_page` is hidden and rejected; missing/invalid IDs never fall back to a
+selected page. The built-in adapter is pinned to chrome-devtools-mcp@1.10.1 and
+incompatible schemas fail closed. Slim/disabled page routing and unreviewed CLI
+flags are rejected. Generic MCP servers retain their existing behavior.
 
-Setup connects/lists live contracts without business tool RPCs and returns
-`{instance, source: "v:tools/chrome-devtools", mode, owned, ready, ...}`.
-`search({handler: "grep", path: "v:tools/chrome-devtools/<instance>", query: "snapshot"})`
-finds that instance's contracts. Read the returned paths for full schemas.
-`invoke_tool({name: "chrome-devtools__take_snapshot", instance: id, args: {...}})`
-routes canonical tool names to isolated instance registries, never prefix variants.
-One instance allows an omitted ID; two or more require explicit selection, with
-no mutable current browser. Invalid/other-session IDs fail without fallback;
-IDs are scoped to the session lifecycle.
-
-Use `browser_setup` with `{action: "list"}` or `{action: "close", instance: id}`.
-Separate ordinary tasks/sessions remain independent, but blocking leaf
-calls/snapshots borrow their owner's instance IDs and may interact/list, not
-launch/attach/close. If the owner has no browser, automatic discovery/invocation
-fails asking the owner to initialize first, never silently creates a persistent
-resource in a leaf.
-Session sleep/reset closes owned instances and only disconnects attached targets,
-never kills external targets. Browser/host tests are synthetic, not actual browser
-end-to-end coverage. Browser/Windows automation still depends on optional external
-tools/services; configuration fields alone do not establish native automation availability.
+Setup loads live MCP contracts, not browser business RPCs: `ready` means adapter
+ready, not proof of CDP connection or profile identity. It returns an opaque
+`instance` ID; search `v:tools/chrome-devtools/<instance>` and pass `instance` to
+`invoke_tool` alongside `args: {pageId: ...}`. One binding permits omitted instance;
+multiple bindings require it. Invalid/foreign IDs never fall back. Binding choices
+are session-only and can be inspected with `{action: "list"}`; close/sleep/reset
+only disconnect MCP and forget the binding. Reconnection can reuse a still-applicable
+user-approved choice without repeating OS setup; changed access scope needs confirmation.
+No sensitive global authorization is saved. Independent sessions may connect to the
+same browser and share human changes; registry isolation is not browser isolation.
+Leaf calls borrow existing bindings but cannot connect or close them. Empty Chrome
+preloads require an existing binding; invocation never auto-launches. Tests are
+synthetic, not actual browser end-to-end coverage.
 
 Web search service selection and Firecrawl, Brave, Exa and Tavily credentials
 belong to App configuration. `/api/app/web-search` exposes credential presence,
@@ -3178,7 +3166,7 @@ run the Node backend directly; keep development services on trusted networks.
 | `src/channels`, `src/audio-cpp`, `src/diffusion-cpp` | Platform adapters, web chat/media, optional local audio.cpp ASR/TTS and sd.cpp image/video; no binary or model is bundled |
 | `src/gateway` | Hono policy/serving, plugin contract, UI proxy/static serving |
 | `src/otel` | Tracing, project telemetry-context integration, storage/query/streaming and distributed-job audit helpers |
-| `src/browser` | Browser discovery, port allocation and process/profile lifecycle |
+| `src/browser` | Explicit browser bindings, page routing contract and MCP disconnect lifecycle |
 | `src/vfs` | Logical resource mounts |
 | `src/cluster`, `src/execution` | WIP device plane, capability/job contracts and executors; local filesystem/Git/process capabilities |
 | `src/utils`, `src/testing` | Shared paths/platform/media/watch helpers and test utilities |
@@ -3251,26 +3239,12 @@ Keep these distinctions when updating documentation: local behavior,
 implemented-but-WIP infrastructure, and planned design each need their own
 evidence.
 
-### Managed browser slot persistence and concurrency
+### Browser migration
 
-Production constructs ChromeManager in Main's project runtime; load-tool allocates
-by opaque instance allocation key, not conversation identity. Attach bypasses the
-manager allocation. Pools live in Project `state/browser/slots`, not session cwd.
-Atomic mkdir `allocation.lock` serializes pool metadata/cursor changes across
-managers and host processes sharing a local Project home. Per-slot `lease`
-directories persist throughout browser lifetime. No TTL or PID-based stealing is
-used. Full/busy/incompatible/quarantined pools return an explicit capacity error.
-Metadata records executable identity, initialization/profile selection, owner PID
-and browser PID when known. Browser Singleton/lockfile remnants also block reuse.
-Release sends stop, polls owned PID exit (3s maximum), then clears the claim; stop
-failure or still-live PID retains it. Unknown launch errors/cancellation retain
-both slot and port reservation because a process may still become active. A host
-crash leaves leases quarantined even if PID checks appear negative; no old process
-is automatically killed. Recovery is intentionally conservative: stop managers,
-verify no browser/descendant uses that slot, then manually clear stale lease/locks.
-A crash in metadata allocation can leave allocation.lock; it too requires stopped
-managers before manual removal. Corrupt metadata fails closed. Local atomic mkdir
-semantics are required; network-shared Project homes are not a supported lock boundary.
-The persisted cap must match configured slotCount; resizing requires explicit
-offline migration preserving metadata and profiles. No old UUID profile, slot
-profile, or incompatible browser data is silently removed or migrated.
+The former managed slot pool, profile-copy and browser-process lifecycle have been
+removed. Old browser data is left untouched; no process is killed or lease deleted.
+Remove obsolete `tools.chrome` launch/slot settings (the compatibility object only
+accepts `{}`), and remove port/launch/profile/routing flags from `.chrome-devtools.json`
+and preloads. Do not delete user profiles as part of this migration. Establish an
+explicit user-owned connection through browser_setup. See the built-in Chrome
+skill's `references/mcp-args.md` for connection evidence and permitted flags.

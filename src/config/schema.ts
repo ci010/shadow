@@ -207,14 +207,8 @@ export const WindowsToolSchema = z.object({
   maxOutputBytes: z.number().default(10_000),
 })
 
-export const ChromeToolSchema = z.object({
-  /** Total persistent browser slots per Project, across all browser kinds. */
-  slotCount: z.number().int().min(1).max(16).default(3),
-  /** Path to Chrome/Edge/Brave executable. Auto-detected if omitted. */
-  executablePath: z.string().optional(),
-  /** Base port for remote debugging (default: 9222). Sessions auto-allocate from this. */
-  basePort: z.number().default(9222),
-})
+/** Legacy launch settings are rejected rather than silently creating private profiles. */
+export const ChromeToolSchema = z.object({}).strict()
 
 export const ToolsSchema = z.object({
   exec: ExecToolSchema.optional(),

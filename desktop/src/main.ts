@@ -237,7 +237,7 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: 
 }
 
 export function createMainWindow(target: RendererTarget, showOnReady = true, runtimeUserDataPath = app.getPath('userData')): BrowserWindow {
-  const window = new BrowserWindow(framelessWindowOptions(join(import.meta.dirname, 'preload.cjs')))
+  const window = new BrowserWindow(framelessWindowOptions(join(import.meta.dirname, 'preload.cjs'), app.isPackaged))
   window.setMaxListeners(MAIN_WINDOW_MAX_LISTENERS)
   installMediaPermissions(ipcMain, window, target, {
     getDisplaySources: () => desktopCapturer.getSources({

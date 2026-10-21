@@ -1,3 +1,4 @@
+import { CHROME_MCP_PACKAGE } from '../../browser/chrome-contract.ts'
 import { SessionProxyTool } from '../../tools/session-proxy.ts'
 import { createSelfSessionHandler } from '../../vfs/session.ts'
 import { registerDevelopmentRestart } from '../../tools/development-restart.ts'
@@ -172,7 +173,6 @@ import { sessionDiagnosisPlugin } from '../../sessions/diagnosis-routes.ts'
 import { SearchTool } from '../../tools/search.ts'
 import { createLiveWebSearchTool } from '../../tools/web-provider.ts'
 import { StartupTimings } from '../startup-timings.ts'
-import { ChromeManager } from '../../browser/chrome-manager.ts'
 import { cleanupTempFiles, workspacePath } from '../../utils/paths.ts'
 import { isCronEventPayload } from '../../cron/events.ts'
 import type { ProjectRuntime, ProjectRuntimeDependencies } from '../../projects/runtime.ts'
@@ -410,29 +410,16 @@ export async function createProjectRuntime(
   const loadable = new Map<string, LoadableEntry>()
   loadable.set('agent_tool_test', agentToolTest)
   loadable.set('session_proxy', new SessionProxyTool())
-  // Chrome config getter that re-reads from the config file so edits take effect
-  // without a process restart (e.g. user sets tools.chrome.executablePath).
-  const chromeConfigGetter = (): {
-    slotCount?: number
-    executablePath?: string
-    basePort: number
-  } => {
-    return activeConfig.tools.chrome ?? { basePort: 9222 }
-  }
-  const chromeManager = new ChromeManager(workspace, chromeConfigGetter, {
-    projectId: project.id, portAllocator: dependencies.chromePortAllocator,
-  })
-  cleanup.push(() => chromeManager.releaseAll())
+  // Browser connections are explicit user-owned session bindings; never launch here.
   loadable.set('chrome-devtools', {
     config: {
       name: 'chrome-devtools',
-      description: 'Managed browser: pages, forms, screenshots, JavaScript, network, console, performance, memory, audits and emulation. browser_setup selects session-local Chrome/Edge/Brave or an explicit Electron/CDP target; search and invoke_tool route by instance ID. Guidance: v:skills/chrome-devtools.',
+      description: 'User-owned browser connection. Use browser_setup discovery guidance and explicit autoConnect or loopback CDP binding; never launches or copies profiles. Page tools require pageId; CDP access is browser-wide. Guidance: v:skills/chrome-devtools.',
       transport: 'stdio',
       command: 'npx',
-      args: ['chrome-devtools-mcp@latest'],
+      args: [CHROME_MCP_PACKAGE],
     },
     configPath: workspacePath(workspace, '.chrome-devtools.json'),
-    chromeManager,
   })
 
   const skills = new SkillsManager(workspace)
@@ -440,7 +427,7 @@ export async function createProjectRuntime(
   await knowledgeMaintenance.init()
   cleanup.push(() => knowledgeMaintenance.stop())
   registerKnowledgeRoutes(app, { workspace, skills, authorize: dependencies.authorize, maintenance: knowledgeMaintenance })
-  const importTool = new ImportTool(loadable, workspace, chromeManager, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport)
+  const importTool = new ImportTool(loadable, workspace, project.id, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport)
   tools.register(new SearchTool(workspace, webSearchTool, vfs, dependencies.localExecutor !== false))
   tools.register(new InvokeTool(importTool))
   registerDevelopmentRestart(importTool)
@@ -1498,7 +1485,6 @@ export async function createProjectRuntime(
       () => channels.stopAll(),
       () => events.stop(),
       () => bus.stopAll(),
-      () => chromeManager.releaseAll(),
       () => evalBridge.shutdown(),
       () => { conventions.close(); initiatives.close() },
       () => sessionStore.close?.(),

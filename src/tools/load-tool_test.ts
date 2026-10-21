@@ -5,196 +5,52 @@ import { writeFile } from 'node:fs/promises'
 import { ImportTool, type LoadableEntry, type McpLoadable } from './load-tool.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { McpConnection } from '../mcp/client.ts'
-import { ChromeManager, ChromePortAllocator, type ChromeRuntimeOperations } from '../browser/chrome-manager.ts'
-import { createProjectScope } from '../projects/scope.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import type { ExecutionContext } from './context.ts'
+import { InvokeTool } from './invoke-tool.ts'
+import { CHROME_MCP_PACKAGE, chromeToolAllowed, validateChromeCall } from '../browser/chrome-contract.ts'
 
-function entry(chromeManager?: ChromeManager): McpLoadable {
-  return {
-    config: { name: 'chrome-devtools', transport: 'stdio', command: 'npx', args: ['chrome-devtools-mcp@latest'] },
-    chromeManager,
-  }
-}
+const config = { name: 'chrome-devtools', transport: 'stdio' as const, command: 'npx', args: [CHROME_MCP_PACKAGE] }
 
-function catalog(browser: McpLoadable): Map<string, LoadableEntry> {
-  return new Map([
-    ['chrome-devtools', browser],
-  ])
-}
-
-test('scoped built-in Chrome rejects all unowned connection/launch forms from every argument source before allocating or connecting', async (t) => {
-  await withTempWorkspace(async (home) => {
-    const manager = new ChromeManager(home, () => ({ basePort: 9222 }), {
-      projectId: 'a', portAllocator: new ChromePortAllocator(async () => true),
-    })
-    const allocate = t.mock.method(manager, 'allocate', async () => { throw new Error('must not allocate') })
-    const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('must not connect') })
-    const flags = [
-      ['--browserUrl=http://127.0.0.1:9222'], ['--browserUrl', 'http://127.0.0.1:9222'],
-      ['--browser-url=http://127.0.0.1:9222'], ['-u', 'http://127.0.0.1:9222'],
-      ['--wsEndpoint=ws://127.0.0.1:9222/devtools/browser/other'], ['--ws-endpoint', 'ws://other'],
-      ['-w', 'ws://other'], ['--autoConnect'], ['--auto-connect=true'],
-      ['--user-data-dir=host-profile'], ['--userDataDir', 'host-profile'],
-      ['--executablePath=host-browser'], ['--channel=stable'], ['--chromeArg=--user-data-dir=host'],
-      ['--', '--browserUrl=http://other'], ['--remote-debugging-port=0'],
-      ['--remote-debugging-port=9222junk'], ['--remote-debugging-port=9222', '--remote-debugging-port=9223'],
-      ['--future-endpoint=other'],
-    ]
-    for (const source of ['caller', 'persistent', 'base']) {
-      for (const args of flags) {
-        const browser = entry(manager)
-        if (source === 'base') browser.config.args!.push(...args)
-        if (source === 'persistent') {
-          browser.configPath = join(home, 'synthetic-chrome.json')
-          await writeFile(browser.configPath, JSON.stringify({ args }))
-        }
-        const importer = new ImportTool(catalog(browser), home, manager)
-        const tools = new SessionTools(new Tools(home), home)
-        assert.match(await importer.importSource({
-          source: 'v:tools/chrome-devtools', args: source === 'caller' ? args : [],
-        }, tools), /^Error loading project Chrome:/)
-      }
-    }
-    assert.equal(allocate.mock.callCount(), 0)
-    assert.equal(connect.mock.callCount(), 0)
-    const browser = entry(manager)
-    browser.configPath = join(home, 'malformed-chrome.json')
-    const importer = new ImportTool(catalog(browser), home, manager)
-    for (const malformed of ['{', '{}', '{"args":[null]}', 'null']) {
-      await writeFile(browser.configPath, malformed)
-      assert.match(await importer.importSource({ source: 'v:tools/chrome-devtools' },
-        new SessionTools(new Tools(home), home)), /^Error loading project Chrome config:/)
-    }
-    assert.equal(allocate.mock.callCount(), 0)
-    assert.equal(connect.mock.callCount(), 0)
-    await manager.releaseAll()
-  })
-})
-
-test('built-in Chrome requires an exact project manager even through cached auto-imports', async (t) => {
-  const scope = createProjectScope('a')
-  const otherScope = createProjectScope('b')
-  const manager = new ChromeManager('unused', () => ({ basePort: 9222 }), {
-    projectId: 'b', portAllocator: new ChromePortAllocator(async () => true),
-  })
+test('all config argument sources reject launch and implicit routing before MCP connect', async t => withTempWorkspace(async home => {
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('must not connect') })
-  try {
-    for (const browser of [entry(), entry(manager)]) {
-      const importer = scope.run(() => new ImportTool(catalog(browser), 'unused'))
-      const tools = new SessionTools(new Tools('unused'), 'unused')
-      assert.match(await importer.importSource({ source: 'v:tools/chrome-devtools' }, tools), /requires its own runtime-managed browser/)
-      assert.match((await importer.importForInvocation('chrome-devtools__take_snapshot', tools))!, /requires its own runtime-managed browser/)
-    }
-    const importer = otherScope.run(() => new ImportTool(catalog(entry(manager)), 'unused', manager))
-    const tools = new SessionTools(new Tools('unused'), 'unused')
-    assert.match(await scope.run(() => importer.importSource({ source: 'v:tools/chrome-devtools' }, tools)), /requires its own runtime-managed browser/)
-    assert.match(await importer.execute({ source: 'v:tools/chrome-devtools' },
-      { projectId: 'a', tools } as ExecutionContext), /Chrome project binding mismatch/)
-    const replacement = createProjectScope('b')
-    try {
-      assert.match(await replacement.run(() => importer.importSource({ source: 'v:tools/chrome-devtools' }, tools)),
-        /requires its own runtime-managed browser/)
-    } finally {
-      replacement.close()
-    }
-    otherScope.close()
-    assert.match(await importer.importSource({ source: 'v:tools/chrome-devtools' }, tools), /requires its own runtime-managed browser/)
-    assert.equal(connect.mock.callCount(), 0)
-  } finally {
-    scope.close()
-    otherScope.close()
-    await manager.releaseAll()
+  const flags = ['--slim', '--slim=true', '--no-page-id-routing', '--pageIdRouting=false', '--page-id-routing=false',
+    '--browserUrl=http://127.0.0.1:9222', '-u', '--wsEndpoint=ws://localhost:9222', '--auto-connect',
+    '--user-data-dir=profile', '--executablePath=browser', '--remote-debugging-port=9222', '--channel=stable', '--future-flag']
+  for (const source of ['base', 'persistent']) for (const flag of flags) {
+    const entry: McpLoadable = { config: { ...config, args: [...config.args] } }
+    if (source === 'base') entry.config.args!.push(flag)
+    else { entry.configPath = join(home, 'synthetic.json'); await writeFile(entry.configPath, JSON.stringify({ args: [flag] })) }
+    const importer = new ImportTool(new Map<string, LoadableEntry>([['chrome-devtools', entry]]), home, 'p')
+    const base = new Tools(home); base.register(new InvokeTool(importer))
+    const tools = new SessionTools(base, home)
+    const ctx = { tools, projectId: 'p', signal: new AbortController().signal } as ExecutionContext
+    const result = await tools.execute('invoke_tool', { name: 'browser_setup', args: { action: 'attach', endpoint: 'http://localhost:9555' } }, ctx)
+    assert.match(String(result), /only reviewed/)
+    await tools.resetDynamicAndWait()
   }
-})
+  assert.equal(connect.mock.callCount(), 0)
+}))
 
-test('managed imports allocate distinct browsers per org and session, reuse connections, and release only the resetting session', async (t) => {
-  await withTempWorkspace(async (home) => {
-    const live = new Map<number, number>()
-    const launches: Array<{ port: number; profile: string }> = []
-    const terminated: number[] = []
-    let nextPid = 100
-    const runtime: ChromeRuntimeOperations = {
-      getUserDataDir: () => null,
-      detectChrome: async () => 'synthetic-browser',
-      isDebugPortActive: async (port) => live.has(port),
-      isProcessAlive: (pid) => [...live.values()].includes(pid),
-      async launchChrome(_path, port, profile) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 2))
-        launches.push({ port, profile })
-        const pid = ++nextPid
-        live.set(port, pid)
-        return { pid }
-      },
-      terminateChrome(pid) {
-        assert(!terminated.includes(pid), 'an owned process must be terminated only once')
-        terminated.push(pid)
-        for (const [port, owner] of live) if (owner === pid) live.delete(port)
-      },
-    }
-    const allocator = new ChromePortAllocator(async (port) => !live.has(port))
-    const managers = ['a', 'b'].map((projectId) => new ChromeManager(join(home, projectId),
-      () => ({ basePort: 9222 }), { projectId, portAllocator: allocator, runtime }))
-    const connect = t.mock.method(McpConnection.prototype, 'connect', async function (this: McpConnection) {
-      assert.equal(this.config.args?.filter((arg) => arg.startsWith('--browserUrl=')).length, 1)
-      assert(!this.config.args?.some((arg) => arg.startsWith('--remote-debugging-port')))
-    })
-    t.mock.method(McpConnection.prototype, 'listTools', async () => [
-      { name: 'take_snapshot', description: '', inputSchema: { type: 'object' } },
-    ])
-    t.mock.method(McpConnection.prototype, 'disconnect', async () => {})
-    const importers = managers.map((manager) => new ImportTool(catalog(entry(manager)), home, manager))
-    const sessions = [0, 1, 2].map(() => new SessionTools(new Tools(home), home))
-    try {
-      const results = await Promise.all([
-        importers[0].importSource({ source: 'v:tools/chrome-devtools' }, sessions[0]),
-        importers[1].importSource({ source: 'v:tools/chrome-devtools' }, sessions[1]),
-        importers[0].importSource({ source: 'v:tools/chrome-devtools' }, sessions[2]),
-      ])
-      for (const result of results) assert.match(result, /^Loaded 1 tool/)
-      assert.equal(new Set(launches.map((launch) => launch.port)).size, 3)
-      assert.equal(new Set(launches.map((launch) => launch.profile)).size, 3)
-      assert.match(await importers[0].importSource({ source: 'v:tools/chrome-devtools' }, sessions[0]), /^Loaded 1 tool/)
-      assert.equal(launches.length, 3)
-      assert.equal(connect.mock.callCount(), 3)
-      assert.match(await importers[0].importSource({
-        source: 'v:tools/chrome-devtools', args: ['--autoConnect'],
-      }, sessions[0]), /^Error loading project Chrome:/)
-      assert.equal(connect.mock.callCount(), 3)
-      assert.equal(launches.length, 3)
-      sessions[0].resetDynamic()
-      await t.waitFor(() => assert.equal(live.size, 2))
-      assert.match(await importers[1].importSource({ source: 'v:tools/chrome-devtools' }, sessions[1]), /^Loaded 1 tool/)
-      assert.equal(launches.length, 3)
-      assert.match(await importers[0].importSource({
-        source: 'v:tools/chrome-devtools', args: ['--remote-debugging-port', '9400', '--no-usage-statistics'],
-      }, sessions[0]), /^Loaded 1 tool/)
-      assert.equal(launches.at(-1)?.port, 9400)
-    } finally {
-      for (const session of sessions) session.resetDynamic()
-      await Promise.all(managers.map((manager) => manager.releaseAll()))
-      assert.equal(terminated.length, launches.length)
-    }
-  })
-})
-
-test('legacy non-org explicit browser connections are preserved without managed allocation', async (t) => {
-  const manager = new ChromeManager('unused', () => ({ basePort: 9222 }))
-  const allocate = t.mock.method(manager, 'allocate', async () => { throw new Error('must not allocate') })
-  const connect = t.mock.method(McpConnection.prototype, 'connect', async function (this: McpConnection) {
-    assert(this.config.args?.includes('--browserUrl=http://127.0.0.1:9333'))
-  })
-  t.mock.method(McpConnection.prototype, 'listTools', async () => [])
-  t.mock.method(McpConnection.prototype, 'disconnect', async () => {})
-  const tools = new SessionTools(new Tools('unused'), 'unused')
-  try {
-    assert.match(await new ImportTool(catalog(entry(manager)), 'unused', manager).importSource({
-      source: 'v:tools/chrome-devtools', args: ['--browserUrl=http://127.0.0.1:9333'],
-    }, tools), /^Loaded 0 tool/)
-    assert.equal(allocate.mock.callCount(), 0)
-    assert.equal(connect.mock.callCount(), 1)
-  } finally {
-    tools.resetDynamic()
-    await manager.releaseAll()
+test('unsupported version, command, and malformed persistent config fail closed', async t => withTempWorkspace(async home => {
+  const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('must not connect') })
+  for (const change of [{ args: ['chrome-devtools-mcp@latest'] }, { args: ['chrome-devtools-mcp@1.9.0'] }, { command: 'other' }]) {
+    const importer = new ImportTool(new Map<string, LoadableEntry>([['chrome-devtools', { config: { ...config, ...change } }]]), home, 'p')
+    const base = new Tools(home); base.register(new InvokeTool(importer))
+    const tools = new SessionTools(base, home)
+    const ctx = { tools, projectId: 'p', signal: new AbortController().signal } as ExecutionContext
+    assert.match(String(await tools.execute('invoke_tool', { name: 'browser_setup', args: { action: 'autoConnect', channel: 'stable' } }, ctx)), /reviewed npx/)
+    await tools.resetDynamicAndWait()
   }
+  assert.equal(connect.mock.callCount(), 0)
+}))
+
+test('adapter defense rejects selected-page tools and missing/malformed page IDs, generic MCP unaffected', () => {
+  const page = { name: 'click', description: '', inputSchema: { type: 'object', properties: { pageId: { type: 'number' } }, required: ['pageId'] } }
+  assert.equal(chromeToolAllowed(config, { ...page, name: 'select_page' }), false)
+  assert.throws(() => validateChromeCall(config, { ...page, name: 'select_page' }, { pageId: 1 }), /disabled/)
+  for (const pageId of [undefined, null, '1', -1, 0.5, Infinity, NaN]) assert.throws(() => validateChromeCall(config, page, { pageId }), /pageId/)
+  validateChromeCall(config, page, { pageId: 1 })
+  assert.throws(() => chromeToolAllowed(config, { ...page, inputSchema: { type: 'object', properties: {} } }), /required pageId/)
+  validateChromeCall({ ...config, name: 'generic' }, { ...page, name: 'select_page' }, {})
 })

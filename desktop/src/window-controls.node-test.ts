@@ -85,6 +85,12 @@ test('desktop windows are frameless with no overlay or native application menu',
   assert.deepEqual(calls, [['application-menu', null], ['remove-window-menu']])
 })
 
+test('development main window uses the DEV PNG shared with the tray', () => {
+  const options = framelessWindowOptions('preload.cjs', false)
+  assert.equal(options.icon, fileURLToPath(new URL('../assets/icon-dev.png', import.meta.url)))
+  assert.equal(framelessWindowOptions('preload.cjs', true).icon, desktopIconPath())
+})
+
 test('validated Main window commands minimize, maximize, restore and close', () => {
   const window = new FakeWindow()
   const ipc = new FakeIpc()

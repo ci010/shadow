@@ -22,7 +22,7 @@ export function secureWebPreferences(preloadPath: string): WebPreferences {
   }
 }
 
-export function framelessWindowOptions(preloadPath: string): BrowserWindowConstructorOptions {
+export function framelessWindowOptions(preloadPath: string, packaged = true): BrowserWindowConstructorOptions {
   return {
     width: 1280,
     height: 800,
@@ -30,7 +30,8 @@ export function framelessWindowOptions(preloadPath: string): BrowserWindowConstr
     minHeight: 600,
     show: false,
     frame: false,
-    icon: desktopIconPath(),
+    // Use the same DEV branding as the tray rather than the Electron executable icon.
+    icon: desktopTrayIconPath(packaged),
     webPreferences: secureWebPreferences(preloadPath),
   }
 }

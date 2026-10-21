@@ -656,10 +656,10 @@ can exceed the request deadline even on a healthy connection. For idle checks,
 record state/time and inspect later with a short call, rather than sleeping
 inside one RPC. MCP-declared text errors retain their JSON envelope and explicit
 failure status.
-The project browser tries its configured preferred port range first, then uses
-bounded OS-assigned candidates if that whole range is occupied or OS-reserved.
-An explicitly requested port never silently changes. Existing listeners are not
-reused or terminated; browser profiles and process ownership stay project-scoped.
+The user selects a running browser through browser_setup: Chrome 144+ authorized
+autoConnect or explicit already-enabled loopback CDP attachment. Shadow never
+allocates/scans ports, launches browsers or copies profiles. Bindings are session-only;
+CDP is browser-wide, not profile isolation. Page operations require explicit pageId.
 
 ### MCP read-only policy and execution ordering
 
@@ -711,7 +711,7 @@ The built-in `browser_setup list` only inspects session-owned instance metadata.
 Its validated `close` action is a separate cleanup control, not a read-only
 browser command. Closing cannot resume or accept Work, reconcile
 earlier effects, launch a browser or acquire another session's instance. Attached
-targets are only disconnected; owned browsers are terminated. Project, tool-role,
+targets and autoConnect browsers are only disconnected, never terminated. Project, tool-role,
 leaf-call and cancellation checks still apply. No other MCP/browser operation
 inherits ownership or cancellation permission.
 Native cleanup metadata cannot be supplied by external MCP annotations or model

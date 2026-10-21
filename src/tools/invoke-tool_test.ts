@@ -54,7 +54,7 @@ test('invoke_tool executes active dynamic tools without exposing them', async ()
   assertEquals(
     await lazyInvoke.execute(
       { name: 'dynamic_echo', args: { value: 'lazy first invoke' } },
-      { tools: lazySession } as ExecutionContext,
+      { tools: lazySession, signal: new AbortController().signal } as ExecutionContext,
     ),
     'lazy first invoke',
   )

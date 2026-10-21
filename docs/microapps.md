@@ -60,8 +60,10 @@ changes. Cancellation and custom replies pause testing. Cancelling this host
 confirmation does not cancel unrelated conversation work.
 
 Continuing queues a runtime event to the original author through SessionManager.
-`micro_app test` opens the approved app in a fresh, session-owned managed browser,
-returning an instance handle rather than a launch ticket. Normal browser tools,
+`micro_app test` requires an explicit owner-held browser_setup binding and opens
+the approved app in a new page there, returning the binding and pageId rather than
+a launch ticket. It never launches a browser; multiple bindings require reducing
+to one unambiguous choice before this handoff. Normal browser tools,
 role and exact-version owner checks remain in force. Work notes are not an
 execution prerequisite. An owner-opened runtime is not
 taken over or stopped by the author: the owner stops it first. Tests consume agent calls and any app calls they make

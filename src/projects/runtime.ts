@@ -8,7 +8,6 @@ import type { FolderRegistry } from '../folders/registry.ts'
 import type { ProjectCatalog } from './catalog.ts'
 import type { ProjectConfigStore } from './config-store.ts'
 import type { ProjectRecord } from './contracts.ts'
-import type { ChromePortAllocator } from '../browser/chrome-manager.ts'
 import type { RealtimeHub } from '../realtime/hub.ts'
 import type { ComputerService } from '../computer/service.ts'
 
@@ -25,7 +24,6 @@ export interface ProjectRuntimeDependencies {
   configStore: ProjectConfigStore
   mainCluster: MainCluster
   copilotAuth: CopilotAuthenticator
-  chromePortAllocator: ChromePortAllocator
   authorize: (request: Request) => boolean | Promise<boolean>
   realtimeHub?: RealtimeHub
   computer?: ComputerService

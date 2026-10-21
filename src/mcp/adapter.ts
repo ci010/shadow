@@ -1,3 +1,4 @@
+import { validateChromeCall } from '../browser/chrome-contract.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { Tool, ToolParameters, ToolResult } from '../tools/tool.ts'
 import type { McpConnection, McpToolInfo } from './client.ts'
@@ -42,6 +43,7 @@ export class McpToolAdapter implements Tool<ToolResult> {
   }
 
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<ToolResult> {
+    validateChromeCall(this.connection.config, this.toolInfo, args)
     return this.connection.callTool(this.toolInfo.name, args, context.signal)
   }
 }

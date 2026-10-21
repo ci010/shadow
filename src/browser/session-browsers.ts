@@ -1,9 +1,8 @@
-import type { BrowserLaunchOptions } from './chrome-manager.ts'
 import type { SessionTools } from '../tools/registry.ts'
 
 export type BrowserTarget =
-  | { mode: 'launch'; options: BrowserLaunchOptions }
-  | { mode: 'attach'; endpoint: string; argument: string }
+  | { mode: 'attach'; endpoint: string; arguments: string[] }
+  | { mode: 'autoConnect'; channel: 'stable' | 'beta' | 'dev' | 'canary'; userDataDir?: string; arguments: string[] }
 
 export interface BrowserInstance {
   id: string
@@ -27,7 +26,7 @@ export function attachmentTarget(endpoint: string): BrowserTarget {
   if (!websocket && (url.pathname !== '/' || url.search)) {
     throw new Error('An HTTP CDP endpoint must be an origin, without a path or query')
   }
-  return { mode: 'attach', endpoint: url.href, argument: `--${websocket ? 'wsEndpoint' : 'browserUrl'}=${url.href}` }
+  return { mode: 'attach', endpoint: url.href, arguments: [`--${websocket ? 'wsEndpoint' : 'browserUrl'}=${url.href}`] }
 }
 
 /** Each instance owns a separate adapter registry, preserving canonical MCP names and schemas. */
@@ -82,7 +81,7 @@ export class SessionBrowsers {
     if (!instances.length && tools.dynamicOwner !== tools) {
       return 'Error: no browser instance is available to borrow. Ask the owning session to initialize its browser first.'
     }
-    return instances[0] ?? this.create(tools, { mode: 'launch', options: {} })
+    return instances[0] ?? 'Error: no browser binding. Read browser_setup and use action discover to guide the user, then explicitly connect. Shadow never launches a browser.'
   }
 
   async close(tools: SessionTools, instance: BrowserInstance): Promise<void> {

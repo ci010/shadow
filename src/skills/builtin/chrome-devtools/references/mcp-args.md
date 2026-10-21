@@ -1,82 +1,95 @@
-# Chrome DevTools MCP — Managed Startup Options
+# Chrome DevTools MCP — Connection contract
 
-Read this only when diagnosing startup/configuration failures. Browser actions
-use `search` and `invoke_tool`, not a CLI. Live tool schemas, not startup flags,
-define the available actions and arguments.
+Browser actions use discovered tools, not shell-launched adapters. The built-in
+adapter is pinned to `chrome-devtools-mcp@1.10.1`; upgrading requires reviewing
+routing, schemas and disconnect behavior. This is not a promise about arbitrary
+custom MCP servers or host commands.
 
-## Explicit session setup
+## User-owned connections
 
-Discover `browser_setup` through global tool search or invoke its known ID.
-`{ action: "launch", browser: "edge" | "brave" | "chrome" | "default" }` selects a
-browser; use `executablePath` instead of `browser` for an explicit executable.
-Explicit selections fail without fallback. Launch exclusively rents one persistent
-Project slot (default 3 total across browser types; tools.chrome.slotCount: 1–16).
-First use snapshots the selected browser user profile read-only; subsequent uses
-reuse that copy, never write it back. Idle slots rotate; executable identities do
-not mix. Capacity failure never evicts or deletes. Attach rents no slot.
-Release requires confirmed owned-process exit. Failed stops/unknown startup or
-cancellation leave a durable lease quarantined across restart. Do not auto-kill
-old processes or clear leases based only on PID absence. Recovery requires stopped
-managers and operator verification that no browser uses the slot before clearing
-stale lease/lock directories. Old UUID profiles are retained, not migrated/deleted.
-Changing the persisted slot cap requires explicit offline migration; restore the
-recorded slotCount if configuration disagrees. Setup never changes configuration.
+Start with browser_setup discover. Ask which running browser and human profile
+to share, and explain browser-wide CDP access (not profile isolation).
 
-`{ action: "attach", endpoint }` accepts only loopback HTTP(S)/WS(S) CDP endpoints,
-including preenabled compatible Electron targets. For example,
-`http://127.0.0.1:9222` or `ws://127.0.0.1:9222/devtools/browser/...`.
-This is separate from startup/import flags. Setup connects/lists live contracts,
-not business tool RPCs, and returns an opaque `instance` ID with
-`source: "v:tools/chrome-devtools"`, `mode`, `owned`, and `ready`.
+- Chrome 144+: the user enables remote debugging at
+  `chrome://inspect/#remote-debugging` and approves the Chrome connection prompt.
+  Bind `autoConnect` with explicitly chosen stable/beta/dev/canary channel.
+  Optional absolute `userDataDir` is a user-identified data root, not a profile
+  selector. Auto-connect reads DevToolsActivePort; it does not launch Chrome.
+- Alternatively attach an already-enabled loopback HTTP(S) origin or browser
+  WebSocket endpoint, including compatible Edge/Brave/Electron. Examples:
+  `http://127.0.0.1:9222`, `ws://127.0.0.1:9222/devtools/browser/...`.
+- Chrome 136+ ignores command-line remote-debugging-port/pipe for its default
+  data directory. Do not bypass this with profile copies, another process sharing
+  the directory, or an agent-initiated restart. Do not scan ports or enable debugging.
 
-Scope searches to `v:tools/chrome-devtools/<instance>`; `search` has no instance parameter.
-Pass `instance` at the top level of `invoke_tool` requests.
-Omitting it on invocation is allowed with one instance, not with two or more; there is no
-mutable current browser or fallback for invalid/other-session IDs. Without setup,
-automatic lazy default launch remains available in an owning session. Use `{ action: "list" }` or
-`{ action: "close", instance }` through `browser_setup` to manage instances.
-Close/sleep/reset releases owned instances but only disconnects attached targets,
-never kills them. Blocking leaf calls/snapshots borrow the owner's instance IDs
-and may interact/list, not launch/attach/close; ordinary tasks/sessions stay
-independent. Without an existing owner browser, automatic discovery/invocation
-fails asking the owner to initialize first, never creates a persistent resource
-in a leaf.
+Setup loads MCP contracts without browser business RPCs. `ready` means adapter
+ready, not verified browser/profile identity. On first browser operation Chrome
+may ask the user to authorize access. Use list_pages to check the intended target.
+If incorrect, disconnect and ask the user, never silently switch browsers.
 
-Global VFS search lists already-loaded browser contract paths under their
-instance IDs without reconnecting. Uninitialized browser sources stay deferred;
-use browser_setup, not search, to initialize them.
+Bindings last until close/sleep/reset and are inspectable with setup list. These
+operations disconnect MCP only; the browser stays user-owned. Reconnect using the
+same still-approved choice without repeating OS setup unless needed; reconfirm
+changed scope/target. No global browser permission or sensitive binding is saved.
+Leaf calls borrow bindings but cannot connect or disconnect them.
 
-## Managed startup imports
+## Routing and imports
 
-Import arguments and `.chrome-devtools.json` accept
-only `--remote-debugging-port` (1-65535, consumed by the allocator), and these
-boolean switches: `--usage-statistics`, `--performance-crux`,
+Every page tool requires an explicit integer pageId. select_page is hidden and
+rejected; incompatible schemas fail closed, with no implicit selection fallback.
+list_pages, new_page and offline heap-analysis tools are browser-independent of
+a preexisting pageId. Tool registry isolation does not isolate browser state.
+
+Import/preload arguments and `.chrome-devtools.json` accept only these boolean
+capability/telemetry flags: `--usage-statistics`, `--performance-crux`,
 `--category-emulation`, `--category-performance`, `--category-network`.
-Camel-case aliases and `--no-` variants are also accepted; boolean values may
-use `=true` or `=false`. Omit the port for automatic allocation.
+Camel-case aliases and `--no-` variants are accepted; values may use `=true` or
+`=false`. All connection, port, executable, profile, slim and routing flags are
+rejected; use browser_setup for explicit connection binding. Startup arguments
+are fixed per binding. Empty Chrome preloads require an existing owner binding.
 
-All other flags are rejected, including external endpoints, auto-connect,
-custom profiles, executable/launch flags, and unknown future options. Use explicit
-`browser_setup` for session launch/attach, not raw flags. The Project's
-`tools.chrome.executablePath` remains a configured default.
-This controls the built-in adapter, not arbitrary host commands or custom MCPs.
-Startup import/preload arguments are pinned per instance; changing them cannot
-silently create another browser. Empty
-`preload_tools: { "chrome-devtools": [] }` remains supported.
+## Migration and recovery
 
-## Recovery
+The former slot pool and launch/profile-copy mechanism are removed. Old user data,
+profiles and leases are not deleted or migrated and old processes are not killed.
+Remove obsolete `tools.chrome` fields (only an empty compatibility object remains),
+and remove obsolete port/launch/profile flags from adapter configuration/preloads.
+Configuration errors fail explicitly, not by falling back to a fresh browser.
 
-Use automatic port allocation unless the task requires a specific free port.
-If a launch port is occupied, use automatic allocation; never implicitly attach
-the existing process. Attaching requires an explicit setup request and a
-preenabled loopback CDP endpoint.
+Use structured MCP failure diagnostics. An incompatible tool schema requires a
+compatibility review, not disabling page routing or using slim. Do not silently
+change disabled categories or telemetry settings. Generic MCP configuration is a
+separate task covered by `v:skills/mcp-config`.
 
-If an expected tool is absent from a successful complete source listing, check
-whether its category has been disabled in the managed configuration and report
-that limitation. Do not silently change category or telemetry settings.
+## Evidence and limits
 
-Upstream may support additional flags, but that does not make them permissible
-in a Project runtime. Do not run a separate server, use `--help` to infer browser
-action syntax, or manually copy host profiles to work around a managed configuration
-error. Managed launch performs its own read-only profile snapshot; copy/lock
-failures must be resolved explicitly, not bypassed with a blank profile. External MCP setup is a different task covered by `v:skills/mcp-config`.
+- Reviewed installed 1.10.1: `build/src/config/mcp-options.js` (pageIdRouting)
+  and page-tool definitions/ToolHandler (explicit pageId). Shadow validates live
+  schemas in addition to pinning.
+- In that release, `build/src/BrowserManager.js:172-179` returns `#connect()`
+  when autoConnect is true; only the alternative branch launches. Lines 268-345
+  read a supplied data root's `DevToolsActivePort`, construct a loopback endpoint,
+  and call puppeteer.connect. Read/connection failures throw, without a launch
+  fallback. Lines 346-363 disconnect connected browsers instead of closing them.
+- `build/src/index.js:115-119` registers schemas from createTools during init;
+  browser acquisition is deferred to getContext at lines 155-156, used by tool
+  handlers. initialize/tools/list alone therefore does not acquire a browser.
+- Upstream connection guide: https://github.com/ChromeDevTools/chrome-devtools-mcp#connecting-to-a-running-chrome-instance
+- Chrome default-directory change: https://developer.chrome.com/blog/remote-debugging-port
+
+`src/browser/chrome-package_test.ts` is an opt-in offline compatibility test:
+set `SHADOW_CHROME_MCP_PACKAGE_DIR` to an already installed 1.10.1 package root.
+It verifies the package version and starts its Node adapter explicitly configured
+for loopback port 1, with telemetry disabled; only initialize/tools/list execute.
+The full default set (30 upstream tools, 29 exposed) and all eight combinations of
+the supported emulation/performance/network category switches are checked. A second
+test exercises the actual BrowserManager with synthetic DevToolsActivePort data
+and mocked Puppeteer connect/launch, proving failure does not fall back to launch.
+Without the environment variable these tests explicitly skip, never download.
+
+Other lifecycle tests mock MCP connections. No tests here verify actual Chrome
+consent UI, OS-specific channel discovery, browser-wide profile visibility or live
+CDP behavior. App handoff failures preserve the shared binding; only a positively
+identified new page is eligible for cleanup under the caller's close_page permission.
+Unknown page creation outcomes are left for inspection, never resolved by disconnecting
+or closing unrelated pages.

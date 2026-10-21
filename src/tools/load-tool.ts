@@ -12,7 +12,6 @@ import type { McpServerConfig } from '../config/schema.ts'
 import type { Tool as TypedTool, ToolParameters, ToolResult } from './tool.ts'
 type Tool = TypedTool<ToolResult>
 import { toolInvocationContract, type SessionTools } from './registry.ts'
-import type { ChromeManager } from '../browser/chrome-manager.ts'
 import { executeScript } from '../script-runtime/runtime.ts'
 import { assertImportPolicy } from '../script-runtime/module-policy.ts'
 import { bindScriptTools } from '../script-runtime/bridge.ts'
@@ -23,6 +22,7 @@ import type { Skill } from '../skills/loader.ts'
 import { readSkillDirectory } from '../skills/edit-store.ts'
 import { parseSkillFile } from '../skills/parse.ts'
 import { SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
+import { CHROME_MCP_PACKAGE, chromeToolAllowed } from '../browser/chrome-contract.ts'
 import { BrowserSetupTool } from './browser-setup.ts'
 import type { VirtualEntry, VirtualListOptions } from '../vfs/virtual-fs.ts'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js'
@@ -56,11 +56,7 @@ export interface McpLoadable {
    * The connection cache key is derived from the shared entry's config name.
    */
   sharedConn?: McpLoadable
-  /**
-   * When set, this entry uses the ChromeManager for auto-launching Chrome
-   * and allocating ports/user-data-dirs before connecting the MCP server.
-   */
-  chromeManager?: ChromeManager
+
 }
 
 export type LoadableEntry = Tool | McpLoadable | FactoryLoadable | ScriptLoadable
@@ -152,28 +148,13 @@ async function readConfigArgs(configPath: string, strict = false): Promise<strin
 const VIRTUAL_TOOLS_PREFIX = 'v:tools/'
 
 /** Only reviewed non-connection switches may reach the managed browser adapter. */
-function managedChromeArgs(args: string[]): { args: string[]; port?: number } {
-  const forwarded: string[] = []
-  let port: number | undefined
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]
-    const separator = arg.indexOf('=')
-    const flag = separator < 0 ? arg : arg.slice(0, separator)
-    const value = separator < 0 ? undefined : arg.slice(separator + 1)
-    if (flag === '--remote-debugging-port') {
-      const raw = value ?? args[++i]
-      if (port !== undefined || !raw || !/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > 65535) {
-        throw new Error('Managed Chrome requires one valid remote-debugging-port (1-65535)')
-      }
-      port = Number(raw)
-    } else if (/^--(?:no-)?(?:usage-statistics|usageStatistics|performance-crux|performanceCrux|category-emulation|categoryEmulation|category-performance|categoryPerformance|category-network|categoryNetwork)$/.test(flag) &&
-      (value === undefined || value === 'true' || value === 'false')) {
-      forwarded.push(arg)
-    } else {
-      throw new Error('Project Chrome imports accept only a managed remote-debugging-port and reviewed capability/telemetry switches; use browser_setup for browser selection or explicit CDP attachment, never raw connection/profile flags')
+function managedChromeArgs(args: string[]): { args: string[] } {
+  for (const arg of args) {
+    if (!/^--(?:no-)?(?:usage-statistics|usageStatistics|performance-crux|performanceCrux|category-emulation|categoryEmulation|category-performance|categoryPerformance|category-network|categoryNetwork)(?:=(?:true|false))?$/.test(arg)) {
+      throw new Error('Chrome accepts only reviewed capability/telemetry switches. Routing cannot be disabled; slim, launch, port and profile flags are forbidden. Use browser_setup for explicit connection binding.')
     }
   }
-  return { args: forwarded, port }
+  return { args }
 }
 
 function selectedAppPage(result: ToolResult, origin: string): number {
@@ -205,7 +186,6 @@ export class ImportTool implements Tool {
   private readonly imports = new WeakMap<SessionTools, Promise<unknown>>()
   private readonly scope = getProjectScope()
   private readonly projectId?: string
-  private readonly browserKeys = new WeakMap<SessionTools, Map<string, string>>()
   private readonly browsers = new SessionBrowsers()
   readonly name = 'import_tool'
   readonly supportsRemoteWorkdir = true
@@ -236,14 +216,14 @@ export class ImportTool implements Tool {
   constructor(
     private loadable: Map<string, LoadableEntry>,
     private workspace: string,
-    private chromeManager?: ChromeManager,
+    browserProjectId?: string,
     private getSkillDirectory: SkillDirectoryResolver = () => undefined,
     private mcpIndex = new McpToolIndex(workspace),
     private canLoad?: (entry: LoadableEntry) => boolean,
   ) {
     this.builtins = new Map(loadable)
-    this.projectId = this.scope?.projectId ?? chromeManager?.projectId
-    if (this.scope && chromeManager && chromeManager.projectId !== this.projectId) {
+    this.projectId = this.scope?.projectId ?? browserProjectId
+    if (this.scope && browserProjectId && browserProjectId !== this.projectId) {
       throw new Error('Import tool Chrome project binding mismatch')
     }
     if (this.sessionBrowsersEnabled()) {
@@ -276,15 +256,15 @@ export class ImportTool implements Tool {
 
   private sessionBrowsersEnabled(): boolean {
     const entry = this.loadable.get('chrome-devtools')
-    return !!(entry && isMcpLoadable(entry) && this.projectId &&
-      (entry.chromeManager ?? entry.sharedConn?.chromeManager ?? this.chromeManager))
+    return !!(entry && isMcpLoadable(entry) && this.projectId)
   }
 
   private browserReceipt(instance: BrowserInstance) {
     return {
       instance: instance.id, source: 'v:tools/chrome-devtools', mode: instance.target.mode,
-      owned: instance.target.mode === 'launch', ready: instance.ready,
-      ...(instance.target.mode === 'launch' ? instance.target.options : { endpoint: instance.target.endpoint }),
+      owned: false, ready: instance.ready, binding: instance.target,
+      lifetime: 'Session only; sleep/reset disconnects and forgets this binding. Browser remains user-owned.',
+      scope: 'Browser-wide CDP access, not profile isolation. pageId addresses a page only.',
       usage: 'Search with handler "glob" or "grep" and path "v:tools/chrome-devtools/<instance>". Pass instance to invoke_tool({name:"chrome-devtools__...",instance,args:{...}}).',
     }
   }
@@ -301,9 +281,11 @@ export class ImportTool implements Tool {
     const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
     return this.withImports(context.tools.dynamicOwner, signal, async () => {
       signal.throwIfAborted()
-      const instance = this.browsers.create(context.tools, { mode: 'launch', options: {} })
+      const instance = this.browsers.resolve(context.tools)
+      if (typeof instance === 'string') throw new Error(instance)
       let phase = 'managed browser setup'
       let setupFailure: string | undefined
+      let pageId: number | undefined
       try {
         const imported = await this.withImports(instance.tools, signal, () =>
           this.loadByName('chrome-devtools', instance.tools, [], { signal, cwd: context.cwd ?? this.workspace }))
@@ -327,7 +309,6 @@ export class ImportTool implements Tool {
             return { connected: true };
           }` },
         ]
-        let pageId: number | undefined
         // Private handoff stays inside this admitted native operation, outside tool hooks/transcripts.
         // Subsequent agent interactions use the normal invoke_tool gateway and its Work guard.
         for (let i = 0; i < tools.length; i++) {
@@ -346,10 +327,27 @@ export class ImportTool implements Tool {
         signal.throwIfAborted()
         return { ...this.browserReceipt(instance), pageId }
       } catch {
+        // This is a borrowed existing binding, not a temporary browser resource.
+        // A navigation/SDK failure must not disconnect unrelated pages or their RPCs.
+        // Do not guess which page to close after an ambiguous new_page outcome.
+        // Clean up only the page positively identified as created by this handoff,
+        // using the caller's existing close_page permission. A cancelled/expired
+        // binding or unknown new_page outcome is left for explicit inspection.
+        if (pageId !== undefined && !signal.aborted && instance.active &&
+          context.tools.canUseDynamic('chrome-devtools__close_page')) {
+          const close = instance.tools.activeDynamicTools().find(tool => tool.name === 'chrome-devtools__close_page')
+          if (close instanceof McpToolAdapter) {
+            const args = { pageId }
+            const validate = new AjvJsonSchemaValidator().getValidator(close.parameters as JsonSchemaType)
+            if (validate(args).valid) {
+              try { await close.execute(args, { ...context, signal, tools: instance.tools }) }
+              catch { /* Keep the original sanitized failure; never disconnect the shared binding. */ }
+            }
+          }
+        }
         // Adapter errors can echo the private launch URL. Never return them to the model.
-        await this.browsers.close(context.tools, instance)
         signal.throwIfAborted()
-        throw new Error(`Could not open the approved app during ${phase}. ${setupFailure ?? 'Inspect app status and browser availability; the app may still be running.'}`)
+        throw new Error(`Could not open the approved app during ${phase}. ${setupFailure ?? 'Inspect app status and browser availability; the app and its new page may still be open. The existing browser binding is retained.'}`)
       }
     })
   }
@@ -539,7 +537,7 @@ export class ImportTool implements Tool {
               signal.throwIfAborted()
               if (indexed) {
                 for (const info of indexed.tools) {
-                  if (!entry.toolFilter || entry.toolFilter.has(info.name)) add(mcpToolContract(entry.config, info), undefined, indexed.indexedAt)
+                  if (chromeToolAllowed(entry.config, info) && (!entry.toolFilter || entry.toolFilter.has(info.name))) add(mcpToolContract(entry.config, info), undefined, indexed.indexedAt)
                 }
               } else {
                 warning = 'Tool metadata is not indexed. Read v:skills/mcp-config for indexing, or initialize built-in browser sources with browser_setup. Search never connects services.'
@@ -674,16 +672,11 @@ export class ImportTool implements Tool {
     }
     const entry = source.startsWith(VIRTUAL_TOOLS_PREFIX) ? this.loadable.get(source.slice(VIRTUAL_TOOLS_PREFIX.length)) : undefined
     if (entry && isMcpLoadable(entry)) {
-      const manager = entry.chromeManager ?? entry.sharedConn?.chromeManager ?? this.chromeManager
-      if ((entry.config.name === 'chrome-devtools' || entry.chromeManager || entry.sharedConn?.chromeManager) &&
-        context.projectId !== (this.projectId ?? manager?.projectId)) {
-        return 'Error: import tool Chrome project binding mismatch'
-      }
-      if (entry.config.name === 'chrome-devtools' && this.projectId) {
+      if (entry.config.name === 'chrome-devtools') {
+        if (context.projectId !== this.projectId) return 'Error: import tool Chrome project binding mismatch'
         const scope = getProjectScope()
-        if (!manager || manager.projectId !== this.projectId || this.scope?.closed ||
-          (scope && (scope.projectId !== this.projectId || (this.scope && scope !== this.scope)))) {
-          return 'Error: project Chrome requires its own runtime-managed browser'
+        if (this.scope?.closed || (scope && (scope.projectId !== this.projectId || (this.scope && scope !== this.scope)))) {
+          return 'Error: Chrome Project binding mismatch or expired runtime.'
         }
       }
     }
@@ -824,86 +817,31 @@ export class ImportTool implements Tool {
       ? `${connOwner.config.name}:${extraCliArgs.join(',')}`
       : connOwner.config.name
 
-    const chromeManager = entry.chromeManager ?? connOwner.chromeManager ??
-      (connOwner.config.name === 'chrome-devtools' ? this.chromeManager : undefined)
-    const scope = getProjectScope()
-    const projectId = this.projectId ?? scope?.projectId ?? chromeManager?.projectId
-    const managedChrome = projectId !== undefined &&
-      (chromeManager !== undefined || connOwner.config.name === 'chrome-devtools' ||
-        name === 'chrome-devtools')
-    if (managedChrome && (!chromeManager || chromeManager.projectId !== projectId ||
-      (scope && (scope.projectId !== projectId || (this.scope && scope !== this.scope))) ||
-      this.scope?.closed)) {
-      return 'Error: project Chrome requires its own runtime-managed browser'
+    const managedChrome = connOwner.config.name === 'chrome-devtools' || name === 'chrome-devtools'
+    if (managedChrome && (this.scope?.closed || (this.scope && getProjectScope() !== this.scope))) {
+      return 'Error: Chrome Project binding mismatch or expired runtime.'
     }
     let configArgs: string[]
     try {
       const configPath = entry.configPath ?? connOwner.configPath
       configArgs = configPath ? await readConfigArgs(configPath, managedChrome) : []
     } catch (error) {
-      return `Error loading project Chrome config: ${error instanceof Error ? error.message : String(error)}`
+      return `Error loading Chrome config: ${error instanceof Error ? error.message : String(error)}`
     }
     let effectiveArgs = [...(connOwner.config.args ?? []), ...configArgs, ...extraCliArgs]
-    if (managedChrome && chromeManager) {
-      let parsed: ReturnType<typeof managedChromeArgs>
+    if (managedChrome) {
       try {
         const [packageName, ...baseArgs] = connOwner.config.args ?? []
         if (connOwner.config.transport !== 'stdio' || connOwner.config.url ||
-          !packageName || !/^chrome-devtools-mcp(?:@[a-zA-Z0-9.*^~+-]+)?$/.test(packageName)) {
-          throw new Error('Project Chrome requires the built-in managed Chrome DevTools adapter')
+          connOwner.config.command !== 'npx' || packageName !== CHROME_MCP_PACKAGE) {
+          throw new Error(`Chrome requires the reviewed npx ${CHROME_MCP_PACKAGE} adapter`)
         }
-        parsed = managedChromeArgs([...baseArgs, ...configArgs, ...extraCliArgs])
-        effectiveArgs = [packageName, ...parsed.args]
+        const parsed = managedChromeArgs([...baseArgs, ...configArgs, ...extraCliArgs])
+        const instance = this.browsers.forTools(sessionTools)
+        if (!instance) throw new Error('No browser binding. Use browser_setup discover, then explicitly connect.')
+        effectiveArgs = [packageName, ...parsed.args, '--page-id-routing', ...instance.target.arguments]
       } catch (error) {
-        return `Error loading project Chrome: ${error instanceof Error ? error.message : String(error)}`
-      }
-      const instance = this.browsers.forTools(sessionTools)
-      if (instance?.target.mode === 'attach') {
-        if (parsed.port !== undefined) return 'Error: an attached browser cannot use a managed remote-debugging-port.'
-        effectiveArgs.push(instance.target.argument)
-      } else {
-        let keys = this.browserKeys.get(sessionTools)
-        if (!keys) {
-          keys = new Map()
-          this.browserKeys.set(sessionTools, keys)
-        }
-        let key = keys.get(connKey)
-        if (!key) {
-          key = crypto.randomUUID()
-          keys.set(connKey, key)
-          const allocationKey = key
-          sessionTools.onReset(async () => {
-            keys.delete(connKey)
-            await chromeManager.release(allocationKey)
-          })
-        }
-        const result = await chromeManager.allocate(key, parsed.port, undefined,
-          instance?.target.mode === 'launch' ? instance.target.options : undefined, options.signal)
-        if ('error' in result) return `Error launching project Chrome: ${result.error}`
-        effectiveArgs.push(...result.extraArgs)
-      }
-    } else if (chromeManager) {
-      // Check if port/user-data-dir were explicitly provided
-      const hasExplicitPort = effectiveArgs.some((a) => a.startsWith('--remote-debugging-port='))
-      const hasExplicitDir = effectiveArgs.some((a) => a.startsWith('--user-data-dir='))
-      const hasBrowserUrl = effectiveArgs.some((a) => a.startsWith('--browserUrl='))
-
-      if (!hasBrowserUrl) {
-        const explicitPort = hasExplicitPort
-          ? parseInt(effectiveArgs.find((a) => a.startsWith('--remote-debugging-port='))!.split('=')[1])
-          : undefined
-        const explicitDir = hasExplicitDir
-          ? effectiveArgs.find((a) => a.startsWith('--user-data-dir='))!.split('=')[1]
-          : undefined
-
-        const result = await chromeManager.allocate(connKey, explicitPort, explicitDir)
-        if ('error' in result) {
-          return `Chrome auto-launch failed for "${name}":\n${result.error}\n\nTo fix: read("v:skills/chrome-devtools") for manual setup instructions.`
-        }
-        // Inject --browserUrl into effective args
-        effectiveArgs.push(...result.extraArgs)
-        // Register cleanup to release Chrome session on session sleep
-        sessionTools.onReset(() => chromeManager.release(connKey))
+        return `Error loading Chrome: ${error instanceof Error ? error.message : String(error)}`
       }
     }
 
@@ -914,7 +852,7 @@ export class ImportTool implements Tool {
       const adapters = await this.connectMcp(
         { ...connOwner.config, args: effectiveArgs }, connKey, sessionTools, entry.toolFilter, options,
         () => this.loadable.get(name) === entry && this.browsers.forTools(sessionTools)?.active !== false,
-        this.configured.get(name) === entry && !extraCliArgs.length && !chromeManager ? entry.config : undefined,
+        this.configured.get(name) === entry && !extraCliArgs.length && !managedChrome ? entry.config : undefined,
       )
       return adapters
     } catch (error) {
@@ -986,7 +924,7 @@ export class ImportTool implements Tool {
       }
       sessionTools.refreshMcpTools(connKey, JSON.stringify(tools))
       const connection = cached.conn
-      const adapters = tools.filter(tool => !filter || filter.has(tool.name))
+      const adapters = tools.filter(tool => chromeToolAllowed(config, tool) && (!filter || filter.has(tool.name)))
         .map(tool => new McpToolAdapter(connection, tool))
         .filter(tool => sessionTools.canUseDynamic(tool.name))
       for (const adapter of adapters) sessionTools.registerDynamic(adapter, connKey)
@@ -1032,6 +970,10 @@ export class ImportTool implements Tool {
 
     const results: string[] = []
     for (const config of configs) {
+      if (config.name === 'chrome-devtools' || config.args?.some(arg => arg.includes('chrome-devtools-mcp'))) {
+        results.push('Error: Chrome imports must use the built-in chrome-devtools source and browser_setup connection binding.')
+        continue
+      }
       options.signal.throwIfAborted()
       try {
         const adapters = await this.connectMcp(

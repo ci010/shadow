@@ -10,7 +10,6 @@ import { ProjectCatalog } from '../projects/catalog.ts'
 import { ProjectConfigStore } from '../projects/config-store.ts'
 import { createProjectScope } from '../projects/scope.ts'
 import { CopilotAuthenticator } from '../providers/copilot.ts'
-import { ChromePortAllocator } from '../browser/chrome-manager.ts'
 import { createProjectRuntime } from './main/project-runtime.ts'
 
 test('project becomes locally ready while QQ connects, and shutdown cancels pending connection', { timeout: 15000 }, async t => {
@@ -52,7 +51,7 @@ test('project becomes locally ready while QQ connects, and shutdown cancels pend
   } as unknown as MainCluster
   const starting = scope.run(() => createProjectRuntime(effective, {
     project, home, scope, catalog, configStore, mainCluster: cluster, copilotAuth: new CopilotAuthenticator(),
-    chromePortAllocator: new ChromePortAllocator(), authorize: () => true,
+    authorize: () => true,
   }))
   let timer: ReturnType<typeof setTimeout> | undefined
   try {

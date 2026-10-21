@@ -32,7 +32,6 @@ import { reserveRemoteSessionWorkdirs, type StartupOwnershipStates } from '../..
 import { OtelStore } from '../../otel/store.ts'
 import { initializeNodeTelemetry } from '../../otel/runtime.ts'
 import { otelPlugin } from '../../otel/routes.ts'
-import { ChromePortAllocator } from '../../browser/chrome-manager.ts'
 import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
 import { StartupTimings } from '../startup-timings.ts'
 import { BrowserAuth } from '../../gateway/web-auth.ts'
@@ -116,7 +115,6 @@ export async function startProjectHost(
   let stopping = false
   let activeConfig = config
   const copilotAuth = new CopilotAuthenticatorV2()
-  const chromePortAllocator = new ChromePortAllocator()
   const computer = new ComputerService(createComputerDesktop(), { enabled: options.localExecutor !== false })
   cleanup.push(() => computer.close())
   const authorizeComputer = async (request: Request) => isLoopbackGatewayRequest(request, clientAddresses)
@@ -204,7 +202,7 @@ export async function startProjectHost(
         runtime = await scope.run(() => factory(projectConfig, {
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
-          mainCluster, copilotAuth, chromePortAllocator, authorize, realtimeHub, computer, authorizeComputer,
+          mainCluster, copilotAuth, authorize, realtimeHub, computer, authorizeComputer,
           localExecutor: options.localExecutor !== false,
         }))
         await runtime.ready

@@ -152,7 +152,8 @@ interruption is not evidence that the provider did no work or charged nothing.
 
 Keep an explicit acceptance ledger: implemented, exercised with fixtures,
 exercised through the actual app, blocked by tools, and awaiting owner approval.
-Check the managed browser early for UI work. If it fails, preserve the connection
+Check the explicitly user-approved browser binding early for UI work (see
+`v:skills/chrome-devtools`); browser setup never launches or copies a profile. If it fails, preserve the connection
 diagnostic and report the unverified visual checks; do not call publication a pass.
 Ask only for the missing user decision or permission, not for engineering fixes.
 
