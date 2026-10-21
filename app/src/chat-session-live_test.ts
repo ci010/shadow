@@ -24,9 +24,9 @@ const graph = () => ({ nodes: [], sessions: [
 
 function fixture(t: TestContext, canWrite = false) {
   const subscriptions: Array<{ projectId: string; observer: LiveObserver; closed: boolean }> = []
-  const requests: Array<{ path: string; signal: AbortSignal; finish: (value: unknown) => void }> = []
+  const requests: Array<{ path: string; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: URL, init: RequestInit) => new Promise<Response>(resolve => {
-    requests.push({ path: new URL(url).pathname, signal: init.signal!, finish: value => resolve(Response.json(value)) })
+    requests.push({ path: new URL(url).pathname, signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
   }))
   const pool = { client: (): Pick<LiveClient, 'subscribe'> => ({
     subscribe: (topic, observer) => {
@@ -43,6 +43,9 @@ function fixture(t: TestContext, canWrite = false) {
   const script = compileScript(descriptor, { id: 'chat-session-live' })
   const module = { exports: {} as { default: Vue.Component & { render?: () => null } } }
   const require = createRequire(url)
+  const previousVue = require.extensions['.vue']
+  require.extensions['.vue'] = module => { module.exports = {} }
+  t.after(() => { if (previousVue) require.extensions['.vue'] = previousVue; else delete require.extensions['.vue'] })
   const code = ts.transpileModule(script.content, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText
@@ -534,4 +537,40 @@ test('history loaded in a hidden conversation follows the bottom when opened wit
   await Vue.nextTick()
   await Vue.nextTick()
   assert.equal(container.scrollTop, 100)
+})
+
+
+test('missing/deleted direct conversation recovers to a blank draft without loading foreign context', async t => {
+  const f = fixture(t)
+  const view = f.mount('a')
+  const state = view.state()
+  const loading = state.loadDirectChat()
+  f.requests.find(request => request.path.endsWith('/api/chat/session'))!.finish({ error: 'session_not_found' }, 404)
+  await loading
+  assert.equal(state.activeSessionId, '')
+  assert.equal(state.composerError, '')
+  assert.deepEqual(state.messages, [])
+  assert.ok(view.navigation.includes(''))
+  assert.equal(f.requests.some(request => request.path.endsWith('/context')), false)
+  const before = f.requests.length
+  await state.loadCurrentSession()
+  assert.equal(f.requests.length, before, 'an unsent draft must not request persisted session context')
+  const other = f.mount('b', '')
+  await other.state().loadCurrentSession()
+  assert.equal(other.state().activeSessionId, '')
+  assert.equal(f.requests.length, before, 'a new Project must not recover the old Project session')
+})
+
+test('deleting the current last conversation clears its active identity and navigates to a draft', async t => {
+  const f = fixture(t)
+  const view = f.mount('a')
+  const state = view.state()
+  state.loadSessionList = async () => {}
+  const deleting = state.sessionsDeleted([root])
+  await settle()
+  for (const request of f.requests) request.finish({ nodes: [], sessions: [] })
+  await deleting
+  assert.equal(state.activeSessionId, '')
+  assert.deepEqual(state.messages, [])
+  assert.ok(view.navigation.includes(''))
 })

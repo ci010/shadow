@@ -454,6 +454,11 @@ export class WebChannel extends AbstractChannel {
 
       try {
         const sessionId = `${this.name}:${chatId}`
+        // A draft has no session until prepare/send. Never preview a missing,
+        // deleted or other-Project ID as though it were a real conversation.
+        if (!this.sessionManager!.getSessionState(sessionId)) {
+          return c.json({ error: 'session_not_found' }, 404)
+        }
         const { systemPrompt, tools } = await this.sessionManager!.getContext({
           sessionId,
           channel: this.name,

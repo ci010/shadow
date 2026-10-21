@@ -572,3 +572,28 @@ test('explicit session media refuses remote and unavailable workdirs even when p
     await rm(workspace, { recursive: true })
   }
 })
+
+
+test('web chat context rejects missing IDs before reading context and preserves existing sessions', async () => {
+  const app = new Hono()
+  const reads: string[] = []
+  const channel = new WebChannel(new Bus(), { sessionManager: {
+    getSessionState: (id: string) => id === 'web:existing' ? { sessionId: id } : null,
+    getContext: async ({ sessionId }: { sessionId: string }) => { reads.push(sessionId); return { systemPrompt: 'Existing prompt', tools: [] } },
+    getHistory: async () => ({ messages: [{ role: 'user', content: 'Existing history' }] }),
+    getCommandResults: async () => [], getYieldRecords: async () => [],
+  } as unknown as SessionManager })
+  await channel.start(app)
+  try {
+    for (const id of ['unknown', 'deleted', 'other-project']) {
+      const response = await app.request(`/api/chat/session?chatId=${id}`)
+      assert.equal(response.status, 404)
+      assert.deepEqual(await response.json(), { error: 'session_not_found' })
+    }
+    assert.deepEqual(reads, [])
+    const response = await app.request('/api/chat/session?chatId=existing')
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).systemPrompt, 'Existing prompt')
+    assert.deepEqual(reads, ['web:existing'])
+  } finally { await channel.stop() }
+})

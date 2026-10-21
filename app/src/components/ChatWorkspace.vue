@@ -35,7 +35,7 @@ import type { FolderRecord } from '../folders-client.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
 const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; embedded?: boolean; keyboardActive?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest; automationRun?: boolean }>(), { visible: true, embedded: false, keyboardActive: true })
-const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab] }>()
+const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab] }>()
 const route = useRoute()
 const router = useRouter()
 const workspace = ref<HTMLElement>()
@@ -74,6 +74,7 @@ function closeChild() {
   void nextTick(() => primary.value?.focusConversation())
 }
 function sessionDeleted(id: string) {
+  emit('deleted', id)
   if (childId.value === id || childConversationTarget(primary.value?.allSessions ?? [], childId.value, id)?.primaryId === id) closeChild()
 }
 function startResize(event: PointerEvent) {

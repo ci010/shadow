@@ -71,7 +71,7 @@
         :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
         @project-navigation="tab => projectNavigation(resource, tab)"
         @dashboard-visible="dashboardVisibility.set(resource.key, $event)"
-        @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" />
+        @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" @deleted="deleted(resource.projectId, $event)" />
       </AutomationDetail>
     </div>
     <FolderOwnershipDialog v-if="folderOperation" :key="`${folderOperation.project.id}:${folderOperation.folder.id}:${folderOperation.action}`"
@@ -386,10 +386,7 @@ function prepared(key: string, sessionId: string) {
   }
 }
 function deleted(projectId: string, sessionId: string) {
-  for (let i = registry.resources.length - 1; i >= 0; i--) {
-    const resource = registry.resources[i]
-    if (resource.projectId === projectId && resource.sessionId === sessionId) registry.resources.splice(i, 1)
-  }
+  registry.removeSession({ projectId, sessionId })
   resources.value = [...registry.resources]
   if (selected.value?.projectId === projectId && selected.value.sessionId === sessionId) startDraft(projectId)
 }

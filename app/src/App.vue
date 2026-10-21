@@ -134,6 +134,21 @@ const stopLiveStatus = livePool.observe(statuses => {
 const liveError = computed(() => liveStatuses.value.find(status => status.error)?.error ?? '')
 
 const resolvedBase = computed(() => installationContext.value.apiBase)
+// Dev diagnostics follow only an explicit visible Project; never infer ownership
+// from a log payload or silently attribute host/unscoped logs to a default Project.
+if (import.meta.env.DEV) {
+  const stopWatch = watch(() => typeof route.params.projectId === 'string'
+    ? projectBase(resolvedBase.value, route.params.projectId) : undefined, (base, _old, onCleanup) => {
+    const controller = new AbortController()
+    let stop = () => {}
+    onCleanup(() => { controller.abort(); stop() })
+    if (base) void import('./frontend-log.ts').then(async module => {
+      if (!controller.signal.aborted) stop = await module.startFrontendLog(base, controller.signal)
+    }).catch(() => {})
+  }, { immediate: true })
+  onUnmounted(stopWatch)
+  if (import.meta.hot) import.meta.hot.dispose(stopWatch)
+}
 const contentBase = computed(() => typeof route.params.projectId === 'string' && !workspaceRoutes.includes(String(route.name))
   ? projectBase(resolvedBase.value, route.params.projectId) : resolvedBase.value)
 const showChildRecovery = computed(() =>

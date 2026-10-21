@@ -215,3 +215,18 @@ test('deleting a project forgets only its mounted conversations and drafts', () 
   assert.equal(registry.session(b), b)
   assert.throws(() => registry.prepared(a.key, 'late-session'), /unavailable/)
 })
+
+
+test('deleted last conversation cannot be restored by resources or cross-Project selection', () => {
+  const registry = createConversationResources()
+  const sent = registry.draft('a')
+  registry.prepared(sent.key, 'web:deleted')
+  const other = registry.session({ projectId: 'b', sessionId: 'web:deleted' })
+  registry.removeSession({ projectId: 'a', sessionId: 'web:deleted' })
+  assert.equal(registry.resources.some(resource => resource.projectId === 'a'), false)
+  assert.equal(registry.resources[0], other)
+  const next = registry.draft('a')
+  assert.equal(next.sessionId, '')
+  assert.equal(registry.draft('new-project').sessionId, '')
+  assert.equal(registry.draft('a'), next)
+})

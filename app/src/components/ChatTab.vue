@@ -1983,6 +1983,18 @@ async function loadDirectChat(background = false): Promise<void> {
   if (!background) loadingHistory.value = true
   try {
     const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal })
+    if (controller.signal.aborted) return
+    if (res.status === 404 && activeSessionId.value === sessionId) {
+      // Stale routes/resources (including deletion from another pane) are not
+      // empty persisted conversations. Release their Work/status reads too.
+      if (!props.embedded) {
+        emit('deleted', sessionId)
+        createNewWebChat()
+      } else {
+        composerError.value = t('This child conversation is unavailable. Close it and refresh the conversation list.')
+      }
+      return
+    }
     if (!res.ok) throw new Error(t('Could not load conversation. Refresh to retry.'))
     const data = await res.json()
     if (controller.signal.aborted) return

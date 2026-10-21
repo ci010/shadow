@@ -153,6 +153,7 @@ import { AutomationProfileService } from '../../cron/profile.ts'
 import { SessionProfileService } from '../../sessions/profile.ts'
 import { createStatsHandler } from '../../vfs/stats.ts'
 import { createRuntimeHandler } from '../../vfs/runtime.ts'
+import { FrontendLog, registerFrontendLogRoutes } from '../frontend-log.ts'
 import { RuntimeDiagnosticLog } from '../diagnostic-log.ts'
 
 import { OtelStore } from '../../otel/store.ts'
@@ -922,11 +923,14 @@ export async function createProjectRuntime(
   cleanup.push(() => mcpManager.stop())
 
   // ── Virtual filesystem mounts ─────────────────────────────────────────
+  const frontendLog = new FrontendLog()
+  registerFrontendLogRoutes(app, frontendLog, dependencies.authorize)
+  cleanup.push(() => frontendLog.dispose())
   const runtimeDiagnostics = createRuntimeHandler(
     dependencies.diagnostics ?? new RuntimeDiagnosticLog(), project.id,
     (id, actor) => topics.assertActor(id, actor),
     () => otelStore.queryLogs({ afterId: runtimeLogStartId, limit: 200 }),
-    sessions,
+    sessions, frontendLog,
   )
   vfs.mount('v:runtime', 'read-only runtime logs and current/other Project session prompt/tool debug; read v:runtime for paths, provenance and capture limits', runtimeDiagnostics.read, runtimeDiagnostics.list)
 

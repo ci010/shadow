@@ -477,3 +477,24 @@ test('explicit session storage never aliases Project Home or execution folders, 
   denied = true
   assertEquals((await app.request(`${base}/files`)).status, 404)
 })
+
+
+test('Work status stays Project-bound and returns 404 for missing/deleted sessions without a snapshot', async () => {
+  const app = new Hono()
+  const snapshots: string[] = []
+  const sessions = {
+    projectId: 'a',
+    readSessionState: async (id: string) => id === 'web:existing' ? { sessionId: id, projectId: 'a' } : null,
+    assertHistoricalFolderAccess: async () => {},
+    alignment: { context: (id: string) => { snapshots.push(id); return { records: [], effects: [] } } },
+  } as unknown as SessionManager
+  sessionsApiPlugin(sessions)(app)
+  for (const id of ['unknown', 'deleted', 'other-project']) {
+    assert.equal((await app.request(`/api/sessions/${id}/work`)).status, 404)
+  }
+  assert.deepEqual(snapshots, [])
+  const response = await app.request('/api/sessions/web:existing/work')
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), { records: [], effects: [] })
+  assert.deepEqual(snapshots, ['web:existing'])
+})

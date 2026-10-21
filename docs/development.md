@@ -107,3 +107,38 @@ These changes require rebuilding the app/backend/desktop and relaunching Electro
 (and its owned Main sidecar). Updating only the renderer cannot establish the
 host/sidecar attestation. Development or tests must not log or persist the private
 `SHADOW_DESKTOP_MEDIA_KEY` environment value.
+
+### Frontend console diagnostics (development only)
+
+With backend `NODE_ENV=development` and a Vite development renderer, the agent can
+use `read({ path: "v:runtime/frontend-logs" })` (or offset/limit paging). Read
+`v:runtime` for the live guide. Production does not register ingestion or advertise
+this path, and production renderers do not install hooks. Restart the dev backend
+after updating backend code; reload the renderer after updating frontend code.
+No automatic restart is performed by this feature.
+
+The hook is installed only after an authenticated capability GET succeeds for an
+explicit Project in the visible route. It captures subsequent `console.log`,
+`info`, `warn`, `error`, `window.error` and `unhandledrejection`; not startup output,
+DOM/user inputs or network payloads. It preserves the original console behavior.
+Route changes/unmount/HMR discard the local queue and restore hooks. An unscoped
+route has no capture. A client-generated tab ID is unverified; there is no session
+association. Global console events are associated with the visible route, not
+proven to originate in that Project (including background components).
+
+Ingestion uses existing Project gateway authentication and a Project-owned memory
+ring, never a body-supplied Project ID. `POST /projects/<id>/api/runtime/frontend-logs`
+accepts strict bounded batches; authenticated `DELETE` at the same path clears the
+ring. It retains 200 events, accepts at most 120/minute/Project and 20/request,
+with 4096 characters/event and a 96 KiB request limit. Restart/Project disposal
+clears memory. No OTLP/database/history event is emitted by ingestion. As with any
+agent read, a requested tool result can subsequently become part of normal agent
+conversation history; this is not a secret-storage or zero-retention channel.
+
+Objects are depth/entry bounded, cycles summarized, getters/toJSON not invoked,
+and sensitive field names omitted. URLs and recognizable credentials/header/body
+text are redacted both before sending and on ingestion. Arbitrary freeform logs
+may still contain unlabeled secrets: avoid logging private data. Log text,
+including HTML, newlines and apparent instructions, remains untrusted JSONL data;
+reads do not render HTML or execute browser JavaScript. Failed diagnostic requests
+are silent, are not retried, and cannot recursively log through the hook.

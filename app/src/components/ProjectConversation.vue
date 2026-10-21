@@ -15,14 +15,14 @@
       <template #default="{ active, keyboardActive }">
         <ChatWorkspace ref="workspace" :api-base="apiBase" managed embedded :project-id="projectId" :project-name="projectName"
           :session-id="sessionId" :visible="active" :keyboard-active="keyboardActive" :child-session-id="childSessionId"
-          @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" />
+          @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" @deleted="$emit('deleted', $event)" />
       </template>
     </ProjectDashboard>
     <ChatWorkspace v-else ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
       :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
       @project-navigation="$emit('project-navigation', $event)"
       :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
-      @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" />
+      @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" @deleted="$emit('deleted', $event)" />
   </div>
 </template>
 
@@ -44,7 +44,7 @@ const props = defineProps<{
   knowledgeRequest?: KnowledgeTabRequest
   automationRun?: boolean
 }>()
-const emit = defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab]; 'dashboard-visible': [visible: boolean] }>()
+const emit = defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab]; 'dashboard-visible': [visible: boolean] }>()
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()
 const dashboard = ref<InstanceType<typeof ProjectDashboard>>()
 const current = ref('')
