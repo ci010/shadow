@@ -54,7 +54,7 @@ test('cold-start project context includes empty selection and a bounded folder s
 test('directory discovery is on demand while the selected resource remains identifiable', () => {
   const folders = Array.from({ length: 100 }, (_, i) => folder(i))
   const prompt = provider(folders).getPromptSection({ ...context, folderId: folders.at(-1)!.id }) as string
-  assert.match(prompt, /Selected Project folder \/ registered resource \(metadata\): id="folder-99"/)
+  assert.match(prompt, /Selected Project folder \/ registered resource \(metadata\): identifier="folder-99-folder99" id="folder-99"/)
   assert.match(prompt, /100 registered/)
   assert.equal(prompt.split('\n').filter(line => line.startsWith('- id=')).length, 0)
   assert.doesNotMatch(prompt, /id="folder-8"/)

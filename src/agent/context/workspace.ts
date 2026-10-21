@@ -31,12 +31,13 @@ export function workspaceProvider(
         workdirCapabilityLookup,
       )
       const lines = [
-        '# Current environment',
+        '# Working context',
         '',
         ...(project ? [await projectProvider(project).getPromptSection(ctx) ?? '', ''] : []),
       ]
 
       lines.push('## Execution', '')
+      if (ctx.folderId) lines.push('Selected-folder skill discovery: read v:skills/folder; load a skill with read v:skills/folder/<name>. This supplements Project/global skills and never executes them automatically.', '')
       if (
         locations.workdir.available && locations.workdir.locality === 'local'
       ) {

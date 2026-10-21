@@ -2175,11 +2175,20 @@ ${JSON.stringify(request)}`,
     })
   }
 
+  /** Read-only actual execution paths; remote display paths are deliberately not returned. */
+  getSelfWorkingPaths(sessionId: string): { projectDir: string | null; cwd: string | null } {
+    const state = this.getSessionState(sessionId)
+    if (!state) throw new Error('Session unavailable')
+    const workdir = resolveSessionLocations(this.deps.workspace, state, undefined, this.deps.workdirCapabilityLookup).workdir
+    const cwd = workdir.available && workdir.locality === 'local' ? workdir.path : null
+    return { projectDir: state.folderId ? cwd : null, cwd }
+  }
+
   /** Tool entry point: the caller supplies only its runtime-bound identity, never a target. */
   async updateSelfMetadata(sessionId: string, value: unknown, expected?: string): Promise<void> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected metadata object')
     const patch = value as Record<string, unknown>
-    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['title', 'description', 'completed'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
+    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['title', 'description', 'completed', 'projectDir', 'cwd'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
     const changes: Partial<SessionState> = {}
     if ('title' in patch) {
       if (typeof patch.title !== 'string') throw new TypeError('Title must be text')
@@ -2195,7 +2204,11 @@ ${JSON.stringify(request)}`,
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
       if (!state || this.stopped || this.deleting.has(sessionId) || state.mode === 'call' || state.automation || state.sessionKind === 'orchestrator') throw new Error('Self metadata requires an available ordinary durable session or task')
-      if (expected !== undefined && expected !== JSON.stringify({ title: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '', description: state.description ?? '', completed: state.completed ?? false }, null, 2)) throw new Error('Session metadata changed during editing. Reread v:session/self.json and retry.')
+      const paths = this.getSelfWorkingPaths(sessionId)
+      for (const key of ['projectDir', 'cwd'] as const) {
+        if (key in patch && patch[key] !== paths[key]) throw new Error('Execution paths are read-only. Use use_project to select a registered folder.')
+      }
+      if (expected !== undefined && expected !== JSON.stringify({ ...paths, title: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '', description: state.description ?? '', completed: state.completed ?? false }, null, 2)) throw new Error('Session metadata changed during editing. Reread v:session/self.json and retry.')
       // Fresh task identity is owned by its parent, not by the child's prompt or supplied patch.
       if (state.mode === 'task' && (('title' in patch && patch.title !== (state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '')) || ('description' in patch && patch.description !== (state.description ?? '')))) throw new Error('Task title and description are parent-owned; preserve them unchanged or omit them.')
       if (state.task && 'completed' in patch && patch.completed !== (state.completed ?? false)) throw new Error('Worker completion is a review submission, not acceptance; return a final response instead')

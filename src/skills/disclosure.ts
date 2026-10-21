@@ -17,6 +17,7 @@ const GUIDANCE = [
   'Skills describe reusable workflows. Below is a bounded selection, not the full catalog; omitted skills remain available.',
   '- read("v:skills/<name>") loads instructions and registers that skill\'s frontmatter tools for this session only.',
   '- read("v:skills/<category>") lists skills in a category.',
+  '- read("v:skills/folder") lists current selected-folder skills; read("v:skills/folder/<name>") loads that scoped skill and registers its tools. Switching folders supersedes the old folder scope, not Project/global skills.',
   '- read("v:skills/<name>/<path>") reads bundled resources.',
   'Category/resource reads do not register tools. Reading a skill does not run its code; invocation may run initialization. Sleep clears registrations: read the skill again. TypeScript entrypoints stay inside their owning skill directory.',
 ].join('\n')

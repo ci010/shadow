@@ -22,7 +22,7 @@ const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
 /** Self-limited outputs and structured execution receipts must remain intact. */
-const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative', 'sql', 'authoring_change', 'skill_read'])
+const EXEMPT_TOOLS = new Set(['use_project', 'read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative', 'sql', 'authoring_change', 'skill_read'])
 
 export function toolInvocationContract(tools: Tool[]): string {
   return 'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +

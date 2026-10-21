@@ -55,6 +55,8 @@ export interface LearnedSkillMeta extends SkillMeta {
  * A loaded skill at various levels of detail.
  */
 export interface Skill {
+  /** Host-stamped selected-folder origin; never parsed from frontmatter. */
+  folderScope?: { folderId: string; path: string }
   meta: SkillMeta
   /** Full markdown body (level 2) */
   body: string

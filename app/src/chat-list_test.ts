@@ -113,3 +113,15 @@ test('folder and keyboard chips follow app radius tokens and retain neutral, dis
   assert.match(chip, /font-weight: 500/)
   assert.match(list, /\.session-folder-chip.is-scratch \{[^}]*background: transparent; box-shadow: none/)
 })
+
+
+test('committed folder changes drive sidebar selection and file workbench without browsing mutation', () => {
+  const sidebar = readFileSync(new URL('./components/FoldersSidebar.vue', import.meta.url), 'utf8')
+  const chat = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
+  const workbench = readFileSync(new URL('./components/files/FileWorkbench.vue', import.meta.url), 'utf8')
+  assert.match(sidebar, /:selected="selectedFolderId === group.folder.id"/)
+  assert.match(sidebar, /props.sessions.find\(session => session.sessionId === props.activeSessionId\)\?\.folderId/)
+  assert.match(chat, /:folder-id="activeSessionId \? activeSession\?\.folderId : draft.folder\?\.id"/)
+  assert.match(workbench, /watch\(\(\) => \[props.contextKey, props.folderId\]/)
+  assert.doesNotMatch(sidebar + workbench, /use_project|switchProjectFolder/)
+})

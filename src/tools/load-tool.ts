@@ -62,6 +62,8 @@ export interface McpLoadable {
 export type LoadableEntry = Tool | McpLoadable | FactoryLoadable | ScriptLoadable
 
 interface ScriptLoadable {
+  directory?: string
+  folderScope?: { folderId: string; path: string }
   script: SkillToolDeclaration & { skill: string; admin?: boolean }
   sourceVersion: string
   code: string
@@ -377,7 +379,22 @@ export class ImportTool implements Tool {
     return new Map([...this.loadable, ...(this.skillTools.get(tools) ?? [])])
   }
 
+  /** Drop only this session's selected-folder imports; captured child/in-flight handles retain their scope. */
+  clearFolderSkillTools(tools: SessionTools): void {
+    const entries = this.skillTools.get(tools)
+    if (!entries) return
+    for (const [name, entry] of entries) if (entry.folderScope) {
+      entries.delete(name)
+      tools.unregister(name)
+    }
+  }
+
+  private skillDirectory(entry: ScriptLoadable): SkillDirectoryResolver {
+    return entry.directory ? name => name === entry.script.skill ? entry.directory : undefined : this.getSkillDirectory
+  }
+
   async registerSkillTools(skill: Skill, context: ExecutionContext): Promise<string[]> {
+    if (skill.folderScope && skill.folderScope.folderId !== context.folderId) throw new Error('Folder skill scope changed; read it again in the current folder')
     if (skill.meta.toolsError) throw new Error(`Invalid tools in skill "${skill.meta.name}": ${skill.meta.toolsError}`)
     const declarations = SkillToolDeclarationsSchema.parse(skill.meta.tools ?? {})
     if (Object.keys(declarations).length && context.remoteWorkdir) throw new Error('Skill scripts require a local workdir')
@@ -401,24 +418,24 @@ export class ImportTool implements Tool {
         }
         const previous = current.get(name)
         if (context.tools.has(name) || this.loadable.has(name) || name === 'import_tool' || name === 'install_tool' ||
-          (previous && previous.script.skill !== skill.meta.name) ||
+          (previous && (previous.script.skill !== skill.meta.name || previous.folderScope?.folderId !== skill.folderScope?.folderId)) ||
           (!previous && context.tools.hasDynamic(name))) {
           throw new Error(`Skill tool "${name}" conflicts with an existing tool; choose another frontmatter alias`)
         }
-        const source = await resolveSkillToolSource(skill.meta.name, declaration.source, this.getSkillDirectory)
+        const source = await resolveSkillToolSource(skill.meta.name, declaration.source, skill.folderScope ? name => name === skill.meta.name ? skill.dirPath : undefined : this.getSkillDirectory)
         const sourceVersion = snapshot!.revision
         const code = snapshot!.files[relative(skill.dirPath, source).replaceAll('\\', '/')]?.toString('utf8')
         if (code === undefined) throw new Error('Skill source changed while reading; read the skill again')
         const script = { ...declaration, source, skill: skill.meta.name, admin: skill.meta.admin }
         next.set(name, previous?.resource.active && previous.sourceVersion === sourceVersion && isDeepStrictEqual(previous.script, script)
-          ? previous : { script, sourceVersion, code, resource: { active: true } })
+          ? previous : { script, sourceVersion, code, resource: { active: true }, ...(skill.folderScope ? { directory: skill.dirPath, folderScope: skill.folderScope } : {}) })
       }
       signal.throwIfAborted()
       if (snapshot && readSkillDirectory(skill.dirPath).revision !== snapshot.revision) {
         throw new Error('Skill changed while reading; read the skill again before invoking its tools')
       }
       for (const [name, entry] of current) {
-        if (entry.script.skill === skill.meta.name && next.get(name) !== entry) {
+        if (entry.script.skill === skill.meta.name && entry.folderScope?.folderId === skill.folderScope?.folderId && next.get(name) !== entry) {
           entry.resource.active = false
           current.delete(name)
         }
@@ -784,16 +801,17 @@ export class ImportTool implements Tool {
     }
 
     if (isScriptLoadable(entry)) {
-      await resolveSkillToolSource(entry.script.skill, entry.script.source, this.getSkillDirectory)
+      await resolveSkillToolSource(entry.script.skill, entry.script.source, this.skillDirectory(entry))
       this.assertCurrentSkill(entry)
       if (tools.hasDynamic(name)) return tools.activeDynamicTools().filter(tool => tool.name === name)
       if (extraArgs.length) return 'Error: skill scripts do not accept import-time arguments; pass arguments to invoke_tool.'
       return this.loadScript(entry.script, entry.code, tools, options, name, entry.resource, async context => {
+        if (entry.folderScope && context.folderId !== entry.folderScope.folderId) throw new Error('Folder skill belongs to a superseded working context; read a current skill')
         if (!entry.resource.active) throw new Error('Skill tool registration expired; read the skill again')
         if (entry.script.admin && !context.admin) throw new Error('This skill requires an admin session')
         if (context.remoteWorkdir) throw new Error('Skill scripts require a local workdir')
         if (this.projectId && context.projectId !== this.projectId) throw new Error('Skill tool Project binding mismatch')
-        await resolveSkillToolSource(entry.script.skill, entry.script.source, this.getSkillDirectory)
+        await resolveSkillToolSource(entry.script.skill, entry.script.source, this.skillDirectory(entry))
         this.assertCurrentSkill(entry)
       })
     }
@@ -1014,7 +1032,7 @@ export class ImportTool implements Tool {
 
   private assertCurrentSkill(entry: ScriptLoadable): void {
     if (!entry.resource.active) throw new Error('Skill tool registration expired; read the skill again')
-    const directory = this.getSkillDirectory(entry.script.skill)
+    const directory = this.skillDirectory(entry)(entry.script.skill)
     if (!directory) throw new Error(`Skill "${entry.script.skill}" was not found; read the skill again`)
     if (readSkillDirectory(directory).revision !== entry.sourceVersion) {
       entry.resource.active = false

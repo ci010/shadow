@@ -33,6 +33,7 @@ import { initiativeProvider } from '../../agent/context/initiative.ts'
 import { memoryProvider } from '../../agent/context/memory-provider.ts'
 import { TopicService } from '../../sessions/topics.ts'
 import { topicsPlugin } from '../../sessions/topic-routes.ts'
+import { UseProjectTool } from '../../tools/use-project.ts'
 import { SessionTool } from '../../tools/session.ts'
 import { runtimeDiscoveryProvider, runtimeIdentityProvider, type RuntimeProviderDeps } from '../../agent/context/runtime.ts'
 import { workspaceProvider } from '../../agent/context/workspace.ts'
@@ -894,6 +895,12 @@ export async function createProjectRuntime(
     registry: folderRegistry,
     workdirCapabilityLookup,
   })
+  tools.register(new UseProjectTool({
+    projectId: project.id, folders: folderRegistry,
+    skills: ctx => skills.getMetadataSummary(ctx.admin, ctx.sessionId) || '',
+    conventions: () => conventions.prompt() || '',
+    switched: ctx => importTool.clearFolderSkillTools(ctx.tools),
+  }))
   context.register(initiativeProvider(initiatives))
   context.register({ name: 'project-conventions', getPromptSection: () => conventions.prompt() })
   context.register(workspaceProvider(workspace, vfs, workdirCapabilityLookup, projectFolderDiscovery))
@@ -965,7 +972,13 @@ export async function createProjectRuntime(
   const bgVfs = createBgTasksHandler(backgroundTasks, sessions, a2a.sessions)
   vfs.mount('v:bg', 'owned executions: background work, local task/call, and remote A2A status and output', bgVfs.read, bgVfs.list)
 
-  const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context))
+  const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context), ctx => {
+    const state = sessions.getSessionState(ctx.sessionId)
+    if (!state?.folderId) return undefined
+    const location = resolveSessionLocations(workspace, state, undefined, workdirCapabilityLookup).workdir
+    if (!location.available) throw new Error('Selected folder skill scope is unavailable')
+    return location.locality === 'local' ? { folderId: state.folderId, path: location.path } : undefined
+  })
   vfs.mount(
     'v:skills',
     'read skill bodies and category listings',

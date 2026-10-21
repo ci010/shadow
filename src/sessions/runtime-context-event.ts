@@ -9,7 +9,7 @@ export { isRuntimeContextEvent } from './runtime-context-contract.ts'
 /** Return a new append-only snapshot only when the latest persisted value differs. */
 export async function runtimeContextEvent(
   history: ChatMessage[],
-  kind: 'work',
+  kind: 'work' | 'working-context',
   content: string,
   workspace: string,
 ): Promise<ChatMessage | undefined> {

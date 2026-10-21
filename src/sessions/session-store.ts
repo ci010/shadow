@@ -191,6 +191,8 @@ export interface SessionState {
   initiativeId?: string
   /** Registered directory identity, independent of Initiative work context. */
   folderId?: string
+  /** Prepared committed folder context, replayed as append-only history after restart. */
+  workingContext?: string
   /** Subagent callback target session key (e.g. "discord:123"). Set once at creation. */
   reportTo?: string
   /** Display name of the user who triggered this session. Set once at creation. */

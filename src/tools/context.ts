@@ -27,6 +27,10 @@ export interface ExecutionContext extends MessageContext {
    * Falls back to the workspace root when unset.
    */
   cwd?: string
+  /** Committed selected Folder identity, never an argument or cwd alias. */
+  folderId?: string
+  /** Host-only sole-call boundary; never available to nested scripts or parallel batches. */
+  switchProjectFolder?: (prepared: { folderId: string; workdir: import('../sessions/locality.ts').WorkdirRefV1; content: string }) => Promise<string>
   /** Capability-backed remote workspace. Local-only tools must reject this context. */
   remoteWorkdir?: {
     nodeId: string

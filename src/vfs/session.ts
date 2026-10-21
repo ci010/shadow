@@ -4,7 +4,7 @@ import type { VirtualFsHandler, VirtualFsWriteHandler } from './virtual-fs.ts'
 
 /** Current identity only: never accept a caller-supplied session/project target. */
 export function createSelfSessionHandler(
-  sessions: Pick<SessionManager, 'updateSelfMetadata'>,
+  sessions: Pick<SessionManager, 'updateSelfMetadata' | 'getSelfWorkingPaths'>,
   topics: () => Pick<TopicService, 'assertActor'>,
 ): { read: VirtualFsHandler; write: VirtualFsWriteHandler } {
   const read: VirtualFsHandler = (subpath, context) => {
@@ -12,6 +12,7 @@ export function createSelfSessionHandler(
     context.signal.throwIfAborted()
     const state = topics().assertActor(context.projectId, context.sessionId)
     return JSON.stringify({
+      ...sessions.getSelfWorkingPaths(context.sessionId),
       title: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '',
       description: state.description ?? '',
       completed: state.completed ?? false,

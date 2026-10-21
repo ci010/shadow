@@ -31,7 +31,7 @@
       <HoverInfo v-if="error && isRail" :text="error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" :aria-label="t('Folders unavailable. Retry folders')" @click="loadFolders"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
       <template v-if="folderGrouped">
       <section v-for="group in sortedFolders" :key="group.folder.id" class="folder-group">
-        <TreeRow class="folder-folder-row" :selected="!activeSessionId && selectedFolderId === group.folder.id"
+        <TreeRow class="folder-folder-row" :selected="selectedFolderId === group.folder.id"
           :icon-only="isRail"
           :label="group.folder.name" :title="group.folder.kind === 'remote' ? `${group.folder.workdir.nodeId}: ${group.folder.path}` : group.folder.path" :expanded="expandedFolders.has(group.folder.id)" separate-toggle
           button-class="folder-folder" toggle-class="folder-toggle"

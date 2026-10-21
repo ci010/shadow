@@ -63,6 +63,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const baseTools = new Tools(workspace); baseTools.register(tool)
       const tools = new SessionTools(baseTools, workspace)
       const context = { projectId: 'p', sessionId: 'web:self', tools, signal: new AbortController().signal } as ExecutionContext
+      const paths = JSON.parse(await self.read('self.json', context))
+      equal(paths.projectDir, null)
+      assert(typeof paths.cwd === 'string' && paths.cwd.includes('workdirs'))
+      await assert.rejects(writeSelf({ cwd: workspace }), /read-only/)
+      await assert.rejects(writeSelf({ projectDir: workspace }), /read-only/)
       const topic = { title: 'Explicit title', goal: 'Verify explicit state', scope: 'Current work' }
       const receipt = await writeSelf({ title: topic.title, description: 'Discovery', completed: true })
       equal(JSON.parse(receipt as string).completed, true)

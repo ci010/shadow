@@ -934,12 +934,14 @@ For ordinary local Project sessions, `ContextBuilder` concatenates providers in 
 2. **Initiative view:** a derived root Work/descendant view when explicitly linked.
    There is no independently editable Topic brief or duplicate session goal.
    Recorded definitions are work context, not new human authorization.
-3. **Current environment:** Project identity and directory-resource selection,
+3. **Working context:** Project identity and directory-resource selection,
    one **Working directory** (local path, remote capability, or unavailable),
    directory source, private uploads, and **Project data directory (Home)**.
    Home is not the working directory. Registered folders are selectable resources,
-   not parallel working directories: only the selected resource's metadata is
-   included; the full catalog is discovered through `v:project/folders`.
+   not parallel working directories. With no selected Folder, the prompt lists
+   available folders and stable short identifiers; with a selection, it includes
+   that resource's metadata. Live availability is discovered through
+   `v:project/folders`; discovery alone never switches execution.
    VFS entry points, memory usage and role-gated `SOUL.md` remain here.
 4. **Behavior and scoped tool guidance:** the selected role owns work strategy;
    compact tool protocols cover work revisions, decisions and coordination.
@@ -2999,6 +3001,63 @@ resolve at Project Home; internal resources otherwise use virtual resources or
 explicit absolute paths. With no selected folder, cwd remains the managed
 session directory. Absolute paths are supported by the local helper. A managed folder therefore provides project, **not isolation
 from the host or other sessions**.
+
+### Switching the working context
+
+The base [`use_project({folder})`](../src/tools/use-project.ts) tool selects a
+registered Folder **inside the current Project**, not another Project. It accepts
+a unique lowercase folder-name slug (for example `app` or `docs`), a human-readable
+`name-xxxxxxxx` selector (name slug plus eight ID characters), or its full ID.
+[`v:project/folders`](../src/folders/discovery.ts) exposes `identifier` and, when
+unambiguous, `shortName`. Name-ID selectors do not depend on registry ordering
+or growth. Duplicate plain names are rejected; a name-ID collision requires
+the full ID, which always wins. Renaming a folder changes its name selectors,
+not its full ID. Paths, arbitrary UUID prefixes and `$alias/path` expressions
+are not switching endpoints.
+
+The tool must be the sole direct top-level call. Parallel batches and nested
+script invocations cannot switch; other calls in a rejected mixed batch still
+run in the old context. Availability and root `AGENTS.md` preparation happen
+before commit, under the existing folder access lease. Missing root instructions
+are explicit; unreadable or oversized instructions fail preparation. Root
+instructions apply only to that folder tree; nested `AGENTS.md` files must be
+read when entering their subtrees. Current Project conventions and a discoverable
+Skill metadata index accompany the transition; skill bodies are not injected
+or executed by discovery. Project/global skills retain `v:skills/<name>`.
+The narrow repository convention is `.agents/skills/<name>/SKILL.md`, with
+frontmatter name matching the directory. Selected-folder skills are separately
+namespaced at `v:skills/folder/<name>` (the reserved `folder` path lists their
+metadata and source/scope provenance); resources use an additional relative path.
+Only explicitly reading a skill body activates its frontmatter declarations
+through the existing lazy ImportTool flow; search, index and resource reads do
+not activate tools. Folder scope is resolved from committed session locality,
+not caller-provided cwd. Switches remove the previous folder's registrations
+from that session while retaining Project/global tools and already-captured
+child/in-flight contexts. No global SkillsManager watcher/cache is repointed.
+Symlink escapes from the selected folder/skill directory are rejected.
+
+[`BaseSession`](../src/sessions/base-session.ts) saves `folderId`, the workdir
+capability and a prepared `workingContext` snapshot together in the existing
+session state store. Both JSONL and SQLite retain it; older records have no
+snapshot and preserve their existing initialization behavior. The next inference
+appends a deduplicated `runtime-context-working-context` history event. Recovery
+can replay a committed snapshot even when interrupted before publishing its
+result. No per-inference system-prompt replacement is used. The receipt states
+old/new context, instruction provenance/scope and supersession of old defaults.
+Locality is refreshed for subsequent calls; already running processes and
+existing children retain their captured context.
+
+`v:session/self.json` exposes read-only `projectDir` and `cwd` (null when no
+selected local folder / no available local cwd, respectively). An unchanged
+roundtrip is accepted; modifying these fields is rejected. The committed
+`session.changed` notification refreshes the existing session list, sidebar
+folder selection and file workbench. Browsing alone does not mutate execution.
+
+Remote folder switching currently fails closed: remote instruction preparation
+is not implemented, even if the remote workdir capability is online. Existing
+remote session initialization is unchanged; remote display paths are never
+resolved on Main and there is no silent local fallback. A validation, preparation
+or state-save failure leaves the previous working context intact.
 
 ### State inventory
 

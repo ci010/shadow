@@ -119,7 +119,7 @@ test('remote discovery uses only capability state, preserves display metadata, a
   assert.deepEqual(offline.workdir, remote.workdir)
   const prompt = projectProvider(discovery).getPromptSection({ projectId: DEFAULT_PROJECT_ID, folderId: remote.id } as SessionPromptContext) as string
   assert.match(prompt, /kind=remote/)
-  assert.match(prompt, /Selected registered resource \(metadata\): id="remote-folder"/)
+  assert.match(prompt, /Selected Project folder \/ registered resource \(metadata\): identifier="remote-display-remotefo" id="remote-folder"/)
   state = { node: 'online', capability: { kind: 'workdir', online: true, path: resolve('.must-not-be-used') } }
   const online = JSON.parse(await read('folders', executionContext())).folders[0]
   assert.deepEqual(online.availability, { available: true, locality: 'remote' })

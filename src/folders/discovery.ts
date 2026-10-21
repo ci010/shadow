@@ -1,3 +1,4 @@
+import { folderIdentifier, folderSlug } from './identifier.ts'
 import type { ProjectRecord } from '../projects/contracts.ts'
 import {
   localFolderWorkdirRef,
@@ -49,6 +50,8 @@ export class ProjectFolderDiscovery {
     ).workdir
     return {
       ...folder,
+      identifier: folderIdentifier(folder.id, folder.name),
+      shortName: this.options.registry.list().filter(item => folderSlug(item.name) === folderSlug(folder.name)).length === 1 ? folderSlug(folder.name) : undefined,
       kind: folder.kind ?? 'local',
       pathUsage: folder.kind === 'remote' ? 'remote-display-only' : 'registered-local-metadata',
       availability: resolution.available

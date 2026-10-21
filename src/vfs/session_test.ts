@@ -8,7 +8,7 @@ import { WriteTool } from '../tools/filesystem.ts'
 test('current session JSON uses dedicated virtual write routing and validates exact edit results', async () => {
   const state = { name: 'Current', description: 'Purpose', completed: false }
   const writes: unknown[] = []
-  const handler = createSelfSessionHandler({ updateSelfMetadata: async (id, value, expected) => {
+  const handler = createSelfSessionHandler({ getSelfWorkingPaths: () => ({ projectDir: null, cwd: null }), updateSelfMetadata: async (id, value, expected) => {
     assert.equal(id, 'web:self')
     writes.push({ value, expected })
     Object.assign(state, { completed: (value as { completed: boolean }).completed })
@@ -20,10 +20,10 @@ test('current session JSON uses dedicated virtual write routing and validates ex
   const context = { projectId: 'p', sessionId: 'web:self', tools: { executionMode: 'session' }, signal: new AbortController().signal } as ExecutionContext
   const writer = new WriteTool('/workspace', false, vfs)
   const original = await vfs.resolve('v:session/self.json', context)
-  assert.deepEqual(JSON.parse(original!), { title: 'Current', description: 'Purpose', completed: false })
+  assert.deepEqual(JSON.parse(original!), { projectDir: null, cwd: null, title: 'Current', description: 'Purpose', completed: false })
   const result = await writer.execute({ path: 'v:session/self.json', match: 'false', content: 'true' }, context)
   assert.equal(JSON.parse(result).completed, true)
-  assert.deepEqual(writes, [{ value: { title: 'Current', description: 'Purpose', completed: true }, expected: original }])
+  assert.deepEqual(writes, [{ value: { projectDir: null, cwd: null, title: 'Current', description: 'Purpose', completed: true }, expected: original }])
   await assert.rejects(writer.execute({ path: 'v:session/self.json', content: '{' }, context), /Invalid JSON/)
   await assert.rejects(writer.execute({ path: 'v:session/self.json', match: 'true', content: 'invalid' }, context), /Invalid JSON/)
   await assert.rejects(writer.execute({ path: 'v:session/self.json', match: 'absent', content: 'x' }, context), /Exact match/)

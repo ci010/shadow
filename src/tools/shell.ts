@@ -127,7 +127,7 @@ export class ExecTool implements Tool<ToolResult> {
       },
       cwd: {
         type: 'string',
-        description: 'Working directory (defaults to workspace root)',
+        description: 'Working directory (defaults to the committed session cwd)',
       },
       timeout_ms: {
         type: 'number',

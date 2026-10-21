@@ -215,7 +215,7 @@ export abstract class BaseSession {
   }
 
   /** Persist snapshots before use. Fail closed rather than send an event absent from recovery history. */
-  protected async recordContextEvent(kind: 'work', content: string): Promise<void> {
+  protected async recordContextEvent(kind: 'work' | 'working-context', content: string): Promise<void> {
     const event = await runtimeContextEvent(this.messages, kind, content, this.workspace)
     if (!event) return
     const timestamp = new Date().toISOString()
@@ -265,6 +265,18 @@ export abstract class BaseSession {
     }
 
     for (let i = 0; budget.remaining > 0; i++) {
+      // Resolve at inference boundaries, not by mutating any in-flight call's context.
+      const current = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).workdir
+      if (!current.available) throw new Error(`Session workdir unavailable: ${current.reason}`)
+      executionContext = { ...executionContext,
+        folderId: this.state.folderId,
+        cwd: current.locality === 'local' ? current.path : undefined,
+        remoteWorkdir: current.locality === 'remote' ? {
+          nodeId: current.workdir.nodeId, capabilityId: current.workdir.capabilityId,
+          executor: this.remoteExecutor ?? failMissingRemoteExecutor(),
+        } : undefined,
+      }
+      if (this.state.workingContext !== undefined) await this.recordContextEvent('working-context', this.state.workingContext)
       const toolDefs = this.tools.getDefinitions()
       signal.throwIfAborted()
 
@@ -523,6 +535,21 @@ export abstract class BaseSession {
           const fileChangePhysicalId = this.physicalSessionId
           const context: ExecutionContext = {
             ...executionContext, toolCallId: tc.id, toolCallName: tc.name,
+            switchProjectFolder: calls.length === 1 && tc.name === 'use_project' ? async prepared => {
+              signal.throwIfAborted()
+              const next = { ...this.state, folderId: prepared.folderId, workdir: prepared.workdir }
+              const resolved = resolveSessionLocations(this.workspace, next, undefined, this.workdirCapabilityLookup).workdir
+              if (!resolved.available || resolved.locality !== 'local') throw new Error('Target folder execution unavailable; prior context retained.')
+              const previous = { folderId: this.state.folderId ?? null, cwd: executionContext.cwd ?? null }
+              const content = `Previous working context: ${JSON.stringify(previous)}\n\n${prepared.content}`
+              // The existing state store is the commit point. Recovery replays this
+              // snapshot if interrupted before the result/context event is appended.
+              await this.store.saveState(this.id, { ...next, workingContext: content })
+              Object.assign(this.state, next, { workingContext: content })
+              this.clearReadCache()
+              this.bus.emit('session.changed', { sessionId: this.id })
+              return content
+            } : undefined,
             afterToolResultPublished: callback => {
               const callbacks = publishedCallbacks.get(tc.id) ?? []
               callbacks.push(callback)
@@ -724,6 +751,7 @@ export abstract class BaseSession {
         ...(input.kind === 'message' && input.source.kind === 'user' && msg.admin === true && !isGroup
           ? { workUserInput: input.content } : {}),
         cwd,
+        folderId: this.state.folderId,
         remoteWorkdir,
         tools: this.tools,
         signal,
