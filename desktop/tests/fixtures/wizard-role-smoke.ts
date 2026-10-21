@@ -271,6 +271,19 @@ async function main() {
     assert.equal(await run('fixture.preparations.length'), 0)
     assert.equal(await run(`document.querySelector('.step-count')`), null)
     await responsive('child pairing')
+    for (const options of [{identityIssue:'identity-conflict'}, {identityIssue:'identity-unreadable'}, {failChildSetup:true}]) {
+      await run(`fixture.reset(${JSON.stringify({ ...options, state: {version:1,revision:1,mode:'child',step:'enter-pairing-offer'} })})`)
+      await wait(`document.querySelector('.action-error')`)
+      assert.match(await run(`document.querySelector('.action-error').textContent`), options.failChildSetup ? /Check the saved Child configuration/ : /Restore the matching Child configuration/)
+      assert.equal(await run(`document.body.innerText.includes('private details')`), false)
+      assert.equal(await run(`document.querySelector('.child-form button[type=submit]').disabled`), true)
+      await run(`document.querySelector('.child-form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));fixture.tick()`)
+      assert.equal(await run(`fixture.calls.includes('pairChild')`), false)
+      if (!options.failChildSetup) {
+        assert.equal(await run(`document.querySelector('#child-home').value`), 'C:/fixture-only/child')
+        assert.equal(await run(`document.querySelector('#child-home').disabled`), true)
+      }
+    }
     console.log('WIZARD_ROLE_SMOKE_OK')
   } finally { window.destroy() }
   app.exit(0)

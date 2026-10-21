@@ -39,7 +39,7 @@ test('setup wizard defaults to Main and gates completion on live provider readin
         const missing = () => ({provider:'copilot',model:'gpt-4.1',authMode:'copilot',host:'github.com',ready:false,hasApiKey:false,reason:'missing_credentials'});
         const connected = () => ({provider:'openai',model:'gpt-4.1',authMode:'api-key',ready:true,hasApiKey:true});
         const defaults = () => ({ state:fresh(), events:[], calls:[], launches:[], preparations:[], commits:[], paths:[], requests:[],
-          completed:false, pickerCalls:0, directoryLoads:0, initializations:0,
+          completed:false, pickerCalls:0, directoryLoads:0, initializations:0, identityIssue:undefined, failChildSetup:false,
           failInitialize:false, loseInitializeReply:false, failPrepare:false, failLaunch:false, failStatus:false,
           holdSave:false, saveReady:true, liveReadyAfterSave:true, status:missing() });
         const f = window.fixture = defaults();
@@ -93,7 +93,8 @@ test('setup wizard defaults to Main and gates completion on live provider readin
             prepareProvider,
             launchMain:async options=>{f.calls.push('launchMain');f.launches.push(options);if(f.failLaunch)return {ok:false,code:'launch-failed',state:f.state};
               f.state=transitionWizard(f.state,{type:'sidecar-ready'});return {ok:true,state:f.state}},
-            childSetup:async()=>({endpoint:'',dataDir:'C:/fixture-only/child',workdir:'C:/fixture-only/work',displayName:'Child',allowInsecureLocalTransport:false,saved:false}),
+            childSetup:async()=>{if(f.failChildSetup)throw new Error('synthetic IPC error with private details');return {endpoint:'',dataDir:'C:/fixture-only/child',workdir:'C:/fixture-only/work',displayName:'Child',allowInsecureLocalTransport:false,saved:false,...(f.identityIssue ? {identityIssue:f.identityIssue} : {})}},
+            pairChild:async()=>{f.calls.push('pairChild');throw new Error('Unexpected pairing')},
           }};
         f.mount=async(state=f.state)=>{ mounted?.unmount(); f.state=parseWizardState(JSON.parse(JSON.stringify(state)));
           mounted=createApp(Wizard,{api,initialState:f.state,onComplete:()=>{f.completed=true}});mounted.mount('#app');await nextTick(); };

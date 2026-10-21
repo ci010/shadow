@@ -35,6 +35,7 @@ export interface ChildSetupInfo {
   readonly allowInsecureLocalTransport: boolean
   readonly saved: boolean
   readonly fingerprint?: string
+  readonly identityIssue?: 'identity-conflict' | 'identity-unreadable'
 }
 export interface ChildBootstrap {
   info(): Promise<ChildSetupInfo>
@@ -81,6 +82,29 @@ function overlaps(a: string, b: string): boolean {
   return contains(a, b) || contains(b, a)
 }
 
+// Inspect public identity metadata only; never return credential contents across IPC.
+async function inspectChildIdentity(dataDir: string, nodeId?: string): Promise<Pick<ChildSetupInfo, 'fingerprint' | 'identityIssue'>> {
+  let fingerprint: string | undefined
+  let credentialFingerprint: string | undefined
+  for (const name of ['device-pairing-info.v1.json', 'device-credential.v1.json']) {
+    try {
+      const value: unknown = JSON.parse(await readFile(join(dataDir, 'credentials', name), 'utf8'))
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return { identityIssue: 'identity-unreadable' }
+      const info = value as Record<string, unknown>
+      if (info.version !== 1 || typeof info.nodeId !== 'string' || !info.nodeId) return { identityIssue: 'identity-unreadable' }
+      if (!nodeId || info.nodeId !== nodeId) return { identityIssue: 'identity-conflict' }
+      const publicFingerprint = name === 'device-pairing-info.v1.json' ? info.fingerprint : info.deviceIdentityFingerprint
+      if (typeof publicFingerprint !== 'string' || !publicFingerprint) return { identityIssue: 'identity-unreadable' }
+      if (name === 'device-pairing-info.v1.json') fingerprint = publicFingerprint
+      else credentialFingerprint = publicFingerprint
+    } catch (error) {
+      if (!isMissingRuntimeConfig(error)) return { identityIssue: 'identity-unreadable' }
+    }
+  }
+  if (fingerprint && credentialFingerprint && fingerprint !== credentialFingerprint) return { identityIssue: 'identity-conflict' }
+  return fingerprint ? { fingerprint } : {}
+}
+
 export class FileChildBootstrap implements ChildBootstrap {
   constructor(
     readonly configPath: string,
@@ -93,19 +117,15 @@ export class FileChildBootstrap implements ChildBootstrap {
   async info(): Promise<ChildSetupInfo> {
     try {
       const config = await this.readConfig()
-      let fingerprint: string | undefined
-      try {
-        const info = JSON.parse(await readFile(join(config.dataDir, 'credentials', 'device-pairing-info.v1.json'), 'utf8'))
-        if (info.version !== 1 || info.nodeId !== config.localNodeId || typeof info.fingerprint !== 'string') throw new TypeError('Pairing identity info is invalid')
-        fingerprint = info.fingerprint
-      } catch (error) { if (!isMissingRuntimeConfig(error)) throw error }
+      const identity = await inspectChildIdentity(config.dataDir, config.localNodeId)
       return { dataDir: config.dataDir, workdir: config.workdirs[0].rootPath, displayName: hostname(),
         endpoint: config.mainEndpoint, allowInsecureLocalTransport: config.allowInsecureLocalTransport, saved: true,
-        ...(fingerprint ? { fingerprint } : {}) }
+        ...identity }
     } catch (error) {
       if (!isMissingRuntimeConfig(error)) throw error
       return { dataDir: this.defaultHome, workdir: this.defaultWorkdir, displayName: hostname(),
-        endpoint: '', allowInsecureLocalTransport: false, saved: false }
+        endpoint: '', allowInsecureLocalTransport: false, saved: false,
+        ...await inspectChildIdentity(this.defaultHome) }
     }
   }
 
@@ -128,6 +148,10 @@ export class FileChildBootstrap implements ChildBootstrap {
     if (config && config.dataDir !== input.dataDir) {
       throw new Error('Keep the saved Child home when retrying; the existing device identity must not be replaced')
     }
+    // Never generate a new node ID over an existing home, or submit pairing with
+    // another node's identity. Inspection is read-only and precedes all writes.
+    const identity = await inspectChildIdentity(input.dataDir, config?.localNodeId)
+    if (identity.identityIssue) throw new Error('Child identity conflicts with the saved configuration or cannot be read. Restore the matching Child configuration; existing identity data is retained.')
     const changed = config && (config.mainEndpoint !== input.endpoint || config.workdirs[0].rootPath !== input.workdir
       || config.allowInsecureLocalTransport !== input.allowInsecureLocalTransport)
     if (config && changed) {

@@ -3871,5 +3871,7 @@
   "Enter a valid Main HTTP(S) endpoint.": "Enter a valid Main HTTP(S) endpoint.",
   "Use an HTTP(S) endpoint without credentials, query or fragment.": "Use an HTTP(S) endpoint without credentials, query or fragment.",
   "Public or DNS HTTP endpoints are not allowed. Use HTTPS, or a private LAN/VPN IP address.": "Public or DNS HTTP endpoints are not allowed. Use HTTPS, or a private LAN/VPN IP address.",
-  "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.": "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing."
+  "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.": "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.",
+  "Child identity conflicts with the saved configuration or cannot be read. Restore the matching Child configuration; existing identity data is retained.": "Child identity conflicts with the saved configuration or cannot be read. Restore the matching Child configuration; existing identity data is retained.",
+  "Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained.": "Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained."
 }

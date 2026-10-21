@@ -102,7 +102,7 @@
 						<div class="directory-field"><input id="child-workdir" v-model="child.workdir" class="directory-input" required :disabled="busy"><button type="button" class="secondary-button" :disabled="busy" @click="pickChildFolder('workdir')">{{ t('Browse…') }}</button></div>
 						<p class="field-help">{{ t('Use separate folders, not a drive root. Child home stays fixed after the first attempt so retries retain this device\'s identity. You can correct the endpoint and work folder until pairing succeeds. No existing data is moved or deleted.') }}</p>
 						<label class="consent-row"><input v-model="executionConsent" type="checkbox" :disabled="busy" required><span>{{ t('I allow the approved Main to read/write the work folder, create managed workdirs under Child home, and execute commands as my OS account.') }} <strong>{{ t('Shell access is not a sandbox and can access other host files.') }}</strong> {{ t('Pair only with a Main you trust with this access.') }}</span></label>
-						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || !executionConsent || !!transportError || !manualPairing && !!invitationPreview.error">{{ busy ? t('Submitting pairing request…') : t('Pair and open local status') }}</button></div>
+						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || childSetupBlocked || !executionConsent || !!transportError || !manualPairing && !!invitationPreview.error">{{ busy ? t('Submitting pairing request…') : t('Pair and open local status') }}</button></div>
 					</form>
 				</div>
 
@@ -229,6 +229,7 @@ const busy = ref(false)
 const actionError = ref('')
 const executionConsent = ref(false)
 const childSaved = ref(false)
+const childSetupBlocked = ref(true)
 const childFingerprint = ref('')
 const manualPairing = ref(false)
 const invitationText = ref('')
@@ -310,9 +311,14 @@ async function loadChild(): Promise<void> {
 		const info = await props.api.bootstrap.childSetup()
 		child.value = { ...child.value, endpoint: info.endpoint, dataDir: info.dataDir,
 			workdir: info.workdir, displayName: child.value.displayName || info.displayName, allowInsecureLocalTransport: info.allowInsecureLocalTransport }
-		childSaved.value = info.saved
+		childSaved.value = info.saved || !!info.identityIssue
+		childSetupBlocked.value = !!info.identityIssue
+		if (info.identityIssue) actionError.value = t('Child identity conflicts with the saved configuration or cannot be read. Restore the matching Child configuration; existing identity data is retained.')
 		childFingerprint.value = info.fingerprint ?? ''
-	} catch { actionError.value = t('Child settings could not be loaded. Restart Shadow and retry; existing identity data is retained.') }
+	} catch {
+		childSetupBlocked.value = true
+		actionError.value = t('Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained.')
+	}
 }
 
 async function pickChildFolder(field: 'dataDir' | 'workdir'): Promise<void> {
@@ -323,7 +329,7 @@ async function pickChildFolder(field: 'dataDir' | 'workdir'): Promise<void> {
 }
 
 async function pairChild(): Promise<void> {
-	if (busy.value || !executionConsent.value || transportError.value) return
+	if (busy.value || childSetupBlocked.value || !executionConsent.value || transportError.value) return
 	busy.value = true
 	actionError.value = ''
 	try {

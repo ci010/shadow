@@ -3871,5 +3871,7 @@
   "Enter a valid Main HTTP(S) endpoint.": "请输入有效的 Main HTTP(S) 地址。",
   "Use an HTTP(S) endpoint without credentials, query or fragment.": "请使用不含凭据、查询参数或片段的 HTTP(S) 地址。",
   "Public or DNS HTTP endpoints are not allowed. Use HTTPS, or a private LAN/VPN IP address.": "不允许公网或域名 HTTP 地址。请使用 HTTPS，或私有局域网/VPN IP 地址。",
-  "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.": "HTTP 将以明文传输 PIN 和流量。配对前请明确允许可信局域网/VPN HTTP。"
+  "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.": "HTTP 将以明文传输 PIN 和流量。配对前请明确允许可信局域网/VPN HTTP。",
+  "Child identity conflicts with the saved configuration or cannot be read. Restore the matching Child configuration; existing identity data is retained.": "子节点身份与已保存的配置不匹配，或身份文件无法读取。请恢复与该身份匹配的子节点配置；已有身份数据会保留。",
+  "Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained.": "无法加载子节点设置。请检查已保存的子节点配置和文件夹权限，或更新桌面构建。已有身份数据会保留。"
 }
