@@ -1,6 +1,9 @@
+import { redactDiagnosticUrls } from '../../src/runtime/module-diagnostic.ts'
+
 export function redactFrontendText(value: string): string {
+  value = redactDiagnosticUrls(value)
   if (/(?:authorization|cookie|bearer\s|basic\s|(?:token|secret|password|credential|headers|body|payload|input|output|prompt|messages|content|api[-_]?key)\s*["']?\s*[:=])/i.test(value)) return '[redacted sensitive text]'
-  return value.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi, '[redacted URL]')
+  return value
     .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]+/g, '[redacted token]')
 }
 const levels = ['log', 'info', 'warn', 'error'] as const
@@ -51,7 +54,7 @@ export function installFrontendLog(target: Window & { console: Console }, send: 
   let count = 0
   let minute = Date.now()
   const capture = (level: string, args: unknown[]) => {
-    if (!active || inside || sending) return
+    if (!active || inside) return
     inside = true
     try {
       if (Date.now() - minute >= 60_000) { minute = Date.now(); count = 0 }
@@ -75,8 +78,26 @@ export function installFrontendLog(target: Window & { console: Console }, send: 
   target.addEventListener('unhandledrejection', rejection)
   const timer = target.setInterval(() => {
     if (!queue.length || sending) return
-    const events = queue; queue = []; sending = true
-    void Promise.resolve().then(() => send(events)).catch(() => {}).finally(() => { sending = false })
+    // The server's 96 KiB limit is bytes, not characters. Leave room for
+    // the envelope/tab ID and split multi-byte or heavily escaped summaries.
+    let bytes = 0
+    let length = 0
+    for (const event of queue) {
+      const size = new TextEncoder().encode(JSON.stringify(event)).byteLength + 1
+      if (bytes + size > 90 * 1024) break
+      bytes += size; length++
+    }
+    const events = queue.splice(0, length)
+    sending = true
+    void Promise.resolve().then(() => {
+      if (!active) return
+      // Suppress only synchronous transport diagnostics, not application logs
+      // emitted while an asynchronous request is in flight.
+      inside = true
+      try { return send(events) } finally { inside = false }
+    }).catch(() => {
+      if (active) queue = [...events, ...queue].slice(0, 20)
+    }).finally(() => { sending = false })
   }, 1000)
   return () => {
     active = false; queue = []
@@ -87,16 +108,49 @@ export function installFrontendLog(target: Window & { console: Console }, send: 
   }
 }
 
-export async function startFrontendLog(base: string, signal: AbortSignal): Promise<() => void> {
+/** Install synchronously before scoped child components render. Capability discovery
+ * gates transmission, not capture; transient failures retry from the bounded queue. */
+export function startFrontendLog(base: string, signal: AbortSignal): () => void {
+  if (signal.aborted) return () => {}
   const endpoint = `${base.replace(/\/$/, '')}/api/runtime/frontend-logs`
-  try {
-    const response = await fetch(endpoint, { credentials: 'include', signal })
-    if (!response.ok || (await response.json()).enabled !== true || signal.aborted) return () => {}
-    const tabId = crypto.randomUUID()
-    const stop = installFrontendLog(window, events => fetch(endpoint, {
-      method: 'POST', credentials: 'include', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabId, events }),
-    }))
-    signal.addEventListener('abort', stop, { once: true })
-    return stop
-  } catch { return () => {} }
+  const tabId = crypto.randomUUID()
+  let active = true
+  let enabled = false
+  let checking: Promise<void> | undefined
+  const check = (): Promise<void> => {
+    if (enabled) return Promise.resolve()
+    if (!checking) checking = (async () => {
+      // Match normal API requests: cookies only on same-origin web deployments.
+      // Cross-port desktop requests use the native launch Authorization header;
+      // the gateway deliberately does not allow cross-origin cookie credentials.
+      const response = await fetch(endpoint, { credentials: 'same-origin', signal, cache: 'no-store' })
+      if (!active || signal.aborted) return
+      if (response.status === 404) { stop(); return }
+      if (!response.ok) throw new Error('Frontend diagnostics capability unavailable')
+      if ((await response.json()).enabled !== true) { stop(); return }
+      if (active && !signal.aborted) enabled = true
+    })().finally(() => { checking = undefined })
+    return checking
+  }
+  const uninstall = installFrontendLog(window, async events => {
+    await check()
+    if (!active || signal.aborted || !enabled) return
+    const response = await fetch(endpoint, {
+      method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabId, events }),
+    })
+    // Authentication/scope loss ends capture; invalid/oversized batches are
+    // dropped rather than starving all future logs with a permanent retry.
+    if ([401, 403, 404].includes(response.status)) { stop(); return }
+    if (!response.ok && (response.status === 429 || response.status >= 500)) {
+      throw new Error('Frontend diagnostics batch not accepted')
+    }
+  })
+  function stop() {
+    active = false
+    signal.removeEventListener('abort', stop)
+    uninstall()
+  }
+  signal.addEventListener('abort', stop, { once: true })
+  void check().catch(() => {})
+  return stop
 }

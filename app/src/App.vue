@@ -97,6 +97,7 @@ import IoHost from './components/io/IoHost.vue'
 import { createIoBridge, ioBridgeKey } from './io/bridge.ts'
 import { projectChatLocation } from './projects.ts'
 import { projectBase } from './api-url.ts'
+import { watchFrontendLogScope } from './frontend-log-scope.ts'
 import { useLiveClientPool } from './composables/useLiveClient.ts'
 import type { LiveStatus } from './live-client.ts'
 import { useAppNotificationSounds } from './composables/useAppNotificationSounds.ts'
@@ -137,15 +138,8 @@ const resolvedBase = computed(() => installationContext.value.apiBase)
 // Dev diagnostics follow only an explicit visible Project; never infer ownership
 // from a log payload or silently attribute host/unscoped logs to a default Project.
 if (import.meta.env.DEV) {
-  const stopWatch = watch(() => typeof route.params.projectId === 'string'
-    ? projectBase(resolvedBase.value, route.params.projectId) : undefined, (base, _old, onCleanup) => {
-    const controller = new AbortController()
-    let stop = () => {}
-    onCleanup(() => { controller.abort(); stop() })
-    if (base) void import('./frontend-log.ts').then(async module => {
-      if (!controller.signal.aborted) stop = await module.startFrontendLog(base, controller.signal)
-    }).catch(() => {})
-  }, { immediate: true })
+  const stopWatch = watchFrontendLogScope(() => typeof route.params.projectId === 'string'
+    ? projectBase(resolvedBase.value, route.params.projectId) : undefined)
   onUnmounted(stopWatch)
   if (import.meta.hot) import.meta.hot.dispose(stopWatch)
 }
