@@ -113,8 +113,6 @@ overrides:
   '@open-file-viewer/core>seek-bzip': '-'
   '@open-file-viewer/core>xz-decompress': '-'
 
-pnpmfileChecksum: sha256-Z4Cw8JhEFFAZnhFE8nnBrZx+6LLxOG38JV37FRTLvUA=
-
 patchedDependencies:
   '@open-file-viewer/core@0.1.48': 70ff5fed1745c0d74aecc4e5321d6c94e524bc025f6880de9560e6db685a4a5a
 
