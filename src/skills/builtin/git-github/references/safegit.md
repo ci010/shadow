@@ -1,15 +1,7 @@
 # safegit usage
 
-Shadow bundles [ci010/safegit](https://github.com/ci010/safegit), a Windows-enabled fork of stricttools/safegit.
-The pinned release is [v0.33.0-windows.1](https://github.com/ci010/safegit/releases/tag/v0.33.0-windows.1).
-On Windows x64 the bundle contains native `safegit.exe` from this fork, not an
-upstream Linux/macOS executable or WSL wrapper. The same release provides the
-macOS/Linux x64/arm64 bundles. Target selection and archive SHA-256 pins live in
-`src/execution/git/safegit.ts`; preparation uses `scripts/safegit-package.ts`.
-Do not resolve a floating `latest` version or manually replace the bundle with
-an unchecked download. Windows ARM64 is not supported.
-
-Discover `safegit` under `v:tools` and call it through `invoke_tool`:
+Read `v:tools/safegit/safegit` directly for the current tool contract; no search
+is needed. Call `safegit` through `invoke_tool`:
 
 - Check availability: `{ "action": "status" }`.
 - Commit explicit task-owned files (no separate `git add`):
@@ -17,13 +9,27 @@ Discover `safegit` under `v:tools` and call it through `invoke_tool`:
 - Push, only when authorized:
   `{ "action": "run", "args": ["push", "--refs", "head"] }`.
 
+Local `exec` provides `SHADOW_SAFEGIT_PATH` when the bundled binary exists on a
+supported host. CLI help examples:
+
+- PowerShell: `& $env:SHADOW_SAFEGIT_PATH --help`
+- POSIX shell: `"$SHADOW_SAFEGIT_PATH" commit --help`
+
+The structured tool remains the default entry; invoking this CLI variable is
+also allowed for the same authorized safegit operations. The default uses a
+file check, not the tool's version validation. Explicit host overrides win over
+workspace `.env` for this variable; otherwise explicit `.env` values are kept,
+including empty values. Other `.env` variables retain their normal precedence.
+Explicit values are configuration, not an availability guarantee. Missing or
+unsupported bundles leave the default unset without breaking unrelated exec.
+No Main binary path is forwarded to remote workdirs. Do not substitute raw Git.
+
 Inspect status/diff before committing, preserve others' edits and verify the
 result. Consult the pinned binary's subcommand help for other arguments;
 safegit is not a drop-in replacement for all Git commands. Its private indexes
 prevent staging races, not simultaneous edits to the same file.
 
 The tool uses the session's local effective workdir and verified bundled binary.
-macOS/Linux x64/arm64 and native Windows x64 are supported; remote workdirs are unsupported.
-Missing/invalid assets block mutations: do not substitute PATH Git, WSL or gh/API
-writes. Git itself must still be installed. Do not bypass refusals or disable
+Remote workdirs are unsupported. Missing/invalid assets block mutations:
+do not substitute another binary or gh/API writes. Git itself must still be installed. Do not bypass refusals or disable
 hooks. Availability does not grant permission to commit or publish.

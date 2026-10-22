@@ -19,6 +19,8 @@ import { ToolNoEffectError, ToolOutcomeUnknownError, completedToolFailure, requi
 import { errMsg } from '../utils/truncate.ts'
 import { backgroundExecutionId, type BackgroundTaskManager } from '../agent/background-task.ts'
 import { loadDotEnv } from '../utils/env.ts'
+import { resolveSessionLocations } from '../sessions/locality.ts'
+import { localExecSafegitEnv } from '../execution/git/safegit.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import { decodeChunks } from '../utils/decode-chunks.ts'
 import type { LocalProcessExecutor } from '../execution/executor.ts'
@@ -302,6 +304,17 @@ export class ExecTool implements Tool<ToolResult> {
     return this.executeRequest(request, context, false)
   }
 
+  private async localEnvironment(context: ExecutionContext): Promise<Record<string, string>> {
+    // The current logical session owns its data, even when cwd is inherited from
+    // another session. Do not pass workspaceRoot or derive this path from cwd.
+    // Called only after the remote branch has returned; never send Main paths.
+    const { sessionDataDir } = resolveSessionLocations(this.workspace, { sessionId: context.sessionId })
+    return {
+      ...await localExecSafegitEnv(await loadDotEnv(this.workspace)),
+      SHADOW_SESSION_DATA_DIR: sessionDataDir,
+    }
+  }
+
   private async executeRequest(
     args: Record<string, unknown> & { script: string; shell: ExecShell },
     context: ExecutionContext,
@@ -347,7 +360,7 @@ export class ExecTool implements Tool<ToolResult> {
     }
 
     // Load workspace .env and forward to subprocess
-    const dotEnv = await loadDotEnv(this.workspace)
+    const dotEnv = await this.localEnvironment(context)
     if (foreground) context.signal.throwIfAborted()
 
     // Spawn
@@ -487,7 +500,7 @@ export class ExecTool implements Tool<ToolResult> {
       context.signal.throwIfAborted()
       if (timeoutMs !== 0) context.signal.addEventListener('abort', abort, { once: true })
       binding = bindScriptTools({ ...context, signal: controller.signal }, { infer: true })
-      const env = { ...process.env, ...await loadDotEnv(this.workspace) }
+      const env = { ...process.env, ...await this.localEnvironment(context) }
       context.signal.throwIfAborted()
       run = startScript({
         code: script,

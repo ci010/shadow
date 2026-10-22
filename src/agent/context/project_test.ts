@@ -43,19 +43,19 @@ const provider = (folders: FolderRecord[]) => projectProvider(discovery(folders)
 
 test('cold-start project context includes empty selection and a bounded folder snapshot without disk probes', () => {
   const prompt = provider([]).getPromptSection(context) as string
-  assert.match(prompt, /id="project-a" name="Current project"/)
+  assert.match(prompt, /- Current Project: "Current project"\n- Project ID: "project-a"/)
   assert.doesNotMatch(prompt, /Selected Project folder/)
-  assert.match(prompt, /0 registered/)
-  assert.match(prompt, /do not select the working directory or grant access/)
+  assert.match(prompt, /- Project folders: 0;/)
+  assert.match(prompt, /not permission to access files/)
   assert.match(prompt, /read\("v:project\/folders"\)/)
-  assert.match(prompt, /remote display paths must never be resolved on Main/)
+  assert.match(prompt, /never resolve remote display paths on Main/)
 })
 
 test('directory discovery is on demand while the selected resource remains identifiable', () => {
   const folders = Array.from({ length: 100 }, (_, i) => folder(i))
   const prompt = provider(folders).getPromptSection({ ...context, folderId: folders.at(-1)!.id }) as string
   assert.doesNotMatch(prompt, /Selected Project folder/)
-  assert.match(prompt, /100 registered/)
+  assert.match(prompt, /- Project folders: 100;/)
   assert.equal(prompt.split('\n').filter(line => line.startsWith('- id=')).length, 0)
   assert.doesNotMatch(prompt, /id="folder-8"/)
   assert.doesNotMatch(prompt, /kind=local/)
@@ -99,8 +99,14 @@ test('one environment section owns the effective working directory regardless of
     const { systemPrompt, sections } = await builder.buildSystemPromptDetails(ctx)
     assert.equal(sections.length, 1)
     const projectSection = sections[0].content
-    assert.match(projectSection, /Project is the scope for sessions, memory and configuration, not a filesystem directory/)
+    assert.match(projectSection, /A Project groups conversations, memory and configuration and may contain folders/)
     assert.doesNotMatch(projectSection, /\*\*Working directory|Selected Project folder:|Session workspace/)
+    assert.match(systemPrompt, /- Session data: `SHADOW_SESSION_DATA_DIR`/)
+    assert.match(systemPrompt, /- Uploaded files: `uploads\/`/)
+    assert.match(systemPrompt, /local exec OS and Node processes/)
+    assert.match(systemPrompt, /read\(\) does not expand environment variables/)
+    assert.doesNotMatch(systemPrompt, /directory resources|registered resource|sole|alone as a direct tool call|name-ID selector/)
+    assert(!systemPrompt.includes(home))
     assert(!systemPrompt.includes(registered.path))
     assert(!systemPrompt.includes(resolveSessionLocations(home, ctx, undefined, lookup).sessionDataDir))
     assert.doesNotMatch(systemPrompt, /C:\\DisplayOnly\\remote-work/)

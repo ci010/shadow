@@ -13,18 +13,12 @@ metadata:
 In every session, use bundled **safegit** for commits and pushes, never raw
 `git commit` or `git push`. It works with ordinary Git repositories but supports
 only a subset of Git, with different commit/push arguments. Read-only commands
-can use Git. See [safegit usage](v:skills/git-github/references/safegit.md) for
-Shadow's invocation and command differences. If unavailable, stop the mutation;
-do not fall back to raw Git.
-
-### Native Windows
-
-On Windows x64, use Shadow's bundled **ci010/safegit** fork, pinned to
-`v0.33.0-windows.1`, through the same `safegit` tool. This is a native Windows
-binary, not the upstream Unix binary or a WSL wrapper. Shadow verifies the
-release archive against its pinned SHA-256 during preparation; do not download
-`latest`, substitute a PATH binary, or bypass a missing/invalid bundle.
-Windows ARM64 is not a supported bundled target.
+can use Git. Read `v:tools/safegit/safegit` directly for the tool contract, then
+call `safegit` through `invoke_tool` (the default structured entry). Local exec
+also exposes `SHADOW_SAFEGIT_PATH` for CLI help and the same authorized safegit
+operations; this is not permission to bypass safegit with raw Git. See
+[safegit usage](v:skills/git-github/references/safegit.md) for commit/push examples.
+If unavailable, stop the mutation; do not fall back to raw Git.
 
 ## GitHub
 

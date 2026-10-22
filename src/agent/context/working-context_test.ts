@@ -33,6 +33,9 @@ test('initial local instructions and discovery use exactly the switch preparatio
       switchProjectFolder: async (prepared: { content: string }) => { switched = prepared.content; return 'receipt' },
     } as unknown as ExecutionContext)
     assert.equal(initial, switched)
+    assert.match(initial, /^# Working context snapshot\n- Selected Project folder: .*\n- Default cwd: .*\n\nThis committed/m)
+    assert.match(initial, /- Source: .*\n- Scope: this folder and descendants only\./)
+    assert.doesNotMatch(initial, /directory resources|registered resource/)
     assert.match(initial, /Scoped root rules/)
     assert(initial.includes(join(root, 'AGENTS.md').replaceAll('\\', '\\\\')))
     assert.match(initial, /descendants only/)

@@ -29,6 +29,8 @@ import { defaultManagedShell } from '../execution/processes/shells.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import { CommandHandlerManager, type CommandContext } from './shell-commands/command-handler.ts'
 import { ExecTool } from './shell.ts'
+import { resolveSessionLocations } from '../sessions/locality.ts'
+import { localExecSafegitEnv } from '../execution/git/safegit.ts'
 import { ProcessManager as RealProcessManager } from '../execution/processes/manager.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
@@ -257,7 +259,7 @@ test('ExecTool foreground LocalExecutor parity: stdout, stderr, cwd, shell, args
     assertEquals(executor.calls, [{
       script: 'printf test',
       cwd: resolveAgentPath(workspace, sessionCwd, '.'),
-      env: { PARITY_VALUE: 'from-dotenv' },
+      env: { ...await localExecSafegitEnv({ PARITY_VALUE: 'from-dotenv' }), SHADOW_SESSION_DATA_DIR: resolveSessionLocations(workspace, { sessionId: 'session-1' }).sessionDataDir },
       shell: defaultManagedShell(),
       args: ['one', 'two'],
     }])
@@ -336,7 +338,7 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
       const tool = new ExecTool(sandbox, 120_000, new CommandHandlerManager(), manager, defaultManagedShell(), tasks)
       const base = new Tools(sandbox)
       base.register(tool)
-      const source = 'setTimeout(() => { console.log("PASS before failure"); console.error("assertion failed"); process.exit(7) }, 100)'
+      const source = 'setTimeout(() => { console.log("PASS before failure"); console.log("SESSION_DATA=" + process.env.SHADOW_SESSION_DATA_DIR); console.error("assertion failed"); process.exit(7) }, 100)'
       const file = join(sandbox, `background-failure-${shell}-${timeout_ms}.cjs`)
       await writeFile(file, source)
       try {
@@ -350,6 +352,8 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
         assertMatch(output, /Status: failed/)
         assertMatch(output, /PASS before failure/)
         assertMatch(output, /assertion failed/)
+        const expectedData = `SESSION_DATA=${resolveSessionLocations(sandbox, { sessionId: 'session-1' }).sessionDataDir}`
+        assert(output.includes(shell === 'node' ? JSON.stringify(expectedData).slice(1, -1) : expectedData), output)
         if (shell !== 'node') {
           assert(output.includes(`Shell: ${shell}\nCwd: ${sandbox}`))
           assertMatch(output, /\[stdout\]\nPASS before failure/)
@@ -497,12 +501,14 @@ test('node exec uses the shared TS runtime with native imports, args, cwd, env a
         'import { basename } from "node:path";',
         'const number: number = 42;',
         'console.log(basename(process.cwd()), process.env.SCRIPT_FIXTURE_VALUE);',
+        'console.log(JSON.stringify({ safegit: process.env.SHADOW_SAFEGIT_PATH }));',
         'export default async (args: string[]) => ({ number, args, calls: [await fixture({ value: 1 }), await fixture({ value: 2 })] });',
       ].join('\n'),
     }, ctx)
     const result = JSON.parse(requireToolText(response))
     assert.equal(result.ok, true, requireToolText(response))
     assert.match(result.stdout, /synthetic/)
+    assert(result.stdout.includes(JSON.stringify({ safegit: (await localExecSafegitEnv({})).SHADOW_SAFEGIT_PATH })))
     assert.deepEqual(result.result, {
       number: 42, args: ['one', 'two'],
       calls: [{ input: { value: 1 }, sessionId: ctx.sessionId }, { input: { value: 2 }, sessionId: ctx.sessionId }],
@@ -774,3 +780,75 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
     })
   }
 }
+
+test('local OS and Node children receive the explicit host safegit override ahead of dotenv without mutating the host', async () => {
+  const workspace = await createTempWorkspace()
+  const previous = process.env.SHADOW_SAFEGIT_PATH
+  const binary = join(workspace, 'explicit-safegit')
+  const manager = new RealProcessManager()
+  const scope = createProjectScope('safegit-env-project')
+  const runtime = new EvalBridgeRuntime({ projectId: scope.projectId, scope })
+  const tool = new ExecTool(workspace, 120_000, new CommandHandlerManager(), manager,
+    defaultManagedShell(), new RecordingBackgroundTasks() as unknown as BackgroundTaskManager)
+  try {
+    process.env.SHADOW_SAFEGIT_PATH = binary
+    await writeFile(join(workspace, '.env'), 'SHADOW_SAFEGIT_PATH=must-not-replace-host\n')
+    const ctx = callContext(workspace, tool)
+    ctx.projectId = scope.projectId
+    ctx.evalBridge = runtime
+    const shell = process.platform === 'win32' ? 'cmd' : 'sh'
+    const os = await tool.execute({ shell, script: process.platform === 'win32'
+      ? 'echo %SHADOW_SAFEGIT_PATH%' : 'printf "%s" "$SHADOW_SAFEGIT_PATH"' }, ctx)
+    assert.equal(requireToolText(os).trim(), binary)
+    const node = JSON.parse(requireToolText(await tool.execute({ shell: 'node',
+      script: 'export default () => process.env.SHADOW_SAFEGIT_PATH' }, ctx)))
+    assert.equal(node.ok, true)
+    assert.equal(node.result, binary)
+    assert.equal(process.env.SHADOW_SAFEGIT_PATH, binary)
+  } finally {
+    if (previous === undefined) delete process.env.SHADOW_SAFEGIT_PATH
+    else process.env.SHADOW_SAFEGIT_PATH = previous
+    await runtime.shutdown()
+    scope.close()
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+
+test('local OS and Node use current logical session data despite inherited cwd and dotenv, without host mutation', async () => {
+  const workspace = await createTempWorkspace()
+  const before = process.env.SHADOW_SESSION_DATA_DIR
+  const manager = new RealProcessManager()
+  const scope = createProjectScope('session-env-project')
+  const runtime = new EvalBridgeRuntime({ projectId: scope.projectId, scope })
+  const tool = new ExecTool(workspace, 120_000, new CommandHandlerManager(), manager,
+    defaultManagedShell(), new RecordingBackgroundTasks() as unknown as BackgroundTaskManager)
+  try {
+    await writeFile(join(workspace, '.env'), 'SHADOW_SESSION_DATA_DIR=wrong-dotenv-owner\n')
+    const owner = resolveSessionLocations(workspace, { sessionId: 'web:owner' }).sessionDataDir
+    await mkdir(owner, { recursive: true })
+    for (const mode of ['call', 'session'] as const) {
+      const ctx = callContext(workspace, tool)
+      if (mode === 'session') ctx.tools.setExecutionScope('session', [])
+      Object.assign(ctx, { sessionId: `sub-current-${mode}`, physicalSessionId: 'different-segment',
+        workspaceRoot: 'web:owner', cwd: owner, projectId: scope.projectId, evalBridge: runtime })
+      const expected = resolveSessionLocations(workspace, { sessionId: ctx.sessionId }).sessionDataDir
+      assert.notEqual(expected, owner)
+      const shell = process.platform === 'win32' ? 'cmd' : 'sh'
+      const os = await tool.execute({ shell, script: process.platform === 'win32'
+        ? 'echo %SHADOW_SESSION_DATA_DIR%' : 'printf "%s" "$SHADOW_SESSION_DATA_DIR"' }, ctx)
+      assert.equal(requireToolText(os).trim(), expected)
+      const nodeText = requireToolText(await tool.execute({ shell: 'node',
+        script: 'export default () => ({ data: process.env.SHADOW_SESSION_DATA_DIR, cwd: process.cwd() })' }, ctx))
+      assert(nodeText.startsWith('{'), nodeText)
+      const node = JSON.parse(nodeText)
+      assert.equal(node.ok, true)
+      assert.deepEqual(node.result, { data: expected, cwd: owner })
+      assert.equal(process.env.SHADOW_SESSION_DATA_DIR, before)
+    }
+  } finally {
+    await runtime.shutdown()
+    scope.close()
+    await rm(workspace, { recursive: true, force: true })
+  }
+})

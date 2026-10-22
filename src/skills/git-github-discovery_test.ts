@@ -14,10 +14,13 @@ test('Git/GitHub skill is bundled and discoverable without installing CLIs', asy
       for (const detail of ['bundled **safegit**', 'never raw',
         'v:skills/git-github/references/safegit.md', 'Prefer **gh**',
         'fetch', 'read', 'not unlimited requests', 'v:skills/download',
-        '**ci010/safegit**', 'v0.33.0-windows.1', 'native Windows',
-        'pinned SHA-256', 'Windows ARM64']) {
+        'v:tools/safegit/safegit', 'invoke_tool', 'SHADOW_SAFEGIT_PATH', 'authorized safegit']) {
         assert.ok(skill.includes(detail), `Missing guidance: ${detail}`)
       }
+      assert.doesNotMatch(skill, /### Native Windows|Windows ARM64|pinned SHA-256/)
+      const usage = await readFile(new URL('./builtin/git-github/references/safegit.md', import.meta.url), 'utf8')
+      assert.match(usage, /v:tools\/safegit\/safegit/)
+      assert.doesNotMatch(usage, /Discover `safegit` under|Windows x64|SHA-256/)
       assert.ok(skills.getMetadataSummary().includes('git-github'))
     } finally {
       await skills.stopWatching()
