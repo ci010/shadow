@@ -45,3 +45,22 @@ test('workspace preserves the same device endpoint prefix as its challenge and e
     assert.equal(response.status, 200)
   }
 })
+
+test('Child workspace forwards Main and other Child folder selections without interpreting their paths locally', async () => {
+  const app = new Hono()
+  const calls: { path: string; body: unknown }[] = []
+  childWorkspacePlugin({ endpoint: 'https://main.invalid', proof: async () => 'synthetic-proof', fetch: async (_url, init) => {
+    const headers = new Headers(init?.headers)
+    assert.equal(headers.get('Authorization'), null)
+    assert.equal(headers.get('X-Shadow-Ui-Method'), 'POST')
+    const body = await new Response(init?.body).json()
+    calls.push({ path: headers.get('X-Shadow-Ui-Path')!, body })
+    return Response.json({ folder: { id: 'owner-registered' } })
+  } })(app)
+  for (const [nodeId, path] of [['main-id', '/main/project'], ['other-child', 'Z:\\远端\\项目']]) {
+    const result = await app.request('/projects/default/api/folders/picker/select', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nodeId, path }) })
+    assert.equal(result.status, 200)
+    assert.deepEqual(calls.at(-1), { path: '/projects/default/api/folders/picker/select', body: { nodeId, path } })
+  }
+})

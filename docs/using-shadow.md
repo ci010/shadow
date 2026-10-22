@@ -140,9 +140,21 @@ skills, and settings. Provider credentials and paired devices are shared at the
 App level. Project isolation is **not an OS sandbox**: permitted host tools still
 run with the backend user's permissions.
 
-Use a Project's **+** menu to open a local folder, clone a repository, or start
-from scratch without selecting a folder. A folder's **+** starts a conversation
-in that folder. A new draft does not create a session until its first message is
+Use a Project's **+** menu to open a folder, clone a repository, or start
+from scratch without selecting a folder. **Open folder** and **Open remote folder**
+use the same in-app directory picker on web, Main, and Child; no native directory
+dialog is opened. Choose Main or a paired Child by device name and node ID, browse
+subdirectories or go to the parent, or enter an absolute path on that device.
+Offline devices remain visible; reconnect and refresh to retry. A Child must be
+updated to advertise the owner-folder-picker capability before browsing is enabled.
+Opening a folder registers it in the selected Project without creating a chat.
+Remote selections are canonicalized and persisted by the owning Child, then
+verified for exclusive Project ownership by Main; remote paths are never treated
+as Main paths. Cancelling browsing does not register a folder. Child-managed
+session storage and its ancestors cannot be selected as Project folders.
+**Clone repository** still clones on Main; its parent directory is chosen through
+the same in-app browser (Main only), and existing destinations are never replaced.
+A folder's **+** starts a conversation in that folder. A new draft does not create a session until its first message is
 sent. Selecting the Project name opens its **Dashboard** as a permanent tab,
 alongside Knowledge, project settings, agents and open files. The Dashboard groups
 recent focus by inferred shared purpose, then shows separate topics with their latest

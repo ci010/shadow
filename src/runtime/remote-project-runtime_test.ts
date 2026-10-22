@@ -177,6 +177,19 @@ for (const localExecutor of [undefined, false]) test(`production project composi
     const deleted = await runtime.app.request(`/api/sessions/${encodeURIComponent(scratch.sessionId)}`, { method: 'DELETE' })
     assert.equal(deleted.status, 200, await deleted.clone().text())
     assert.equal(await readFile(join(allocated.displayPath!, 'scratch.txt'), 'utf8'), 'Independent Child session')
+    const pickedPath = join(root, 'picked-child-folder')
+    await mkdir(pickedPath)
+    const browsed = await request('/api/folders/picker/browse', { nodeId: 'child', path: pickedPath })
+    assert.equal(browsed.status, 200, await browsed.clone().text())
+    assert.equal((await browsed.json()).listing.path, pickedPath)
+    const selected = await request('/api/folders/picker/select', { nodeId: 'child', path: pickedPath })
+    assert.equal(selected.status, 200, await selected.clone().text())
+    const picked = (await selected.json()).folder
+    assert.equal(picked.kind, 'remote')
+    assert.equal(picked.projectId, 'default')
+    assert.equal(picked.workdir.nodeId, 'child')
+    assert.ok(workdirs.capabilities.some(c => c.capabilityId === picked.workdir.capabilityId))
+
   } finally {
     await scope.run(() => runtime.shutdown())
     scope.close()

@@ -27,10 +27,14 @@ export async function executeRemoteFilesystemText(
   target: RemoteFilesystemTarget,
   operation: string,
   args: unknown,
+  maxOutputBytes = Number.POSITIVE_INFINITY,
 ): Promise<string> {
   const createdAt = new Date()
   const jobId = crypto.randomUUID()
   const output: string[] = []
+  let bytes = 0
+  const controller = new AbortController()
+  const signal = AbortSignal.any([target.signal, controller.signal])
   let terminal: ExecutionReceiptV1 | undefined
   for await (
     const event of target.executor.execute({
@@ -45,10 +49,16 @@ export async function executeRemoteFilesystemText(
       args,
       createdAt: createdAt.toISOString(),
       deadlineAt: new Date(createdAt.getTime() + 60_000).toISOString(),
-    }, target.signal)
+    }, signal)
   ) {
-    if (event.type === 'stdout') output.push(event.chunk)
-    if (event.type === 'stderr') output.push(event.chunk)
+    if (event.type === 'stdout' || event.type === 'stderr') {
+      bytes += Buffer.byteLength(event.chunk)
+      if (bytes > maxOutputBytes) {
+        controller.abort()
+        throw new RemoteFilesystemError('result-too-large', 'The remote result exceeded its size limit.', false)
+      }
+      output.push(event.chunk)
+    }
     if ('receipt' in event) terminal = event.receipt
   }
   if (!terminal || terminal.state !== 'completed') {
