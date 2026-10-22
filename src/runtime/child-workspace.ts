@@ -1,4 +1,5 @@
 import { DEVICE_UI_CHALLENGE, DEVICE_UI_REQUEST, deviceUiHeaders, deviceUiPath } from '../cluster/device-ui.ts'
+import { DeviceApprovalUnavailableError, DeviceChallengeRequestError } from '../cluster/device-challenge-client.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 
 /** Loopback renderer admission is enforced by ChildLocalControl before this proxy. */
@@ -11,19 +12,36 @@ export function childWorkspacePlugin(options: {
     const url = new URL(c.req.url)
     const path = `${url.pathname}${url.search}`
     if (!deviceUiPath(path)) return c.json({ error: 'not_found' }, 404)
+    let stage = 'challenge'
     try {
       const proof = await options.proof(AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(8000)]), DEVICE_UI_CHALLENGE)
-      const endpoint = new URL(DEVICE_UI_REQUEST, options.endpoint)
+      stage = 'request'
+      // Match execution/challenge routing when a device endpoint is mounted under a proxy prefix.
+      const endpoint = new URL(options.endpoint)
+      endpoint.pathname = endpoint.pathname.replace(/\/+$/, '') + DEVICE_UI_REQUEST
+      endpoint.search = ''; endpoint.hash = ''
       const headers = deviceUiHeaders(c.req.raw.headers)
       headers.set('X-Shadow-Device-Proof', proof)
       headers.set('X-Shadow-Ui-Path', path)
       headers.set('X-Shadow-Ui-Method', c.req.method)
-      return await (options.fetch ?? fetch)(endpoint, {
+      const response = await (options.fetch ?? fetch)(endpoint, {
         method: 'POST', headers, redirect: 'error', signal: c.req.raw.signal,
         ...(!['GET', 'HEAD'].includes(c.req.method) ? { body: c.req.raw.body, duplex: 'half' } : {}),
       } as RequestInit)
-    } catch {
-      return c.json({ error: 'main_workspace_unavailable', message: 'Main workspace is offline or this Child is not approved. Retry when Main is available.' }, 503, { 'Cache-Control': 'no-store' })
+      if (!response.ok) console.error('[child-workspace]', { stage, status: response.status })
+      return response
+    } catch (error) {
+      // Never log endpoint, proof, credentials, arbitrary exception messages or response bodies.
+      const cause = error instanceof Error ? error.cause : undefined
+      const transportCode = cause && typeof cause === 'object' && 'code' in cause ? cause.code : undefined
+      const knownTransportCodes = ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE']
+      const code = error instanceof DeviceApprovalUnavailableError ? 'main_workspace_approval_unavailable'
+        : error instanceof DeviceChallengeRequestError ? `main_workspace_challenge_http_${error.status}`
+        : error instanceof Error && error.name === 'TimeoutError' ? 'main_workspace_timeout'
+        : typeof transportCode === 'string' && knownTransportCodes.includes(transportCode) ? `main_workspace_${transportCode.toLowerCase()}`
+        : 'main_workspace_unavailable'
+      console.error('[child-workspace]', { stage, code })
+      return c.json({ error: code, stage }, 503, { 'Cache-Control': 'no-store' })
     }
   })
 }

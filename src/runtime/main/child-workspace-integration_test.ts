@@ -4,7 +4,7 @@ import { createServer } from 'node:net'
 import { once } from 'node:events'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { Hono } from 'hono'
+import { ChildLocalControlService } from '../child-local-control.ts'
 import { ConfigSchema } from '../../config/schema.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
 import { startMainRuntime } from './start.ts'
@@ -52,20 +52,26 @@ test('real Main device ingress serves same project/session APIs to approved Chil
       const setup = await fetch(`${mainBase}/nodes/v1/network`, { method: 'PUT', headers: { Authorization: 'Bearer fixture-main-secret', 'Content-Type': 'application/json' },
         body: JSON.stringify({ version: 1, enabled: true, host: '127.0.0.1', port: devicePort, allowInsecureLocalTransport: true }) })
       assert.equal(setup.status, 200, await setup.text())
-      const child = new Hono()
-      childWorkspacePlugin({ endpoint: deviceBase,
+      const child = new ChildLocalControlService({ port: 0, launchCredential: 'fixture-child-secret', requestShutdown() {},
+        workspace: childWorkspacePlugin({ endpoint: deviceBase,
         proof: (signal, path) => requestDeviceChallengeProtocol(deviceBase, auth, new DeviceCredentialProof(async bytes => new Uint8Array(await crypto.subtle.sign('Ed25519', keys.privateKey, new Uint8Array(bytes)))), fetch, signal, path),
-      })(child)
+      }) })
+      await child.start(new AbortController().signal)
+      t.after(() => child.shutdown())
+      const childBase = `http://127.0.0.1:${child.address!.port}`
+      const childRequest = (path: string, init: RequestInit = {}) => fetch(childBase + path, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), Authorization: 'Bearer fixture-child-secret' } })
+      assert.equal((await fetch(childBase + '/api/projects')).status, 401)
+      assert.equal((await fetch(childBase + '/api/projects', { headers: { Authorization: 'Bearer fixture-main-secret' } })).status, 401)
       const ownerHeaders = { Authorization: 'Bearer fixture-main-secret' }
       const ownerProjects = await (await fetch(`${mainBase}/api/projects`, { headers: ownerHeaders })).json()
-      const projects = await child.request('/api/projects'); assert.equal(projects.status, 200, await projects.clone().text())
+      const projects = await childRequest('/api/projects'); assert.equal(projects.status, 200, await projects.clone().text())
       assert.deepEqual(await projects.json(), ownerProjects)
-      const rename = await child.request('/api/projects/default', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Changed from Child workspace' }) })
+      const rename = await childRequest('/api/projects/default', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Changed from Child workspace' }) })
       assert.equal(rename.status, 200, await rename.clone().text())
       const changed = await (await fetch(`${mainBase}/api/projects`, { headers: ownerHeaders })).json()
       assert.equal(changed.projects.find((project: { id: string }) => project.id === 'default').name, 'Changed from Child workspace')
       for (const path of ['/projects/default/api/sessions', '/projects/default/api/microapps']) {
-        const response = await child.request(path)
+        const response = await childRequest(path)
         assert.equal(response.status, 200, `${path}: ${await response.clone().text()}`)
         assert.deepEqual(await response.json(), await (await fetch(mainBase + path, { headers: ownerHeaders })).json())
       }

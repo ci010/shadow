@@ -15,7 +15,7 @@ const repository = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('Child wizard validates consent and retries; local shell is honest offline and stays bounded', {
+test('Child wizard validates consent; workspace recovery replaces the old local status shell', {
   timeout: 60_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server' : false,
 }, async () => {
@@ -30,7 +30,7 @@ test('Child wizard validates consent and retries; local shell is honest offline 
         import 'uno.css'; import '/src/styles.css';
         import { createApp, h } from 'vue';
         import Wizard from '/src/FirstRunWizard.vue';
-        import Child from '/src/ChildDesktop.vue';
+        import Child from '/src/ChildWorkspace.vue';
         import Recovery from '/src/RuntimeRecovery.vue';
         import DesktopFrame from '/src/DesktopFrame.vue';
         import RoleSettings from '/src/components/DesktopRoleSettings.vue';
@@ -50,6 +50,7 @@ test('Child wizard validates consent and retries; local shell is honest offline 
         mounted.mount('#app');
         window.fetch = async url => {
           f.requests.push(String(url));
+          if (String(url).endsWith('/api/projects')) return Response.json({error:'main_workspace_econnrefused'}, {status:503});
           if (String(url).endsWith('/local/v1/child')) {
             if(f.statusFailure) throw new Error('offline');
             return Response.json({version:1,nodeId:'child-1',mainEndpoint:info.endpoint,connection:f.connection,

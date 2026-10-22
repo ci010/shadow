@@ -14,8 +14,27 @@ After the existing Child pairing and Main approval, Child opens the same Main
 projects, conversations and application settings automatically. No second
 invitation, browser login, role switch or separate HTTPS deployment is required.
 The Child runtime remains an execution node and does not start a second Main.
-**Local status** remains available from the workspace, and is shown automatically
-while Main is unavailable or approval is pending; the connection retries.
+The old Child-only status/inventory home and its navigation entry have been
+removed. While the workspace is unavailable, only a small connection recovery
+screen is shown, with automatic retry and a manual retry button. Execution-node
+`connected` only confirms the execution transport, not workspace HTTP admission.
+The recovery screen displays a bounded error code and HTTP status instead of assuming
+that every failure means approval is pending. For example, `unauthorized` (401)
+can indicate local gateway admission, `main_workspace_challenge_http_404` is a missing Main
+workspace challenge route, and `main_workspace_approval_unavailable` means Main
+explicitly reported that the credential is unavailable (not necessarily pending).
+Backend `[child-workspace]` diagnostics include only stage/code/status, never the
+endpoint, credential, signed proof or arbitrary upstream response body.
+
+Device endpoints with a reverse-proxy path prefix retain that prefix for both
+challenge and workspace request URLs, matching the execution transport.
+
+To diagnose a connection failure without re-pairing, open the existing Child
+installation with Main online, record the recovery screen's code/HTTP status,
+and correlate it with backend `[child-workspace]` stage diagnostics. A local
+401 fails before the Main challenge; a challenge failure and a tunneled request
+failure are different stages. Do not create another invitation for an already
+approved identity solely because the workspace probe failed.
 
 Approval now explicitly describes workspace access: only approve a desktop you
 trust with the single-owner Main workspace. Existing approved public-key devices

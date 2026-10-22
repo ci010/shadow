@@ -17,7 +17,6 @@
     </template>
     <template #actions>
       <Teleport :to="mobile.actionsTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.actionsTarget.value">
-          <button v-if="installationContext.mainWorkspace" class="tab" @click="emit('childStatus')">{{ t('Child') }} · {{ t('Local status') }}</button>
           <DesktopBrowserAccess v-if="isMain && !installationContext.mainWorkspace && desktopWebPairing" :api="desktopWebPairing" />
           <MobileConnection v-if="mobileSession" :session="mobileSession" connected />
           <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">{{ t('Sign out') }}</button>
@@ -77,7 +76,6 @@
 </template>
 
 <script setup lang="ts">
-const emit = defineEmits<{ childStatus: [] }>()
 import { t } from './i18n.ts'
 import { installRevealBorder } from './reveal-border.ts'
 import { computed, ref, onMounted, onUnmounted, watch, provide, inject } from 'vue'

@@ -3858,7 +3858,7 @@
   "Main workspace": "Main workspace",
   "Open Main workspace": "Open Main workspace",
   "Local status": "Local status",
-  "Main workspace is offline or approval is pending. Retrying automatically; Child execution role is unchanged.": "Main workspace is offline or approval is pending. Retrying automatically; Child execution role is unchanged.",
+  "Main workspace unavailable. Retrying automatically; Child execution role is unchanged.": "Main workspace unavailable. Retrying automatically; Child execution role is unchanged.",
   "Main workspace is available automatically after device approval. This local status and inventory remain available when Main is offline.": "Main workspace is available automatically after device approval. This local status and inventory remain available when Main is offline.",
   "An approved Child desktop can also operate this Main’s projects, sessions and application settings. Device removal revokes workspace access too. Approve only a desktop you trust with your Main workspace.": "An approved Child desktop can also operate this Main’s projects, sessions and application settings. Device removal revokes workspace access too. Approve only a desktop you trust with your Main workspace.",
   "Pair and open workspace": "Pair and open workspace",

@@ -47,3 +47,19 @@ test('disposing Child workspace aborts an in-flight check and ignores its late r
   await check
   assert.equal(connection.available.value, false)
 })
+
+test('workspace displays safe concrete HTTP diagnostics and clears them after recovery', async () => {
+  let response = Response.json({ error: 'main_workspace_challenge_http_404' }, { status: 503 })
+  const connection = createChildWorkspaceConnection('http://127.0.0.1:3123', { fetch: async () => response })
+  try {
+    await connection.refresh()
+    assert.equal(connection.error.value, 'main_workspace_challenge_http_404 (HTTP 503)')
+    response = Response.json({ error: 'Bearer secret with spaces' }, { status: 401 })
+    await connection.refresh()
+    assert.equal(connection.error.value, 'main_workspace_http_error (HTTP 401)')
+    response = Response.json({ projects: [] })
+    await connection.refresh()
+    assert.equal(connection.error.value, null)
+    assert.equal(connection.available.value, true)
+  } finally { connection.dispose() }
+})
