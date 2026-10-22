@@ -8,7 +8,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 export class UseProjectTool implements Tool {
   readonly name = 'use_project'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Select a registered Folder in the current Project and switch the default cwd together. Use the short identifier from Project folders or its full folder ID, never a path. Call alone, directly, not in a parallel batch or script. Applies to subsequent calls only; running processes and children retain their context. Does not change Project scope.'
+  readonly description = 'Set a registered Folder in the current Project as this session\'s ongoing working context, switching the default cwd and folder-scoped instructions together. Use when this session will keep working in that folder, not as a prerequisite for every folder task. For cross-folder work, consider explicit paths or separate folder-bound subagents/sessions instead of serial switching; choose what fits the task. Use the short identifier from Project folders or its full folder ID, never a path. Call alone, directly, not in a parallel batch or script. Applies to subsequent calls only; running processes and children retain their context. Does not change Project scope.'
   readonly parameters: ToolParameters = {
     type: 'object', properties: { folder: { type: 'string', description: 'Unique short folder name (for example app or docs), name-ID selector from discovery, or full folder ID.' } },
     required: ['folder'], additionalProperties: false,

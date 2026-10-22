@@ -3011,6 +3011,15 @@ the full ID, which always wins. Renaming a folder changes its name selectors,
 not its full ID. Paths, arbitrary UUID prefixes and `$alias/path` expressions
 are not switching endpoints.
 
+Use this tool when a session needs a folder as its ongoing working context
+(default cwd and folder-scoped instructions), not as a mandatory first step for
+every task involving that folder. A task spanning folders may be better served
+by explicit paths or separate subagents/sessions with their own folder contexts,
+rather than serially switching the parent session. These are task-dependent
+choices, not a requirement to delegate or a prohibition on switching. Explicit
+paths do not change the session context; applicable directory instructions still
+need to be read and followed.
+
 The tool must be the sole direct top-level call. Parallel batches and nested
 script invocations cannot switch; other calls in a rejected mixed batch still
 run in the old context. Availability and root `AGENTS.md` preparation happen
