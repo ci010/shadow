@@ -21,7 +21,7 @@
           <p v-if="status.allowInsecureLocalTransport && status.mainEndpoint.startsWith('http:')">{{ t('Trusted LAN/VPN HTTP test transport: traffic is unencrypted; device authentication is still required.') }}</p>
           <details><summary>{{ t('Execution access on this computer') }}</summary><p>{{ t('The approved Main may use the shared work folder, managed session workdirs under Child home, and shell commands as your OS account. Shell access is not a sandbox. These advertised capabilities become available after device approval.') }}</p></details>
         </template>
-        <p class="scope-note">{{ t('Chat and Main administration are not proxied on Child. Use Main for those tasks. This page and the local inventory remain available when Main is offline.') }}</p>
+        <p class="scope-note">{{ t('Main workspace is available automatically after device approval. This local status and inventory remain available when Main is offline.') }}</p>
       </section>
       <NodesView :api-base="apiBase" />
     </main>
@@ -31,10 +31,14 @@
 <script setup lang="ts">
 import DesktopRoleSettings from './components/DesktopRoleSettings.vue'
 import { t } from './i18n.ts'
-import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref, provide, readonly } from 'vue'
 import DesktopFrame from './DesktopFrame.vue'
 import NodesView from './components/NodesView.vue'
 import { parseChildStatus, type ChildStatus } from './child-status.ts'
+
+import { installationContextKey, useInstallationContext } from './composables/useInstallationContext.ts'
+const inheritedContext = useInstallationContext()
+provide(installationContextKey, readonly(ref({ ...inheritedContext.value, mainWorkspace: false, uiScopes: [] })))
 
 const props = defineProps<{ apiBase: string }>()
 const status = ref<ChildStatus | null>(null)

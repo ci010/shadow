@@ -40,7 +40,7 @@ test('sidebar remote action opens the existing draft picker without allocating o
   const workspace = readFileSync(new URL('./components/ChatWorkspace.vue', import.meta.url), 'utf8')
   assert.match(sidebar, /action.id !== 'remote' \|\| props.remoteFolders/)
   assert.match(sidebar, /id === 'remote'.*emit\('remote'\)/)
-  assert.match(chat, /:remote-folders="installation.mode === 'main'"/)
+  assert.match(chat, /:remote-folders="\(installation.mode === 'main' \|\| installation.mainWorkspace === true\)"/)
   assert.match(chat, /@remote="createNewWebChat\(undefined, true, true\)"/)
   const createDraft = chat.slice(chat.indexOf('function createNewWebChat('), chat.indexOf('function clearPendingAttachments('))
   assert.match(createDraft, /emit\('primary-change', ''\)/)

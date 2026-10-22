@@ -9,7 +9,8 @@ import { createLocalMainAdminContext } from './installation-context.ts'
 import FirstRunWizard from './FirstRunWizard.vue'
 import RuntimeRecovery from './RuntimeRecovery.vue'
 import DesktopFrame from './DesktopFrame.vue'
-import ChildDesktop from './ChildDesktop.vue'
+import ChildWorkspace from './ChildWorkspace.vue'
+import { LOCAL_MAIN_ADMIN_SCOPES } from './installation-context.ts'
 import BrowserAuth from './BrowserAuth.vue'
 import { browserSessionKey, createBrowserSession, mountBrowserSession } from './web-auth.ts'
 import {
@@ -42,9 +43,10 @@ function desktopRoot(component: Component, props?: Record<string, unknown>) {
 
 function mountMainApp(installationContext: InstallationContextV1): void {
 	if (installationContext.mode === 'child') {
-		createApp(ChildDesktop, { apiBase: installationContext.apiBase })
+		createApp(ChildWorkspace, { apiBase: installationContext.apiBase })
+			.use(router)
 			.use(i18n)
-			.use(createInstallationContextProvider(installationContext))
+			.use(createInstallationContextProvider({ ...installationContext, mainWorkspace: true, uiScopes: LOCAL_MAIN_ADMIN_SCOPES.filter(scope => scope !== 'nodes:admin') }))
 			.mount('#app')
 		return
 	}

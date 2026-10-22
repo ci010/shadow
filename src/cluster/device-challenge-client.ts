@@ -19,13 +19,14 @@ export async function requestDeviceChallengeProtocol(
   proof: DeviceCredentialProof,
   fetchChallenge: ChallengeFetch = fetch,
   signal?: AbortSignal,
+  challengePath = '/cluster/v1/challenges',
 ): Promise<string> {
   const url = new URL(endpoint)
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new TypeError('Main endpoint must use http or https')
   }
   const basePath = url.pathname.replace(/\/+$/, '')
-  url.pathname = `${basePath}/cluster/v1/challenges`
+  url.pathname = `${basePath}${challengePath}`
   url.search = ''
   url.hash = ''
   const response = await fetchChallenge(url, {

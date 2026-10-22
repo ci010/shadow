@@ -101,7 +101,8 @@
 						<div class="directory-field"><input id="child-workdir" v-model="child.workdir" class="directory-input" required :disabled="busy"><button type="button" class="secondary-button" :disabled="busy" @click="pickChildFolder('workdir')">{{ t('Browse…') }}</button></div>
 						<p class="field-help">{{ t('Use separate folders, not a drive root. Child home stays fixed after the first attempt so retries retain this device\'s identity. You can correct the endpoint and work folder until pairing succeeds. No existing data is moved or deleted.') }}</p>
 						<label class="consent-row"><input v-model="executionConsent" type="checkbox" :disabled="busy" required><span>{{ t('I allow the approved Main to read/write the work folder, create managed workdirs under Child home, and execute commands as my OS account.') }} <strong>{{ t('Shell access is not a sandbox and can access other host files.') }}</strong> {{ t('Pair only with a Main you trust with this access.') }}</span></label>
-						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || childSetupBlocked || !executionConsent || !!transportError || !manualPairing && !!invitationPreview.error">{{ busy ? t('Submitting pairing request…') : t('Pair and open local status') }}</button></div>
+						<p>{{ t('After approval, this Child can operate Main’s projects, sessions and application settings without another login. Workspace traffic uses the same device transport; trusted-network HTTP is not encrypted.') }}</p>
+						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || childSetupBlocked || !executionConsent || !!transportError || !manualPairing && !!invitationPreview.error">{{ busy ? t('Submitting pairing request…') : t('Pair and open workspace') }}</button></div>
 					</form>
 				</div>
 

@@ -17,7 +17,8 @@
     </template>
     <template #actions>
       <Teleport :to="mobile.actionsTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.actionsTarget.value">
-          <DesktopBrowserAccess v-if="isMain && desktopWebPairing" :api="desktopWebPairing" />
+          <button v-if="installationContext.mainWorkspace" class="tab" @click="emit('childStatus')">{{ t('Child') }} · {{ t('Local status') }}</button>
+          <DesktopBrowserAccess v-if="isMain && !installationContext.mainWorkspace && desktopWebPairing" :api="desktopWebPairing" />
           <MobileConnection v-if="mobileSession" :session="mobileSession" connected />
           <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">{{ t('Sign out') }}</button>
           <button v-if="browserNotifications" class="theme-toggle" :disabled="browserNotifications.requesting.value"
@@ -76,6 +77,7 @@
 </template>
 
 <script setup lang="ts">
+const emit = defineEmits<{ childStatus: [] }>()
 import { t } from './i18n.ts'
 import { installRevealBorder } from './reveal-border.ts'
 import { computed, ref, onMounted, onUnmounted, watch, provide, inject } from 'vue'
@@ -146,7 +148,7 @@ if (import.meta.env.DEV) {
 const contentBase = computed(() => typeof route.params.projectId === 'string' && !workspaceRoutes.includes(String(route.name))
   ? projectBase(resolvedBase.value, route.params.projectId) : resolvedBase.value)
 const showChildRecovery = computed(() =>
-  installationContext.value.mode === 'child' &&
+  installationContext.value.mode === 'child' && !installationContext.value.mainWorkspace &&
   installationContext.value.mainConnection !== 'connected'
 )
 const recoveryTitle = computed(() =>
@@ -158,7 +160,7 @@ const recoveryTitle = computed(() =>
 const logCount = ref(0)
 
 // ── Model selector ──────────────────────────────────────────
-const isMain = computed(() => installationContext.value.mode === 'main' || installationContext.value.mode === 'client')
+const isMain = computed(() => installationContext.value.mainWorkspace === true || installationContext.value.mode === 'main' || installationContext.value.mode === 'client')
 const providerStatus = ref<ProviderSetupStatus | null>(null)
 const checkingProvider = ref(true)
 const providerError = ref('')

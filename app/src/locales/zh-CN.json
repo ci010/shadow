@@ -3854,5 +3854,13 @@
   "Public or DNS HTTP endpoints are not allowed. Use HTTPS, or a private LAN/VPN IP address.": "不允许公网或域名 HTTP 地址。请使用 HTTPS，或私有局域网/VPN IP 地址。",
   "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.": "HTTP 将以明文传输 PIN 和流量。配对前请明确允许可信局域网/VPN HTTP。",
   "Child identity conflicts with the saved configuration or cannot be read. Restore the matching Child configuration; existing identity data is retained.": "子节点身份与已保存的配置不匹配，或身份文件无法读取。请恢复与该身份匹配的子节点配置；已有身份数据会保留。",
-  "Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained.": "无法加载子节点设置。请检查已保存的子节点配置和文件夹权限，或更新桌面构建。已有身份数据会保留。"
+  "Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained.": "无法加载子节点设置。请检查已保存的子节点配置和文件夹权限，或更新桌面构建。已有身份数据会保留。",
+  "Main workspace": "Main 工作区",
+  "Open Main workspace": "打开 Main 工作区",
+  "Local status": "本地状态",
+  "Main workspace is offline or approval is pending. Retrying automatically; Child execution role is unchanged.": "Main 工作区离线或正在等待批准。将自动重试，Child 执行节点角色保持不变。",
+  "Main workspace is available automatically after device approval. This local status and inventory remain available when Main is offline.": "设备获批后将自动打开 Main 工作区。Main 离线时，本地状态和资源清单仍可用。",
+  "An approved Child desktop can also operate this Main’s projects, sessions and application settings. Device removal revokes workspace access too. Approve only a desktop you trust with your Main workspace.": "获批的 Child 桌面也能操作此 Main 的项目、会话与应用设置。移除设备也会撤销工作区访问。请仅批准您信任其访问 Main 工作区的桌面。",
+  "Pair and open workspace": "配对并打开工作区",
+  "After approval, this Child can operate Main’s projects, sessions and application settings without another login. Workspace traffic uses the same device transport; trusted-network HTTP is not encrypted.": "获批后，此 Child 无需再次登录即可操作 Main 的项目、会话和应用设置。工作区流量使用相同的设备传输通道；可信网络 HTTP 不提供加密。"
 }

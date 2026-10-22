@@ -16,6 +16,7 @@ export type UiScope =
 
 export interface InstallationContextV1 {
   version: 1
+  mainWorkspace?: boolean
   mode: InstallationMode
   localNodeId: string
   mainConnection: MainConnectionState

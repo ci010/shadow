@@ -19,7 +19,7 @@
     <p v-if="error" class="inventory-error" role="alert">{{ error }}</p>
     <p v-else-if="loading && !loaded" class="inventory-status" role="status">{{ t('Loading devices…') }}</p>
     <p v-else-if="loaded" class="inventory-status">
-      {{ context.mode === 'child' ? t('Capabilities provided by this Child.') : t('Main and registered Child devices.') }}
+      {{ context.mode === 'child' && !context.mainWorkspace ? t('Capabilities provided by this Child.') : t('Main and registered Child devices.') }}
       {{ t('Updated') }} {{ updatedAt }}{{ t('. Refreshes automatically while visible.') }}
     </p>
 
@@ -175,7 +175,7 @@ async function refresh() {
   controller = current
   loading.value = true
   try {
-    const result = await fetchNodeInventory(props.apiBase, context.value.mode, AbortSignal.any([current.signal, AbortSignal.timeout(10_000)]))
+    const result = await fetchNodeInventory(props.apiBase, context.value.mainWorkspace ? 'main' : context.value.mode, AbortSignal.any([current.signal, AbortSignal.timeout(10_000)]))
     if (controller !== current) return
     nodes.value = result.nodes
     loaded.value = true

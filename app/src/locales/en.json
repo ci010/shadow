@@ -3854,5 +3854,13 @@
   "Public or DNS HTTP endpoints are not allowed. Use HTTPS, or a private LAN/VPN IP address.": "Public or DNS HTTP endpoints are not allowed. Use HTTPS, or a private LAN/VPN IP address.",
   "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.": "HTTP sends the PIN and traffic without encryption. Explicitly allow trusted LAN/VPN HTTP before pairing.",
   "Child identity conflicts with the saved configuration or cannot be read. Restore the matching Child configuration; existing identity data is retained.": "Child identity conflicts with the saved configuration or cannot be read. Restore the matching Child configuration; existing identity data is retained.",
-  "Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained.": "Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained."
+  "Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained.": "Child settings could not be loaded. Check the saved Child configuration and folder permissions, or update the desktop build. Existing identity data is retained.",
+  "Main workspace": "Main workspace",
+  "Open Main workspace": "Open Main workspace",
+  "Local status": "Local status",
+  "Main workspace is offline or approval is pending. Retrying automatically; Child execution role is unchanged.": "Main workspace is offline or approval is pending. Retrying automatically; Child execution role is unchanged.",
+  "Main workspace is available automatically after device approval. This local status and inventory remain available when Main is offline.": "Main workspace is available automatically after device approval. This local status and inventory remain available when Main is offline.",
+  "An approved Child desktop can also operate this Main’s projects, sessions and application settings. Device removal revokes workspace access too. Approve only a desktop you trust with your Main workspace.": "An approved Child desktop can also operate this Main’s projects, sessions and application settings. Device removal revokes workspace access too. Approve only a desktop you trust with your Main workspace.",
+  "Pair and open workspace": "Pair and open workspace",
+  "After approval, this Child can operate Main’s projects, sessions and application settings without another login. Workspace traffic uses the same device transport; trusted-network HTTP is not encrypted.": "After approval, this Child can operate Main’s projects, sessions and application settings without another login. Workspace traffic uses the same device transport; trusted-network HTTP is not encrypted."
 }

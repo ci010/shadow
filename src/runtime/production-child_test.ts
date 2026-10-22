@@ -182,7 +182,7 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals((await fetch(
     `http://127.0.0.1:${localControlPort}/nodes/v1`,
     { headers: { Authorization: 'Bearer production-child-secret' } },
-  )).status, 404)
+  )).status, 503) // Main workspace proxy is explicit about an unavailable/unapproved Main.
   assertEquals(await Promise.all([runtime.shutdown(), runtime.shutdown()]), [
     undefined,
     undefined,

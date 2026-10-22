@@ -117,6 +117,10 @@ export class DeviceChallengeAuthority {
     now = new Date(),
   ): DeviceChallengeV1 {
     this.registry.authenticate(authentication)
+    for (const [id, active] of this.#challenges) {
+      if (Date.parse(active.challenge.expiresAt) <= now.getTime()) this.#challenges.delete(id)
+    }
+    if (this.#challenges.size >= 4096) throw new TypeError('Device challenge capacity reached')
     const registered = this.#credentials.get(authentication.credentialId)
     if (
       !registered ||

@@ -1,3 +1,4 @@
+import { DEVICE_UI_ROUTES } from '../../cluster/device-ui.ts'
 import { Hono } from 'hono'
 import { randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
@@ -39,6 +40,7 @@ export interface DeviceNetworkState extends DeviceNetworkConfig {
 }
 
 interface DeviceNetworkOptions {
+  readonly uiPlugin?: GatewayPlugin
   readonly configPath: string
   readonly cluster: MainCluster
   readonly clientAddresses: GatewayClientAddressRegistry
@@ -51,7 +53,7 @@ const DEFAULT_CONFIG: DeviceNetworkConfig = {
   allowInsecureLocalTransport: false,
 }
 const DEVICE_ROUTES = new Set(
-  MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS.map(({ method, path }) => `${method} ${path}`),
+  [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, ...DEVICE_UI_ROUTES].map(({ method, path }) => `${method} ${path}`),
 )
 
 export function isPrivateDeviceAddress(address: string): boolean {
@@ -196,7 +198,8 @@ export class MainDeviceNetwork {
   private async startListener(): Promise<void> {
     this.requireAddress(this.config.host)
     const app = new Hono()
-    // Only device ingress is reachable here; the UI, launch token and administration stay on Main's gateway.
+    // Only device protocol ingress is reachable here, including the proof-authenticated UI tunnel.
+    // Raw browser APIs and launch-token/local administration remain inaccessible.
     app.use('*', async (context, next) => {
       if (!DEVICE_ROUTES.has(`${context.req.method} ${new URL(context.req.url).pathname}`)) {
         return context.json({ error: 'not_found' }, 404)
@@ -204,9 +207,9 @@ export class MainDeviceNetwork {
       if (context.req.header('Origin')) return context.json({ error: 'browser_access_not_allowed' }, 403)
       await next()
     })
-    registerGatewayRoutes(app, [...this.options.cluster.plugins], {
+    registerGatewayRoutes(app, [...this.options.cluster.plugins, ...(this.options.uiPlugin ? [this.options.uiPlugin] : [])], {
       clientAddresses: this.options.clientAddresses,
-      launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
+      launchCredentialExemptions: [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, ...DEVICE_UI_ROUTES],
     })
     const server = serveGateway(app, {
       host: this.config.host, port: this.config.port,

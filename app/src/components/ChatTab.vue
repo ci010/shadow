@@ -12,7 +12,7 @@
       :sessions="allSessions"
       :active-session-id="childSessionId || activeSessionId"
       :draft-folder-id="draft.folder?.id"
-      :remote-folders="installation.mode === 'main'"
+      :remote-folders="(installation.mode === 'main' || installation.mainWorkspace === true)"
       :collapsed="collapsedSessions"
       :stages="displayedSessionStages"
       :sessions-loading="sessionsLoading"
@@ -58,7 +58,7 @@
       <div v-if="!activeSessionId" class="draft-heading">
         <h1>{{ t('What would you like to work on?') }}</h1>
         <p v-if="projectName" class="draft-scratch">{{ projectName }}</p>
-        <div v-if="installation.mode === 'main'" class="draft-location">
+        <div v-if="(installation.mode === 'main' || installation.mainWorkspace === true)" class="draft-location">
           <ExecutionLocationSelector ref="executionLocationSelector" :empty-label="t('From scratch · No folder selected')" show-shortcuts :folder-sessions="allSessions"
             :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
             :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />

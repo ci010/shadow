@@ -32,7 +32,7 @@
           :pending-coordinator-project-id="pendingCoordinatorProjectId" @coordinator-opening="pendingCoordinatorProjectId = project.id"
           :selected-project-id="selectedProjectId" :selected-session-id="selected?.sessionId ?? ''" :selected-automation-id="automation?.id"
           :dashboard-selected="selected ? dashboardVisibility.get(selected.key) !== false : false"
-          :draft-folder-id="selected?.folder?.id" :remote-folders="installation.mode === 'main'"
+          :draft-folder-id="selected?.folder?.id" :remote-folders="(installation.mode === 'main' || installation.mainWorkspace === true)"
           @select="selectSession(project.id, $event)" @draft="(folder, remote) => startDraft(project.id, folder, remote)"
           @knowledge="openKnowledge(project.id)"
           @deleted="deleted(project.id, $event)" @manage="(folder, action) => manageFolder(project, folder, action)"
