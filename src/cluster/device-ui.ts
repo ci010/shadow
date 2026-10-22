@@ -18,7 +18,10 @@ export function deviceUiAudience(value: string): string {
 }
 /** UI business APIs only. Control/device/credential ingress never becomes tunnelable. */
 export function deviceUiPath(value: string): boolean {
-  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || /%2f|%5c|%2e/i.test(value)) return false
+  // Query values include encoded attachment paths (and may contain URLs). They
+  // are business API data, not part of the route admission/escape check.
+  const rawPath = value.split(/[?#]/, 1)[0]!
+  if (!rawPath.startsWith('/') || rawPath.startsWith('//') || rawPath.includes('\\') || /%2f|%5c|%2e/i.test(rawPath)) return false
   const path = new URL(value, 'http://workspace.internal').pathname
   const bare = path.replace(/^\/projects\/[^/]+(?=\/)/, '')
   return (/^\/api(?:\/|$)/.test(bare) && !/^\/api\/(?:web-auth|mobile)(?:\/|$)/.test(bare))
