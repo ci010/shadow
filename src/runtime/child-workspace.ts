@@ -29,7 +29,10 @@ export function childWorkspacePlugin(options: {
         ...(!['GET', 'HEAD'].includes(c.req.method) ? { body: c.req.raw.body, duplex: 'half' } : {}),
       } as RequestInit)
       if (!response.ok) console.error('[child-workspace]', { stage, status: response.status })
-      return response
+      // Fetch headers are immutable; the local gateway must still add its CORS headers.
+      return new Response(response.body, {
+        status: response.status, statusText: response.statusText, headers: new Headers(response.headers),
+      })
     } catch (error) {
       // Never log endpoint, proof, credentials, arbitrary exception messages or response bodies.
       const cause = error instanceof Error ? error.cause : undefined

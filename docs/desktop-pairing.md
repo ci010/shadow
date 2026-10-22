@@ -36,6 +36,12 @@ and correlate it with backend `[child-workspace]` stage diagnostics. A local
 failure are different stages. Do not create another invitation for an already
 approved identity solely because the workspace probe failed.
 
+In desktop development, `main_workspace_connection_failed` can also mean the
+browser could not read the loopback response, not that Main is offline. If local
+readiness succeeds but workspace requests fail with `TypeError: immutable` in
+the backend, rebuild and restart Child with the response-header fix: the proxy
+must copy upstream headers before the local gateway adds its CORS headers.
+
 Approval now explicitly describes workspace access: only approve a desktop you
 trust with the single-owner Main workspace. Existing approved public-key devices
 use the same verified identity; credentials without a registered signing public
