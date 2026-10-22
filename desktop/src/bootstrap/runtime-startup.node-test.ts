@@ -7,7 +7,7 @@ const ready: EnsureRuntimeResult = {
   ok: true,
   context: {
     version: 1, mode: 'child', localNodeId: 'fixture', mainConnection: 'connecting',
-    mainLatencyMs: null, uiScopes: [], apiBase: 'http://127.0.0.1:43124',
+    mainLatencyMs: null, apiBase: 'http://127.0.0.1:43124',
   },
 }
 

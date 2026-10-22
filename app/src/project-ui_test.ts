@@ -802,7 +802,7 @@ test('same-platform bot editors retain separate unsaved names and secrets during
   assert.equal(state().channels[0].state, 'connecting')
 })
 
-test('saving one settings section preserves unsaved fields in other sections of that project', async t => {
+test('connected Child with empty legacy scopes loads and saves project settings while preserving drafts', async t => {
   let saved = {
     ...config('a-default'),
     learning: { enabled: true, reflectIntervalMs: 60_000, encapsulateIntervalMs: 60_000, soulIntervalMs: 60_000 },
@@ -819,25 +819,35 @@ test('saving one settings section preserves unsaved fields in other sections of 
   const state = mountScript(t, 'ProjectSettings.vue',
     { apiBase: 'http://fixture/projects/a/', hostApiBase: 'http://fixture', projectId: 'a' }, undefined, {
       'vue-router': { useRoute: () => ({ name: 'project-settings', params: { projectId: 'a', section: 'models' } }) },
-      '../composables/useInstallationContext.ts': { useInstallationContext: () => ref({ mode: 'main', uiScopes: ['main:admin'] }) },
+      '../composables/useInstallationContext.ts': { useInstallationContext: () => ref({ mode: 'child', mainConnection: 'connected', uiScopes: [] }) },
     })
   await settle()
   state().learningIntervals.reflectIntervalMs = 7
   state().name = 'Unsaved project name'
-  state().model = 'a-choice'
-  await state().saveModels()
-  assert.equal(state().error, '')
-  assert.equal(saved.agent.model, 'a-choice')
-  assert.equal(state().learningIntervals.reflectIntervalMs, 7)
-  state().model = 'Unsaved next model'
+  assert.equal(state().available, true)
+  assert.equal(state().name, 'Unsaved project name')
   state().learningEnabled = false
   await state().saveLearning()
   assert.equal(state().error, '')
   assert.equal(saved.learning.reflectIntervalMs, 420_000)
   assert.equal(saved.learning.enabled, false)
   assert.equal(state().learningRevision, 1)
-  assert.equal(state().model, 'Unsaved next model')
   assert.equal(state().name, 'Unsaved project name')
+})
+
+test('offline Child project settings retain connection availability guard', async t => {
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return Response.json({}) })
+  const state = mountScript(t, 'ProjectSettings.vue',
+    { apiBase: 'http://fixture/projects/a/', hostApiBase: 'http://fixture', projectId: 'a' }, undefined, {
+      'vue-router': { useRoute: () => ({ name: 'project-settings', params: { projectId: 'a' } }) },
+      '../composables/useInstallationContext.ts': { useInstallationContext: () => ref({ mode: 'child', mainConnection: 'offline', uiScopes: [] }) },
+    })
+  await settle()
+  assert.equal(state().available, false)
+  await state().saveLearning()
+  assert.equal(calls, 0)
+  assert.match(state().error, /Main is unavailable/)
 })
 
 test('a failed project exposes a real retry and refreshes only its own conversation resources', async t => {

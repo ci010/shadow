@@ -28,7 +28,7 @@
     />
 
     <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? conversationTitle : 'New conversation'" :folder-id="activeSessionId ? activeSession?.folderId : draft.folder?.id"
-      :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
+      :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded"
       :project-navigation-enabled="!embedded"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
@@ -45,7 +45,7 @@
       <template v-if="activeSessionId">
         <button v-if="conversationDocumentVisible && activePanel === 'conversation'" @click="close(); nextTick(() => conversationSearch?.show())">{{ t('Search conversation') }}</button>
         <button @click="close(); showMobileSessionDetails()">{{ t('Session details') }}</button>
-        <button v-if="installation.uiScopes.includes('chat:write')" @click="close(); renameMobileSession()">{{ t('Rename session') }}</button>
+        <button @click="close(); renameMobileSession()">{{ t('Rename session') }}</button>
         <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">{{ t('Back to owning execution') }}</button>
         <details v-if="historyMarkers.length && conversationDocumentVisible && activePanel === 'conversation'" class="mobile-history">
           <summary>{{ t('Message history') }}</summary>
@@ -71,7 +71,7 @@
           </button>
           <SessionHeading v-show="!mobileLayout" ref="sessionHeading" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
             :name="conversationTitle" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
-            :can-rename="installation.uiScopes.includes('chat:write')" @renamed="loadSessionList()"
+            :can-rename="true" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
           <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="!!previousPhysicalId || !!automationConversation?.hasPrevious.value"
             :historical="!!viewingPhysicalId || !!automationConversation?.historical.value" :busy="loadingHistory || !!automationConversation?.loading.value" @previous="viewPreviousSegment"
@@ -85,7 +85,7 @@
           </button>
         </div>
         <AutomationConversationInfo v-if="automationConversation" :conversation="automationConversation" />
-        <QuickActionsOverlay v-if="actionsOpen" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="paneActive" :can-write="installation.uiScopes.includes('main:admin')" @close="closeActions(true)" />
+        <QuickActionsOverlay v-if="actionsOpen" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="paneActive" :can-write="true" @close="closeActions(true)" />
         <ConversationSearch ref="conversationSearch" :container="messagesContainer"
           :active="paneActive && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'"
           :keyboard-active="keyboardActive" :context-key="fileContextKey" :live-entries="liveSearchEntries"
@@ -121,7 +121,7 @@
             <YieldDecision v-for="[index, decision] in yieldDecisions.unlinked"
               :key="decision.requestId" :decision="decision" :api-base="apiBase"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
-              :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
+              :data-msg-idx="index" :can-manage="true" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
           </div>
           <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
           <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx">
@@ -148,7 +148,7 @@
               @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" @interact="clearSelection" />
             <YieldDecision v-else-if="yieldDecisions.entries.has(idx)" :decision="yieldDecisions.entries.get(idx)!"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
-              :api-base="apiBase" :data-msg-idx="idx" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
+              :api-base="apiBase" :data-msg-idx="idx" :can-manage="true" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
             <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!" :render-content="renderMarkdown"
               :api-base="apiBase" :session-id="activeSessionId"
               :default-open="streaming && !viewingPhysicalId && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
@@ -210,7 +210,7 @@
             <YieldDecision v-for="[index, decision] in yieldDecisions.after.get(idx)"
               :key="decision.requestId" :decision="decision" :api-base="apiBase"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
-              :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
+              :data-msg-idx="index" :can-manage="true" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </div>
           </template>
@@ -245,7 +245,7 @@
       <SessionDiagnosis v-if="diagnosisOpened" :id="domId('diagnosis-panel')" role="region" :aria-label="t('Session diagnosis')" :id-prefix="embedded || managed ? paneId : undefined"
         :section="diagnosisNavigation.section.value" @update:section="diagnosisNavigation.selectSection"
         :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
-        :active="visible && activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="installation.uiScopes.includes('audit:read')"
+        :active="visible && activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="true"
         :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
     </template>
     <template #composer>
@@ -255,7 +255,7 @@
             :key="`work-status:${activeSessionId}`" :api-base="apiBase" :session-id="activeSessionId" :revision="workRevision"
             :active="paneActive && composerVisible && route.name === 'chat'" @open="openProjectWork" />
           <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="`work-controls:${activeSessionId}`"
-            :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'"
+            :api-base="apiBase" :session-id="activeSessionId" :can-write="true" :active="paneActive && composerVisible && route.name === 'chat'"
             :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
           <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" :class="{ 'work-chip-active': composerWorking }" role="status" aria-live="polite">
             <SessionActivity :stage="sessionStage" :hide-symbol="!isWaitingStage(sessionStage)" />
@@ -276,28 +276,28 @@
         </div>
         <YieldQuestion v-if="!isCall" ref="yieldQuestion" :api-base="apiBase" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled"
+          :stage="sessionStage" :can-answer="true" @cancelled="handleYieldCancelled"
           :use-composer="isDirectChat && !viewingPhysicalId" :composer-id="domId('message-input')" :composer-busy="submittingMessage"
           @request="handleYieldRequest" @inspect="inspectExecution" @custom="focusQuestionComposer" />
         <BotChatSetup :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :can-submit="installation.uiScopes.includes('main:admin')" />
+          :can-submit="true" />
         <CredentialRequest v-if="activeSessionId === 'web:orchestrator'" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
+          :stage="sessionStage" :can-submit="true" />
         <ComputerControl ref="computerControl" v-if="canUseComputer" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
+          :stage="sessionStage" :can-submit="true" />
         <PublicationRequest :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
+          :stage="sessionStage" :can-submit="true" />
         <AuthoringProbeRequest :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
+          :stage="sessionStage" :can-submit="true" />
 
         <AutomationConversationSettings v-if="automationConversation?.automation.value"
           :key="automationConversation.automation.value.id" :api-base="apiBase" :job="automationConversation.automation.value" :active="paneActive" @saved="automationConversation.refresh()" />
@@ -336,7 +336,7 @@
               </label>
             </div>
             <button class="resume-button" :aria-label="t('Resume interrupted request')"
-              :disabled="!!providerNotice || !installation.uiScopes.includes('chat:write') || savingSettings || pickingContext || !!currentRecovery.pendingToolCalls && acknowledgedRecoveryId !== currentRecovery.id"
+              :disabled="!!providerNotice || savingSettings || pickingContext || !!currentRecovery.pendingToolCalls && acknowledgedRecoveryId !== currentRecovery.id"
               @click="resumeCurrentRequest()">
               <span class="i-lucide-play w-4 h-4" aria-hidden="true" /> {{ t('Continue') }}
             </button>
@@ -353,12 +353,12 @@
           <SlashCommandMenu ref="slashMenu" :api-base="apiBase" :session-id="activeSessionId || ''"
             :text="inputText" :input="chatInput" :focused="composerFocused"
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
-            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && installation.uiScopes.includes('chat:write') && route.name === 'chat'"
+            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && route.name === 'chat'"
             @complete="completeSlashCommand" />
           <SessionReferenceMenu ref="sessionReferenceMenu" :project-id="projectId || liveProjectId(apiBase)" :sessions="allSessions" :session-id="activeSessionId || ''"
             :text="inputText" :input="chatInput" :focused="composerFocused"
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
-            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && installation.uiScopes.includes('chat:write') && route.name === 'chat'"
+            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && route.name === 'chat'"
             @complete="completeSessionReference" />
           <input ref="attachmentInput" class="composer-file-input" type="file" multiple @change="handleAttachmentInput">
           <div v-if="pendingAttachments.length" class="composer-context composer-attachments" :aria-label="t('Attached files')">
@@ -443,7 +443,7 @@
             <button
               v-if="requestBusy"
               class="composer-send composer-stop"
-              :disabled="currentRequest?.state.stopping || !installation.uiScopes.includes('chat:write')"
+              :disabled="currentRequest?.state.stopping"
               :aria-busy="currentRequest?.state.stopping || undefined"
               :aria-label="t('Stop current request')"
               :title="currentRequest?.state.stopping ? t('Stopping current request; waiting for Main...') : t('Stop current request; queued messages are kept')"
@@ -451,7 +451,7 @@
             >
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
             </button>
-            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && route.name === 'chat'" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote || !installation.uiScopes.includes('chat:write')"
+            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && route.name === 'chat'" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :setup-disabled="submissionBusy || requestBusy || !!inputText.trim() || pendingAttachments.length > 0 || contextItems.length > 0" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote"
                 @request="sendMessage($event)" />
             <button
               v-if="showComposerSend"
@@ -722,7 +722,7 @@ if (modelSelection) provideModelSelection({
   inherited: inheritedModel,
   defaultReasoning: inheritedReasoning,
   inheriting: computed(() => !explicitModel.value),
-  disabled: computed(() => modelSelection.disabled.value || !installation.value.uiScopes.includes('chat:write') ||
+  disabled: computed(() => modelSelection.disabled.value ||
     pickingContext.value || isExecution.value || awaitingCall.value || !!viewingPhysicalId.value ||
     channelConversation.value && !activeSession.value?.inferenceDefaults),
   select: model => changeConversationSettings({ model: model.trim() || null }),
@@ -749,7 +749,7 @@ const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdi
 const canPickContext = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
 const computerControl = ref<InstanceType<typeof ComputerControl>>()
 const canUseComputer = computed(() => isDirectChat.value && !isCall.value && !remoteConversation.value && !props.embedded
-  && !!activeSessionId.value && installation.value.uiScopes.includes('main:admin'))
+  && !!activeSessionId.value)
 const canOpenComposerPopover = computed(() => canAttachFiles.value || canPickContext.value)
 const composerPopoverTitle = computed(() =>
   remoteConversation.value ? t('Local attachments are not transferred to remote workspaces')
@@ -762,7 +762,7 @@ const canSend = computed(() => !providerSendBlocked.value && !modelSelection?.lo
   inputText.value,
   contextItems.value.length,
   pendingAttachments.value.length,
-) && !submissionBusy.value && !currentRequest.value?.state.stopping && installation.value.uiScopes.includes('chat:write')
+) && !submissionBusy.value && !currentRequest.value?.state.stopping
   && !pickingContext.value && !pastingFiles.value && !savingSettings.value && imageEditsBusy.value.size === 0)
 let sendRequest: AbortController | undefined
 let historyRequest: AbortController | undefined
@@ -860,7 +860,7 @@ const requestBusy = computed(() => preparingSend.value || streaming.value || ses
   || !!currentRequest.value && currentRequest.value.state.phase !== 'finished')
 const showComposerSend = computed(() => !requestBusy.value || canSend.value || queueModifier.value || answeringQuestion.value)
 async function stopCurrentRequest(): Promise<void> {
-  if (!installation.value.uiScopes.includes('chat:write') || !requestBusy.value) return
+  if (!requestBusy.value) return
   let control = currentRequest.value
   if ((!control || control.state.phase === 'finished') && activeSessionId.value) {
     control = createChatRequestControl(props.apiBase, () => {}, fetch, activeSessionId.value, activeRequestIds.value[activeSessionId.value])
@@ -877,7 +877,7 @@ async function resumeCurrentRequest(): Promise<void> {
   const sessionId = activeSessionId.value
   const recovery = currentRecovery.value
   if (!sessionId || !recovery || requestBusy.value || !isDirectChat.value
-    || !installation.value.uiScopes.includes('chat:write') || savingSettings.value || pickingContext.value) return
+    || savingSettings.value || pickingContext.value) return
   if (providerNotice.value) return
   const generation = sessionSelectionGeneration
   const control = createChatRequestControl(props.apiBase, () => {})
@@ -946,7 +946,7 @@ async function changeReasoningSettings(patch: ReasoningSettings): Promise<void> 
 }
 
 async function changeConversationSettings(patch: ConversationSettings): Promise<void> {
-  if (isExecution.value || awaitingCall.value || viewingPhysicalId.value || !installation.value.uiScopes.includes('chat:write') ||
+  if (isExecution.value || awaitingCall.value || viewingPhysicalId.value ||
     channelConversation.value && !activeSession.value?.inferenceDefaults) return
   const modelOnly = Object.keys(patch).length === 1 && 'model' in patch
   if (savingSettings.value || (!modelOnly && requestBusy.value) || pickingContext.value) return
@@ -2414,8 +2414,8 @@ function isStreamPayload(value: unknown): value is StreamPayload {
       return typeof count === 'number' && Number.isFinite(count) && count >= 0
     })))) return false
   if (value.event === 'session_message') return !!parseLiveSessionMessage(value.message)
-  if (value.event === 'command_result') return value.done === true && isCommandReceipt(value.receipt)
-  if (value.event === 'turn_finished') return value.done === true && ['completed', 'failed', 'cancelled'].includes(String(value.status)) && typeof value.turnId === 'string'
+  if (value.event === 'command_result') return value.done === isCommandReceipt(value.receipt)
+  if (value.event === 'turn_finished') return value.done === ['completed', 'failed', 'cancelled'].includes(String(value.status)) && typeof value.turnId === 'string'
   return true
 }
 
@@ -2541,7 +2541,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     return
   }
   if ((!content && !retry && attachments.length === 0) || submissionBusy.value || currentRequest.value?.state.stopping
-    || !installation.value.uiScopes.includes('chat:write') || retry && requestBusy.value
+    || retry && requestBusy.value
     || pickingContext.value || pastingFiles.value || savingSettings.value || imageEditsBusy.value.size > 0) return
   if (!retry && !opts?.queue && answeringQuestion.value && activeAsk.value) {
     await sendQuestionAnswer(activeAsk.value, content, attachments)

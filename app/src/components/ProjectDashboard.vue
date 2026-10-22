@@ -6,8 +6,8 @@
       <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="coordinatorId" :project-id="projectId"
         primary-label="Dashboard" primary-icon="i-lucide-layout-dashboard" :context-key="projectResourceKey(projectId, 'dashboard', coordinatorId)"
         :active="visible && (wide || !coordinatorOpen)" :keyboard-active="activePane === 'dashboard'" :initial-explorer-open="false"
-        :knowledge-enabled="installation.uiScopes.includes('main:admin')" :knowledge-request="knowledgeRequest"
-        :can-quote="installation.uiScopes.includes('chat:write')" @quote="quote" @image-context="imageContext" @image-busy="emit('image-busy', $event)"
+        :knowledge-enabled="true" :knowledge-request="knowledgeRequest"
+        :can-quote="true" @quote="quote" @image-context="imageContext" @image-busy="emit('image-busy', $event)"
         @conversation-visible="dashboardSelected = $event"
         @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
         @project-navigation="emit('project-navigation', $event)">
@@ -48,7 +48,6 @@ import SidebarResizer from './SidebarResizer.vue'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { projectResourceKey } from '../projects.ts'
 import { ORCHESTRATOR_SESSION_ID as coordinatorId } from '../project-coordination.ts'
-import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 import type { ImageContextBusy, ImageContextUpdate } from '../image-context.ts'
 
@@ -59,7 +58,7 @@ const emit = defineEmits<{
   'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab]
   'dashboard-visible': [visible: boolean]
 }>()
-const installation = useInstallationContext(), route = useRoute()
+const route = useRoute()
 const root = ref<HTMLElement>(), dashboardRoot = ref<HTMLElement>(), coordinatorTrigger = ref<HTMLButtonElement>()
 const workbench = ref<InstanceType<typeof FileWorkbench>>()
 const dashboardSelected = ref(true)

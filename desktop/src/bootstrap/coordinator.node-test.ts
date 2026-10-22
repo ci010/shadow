@@ -229,7 +229,6 @@ test('ensureRuntime resumes Main from launch or complete with the frozen safe co
       localNodeId: 'local-node-id',
       mainConnection: 'connected',
       mainLatencyMs: null,
-      uiScopes: ['chat:read', 'chat:write', 'knowledge:read', 'main:admin', 'nodes:admin', 'audit:read'],
       apiBase: 'http://127.0.0.1:43123',
     },
   })
@@ -372,7 +371,6 @@ test('prepareProvider starts the authenticated host and exposes only safe contex
     ok: true,
     context: {
       version: 1, mode: 'main', localNodeId: 'local-node-id', mainConnection: 'connected', mainLatencyMs: null,
-      uiScopes: ['chat:read', 'chat:write', 'knowledge:read', 'main:admin', 'nodes:admin', 'audit:read'],
       apiBase: 'http://127.0.0.1:43123',
     },
   })

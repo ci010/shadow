@@ -10,7 +10,6 @@ import FirstRunWizard from './FirstRunWizard.vue'
 import RuntimeRecovery from './RuntimeRecovery.vue'
 import DesktopFrame from './DesktopFrame.vue'
 import ChildWorkspace from './ChildWorkspace.vue'
-import { LOCAL_MAIN_ADMIN_SCOPES } from './installation-context.ts'
 import BrowserAuth from './BrowserAuth.vue'
 import { browserSessionKey, createBrowserSession, mountBrowserSession } from './web-auth.ts'
 import {
@@ -46,7 +45,7 @@ function mountMainApp(installationContext: InstallationContextV1): void {
 		createApp(ChildWorkspace, { apiBase: installationContext.apiBase })
 			.use(router)
 			.use(i18n)
-			.use(createInstallationContextProvider({ ...installationContext, mainWorkspace: true, uiScopes: LOCAL_MAIN_ADMIN_SCOPES.filter(scope => scope !== 'nodes:admin') }))
+			.use(createInstallationContextProvider({ ...installationContext, mainWorkspace: true }))
 			.mount('#app')
 		return
 	}

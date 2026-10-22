@@ -118,7 +118,7 @@ watch(() => route.fullPath, (path) => {
 const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
 const { sounds, monitoringError, toggle: toggleSounds, browserNotifications } = useAppNotificationSounds(() => ({
-  base: installationContext.value.apiBase, allowed: installationContext.value.uiScopes.includes('chat:read'),
+  base: installationContext.value.apiBase, allowed: true,
 }))
 const livePool = useLiveClientPool()
 const liveStatuses = ref<readonly LiveStatus[]>([])
@@ -158,12 +158,12 @@ const recoveryTitle = computed(() =>
 const logCount = ref(0)
 
 // ── Model selector ──────────────────────────────────────────
-const isMain = computed(() => installationContext.value.mainWorkspace === true || installationContext.value.mode === 'main' || installationContext.value.mode === 'client')
+const isMain = computed(() => installationContext.value.mainWorkspace === true || installationContext.value.mode === 'main' || installationContext.value.mode === 'client' || installationContext.value.mainConnection === 'connected')
 const providerStatus = ref<ProviderSetupStatus | null>(null)
 const checkingProvider = ref(true)
 const providerError = ref('')
 provideProviderReadiness({ status: providerStatus, checking: checkingProvider, error: providerError, enabled: isMain,
-  canConfigure: computed(() => isMain.value && installationContext.value.uiScopes.includes('main:admin')),
+  canConfigure: isMain,
   retry: () => { void refreshProvider(true) },
 })
 const providerViewProps = computed(() => ({
@@ -171,7 +171,7 @@ const providerViewProps = computed(() => ({
   status: providerStatus.value,
   error: providerError.value,
   checking: checkingProvider.value,
-  available: isMain.value && installationContext.value.uiScopes.includes('main:admin'),
+  available: isMain.value,
 }))
 const providerViewEvents = {
   configured: providerConfigured,
