@@ -1,9 +1,45 @@
 import assert from 'node:assert/strict'
+import { once } from 'node:events'
+import { createServer } from 'node:http'
 import { test } from 'node:test'
 import { Hono } from 'hono'
 import { childWorkspacePlugin } from './child-workspace.ts'
 import { DeviceApprovalUnavailableError, DeviceChallengeRequestError, requestDeviceChallengeProtocol } from '../cluster/device-challenge-client.ts'
 import { DeviceCredentialProof } from '../cluster/device-credentials.ts'
+import { ChildLocalControlService } from './child-local-control.ts'
+
+test('workspace HTTP proxy preserves upstream responses while adding local CORS headers', async t => {
+  const upstream = createServer((request, response) => {
+    const status = request.headers['x-shadow-ui-path'] === '/api/projects?failure=1' ? 503 : 200
+    response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+    response.end(JSON.stringify(status === 200 ? { projects: [] } : { error: 'fixture_unavailable' }))
+  })
+  upstream.listen(0, '127.0.0.1')
+  await once(upstream, 'listening')
+  t.after(() => new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve())))
+  const address = upstream.address()
+  if (!address || typeof address === 'string') throw new Error('upstream address is unavailable')
+  const service = new ChildLocalControlService({
+    port: 0, launchCredential: 'synthetic-workspace-admission', requestShutdown: () => {},
+    workspace: childWorkspacePlugin({
+      endpoint: `http://127.0.0.1:${address.port}`,
+      proof: async () => 'synthetic-proof',
+    }),
+  })
+  t.after(() => service.shutdown())
+  await service.start(new AbortController().signal)
+  const base = `http://127.0.0.1:${service.address!.port}`
+  for (const status of [200, 503]) {
+    const response = await fetch(`${base}/api/projects${status === 503 ? '?failure=1' : ''}`, {
+      headers: { Authorization: 'Bearer synthetic-workspace-admission', Origin: 'null' },
+    })
+    assert.equal(response.status, status)
+    assert.equal(response.headers.get('access-control-allow-origin'), 'null')
+    assert.equal(response.headers.get('vary'), 'Origin')
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    assert.deepEqual(await response.json(), status === 200 ? { projects: [] } : { error: 'fixture_unavailable' })
+  }
+})
 
 test('workspace reports bounded challenge diagnostics, never secrets or speculative pending approval', async () => {
   for (const [failure, code] of [
