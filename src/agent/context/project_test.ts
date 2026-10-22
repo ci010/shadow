@@ -44,7 +44,7 @@ const provider = (folders: FolderRecord[]) => projectProvider(discovery(folders)
 test('cold-start project context includes empty selection and a bounded folder snapshot without disk probes', () => {
   const prompt = provider([]).getPromptSection(context) as string
   assert.match(prompt, /id="project-a" name="Current project"/)
-  assert.match(prompt, /no registered resource selected/)
+  assert.doesNotMatch(prompt, /Selected Project folder/)
   assert.match(prompt, /0 registered/)
   assert.match(prompt, /do not select the working directory or grant access/)
   assert.match(prompt, /read\("v:project\/folders"\)/)
@@ -54,11 +54,11 @@ test('cold-start project context includes empty selection and a bounded folder s
 test('directory discovery is on demand while the selected resource remains identifiable', () => {
   const folders = Array.from({ length: 100 }, (_, i) => folder(i))
   const prompt = provider(folders).getPromptSection({ ...context, folderId: folders.at(-1)!.id }) as string
-  assert.match(prompt, /Selected Project folder \/ registered resource \(metadata\): identifier="folder-99-folder99" id="folder-99"/)
+  assert.doesNotMatch(prompt, /Selected Project folder/)
   assert.match(prompt, /100 registered/)
   assert.equal(prompt.split('\n').filter(line => line.startsWith('- id=')).length, 0)
   assert.doesNotMatch(prompt, /id="folder-8"/)
-  assert.match(prompt, /kind=local/)
+  assert.doesNotMatch(prompt, /kind=local/)
 })
 
 test('summary encodes and bounds untrusted display data including newlines, markup and bidi controls', () => {
@@ -66,15 +66,13 @@ test('summary encodes and bounds untrusted display data including newlines, mark
   const record = { ...folder(0), name: hostile, path: hostile }
   const prompt = provider([record]).getPromptSection({ ...context, folderId: record.id }) as string
   assert.doesNotMatch(prompt, /<system>|`ignore`|\u202e/)
-  assert.match(prompt, /\\u003c/)
-  assert.match(prompt, /\\n/)
-  assert.match(prompt, /…/)
+  assert.doesNotMatch(prompt, /Selected Project folder|folder-0/)
   assert(prompt.length < 3_000)
 })
 
 test('unknown selected folder is not inferred from cwd or borrowed from another project', () => {
   const prompt = provider([folder(0)]).getPromptSection({ ...context, folderId: 'other-folder' }) as string
-  assert.match(prompt, /Selected Project folder \/ registered resource: id="other-folder" \(not registered in this project; unavailable\)/)
+  assert.doesNotMatch(prompt, /other-folder/)
   assert.throws(() => provider([]).getPromptSection({ ...context, projectId: 'other-project' }), /current Project context/)
   assert.throws(() => provider([]).getPromptSection({ ...context, projectId: undefined }), /current Project context/)
 })
@@ -102,22 +100,9 @@ test('one environment section owns the effective working directory regardless of
     assert.equal(sections.length, 1)
     const projectSection = sections[0].content
     assert.match(projectSection, /Project is the scope for sessions, memory and configuration, not a filesystem directory/)
-    assert.equal(projectSection.match(/\*\*Working directory\*\*:/g)?.length, 1)
-    assert.match(projectSection, /Project data directory \(Home; not the working directory\)/)
-    assert.doesNotMatch(projectSection, /existing workspace/)
-    if (kind !== 'folder') {
-      assert.match(projectSection, /no registered resource selected/)
-      assert.match(projectSection, /does not remove the session working directory/)
-    }
-    const actual = resolveSessionLocations(home, ctx, undefined, lookup).workdir
-    if (actual.available && actual.locality === 'local') {
-      assert.notEqual(actual.path, home)
-      assert(systemPrompt.includes(`**Working directory**: \`${actual.path}\``))
-      assert.match(systemPrompt, /Relative file paths resolve from the working directory/)
-      if (kind === 'inherited') assert.match(systemPrompt, /inherited session-managed directory/)
-    } else {
-      assert(systemPrompt.includes(`**Working directory**: ${actual.available ? 'remote capability' : 'unavailable'}`))
-      assert.doesNotMatch(systemPrompt, /C:\\DisplayOnly\\remote-work/)
-    }
+    assert.doesNotMatch(projectSection, /\*\*Working directory|Selected Project folder:|Session workspace/)
+    assert(!systemPrompt.includes(registered.path))
+    assert(!systemPrompt.includes(resolveSessionLocations(home, ctx, undefined, lookup).sessionDataDir))
+    assert.doesNotMatch(systemPrompt, /C:\\DisplayOnly\\remote-work/)
   }
 })
