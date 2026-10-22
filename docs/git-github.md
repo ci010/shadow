@@ -1,62 +1,73 @@
 # Git and GitHub agent workflow
 
-Shadow ships the built-in `git-github` skill. The shared session workspace
-context points executing agents to it before Git mutations or GitHub research;
-coordination-only agents carry the requirement into worker assignments.
-This does not grant extra tools or permission to publish.
+The built-in `git-github` skill and shared runtime context default commits/pushes
+to [ci010/safegit](https://github.com/ci010/safegit), the pinned Windows-enabled
+fork of stricttools/safegit. Read-only Git inspection remains ordinary Git.
+This grants no extra tools or permission to publish.
 
-## Git
+## CLI, not a structured tool
 
-Commits and pushes use [ci010/safegit](https://github.com/ci010/safegit), the Windows-enabled fork of stricttools/safegit,
-a separate binary, rather than raw `git add` / `git commit` / `git push`.
-Safegit commits explicit paths through private indexes and serializes reference
-updates. It does not isolate simultaneous edits to the same working-tree file.
-Read-only Git inspection remains available through ordinary Git.
+Local `exec` exposes a native `safegit` alias through a child-only PATH and an
+absolute `SHADOW_SAFEGIT_PATH`. There is no safegit tool registration, schema,
+`status` action or `run` action. Historical tool calls must migrate to CLI use:
 
-The `safegit` tool exposes `status` and `run` actions. Run `status` first;
-`run` executes arguments in the local session's effective workdir. For example:
-
-```json
-{"action":"run","args":["commit","-m","Describe the change","--","src/example.ts"]}
+```sh
+safegit --version
+safegit commit --help
+safegit commit -m "Describe the change" -- src/example.ts
+safegit push --refs head
 ```
 
-```json
-{"action":"run","args":["push","--refs","head"]}
-```
+Only commit task-owned paths; push only when authorized. Private indexes and
+serialized ref updates do not isolate concurrent edits to the same file.
+Noninteractive Windows/macOS/Linux shells use the same native name. A
+content-addressed copy under session storage handles overrides with arbitrary
+filenames and spaces. Matching copies and version checks are reused; a changed
+binary selects a new digest, never an old cached executable. PATH is modified
+only for the child, keeping its inherited order after the alias directory.
+No global PATH or user shell configuration is changed. Missing/invalid binaries
+install a failing alias before inherited PATH entries, preventing system-name
+substitution, and expose `SHADOW_SAFEGIT_ERROR`. Windows native lookup fails on
+an intentionally invalid executable; POSIX shells print a bounded error.
 
-The pinned fork prerelease `v0.33.0-windows.1` supports macOS/Linux x64/arm64
-and native Windows x64. The [fork release](https://github.com/ci010/safegit/releases/tag/v0.33.0-windows.1)
-was built from `559455e6cf0e68d067684b11e725fae1ad821358`; all 16 jobs in
-[its CI run](https://github.com/ci010/safegit/actions/runs/39716324711) passed.
-Every archive is SHA-256 pinned in `src/execution/git/safegit.ts` against the
-release's `checksums.txt`; packaging verifies
-the executable format, architecture and (on the host target) version. Agents
-must not fall back to raw Git or WSL. Remote workdirs are not supported
-by the local safegit tool. Git itself must still be installed on the execution
-device. Missing assets/version mismatches block execution instead of selecting
-an arbitrary executable from PATH. No download occurs automatically at startup.
+`SHADOW_SAFEGIT_PATH` explicitly overrides the binary location and must be
+absolute; alias preparation validates the pinned version. Main aliases/paths
+are not sent to remote workdirs: prepare and invoke the execution device's own
+binary. Git must be installed on that device; gh remains optional.
 
-This is an agent workflow convention with a verified execution entry point, not
-a universal shell sandbox: arbitrary shell commands are not rewritten or blocked.
+## Preparation and failure handling
+
+The pinned fork v0.33.0-windows.1 supports macOS/Linux x64/arm64 and Windows x64.
+Archives are SHA-256 pinned in `src/execution/git/safegit.ts`; preparation checks
+inventory, license, executable format, architecture and host version.
+`pnpm dev` and `pnpm start` verify/reuse existing host assets or prepare absent
+assets using the same pinned downloader/cache. Partial or corrupt packages and
+invalid cached archives fail closed; repair explicitly with
+`pnpm exec node --import tsx scripts/safegit-package.ts` after investigation.
+Installed applications never download runtime resources. Release preparation
+and signing remain separate and unchanged.
+
+On failure, stop and inspect possible side effects, including local status,
+diff/refs and remote outcomes when relevant. Report known/unknown effects before
+retrying. Never automatically fall back to raw Git, WSL or gh/API writes.
+Only explicit human authorization for the specified repository and operation
+permits the corresponding ordinary Git operation, subject to higher-priority
+restrictions. Honor scoped human instructions; ask if scope is unclear. This
+does not expand force/reset/clean, hook bypass or publication permissions.
+Workers route human decisions through their parent when required and cannot
+authorize their own bypass. This is workflow guidance, not a universal sandbox.
 
 ## GitHub
 
-For GitHub search/read, prefer the optional official `gh` CLI with explicit repo,
-structured output and bounded pagination. The skill covers repository/code search,
-issues, PRs, contents API decoding and reproducible refs. `gh` is not bundled or
-automatically installed. If absent, agents can offer official package-manager or
-checksum-verified release setup, subject to installation/network consent. Login
-uses the human's official browser/device flow, never credentials pasted in chat.
-Public API/web reads remain a clearly labelled fallback if setup is unavailable.
-
-GitHub reads do not authorize writes. Do not use gh/API mutations to bypass
-safegit commit/push rules.
+Prefer optional official `gh` for bounded search/read. It is not bundled or
+automatically installed. Offer official setup when missing, subject to network
+and installation consent. Humans complete login; never request credentials in
+chat. Reads do not authorize writes or publication.
 
 ## Focused checks
 
 ```sh
-pnpm exec node --import tsx --test src/skills/git-github-discovery_test.ts src/agent/context/workspace_test.ts
+pnpm exec node --import tsx --test scripts/development-safegit_test.ts scripts/safegit-package_test.ts src/execution/git/safegit*_test.ts src/skills/git-github-discovery_test.ts src/agent/context/workspace_test.ts src/tools/shell_test.ts src/tools/shell_remote_test.ts
 ```
 
-Native Unix execution and signed desktop installers require verification on
-those platforms; Windows tests cannot establish that runtime behavior.
+Native platform behavior and signed installers require checks on those platforms.

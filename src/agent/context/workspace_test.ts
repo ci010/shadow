@@ -125,7 +125,7 @@ test('Git workflow is session-default without granting coordinator execution', a
       assert.doesNotMatch(prompt, /v:skills\/git-github/)
     } else {
       assert.match(prompt, /read `v:skills\/git-github`/)
-      assert.match(prompt, /If safegit is unavailable, stop the mutation/)
+      assert.match(prompt, /If safegit is unavailable or fails, stop/)
     }
   }
 })

@@ -4,33 +4,33 @@ import { test } from 'node:test'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { SkillsManager } from './loader.ts'
 
-test('Git/GitHub skill is bundled and discoverable without installing CLIs', async () => {
+test('Git/GitHub CLI skill is bundled and discoverable without installing CLIs', async () => {
   await withTempWorkspace(async workspace => {
     const skills = new SkillsManager(workspace)
     try {
       await skills.load()
       const skill = skills.getSkillBody('git-github')
       assert.ok(skill)
-      for (const detail of ['bundled **safegit**', 'never raw',
-        'v:skills/git-github/references/safegit.md', 'Prefer **gh**',
-        'fetch', 'read', 'not unlimited requests', 'v:skills/download',
-        'v:tools/safegit/safegit', 'invoke_tool', 'SHADOW_SAFEGIT_PATH', 'authorized safegit']) {
-        assert.ok(skill.includes(detail), `Missing guidance: ${detail}`)
+      for (const detail of ['**safegit**', 'child-only PATH alias', 'SHADOW_SAFEGIT_PATH',
+        'Never automatically fall back to raw Git', 'Prefer **gh**', 'v:skills/download']) {
+        assert.ok(skill.includes(detail), detail)
       }
-      assert.doesNotMatch(skill, /### Native Windows|Windows ARM64|pinned SHA-256/)
-      const usage = await readFile(new URL('./builtin/git-github/references/safegit.md', import.meta.url), 'utf8')
-      assert.match(usage, /v:tools\/safegit\/safegit/)
-      assert.doesNotMatch(usage, /Discover `safegit` under|Windows x64|SHA-256/)
+      assert.doesNotMatch(skill, /v:tools\/safegit|invoke_tool/)
       assert.ok(skills.getMetadataSummary().includes('git-github'))
-    } finally {
-      await skills.stopWatching()
-    }
+    } finally { await skills.stopWatching() }
   })
 })
 
-test('shared session workspace context defaults commits and pushes to safegit', async () => {
-  const source = await readFile(new URL('../agent/context/workspace.ts', import.meta.url), 'utf8')
-  assert.match(source, /Before Git mutations or GitHub research, read `v:skills\/git-github`/)
-  assert.match(source, /In every session, use the bundled stricttools\/safegit/)
-  assert.match(source, /If safegit is unavailable, stop the mutation/)
+test('Git fallback is human-scoped and consistent in skill and runtime roles', async () => {
+  for (const file of ['./builtin/git-github/SKILL.md', './builtin/git-github/references/safegit.md', '../agent/context/workspace.ts']) {
+    const text = await readFile(new URL(file, import.meta.url), 'utf8')
+    for (const boundary of ['side effects', 'human authorization', 'specified repository and operation', 'higher-priority', 'force/reset/clean']) {
+      assert(text.includes(boundary), `${file}: ${boundary}`)
+    }
+    assert.doesNotMatch(text, /never raw `git commit`|never request a raw Git bypass|do not fall back to raw Git|v:tools\/safegit/)
+  }
+  const prompt = await readFile(new URL('../agent/context/workspace.ts', import.meta.url), 'utf8')
+  assert.equal(prompt.split('Only explicit human authorization for the specified repository and operation').length - 1, 2)
+  const runtime = await readFile(new URL('../runtime/main/project-runtime.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(runtime, /SafegitTool|registerBuiltin\('safegit'/)
 })

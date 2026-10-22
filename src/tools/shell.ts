@@ -21,6 +21,7 @@ import { backgroundExecutionId, type BackgroundTaskManager } from '../agent/back
 import { loadDotEnv } from '../utils/env.ts'
 import { resolveSessionLocations } from '../sessions/locality.ts'
 import { localExecSafegitEnv } from '../execution/git/safegit.ts'
+import { localExecSafegitAliasEnv } from '../execution/git/safegit-alias.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import { decodeChunks } from '../utils/decode-chunks.ts'
 import type { LocalProcessExecutor } from '../execution/executor.ts'
@@ -310,7 +311,7 @@ export class ExecTool implements Tool<ToolResult> {
     // Called only after the remote branch has returned; never send Main paths.
     const { sessionDataDir } = resolveSessionLocations(this.workspace, { sessionId: context.sessionId })
     return {
-      ...await localExecSafegitEnv(await loadDotEnv(this.workspace)),
+      ...await localExecSafegitAliasEnv(await localExecSafegitEnv(await loadDotEnv(this.workspace)), sessionDataDir),
       SHADOW_SESSION_DATA_DIR: sessionDataDir,
     }
   }

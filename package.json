@@ -12,7 +12,7 @@
   },
   "scripts": {
     "dev": "node --env-file-if-exists=.env --import tsx scripts/desktop.ts dev",
-    "start": "node --env-file-if-exists=.env --import tsx src/index.ts",
+    "start": "node --env-file-if-exists=.env --import tsx scripts/start.ts",
     "a2a:bridge": "node --import tsx integrations/a2a/cli.ts",
     "a2a:mcp": "node --import tsx src/a2a/mcp-cli.ts",
     "build": "node --import tsx build.ts",

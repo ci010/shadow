@@ -4,8 +4,6 @@ import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { SAFEGIT_VERSION, safegitTarget, requestedSafegitBinary, SafegitRunner } from './safegit.ts'
-import { SafegitTool } from '../../tools/safegit.ts'
-import type { ExecutionContext } from '../../tools/context.ts'
 
 test('pinned targets include native Windows x64; no fallback even with override', async () => {
   assert.equal(safegitTarget('win32', 'x64'), 'windows_amd64')
@@ -51,18 +49,4 @@ test('run preserves literal argv, cwd, abort, refusal exit code; version mismatc
     await assert.rejects(bad.run(['push'], scratch, signal), /Expected safegit/)
     await assert.rejects(runner.run(['push'], scratch, AbortSignal.abort()), /abort/i)
   } finally { await rm(scratch, { recursive: true, force: true }) }
-})
-
-test('tool validates project/locality/schema and does not accept arbitrary cwd', async () => {
-  let called = false
-  const runner = { status: async () => ({ supported: false }), run: async () => { called = true; return {} } } as unknown as SafegitRunner
-  const tool = new SafegitTool(runner, 'p')
-  const context = { projectId: 'p', cwd: resolve('.'), signal: new AbortController().signal } as ExecutionContext
-  assert.equal(JSON.parse(await tool.execute({ action: 'status' }, context)).supported, false)
-  await assert.rejects(tool.execute({ action: 'status' }, { ...context, projectId: 'other' }), /owning Project/)
-  await assert.rejects(tool.execute({ action: 'run', args: ['push'] }, { ...context, remoteWorkdir: {} } as ExecutionContext), /local workdir/)
-  await assert.rejects(tool.execute({ action: 'run', args: ['push'], cwd: '/' }, context))
-  assert.equal(called, false)
-  await tool.execute({ action: 'run', args: ['push', '--refs', 'head'] }, context)
-  assert.equal(called, true)
 })

@@ -31,6 +31,7 @@ import { CommandHandlerManager, type CommandContext } from './shell-commands/com
 import { ExecTool } from './shell.ts'
 import { resolveSessionLocations } from '../sessions/locality.ts'
 import { localExecSafegitEnv } from '../execution/git/safegit.ts'
+import { localExecSafegitAliasEnv } from '../execution/git/safegit-alias.ts'
 import { ProcessManager as RealProcessManager } from '../execution/processes/manager.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
@@ -259,7 +260,7 @@ test('ExecTool foreground LocalExecutor parity: stdout, stderr, cwd, shell, args
     assertEquals(executor.calls, [{
       script: 'printf test',
       cwd: resolveAgentPath(workspace, sessionCwd, '.'),
-      env: { ...await localExecSafegitEnv({ PARITY_VALUE: 'from-dotenv' }), SHADOW_SESSION_DATA_DIR: resolveSessionLocations(workspace, { sessionId: 'session-1' }).sessionDataDir },
+      env: { ...await localExecSafegitAliasEnv(await localExecSafegitEnv({ PARITY_VALUE: 'from-dotenv' }), resolveSessionLocations(workspace, { sessionId: 'session-1' }).sessionDataDir), SHADOW_SESSION_DATA_DIR: resolveSessionLocations(workspace, { sessionId: 'session-1' }).sessionDataDir },
       shell: defaultManagedShell(),
       args: ['one', 'two'],
     }])

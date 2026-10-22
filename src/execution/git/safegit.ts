@@ -73,7 +73,7 @@ export class SafegitRunner {
     const binary = this.binaryPath()
     const file = await stat(binary).catch(error => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        throw new Error(`Pinned safegit ${SAFEGIT_VERSION} is missing: ${binary}. In source/dev run pnpm exec node --import tsx scripts/safegit-package.ts on a supported platform, or set an absolute SHADOW_SAFEGIT_PATH. Repair an incomplete installed app; do not substitute raw git.`)
+        throw new Error(`Pinned safegit ${SAFEGIT_VERSION} is missing: ${binary}. In source/dev run pnpm exec node --import tsx scripts/safegit-package.ts on a supported platform, or set an absolute SHADOW_SAFEGIT_PATH. Repair an incomplete installed app; no automatic fallback.`)
       }
       throw error
     })

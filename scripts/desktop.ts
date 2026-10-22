@@ -1,3 +1,4 @@
+import { ensureDevelopmentSafegit } from './development-safegit.ts'
 import { consumeStartupProfileArm } from './startup-profile.ts'
 import { createRequire } from 'node:module'
 import { stageBackend } from './backend-bundle.ts'
@@ -19,6 +20,7 @@ if (mode !== 'build' && mode !== 'dev' && mode !== 'package') {
 }
 
 const target = mode !== 'dev' ? desktopTarget() : undefined
+if (mode === 'dev') await ensureDevelopmentSafegit(process.cwd())
 const sourceHash = mode === 'package' ? await verifyPreparedBuild(process.cwd(), 'desktop')
   : target ? await sourceFingerprint(process.cwd()) : undefined
 if (mode !== 'package') {
