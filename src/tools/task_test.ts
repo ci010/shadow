@@ -15,3 +15,12 @@ test('structured review uses authenticated identity and rejects manual orchestra
   await assert.rejects(tool.execute({ action: 'review', sessionId: 'worker', revision: '3', outcome: 'pass' }, context), /revision/)
   assert.equal(executionModeAllowsTool('call', 'task'), false)
 })
+
+test('retry requires a version and uses authenticated creator identity', async () => {
+  let received: unknown[] = []
+  const tool = new TaskTool({ taskAction: async (...args: unknown[]) => { received = args; return { status: 'working' } } } as unknown as SessionManager)
+  const context = { sessionId: 'creator', signal: new AbortController().signal } as ExecutionContext
+  await assert.rejects(tool.execute({ action: 'retry', sessionId: 'worker' }, context), /expectedVersion/)
+  await tool.execute({ action: 'retry', sessionId: 'worker', expectedVersion: 4, actorSessionId: 'forged' }, context)
+  assert.deepEqual(received, ['creator', 'worker', 'retry', 4])
+})
