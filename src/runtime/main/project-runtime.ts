@@ -1,3 +1,4 @@
+import { FOLDER_PICKER_CAPABILITY, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../../folders/picker.ts'
 import { CHROME_MCP_PACKAGE } from '../../browser/chrome-contract.ts'
 import { SessionProxyTool } from '../../tools/session-proxy.ts'
 import { createSelfSessionHandler } from '../../vfs/session.ts'
@@ -1348,6 +1349,10 @@ export async function createProjectRuntime(
   for (const tool of channelTools(channels)) importTool.registerBuiltin(tool.name, tool)
   const folders = new FolderService({
     registry: folderRegistry,
+    picker: { inventory: () => mainCluster.getNodeInventory(), executor: new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+      if (request.sessionId !== 'owner-folder-picker' || request.capabilityId !== FOLDER_PICKER_CAPABILITY ||
+        ![FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation)) throw new Error('Invalid owner picker operation')
+    }) },
     remoteExecutor,
     createSession: async (folder, requestId) => {
       const chatId = `chat-${requestId ?? randomUUID()}`

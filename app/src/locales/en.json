@@ -3862,5 +3862,16 @@
   "Main workspace is available automatically after device approval. This local status and inventory remain available when Main is offline.": "Main workspace is available automatically after device approval. This local status and inventory remain available when Main is offline.",
   "An approved Child desktop can also operate this Main’s projects, sessions and application settings. Device removal revokes workspace access too. Approve only a desktop you trust with your Main workspace.": "An approved Child desktop can also operate this Main’s projects, sessions and application settings. Device removal revokes workspace access too. Approve only a desktop you trust with your Main workspace.",
   "Pair and open workspace": "Pair and open workspace",
-  "After approval, this Child can operate Main’s projects, sessions and application settings without another login. Workspace traffic uses the same device transport; trusted-network HTTP is not encrypted.": "After approval, this Child can operate Main’s projects, sessions and application settings without another login. Workspace traffic uses the same device transport; trusted-network HTTP is not encrypted."
+  "After approval, this Child can operate Main’s projects, sessions and application settings without another login. Workspace traffic uses the same device transport; trusted-network HTTP is not encrypted.": "After approval, this Child can operate Main’s projects, sessions and application settings without another login. Workspace traffic uses the same device transport; trusted-network HTTP is not encrypted.",
+  "Update required": "Update required",
+  "Refresh devices": "Refresh devices",
+  "Enter a path on the selected device, or browse its directories below.": "Enter a path on the selected device, or browse its directories below.",
+  "Loading directories…": "Loading directories…",
+  "Parent directory": "Parent directory",
+  "No subdirectories": "No subdirectories",
+  "Too many directories. Enter a path to continue.": "Too many directories. Enter a path to continue.",
+  "The selected device is offline or needs an update. Choose another device or retry.": "The selected device is offline or needs an update. Choose another device or retry.",
+  "Could not load devices. Retry.": "Could not load devices. Retry.",
+  "Could not browse this directory. Retry.": "Could not browse this directory. Retry.",
+  "Clone a repository into a new folder on Main.": "Clone a repository into a new folder on Main."
 }

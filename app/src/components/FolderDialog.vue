@@ -4,24 +4,45 @@
     <div v-if="mode" class="folder-dialog-backdrop" @click.self="close" @keydown="dialogKeydown">
       <section ref="dialog" class="folder-dialog" role="dialog" aria-modal="true" aria-labelledby="folder-dialog-title" tabindex="-1">
         <header>
-          <h2 id="folder-dialog-title">{{ mode === 'open' ? t('Open folder') : t('Clone repository') }}</h2>
-          <button class="folder-icon-button" :aria-label="t('Close folder dialog')" :disabled="busy || cloneView.state === 'cancelling'" @click="close">×</button>
+          <h2 id="folder-dialog-title">{{ mode !== 'clone' ? t('Open folder') : t('Clone repository') }}</h2>
+          <button class="folder-icon-button" :aria-label="t('Close folder dialog')" :disabled="cloneView.state === 'cancelling'" @click="close">×</button>
         </header>
-        <p class="dialog-intro">{{ mode === 'open' ? t('Add an existing folder to this project. Your files stay where they are.') : t('Clone a repository into a new folder on this computer.') }}</p>
+        <p class="dialog-intro">{{ mode !== 'clone' ? t('Add an existing folder to this project. Your files stay where they are.') : t('Clone a repository into a new folder on Main.') }}</p>
         <form @submit.prevent="submit">
           <label v-if="mode === 'clone'" class="dialog-field">
             <span>{{ t('Repository URL') }}</span>
             <input ref="urlInput" v-model="url" type="text" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repo.git" :disabled="cloneActive" required />
             <small>{{ t('HTTPS or SSH. Use Git authentication rather than a token in the URL.') }}</small>
           </label>
+          <label v-if="mode !== 'clone'" class="dialog-field">
+            <span>{{ t('Device') }}</span>
+            <select v-model="nodeId" :disabled="busy" @change="deviceChanged">
+              <option v-for="device in devices" :key="device.nodeId" :value="device.nodeId" :disabled="!device.online || !device.supported">
+                {{ device.name }} · {{ device.nodeId }} ({{ device.role }}){{ !device.online ? ' · ' + t('Offline') : !device.supported ? ' · ' + t('Update required') : '' }}
+              </option>
+            </select>
+          </label>
+          <button type="button" class="btn" :disabled="busy || cloneActive" @click="loadDevices">{{ t('Refresh devices') }}</button>
           <label class="dialog-field">
-            <span>{{ mode === 'open' ? t('Folder path') : t('Parent folder') }}</span>
+            <span>{{ mode !== 'clone' ? t('Folder path') : t('Parent folder') }}</span>
             <span class="path-input-row">
               <input ref="pathInput" v-model="path" type="text" autocomplete="off" spellcheck="false" :placeholder="t('Absolute folder path')" :disabled="busy || cloneActive" required />
-              <button v-if="hasPicker" type="button" class="btn" :disabled="busy || cloneActive" @click="chooseDirectory(false)">{{ busy ? t('Choosing…') : t('Browse…') }}</button>
+              <button type="button" class="btn" :disabled="busy || cloneActive" @click="browse(path)">{{ busy ? t('Choosing…') : t('Browse…') }}</button>
             </span>
-            <small>{{ hasPicker ? t('Choose an existing folder on this computer.') : t('Enter an absolute path on the computer running Main.') }}</small>
+            <small>{{ t('Enter a path on the selected device, or browse its directories below.') }}</small>
           </label>
+          <div class="directory-browser" aria-live="polite">
+            <p v-if="busy" role="status">{{ t('Loading directories…') }}</p>
+            <template v-if="listing">
+              <p class="directory-location">{{ selectedDevice?.name }} · {{ nodeId }}: {{ listing.path }}</p>
+              <button type="button" class="btn" :disabled="busy || !listing.parent || cloneActive" @click="browse(listing.parent ?? '')">{{ t('Parent directory') }}</button>
+              <ul class="directory-list">
+                <li v-for="entry in listing.directories" :key="entry.path"><button type="button" :disabled="busy || cloneActive" @click="browse(entry.path)"><span class="i-lucide-folder" aria-hidden="true" /> {{ entry.name }}</button></li>
+              </ul>
+              <p v-if="!listing.directories.length">{{ t('No subdirectories') }}</p>
+              <p v-if="listing.truncated">{{ t('Too many directories. Enter a path to continue.') }}</p>
+            </template>
+          </div>
           <label v-if="mode === 'clone'" class="dialog-field">
             <span>{{ t('New folder name') }}</span>
             <input v-model="directoryName" type="text" autocomplete="off" spellcheck="false" :disabled="cloneActive" @input="directoryEdited = true" required />
@@ -35,15 +56,16 @@
             <p v-if="cloneView.operation?.destination" class="checkout-path">{{ cloneView.operation.destination }}</p>
           </div>
           <p v-if="error || (mode === 'clone' && cloneView.error)" class="folder-error" role="alert">{{ error || cloneView.error }}</p>
+          <button v-if="error && !cloneActive" type="button" class="btn" :disabled="busy" @click="loadDevices">{{ t('Retry') }}</button>
           <footer>
             <template v-if="mode === 'clone' && cloneActive">
               <button v-if="cloneView.state === 'unknown'" class="btn" type="button" @click="controller.refresh()">{{ t('Retry status') }}</button>
               <button class="btn" type="button" :disabled="cloneView.state === 'cancelling'" @click="controller.cancel()">{{ cloneView.state === 'cancelling' ? t('Cancelling…') : t('Cancel clone') }}</button>
             </template>
             <template v-else>
-              <button class="btn" type="button" :disabled="busy" @click="close">{{ cloneView.state === 'succeeded' && mode === 'clone' ? t('Done') : t('Cancel') }}</button>
+              <button class="btn" type="button" @click="close">{{ cloneView.state === 'succeeded' && mode === 'clone' ? t('Done') : t('Cancel') }}</button>
               <button v-if="mode === 'clone' && cloneView.state === 'succeeded'" class="btn" type="button" @click="resetClone">{{ t('Clone another repository') }}</button>
-              <button v-if="mode === 'open' || cloneView.state !== 'succeeded'" class="btn primary" type="submit" :disabled="busy">{{ busy ? t('Opening…') : mode === 'open' ? t('Open folder') : cloneView.state === 'idle' ? t('Clone repository') : t('Retry clone') }}</button>
+              <button v-if="mode !== 'clone' || cloneView.state !== 'succeeded'" class="btn primary" type="submit" :disabled="busy">{{ busy ? t('Opening…') : mode !== 'clone' ? t('Open folder') : cloneView.state === 'idle' ? t('Clone repository') : t('Retry clone') }}</button>
             </template>
           </footer>
         </form>
@@ -59,13 +81,15 @@ import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { createCloneController, type CloneView, type FolderRecord, type FoldersClient } from '../folders-client.ts'
 import { isAbsoluteFolderPath, suggestCloneDirectory } from '../folders-sidebar.ts'
 import OverlayTransition from './OverlayTransition.vue'
+import { useInstallationContext } from '../composables/useInstallationContext.ts'
 
-const props = defineProps<{ mode: 'open' | 'clone' | null; client: FoldersClient }>()
+const props = defineProps<{ mode: 'open' | 'remote' | 'clone' | null; client: FoldersClient }>()
 const emit = defineEmits<{
   close: []
   registered: [folder: FolderRecord]
   status: [view: CloneView]
 }>()
+const installation = useInstallationContext()
 const dialog = ref<HTMLElement>()
 const urlInput = ref<HTMLInputElement>()
 const pathInput = ref<HTMLInputElement>()
@@ -76,7 +100,10 @@ const directoryEdited = ref(false)
 const busy = ref(false)
 const error = ref('')
 const cloneView = ref<CloneView>({ state: 'idle' })
-const hasPicker = computed(() => !!window.shadowDesktop?.folders?.selectDirectory)
+const devices = ref<Awaited<ReturnType<FoldersClient['pickerDevices']>>>([])
+const nodeId = ref('')
+const selectedDevice = computed(() => devices.value.find(d => d.nodeId === nodeId.value))
+const listing = ref<Awaited<ReturnType<FoldersClient['browseDirectory']>>>()
 const cloneActive = computed(() => props.mode === 'clone' && ['starting', 'running', 'cancelling', 'unknown'].includes(cloneView.value.state))
 const destination = computed(() => `${path.value.replace(/[\\/]+$/, '')}${path.value.includes('\\') ? '\\' : '/'}${directoryName.value}`)
 const cloneStatus = computed(() => ({
@@ -84,7 +111,6 @@ const cloneStatus = computed(() => ({
   succeeded: t('Repository cloned'), failed: t('Clone failed'), cancelled: t('Clone cancelled'), unknown: t('Clone status unavailable'),
 })[cloneView.value.state])
 let request: AbortController | undefined
-let pickerGeneration = 0
 let returnFocus: HTMLElement | null = null
 let deactivated = false
 
@@ -100,7 +126,6 @@ watch(url, value => {
 watch(() => props.mode, async (mode, previous) => {
   error.value = ''
   if (!mode) {
-    pickerGeneration++
     request?.abort()
     busy.value = false
     if (!deactivated && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true })
@@ -108,39 +133,64 @@ watch(() => props.mode, async (mode, previous) => {
   }
   deactivated = false
   returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  if (mode === 'open' && previous !== 'open') path.value = ''
+  if (mode !== previous) { path.value = ''; listing.value = undefined; nodeId.value = '' }
   await nextTick()
   ;(mode === 'clone' ? urlInput.value : pathInput.value)?.focus({ preventScroll: true })
-  if (mode === 'open' && hasPicker.value) await chooseDirectory(true)
+  await loadDevices()
 })
 
-async function chooseDirectory(openImmediately: boolean) {
-  if (busy.value) return
-  const picker = window.shadowDesktop?.folders
-  if (!picker?.selectDirectory) return
-  const current = ++pickerGeneration
+async function loadDevices() {
+  if (cloneActive.value) return
+  request?.abort()
+  const abort = new AbortController()
+  request = abort
   busy.value = true
   error.value = ''
   try {
-    const selected = await picker.selectDirectory()
-    if (current !== pickerGeneration) return
-    if (selected === null) {
-      if (openImmediately) emit('close')
-      return
+    const result = await props.client.pickerDevices(abort.signal)
+    if (request !== abort || abort.signal.aborted) return
+    devices.value = result
+    if (!nodeId.value) {
+      // Match an actual advertised identity; browser/mobile placeholders are never guessed into nodes.
+      const current = installation.value.mode === 'client' ? undefined : result.find(d =>
+        d.nodeId === installation.value.localNodeId && d.role === installation.value.mode)
+      const preferred = props.mode === 'clone' ? result.find(d => d.role === 'main')
+        : props.mode === 'remote' ? result.find(d => d.online && d.supported &&
+          (current ? d.nodeId !== current.nodeId : d.role === 'child'))
+        : current?.online && current.supported ? current : result.find(d => d.role === 'main')
+      nodeId.value = preferred?.nodeId ?? result.find(d => d.role === 'main')?.nodeId ?? ''
     }
-    if (typeof selected !== 'string' || !isAbsoluteFolderPath(selected)) throw new Error(t('invalid selection'))
-    path.value = selected
-    if (openImmediately) {
-      busy.value = false
-      await submit()
-    }
-  } catch {
-    if (current === pickerGeneration) error.value = t('The folder picker could not open. Try Browse again, or enter an existing absolute folder path.')
-  } finally {
-    if (current === pickerGeneration) busy.value = false
-  }
+    if (!selectedDevice.value?.online || !selectedDevice.value.supported) throw new Error(t('The selected device is offline or needs an update. Choose another device or retry.'))
+  } catch (cause) {
+    if (!abort.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load devices. Retry.')
+  } finally { if (request === abort) { request = undefined; busy.value = false } }
+  if (!error.value) await browse(path.value)
 }
-
+function deviceChanged() {
+  request?.abort()
+  path.value = ''
+  listing.value = undefined
+  void browse('')
+}
+async function browse(directory: string) {
+  if (cloneActive.value) return
+  request?.abort()
+  const abort = new AbortController()
+  request = abort
+  const device = nodeId.value
+  path.value = directory
+  busy.value = true
+  error.value = ''
+  listing.value = undefined
+  try {
+    const result = await props.client.browseDirectory(device, directory, abort.signal)
+    if (abort.signal.aborted || request !== abort || device !== nodeId.value) return
+    listing.value = result
+    path.value = result.path
+  } catch (cause) {
+    if (!abort.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not browse this directory. Retry.')
+  } finally { if (request === abort) { request = undefined; busy.value = false } }
+}
 async function submit() {
   if (busy.value || cloneActive.value) return
   error.value = ''
@@ -161,7 +211,7 @@ async function submit() {
   const current = new AbortController()
   request = current
   try {
-    const folder = await props.client.register(path.value.trim(), current.signal)
+    const folder = await props.client.selectDirectory(nodeId.value, path.value.trim(), current.signal)
     if (current.signal.aborted) return
     emit('registered', folder)
     emit('close')
@@ -173,7 +223,7 @@ async function submit() {
 }
 
 async function close() {
-  if (busy.value || cloneView.value.state === 'cancelling') return
+  if (cloneView.value.state === 'cancelling') return
   if (cloneActive.value) {
     await controller.cancel()
     if (cloneView.value.state === 'unknown' || cloneView.value.state === 'failed') return
@@ -194,7 +244,7 @@ function resetClone() {
 function dialogKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); void close(); return }
   if (event.key !== 'Tab') return
-  const elements = Array.from(dialog.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]') ?? [])
+  const elements = Array.from(dialog.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]') ?? [])
   const first = elements[0]
   const last = elements.at(-1)
   if (!first) { event.preventDefault(); dialog.value?.focus(); return }
@@ -203,7 +253,6 @@ function dialogKeydown(event: KeyboardEvent) {
 }
 function deactivate() {
   deactivated = true
-  pickerGeneration++
   request?.abort()
   busy.value = false
   void controller.cancel()
@@ -229,7 +278,7 @@ onUnmounted(deactivate)
 .folder-dialog .primary:hover { background: var(--c-primary-bg-hover); }
 .folder-icon-button { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font-size: 22px; }
 .folder-icon-button:hover { background: var(--c-bg-muted); color: var(--c-text); }
-.folder-dialog :is(button, input):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.folder-dialog :is(button, input, select):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .folder-dialog button:disabled, .folder-dialog input:disabled { opacity: .6; cursor: not-allowed; }
 .destination-preview, .checkout-path { overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; color: var(--c-text-secondary); }
 .destination-preview { display: flex; flex-direction: column; gap: 4px; margin: 16px 0 0; }
@@ -240,4 +289,13 @@ onUnmounted(deactivate)
   .folder-dialog-backdrop { padding: 12px; }
   .folder-dialog { padding: 20px 16px; max-height: calc(100dvh - 24px); }
 }
+</style>
+
+<style scoped>
+.directory-browser { border: 1px solid var(--c-border); border-radius: 8px; padding: 10px; }
+.directory-location { overflow-wrap: anywhere; font-size: 12px; }
+.directory-list { max-height: 220px; overflow: auto; padding: 0; list-style: none; }
+.directory-list button { width: 100%; text-align: left; padding: 6px; background: transparent; color: inherit; border: 0; cursor: pointer; }
+.directory-list button:hover { background: var(--c-bg-muted); }
+.dialog-field select { padding: 8px; background: var(--c-bg-input); color: inherit; border: 1px solid var(--c-border); border-radius: 6px; }
 </style>

@@ -173,6 +173,8 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals(body.nodes[0].capabilities, [{
     capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,
   }, {
+    capabilityId: 'owner-folder-picker-v1', kind: 'shell', displayName: 'Owner folder picker', online: true,
+  }, {
     capabilityId: 'managed-sessions-v1', kind: 'shell', displayName: 'Managed session allocation', online: true,
   }, {
     capabilityId: 'folder-root', kind: 'workdir', displayName: 'Child folder', online: true, displayPath: folders,
