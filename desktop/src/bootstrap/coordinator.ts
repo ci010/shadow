@@ -44,7 +44,6 @@ export interface MainRuntimeContext {
   readonly localNodeId: string
   readonly mainConnection: 'connected'
   readonly mainLatencyMs: null
-  readonly uiScopes: readonly ['chat:read', 'chat:write', 'knowledge:read', 'main:admin', 'nodes:admin', 'audit:read']
   readonly apiBase: string
 }
 
@@ -58,18 +57,8 @@ export interface ChildRuntimeContext {
   readonly localNodeId: string
   readonly mainConnection: 'connecting'
   readonly mainLatencyMs: null
-  readonly uiScopes: readonly []
   readonly apiBase: string
 }
-const MAIN_UI_SCOPES = [
-  'chat:read',
-  'chat:write',
-  'knowledge:read',
-  'main:admin',
-  'nodes:admin',
-  'audit:read',
-] as const
-
 const PRIVILEGED_EVENTS = new Set<WizardEvent['type']>([
   'data-directory-selected',
   'main-initialized',
@@ -307,7 +296,7 @@ export class BootstrapCoordinator {
       if (current.mode === 'child') return {
         ok: true,
         context: { version: 1, mode: 'child', localNodeId: config.localNodeId,
-          mainConnection: 'connecting', mainLatencyMs: null, uiScopes: [], apiBase: status.apiBase },
+          mainConnection: 'connecting', mainLatencyMs: null, apiBase: status.apiBase },
       }
       return {
         ok: true,
@@ -317,7 +306,6 @@ export class BootstrapCoordinator {
           localNodeId: config.localNodeId,
           mainConnection: 'connected',
           mainLatencyMs: null,
-          uiScopes: MAIN_UI_SCOPES,
           apiBase: status.apiBase,
         },
       }

@@ -21,11 +21,11 @@ const pending: PendingDevice = {
   deviceIdentityFingerprint: 'a'.repeat(64), displayName: 'Test Child', requestedAt: '2026-09-20T12:00:00Z',
 }
 
-test('only a Main with node administration scope gets controls', () => {
+test('only local Main exposes device administration controls', () => {
   const main = createLocalMainAdminContext('http://127.0.0.1:3123')
   assert.equal(canAdministerDevices(main), true)
   assert.equal(canAdministerDevices({ ...main, mode: 'child' }), false)
-  assert.equal(canAdministerDevices({ ...main, uiScopes: ['chat:read'] }), false)
+  assert.equal(canAdministerDevices({ ...main, mode: 'client' }), false)
 })
 
 test('network choices stay on known private IPv4 addresses and default off loopback', () => {

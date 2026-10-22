@@ -308,7 +308,7 @@ function startDraft(projectId: string, folder?: FolderRecord, remote = false) {
 const keyboardActive = ref(true)
 const newConversationShortcut = createNewConversationShortcut({
   context() {
-    if (!keyboardActive.value || !props.visible || creating.value || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]')) || !installation.value.uiScopes.includes('chat:write')
+    if (!keyboardActive.value || !props.visible || creating.value || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
       || !['chat', 'project-settings', 'agents'].includes(String(route.name))) return
     const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
     if (!projects.value.some(project => project.id === projectId)) return
@@ -324,7 +324,7 @@ const newConversationShortcut = createNewConversationShortcut({
 })
 // Synchronous cancellation also covers switching away and back during a pending read.
 watch(() => [route.fullPath, selected.value?.key, selected.value?.sessionId, automation.value?.id,
-  props.apiBase, props.visible, keyboardActive.value, installation.value.uiScopes.join(','),
+  props.apiBase, props.visible, keyboardActive.value,
   projects.value.map(project => project.id).join(',')], () => newConversationShortcut.cancel(), { flush: 'sync' })
 function navigate(projectId: string, sessionId: string, child?: string) {
   automation.value = undefined
@@ -342,7 +342,7 @@ function selectSession(projectId: string, sessionId: string) {
   navigate(projectId, sessionId)
 }
 function openKnowledge(projectId: string) {
-  if (!installation.value.uiScopes.includes('main:admin')) return
+
   automation.value = undefined
   const resource = selected.value?.projectId === projectId ? selected.value
     : registry.resources.findLast(item => item.projectId === projectId) ?? registry.draft(projectId)

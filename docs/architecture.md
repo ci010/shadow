@@ -2600,8 +2600,11 @@ are short, grouped and rate-limited, with question prompts taking priority.
 Autoplay restrictions and device mute still apply; a closed or suspended renderer
 cannot notify. Each application window owns its own sound monitor.
 
-Installation context and route policy distinguish Main/Child and UI scope.
-These client-side policies are presentation rules, not server authorization.
+Installation context distinguishes Main, Child, and mobile-client surfaces.
+An authenticated connection grants management access; the renderer does not apply
+additional UI roles or scope checks. Connection availability, Child-local recovery,
+mobile backend route restrictions, and device/browser authentication remain in
+place. Client-side presentation rules are not server authorization.
 The former Workspaces page is consolidated into each node's capability details;
 `/workspaces` redirects to `/nodes`. Nodes consumes a versioned, allowlisted
 read-only inventory alongside separate Main desktop administration commands,

@@ -9,13 +9,13 @@
           <button type="button" :aria-pressed="view === 'board'" @click="view = 'board'">{{ t('Board') }}</button>
           <button type="button" :aria-pressed="view === 'usage'" @click="view = 'usage'; panel = ''">{{ t('Usage') }}</button>
         </div>
-        <button v-if="canWrite && view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :title="t('Uses multiple bounded model requests and saves valid patches progressively; no calls on opening.')" :aria-describedby="modelCallNoticeId" @click="organizeTopics('full')">{{ organizing ? t('Organizing…') : t('Reorganize recent topics') }}</button>
-        <button v-if="canWrite && view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :aria-describedby="modelCallNoticeId" @click="organizeTopics('delta')">{{ t('Update changed topics') }}</button>
+        <button v-if="view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :title="t('Uses multiple bounded model requests and saves valid patches progressively; no calls on opening.')" :aria-describedby="modelCallNoticeId" @click="organizeTopics('full')">{{ organizing ? t('Organizing…') : t('Reorganize recent topics') }}</button>
+        <button v-if="view === 'history'" type="button" :disabled="organizationBusy || organizationDisabled" :aria-describedby="modelCallNoticeId" @click="organizeTopics('delta')">{{ t('Update changed topics') }}</button>
         <span :id="modelCallNoticeId" class="model-call-description">{{ t('Up to 8 model requests, 24 tool calls and 120 seconds. Valid patches are saved immediately.') }}</span>
         <button v-if="view !== 'usage'" type="button" :aria-expanded="diagnosticsOpen" @click="diagnosticsOpen = !diagnosticsOpen">{{ t('Agent diagnostics') }}</button>
         <span v-if="view === 'board'" class="work-count">{{ filtered.length }} {{ t('of') }} {{ data?.items.length ?? 0 }} {{ t('items') }}</span>
         <button v-if="view !== 'usage'" type="button" class="work-refresh" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
-        <button v-if="canWrite && view !== 'usage'" type="button" class="new-work" @click="newWork">{{ t('New work') }}</button>
+        <button v-if="view !== 'usage'" type="button" class="new-work" @click="newWork">{{ t('New work') }}</button>
       </div>
       <div class="workbench-integrations">
         <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? t('Back to work') : t('Apps') }}</button>
@@ -25,8 +25,8 @@
       <div v-if="!appsVisible && view === 'history' && organizationProgress" class="organization-status" role="status" aria-live="polite">{{ organizationProgress }}</div>
       <div v-if="!appsVisible && view === 'history' && organizationMessage" class="organization-status" role="status" aria-live="polite">{{ organizationMessage }}</div>
     </header>
-    <QuickActions :api-base="apiBase" :project-id="projectId" :active="visible" :can-write="installation.uiScopes.includes('main:admin')" pinned-only />
-    <ProjectMicroApps v-if="appsVisible" :api-base="apiBase" :active="visible" :can-write="canWrite" @compose="discussApp" />
+    <QuickActions :api-base="apiBase" :project-id="projectId" :active="visible" :can-write="true" pinned-only />
+    <ProjectMicroApps v-if="appsVisible" :api-base="apiBase" :active="visible" :can-write="true" @compose="discussApp" />
     <ProjectUsage v-if="view === 'usage' && !appsVisible" :api-base="apiBase" :project-id="projectId" :active="visible" />
     <div v-show="!appsVisible && view !== 'usage'" class="workbench-body">
       <main v-show="wide || !panel || view === 'history'" class="workbench-main">
@@ -63,7 +63,7 @@
           <div v-else-if="!data.items.length" class="workbench-empty">
             <span class="i-lucide-workflow empty-work-icon" aria-hidden="true" />
             <h2>{{ t('No work items yet') }}</h2><p>{{ t('Conversations can stay conversations. Ask the coordinator to organize work when there is an outcome to track.') }}</p>
-            <button @click="canWrite ? newWork() : emit('coordinator')">{{ canWrite ? t('Talk to coordinator') : t('View coordinator conversation') }}</button>
+            <button @click="newWork()">{{ t('Talk to coordinator') }}</button>
           </div>
           <div v-else-if="!filtered.length" class="workbench-empty"><h2>{{ t('No matching work') }}</h2><p>{{ t('Try another Initiative, session or search.') }}</p><button @click="clearFilters">{{ t('Clear filters') }}</button></div>
           <div v-else-if="view === 'board'" class="work-board" tabindex="0" :aria-label="t('Work board')">
@@ -89,12 +89,12 @@
         <header class="coordination-panel-heading">
           <h2 ref="panelHeading" tabindex="-1">{{ panel === 'github' ? 'GitHub' : t('Work details') }}</h2>
           <button v-if="selected && panel !== 'work'" @click="panel = 'work'">{{ t('Task') }}</button>
-          <button v-if="panel === 'work' && canWrite" @click="discussSelected">{{ t('Discuss') }}</button>
+          <button v-if="panel === 'work'" @click="discussSelected">{{ t('Discuss') }}</button>
           <button type="button" :aria-label="t('Close coordination panel')" @click="closePanel"><span class="i-lucide-x" aria-hidden="true" /></button>
         </header>
         <div v-show="panel === 'github'" class="project-work-detail">
           <ProjectGitHub :api-base="apiBase" :project-id="projectId" :active="visible && panel === 'github'"
-            :can-write="canWrite" :selected="selected" :works="data?.items ?? []" :sessions="data?.sessions ?? []"
+            :can-write="true" :selected="selected" :works="data?.items ?? []" :sessions="data?.sessions ?? []"
             @work="selectWork" @updated="refresh" @compose="discussGitHub" />
         </div>
         <div v-show="panel === 'work'" class="project-work-detail">
@@ -105,9 +105,9 @@
               <button v-for="key in selectedItem.dependencies" :key="key" @click="selectWork(key)">{{ data?.items.find(item => item.key === key)?.title ?? key }}</button>
             </p>
             <WorkAlignment :key="selected" :api-base="apiBase" :session-id="coordinatorId" project :work-key="selected"
-              embedded :expanded="visible && panel === 'work'" :can-write="canWrite" :revision="lease?.work.state.revision"
+              embedded :expanded="visible && panel === 'work'" :can-write="true" :revision="lease?.work.state.revision"
               :sessions="data?.sessions.filter(session => session.assignable)" @updated="refresh" @editing="editing = $event" />
-            <details v-if="canWrite && selectedItem?.assignee && sessionExists(selectedItem.assignee)" class="reporting-settings">
+            <details v-if="selectedItem?.assignee && sessionExists(selectedItem.assignee)" class="reporting-settings">
               <summary>{{ t('Advanced reporting settings') }}</summary>
               <DecisionOwner :api-base="apiBase" :session-id="selectedItem.assignee" />
             </details>
@@ -127,7 +127,6 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, 
 import { useRoute, useRouter } from 'vue-router'
 import { automationChatLocation } from '../automations.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
-import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
 import { ORCHESTRATOR_SESSION_ID as coordinatorId } from '../project-coordination.ts'
 import { filterWork, groupWork, workAttention, workColumns, workRoots } from '../project-work.ts'
@@ -146,14 +145,13 @@ import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 
 const props = defineProps<{ apiBase: string; projectId: string; projectName: string; visible: boolean }>()
 const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string]; coordinator: [] }>()
-const live = useProjectLiveState(), installation = useInstallationContext(), route = useRoute(), router = useRouter()
+const live = useProjectLiveState(), route = useRoute(), router = useRouter()
 const lease = shallowRef<ProjectLiveLease>()
 const lastSnapshot = shallowRef<ProjectWorkOverview>()
 const organizationSnapshot = shallowRef<ProjectWorkOverview>()
 const data = computed(() => organizationSnapshot.value ?? lease.value?.work.state.value ?? lastSnapshot.value)
 const error = computed(() => lease.value?.work.state.error)
 const loading = computed(() => lease.value?.work.state.loading)
-const canWrite = computed(() => installation.value.uiScopes.includes('chat:write'))
 const view = ref<'history' | 'board' | 'usage'>('history'), panel = ref<'work' | 'github' | ''>('')
 
 const selected = ref(''), editing = ref(false), wide = ref(false)
@@ -170,7 +168,7 @@ const organizationProgress = computed(() => {
 })
 let organizationController: AbortController | undefined
 async function organizeTopics(mode: 'full' | 'delta' = 'full') {
-  if (organizationDisabled.value || organizationBusy.value || !canWrite.value) return
+  if (organizationDisabled.value || organizationBusy.value) return
   const apiBase = props.apiBase, projectId = props.projectId
   const controller = new AbortController()
   organizationController = controller

@@ -283,10 +283,10 @@ test('rendered expired invitation hides its PIN and disables copying while allow
   assert.equal(view.button('Create another invitation').props.disabled, false)
 })
 
-test('rendered Child and unprivileged Main retain read-only inventory without admin requests', async t => {
+test('rendered Child and mobile client retain read-only inventory without admin requests', async t => {
   for (const context of [
     { ...createLocalMainAdminContext('http://127.0.0.1:3123'), mode: 'child' as const },
-    { ...createLocalMainAdminContext('http://127.0.0.1:3123'), uiScopes: [] },
+    { ...createLocalMainAdminContext('http://127.0.0.1:3123'), mode: 'client' as const },
   ]) {
     const { calls } = backend(t)
     const view = mount(t, 'NodesView', context)
@@ -298,7 +298,7 @@ test('rendered Child and unprivileged Main retain read-only inventory without ad
   }
 })
 
-test('browser-mode Main scopes do not grant administration without the desktop launch credential', async t => {
+test('browser sign-in does not grant local device administration without the desktop launch credential', async t => {
   const { state, calls } = backend(t, listeningNetwork, [pending])
   state.denied = true
   const view = mount(t, 'NodesView', createLocalMainAdminContext('http://127.0.0.1:3123'))

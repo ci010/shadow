@@ -22,58 +22,11 @@ test('local Main admin sees product and diagnostic routes', () => {
   ])
 })
 
-test('Main-facing navigation is scope-aware rather than role-gated', () => {
-  const context: InstallationContextV1 = {
-    ...createLocalMainAdminContext('http://localhost'),
-    mode: 'child',
+test('authenticated contexts ignore retired scopes for product and diagnostic navigation', () => {
+  for (const mode of ['main', 'child', 'client'] as const) {
+    const context = { ...createLocalMainAdminContext('http://localhost'), mode, uiScopes: [] }
+    assertEquals(routeNames(context), ['chat', 'settings', 'spans', 'logs'])
   }
-
-  assertEquals(routeNames(context), [
-    'chat',
-    'settings',
-    'spans',
-    'logs',
-  ])
-})
-
-test('restricted Child sees only routes allowed by its scopes', () => {
-  const context: InstallationContextV1 = {
-    ...createLocalMainAdminContext('http://localhost'),
-    mode: 'child',
-    uiScopes: ['chat:read'],
-  }
-
-  assertEquals(routeNames(context), [
-    'chat',
-    'settings',
-  ])
-})
-
-test('Main node administration requires nodes:admin', () => {
-  const context: InstallationContextV1 = {
-    ...createLocalMainAdminContext('http://localhost'),
-    uiScopes: ['nodes:admin'],
-  }
-
-  assertEquals(routeNames(context), ['settings'])
-})
-
-test('Settings replaces Providers as the Main administration tab', () => {
-  const context = createLocalMainAdminContext('http://localhost')
-  assertEquals(navigationFor(context).find((item) => item.name === 'settings'), {
-    name: 'settings', label: 'Settings', group: 'primary',
-  })
-  assertEquals(routeNames({ ...context, uiScopes: ['chat:read'] }), ['chat'])
-})
-
-test('Child local surfaces do not require Main administration scopes', () => {
-  const context: InstallationContextV1 = {
-    ...createLocalMainAdminContext('http://localhost'),
-    mode: 'child',
-    uiScopes: [],
-  }
-
-  assertEquals(routeNames(context), ['settings'])
 })
 
 test('diagnostic routes are grouped without adding a product route', () => {

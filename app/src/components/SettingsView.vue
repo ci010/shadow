@@ -54,7 +54,7 @@ const sections = computed(() => [
   { id: 'sounds', get label() { return t('Sounds') }, icon: 'i-lucide-volume-2' },
   { id: 'language', get label() { return t('Language') }, icon: 'i-lucide-languages' },
 ].filter(item => item.id === 'nodes'
-  ? context.value.mode === 'child' || context.value.uiScopes.includes('nodes:admin')
+  ? context.value.mode !== 'client'
   : props.available))
 const section = computed(() => sections.value.find(item => item.id === route.params.section)?.id
   ?? (props.available ? 'providers' : sections.value[0]?.id))
