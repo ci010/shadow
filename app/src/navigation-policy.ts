@@ -34,19 +34,12 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
     modes: ['main', 'child', 'client'],
   },
   {
-    name: 'nodes',
-    get label() { return t('Nodes') },
-    group: 'primary',
-    scopes: ['nodes:admin'],
-    modes: ['main', 'child'],
-    childLocal: true,
-  },
-  {
     name: 'settings',
     get label() { return t('Settings') },
     group: 'primary',
-    scopes: ['main:admin'],
-    modes: ['main', 'client'],
+    scopes: ['main:admin', 'nodes:admin'],
+    modes: ['main', 'child', 'client'],
+    childLocal: true,
   },
   {
     name: 'spans',

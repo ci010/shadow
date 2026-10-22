@@ -1,6 +1,5 @@
 <template>
-	<DataLayoutUpgrade v-if="upgradeLayout" :api="api" :initial-layout="upgradeLayout" @complete="resumeUpgrade" />
-	<main v-else class="setup-shell">
+	<main class="setup-shell">
 		<section class="setup-panel" aria-labelledby="setup-title">
 			<header class="setup-header">
 				<img class="brand-mark" :src="shadowLogo" alt="" aria-hidden="true" draggable="false">
@@ -165,8 +164,6 @@
 import DesktopRoleSettings from './components/DesktopRoleSettings.vue'
 import { t } from './i18n.ts'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import DataLayoutUpgrade from './DataLayoutUpgrade.vue'
-import type { DataLayoutView } from '../../desktop/src/bootstrap/data-layout-controller.ts'
 import ProviderSetup from './ProviderSetup.vue'
 import { createProviderSetupClient, providerDisplayName, type ProviderSetupStatus } from './provider-setup.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
@@ -223,8 +220,6 @@ const directoryPath = ref('')
 const localExecutor = ref(props.initialState?.mode === 'main'
 	? props.initialState.localExecutor ?? loadLocalExecutorChoice()
 	: true)
-const upgradeLayout = ref<DataLayoutView | null>(null)
-async function resumeUpgrade() { upgradeLayout.value = null; await continueMain(true) }
 const busy = ref(false)
 const actionError = ref('')
 const executionConsent = ref(false)
@@ -405,24 +400,19 @@ async function continueMain(useChosenDirectory = false): Promise<void> {
 			}
 			const result = await commitMainDirectoryChoice(props.api, directoryPath.value, directorySelection.value)
 			lifetime.signal.throwIfAborted()
-			if (!result.ok) throw new Error(result.code === 'migration-required' ? 'migration-required' : 'Directory setup failed')
+			if (!result.ok) throw new Error('Directory setup failed')
 			state.value = result.state
 			directorySelection.value = null
 		}
 		if (state.value.mode === 'main' && state.value.step === 'initialize-main') {
 			const result = await props.api.bootstrap.initializeMain()
 			lifetime.signal.throwIfAborted()
-			if (!result.ok) throw new Error(result.code === 'migration-required' ? 'migration-required' : 'Initialization failed')
+			if (!result.ok) throw new Error('Initialization failed')
 			state.value = result.state
 		}
 		await connectProviderRuntime()
 	} catch (error) {
 		await reloadSavedProgress()
-		if (error instanceof Error && error.message === 'migration-required') {
-			upgradeLayout.value = await props.api.bootstrap.dataLayoutStatus?.() ?? null
-			if (!upgradeLayout.value) actionError.value = t('Data upgrade is required. Update Desktop or use the bundled offline migration diagnostics.')
-			return
-		}
 		if (state.value?.step === 'choose-data-directory') automaticDirectory.value = false
 		if (!lifetime.signal.aborted) actionError.value = t('Setup could not finish. Check the data folder permissions and desktop connection, then retry. Existing data is preserved.')
 	} finally { busy.value = false }

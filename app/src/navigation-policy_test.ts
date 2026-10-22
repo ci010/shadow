@@ -16,7 +16,6 @@ test('local Main admin sees product and diagnostic routes', () => {
 
   assertEquals(routeNames(context), [
     'chat',
-    'nodes',
     'settings',
     'spans',
     'logs',
@@ -31,7 +30,7 @@ test('Main-facing navigation is scope-aware rather than role-gated', () => {
 
   assertEquals(routeNames(context), [
     'chat',
-    'nodes',
+    'settings',
     'spans',
     'logs',
   ])
@@ -46,7 +45,7 @@ test('restricted Child sees only routes allowed by its scopes', () => {
 
   assertEquals(routeNames(context), [
     'chat',
-    'nodes',
+    'settings',
   ])
 })
 
@@ -56,7 +55,7 @@ test('Main node administration requires nodes:admin', () => {
     uiScopes: ['nodes:admin'],
   }
 
-  assertEquals(routeNames(context), ['nodes'])
+  assertEquals(routeNames(context), ['settings'])
 })
 
 test('Settings replaces Providers as the Main administration tab', () => {
@@ -74,7 +73,7 @@ test('Child local surfaces do not require Main administration scopes', () => {
     uiScopes: [],
   }
 
-  assertEquals(routeNames(context), ['nodes'])
+  assertEquals(routeNames(context), ['settings'])
 })
 
 test('diagnostic routes are grouped without adding a product route', () => {
@@ -90,6 +89,5 @@ test('app content follows navigation without a persistent runtime status row', a
   const app = await readFile(new URL('./App.vue', import.meta.url), 'utf8')
   assert.doesNotMatch(app, /runtime-status|runtime-dot|roleLabel|mainConnectionLabel/)
   assert.match(app, /<main class="app-main">/)
-  assert.match(app, /v-if="showChildRecovery"/)
-  assert.match(app, /<router-link :to="\{ name: 'nodes' \}">Manage this node<\/router-link>/)
+    assert.match(app, /@manage-node="router.push\(\{ name: 'settings', params: \{ section: 'nodes' \} \}\)"/)
 })

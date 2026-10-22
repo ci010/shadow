@@ -2,7 +2,7 @@
   <section class="product-page fade-in">
     <header class="page-header">
       <div class="min-w-0">
-        <h1 ref="heading" tabindex="-1">{{ t('Nodes') }}</h1>
+        <component :is="embedded ? 'h2' : 'h1'" ref="heading" tabindex="-1">{{ t('Nodes') }}</component>
         <p class="page-summary">{{ t('Devices and the capabilities they provide.') }}</p>
       </div>
       <div class="context-strip" :aria-label="t('Administration access')">
@@ -11,6 +11,8 @@
         <button type="button" class="inventory-refresh" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : error ? t('Retry') : t('Refresh') }}</button>
       </div>
     </header>
+
+    <DesktopRoleSettings />
 
     <DeviceAdministration v-if="canAdministerDevices(context)" :api-base="apiBase" :nodes="nodes" @changed="refresh" />
 
@@ -96,10 +98,11 @@ import { t, formatDateTime } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { CAPABILITY_LABELS, capabilityAvailability, capabilitySummary, fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
+import DesktopRoleSettings from './DesktopRoleSettings.vue'
 import DeviceAdministration from './DeviceAdministration.vue'
 import { canAdministerDevices, revokeDevice } from './device-administration.ts'
 
-const props = defineProps<{ apiBase: string }>()
+const props = defineProps<{ apiBase: string; embedded?: boolean }>()
 const context = useInstallationContext()
 const nodes = ref<readonly NodeInventoryEntry[]>([])
 const activeNodes = computed(() => nodes.value.filter(node => node.connection !== 'revoked'))

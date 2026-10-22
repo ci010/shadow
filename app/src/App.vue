@@ -53,10 +53,10 @@
       </div>
       <ConnectionStatus :child-title="showChildRecovery ? recoveryTitle : undefined" :live-error="liveError"
         :notification-error="monitoringError || sounds.error.value"
-        @retry="livePool.retry()" @manage-node="router.push({ name: 'nodes' })" />
+        @retry="livePool.retry()" @manage-node="router.push({ name: 'settings', params: { section: 'nodes' } })" />
       <div
         class="route-content"
-        :class="{ 'chat-route': workspaceRoutes.includes(String(route.name)) }"
+        :class="{ 'chat-route': workspaceRoutes.includes(String(route.name)), 'settings-route': route.name === 'settings' }"
       >
       <router-view v-slot="{ Component, route: viewRoute }">
         <KeepAlive :key="resolvedBase" include="ProjectsWorkspace">
@@ -278,6 +278,7 @@ onUnmounted(() => {
 }
 .route-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 .route-content.chat-route { display: flex; padding: 0; overflow: hidden; }
+.route-content.settings-route { scrollbar-gutter: stable; }
 .setup-content-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 
 .tab-nav {
