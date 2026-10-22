@@ -1,3 +1,5 @@
+import { DatabaseSync } from 'node:sqlite'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -15,6 +17,10 @@ for (const remote of [false, true]) {
   test(`Initiative SQL uses lazy invocation and Project Home (${remote ? 'remote' : 'local'} workdir)`, async () => {
     await withTempWorkspace(async root => {
       const home = join(root, 'one')
+      new InitiativeStore(home).close()
+      const archive = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+      archive.exec('PRAGMA user_version=5')
+      archive.close()
       const store = new InitiativeStore(home, { isSessionKnown: id => id === 'web:actor' })
       const other = new InitiativeStore(join(root, 'two'))
       const base = new Tools(home)

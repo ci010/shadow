@@ -1,6 +1,6 @@
 import { isAbsolute, join, resolve } from 'node:path'
 
-/** Pure layout description. Existence checks and migration belong to storage migration. */
+/** Pure description of the current application data layout. */
 export function appDataPaths(dataDir: string) {
   const root = resolve(dataDir)
   return {
@@ -29,7 +29,7 @@ export function projectDataPaths(home: string) {
 
 /**
  * Logical storage names retained by service APIs and historical references.
- * Both migration and service readers/writers use this table. Browser profiles,
+ * Service readers/writers use this table. Browser profiles,
  * capture artifacts and app bundles are durable state, NOT disposable caches.
  */
 export const PROJECT_STORAGE_ENTRIES: Readonly<Record<string, readonly string[]>> = Object.freeze({
@@ -61,7 +61,6 @@ export const PROJECT_STORAGE_ENTRIES: Readonly<Record<string, readonly string[]>
   'folders.v2.json': ['state', 'folders.v2.json'],
   'HEARTBEAT.pulse': ['state', 'HEARTBEAT.pulse'],
   'wechat': ['state', 'wechat'],
-  'projects': ['state', 'legacy-initiatives'],
   'uploads': ['workdirs', 'legacy-uploads'],
   'github-integration.json': ['config', 'github-integration.json'],
   'user-actions.v1.json': ['config', 'user-actions.v1.json'],

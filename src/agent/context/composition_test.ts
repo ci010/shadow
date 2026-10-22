@@ -69,7 +69,7 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     assert(order.every((position, index) => position >= 0 && (!index || position > order[index - 1])))
     assert.doesNotMatch(built.systemPrompt, /\*\*Working directory\*\*:/)
     assert.doesNotMatch(prompt, /Workspace root|Selected folder: none|Conventions \(always in effect\)/)
-    assert.match(prompt, /Project Home and session storage are internal\/draft data/)
+    assert.match(prompt, /Project Home is internal application data/)
     assert.match(prompt, /Historical context is not fresh human authorization/)
     assert.doesNotMatch(prompt, /# Task context|Topic brief|no explicit topic brief/)
     assert.match(prompt, /source, scope, version and explicit supersession, not timestamp alone/)

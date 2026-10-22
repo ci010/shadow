@@ -199,6 +199,8 @@ import { DiffusionCppService } from '../../diffusion-cpp/service.ts'
 import { DiffusionCppTool } from '../../tools/diffusion-cpp.ts'
 import { Aria2Downloader } from '../../downloader/aria2.ts'
 import { DownloadTool } from '../../tools/download.ts'
+import { SafegitTool } from '../../tools/safegit.ts'
+import { SafegitRunner } from '../../execution/git/safegit.ts'
 import { createPromptCaptureStore } from '../../sessions/prompt-capture.ts'
 import { createA2aRuntime } from '../../a2a/runtime.ts'
 import { isDeepStrictEqual } from 'node:util'
@@ -742,6 +744,7 @@ export async function createProjectRuntime(
     },
   ))
   importTool.registerBuiltin('download', new DownloadTool(new Aria2Downloader(), project.id, backgroundTasks))
+  importTool.registerBuiltin('safegit', new SafegitTool(new SafegitRunner(), project.id))
 
   const initiatives = new InitiativeStore(workspace, {
     trackWork: true,
@@ -755,8 +758,6 @@ export async function createProjectRuntime(
     },
   })
   cleanup.push(async () => { await sessions.stop(); initiatives.close() })
-  initiatives.migrateLegacyMarkdown()
-  initiatives.migrateWorkItems()
   const topics = new TopicService({
     projectId: project.id,
     sessions,
