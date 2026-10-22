@@ -65,7 +65,7 @@ export function parseMcpConfigDocument(
       throw new TypeError('mcpServers must be an object')
     }
     const entries = Object.entries(input.mcpServers)
-    if (!entries.length) throw new TypeError('mcpServers is empty')
+
     if (options.server !== undefined && !entries.some(([name]) => name === options.server)) {
       throw new TypeError('Selected MCP server does not exist in this config')
     }

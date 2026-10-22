@@ -3021,8 +3021,9 @@ run in the old context. Availability and root `AGENTS.md` preparation happen
 before commit, under the existing folder access lease. Missing root instructions
 are explicit; unreadable or oversized instructions fail preparation. Root
 instructions apply only to that folder tree; nested `AGENTS.md` files must be
-read when entering their subtrees. Current Project conventions and a discoverable
-Skill metadata index accompany the transition; skill bodies are not injected
+read when entering their subtrees. Only selected-folder Skill metadata accompanies
+the transition; Project conventions and Project/global skill discovery already
+provided by the system prompt are not repeated. Skill bodies are not injected
 or executed by discovery. Project/global skills retain `v:skills/<name>`.
 The narrow repository convention is `.agents/skills/<name>/SKILL.md`, with
 frontmatter name matching the directory. Selected-folder skills are separately
@@ -3307,3 +3308,29 @@ accepts `{}`), and remove port/launch/profile/routing flags from `.chrome-devtoo
 and preloads. Do not delete user profiles as part of this migration. Establish an
 explicit user-owned connection through browser_setup. See the built-in Chrome
 skill's `references/mcp-args.md` for connection evidence and permitted flags.
+
+### Folder-local MCP declarations
+
+Local selected folders recognize explicit `.mcp.json` (`mcpServers`) and
+`.vscode/mcp.json` (`servers`, including VS Code `type: "http"`) declarations.
+`use_project` validates these before committing and appends only folder-local
+source discovery. Invalid/unreadable declarations fail the switch without
+printing file values. No declaration is copied into Project configuration.
+Both files may contribute; source IDs include a folder/file hash so their
+servers cannot overwrite Project sources or one another. Folder-relative
+stdio execution uses that folder as cwd. These files are JSON, not JSONC;
+editor variable/input substitution is not implemented. Managed Chrome must
+still use the built-in browser source.
+
+The session importer resolves folder sources lazily for `v:tools` reads/search
+and `invoke_tool`. Search reads cached metadata only and never connects; an
+unindexed source advertises its status and the exact initialization call:
+`invoke_tool({ name: "folder-<scope>-<server>", args: {} })`. This starts the
+declared service and returns contracts without executing any MCP tool; invoke
+a returned exact tool name to execute it. Empty server maps are valid and
+contribute no sources. Successful imports reuse
+the existing MCP metadata index. Switching removes old folder tool names from
+the current session overlay, not captured child overlays. Connections remain
+owned until session reset/sleep so borrowed children retain their handles.
+Folder declaration snapshots last for that selected scope; switch away/back
+(or start a new session) to reload edits. Remote folders have no Main fallback.

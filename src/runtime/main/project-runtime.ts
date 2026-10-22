@@ -428,7 +428,7 @@ export async function createProjectRuntime(
   await knowledgeMaintenance.init()
   cleanup.push(() => knowledgeMaintenance.stop())
   registerKnowledgeRoutes(app, { workspace, skills, authorize: dependencies.authorize, maintenance: knowledgeMaintenance })
-  const importTool = new ImportTool(loadable, workspace, project.id, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport)
+  const importTool = new ImportTool(loadable, workspace, project.id, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport, id => { const folder = folderRegistry.list().find(folder => folder.id === id); return folder?.kind === 'local' ? { id: folder.id, path: folder.path } : undefined })
   tools.register(new SearchTool(workspace, webSearchTool, vfs, dependencies.localExecutor !== false))
   tools.register(new InvokeTool(importTool))
   registerDevelopmentRestart(importTool)
@@ -897,9 +897,7 @@ export async function createProjectRuntime(
   })
   tools.register(new UseProjectTool({
     projectId: project.id, folders: folderRegistry,
-    skills: ctx => skills.getMetadataSummary(ctx.admin, ctx.sessionId) || '',
-    conventions: () => conventions.prompt() || '',
-    switched: ctx => importTool.clearFolderSkillTools(ctx.tools),
+    switched: ctx => { importTool.clearFolderSkillTools(ctx.tools); importTool.clearFolderMcpTools(ctx.tools) },
   }))
   context.register(initiativeProvider(initiatives))
   context.register({ name: 'project-conventions', getPromptSection: () => conventions.prompt() })
