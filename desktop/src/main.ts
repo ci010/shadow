@@ -33,9 +33,6 @@ import {
   launchProfilePath,
 } from './bootstrap/launch-profile.js'
 import { AtomicMainAgentConfigInitializer } from './bootstrap/main-agent-config.js'
-import { DataLayoutController } from './bootstrap/data-layout-controller.js'
-import { createDataLayoutCommand } from './bootstrap/data-layout-command.js'
-import { detectDataLayout } from './bootstrap/data-layout-startup.js'
 import { BootstrapCoordinator } from './bootstrap/coordinator.js'
 import { assertRoleDataIsolation } from './bootstrap/role-data-isolation.js'
 import { DesktopRoleProfiles, parseRoleSwitchArguments } from './bootstrap/role-profiles.js'
@@ -132,16 +129,6 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: 
       throw new Error('Bootstrap commands require the desktop main frame')
     }
   }
-  ipcMain.handle(IPC_CHANNELS.dataLayoutStatus, (event, ...args: unknown[]) => {
-    assertBootstrapSender(event)
-    parseNoArguments(args)
-    return coordinator.dataLayoutStatus()
-  })
-  ipcMain.handle(IPC_CHANNELS.upgradeDataLayout, (event, ...args: unknown[]) => {
-    assertBootstrapSender(event)
-    parseNoArguments(args)
-    return coordinator.upgradeDataLayout()
-  })
   ipcMain.handle(IPC_CHANNELS.childSetup, (event, ...args: unknown[]) => {
     assertBootstrapSender(event)
     parseNoArguments(args)
@@ -351,10 +338,6 @@ async function start(): Promise<void> {
     executablePath: process.execPath, appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath, userDataPath: roleUserDataPath, packaged: app.isPackaged,
   })
-  const dataLayoutCommand = createDataLayoutCommand({
-    executablePath: process.execPath, appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath, userDataPath: roleUserDataPath, packaged: app.isPackaged,
-  })
   const coordinator = new BootstrapCoordinator(
     storage,
     new AtomicRuntimeConfigWriter(configPath),
@@ -369,7 +352,6 @@ async function start(): Promise<void> {
     ),
     new FileChildBootstrap(configPath, childPairingCommand, undefined, undefined,
       async paths => assertRoleDataIsolation(paths, await otherRoleConfigPath('main'), 'main')),
-    new DataLayoutController(detectDataLayout, dataLayoutCommand),
     async paths => assertRoleDataIsolation(paths, await otherRoleConfigPath('child'), 'child'),
   )
   if (roles.explicit) {
@@ -387,7 +369,7 @@ async function start(): Promise<void> {
     stop: async () => {
       try {
         await microApps?.shutdown()
-        await Promise.all([runtimeHost.stop(), childPairingCommand.stop(), dataLayoutCommand.stop()])
+        await Promise.all([runtimeHost.stop(), childPairingCommand.stop()])
       } finally { await publication.close() }
     },
   })
@@ -403,7 +385,7 @@ async function start(): Promise<void> {
     await startup.current() // A pending startup must finish before the stop boundary.
     await coordinator.switchRole(targetRole, async current => {
       await microApps?.shutdown()
-      await Promise.all([runtimeHost.stop(), childPairingCommand.stop(), dataLayoutCommand.stop()])
+      await Promise.all([runtimeHost.stop(), childPairingCommand.stop()])
       await roles.select(targetRole, current)
     })
     // User initiated only. The normal quit lifecycle completes before another runtime starts.

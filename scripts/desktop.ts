@@ -11,6 +11,7 @@ import { prepareReleaseDownloads } from './release-downloads.ts'
 import { desktopTarget } from './desktop-target.ts'
 import { verifyPreparedBuild } from './prepared-build.ts'
 import { prepareAria2Signing, verifyAria2Package } from './aria2-package.ts'
+import { prepareSafegit, prepareSafegitSigning } from './safegit-package.ts'
 
 const mode = process.argv[2] ?? 'build'
 if (mode !== 'build' && mode !== 'dev' && mode !== 'package') {
@@ -35,6 +36,8 @@ if (target) {
   const electronDist = await prepareReleaseDownloads(process.cwd(), process.env, target)
   await verifyAria2Package(process.cwd(), target)
   await prepareAria2Signing(process.cwd(), target)
+  await prepareSafegit(process.cwd(), target.platform, target.arch)
+  await prepareSafegitSigning(process.cwd(), target.platform)
   await createReleaseManifest(process.cwd(), sourceHash!)
   await runPnpm(['--filter', '@shadow/desktop', 'dist', target.builderFlag, target.format, `--${target.arch}`, `--config.electronDist=${electronDist}`])
 } else {

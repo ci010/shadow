@@ -324,17 +324,13 @@ eligibility, not evidence of completion. There is no startup scan or physical
 purge. Legacy retirement config is inert; upgrading requires explicit opt-in to
 the ordinary automation.
 
-Migration is explicit and offline; see [data migration](data-migration.md).
-Startup refuses an active/interrupted migration lock or detectable unmigrated
-legacy catalog instead of silently creating an empty Default. The copy tool
-retains old data, verifies ordinary files and SQLite recovery, and publishes
-`app.json` last. A Project migration marker supports bounded access to historical
-absolute paths under that same application's old managed Home; arbitrary remote
-paths and external repository paths are never reinterpreted.
+A retained Project layout marker supports bounded access to historical absolute
+paths under that same application's old managed Home; arbitrary remote paths
+and external repository paths are never reinterpreted. Historical migration
+commands are no longer shipped.
 
-Copilot credentials remain in their existing host/profile location; this
-migration does not change the protected Child credential storage or reset Child
-pairing identities. Main registry files are copied intact into `devices/`.
+Copilot credentials remain in their existing host/profile location. Child
+credentials use protected storage, and Main registry files live in `devices/`.
 Current JSONL and SQLite records keep distinct `projectId` and `folderId`
 ownership; unsupported formats fail rather than reinterpret old IDs.
 

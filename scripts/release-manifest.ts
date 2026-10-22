@@ -5,7 +5,7 @@ import { extractFile, listPackage } from '@electron/asar'
 import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
 
 const sourceInputs = [
-  'src', 'scripts', 'integrations/a2a', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/service', 'desktop/aria2',
+  'src', 'scripts', 'integrations/a2a', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/service', 'desktop/aria2', 'desktop/safegit',
   'build.ts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.pnpmfile.cjs',
   '.gitattributes', '.github/workflows/release-check.yml',
   'tsconfig.json', 'tsconfig.build.json', 'app/package.json', 'app/tsconfig.json',
@@ -75,6 +75,7 @@ export async function sourceFingerprint(root: string): Promise<string> {
       for (const [name, bytes] of await tree(path, input === 'integrations/a2a' ? new Set(['node_modules', 'dist']) : undefined)) {
         // The pinned downloaded wrapper is an output, not source.
         if (input === 'desktop/service' && name === 'ShadowService.exe') continue
+        if (input === 'desktop/safegit' && ['safegit', 'release.json', 'LICENSE'].includes(name)) continue
         if (input === 'desktop/aria2' && ['aria2c', 'aria2c.exe', 'COPYING', 'LICENSE.OpenSSL',
           'aria2-1.37.0-source.tar.gz', 'build-aria2-native.sh'].includes(name)) continue
         entries.push([`${input}/${name}`, hash(bytes)])
@@ -97,6 +98,8 @@ export async function createReleaseManifest(
     ['desktop/backend', 'resources/backend'],
     ['app/dist', 'resources/app-dist'],
     ['desktop/aria2', 'resources/aria2'],
+    ...(target.platform !== 'win32' && await exists(join(root, 'desktop', 'safegit', 'release.json'))
+      ? [['desktop/safegit', 'resources/safegit']] : []),
     ...(target.platform === 'win32' ? [['desktop/service', 'resources/service']] : []),
     ['desktop/dist', 'asar/dist'],
     ['desktop/assets', 'asar/assets'],
@@ -104,6 +107,7 @@ export async function createReleaseManifest(
     for (const [name, bytes] of await tree(resolve(root, input))) {
       if (prefix === 'resources/aria2' && ['aria2c', 'aria2c.exe'].includes(name)
         && name !== (target.platform === 'win32' ? 'aria2c.exe' : 'aria2c')) continue
+      if (prefix === 'resources/safegit' && !['safegit', 'LICENSE', 'release.json'].includes(name)) continue
       if (prefix === 'resources/backend' && !name.startsWith('dist/') && !name.startsWith('node_modules/') && name !== 'package.json') continue
       if (prefix === 'resources/backend' && name.startsWith('dist/') && name.endsWith('.map')) continue
       // electron-builder removes Git directory placeholders from extraResources.
@@ -140,7 +144,7 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
   const target = legacy ? desktopTarget('win32', 'x64') : desktopTarget(data.platform as string, data.arch as string)
   const files: Record<string, string> = {}
   for (const [name, checksum] of Object.entries(data.files)) {
-    if (!/^(resources\/(?:backend|app-dist|service|aria2)|asar\/(?:dist|assets))\//.test(name) ||
+    if (!/^(resources\/(?:backend|app-dist|service|aria2|safegit)|asar\/(?:dist|assets))\//.test(name) ||
       name.includes('\\') || name.split('/').some(part => part === '.' || part === '..' || !part) || !hex(checksum)) {
       throw new Error(`Invalid release manifest entry: ${name}`)
     }
@@ -192,6 +196,7 @@ export async function verifyReleaseManifest(
     throw new Error('Non-Windows package must not contain service resources')
   }
   for (const directory of ['backend', 'app-dist', ...(!legacy ? ['aria2'] : []),
+    ...(Object.keys(manifest.files).some(name => name.startsWith('resources/safegit/')) ? ['safegit'] : []),
     ...(target.platform === 'win32' ? ['service'] : [])]) {
     for (const [name, bytes] of await tree(join(resources, directory))) {
       actual.set(`resources/${directory}/${name}`, bytes)

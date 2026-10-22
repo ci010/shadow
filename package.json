@@ -40,8 +40,7 @@
     "mobile:check": "pnpm --filter @shadow/mobile check",
     "mobile:android": "pnpm --filter @shadow/mobile android",
     "mobile:ios": "pnpm --filter @shadow/mobile ios",
-    "test:mobile": "node --import tsx --test src/gateway/mobile-access_test.ts src/runtime/mobile-pairing-cli_test.ts src/runtime/main/mobile-integration_test.ts app/src/mobile*_test.ts scripts/mobile_test.ts",
-    "migrate:sessions": "node --import tsx scripts/migrate-sessions-to-sqlite.ts"
+    "test:mobile": "node --import tsx --test src/gateway/mobile-access_test.ts src/runtime/mobile-pairing-cli_test.ts src/runtime/main/mobile-integration_test.ts app/src/mobile*_test.ts scripts/mobile_test.ts"
   },
   "dependencies": {
     "@a2a-js/sdk": "1.1.0",

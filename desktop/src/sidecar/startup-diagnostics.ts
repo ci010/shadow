@@ -4,7 +4,7 @@ import { safeBackendError, safeBackendTiming, type BackendStartupError, type Bac
 
 export const STARTUP_FAILURE_KINDS = [
   'spawn-error', 'configuration-error', 'port-conflict', 'readiness-timeout',
-  'early-exit', 'migration-failure', 'main-unreachable', 'crash',
+  'early-exit', 'main-unreachable', 'crash',
 ] as const
 
 export type StartupFailureKind = typeof STARTUP_FAILURE_KINDS[number]

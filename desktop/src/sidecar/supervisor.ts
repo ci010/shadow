@@ -13,7 +13,6 @@ export type SidecarFailureKind =
   | 'port-conflict'
   | 'readiness-timeout'
   | 'early-exit'
-  | 'migration-failure'
   | 'main-unreachable'
   | 'crash'
 
@@ -56,7 +55,7 @@ export type SidecarSpawn = (
 export interface SidecarReadinessResult {
   readonly ready: boolean
   readonly failure?: {
-    readonly kind: Extract<SidecarFailureKind, 'configuration-error' | 'port-conflict' | 'migration-failure' | 'main-unreachable'>
+    readonly kind: Extract<SidecarFailureKind, 'configuration-error' | 'port-conflict' | 'main-unreachable'>
     readonly message: string
   }
 }
@@ -414,7 +413,6 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
   private classifyEarlyExit(): SidecarFailureKind {
     if (/EADDRINUSE|address already in use|port.+in use/i.test(this.recentOutput)) return 'port-conflict'
     if (/config(?:uration)?.+(?:invalid|error)|invalid.+config/i.test(this.recentOutput)) return 'configuration-error'
-    if (/migration.+(?:failed|error)/i.test(this.recentOutput)) return 'migration-failure'
     return 'early-exit'
   }
 
