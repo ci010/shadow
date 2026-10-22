@@ -4,7 +4,7 @@
     <div v-if="mode" class="folder-dialog-backdrop" @click.self="close" @keydown="dialogKeydown">
       <section ref="dialog" class="folder-dialog" role="dialog" aria-modal="true" aria-labelledby="folder-dialog-title" tabindex="-1">
         <header>
-          <h2 id="folder-dialog-title">{{ mode !== 'clone' ? t('Open folder') : t('Clone repository') }}</h2>
+          <h2 id="folder-dialog-title"><span :class="mode === 'clone' ? 'i-lucide-git-fork' : 'i-lucide-folder-open'" aria-hidden="true" /> {{ mode !== 'clone' ? t('Open folder') : t('Clone repository') }}</h2>
           <button class="folder-icon-button" :aria-label="t('Close folder dialog')" :disabled="cloneView.state === 'cancelling'" @click="close">×</button>
         </header>
         <p class="dialog-intro">{{ mode !== 'clone' ? t('Add an existing folder to this project. Your files stay where they are.') : t('Clone a repository into a new folder on Main.') }}</p>
@@ -14,15 +14,20 @@
             <input ref="urlInput" v-model="url" type="text" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repo.git" :disabled="cloneActive" required />
             <small>{{ t('HTTPS or SSH. Use Git authentication rather than a token in the URL.') }}</small>
           </label>
-          <label v-if="mode !== 'clone'" class="dialog-field">
-            <span>{{ t('Device') }}</span>
-            <select v-model="nodeId" :disabled="busy" @change="deviceChanged">
-              <option v-for="device in devices" :key="device.nodeId" :value="device.nodeId" :disabled="!device.online || !device.supported">
-                {{ device.name }} · {{ device.nodeId }} ({{ device.role }}){{ !device.online ? ' · ' + t('Offline') : !device.supported ? ' · ' + t('Update required') : '' }}
-              </option>
-            </select>
-          </label>
-          <button type="button" class="btn" :disabled="busy || cloneActive" @click="loadDevices">{{ t('Refresh devices') }}</button>
+          <div class="device-toolbar">
+            <label v-if="mode !== 'clone'" class="dialog-field device-field">
+              <span>{{ t('Device') }}</span>
+              <span class="device-select-row">
+                <span class="i-lucide-monitor device-icon" aria-hidden="true" />
+                <select v-model="nodeId" :disabled="busy" :title="selectedDevice ? `${selectedDevice.name} · ${nodeId}` : ''" @change="deviceChanged">
+                  <option v-for="device in devices" :key="device.nodeId" :value="device.nodeId" :disabled="!device.online || !device.supported">
+                    {{ device.name }} · {{ device.role }}{{ !device.online ? ' · ' + t('Offline') : !device.supported ? ' · ' + t('Update required') : '' }}
+                  </option>
+                </select>
+              </span>
+            </label>
+            <button type="button" class="folder-icon-button refresh-devices" :disabled="busy || cloneActive" :aria-label="t('Refresh devices')" :title="t('Refresh devices')" @click="loadDevices"><span class="i-lucide-refresh-cw" :class="{ 'is-loading': busy }" aria-hidden="true" /></button>
+          </div>
           <label class="dialog-field">
             <span>{{ mode !== 'clone' ? t('Folder path') : t('Parent folder') }}</span>
             <span class="path-input-row">
@@ -32,15 +37,17 @@
             <small>{{ t('Enter a path on the selected device, or browse its directories below.') }}</small>
           </label>
           <div class="directory-browser" aria-live="polite">
-            <p v-if="busy" role="status">{{ t('Loading directories…') }}</p>
+            <p v-if="busy" class="directory-empty" role="status">{{ t('Loading directories…') }}</p>
             <template v-if="listing">
-              <p class="directory-location">{{ selectedDevice?.name }} · {{ nodeId }}: {{ listing.path }}</p>
-              <button type="button" class="btn" :disabled="busy || !listing.parent || cloneActive" @click="browse(listing.parent ?? '')">{{ t('Parent directory') }}</button>
+              <div class="directory-toolbar">
+                <button type="button" class="folder-icon-button" :disabled="busy || !listing.parent || cloneActive" :aria-label="t('Parent directory')" :title="t('Parent directory')" @click="browse(listing.parent ?? '')"><span class="i-lucide-arrow-up" aria-hidden="true" /></button>
+                <p class="directory-location" :title="listing.path">{{ listing.path }}</p>
+              </div>
               <ul class="directory-list">
-                <li v-for="entry in listing.directories" :key="entry.path"><button type="button" :disabled="busy || cloneActive" @click="browse(entry.path)"><span class="i-lucide-folder" aria-hidden="true" /> {{ entry.name }}</button></li>
+                <li v-for="entry in listing.directories" :key="entry.path"><button type="button" :disabled="busy || cloneActive" @click="browse(entry.path)"><span class="i-lucide-folder directory-icon" aria-hidden="true" /><span class="directory-name">{{ entry.name }}</span><span class="i-lucide-chevron-right directory-chevron" aria-hidden="true" /></button></li>
               </ul>
-              <p v-if="!listing.directories.length">{{ t('No subdirectories') }}</p>
-              <p v-if="listing.truncated">{{ t('Too many directories. Enter a path to continue.') }}</p>
+              <p v-if="!listing.directories.length" class="directory-empty">{{ t('No subdirectories') }}</p>
+              <p v-if="listing.truncated" class="directory-note">{{ t('Too many directories. Enter a path to continue.') }}</p>
             </template>
           </div>
           <label v-if="mode === 'clone'" class="dialog-field">
@@ -262,24 +269,46 @@ onUnmounted(deactivate)
 </script>
 
 <style scoped>
-.folder-dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: rgb(0 0 0 / 36%); }
-.folder-dialog { width: min(100%, 480px); min-width: 0; max-height: calc(100dvh - 40px); overflow-y: auto; overscroll-behavior: contain; padding: 24px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 16px 48px var(--c-shadow); }
+.folder-dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 48%); }
+.folder-dialog { box-sizing: border-box; width: min(100%, 560px); min-width: 0; max-height: calc(100dvh - 48px); overflow-y: auto; overscroll-behavior: contain; padding: 24px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 16px 48px var(--c-shadow); }
 .folder-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.folder-dialog h2 { margin: 0; font-size: 18px; font-weight: 600; }
-.dialog-intro { margin: 12px 0 24px; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
-.dialog-field { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; font-size: 13px; font-weight: 500; }
-.dialog-field input { min-width: 0; width: 100%; border: 1px solid var(--c-border-soft); border-radius: var(--radius-control); padding: 9px 10px; background: var(--c-bg-input); color: var(--c-text); font: inherit; font-weight: 400; }
+.folder-dialog h2 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 17px; font-weight: 600; }
+.folder-dialog h2 > span { width: 20px; height: 20px; color: var(--c-text-secondary); }
+.dialog-intro { margin: 8px 0 20px; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
+.dialog-field { display: flex; flex-direction: column; gap: 7px; margin: 16px 0 0; min-width: 0; font-size: 12px; font-weight: 500; }
+.dialog-field input, .dialog-field select { box-sizing: border-box; min-width: 0; width: 100%; min-height: 36px; border: 1px solid var(--c-border); border-radius: var(--radius-control); padding: 8px 10px; background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; font-weight: 400; }
 .dialog-field input::placeholder { color: var(--c-text-secondary); }
-.dialog-field small { color: var(--c-text-secondary); font-weight: 400; line-height: 1.5; }
-.path-input-row { display: flex; gap: 8px; }
+.dialog-field small { color: var(--c-text-secondary); font-size: 11px; font-weight: 400; line-height: 1.5; }
+.device-toolbar { display: flex; align-items: flex-end; gap: 8px; }
+.device-field { flex: 1; margin: 0; }
+.device-select-row { position: relative; display: flex; align-items: center; min-width: 0; }
+.device-icon { position: absolute; left: 10px; width: 16px; height: 16px; pointer-events: none; color: var(--c-text-secondary); }
+.device-field select { padding-left: 34px; text-overflow: ellipsis; }
+.path-input-row { display: flex; gap: 8px; min-width: 0; }
+.path-input-row input { flex: 1; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
 .path-input-row .btn { flex-shrink: 0; }
-.folder-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
-.folder-dialog .primary { background: var(--c-primary-bg); color: var(--c-text-on-primary); }
+.folder-dialog .btn { border-radius: var(--radius-control); }
+.folder-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--c-border-soft); }
+.folder-dialog .primary { background: var(--c-primary-bg); color: var(--c-text-on-primary); border-color: transparent; }
 .folder-dialog .primary:hover { background: var(--c-primary-bg-hover); }
-.folder-icon-button { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font-size: 22px; }
-.folder-icon-button:hover { background: var(--c-bg-muted); color: var(--c-text); }
+.folder-icon-button { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font-size: 22px; }
+.folder-icon-button > span { width: 16px; height: 16px; }
+.folder-icon-button:hover:not(:disabled) { background: var(--c-bg-muted); color: var(--c-text); }
+.refresh-devices { width: 36px; height: 36px; border: 1px solid var(--c-border); }
 .folder-dialog :is(button, input, select):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.folder-dialog button:disabled, .folder-dialog input:disabled { opacity: .6; cursor: not-allowed; }
+.folder-dialog :is(button, input, select):disabled { opacity: .5; cursor: not-allowed; }
+.directory-browser { margin-top: 12px; border: 1px solid var(--c-border); border-radius: var(--radius-control); overflow: hidden; }
+.directory-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--c-bg-input); border-bottom: 1px solid var(--c-border-soft); }
+.directory-location { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: var(--c-text-secondary); text-align: left; }
+.directory-list { height: clamp(140px, 28dvh, 280px); overflow: auto; overscroll-behavior: contain; margin: 0; padding: 4px; list-style: none; }
+.directory-list button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; text-align: left; padding: 7px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; cursor: pointer; }
+.directory-list button:hover:not(:disabled), .directory-list button:focus-visible { background: var(--c-bg-muted); }
+.directory-icon, .directory-chevron { flex-shrink: 0; width: 16px; height: 16px; color: var(--c-text-secondary); }
+.directory-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.directory-chevron { width: 14px; height: 14px; opacity: .5; }
+.directory-empty { padding: 24px 16px; margin: 0; text-align: center; color: var(--c-text-secondary); font-size: 12px; }
+.directory-list:has(+ .directory-empty) { display: none; }
+.directory-note { padding: 8px 12px; margin: 0; border-top: 1px solid var(--c-border-soft); font-size: 12px; color: var(--c-text-secondary); }
 .destination-preview, .checkout-path { overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; color: var(--c-text-secondary); }
 .destination-preview { display: flex; flex-direction: column; gap: 4px; margin: 16px 0 0; }
 .clone-status { margin-top: 20px; font-size: 13px; line-height: 1.6; }
@@ -287,15 +316,7 @@ onUnmounted(deactivate)
 .folder-error { color: var(--c-error); font-size: 13px; line-height: 1.6; margin: 16px 0 0; overflow-wrap: anywhere; }
 @media (max-width: 480px) {
   .folder-dialog-backdrop { padding: 12px; }
-  .folder-dialog { padding: 20px 16px; max-height: calc(100dvh - 24px); }
+  .folder-dialog { padding: 18px 16px; max-height: calc(100dvh - 24px); }
+  .dialog-intro { margin-bottom: 16px; }
 }
-</style>
-
-<style scoped>
-.directory-browser { border: 1px solid var(--c-border); border-radius: 8px; padding: 10px; }
-.directory-location { overflow-wrap: anywhere; font-size: 12px; }
-.directory-list { max-height: 220px; overflow: auto; padding: 0; list-style: none; }
-.directory-list button { width: 100%; text-align: left; padding: 6px; background: transparent; color: inherit; border: 0; cursor: pointer; }
-.directory-list button:hover { background: var(--c-bg-muted); }
-.dialog-field select { padding: 8px; background: var(--c-bg-input); color: inherit; border: 1px solid var(--c-border); border-radius: 6px; }
 </style>

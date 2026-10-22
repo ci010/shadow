@@ -152,3 +152,19 @@ test('current Child identity is preferred for Open and other devices for Remote;
   state().dialogKeydown({ key: 'Tab', shiftKey: false, preventDefault() { prevented = true } })
   assert.equal(prevented, true); assert.equal(firstFocused, true)
 })
+
+
+test('folder picker uses shared radius tokens and compact device and directory toolbars', () => {
+  const { descriptor } = parse(readFileSync(new URL('./components/FolderDialog.vue', import.meta.url), 'utf8'))
+  assert.equal(descriptor.styles.length, 1, 'Keep picker styling consolidated')
+  const css = descriptor.styles[0]!.content
+  const radii = [...css.matchAll(/border-radius:\s*([^;]+);/g)].map(match => match[1])
+  assert.ok(radii.length > 0)
+  assert.ok(radii.every(value => /^var\(--radius-[\w-]+\)$/.test(value!)), 'Every radius follows the shared theme tokens')
+  assert.match(descriptor.template!.content, /class="device-toolbar"/)
+  assert.match(descriptor.template!.content, /class="directory-toolbar"/)
+  assert.match(descriptor.template!.content, /class="directory-name"/)
+  const option = descriptor.template!.content.match(/<option[\s\S]*?<\/option>/)![0]
+  assert.doesNotMatch(option, /\{\{[^}]*device\.nodeId/, 'Keep full identities out of the visible device label')
+  assert.match(descriptor.template!.content, /:title="selectedDevice \? `\$\{selectedDevice.name\} · \$\{nodeId\}`/)
+})
