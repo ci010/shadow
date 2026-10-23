@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdir, readFile, readdir, writeFile, symlink, rm } from 'node:fs/promises'
+import { open, mkdir, readFile, readdir, writeFile, symlink, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { copyUserProfile } from './profile-copy.ts'
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
-import { superviseChromeChild, validateChromeExecutable, nativeChromeRuntime, SharedChrome, type ManagedChromeChoice, type ManagedChromeProcess, type SharedChromeRuntime } from './shared-chrome.ts'
+import { validateManagedBrowser } from './managed-browsers.ts'
+import { superviseChromeChild, nativeChromeRuntime, SharedChrome, type ManagedChromeChoice, type ManagedChromeProcess, type SharedChromeRuntime } from './shared-chrome.ts'
 
 export async function syntheticChrome(home: string) {
   const source = join(home, 'source')
@@ -19,7 +20,7 @@ export async function syntheticChrome(home: string) {
   await writeFile(join(source, 'Local State'), 'opaque-synthetic-local-state')
   const executablePath = join(home, 'fake-chrome')
   await writeFile(executablePath, 'never-executed')
-  const choice: ManagedChromeChoice = { executablePath, userDataDir: source, profileDirectory: 'Default' }
+  const choice: ManagedChromeChoice = { browser: 'chrome', executablePath, userDataDir: source, profileDirectory: 'Default' }
   const processes: (ManagedChromeProcess & { exited: boolean; args: string[]; stops: number })[] = []
   const runtime: SharedChromeRuntime = {
     async validateExecutable() {}, // synthetic process boundary; never execute the fixture file
@@ -78,7 +79,7 @@ test('separate Project managers never share processes or overwrite old copies', 
   await restart.shutdown()
 }))
 
-test('copy refuses locks/missing source/existing destination and does not remove user data', async () => withTempWorkspace(async home => {
+test('copy ignores runtime lock markers but refuses missing source/existing destination and does not remove user data', async () => withTempWorkspace(async home => {
   const f = await syntheticChrome(home)
   const destination = join(home, 'copy')
   await mkdir(destination)
@@ -86,8 +87,9 @@ test('copy refuses locks/missing source/existing destination and does not remove
   await assert.rejects(copyUserProfile(f.choice, destination), /copy failed/)
   assert.equal(await readFile(join(destination, 'keep'), 'utf8'), 'user-data')
   await writeFile(join(f.source, 'SingletonLock'), 'synthetic-lock')
-  await assert.rejects(f.manager.ensure(f.choice), /copy failed/)
-  assert.equal(f.processes.length, 0)
+  await f.manager.ensure(f.choice)
+  assert.equal(f.processes.length, 1)
+  await f.manager.shutdown()
   assert.equal(await readFile(join(f.source, 'SingletonLock'), 'utf8'), 'synthetic-lock')
   await assert.rejects(copyUserProfile({ ...f.choice, userDataDir: join(home, 'absent') }, join(home, 'missing-copy')), /copy failed/)
   await assert.rejects(copyUserProfile({ ...f.choice, profileDirectory: '../Default' }, join(home, 'bad')), /Select an absolute/)
@@ -126,11 +128,12 @@ test('selected profile links are rejected without reading outside data or damagi
   const outside = join(home, 'outside')
   await mkdir(outside)
   await writeFile(join(outside, 'keep'), 'synthetic-external-data')
-  await symlink(outside, join(f.source, 'Default', 'linked'), 'junction')
-  await assert.rejects(copyUserProfile(f.choice, join(home, 'copy')), /copy failed/)
+  await symlink(outside, join(f.source, 'Default', 'Network'), 'junction')
+  const report = await copyUserProfile(f.choice, join(home, 'copy'))
+  assert.ok(report.warnings.some(w => w.code === 'UNSUPPORTED_OR_LINKED_ENTRY'))
   assert.equal(await readFile(join(outside, 'keep'), 'utf8'), 'synthetic-external-data')
-  await assert.rejects(readFile(join(home, 'copy', 'Local State')), { code: 'ENOENT' })
-  await rm(join(f.source, 'Default', 'linked'))
+  assert.equal(await readFile(join(home, 'copy', 'Local State'), 'utf8'), 'opaque-synthetic-local-state')
+  await rm(join(f.source, 'Default', 'Network'))
 }))
 
 test('native endpoint discovery reads only synthetic managed file, validates port/path, and observes cancellation/exit', async () => withTempWorkspace(async home => {
@@ -159,5 +162,64 @@ test('native child kill errors never certify exit or permit a replacement', asyn
 test('native validator refuses arbitrary executable without launching it', async () => withTempWorkspace(async home => {
   const path = join(home, 'not-a-browser.exe')
   await writeFile(path, 'synthetic')
-  await assert.rejects(validateChromeExecutable(path), /recognized Chrome/)
+  await assert.rejects(validateManagedBrowser(path, 'chrome', home), /recognized installation/)
+}))
+for (const browser of ['chrome', 'edge', 'brave', 'chromium'] as const) {
+  test(`${browser}: managed selection is preserved at validation and launch, never substitutes Chrome`, async () => withTempWorkspace(async home => {
+    const f = await syntheticChrome(home)
+    const choice = { ...f.choice, browser }
+    let validated = false
+    f.runtime.validateExecutable = async (path, family, source) => {
+      assert.equal(path, choice.executablePath)
+      assert.equal(family, browser)
+      assert.equal(source, choice.userDataDir)
+      validated = true
+    }
+    const launch = f.runtime.launch
+    f.runtime.launch = (path, args) => { assert.ok(validated); assert.equal(path, choice.executablePath); return launch(path, args) }
+    await f.manager.ensure(choice)
+    await assert.rejects(f.manager.ensure({ ...choice, browser: browser === 'edge' ? 'chrome' : 'edge' }), /already selected/)
+    await f.manager.shutdown()
+  }))
+}
+
+test('installation/source validation failure happens before any copy or process launch', async () => withTempWorkspace(async home => {
+  const f = await syntheticChrome(home)
+  f.runtime.validateExecutable = async () => { throw new Error('synthetic mismatched browser source') }
+  await assert.rejects(f.manager.ensure(f.choice), /mismatched browser source/)
+  assert.equal(f.processes.length, 0)
+  await assert.rejects(readdir(join(home, 'managed')), { code: 'ENOENT' })
+  assert.equal(await readFile(join(f.source, 'Default', 'Preferences'), 'utf8'), 'synthetic-preferences')
+}))
+
+for (const all of [false, true]) test(`source failures still launch and original report survives reuse/restart: all=${all}`, async () => withTempWorkspace(async home => {
+  const f = await syntheticChrome(home)
+  let attempts = 0
+  f.runtime.copyOperations = { open: async (path, flags, mode) => {
+    if (flags === 'r') {
+      attempts++
+      if (all || String(path).endsWith('Local State')) throw Object.assign(new Error('private'), { code: 'EBUSY' })
+    }
+    return open(path, flags, mode)
+  } }
+  await f.manager.ensure(f.choice)
+  const report = f.manager.copyReport()
+  assert.equal(f.processes.length, 1)
+  assert.equal(report?.status, 'ready_with_warnings')
+  assert.ok(report?.warnings.some(w => w.item === 'Local State' && w.osCode === 'EBUSY'))
+  if (all) { assert.equal(report?.copiedFiles, 0); assert.match(report!.message, /No login data was migrated/) }
+  const originalAttempts = attempts
+  await f.manager.ensure(f.choice)
+  f.processes[0].exited = true
+  await f.manager.ensure(f.choice)
+  assert.deepEqual(f.manager.copyReport(), report)
+  assert.equal(attempts, originalAttempts)
+  await f.manager.shutdown()
+}))
+test('cancelled source copy never launches browser', async () => withTempWorkspace(async home => {
+  const f = await syntheticChrome(home), controller = new AbortController()
+  f.runtime.copyOperations = { open: async (path, flags, mode) => { controller.abort(); return open(path, flags, mode) } }
+  await assert.rejects(f.manager.ensure(f.choice, controller.signal), /abort/i)
+  assert.equal(f.processes.length, 0)
+  await f.manager.shutdown()
 }))

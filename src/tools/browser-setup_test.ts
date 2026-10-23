@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { ChromeToolSchema } from '../config/schema.ts'
 
 function fixture(t: TestContext, home: string) {
+  t.mock.method(BrowserSetupTool.prototype, 'discover', async () => []) // never inspect real profiles in tests
   const importer = new ImportTool(new Map<string, LoadableEntry>([['chrome-devtools', {
     config: { name: 'chrome-devtools', transport: 'stdio', command: 'npx', args: [CHROME_MCP_PACKAGE] },
   }]]), home, 'project')
@@ -347,8 +348,12 @@ test('managed shared endpoint keeps session registries, permissions, binding IDs
   const f = fixture(t, home), owner = f.session(), peer = f.session()
   const ensure = t.mock.method(SharedChrome.prototype, 'ensure', async () => 'ws://127.0.0.1:9555/devtools/browser/shared')
   const shutdown = t.mock.method(SharedChrome.prototype, 'shutdown', async () => {})
-  const args = { action: 'managed', executablePath: join(home, 'synthetic-chrome'), userDataDir: join(home, 'synthetic-source'), profileDirectory: 'Default' }
+  const report = { status: 'ready_with_warnings' as const, copiedFiles: 0, absent: [], warnings: [{ stage: 'open-source', item: 'Local State', code: 'SOURCE_READ_FAILED', osCode: 'EBUSY' }], loginData: 'not_migrated' as const, message: 'No login data was migrated.' }
+  t.mock.method(SharedChrome.prototype, 'copyReport', () => structuredClone(report))
+  const args = { action: 'managed', browser: 'chrome', executablePath: join(home, 'synthetic-chrome'), userDataDir: join(home, 'synthetic-source'), profileDirectory: 'Default' }
   const [first, second] = await Promise.all([f.setup(owner, args), f.setup(peer, args)]).then(values => values.map(value => JSON.parse(String(value))))
+  assert.deepEqual(first.copyReport, report)
+  assert.deepEqual(second.copyReport, report)
   assert.notEqual(first.instance, second.instance)
   assert.equal(first.owned, true)
   assert.equal(first.mode, 'managed')
@@ -379,7 +384,7 @@ test('session reset during managed initialization cannot publish a late binding 
   const f = fixture(t, home), owner = f.session(), peer = f.session()
   const started = Promise.withResolvers<void>(), endpoint = Promise.withResolvers<string>()
   t.mock.method(SharedChrome.prototype, 'ensure', async () => { started.resolve(); return endpoint.promise })
-  const args = { action: 'managed', executablePath: join(home, 'synthetic-chrome'), userDataDir: join(home, 'synthetic-source'), profileDirectory: 'Default' }
+  const args = { action: 'managed', browser: 'chrome', executablePath: join(home, 'synthetic-chrome'), userDataDir: join(home, 'synthetic-source'), profileDirectory: 'Default' }
   const pending = f.setup(owner, args)
   await started.promise
   // reset aborts the binding. Shared initialization is Project-owned and continues.
@@ -391,4 +396,18 @@ test('session reset during managed initialization cannot publish a late binding 
   assert.ok(JSON.parse(String(await peerPending)).instance)
   assert.deepEqual(JSON.parse(String(await f.setup(owner, { action: 'list' }))).instances, [])
   assert.equal(await f.invoke(peer, { pageId: 2, function: '() => 2' }), 'B')
+}))
+test('managed setup requires an explicit supported family and forwards it unchanged', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home)
+  const ensure = t.mock.method(SharedChrome.prototype, 'ensure', async () => 'ws://127.0.0.1:9555/devtools/browser/shared')
+  const args = { action: 'managed', executablePath: join(home, 'synthetic-browser'), userDataDir: join(home, 'synthetic-source'), profileDirectory: 'Default' }
+  assert.match(String(await f.setup(f.session(), args)), /legacy managed overrides require/)
+  assert.match(String(await f.setup(f.session(), { ...args, browser: 'electron' })), /invalid (?:browser_setup )?arguments/)
+  assert.equal(ensure.mock.callCount(), 0)
+  for (const browser of ['chrome', 'edge', 'brave', 'chromium']) {
+    const ctx = f.session()
+    assert.ok(JSON.parse(String(await f.setup(ctx, { ...args, browser }))).instance)
+    assert.equal(ensure.mock.calls.at(-1)!.arguments[0]!.browser, browser)
+    await ctx.tools.resetDynamicAndWait()
+  }
 }))

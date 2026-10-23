@@ -3,12 +3,12 @@ name: chrome-devtools
 description: >
   Browser automation: navigate pages, forms, screenshots, network, console,
   slow pages, memory, audits and emulate devices; browser_setup guides connection
-  to Project-shared copied-profile Chrome; explicit attach for Edge/Brave/Electron.
+  to Project-shared copied-profile Chrome/Edge/Brave/Chromium; explicit CDP attach for Electron and custom layouts.
 metadata:
   core: true
 ---
 
-# Chrome DevTools MCP — Project-shared copied-profile Chrome
+# Chromium CDP automation — Project-shared copied profiles
 
 Read this skill, then use dynamic MCP tools, not shell-launched adapters.
 For recordings, microphone, camera and interactive input panels use `v:skills/io`,
@@ -44,31 +44,47 @@ Read its contract, then invoke:
 invoke_tool({ name: "browser_setup", args: { action: "discover" } })
 ```
 
-Discovery returns guidance, not an inventory of profiles. The default is an
-application-managed Chrome with a separate COPY of the user's chosen profile.
-Managed launch accepts recognized Chrome installation paths only (standard Windows,
-macOS and Linux locations/channels), not custom executable programs. Use explicitly
-approved attach for other installations or browsers.
-Ask for the absolute Chrome executable, user data ROOT and profile directory
-(`Default` or `Profile N`, visible at chrome://version). Confirm copying that
-profile and sharing its managed browser with all permitted sessions in this
-Project. Do not inspect credentials, infer a profile from last-used state, or
-launch against the original directory. Use the existing conversation input/decision
-flow for missing input and authorization.
+Discovery returns installed supported browsers, stable installation IDs, matching source roots,
+and profile candidates (directory identifier and display name only), plus the existing
+Project shared choice. It never launches/copies or reads cookies/history/credentials.
+The agent/tool discovers paths: do not ask the user for executable or root paths.
+Reuse an existing Project choice first (managed with no selectors). Otherwise choose
+the user's browser/installation and match their stated profile name. Unique candidates
+are selected automatically. Ask which profile name only when multiple candidates are
+ambiguous; never silently choose Default or last-used. If multiple browsers are installed,
+use the user's stated brand or clarify that choice. Confirm copying and browser-wide
+sharing by permitted Project sessions, without repeatedly asking for known choices.
+Standard Chrome, Edge, Brave and Chromium brand/channel pairs are validated on
+Windows/macOS/Linux. Never cross-import another browser/channel profile. Custom,
+portable, Snap/Flatpak or other CDP apps require explicitly approved attach.
 
 ```
-invoke_tool({ name: "browser_setup", args: { action: "managed", executablePath: "<absolute Chrome executable>", userDataDir: "<absolute source data root>", profileDirectory: "Default" } })
+invoke_tool({ name: "browser_setup", args: { action: "managed", installation: "edge:stable" } })
+// With ambiguous profiles, after the user selects a discovered label:
+invoke_tool({ name: "browser_setup", args: { action: "managed", installation: "edge:stable", profile: "Work" } })
 ```
 
-The manager copies only the selected profile and opaque Local State into a unique
-Project-owned directory, disables sync/extensions and starts one loopback-CDP
-Chrome per Project runtime. All explicitly bound sessions share this process,
-cookies and tabs, but retain independent tool registries and permissions. Other
-Projects are isolated. Source files are never modified or written back; no
-existing copy is overwritten. If the source is locked, ask the user to close it
-before retrying; never remove its locks. Encrypted cookies/passwords and active
-databases may not transfer reliably. Re-login in the managed browser may be
-required. Do not claim inherited login before verifying in a page.
+Copies only key data from the selected profile: Cookies, Login Data, Web Data,
+Preferences, Secure Preferences (and SQLite sidecars), Local Storage, Session Storage,
+IndexedDB, Network, plus root Local State. History, other profiles, caches and runtime
+locks are omitted. Source files are read-only; never remove locks, bypass OS locks,
+or require the user to close their browser. Each source read/copy failure (including
+Local State and changed files) skips only that item with a structured warning: stage,
+source-relative item, safe code and OS code, never file contents/native error text.
+Optional missing items appear in absent, not warning floods. browser_setup returns
+copyReport with ready/ready_with_warnings, copiedFiles, absent, warnings, loginData and
+message. Relay warnings to the user: missing data may require signing in again. Even
+if all key data fails, launch the usable copy and clearly state no login data migrated;
+never claim complete login inheritance. Invalid source roots/boundaries, destination
+infrastructure failures, cancellation, invalid executables and shared-choice conflicts
+remain blocking. Linked/unsupported individual entries are skipped with warnings, never
+followed. Metadata checks are not atomic snapshots; encrypted credentials may not transfer.
+The original initialization report survives cross-session reuse and crash restart;
+reuse does not refresh/copy again.
+
+One managed browser per Project runtime uses a unique private copy with sync/extensions
+disabled and loopback CDP. Sessions share browser state but retain independent registries
+and permissions. Never overwrite an existing copy.
 
 The Project manager stops only its own child at Project shutdown. Session
 close/sleep/reset only disconnects that session. Crash recovery reuses the same

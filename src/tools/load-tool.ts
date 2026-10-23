@@ -256,7 +256,7 @@ export class ImportTool implements Tool {
           if (typeof result === 'string') return result
           return JSON.stringify(this.browserReceipt(instance))
         })
-      }))
+      }, () => this.sharedChrome.selectedChoice()))
     }
   }
 
@@ -271,6 +271,7 @@ export class ImportTool implements Tool {
   private browserReceipt(instance: BrowserInstance) {
     return {
       instance: instance.id, source: 'v:tools/chrome-devtools', mode: instance.target.mode,
+      copyReport: instance.target.mode === 'managed' ? this.sharedChrome.copyReport() : undefined,
       owned: instance.target.mode === 'managed', ready: instance.ready, binding: instance.target,
       lifetime: instance.target.mode === 'managed'
         ? 'Project runtime shared browser; session close/sleep/reset only disconnects this binding. Project shutdown stops its managed child; copy is retained.'
@@ -868,7 +869,7 @@ export class ImportTool implements Tool {
         if (!instance) throw new Error('No browser binding. Use browser_setup discover, then explicitly connect.')
         options.signal.throwIfAborted()
         const targetArgs = instance.target.mode === 'managed'
-          ? attachmentTarget(await this.sharedChrome.ensure(instance.target)).arguments
+          ? attachmentTarget(await this.sharedChrome.ensure(instance.target, options.signal)).arguments
           : instance.target.arguments
         options.signal.throwIfAborted()
         effectiveArgs = [packageName, ...parsed.args, '--page-id-routing', ...targetArgs]

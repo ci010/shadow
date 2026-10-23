@@ -415,7 +415,7 @@ export async function createProjectRuntime(
   loadable.set('chrome-devtools', {
     config: {
       name: 'chrome-devtools',
-      description: 'Project-shared managed Chrome using an explicitly selected copied profile. Start with browser_setup discover, then managed; compatibility autoConnect/attach only with explicit approval. Page tools require pageId; CDP access is browser-wide. Guidance: v:skills/chrome-devtools.',
+      description: 'Project-shared managed Chromium-family browser (Chrome/Edge/Brave/Chromium) using an explicitly selected copied profile. Start with browser_setup discover for installed browser/profile candidates (agent discovers paths, never asks the user for paths), then managed; unique profiles auto-select, ambiguous profile names require clarification, existing Project choice is reused; compatibility autoConnect/attach only with explicit approval. Page tools require pageId; CDP access is browser-wide. Guidance: v:skills/chrome-devtools.',
       transport: 'stdio',
       command: 'npx',
       args: [CHROME_MCP_PACKAGE],

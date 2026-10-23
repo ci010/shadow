@@ -40,11 +40,19 @@ test('browser capabilities are visible in the compact summary before tool discov
       assert.match(body, /does not inherit the parent's open page or login/)
       const normalized = body.replace(/\s+/g, ' ')
       for (const contract of [
+        /copyReport with ready\/ready_with_warnings/,
+        /Even if all key data fails/,
         /action: "discover"/,
         /action: "managed"/,
-        /one loopback-CDP Chrome per Project runtime/,
-        /Source files are never modified/,
-        /Encrypted cookies\/passwords/,
+        /One managed browser per Project runtime/,
+        /installation: "edge:stable"/,
+        /brand\/channel pairs are validated/,
+        /do not ask the user for executable or root paths/,
+        /Unique candidates are selected automatically/,
+        /Ask which profile name only when multiple candidates/,
+        /Reuse an existing Project choice first/,
+        /Source files are read-only/,
+        /encrypted credentials may not transfer/,
         /action: "autoConnect", channel: "stable"/,
         /Chrome 144\+/,
         /Chrome 136\+/,

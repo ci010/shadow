@@ -7,15 +7,43 @@ custom MCP servers or host commands.
 
 ## Project-managed copied profile (default)
 
-Start with browser_setup discover. Ask for an explicit absolute Chrome executable,
-source user data root and Default/Profile N directory, and confirm copying plus
-browser-wide sharing by permitted sessions in this Project. Only recognized Chrome
-installation paths are accepted, not arbitrary executable programs. action managed makes
-an opaque selected-profile + Local State copy and launches only that independent
-copy. It does not parse credentials, modify the source, infer last-used profiles,
-fall back to a blank profile or overwrite old copies. Missing/locked/unsupported
-sources fail. Have the user close a locked source; never kill it or remove locks.
-Encrypted credentials and live databases may not transfer; login is not promised.
+Start with browser_setup discover: installed supported browsers, stable installation IDs,
+standard source roots, minimal profile directory/display names, existing shared choice.
+The agent/tool discovers paths; never ask users for executable/root paths. Use managed
+with installation (e.g. edge:stable) or browser, and optional profile display name or
+directory. A sole candidate is automatic; honor the user's named profile and ask only
+for ambiguous choices. No Default/last_used guessing. Reuse an existing Project choice
+with managed and no selectors, without copying or asking again. Confirm copying and
+browser-wide Project sharing. Legacy explicit path overrides remain validated, not the
+normal workflow. Only reviewed matching brand/channel executable/root pairs are accepted.
+Discovery reads bounded Local State profile labels only; it does not output account
+metadata or email-like labels, read cookies/history/credentials, copy or launch.
+Windows/macOS: Chrome and Edge stable/beta/dev/canary, Brave stable/beta/nightly,
+Chromium standard install. Linux: Chrome and Edge stable/beta/dev, Brave
+stable/beta/nightly, Chromium native package paths. Portable/custom roots,
+Snap/Flatpak and other CDP applications require explicit attach. Add managed
+support only by reviewing installation/profile pairs, Chromium flags and copy
+compatibility in managed-browsers.ts; do not relax validation to a basename or
+agent-provided executable allowlist. Paths are canonicalized, not binary-attested;
+host installation integrity is an OS trust boundary. action managed makes
+a private independent key-data copy; it never modifies the source or overwrites old copies.
+Copies only key data from the selected profile: Cookies, Login Data, Web Data,
+Preferences, Secure Preferences (and SQLite sidecars), Local Storage, Session Storage,
+IndexedDB, Network, plus root Local State. History, other profiles, caches and runtime
+locks are omitted. Source files are read-only; never remove locks, bypass OS locks,
+or require the user to close their browser. Each source read/copy failure (including
+Local State and changed files) skips only that item with a structured warning: stage,
+source-relative item, safe code and OS code, never file contents/native error text.
+Optional missing items appear in absent, not warning floods. browser_setup returns
+copyReport with ready/ready_with_warnings, copiedFiles, absent, warnings, loginData and
+message. Relay warnings to the user: missing data may require signing in again. Even
+if all key data fails, launch the usable copy and clearly state no login data migrated;
+never claim complete login inheritance. Invalid source roots/boundaries, destination
+infrastructure failures, cancellation, invalid executables and shared-choice conflicts
+remain blocking. Linked/unsupported individual entries are skipped with warnings, never
+followed. Metadata checks are not atomic snapshots; encrypted credentials may not transfer.
+The original initialization report survives cross-session reuse and crash restart;
+reuse does not refresh/copy again.
 
 One SharedChrome manager belongs to each Project runtime (not a global pool or
 session slot). Concurrent setup is deduplicated; every session explicitly binds

@@ -83,7 +83,7 @@ export class SessionBrowsers {
     if (!instances.length && tools.dynamicOwner !== tools) {
       return 'Error: no browser instance is available to borrow. Ask the owning session to initialize its browser first.'
     }
-    return instances[0] ?? 'Error: no browser binding. Read browser_setup and use action discover to guide the user, then explicitly connect. Use managed to copy an explicitly selected profile into the Project shared Chrome.'
+    return instances[0] ?? 'Error: no browser binding. Read browser_setup and use action discover to guide the user, then explicitly connect. Use managed to copy an explicitly selected profile into the Project shared Chromium-family browser.'
   }
 
   async close(tools: SessionTools, instance: BrowserInstance): Promise<void> {
