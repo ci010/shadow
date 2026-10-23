@@ -246,7 +246,7 @@ const selectedFolderId = ref('')
 const loading = ref(false)
 const error = ref('')
 const cloneStatus = ref<CloneView>({ state: 'idle' })
-const dialogMode = ref<'open' | 'remote' | 'clone' | null>(null)
+const dialogMode = ref<'open' | 'clone' | null>(null)
 const menuOpen = ref(false)
 const menuFolder = ref<FolderRecord>()
 const menuActions = computed(() => menuFolder.value
@@ -382,7 +382,6 @@ function runAction(id: typeof FOLDER_ACTIONS[number]['id'] | 'remove' | 'move') 
   if (id === 'remove' || id === 'move') {
     if (menuFolder.value) emit('manage', menuFolder.value, id)
   } else if (id === 'scratch') startScratchDraft()
-  else if (id === 'remote') dialogMode.value = 'remote'
   else dialogMode.value = id
 }
 function menuKeydown(event: KeyboardEvent) {

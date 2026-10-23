@@ -49,7 +49,12 @@ test('verified no-change advances bounded cursors; legacy history is not replaye
       const batch = f.runtime.ledger.batchFor(id)!
       assert.equal(batch.sources[0].offset, 3)
       assert.equal(batch.sources[0].end, 103)
-      assert.match(learningTask(batch), /page_size=20/)
+      assert.match(learningTask(batch), /\/overview.*read.offset\/read.limit/)
+      const task = learningTask(batch, new Map([[batch.sources[0].physicalId, { offset: 12, end: 312, fullOffset: 28, fullEnd: 900 }]]))
+      assert.match(task, /\/overview", offset: 12, limit: 100/)
+      assert.match(task, /stopping before line 312/)
+      assert.match(task, /\/calls\/<encoded-id>/)
+      assert.match(task, /\[28, 900\)/)
       await f.tools.result.execute({ status: 'no_change', summary: 'Reviewed greetings; no durable signal.' }, f.context(id))
     })
     const id = await f.runtime.run('reflector', signal())

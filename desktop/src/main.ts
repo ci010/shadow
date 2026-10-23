@@ -65,7 +65,7 @@ import { installRuntimeRequestAuthorization, type RuntimeAuthorization } from '.
 import { parseWizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { desktopIconPath, desktopTrayIconPath, framelessWindowOptions, installWindowControls, MAIN_WINDOW_MAX_LISTENERS, removeNativeMenus } from './window-controls.js'
-import { installTrayMenu } from './tray.js'
+import { createTrayImage, installTrayMenu } from './tray.js'
 import { createDevelopmentRestart } from './development-restart.js'
 import { installBackgroundWindow } from './background-window.js'
 import { installFolderDirectoryPicker } from './folder-directories.js'
@@ -431,7 +431,7 @@ async function start(): Promise<void> {
     if (!runtime.ok || !activityAuthorization) throw new Error('Local Main is unavailable')
     await microApps!.open(identity)
   }
-  mainTray = new Tray(desktopTrayIconPath(app.isPackaged))
+  mainTray = new Tray(createTrayImage(desktopTrayIconPath(app.isPackaged), nativeImage))
   const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit(), restart, !app.isPackaged)
   const disposeBackground = installBackgroundWindow(app, mainWindow)
   app.once('will-quit', () => {

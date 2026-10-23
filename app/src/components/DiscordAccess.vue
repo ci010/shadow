@@ -185,6 +185,7 @@
 </template>
 
 <script setup lang="ts">
+import { createUuid } from '../uuid.ts'
 import UiSelect from './UiSelect.vue'
 import { enumLabel } from '../display-labels.ts'
 import { t, formatDateTime } from '../i18n.ts'
@@ -230,7 +231,7 @@ const previewChatId = ref('')
 const previewSender = ref('')
 const preview = ref<IntegrationPreview>()
 const editingAgentId = ref('')
-const newAgent = (): IntegrationAgentInput => ({ id: crypto.randomUUID(), name: '', displayName: '', execution: 'restricted',
+const newAgent = (): IntegrationAgentInput => ({ id: createUuid(), name: '', displayName: '', execution: 'restricted',
   tools: ['read', 'search', 'memory_save', 'learned_skill'], readDomains: [], skills: [],
   markdown: '---\ndescription: Discord assistant\ndefaultMode: session\n---\nHelp with questions in this channel using the approved knowledge. Keep customer details in conversation memory.' })
 const agentDraft = ref(newAgent())
@@ -368,7 +369,7 @@ async function proposeBindings() {
       ? [{ kind: 'dm', userId: people[0]! }] : selectedChannels.value.map(channelId => ({ kind: 'channel', guildId: guildId.value, channelId }))
     const bindings = targets.map(target => {
       const previous = botBindings.value.find(binding => JSON.stringify(binding.target) === JSON.stringify(target))
-      return { id: previous?.id ?? crypto.randomUUID(), botInstanceId: props.bot.id, botUserId: directory.value!.botUserId,
+      return { id: previous?.id ?? createUuid(), botInstanceId: props.bot.id, botUserId: directory.value!.botUserId,
         target, enabled: true, agentId: assignedAgentId.value, trigger: trigger.value,
         participants: { everyone: locationType.value === 'channel' && everyone.value, userIds: people, roleIds: locationType.value === 'channel' ? [...roleIds.value] : [] },
         tools: [...selectedTools.value], readDomains: [...selectedDomains.value], inheritThreads: locationType.value === 'channel' && inheritThreads.value,

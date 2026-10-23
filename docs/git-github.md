@@ -2,7 +2,8 @@
 
 The built-in `git-github` skill and shared runtime context default commits/pushes
 to [ci010/safegit](https://github.com/ci010/safegit), the pinned Windows-enabled
-fork of stricttools/safegit. Read-only Git inspection remains ordinary Git.
+fork of stricttools/safegit. Other Git commands use ordinary Git; safegit coverage alone does not require
+extra approval. Existing destructive-operation and publication permissions still apply.
 This grants no extra tools or permission to publish.
 
 ## CLI, not a structured tool
@@ -47,9 +48,9 @@ invalid cached archives fail closed; repair explicitly with
 Installed applications never download runtime resources. Release preparation
 and signing remain separate and unchanged.
 
-On failure, stop and inspect possible side effects, including local status,
+On safegit commit/push failure, stop and inspect possible side effects, including local status,
 diff/refs and remote outcomes when relevant. Report known/unknown effects before
-retrying. Never automatically fall back to raw Git, WSL or gh/API writes.
+retrying. Never automatically fall back to raw Git, WSL or gh/API writes for commit/push.
 Only explicit human authorization for the specified repository and operation
 permits the corresponding ordinary Git operation, subject to higher-priority
 restrictions. Honor scoped human instructions; ask if scope is unclear. This

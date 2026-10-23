@@ -9,7 +9,6 @@ import { channelAddressFromSessionId, type ChannelAddress } from '../../src/bus/
 
 export const FOLDER_ACTIONS = [
   { id: 'open', get label() { return t('Open folder') } },
-  { id: 'remote', get label() { return t('Open remote folder') } },
   { id: 'clone', get label() { return t('Clone repository') } },
   { id: 'scratch', get label() { return t('Start from scratch') } },
 ] as const
