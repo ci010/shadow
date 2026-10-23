@@ -17,7 +17,6 @@ interface Grant {
   expiresAt: number
   controller: AbortController
   timer: ReturnType<typeof setTimeout>
-  foregroundInput: boolean
   observation?: { value: ComputerObservation; at: number; frame?: ComputerObservation['screenshot']; timer?: ReturnType<typeof setTimeout> }
 }
 interface Pending {
@@ -59,7 +58,7 @@ export class ComputerService {
     return {
       ...owner, available: this.available,
       busy: !!(this.binding || this.grant && !grant),
-      grant: grant ? { target: structuredClone(grant.target), expiresAt: new Date(grant.expiresAt).toISOString(), foregroundInput: grant.foregroundInput } : null,
+      grant: grant ? { target: structuredClone(grant.target), expiresAt: new Date(grant.expiresAt).toISOString() } : null,
       pending: grant && this.pending ? structuredClone(this.pending.approval) : null,
       executing: !!grant && this.executing,
       lastAction: this.last && sameOwner(this.last.owner, owner) ? { ...this.last.receipt } : null,
@@ -103,8 +102,8 @@ export class ComputerService {
     } finally { this.binding = undefined }
   }
 
-  /** Acquire a listed target. Agent tools always use the default UIA-only permission. */
-  async share(owner: ComputerOwner, windowId: string, signal: AbortSignal, foregroundInput = false): Promise<ComputerStatus> {
+  /** Acquire a listed target. Foreground mutations require exact owner review; supported UIA actions run directly. */
+  async share(owner: ComputerOwner, windowId: string, signal: AbortSignal): Promise<ComputerStatus> {
     this.assertAvailable(owner)
     if (this.operation) throw new ComputerError('desktop_busy', 'The previous desktop operation is still stopping.')
     if (this.grant) throw new ComputerError('already_shared', 'Stop the current window before selecting another.')
@@ -117,7 +116,7 @@ export class ComputerService {
     const revision = this.revision
     const generation = this.desktop.generation
     try {
-      const target = ComputerTargetSchema.parse(await this.desktop.request({ method: 'bind', windowId, foregroundInput }, signal))
+      const target = ComputerTargetSchema.parse(await this.desktop.request({ method: 'bind', windowId }, signal))
       signal.throwIfAborted()
       if (revision !== this.revision || generation !== this.desktop.generation || this.stopped) {
         throw new ComputerError('interrupted', 'Window sharing was interrupted.')
@@ -127,34 +126,13 @@ export class ComputerService {
         void this.release(owner).catch(() => console.error('[computer] Could not stop the desktop host after grant expiry.'))
       }, this.options.grantMs ?? GRANT_MS)
       timer.unref()
-      this.grant = { owner: { ...owner }, target, expiresAt, generation, timer, foregroundInput, controller: new AbortController() }
+      this.grant = { owner: { ...owner }, target, expiresAt, generation, timer, controller: new AbortController() }
       this.last = undefined
     } catch (error) {
       await this.desktop.interrupt()
       throw error
     } finally { this.binding = undefined }
     return this.status(owner)
-  }
-
-  /** Authenticated owner UI only; deliberately not exposed by agent tools. Does not extend the lease. */
-  async enableForeground(owner: ComputerOwner, targetId: string, signal: AbortSignal): Promise<ComputerStatus> {
-    const grant = this.requireGrant(owner, targetId)
-    if (this.operation) throw new ComputerError('action_pending', 'Finish or reject the current action before changing permission.')
-    this.operation = true
-    this.clearObservation(grant)
-    try {
-      const result = await this.desktop.request({ method: 'foreground', targetId }, AbortSignal.any([signal, grant.controller.signal]))
-      if (!result || typeof result !== 'object' || !('enabled' in result) || result.enabled !== true) {
-        throw new ComputerError('host_failure', 'The desktop host did not confirm foreground permission.')
-      }
-      signal.throwIfAborted()
-      if (this.requireGrant(owner, targetId) !== grant) throw new ComputerError('interrupted', 'The selected window changed.')
-      grant.foregroundInput = true
-      return this.status(owner)
-    } catch (error) {
-      await this.release(owner)
-      throw error
-    } finally { this.operation = false }
   }
 
   private requireGrant(owner: ComputerOwner, targetId: string): Grant {
@@ -185,7 +163,7 @@ export class ComputerService {
     const { screenshot, ...tree } = observation
     grant.target = { ...grant.target, title: tree.title, bounds: tree.bounds }
     const observed: NonNullable<Grant['observation']> = {
-      value: tree, at: this.now(), ...(grant.foregroundInput && screenshot ? { frame: screenshot } : {}),
+      value: tree, at: this.now(), ...(screenshot ? { frame: screenshot } : {}),
     }
     if (observed.frame) {
       observed.timer = setTimeout(() => { observed.frame = undefined }, 120_000)
@@ -208,9 +186,6 @@ export class ComputerService {
     const observed = grant.observation
     if (!observed || observed.value.id !== input.observationId || this.now() - observed.at >= 120_000) {
       throw new ComputerError('stale_observation', 'Observe the window again before requesting an action.')
-    }
-    if (isForegroundAction(action) && !grant.foregroundInput) {
-      throw new ComputerError('input_not_enabled', 'Ask the user to enable foreground keyboard and mouse for this selected target in Computer use. The agent cannot enable it; every action still requires exact review.', 403)
     }
     const element = 'elementId' in action ? observed.value.elements.find(element => element.id === action.elementId) : undefined
     if (isPointerAction(action)) {
@@ -237,7 +212,7 @@ export class ComputerService {
     const combined = AbortSignal.any([signal, grant.controller.signal])
     let dispatched = false
     try {
-      const approved = await this.review(approval, combined, isPointerAction(action) ? observed.frame : undefined)
+      const approved = !isForegroundAction(action) || await this.review(approval, combined, isPointerAction(action) ? observed.frame : undefined)
       observed.frame = undefined
       if (!approved) {
         const receipt: ComputerReceipt = { actionId: approval.id, kind: action.kind, outcome: 'denied', verified: false }

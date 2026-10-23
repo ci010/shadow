@@ -44,23 +44,64 @@ unsafe extern "system" { fn CoCreateGuid(guid: *mut GuidBytes) -> i32; }
 struct Owned(Handle);
 impl Drop for Owned { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
 #[derive(Clone)]
-struct Window { hwnd: usize, pid: u32, created: FileTime, app: String, expires: Instant, runtime_id: Option<Vec<i32>>, foreground: bool }
+struct Window { hwnd: usize, pid: u32, created: FileTime, app: String, expires: Instant, runtime_id: Option<Vec<i32>> }
 #[derive(Clone)]
 struct Snapshot { id: String, created: Instant, signature: String, bindings: HashMap<String, Vec<i32>>, frame: Option<(String,i32,i32)>, bounds: Rect }
 #[derive(Default)]
 pub(crate) struct State { guard_path: Option<String>, guard: Option<crate::input::Guard>, owner: u32, candidates: HashMap<String, Window>, targets: HashMap<String, Window>, snapshots: HashMap<String, Snapshot>, actions: HashSet<String> }
 type Result<T> = std::result::Result<T, &'static str>;
+// Only our fixed diagnostic vocabulary may leave the native boundary.
+fn uia_error(error: agent_desktop_core::AdapterError) -> &'static str {
+ match error.message.as_str() {
+  "uia_verification_failed" => "uia_verification_failed",
+  "uia_client_init" => "uia_client_init",
+  "uia_tree_navigation" => "uia_tree_navigation",
+  "uia_root_unavailable" => "uia_root_unavailable",
+  "uia_identity_unavailable" => "uia_identity_unavailable",
+  "uia_deadline" => "uia_deadline",
+  "uia_budget" => "uia_budget",
+  "uia_process_mismatch" => "uia_process_mismatch",
+  "uia_root_protected_or_unknown" => "uia_root_protected_or_unknown",
+  "uia_geometry" => "uia_geometry",
+  "uia_state_unavailable" => "uia_state_unavailable",
+  "uia_value_read" => "uia_value_read",
+  "uia_text_read" => "uia_text_read",
+  "uia_password_recheck" => "uia_password_recheck",
+  _ => "uia_verification_failed",
+ }
+}
+fn error_body(code: &'static str) -> Value {
+ match code {
+  "uia_verification_failed" => json!({"error":{"code":"observation_failed","reason":"uia_verification_failed"}}),
+  "uia_client_init" => json!({"error":{"code":"observation_failed","reason":"uia_client_init"}}),
+  "uia_tree_navigation" => json!({"error":{"code":"observation_failed","reason":"uia_tree_navigation"}}),
+  "uia_root_unavailable" => json!({"error":{"code":"observation_failed","reason":"uia_root_unavailable"}}),
+  "uia_identity_unavailable" => json!({"error":{"code":"observation_failed","reason":"uia_identity_unavailable"}}),
+  "uia_deadline" => json!({"error":{"code":"observation_failed","reason":"uia_deadline"}}),
+  "uia_budget" => json!({"error":{"code":"observation_failed","reason":"uia_budget"}}),
+  "uia_process_mismatch" => json!({"error":{"code":"observation_failed","reason":"uia_process_mismatch"}}),
+  "uia_root_protected_or_unknown" => json!({"error":{"code":"observation_failed","reason":"uia_root_protected_or_unknown"}}),
+  "uia_geometry" => json!({"error":{"code":"observation_failed","reason":"uia_geometry"}}),
+  "uia_state_unavailable" => json!({"error":{"code":"observation_failed","reason":"uia_state_unavailable"}}),
+  "uia_value_read" => json!({"error":{"code":"observation_failed","reason":"uia_value_read"}}),
+  "uia_text_read" => json!({"error":{"code":"observation_failed","reason":"uia_text_read"}}),
+  "uia_password_recheck" => json!({"error":{"code":"observation_failed","reason":"uia_password_recheck"}}),
+  "desktop_session" | "desktop_open" | "desktop_name" | "desktop_not_default" => json!({"error":{"code":"desktop_unavailable","reason":code}}),
+  _ => json!({"error":{"code":code}}),
+ }
+}
 fn desktop() -> Result<()> {
  unsafe {
   let mut session = 0;
-  if ProcessIdToSessionId(GetCurrentProcessId(), &mut session) == 0 || session == 0 { return Err("unavailable"); }
+  if ProcessIdToSessionId(GetCurrentProcessId(), &mut session) == 0 || session == 0 { return Err("desktop_session"); }
   let handle = OpenInputDesktop(0, 0, 1);
-  if handle.is_null() { return Err("unavailable"); }
+  if handle.is_null() { return Err("desktop_open"); }
   let mut name = [0u16; 256]; let mut needed = 0;
   let ok = GetUserObjectInformationW(handle, 2, name.as_mut_ptr().cast(), 512, &mut needed);
   CloseDesktop(handle);
   let length = name.iter().position(|v| *v == 0).unwrap_or(name.len());
-  if ok == 0 || !String::from_utf16_lossy(&name[..length]).eq_ignore_ascii_case("Default") { return Err("unavailable"); }
+  if ok == 0 { return Err("desktop_name"); }
+  if !String::from_utf16_lossy(&name[..length]).eq_ignore_ascii_case("Default") { return Err("desktop_not_default"); }
  }
  Ok(())
 }
@@ -120,7 +161,7 @@ unsafe extern "system" fn enumerate(hwnd: Handle, data: isize) -> i32 {
   if census.windows.len() >= 256 { census.excluded += 1; return; }
   let result = (|| {
    let (created, app) = process(pid, census.state.owner)?;
-   let window = Window { hwnd: hwnd as usize, pid, created, app, expires: Instant::now() + Duration::from_secs(30), runtime_id: None, foreground:false };
+   let window = Window { hwnd: hwnd as usize, pid, created, app, expires: Instant::now() + Duration::from_secs(30), runtime_id: None };
    let id = uuid()?; let value = describe(&id, &window, census.state.owner, false)?;
    if value["title"].as_str().unwrap_or("").trim().is_empty() { return Ok(()); }
    census.state.candidates.insert(id, window); census.windows.push(value); Ok::<(), &'static str>(())
@@ -130,11 +171,11 @@ unsafe extern "system" fn enumerate(hwnd: Handle, data: isize) -> i32 {
  if outcome.is_err() { census.failed = true; 0 } else { 1 }
 }
 pub fn dispatch(input: Value, adapter: &agent_desktop_windows::WindowsAdapter, state: &mut State) -> Value {
- match execute(input, adapter, state) { Ok(value) => json!({"result":value}), Err(code) => json!({"error":{"code":code}}) }
+ match execute(input, adapter, state) { Ok(value) => json!({"result":value}), Err(code) => error_body(code) }
 }
 fn execute(input: Value, adapter: &agent_desktop_windows::WindowsAdapter, state: &mut State) -> Result<Value> {
  let method = input["method"].as_str().ok_or("unsupported_action")?;
- if !["list", "bind", "release", "observe", "act", "foreground"].contains(&method) { return Err("unsupported_action"); }
+ if !["list", "bind", "release", "observe", "act"].contains(&method) { return Err("unsupported_action"); }
  let owner = input["ownerPid"].as_u64().and_then(|v| u32::try_from(v).ok()).filter(|v| *v > 0).ok_or("protected_target")?;
  const GUARD_NAME: &str = "shadow-input-guard.exe";
  let path=input["guardPath"].as_str().filter(|p|std::path::Path::new(p).is_absolute() && std::path::Path::new(p).file_name().and_then(|s|s.to_str())==Some(GUARD_NAME)).ok_or("invalid_request")?;
@@ -145,11 +186,6 @@ fn execute(input: Value, adapter: &agent_desktop_windows::WindowsAdapter, state:
  if method == "release" {
   let id = input["targetId"].as_str().ok_or("window_unavailable")?;
   state.targets.remove(id); state.snapshots.remove(id); return Ok(json!({"released":true}));
- }
- if method=="foreground" {
-  let id=input["targetId"].as_str().ok_or("invalid_request")?;
-  let window=state.targets.get_mut(id).ok_or("window_unavailable")?;
-  window.foreground=true; state.snapshots.remove(id); return Ok(json!({"enabled":true}));
  }
  desktop()?;
  match method {
@@ -162,15 +198,13 @@ fn execute(input: Value, adapter: &agent_desktop_windows::WindowsAdapter, state:
    desktop()?; Ok(json!({"windows":census.windows,"excluded":census.excluded}))
   }
   "bind" => {
-   let foreground=match input.get("foregroundInput") { None=>false, Some(v)=>v.as_bool().ok_or("invalid_request")? };
    let id = input["windowId"].as_str().ok_or("window_unavailable")?;
    let mut window = state.candidates.get(id).cloned().ok_or("window_unavailable")?;
    if window.expires < Instant::now() || state.targets.len() >= 32 { return Err("window_unavailable"); }
    validate(&window, owner)?;
-   window.foreground=foreground;
-   window.runtime_id = Some(adapter.shadow_root_identity(window.hwnd as isize, window.pid).map_err(|_| "unavailable")?);
+   window.runtime_id = Some(adapter.shadow_root_identity(window.hwnd as isize, window.pid).map_err(uia_error)?);
    let target = uuid()?; let description = describe(&target, &window, owner, true)?;
-   if Some(adapter.shadow_root_identity(window.hwnd as isize, window.pid).map_err(|_| "unavailable")?) != window.runtime_id { return Err("window_unavailable"); }
+   if Some(adapter.shadow_root_identity(window.hwnd as isize, window.pid).map_err(uia_error)?) != window.runtime_id { return Err("window_unavailable"); }
    state.candidates.remove(id); state.targets.insert(target, window); Ok(description)
   }
   "observe" => {
@@ -188,7 +222,6 @@ fn execute(input: Value, adapter: &agent_desktop_windows::WindowsAdapter, state:
    let pointer=is_pointer(action);
    if is_foreground(action) {
     let window=state.targets.get(id).cloned().ok_or("window_unavailable")?;
-    if !window.foreground { return Err("foreground_not_allowed"); }
     wait_for_quiet(window.hwnd)?;
     observe(id,pointer,adapter,state)?;
     let current=state.snapshots.remove(id).ok_or("stale_observation")?;
@@ -244,15 +277,15 @@ fn observe(id: &str, screenshot: bool, adapter: &agent_desktop_windows::WindowsA
  validate(&window, state.owner)?;
  if unsafe { IsIconic(window.hwnd as Handle) } != 0 { return Err("window_unavailable"); }
  let description = describe(id, &window, state.owner, true)?;
- let deadline = agent_desktop_core::Deadline::after(5000).map_err(|_| "unavailable")?;
+ let deadline = agent_desktop_core::Deadline::after(5000).map_err(|_| "uia_deadline")?;
  let root = window.runtime_id.as_deref().ok_or("window_unavailable")?;
- let tree = adapter.shadow_observe_window(window.hwnd as isize, window.pid, root, deadline).map_err(|_| "unavailable")?;
+ let tree = adapter.shadow_observe_window(window.hwnd as isize, window.pid, root, deadline).map_err(uia_error)?;
  let mut elements = Vec::new(); let mut bindings = HashMap::new(); flatten(&tree, None, &mut elements, &mut bindings);
  let observation_id = uuid()?;
  let mut data = json!({"id":observation_id,"targetId":id,"title":description["title"],"bounds":description["bounds"],"elements":elements,"truncated":truncated(&tree)});
  if screenshot { data["screenshot"] = capture(&window, &description, adapter)?; }
  validate(&window, state.owner)?;
- if describe(id, &window, state.owner, true)? != description || adapter.shadow_root_identity(window.hwnd as isize, window.pid).map_err(|_| "unavailable")? != root { return Err("stale_observation"); }
+ if describe(id, &window, state.owner, true)? != description || adapter.shadow_root_identity(window.hwnd as isize, window.pid).map_err(uia_error)? != root { return Err("stale_observation"); }
  let frame=if screenshot { use sha2::{Digest,Sha256}; let shot=&data["screenshot"]; Some((format!("{:x}",Sha256::digest(shot["base64"].as_str().ok_or("capture_failed")?.as_bytes())),shot["width"].as_i64().ok_or("capture_failed")? as i32,shot["height"].as_i64().ok_or("capture_failed")? as i32)) } else { None };
  let b=&description["bounds"];
  let left=i32::try_from(b["x"].as_i64().ok_or("capture_failed")?).map_err(|_|"capture_failed")?;
@@ -533,17 +566,13 @@ fn ready(guard:&mut crate::input::Guard,method:&str,started:&mut bool)->Result<(
  }
 }
 
-#[cfg(test)] mod permission_tests {
+#[cfg(test)] mod removed_permission_tests {
  use super::*;
- #[test] fn foreground_permission_is_memory_only_and_consumes_snapshot() {
-  let mut state=State::default();
-  state.targets.insert("target".into(),Window{hwnd:0,pid:0,created:FileTime::default(),app:"synthetic".into(),expires:Instant::now(),runtime_id:None,foreground:false});
-  state.snapshots.insert("target".into(),Snapshot{id:"old".into(),created:Instant::now(),signature:"same".into(),bindings:HashMap::new(),frame:None,bounds:Rect::default()});
-  // Invalid HWND/PID intentionally proves this branch cannot touch Win32/UIA.
+ #[test] fn obsolete_permission_method_is_rejected_without_touching_desktop() {
   let adapter=agent_desktop_windows::WindowsAdapter::new();
-  let path=std::env::current_dir().unwrap().join("shadow-input-guard.exe");
-  let result=execute(json!({"method":"foreground","targetId":"target","ownerPid":123,"guardPath":path}),&adapter,&mut state).unwrap();
-  assert_eq!(result,json!({"enabled":true})); assert!(state.targets["target"].foreground); assert!(!state.snapshots.contains_key("target")); assert!(state.guard.is_none());
+  let mut state=State::default();
+  assert_eq!(execute(json!({"method":"foreground"}),&adapter,&mut state),Err("unsupported_action"));
+  assert!(state.targets.is_empty()); assert!(state.guard.is_none());
  }
 }
 
@@ -561,5 +590,17 @@ fn ready(guard:&mut crate::input::Guard,method:&str,started:&mut bool)->Result<(
   assert!(!crate::safety_gate::value_allowed(Some(false),true,true,true,true,Some(false),5));
   let mut output=vec![]; flatten(&node,None,&mut output,&mut HashMap::new());
   assert_eq!(output[0]["value"],"after"); assert_eq!(output[0]["name"],"hidden name"); assert_eq!(output[0]["actions"],json!([]));
+ }
+}
+
+#[cfg(test)] mod diagnostic_tests {
+ use super::*;
+ #[test] fn provider_content_is_never_published() {
+  let error=agent_desktop_core::AdapterError::new(agent_desktop_core::ErrorCode::Internal,"private title/value");
+  assert_eq!(uia_error(error),"uia_verification_failed");
+  let error=agent_desktop_core::AdapterError::new(agent_desktop_core::ErrorCode::Internal,"uia_root_protected_or_unknown");
+  assert_eq!(error_body(uia_error(error)),json!({"error":{"code":"observation_failed","reason":"uia_root_protected_or_unknown"}}));
+  assert_eq!(error_body("desktop_open"),json!({"error":{"code":"desktop_unavailable","reason":"desktop_open"}}));
+  assert_eq!(error_body("capture_failed"),json!({"error":{"code":"capture_failed"}}));
  }
 }

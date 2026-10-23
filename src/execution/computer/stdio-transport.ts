@@ -1,13 +1,28 @@
 import { type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
+import { desktopErrorCodes as errorCodeSchema } from './agent-desktop-errors.js'
 import { ComputerError, type ComputerDesktop, type DesktopRequest } from './contracts.ts'
 
-const errorCodeSchema = z.enum(['unavailable', 'window_unavailable', 'protected_target', 'stale_observation',
-      'unsupported_action', 'outcome_unknown', 'invalid_request', 'capture_failed', 'host_failure',
-      'foreground_not_allowed', 'user_interrupted', 'focus_denied', 'keyboard_focus_changed', 'input_outside_window',
-      'input_unavailable', 'unsupported_shortcut'])
 const errorReasonSchema = z.union([errorCodeSchema, z.enum([
+  'uia_verification_failed',
+  'uia_client_init',
+  'uia_tree_navigation',
+  'uia_root_unavailable',
+  'uia_identity_unavailable',
+  'uia_deadline',
+  'uia_budget',
+  'uia_process_mismatch',
+  'uia_root_protected_or_unknown',
+  'uia_geometry',
+  'uia_state_unavailable',
+  'uia_value_read',
+  'uia_text_read',
+  'uia_password_recheck',
+  'desktop_session',
+  'desktop_open',
+  'desktop_name',
+  'desktop_not_default',
   'keyboard_input_detected', 'mouse_input_detected', 'foreign_input_detected',
   'input_tag_changed', 'input_cancelled', 'input_lease_expired',
 ])])
@@ -18,12 +33,13 @@ const responseSchema = z.union([
   }).strict() }).strict(),
 ])
 const messages: Record<string, string> = {
-  unavailable: 'An unlocked, interactive Windows desktop is required.',
+  unavailable: 'The native desktop operation is unavailable. This does not necessarily mean the desktop is locked.',
+  desktop_unavailable: 'Windows could not verify an interactive Default desktop. Access remains blocked; the desktop may be locked, secure, or inaccessible to this process.',
+  observation_failed: 'Windows UI Automation could not safely verify the selected window. No partial observation or desktop fallback was returned.',
   window_unavailable: 'The selected window is no longer available. Select it again.',
   protected_target: 'Browsers, Shadow, elevated applications and protected fields are not supported.',
   stale_observation: 'The window changed or the observation expired. Observe again before acting.',
   unsupported_action: 'This control does not support the requested operation.',
-  foreground_not_allowed: 'Keyboard and mouse input require an explicit foreground-input grant.',
   user_interrupted: 'Desktop input was interrupted by activity, cancellation, or an expired foreground lease. No action was replayed.',
   focus_denied: 'The approved window did not become or remain foreground. No foreground workaround was used.',
   keyboard_focus_changed: 'Keyboard focus could not be confirmed on the approved control. Observe again before continuing.',
@@ -105,7 +121,7 @@ export class DesktopStdioTransport implements ComputerDesktop {
         this.pending = undefined
         pending.cleanup()
         if ('error' in parsed) pending.reject(new ComputerError(parsed.error.code,
-          messages[parsed.error.code] + (parsed.error.reason ? ` ${messages[parsed.error.reason]}` : '')))
+          messages[parsed.error.code] + (parsed.error.reason ? ` ${messages[parsed.error.reason] ?? `Diagnostic: ${parsed.error.reason}.`}` : '')))
         else pending.resolve(parsed.result)
       }
     })

@@ -17,9 +17,8 @@ test('desktop access starts only after an exact, current listed window is select
   await assert.rejects(service.share({ ...owner, sessionId: 'web:foreign' }, desktop.window.id, new AbortController().signal), /Refresh/)
   await service.share(owner, desktop.window.id, new AbortController().signal)
   assert.equal(service.status(owner).grant?.target.id, desktop.target.id)
-  assert.equal(service.status(owner).grant?.foregroundInput, false)
   assert.deepEqual(desktop.calls.find(call => call.method === 'bind'),
-    { method: 'bind', windowId: desktop.window.id, foregroundInput: false })
+    { method: 'bind', windowId: desktop.window.id })
   const foreign = service.status({ ...owner, projectId: 'project-b' })
   assert.equal(foreign.busy, true)
   assert.equal(foreign.grant, null)
@@ -27,16 +26,11 @@ test('desktop access starts only after an exact, current listed window is select
   await assert.rejects(service.windows({ ...owner, projectId: 'project-b' }, new AbortController().signal), /Another conversation/)
 })
 
-test('foreground input needs a separate explicit grant and a focusable, visible, non-protected control', async t => {
-  const off = await fixture(t)
+test('foreground input uses the selected target but still needs review and a focusable, visible, non-protected control', async t => {
+  const f = await fixture(t)
   const action = ComputerActionSchema.parse({ kind: 'type_text', elementId: '0', text: 'Synthetic text' })
-  await assert.rejects(off.service.act(owner, { ...off.input(), action }, off.signal),
-    error => error instanceof ComputerError && error.code === 'input_not_enabled')
-  assert.equal(off.service.status(owner).pending, null)
-  const f = await fixture(t, {}, true)
-  assert.equal(f.service.status(owner).grant?.foregroundInput, true)
   assert.deepEqual(f.desktop.calls.find(call => call.method === 'bind'),
-    { method: 'bind', windowId: f.desktop.window.id, foregroundInput: true })
+    { method: 'bind', windowId: f.desktop.window.id })
   const original = structuredClone(f.desktop.observation.elements[0])
   for (const patch of [{ focusable: false }, { protected: true }, { enabled: false }, { offscreen: true }, { role: 'ControlType.Button' }]) {
     f.desktop.observation.elements[0] = { ...original, ...patch }
@@ -56,7 +50,7 @@ test('foreground input needs a separate explicit grant and a focusable, visible,
 })
 
 test('pointer actions require the exact screenshot and screenshot-local coordinates', async t => {
-  const f = await fixture(t, {}, true)
+  const f = await fixture(t)
   const action = ComputerActionSchema.parse({ kind: 'click', x: 0, y: 0 })
   await assert.rejects(f.service.act(owner, { ...f.input(), action }, f.signal), /screenshot:true/)
   f.desktop.observation.screenshot = frame
@@ -84,7 +78,7 @@ test('pointer actions require the exact screenshot and screenshot-local coordina
 
 test('review frames are dropped after denial, cancellation, expiry, and explicit stop', async t => {
   for (const reason of ['deny', 'cancel', 'expire', 'stop'] as const) {
-    const f = await fixture(t, { reviewMs: reason === 'expire' ? 15 : 60_000 }, true)
+    const f = await fixture(t, { reviewMs: reason === 'expire' ? 15 : 60_000 })
     f.desktop.observation.screenshot = frame
     await f.service.observe(owner, f.desktop.target.id, true, f.signal)
     const controller = new AbortController()
@@ -102,9 +96,9 @@ test('review frames are dropped after denial, cancellation, expiry, and explicit
   }
 })
 
-test('an opted-in observation frame expires in memory and human takeover revokes ownership', async t => {
+test('a requested observation frame expires in memory and human takeover revokes ownership', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  const f = await fixture(t, {}, true)
+  const f = await fixture(t)
   f.desktop.observation.screenshot = frame
   await f.service.observe(owner, f.desktop.target.id, true, f.signal)
   t.mock.timers.tick(120_000)
@@ -119,7 +113,7 @@ test('an opted-in observation frame expires in memory and human takeover revokes
   assert.equal(f.desktop.calls.filter(call => call.method === 'act').length, 1)
 })
 
-test('every mutation waits for immutable single-use owner approval', async t => {
+test('every foreground mutation waits for immutable single-use owner approval', async t => {
   const f = await fixture(t)
   f.desktop.observation.title = 'Synthetic newly opened document'
   await f.observe()
@@ -128,7 +122,7 @@ test('every mutation waits for immutable single-use owner approval', async t => 
   const pending = f.service.status(owner).pending!
   assert.ok(pending)
   assert.equal(f.service.status(owner).grant?.target.title, 'Synthetic newly opened document')
-  input.action.value = 'changed after request'
+  input.action.text = 'changed after request'
   pending.action = { kind: 'invoke', elementId: '0' }
   assert.equal(f.desktop.calls.filter(call => call.method === 'act').length, 0)
   assert.throws(() => f.service.decide({ ...owner, sessionId: 'web:foreign' }, pending.id, true), /Another conversation/)
@@ -140,7 +134,7 @@ test('every mutation waits for immutable single-use owner approval', async t => 
   assert.equal(result.outcome, 'executed')
   const executed = f.desktop.calls.find(call => call.method === 'act')
   assert.equal(executed?.method, 'act')
-  if (executed?.method === 'act') assert.deepEqual(executed.action, { kind: 'set_value', elementId: '0', value: 'synthetic replacement' })
+  if (executed?.method === 'act') assert.deepEqual(executed.action, { kind: 'type_text', elementId: '0', text: 'synthetic insertion' })
   assert.equal(f.service.status(owner).pending, null)
 })
 
@@ -230,7 +224,7 @@ test('protected, disabled, offscreen and unsupported controls cannot create revi
   for (const patch of [{ protected: true }, { enabled: false }, { offscreen: true }, { actions: [] }]) {
     f.desktop.observation.elements[0] = { ...f.desktop.observation.elements[0], protected: false, enabled: true, offscreen: false, actions: ['set_value'], ...patch }
     await f.observe()
-    await assert.rejects(f.service.act(owner, f.input(), f.signal), /does not support/)
+    await assert.rejects(f.service.act(owner, { ...f.input(), action: { kind: 'set_value', elementId: '0', value: 'ordinary' } }, f.signal), /does not support/)
     assert.equal(f.service.status(owner).pending, null)
   }
 })
@@ -308,48 +302,50 @@ test('cancelling a dispatched action or receiving a malformed receipt revokes ra
 })
 
 
-test('owner can enable foreground for the agent-selected target without relisting, extending access or approving an action', async t => {
+test('foreground requests cannot cross targets or owners, extend the lease, or execute before review', async t => {
   const f = await fixture(t)
   const before = f.service.status(owner)
+  const input = { ...f.input(), action: { kind: 'type_text' as const, elementId: '0', text: 'ordinary text' } }
   for (const foreign of [{ ...owner, sessionId: 'web:foreign' }, { ...owner, projectId: 'foreign' }]) {
-    await assert.rejects(f.service.enableForeground(foreign, f.desktop.target.id, f.signal))
+    await assert.rejects(f.service.act(foreign, input, f.signal))
   }
-  await assert.rejects(f.service.enableForeground(owner, crypto.randomUUID(), f.signal))
-  assert.equal(f.desktop.calls.some(call => call.method === 'foreground'), false)
-  const state = await f.service.enableForeground(owner, f.desktop.target.id, f.signal)
-  assert.equal(state.grant?.foregroundInput, true)
-  assert.equal(state.grant?.expiresAt, before.grant?.expiresAt)
-  assert.equal(state.grant?.target.id, before.grant?.target.id)
-  assert.equal(state.pending, null)
-  await assert.rejects(f.service.act(owner, f.input(), f.signal), /Observe/)
-  await f.observe()
-  const pending = f.service.act(owner, { ...f.input(), action: { kind: 'type_text', elementId: '0', text: 'ordinary text' } }, f.signal)
+  await assert.rejects(f.service.act(owner, { ...input, targetId: crypto.randomUUID() }, f.signal))
+  const execution = f.service.act(owner, input, f.signal)
   assert.equal(f.desktop.calls.some(call => call.method === 'act'), false)
-  await assert.rejects(f.service.enableForeground(owner, f.desktop.target.id, f.signal), /current action/)
+  assert.equal(f.service.status(owner).grant?.expiresAt, before.grant?.expiresAt)
   f.service.decide(owner, f.service.status(owner).pending!.id, false)
-  await pending
+  await execution
   await f.service.release(owner)
-  await assert.rejects(f.service.enableForeground(owner, f.desktop.target.id, f.signal), /List supported/)
+  await assert.rejects(f.service.act(owner, input, f.signal), /List supported/)
 })
 
 
-test('Stop and malformed host permission acknowledgements cannot leave foreground access enabled', async t => {
-  for (const cause of ['stop', 'malformed'] as const) {
+test('all five supported UIA actions execute directly without creating or approving a review', async t => {
+  for (const action of [
+    { kind: 'invoke', elementId: '0' }, { kind: 'set_value', elementId: '0', value: 'ordinary value' },
+    { kind: 'toggle', elementId: '0' }, { kind: 'select', elementId: '0' },
+    { kind: 'scroll', elementId: '0', direction: 'down' },
+  ] as const) {
     const f = await fixture(t)
-    const gate = Promise.withResolvers<void>()
-    const request = f.desktop.request.bind(f.desktop)
-    f.desktop.request = async (input, signal) => {
-      if (input.method !== 'foreground') return request(input, signal)
-      await gate.promise
-      return cause === 'malformed' ? { enabled: 'true' } : { enabled: true }
-    }
-    const permission = f.service.enableForeground(owner, f.desktop.target.id, f.signal)
-    const rejected = assert.rejects(permission)
-    if (cause === 'stop') await f.service.stopAll()
-    gate.resolve()
-    await rejected
-    assert.equal(f.service.status(owner).grant, null)
+    f.desktop.observation.elements[0].actions = ['invoke', 'set_value', 'toggle', 'select', 'scroll']
+    await f.observe()
+    const result = await f.service.act(owner, { ...f.input(), action }, f.signal)
+    assert.equal(result.outcome, 'executed')
     assert.equal(f.service.status(owner).pending, null)
-    assert.equal(f.desktop.calls.some(call => call.method === 'act'), false)
+    const dispatched = f.desktop.calls.filter(call => call.method === 'act')
+    assert.equal(dispatched.length, 1)
+    assert.deepEqual(dispatched[0].action, action)
   }
+})
+
+test('a direct UIA request cannot approve or bypass an already pending foreground action', async t => {
+  const f = await fixture(t)
+  const execution = f.service.act(owner, f.input(), f.signal)
+  const pending = f.service.status(owner).pending!
+  await assert.rejects(f.service.act(owner, { ...f.input(), action: { kind: 'invoke', elementId: '0' } }, f.signal), /already awaiting/)
+  assert.equal(f.service.status(owner).pending?.id, pending.id)
+  assert.equal(f.desktop.calls.some(call => call.method === 'act'), false)
+  f.service.decide(owner, pending.id, false)
+  await execution
+  assert.equal(f.desktop.calls.some(call => call.method === 'act'), false)
 })

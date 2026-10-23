@@ -11,15 +11,14 @@ import { DesktopStdioTransport } from './stdio-transport.ts'
 const uuid = z.string().uuid()
 export const AgentDesktopRequestSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('list'), processId: z.number().int().positive().optional() }).strict(),
-  z.object({ method: z.literal('bind'), windowId: uuid, foregroundInput: z.boolean().optional() }).strict(),
+  z.object({ method: z.literal('bind'), windowId: uuid }).strict(),
   z.object({ method: z.literal('observe'), targetId: uuid, screenshot: z.boolean() }).strict(),
   z.object({ method: z.literal('act'), targetId: uuid, observationId: uuid, actionId: uuid, action: ComputerActionSchema }).strict(),
-  z.object({ method: z.literal('foreground'), targetId: uuid }).strict(),
   z.object({ method: z.literal('release'), targetId: uuid }).strict(),
 ])
 
 /** The native desktop backend. Authorization and immutable
- * per-action approval remain in ComputerService; native checks are additional. */
+ * foreground per-action approval remain in ComputerService; native checks are additional. */
 export class AgentDesktopComputerDesktop implements ComputerDesktop {
   readonly available = process.platform === 'win32' && ['x64', 'arm64'].includes(process.arch)
   private readonly transport: DesktopStdioTransport
@@ -53,7 +52,6 @@ export class AgentDesktopComputerDesktop implements ComputerDesktop {
         : request.method === 'bind' ? ComputerTargetSchema
         : request.method === 'observe' ? ComputerObservationSchema
         : request.method === 'act' ? ComputerActionResultSchema
-        : request.method === 'foreground' ? z.object({ enabled: z.literal(true) }).strict()
         : z.object({ released: z.literal(true) }).strict()
       const result = schema.safeParse(value)
       const observation = result.data as { targetId?: string; screenshot?: unknown }

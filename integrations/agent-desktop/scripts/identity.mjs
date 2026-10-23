@@ -22,7 +22,7 @@ if (isMainThread) {
  assert.equal(value.capabilities.nodeBounds, true);
  assert.deepEqual(value.capabilities.actions, ["invoke", "set_value", "toggle", "select", "scroll", "click", "move", "drag", "wheel", "press_key", "type_text"]);
  assert.equal(value.capabilities.screenshot, true);
- assert.equal(value.capabilities.patch, "shadow-password-first-v3");
+ assert.equal(value.capabilities.patch, "shadow-password-first-v4");
  assert.equal(value.capabilities.guard, "shadow-input-guard-v1");
  assert.equal(typeof addon.cancelInput, "function");
  // Deliberately impossible method: native dispatch rejects this BEFORE checking

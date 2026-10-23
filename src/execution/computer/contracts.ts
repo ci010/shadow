@@ -97,10 +97,9 @@ export type ComputerActionResult = z.infer<typeof ComputerActionResultSchema>
 
 export type DesktopRequest =
   | { method: 'list'; processId?: number }
-  | { method: 'bind'; windowId: string; foregroundInput?: boolean }
+  | { method: 'bind'; windowId: string }
   | { method: 'observe'; targetId: string; screenshot: boolean }
   | { method: 'act'; targetId: string; observationId: string; actionId: string; action: ComputerAction }
-  | { method: 'foreground'; targetId: string }
   | { method: 'release'; targetId: string }
 
 export class ComputerError extends Error {

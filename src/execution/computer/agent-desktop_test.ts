@@ -56,7 +56,7 @@ test('unsafe foreground payloads and internal guard-path injection fail before d
     const request = { method: 'act', targetId: randomUUID(), observationId: randomUUID(), actionId: randomUUID(), action } as DesktopRequest
     await assert.rejects(f.desktop.request(request, signal()), code('invalid_request'))
   }
-  await assert.rejects(f.desktop.request({ method: 'foreground', targetId: randomUUID(), guardPath: 'untrusted.exe' } as DesktopRequest, signal()), code('invalid_request'))
+  await assert.rejects(f.desktop.request({ method: 'foreground', targetId: randomUUID() } as unknown as DesktopRequest, signal()), code('invalid_request'))
   assert.equal(f.launches, 0)
 })
 
@@ -130,15 +130,32 @@ test('child exit invalidates state without retrying or forwarding diagnostics', 
 
 test('built addon completes release-only no-UI ABI loop through the production worker', async t => {
   const { existsSync } = await import('node:fs')
-  const artifact = fileURLToPath(new URL(`../../../integrations/agent-desktop/artifacts/win32-${process.arch}/shadow-agent-desktop.node`, import.meta.url))
+  // Test-only override permits checking a freshly built pair without replacing
+  // the installed artifact or restarting a running host. Production has no override.
+  const artifact = process.env.SHADOW_TEST_COMPUTER_ADDON ?? fileURLToPath(new URL(`../../../integrations/agent-desktop/artifacts/win32-${process.arch}/shadow-agent-desktop.node`, import.meta.url))
   if (process.platform !== 'win32' || !existsSync(artifact)) { t.skip('Optional matching native artifact not installed'); return }
-  // Native release is idempotent metadata cleanup BEFORE desktop()/UIA. This
-  // freshly spawned worker has never listed or bound any window; no target is read.
-  const desktop = new AgentDesktopComputerDesktop()
-  t.after(() => desktop.interrupt())
-  assert.deepEqual(await desktop.request({ method: 'release', targetId: randomUUID() }, signal()), { released: true })
-  await desktop.interrupt()
-  assert.ok(desktop.generation > 0)
+  const { mkdir, copyFile } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+  const { withTempWorkspace } = await import('../../testing/workspace.ts')
+  await withTempWorkspace(async root => {
+    const workerDirectory = join(root, 'src/execution/computer')
+    const artifactDirectory = join(root, `integrations/agent-desktop/artifacts/win32-${process.arch}`)
+    await mkdir(workerDirectory, { recursive: true })
+    await mkdir(artifactDirectory, { recursive: true })
+    for (const name of ['agent-desktop-worker.js', 'agent-desktop-errors.js', 'agent-desktop-actions.js']) {
+      await copyFile(fileURLToPath(new URL(name, import.meta.url)), join(workerDirectory, name))
+    }
+    await copyFile(artifact, join(artifactDirectory, 'shadow-agent-desktop.node'))
+    // Release is metadata cleanup BEFORE desktop()/UIA. No target, guard process
+    // or application is opened; an input guard binary is deliberately not copied.
+    const desktop = new AgentDesktopComputerDesktop({ spawnWorker: () => spawn(process.execPath,
+      [join(workerDirectory, 'agent-desktop-worker.js')], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+        env: { ...process.env, NODE_OPTIONS: '', ELECTRON_RUN_AS_NODE: '1' } }) })
+    try {
+      assert.deepEqual(await desktop.request({ method: 'release', targetId: randomUUID() }, signal()), { released: true })
+    } finally { await desktop.interrupt() }
+    assert.ok(desktop.generation > 0)
+  })
 })
 
 const ordinaryRequest = (): Extract<DesktopRequest, { method: 'act' }> => ({ method: 'act', targetId: randomUUID(), observationId: randomUUID(), actionId: randomUUID(), action: { kind: 'invoke', elementId: '1' } })
@@ -191,7 +208,7 @@ test('window-only screenshot results preserve the existing observation contract'
 test('host approval gates the IPC dispatch and malformed post-effect receipts revoke the grant', { skip: process.platform !== 'win32' }, async t => {
   const { ComputerService } = await import('../../computer/service.ts')
   const windowId = randomUUID(), targetId = randomUUID()
-  const nativeObservation = `({...${observationCode},elements:[{id:'1',parentId:null,role:'ControlType.Button',name:'Synthetic',enabled:true,offscreen:false,protected:false,focusable:false,bounds:{x:1,y:1,width:10,height:10},actions:['invoke']}]})`
+  const nativeObservation = `({...${observationCode},elements:[{id:'1',parentId:null,role:'ControlType.Edit',name:'Synthetic',enabled:true,offscreen:false,protected:false,focusable:true,bounds:{x:1,y:1,width:10,height:10},actions:['invoke']}]})`
   const f = fixture(`
     const window={id:${JSON.stringify(windowId)},title:'Synthetic',app:'fixture',pid:123};
     const target={...window,id:${JSON.stringify(targetId)},bounds:{x:0,y:0,width:100,height:100}};
@@ -209,21 +226,19 @@ test('host approval gates the IPC dispatch and malformed post-effect receipts re
   await service.windows(owner, signal())
   await service.share(owner, windowId, signal())
   const observed = await service.observe(owner, targetId, false, signal())
-  const execution = service.act(owner, { targetId, observationId: observed.id, action: { kind: 'invoke', elementId: '1' } }, signal())
+  const execution = service.act(owner, { targetId, observationId: observed.id, action: { kind: 'type_text', elementId: '1', text: 'Synthetic' } }, signal())
   const rejected = assert.rejects(execution, code('outcome_unknown'))
   const review = service.status(owner).pending
   assert.ok(review, 'The exact action must wait for the existing host review')
-  assert.equal(review.action.kind, 'invoke')
+  assert.equal(review.action.kind, 'type_text')
   service.decide(owner, review.id, true)
   await rejected
   assert.equal(service.status(owner).grant, null, 'An uncertain executed action revokes the grant rather than enabling retry')
   assert.equal(f.launches, 1)
 })
 
-test('foreground enablement is explicit metadata and every existing physical form bridges a receipt', async t => {
+test('each physical form bridges a receipt without a separate permission command', async t => {
   const f = fixture(`
-    if(q.method==='foreground') { global.enabled=true; process.stdout.write(JSON.stringify({id:q.id,result:{enabled:true}})+'\\n'); return; }
-    if(!global.enabled) { process.stdout.write(JSON.stringify({id:q.id,error:{code:'foreground_not_allowed'}})+'\\n'); return; }
     process.stdout.write(JSON.stringify({id:q.id,result:{actionId:q.actionId,outcome:'executed',verified:false,focusRestored:null,observation:${observationCode}}})+'\\n');
   `)
   t.after(() => f.desktop.interrupt())
@@ -234,9 +249,6 @@ test('foreground enablement is explicit metadata and every existing physical for
     { kind: 'press_key', elementId: '1', key: 'ENTER' }, { kind: 'type_text', elementId: '1', text: 'Synthetic' },
   ]
   const { ComputerActionSchema } = await import('./contracts.ts')
-  const first = { method: 'act' as const, targetId, observationId: randomUUID(), actionId: randomUUID(), action: ComputerActionSchema.parse(actions[0]) }
-  await assert.rejects(f.desktop.request(first, signal()), code('foreground_not_allowed'))
-  assert.deepEqual(await f.desktop.request({ method: 'foreground', targetId }, signal()), { enabled: true })
   for (const raw of actions) {
     const actionId = randomUUID()
     const result = await f.desktop.request({ method: 'act', targetId, observationId: randomUUID(), actionId, action: ComputerActionSchema.parse(raw) }, signal()) as { actionId: string; focusRestored: unknown }

@@ -16,7 +16,6 @@ const makeStatus = (shared = false, pending = false) => ({
 })
 const makePointerStatus = () => ({
   ...makeStatus(true),
-  grant: { ...makeStatus(true).grant!, foregroundInput: true },
   pending: { ...makeStatus(true, true).pending!, action: { kind: 'drag', x: 10, y: 20, toX: 100, toY: 200 },
     element: null, frame: { width: 500, height: 300 } },
 })
@@ -48,51 +47,27 @@ test('desktop status is scoped and refuses mismatched target reviews', () => {
   assert.throws(() => parseComputerStatus({ ...makeStatus(), rawScreenshot: 'private' }, makeStatus()))
 })
 
-test('opening controls never enumerates or shares windows without a user action', async t => {
+test('status discovery never enumerates or shares windows', async t => {
   const { state, requests } = harness(t)
+  requests[0].finish(Response.json(makeStatus(true)))
+  await settle()
   assert.equal(requests.length, 1)
-  assert.equal(requests[0].url, 'http://127.0.0.1:3123/projects/project-a/api/computer/web%3Afixture')
-  requests[0].finish(Response.json(makeStatus()))
-  await settle()
-  state.expanded.value = true
-  assert.equal(requests.length, 1)
-  const listing = state.findWindows()
-  assert.match(requests[1].url, /\/windows$/)
-  const { bounds: _bounds, ...window } = target
-  requests[1].finish(Response.json({ windows: [window], excluded: 0 }))
-  await settle()
-  requests[2].finish(Response.json(makeStatus()))
-  await listing
-  assert.equal(state.selected.value, '')
-  state.selected.value = targetId
-  const sharing = state.share()
-  assert.deepEqual(JSON.parse(String(requests[3].init.body)), { windowId: targetId, foregroundInput: false })
-  requests[3].finish(Response.json(makeStatus(true)))
-  await settle()
-  requests[4].finish(Response.json(makeStatus(true)))
-  await sharing
-  assert.equal(state.windows.value.length, 0)
-  assert.ok(state.status.value?.grant)
+  assert.equal('findWindows' in state, false)
+  assert.equal('share' in state, false)
 })
 
-test('passive status failures stay silent; opening controls checks again and reports a local failure', async t => {
+test('passive availability failures stay silent and tool-stage discovery can recover', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
   const { state, requests } = harness(t)
   requests[0].finish(new Response(null, { status: 503 }))
   await settle()
   assert.equal(state.error.value, '')
   assert.equal(state.needsReload.value, false)
-  assert.equal(state.expanded.value, false)
-  state.expanded.value = true
-  assert.equal(requests.length, 2)
-  requests[1].finish(new Response(null, { status: 503 }))
+  t.mock.timers.tick(1000)
+  requests[1].finish(Response.json(makeStatus()))
   await settle()
-  assert.match(state.error.value, /Could not load computer use/)
-  assert.equal(state.needsReload.value, true)
-  const reload = state.refresh()
-  requests[2].finish(Response.json(makeStatus()))
-  await reload
   assert.equal(state.error.value, '')
-  assert.equal(state.needsReload.value, false)
+  assert.equal(state.status.value?.available, true)
 })
 
 test('status failures during shared desktop access remain visible even with collapsed controls', async t => {
@@ -100,7 +75,6 @@ test('status failures during shared desktop access remain visible even with coll
   const { state, requests } = harness(t)
   requests[0].finish(Response.json(makeStatus(true)))
   await settle()
-  assert.equal(state.expanded.value, false)
   t.mock.timers.tick(1000)
   assert.equal(requests.length, 2)
   requests[1].reject(new Error('offline'))
@@ -113,7 +87,6 @@ test('approval submits only the immutable request ID and decision, not a replace
   const { state, requests } = harness(t)
   requests[0].finish(Response.json(makeStatus(true, true)))
   await settle()
-  assert.equal(state.expanded.value, true)
   const approval = state.decide(true)
   assert.match(requests[1].url, new RegExp(`/decisions/${requestId}$`))
   assert.deepEqual(JSON.parse(String(requests[1].init.body)), { approved: true })
@@ -171,34 +144,9 @@ test('session changes abort old writes and cannot import their approvals into an
   assert.equal(state.status.value, null)
 })
 
-test('foreground permission is explicit, scoped to the selected window, and reset after sharing', async t => {
-  const { state, requests } = harness(t)
-  requests[0].finish(Response.json(makeStatus()))
-  await settle()
-  const { bounds: _bounds, ...window } = target
-  state.windows.value = [window]
-  state.selected.value = targetId
-  assert.equal(state.foregroundInput.value, false)
-  state.foregroundInput.value = true
-  state.selected.value = ''
-  assert.equal(state.foregroundInput.value, false)
-  state.selected.value = targetId
-  state.foregroundInput.value = true
-  const shared = { ...makeStatus(true), grant: { ...makeStatus(true).grant!, foregroundInput: true } }
-  const operation = state.share()
-  assert.deepEqual(JSON.parse(String(requests[1].init.body)), { windowId: targetId, foregroundInput: true })
-  requests[1].finish(Response.json(shared))
-  await settle()
-  requests[2].finish(Response.json(shared))
-  assert.equal(await operation, true)
-  assert.equal(state.status.value?.grant?.foregroundInput, true)
-  assert.equal(state.foregroundInput.value, false)
-})
-
-test('foreground reviews require permission and structurally consistent exact frames', () => {
+test('foreground reviews require a matching target and structurally consistent exact frames', () => {
   const value = makePointerStatus()
   assert.equal(parseComputerStatus(value, value).pending?.action.kind, 'drag')
-  assert.throws(() => parseComputerStatus({ ...value, grant: { ...value.grant, foregroundInput: false } }, value), /permission/)
   assert.throws(() => parseComputerStatus({ ...value, pending: { ...value.pending, frame: undefined } }, value), /frame/)
   assert.throws(() => parseComputerStatus({ ...value, pending: { ...value.pending, element: { name: 'Wrong', role: 'ControlType.Edit' } } }, value), /frame/)
   assert.throws(() => parseComputerStatus({ ...value, pending: { ...value.pending, action: { kind: 'move', x: 500, y: 0 } } }, value), /outside frame/)
@@ -302,20 +250,14 @@ test('review expiry drops its image and cannot leave an enabled approval button'
 })
 
 
-test('agent-selected target needs no manual listing and foreground permission posts only its exact target ID', async t => {
+test('release removes desktop access without leaving a manual setup state', async t => {
   const { state, requests } = harness(t)
   requests[0].finish(Response.json(makeStatus(true)))
   await settle()
-  assert.equal(state.windows.value.length, 0)
-  assert.equal(state.status.value?.grant?.foregroundInput, false)
-  const permission = state.enableForeground()
-  assert.match(requests[1].url, /\/foreground$/)
-  assert.deepEqual(JSON.parse(requests[1].init.body as string), { targetId })
-  const allowed = { ...makeStatus(true), grant: { ...makeStatus(true).grant!, foregroundInput: true } }
-  requests[1].finish(Response.json(allowed))
-  await settle()
-  requests[2].finish(Response.json(allowed))
-  await permission
-  assert.equal(state.status.value?.grant?.foregroundInput, true)
-  assert.equal(requests.some(request => /\/(windows|share)$/.test(request.url)), false)
+  const release = state.refresh()
+  requests[1].finish(Response.json(makeStatus()))
+  await release
+  assert.equal(state.status.value?.grant, null)
+  assert.equal('enableForeground' in state, false)
+  assert.equal('expanded' in state, false)
 })

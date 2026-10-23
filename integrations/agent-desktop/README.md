@@ -16,17 +16,22 @@ dependency-license review and distribution remain unverified.
 ## ABI / existing ComputerDesktop wire
 
 - `identity(): string`: pure JSON, protocol 1, backend `agent-desktop`, pinned
-  revision, patch `shadow-password-first-v3`. Does not create an owner or UIA.
-  Capabilities: restricted true; methods list/bind/observe/act/foreground/release; actions
+  revision, patch `shadow-password-first-v4` (requires matching worker/addon; old v3
+  permission-gated addons fail identity validation). Does not create an owner or UIA.
+  Capabilities: restricted true; methods list/bind/observe/act/release; actions
   invoke/set_value/toggle/select/scroll/click/move/drag/wheel/press_key/type_text;
   screenshot/values/nodeBounds/input true; clipboard false; guard shadow-input-guard-v1.
-- `request(json: string): string`: `{result:...}` or `{error:{code}}`; maximum
-  request 32768 UTF-8 bytes. No raw provider diagnostics/content in errors.
+- `request(json: string): string`: `{result:...}` or `{error:{code,reason?}}`; maximum
+  request 32768 UTF-8 bytes. Reasons are allowlisted static diagnostic codes;
+  no raw provider diagnostics/content in errors. UIA verification errors use
+  `observation_failed` + `uia_*`, distinct from `desktop_unavailable` +
+  `desktop_session`/`desktop_open`/`desktop_name`/`desktop_not_default`.
+  Unclassified `unavailable` errors must not be presented as proof of locking.
 - Worker injects `ownerPid:process.ppid` and fixed sibling `guardPath`, rejecting external fields. Native state
   pins the first owner PID and guard path. Load only in a disposable worker process, never Main.
   Host authorization remains required before bind.
 - `list {processId?}` -> `{windows:[{id,title,app,pid}],excluded}`.
-- `bind {windowId,foregroundInput?:boolean}` -> `{id,title,app,pid,bounds}`.
+- `bind {windowId}` -> `{id,title,app,pid,bounds}`.
 - `observe {targetId,screenshot:boolean}` ->
   `{id,targetId,title,bounds,elements,truncated,screenshot?}`. Elements:
   `{id,parentId,role,name,value?,enabled,offscreen,protected,focusable,bounds,actions,toggleState?,selected?}`.
@@ -43,8 +48,10 @@ dependency-license review and distribution remain unverified.
   verified false; other verification is immediate UIA state, not persistence.
 - `release {targetId}` -> `{released:true}`; removes target and snapshot.
 - Internal `shutdown` joins the owner thread, irreversible for that addon load.
-- `foreground {targetId}` enables the native in-memory foreground permission and clears
-  its snapshot; it does not activate or inject. Bind may also enable permission.
+- Keyboard/mouse actions use the bound target without a separate foreground toggle.
+  The host requires exact review for foreground input; supported UIA actions run
+  directly. Native focus, protected-target,
+  geometry and input-interference checks remain mandatory.
 - `cancelInput(): void` is independent of the owner request queue. A permanent atomic
   latch plus Arc-owned named manual-reset event stop the guard even during blocked UIA.
   Cancellation requires disposing/rebuilding the Node instance; it is never reset.
@@ -224,7 +231,7 @@ resolution was required.
 - Rust production-linked pure/no-UI tests: 29/29 (validators, UTF-16, shortcuts,
   mapping, checked FILETIME, one-use snapshots/action IDs, frame identity,
   outcome classification, strict IPC, Arc event lifetime/sticky signal,
-  cancellation-before-start, memory-only foreground permission).
+  cancellation-before-start, rejection of the obsolete foreground permission method).
 - Node static source regressions: 10/10.
 - Root input-guard helper tests: 4/4, including >=40 existing fake-environment
   assertions, metadata-only real guard identity, and idle EOF/owner-death cleanup.
@@ -243,7 +250,8 @@ Runtime artifact files (outside ASAR):
 Guard metadata source SHA-256:
 `2a920e421dbfcd398e565042819aff33b3e0868bb9efe4d9e078368014cec4cd`.
 
-Final local x64 artifact SHA-256 (guard csc builds are not deterministic):
+Historical foreground-revision x64 artifact SHA-256 (not current after rebuild;
+guard csc builds are not deterministic):
 
 - shadow-agent-desktop.node (1310720 bytes):
   `D666F5BEF1B773D641F8B5B5ADA687BB7516E8DEE506B0CE728741110108B578`

@@ -1,25 +1,29 @@
 # Windows computer use
 
-**First version:** local Windows application observation and owner-approved UI
-Automation operations, with separately enabled, guarded foreground keyboard and
+**First version:** local Windows application observation and direct UI
+Automation operations, with owner-approved guarded foreground keyboard and
 mouse input. This is not unattended desktop control or a cross-platform/
 remote-desktop release.
 
 The capability is available by default in eligible local owner Main conversations;
 there is no per-chat enable switch or manual window-sharing prerequisite. The
 agent can enumerate supported windows and select the task-relevant target through
-`computer_setup`. Opening the composer **+ → Computer use** panel does not itself
-enumerate or capture anything. A selected window keeps compact status and Stop
-visible; exact-action reviews open automatically. Idle chats show no persistent
-computer-use panel. Passive availability-check failures stay silent; opening the
-controls checks again and reports connection errors locally. Failures during
-shared desktop access remain visible and require reload before approval.
+`computer_setup`. There is no Computer use entry in the composer + menu and no
+idle/ready or manual window-sharing panel. During access, a small monitor-stop
+button beside the composer offers **Stop all desktop access** via its tooltip
+and accessible label; it disappears when access ends. No shared/access status
+banner is shown. Exact-action reviews open automatically, with an additional
+Stop button. Passive availability failures stay silent; failures during access
+remain visible and require reload before approval.
 
 ## Use it
 
 Use a local web/Electron conversation on Main with local execution enabled.
-Open the application at ordinary user privilege and ask the assistant to perform
-your task. The assistant lists supported window metadata with
+Ask the assistant to perform your task in an ordinary-privilege application.
+The assistant selects an existing task-relevant window; you need not open the
+controls or designate a window first. Application launching is not supported;
+only if the requested application is absent may the assistant ask you to open it.
+The assistant lists supported window metadata with
 `computer_setup {action:"windows"}`, then acquires a current `windowId` with
 `{action:"select",windowId}`. It can observe and propose UIA actions immediately;
 you do not need to choose/share a window first. Only windows relevant to your
@@ -28,18 +32,17 @@ Window metadata and observations go to your configured model. Raw metadata,
 trees and screenshots are transient; model replies/entered text may be retained.
 Close sensitive content first; screenshots may contain secrets.
 
-Review each proposed change and choose **Approve once** or **Reject action**.
-For tasks needing foreground keyboard/mouse, open **+ → Computer use**, check
-the displayed agent-selected target, and choose **Allow foreground keyboard and
-mouse**. This separate explicit owner permission is off by default; the agent
-cannot enable it. No relisting or manual selection is needed. It invalidates
-old observations, does not extend access, and does not approve any action.
-UIA remains preferred. Optional manual window selection is still available in
-the panel, not a prerequisite. Use **Stop all desktop access** to revoke access
-immediately, including another conversation's lease; it does not close the app.
+Supported UIA actions (`invoke`, `set_value`, `toggle`, `select`, `scroll`) execute
+directly on the task-selected target without a per-action prompt. For foreground
+keyboard/mouse actions, choose **Approve once** or **Reject action**.
+There is no separate keyboard/mouse switch: guarded foreground actions are
+available on the agent-selected target and still need the same exact-action
+review. UIA remains preferred. No manual window selector is shown. Use the small
+**Stop all desktop access** control beside the composer (or in a review) to revoke
+access immediately; it does not close the application.
 
-Selecting grants observation of one window for at most 10 minutes. It does not
-grant unattended modification: every action has a single-use, 60-second
+Selecting grants access to one window for at most 10 minutes. Supported UIA
+modifications execute directly; foreground input requires a single-use, 60-second
 review showing the window and exact action. Keyboard reviews show the target
 control and complete key chord or text; pointer reviews show the exact screenshot
 with position/drag markers. A missing, expired or undecodable review image
@@ -52,7 +55,7 @@ processes and Shadow's Electron process are excluded from desktop selection.
 Text fields, buttons, checkboxes, selections and scroll containers must expose
 the corresponding UI Automation pattern. Unsupported apps/controls fail
 explicitly. Foreground input is an explicitly selected action with its own
-permission and review, never an automatic retry/fallback after UIA fails.
+exact-action review, never an automatic retry/fallback after UIA fails.
 There is no shell-input or desktop-wide screenshot fallback.
 
 Fields whose observed value reaches the 2,000-character limit cannot be replaced.
@@ -61,10 +64,12 @@ does not establish that the entire underlying document is unchanged.
 
 ## Keyboard and mouse
 
-UIA remains preferred whenever it exposes the needed operation. Foreground
-permission defaults to off, is bound to the selected window and expires with
-its grant. Changing windows resets foreground permission. The model cannot enable
-it, approve an input, or hold keys/buttons across actions.
+UIA remains preferred whenever it exposes the needed operation. Keyboard/mouse
+operations are bound to the selected window and expire with its grant, without
+a separate opt-in. The model cannot approve input or hold keys/buttons across
+actions. **This is not an isolated desktop:** foreground actions can activate
+the application and move the user's real pointer. Input-interference checks
+stop further injection on takeover, but cannot undo already delivered input.
 
 | Action | Contract |
 | --- | --- |
@@ -136,13 +141,12 @@ screenshots and other controls may still expose secrets.
 Raw observations are delivered to the next inference only. The tool
 pipeline saves a summary in both JSONL and SQLite, without writing screenshot
 files, raw trees or large-result spill files. The current bounded tree remains
-in the grant only to construct a review. For an opted-in foreground grant,
+in the grant only to construct a review. When a screenshot is requested,
 one screenshot is retained **in memory** for at most two minutes as the current
 observation, then only for the pending review (at most 60 seconds). Approval,
 rejection, timeout, cancellation and Stop drop it. The owner/request-scoped PNG
 endpoint uses `no-store`; the renderer revokes its Blob URL on review expiry,
-decision, error, scope/visibility change and unmount. UIA-only grants do not
-retain screenshot bytes after returning the observation.
+decision, error, scope/visibility change and unmount. Observations without screenshots do not retain image bytes.
 Normal tool-call arguments (including entered text), generated replies,
 reasoning and model-provider retention are not covered by this omission.
 Do not use computer use to enter credentials or secrets.
@@ -219,8 +223,8 @@ no legacy opt-in shell-driven UIA/foreground test command. For real acceptance,
 the owner must separately authorize any normal host restart, manually open the
 fixture or another non-sensitive application, and use the existing computer-use
 host to select the exact window. Observe password pruning and field constraints;
-approve each ordinary action individually. Enable foreground permission
-separately, obtain a fresh screenshot and approve each physical action. Test
+verify direct UIA actions without review. Obtain a fresh screenshot and approve
+each physical action; no separate keyboard/mouse switch is needed. Test
 Stop/human takeover only on an idle desktop under controlled approval. Unknown
 outcomes require inspection and a fresh grant, never automatic replay. Detailed
 steps and fixture location are in `agent-desktop.md`.
@@ -230,3 +234,30 @@ cancellation remain separate acceptance gates. These tests do not establish
 compatibility with Office, third-party editors, every UIA provider, physical
 multi-monitor/DPI configurations, enterprise host policies, signing/installation
 or real-model task success.
+
+## Observation diagnostics
+
+`desktop_unavailable` means the native gate could not verify the interactive
+Default desktop. Its bounded reason distinguishes `desktop_session`,
+`desktop_open`, `desktop_name`, and `desktop_not_default`. None alone proves the
+user has locked the screen: access/session/secure-desktop conditions can also
+prevent verification. The gate still fails closed.
+
+`observation_failed` means restricted UI Automation verification failed, not
+that the screen is locked. Static `uia_*` diagnostic codes distinguish client
+initialization, root/identity acquisition, tree navigation, deadline/budget,
+process/geometry/state verification, value/text reads, and password checks.
+`uia_root_protected_or_unknown` includes an unreadable/unsupported root password
+property; it must not be worked around by assuming the root is nonsecret.
+Unknown failures use `uia_verification_failed`. Provider exception text, window
+names and values are never included in diagnostic reasons. No partial result,
+screenshot-only bypass, broader access or automatic action replay is introduced.
+
+Successful listing and selection do not prove that observation will succeed:
+bind reads root identity, while observe additionally walks and verifies the
+password-first subtree. The reported VSCode observation failure has not yet been
+reproduced with these diagnostics; its specific native cause and live recovery
+remain unverified. Rebuild the matching native addon and backend, then use a
+fresh computer-use worker to obtain the new code through the authorized tools.
+Old workers/addons may still return the generic `unavailable` code, which no
+longer asserts that the desktop is locked.

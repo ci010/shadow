@@ -28,7 +28,6 @@ export class FixtureDesktop implements ComputerDesktop {
     if (this.failure) throw this.failure
     if (request.method === 'list') return { windows: [this.window], excluded: 0 }
     if (request.method === 'bind') return this.target
-    if (request.method === 'foreground') return { enabled: true }
     if (request.method === 'observe') return structuredClone({ ...this.observation,
       screenshot: request.screenshot ? this.observation.screenshot : undefined })
     if (request.method === 'act') {
@@ -40,16 +39,16 @@ export class FixtureDesktop implements ComputerDesktop {
   }
   async interrupt() { this.generation++ }
 }
-export async function fixture(t: TestContext, options: ConstructorParameters<typeof ComputerService>[1] = {}, foregroundInput = false) {
+export async function fixture(t: TestContext, options: ConstructorParameters<typeof ComputerService>[1] = {}) {
   const desktop = new FixtureDesktop()
   const service = new ComputerService(desktop, options)
   t.after(() => service.close())
   const signal = new AbortController().signal
   await service.windows(owner, signal)
-  await service.share(owner, desktop.window.id, signal, foregroundInput)
+  await service.share(owner, desktop.window.id, signal)
   const observe = () => service.observe(owner, desktop.target.id, false, signal)
   const observation = await observe()
   const input = () => ({ targetId: desktop.target.id, observationId: desktop.observation.id,
-    action: { kind: 'set_value' as const, elementId: '0', value: 'synthetic replacement' } })
+    action: { kind: 'type_text' as const, elementId: '0', text: 'synthetic insertion' } })
   return { desktop, service, signal, observe, observation, input }
 }

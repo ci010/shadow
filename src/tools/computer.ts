@@ -56,7 +56,7 @@ export function computerTools(service: ComputerService, projectId: string, asser
   return [
     {
       ...shared, name: 'computer_setup',
-      description: 'Windows computer use, available by default for the local owner on Main. For the user-requested task: windows lists supported windows (no capture), select acquires one current windowId with UIA-only access for 10 minutes, status inspects access, release stops it. No manual window sharing prerequisite. Choose only task-relevant targets; never inspect unrelated background content. Selecting does not enable foreground input or approve mutations. The user may enable keyboard/mouse for the selected target in Computer use; every action still needs exact owner review. Browsers use chrome-devtools. Guide: v:skills/computer-use.',
+      description: 'Windows computer use, available by default for the local owner on Main. For the user-requested task: windows lists supported windows (no capture), select acquires one current windowId for 10 minutes, status inspects access, release stops it. No manual window sharing prerequisite. Choose only task-relevant targets; never inspect unrelated background content. Selection does not approve mutations. Keyboard/mouse actions use that same target without a separate switch; foreground actions still need exact owner review; supported UIA actions execute directly. Foreground input can take focus and move the real pointer; it is not isolated from the user desktop. Browsers use chrome-devtools. Guide: v:skills/computer-use.',
       readonly: args => args.action === 'status' || args.action === 'windows',
       workAdmission: args => setupSchema.safeParse(args).success && args.action === 'release' ? 'cleanup' : undefined,
       parameters: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'release', 'windows', 'select'] }, windowId: { type: 'string', description: 'Required only for select; use a current ID returned by windows.' } }, required: ['action'], additionalProperties: false },
@@ -76,13 +76,12 @@ export function computerTools(service: ComputerService, projectId: string, asser
         const state = service.status(identity)
         return transientToolResult([{ type: 'text', text: JSON.stringify(state) }],
           JSON.stringify({ available: state.available, busy: state.busy, targetId: state.grant?.target.id ?? null,
-            foregroundInput: state.grant?.foregroundInput ?? false,
             next: state.grant ? 'Observe the shared window.' : 'List supported windows with action:windows, then select a task-relevant windowId.' }))
       }),
     },
     {
       ...shared, name: 'computer_observe', readonly: true,
-      description: 'Observe the exact selected Windows window using its accessibility tree. Optional window-only screenshot (never the entire desktop) is sent to the configured model for one inference only. Prefer element IDs. Coordinate actions require screenshot:true and explicit foreground permission; their exact image is kept temporarily for owner review. Observation does not focus the window. Screenshots can contain sensitive pixels.',
+      description: 'Observe the exact selected Windows window using its accessibility tree. Optional window-only screenshot (never the entire desktop) is sent to the configured model for one inference only. Prefer element IDs. Coordinate actions require screenshot:true; their exact image is kept temporarily for owner review. Observation does not focus the window. Screenshots can contain sensitive pixels.',
       parameters: {
         type: 'object', properties: { targetId: { type: 'string' }, screenshot: { type: 'boolean', description: 'Default false. Request only when the tree cannot answer the task; requires a vision-capable model.' } },
         required: ['targetId'], additionalProperties: false,
@@ -95,7 +94,7 @@ export function computerTools(service: ComputerService, projectId: string, asser
     },
     {
       ...shared, name: 'computer_act',
-      description: 'Request one action against the current selected Windows observation. Prefer UIA: invoke, set_value, toggle, select, scroll. Only with explicit foreground permission: click, move, drag, wheel, press_key, type_text. Every action waits for one exact owner approval (60s); messages/arguments cannot approve it. Pointer actions require the exact screenshot; keyboard actions require a focusable element. User input interrupts foreground execution. No passwords, elevation, system/window-switching shortcuts or automatic fallback. Never replay an unknown outcome or automatically ask again after denial.',
+      description: 'Request one action against the current selected Windows observation. Prefer UIA: invoke, set_value, toggle, select, scroll. Guarded foreground actions on the same target: click, move, drag, wheel, press_key, type_text. No separate keyboard/mouse switch. Supported UIA actions execute directly within the selected target. Foreground actions wait for one exact owner approval (60s); messages/arguments cannot approve them. Pointer actions require the exact screenshot; keyboard actions require a focusable element. User input interrupts foreground execution. No passwords, elevation, system/window-switching shortcuts or automatic fallback. Never replay an unknown outcome or automatically ask again after denial.',
       parameters: {
         type: 'object', properties: {
           targetId: { type: 'string' }, observationId: { type: 'string' },

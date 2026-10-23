@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { apiUrl } from './api-url.ts'
 import { t } from './i18n.ts'
 import { ComputerStatusSchema, type ComputerStatus } from '../../src/computer/contracts.ts'
-import { ComputerWindowsSchema, isForegroundAction, isPointerAction, type ComputerWindow } from '../../src/execution/computer/contracts.ts'
+import { isPointerAction } from '../../src/execution/computer/contracts.ts'
 
 export interface ComputerSource {
   apiBase: string
@@ -19,7 +19,6 @@ export function parseComputerStatus(value: unknown, source: Pick<ComputerSource,
   if (status.pending && status.pending.targetId !== status.grant?.target.id) throw new Error('Computer review target mismatch')
   if (status.pending) {
     const { action, element, frame } = status.pending
-    if (isForegroundAction(action) && !status.grant?.foregroundInput) throw new Error('Foreground review without permission')
     if (isPointerAction(action)) {
       if (element || !frame) throw new Error('Missing coordinate review frame')
       const points = action.kind === 'drag' ? [[action.x, action.y], [action.toX, action.toY]] : [[action.x, action.y]]
@@ -31,16 +30,11 @@ export function parseComputerStatus(value: unknown, source: Pick<ComputerSource,
 
 export function useComputer(source: () => ComputerSource) {
   const status = ref<ComputerStatus | null>(null)
-  const windows = ref<ComputerWindow[]>([])
-  const selected = ref('')
-  const foregroundInput = ref(false)
-  const expanded = ref(false)
   const error = ref('')
   const loading = ref(false)
   const needsReload = ref(false)
-  const listed = ref(false)
   const now = ref(Date.now())
-  const operation = ref<'permission' | 'windows' | 'sharing' | 'approving' | 'denying' | 'stopping' | null>(null)
+  const operation = ref<'approving' | 'denying' | 'stopping' | null>(null)
   const busy = computed(() => operation.value !== null)
   const enabled = computed(() => source().active && source().canSubmit && !!source().projectId && !!source().sessionId)
   const remaining = computed(() => Math.max(0, Math.ceil((Date.parse(status.value?.pending?.expiresAt ?? '') - now.value) / 1000)) || 0)
@@ -112,10 +106,8 @@ export function useComputer(source: () => ComputerSource) {
     if (interval) clearInterval(interval)
     interval = undefined
     status.value = null
-    windows.value = []
-    selected.value = error.value = ''
-    foregroundInput.value = false
-    expanded.value = loading.value = listed.value = needsReload.value = false
+    error.value = ''
+    loading.value = needsReload.value = false
     operation.value = null
   }
   async function refresh(manual = false) {
@@ -134,15 +126,14 @@ export function useComputer(source: () => ComputerSource) {
       if (current !== generation || controller.signal.aborted) return
       status.value = next
       now.value = Date.now()
-      if (next.pending) expanded.value = true
       if (manual) needsReload.value = false
       if (!needsReload.value) error.value = ''
     } catch {
       // Passive discovery must not turn an unrelated chat into an error panel.
-      // Once the owner opens controls or this conversation has desktop access,
+      // Once this conversation has desktop access,
       // failures remain visible and block approvals until an explicit reload.
       if (current === generation && !controller.signal.aborted
-        && (manual || expanded.value || status.value?.grant || status.value?.pending || status.value?.executing)) {
+        && (manual || status.value?.grant || status.value?.pending || status.value?.executing)) {
         needsReload.value = true
         error.value = t('Could not load computer use. Check your local owner connection and reload.')
       }
@@ -189,39 +180,16 @@ export function useComputer(source: () => ComputerSource) {
     }
     return success
   }
-  function findWindows() {
-    return mutate('windows', '/windows', undefined, value => {
-      windows.value = ComputerWindowsSchema.parse(value).windows
-      selected.value = ''
-      listed.value = true
-    })
-  }
-  function share() {
-    if (!selected.value || needsReload.value || !windows.value.some(window => window.id === selected.value)) return Promise.resolve(false)
-    return mutate('sharing', '/share', { windowId: selected.value, foregroundInput: foregroundInput.value }, value => {
-      status.value = parseComputerStatus(value, source())
-      windows.value = []
-      selected.value = ''
-      listed.value = false
-    })
-  }
-  function enableForeground() {
-    const targetId = status.value?.grant?.target.id
-    if (!targetId || needsReload.value || status.value?.pending || status.value?.executing) return Promise.resolve(false)
-    return mutate('permission', '/foreground', { targetId }, value => {
-      status.value = parseComputerStatus(value, source())
-    })
-  }
   function decide(approved: boolean) {
     const pending = status.value?.pending
     if (!pending || needsReload.value || remaining.value === 0 || approved && !canApprove.value) return Promise.resolve(false)
     return mutate(approved ? 'approving' : 'denying', `/decisions/${encodeURIComponent(pending.id)}`, { approved }, value => {
       const result = z.object({ requestId: z.literal(pending.id), accepted: z.literal(true) }).strict().parse(value)
-      if (result.accepted && status.value?.pending?.id === pending.id) status.value.pending = null
+      if (result.accepted && status.value?.pending?.id === pending.id) {
+        status.value.pending = null
+      }
     })
   }
-  watch(expanded, value => { if (value && (!status.value || needsReload.value)) void refresh(true) }, { flush: 'sync' })
-  watch(selected, () => { foregroundInput.value = false }, { flush: 'sync' })
   watch([() => status.value?.pending, enabled, needsReload, remaining, busy], () => {
     if (!enabled.value || needsReload.value || busy.value || !remaining.value || !status.value?.pending?.frame) { clearFrame(); return }
     if (frameRequestId !== status.value.pending.id) void loadFrame()
@@ -230,9 +198,6 @@ export function useComputer(source: () => ComputerSource) {
     return mutate('stopping', 'stop', undefined, value => {
       z.object({ stopped: z.literal(true) }).strict().parse(value)
       if (status.value) status.value = { ...status.value, grant: null, pending: null, executing: false, busy: false }
-      windows.value = []
-      selected.value = ''
-      listed.value = false
     }, true)
   }
   watch([() => source().apiBase, () => source().projectId, () => source().sessionId, enabled], () => {
@@ -241,11 +206,11 @@ export function useComputer(source: () => ComputerSource) {
     void refresh()
     interval = setInterval(() => {
       now.value = Date.now()
-      if (expanded.value || status.value?.grant || source().stage === 'tool') void refresh()
+      if (status.value?.grant || source().stage === 'tool') void refresh()
     }, 1000)
   }, { immediate: true, flush: 'sync' })
   onUnmounted(clear)
-  return { status, windows, selected, foregroundInput, expanded, error, loading, needsReload, listed, operation, busy, enabled, remaining,
+  return { status, error, loading, needsReload, operation, busy, enabled, remaining,
     frameUrl, frameState, canApprove, frameLoaded, frameFailed, reloadFrame: loadFrame,
-    refresh: () => refresh(true), findWindows, share, enableForeground, decide, stop }
+    refresh: () => refresh(true), decide, stop }
 }

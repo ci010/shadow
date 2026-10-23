@@ -10,7 +10,7 @@ const REVISION: &str = "5a2c9ad43e269164a8adc8978a733c40b1d38a8b";
 const MAX_REQUEST_BYTES: usize = 32 * 1024;
 #[cfg_attr(not(test), napi)]
 pub fn identity() -> String {
- json!({"protocol":1,"revision":REVISION,"backend":"agent-desktop","capabilities":{"restricted":true,"methods":["list","bind","observe","act","foreground","release"],"actions":["invoke","set_value","toggle","select","scroll","click","move","drag","wheel","press_key","type_text"],"screenshot":true,"input":true,"clipboard":false,"values":true,"nodeBounds":true,"patch":"shadow-password-first-v3","guard":"shadow-input-guard-v1"}}).to_string()
+ json!({"protocol":1,"revision":REVISION,"backend":"agent-desktop","capabilities":{"restricted":true,"methods":["list","bind","observe","act","release"],"actions":["invoke","set_value","toggle","select","scroll","click","move","drag","wheel","press_key","type_text"],"screenshot":true,"input":true,"clipboard":false,"values":true,"nodeBounds":true,"patch":"shadow-password-first-v4","guard":"shadow-input-guard-v1"}}).to_string()
 }
 fn error(code: &str, reason: &str) -> String {
  json!({"error":{"code":code,"reason":reason}}).to_string()

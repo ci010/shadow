@@ -13,29 +13,30 @@ impl crate::WindowsAdapter {
         // Own the client locally, not upstream's thread-local cache, so every
         // COM interface is released before the host balances CoInitializeEx.
         use windows::{core::Interface, Win32::{System::Com::{CoCreateInstance, CLSCTX_ALL}, UI::Accessibility::{CUIAutomation8, IUIAutomation, IUIAutomation2}}};
-        let bounded: IUIAutomation2 = unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_ALL) }.map_err(|_| refused())?;
-        unsafe { bounded.SetConnectionTimeout(2000).map_err(|_| refused())?; bounded.SetTransactionTimeout(5000).map_err(|_| refused())?; }
-        let base: IUIAutomation = bounded.cast().map_err(|_| refused())?;
+        let bounded: IUIAutomation2 = unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_ALL) }.map_err(|_| diagnostic("uia_client_init"))?;
+        unsafe { bounded.SetConnectionTimeout(2000).map_err(|_| diagnostic("uia_client_init"))?; bounded.SetTransactionTimeout(5000).map_err(|_| diagnostic("uia_client_init"))?; }
+        let base: IUIAutomation = bounded.cast().map_err(|_| diagnostic("uia_client_init"))?;
         let client = uiautomation::UIAutomation::from(base);
-        let walker = client.get_control_view_walker().map_err(|_| refused())?;
-        let root = UIAElement::from(client.element_from_handle(uiautomation::types::Handle::from(hwnd)).map_err(|_| refused())?);
+        let walker = client.get_control_view_walker().map_err(|_| diagnostic("uia_tree_navigation"))?;
+        let root = UIAElement::from(client.element_from_handle(uiautomation::types::Handle::from(hwnd)).map_err(|_| diagnostic("uia_root_unavailable"))?);
         let pid = root.0.get_process_id().map_err(|_| refused())?;
-        if pid != expected_pid || root.0.get_runtime_id().map_err(|_| refused())? != expected_runtime_id { return Err(refused()); }
+        if pid != expected_pid || root.0.get_runtime_id().map_err(|_| diagnostic("uia_identity_unavailable"))? != expected_runtime_id { return Err(refused()); }
         let mut remaining = 200usize;
         let tree = visit(&root, &walker, deadline, 0, &mut remaining, pid, &mut 0)?;
-        let after = UIAElement::from(client.element_from_handle(uiautomation::types::Handle::from(hwnd)).map_err(|_| refused())?);
-        if after.0.get_process_id().ok() != Some(expected_pid) || after.0.get_runtime_id().map_err(|_| refused())? != expected_runtime_id { return Err(refused()); }
-        if deadline.is_expired() { return Err(refused()); }
+        let after = UIAElement::from(client.element_from_handle(uiautomation::types::Handle::from(hwnd)).map_err(|_| diagnostic("uia_root_unavailable"))?);
+        if after.0.get_process_id().ok() != Some(expected_pid) || after.0.get_runtime_id().map_err(|_| diagnostic("uia_identity_unavailable"))? != expected_runtime_id { return Err(refused()); }
+        if deadline.is_expired() { return Err(diagnostic("uia_deadline")); }
         Ok(tree)
     }
 }
-fn refused() -> AdapterError {
-    AdapterError::new(ErrorCode::Internal, "Restricted observation could not be verified")
-}
+fn refused() -> AdapterError { diagnostic("uia_verification_failed") }
+// Static codes only: never include provider exception text, names or values.
+fn diagnostic(reason: &'static str) -> AdapterError { AdapterError::new(ErrorCode::Internal, reason) }
 fn visit(element: &UIAElement, walker: &uiautomation::core::UITreeWalker, deadline: Deadline, depth: u8, remaining: &mut usize, pid: u32, characters: &mut usize) -> Result<AccessibilityNode, AdapterError> {
-    if deadline.is_expired() || *remaining == 0 { return Err(refused()); }
+    if deadline.is_expired() { return Err(diagnostic("uia_deadline")); }
+    if *remaining == 0 { return Err(diagnostic("uia_budget")); }
     *remaining -= 1;
-    if element.0.get_process_id().ok() != Some(pid) { return Err(refused()); }
+    if element.0.get_process_id().ok() != Some(pid) { return Err(diagnostic("uia_process_mismatch")); }
     // Any unreadable/unsupported password status fails closed BEFORE name/value.
     let secret = read_one(element, TreeProperty::IsPassword).flag().unwrap_or(true);
     let mut node = AccessibilityNode {
@@ -44,20 +45,20 @@ fn visit(element: &UIAElement, walker: &uiautomation::core::UITreeWalker, deadli
         children_count: None, subtree_truncated: false, children: Vec::new(),
     };
     if secret {
-        if depth == 0 { return Err(refused()); }
+        if depth == 0 { return Err(diagnostic("uia_root_protected_or_unknown")); }
         node.identity.name = Some("[Protected field]".into());
         node.presentation.states.push("protected".into());
         // Do not enumerate or visit descendants of a secret control.
         return Ok(node);
     }
-    let raw = element.0.get_bounding_rectangle().map_err(|_| refused())?;
+    let raw = element.0.get_bounding_rectangle().map_err(|_| diagnostic("uia_geometry"))?;
     let width = i64::from(raw.get_right()) - i64::from(raw.get_left());
     let height = i64::from(raw.get_bottom()) - i64::from(raw.get_top());
-    if width < 0 || height < 0 || width > i32::MAX as i64 || height > i32::MAX as i64 { return Err(refused()); }
+    if width < 0 || height < 0 || width > i32::MAX as i64 || height > i32::MAX as i64 { return Err(diagnostic("uia_geometry")); }
     let bounds = agent_desktop_core::Rect { x: f64::from(raw.get_left()), y: f64::from(raw.get_top()), width: width as f64, height: height as f64 };
     node.presentation.bounds = Some(bounds);
-    let enabled = read_one(element, TreeProperty::IsEnabled).flag().ok_or_else(refused)?;
-    let offscreen = read_one(element, TreeProperty::IsOffscreen).flag().ok_or_else(refused)?;
+    let enabled = read_one(element, TreeProperty::IsEnabled).flag().ok_or_else(|| diagnostic("uia_state_unavailable"))?;
+    let offscreen = read_one(element, TreeProperty::IsOffscreen).flag().ok_or_else(|| diagnostic("uia_state_unavailable"))?;
     if read_one(element, TreeProperty::IsKeyboardFocusable).flag() == Some(true) { node.presentation.states.push("focusable".into()); }
     if enabled { node.presentation.states.push("enabled".into()); }
     if offscreen { node.presentation.states.push("offscreen".into()); }
@@ -70,13 +71,13 @@ fn visit(element: &UIAElement, walker: &uiautomation::core::UITreeWalker, deadli
         }
     }
     use uiautomation::patterns::{UIInvokePattern, UIValuePattern, UITogglePattern, UISelectionItemPattern, UIScrollPattern, UITextPattern};
-    let runtime = element.0.get_runtime_id().map_err(|_| refused())?;
+    let runtime = element.0.get_runtime_id().map_err(|_| diagnostic("uia_identity_unavailable"))?;
     if runtime.is_empty() { return Err(refused()); }
     node.role = format!("{:?}", element.0.get_control_type().map_err(|_| refused())?);
     let mut raw_value = None;
     {
         if let Ok(pattern) = element.0.get_pattern::<UIValuePattern>() {
-            let value = pattern.get_value().map_err(|_| refused())?;
+            let value = pattern.get_value().map_err(|_| diagnostic("uia_value_read"))?;
             let complete = value.encode_utf16().count() < 2000;
             if !complete { node.subtree_truncated = true; }
             node.identity.value = Some(truncate_utf16(&value, 2000));
@@ -84,7 +85,7 @@ fn visit(element: &UIAElement, walker: &uiautomation::core::UITreeWalker, deadli
             if gate::value_allowed(Some(false),enabled,offscreen,true,node.role == "Edit",pattern.is_readonly().ok(),value.encode_utf16().count()) { node.presentation.available_actions.push("set_value".into()); }
         }
         else if let Ok(pattern) = element.0.get_pattern::<UITextPattern>() {
-            let value = pattern.get_document_range().map_err(|_| refused())?.get_text(2001).map_err(|_| refused())?;
+            let value = pattern.get_document_range().map_err(|_| diagnostic("uia_text_read"))?.get_text(2001).map_err(|_| diagnostic("uia_text_read"))?;
             if value.encode_utf16().count() > 2000 { node.subtree_truncated = true; }
             node.identity.value = Some(truncate_utf16(&value,2000));
             raw_value = Some(fingerprint(&value));
@@ -99,13 +100,13 @@ fn visit(element: &UIAElement, walker: &uiautomation::core::UITreeWalker, deadli
     // Hidden identity/signature material, never included in the wire observation.
     node.identity.retained_object = Some(serde_json::json!({"runtime":runtime,"rawName": raw_name, "rawValue":raw_value}).to_string());
     // Recheck after content read. On races, discard the complete observation.
-    if read_one(element, TreeProperty::IsPassword).flag() != Some(false) { return Err(refused()); }
+    if read_one(element, TreeProperty::IsPassword).flag() != Some(false) { return Err(diagnostic("uia_password_recheck")); }
     *characters += serde_json::to_string(&node).map_err(|_| refused())?.len();
     if depth >= 20 || *remaining == 0 || *characters >= 32000 { node.subtree_truncated = true; return Ok(node); }
     let mut child = match walker.get_first_child(&element.0) {
         Ok(value) => Some(value),
         Err(error) if failure_of(&error).is_exhaustion() => None,
-        Err(_) => return Err(refused()),
+        Err(_) => return Err(diagnostic("uia_tree_navigation")),
     };
     while let Some(value) = child {
         if deadline.is_expired() || *remaining == 0 || *characters >= 32000 { node.subtree_truncated = true; break; }
@@ -114,7 +115,7 @@ fn visit(element: &UIAElement, walker: &uiautomation::core::UITreeWalker, deadli
         child = match walker.get_next_sibling(&wrapped.0) {
             Ok(value) => Some(value),
             Err(error) if failure_of(&error).is_exhaustion() => None,
-            Err(_) => return Err(refused()),
+            Err(_) => return Err(diagnostic("uia_tree_navigation")),
         };
     }
     Ok(node)
@@ -124,13 +125,13 @@ impl crate::WindowsAdapter {
     /// Authorized bind-time identity read only: no names, values or descendants.
     pub fn shadow_root_identity(&self, hwnd: isize, expected_pid: u32) -> Result<Vec<i32>, AdapterError> {
         use windows::{core::Interface, Win32::{System::Com::{CoCreateInstance, CLSCTX_ALL}, UI::Accessibility::{CUIAutomation8, IUIAutomation, IUIAutomation2}}};
-        let bounded: IUIAutomation2 = unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_ALL) }.map_err(|_| refused())?;
-        unsafe { bounded.SetConnectionTimeout(2000).map_err(|_| refused())?; bounded.SetTransactionTimeout(5000).map_err(|_| refused())?; }
-        let base: IUIAutomation = bounded.cast().map_err(|_| refused())?;
+        let bounded: IUIAutomation2 = unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_ALL) }.map_err(|_| diagnostic("uia_client_init"))?;
+        unsafe { bounded.SetConnectionTimeout(2000).map_err(|_| diagnostic("uia_client_init"))?; bounded.SetTransactionTimeout(5000).map_err(|_| diagnostic("uia_client_init"))?; }
+        let base: IUIAutomation = bounded.cast().map_err(|_| diagnostic("uia_client_init"))?;
         let client = uiautomation::UIAutomation::from(base);
-        let element = client.element_from_handle(uiautomation::types::Handle::from(hwnd)).map_err(|_| refused())?;
+        let element = client.element_from_handle(uiautomation::types::Handle::from(hwnd)).map_err(|_| diagnostic("uia_root_unavailable"))?;
         if element.get_process_id().ok() != Some(expected_pid) { return Err(refused()); }
-        let id = element.get_runtime_id().map_err(|_| refused())?;
+        let id = element.get_runtime_id().map_err(|_| diagnostic("uia_identity_unavailable"))?;
         if id.is_empty() { return Err(refused()); }
         Ok(id)
     }

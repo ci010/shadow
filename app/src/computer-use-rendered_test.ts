@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,13 +42,6 @@ test('computer controls render safe defaults, exact-action review and independen
         window.fetch = async (url, init) => {
           const path = new URL(url, location.href).pathname; window.fixture.requests.push({path,method:init?.method||'GET'});
           if(path.endsWith('/windows')) return Response.json({windows:[{id,title:target.title,app:'fixture',pid:42}],excluded:0});
-          if(path.endsWith('/share')) {
-            const body=JSON.parse(init.body); window.fixture.shares.push(body);
-            state.grant = {target,expiresAt:new Date(Date.now()+600000).toISOString(),foregroundInput:body.foregroundInput};
-          }
-          if(path.endsWith('/foreground')) {
-            window.fixture.permissions.push(JSON.parse(init.body)); state.grant.foregroundInput=true;
-          }
           if(path.endsWith('/frame')) return window.fixture.frameMode==='ok'
             ? new Response(png,{headers:{'content-type':'image/png'}}) : new Response('Synthetic failure',{status:503});
           if(path.includes('/decisions/')) {
@@ -58,7 +51,7 @@ test('computer controls render safe defaults, exact-action review and independen
           if(path.endsWith('/stop')) {window.fixture.stops++;state.grant=null;state.pending=null;return Response.json({stopped:true});}
           return window.fixture.statusMode==='error' ? new Response(null,{status:503}) : Response.json(state);
         };
-        createApp({setup() { const control=ref(); return () => h('div', [h('button',{class:'computer-entry',onClick:()=>control.value.open()}, 'Computer use · '+(control.value?.stateLabel || '')), h(ComputerControl,{ref:control,apiBase:location.origin,projectId:'fixture',sessionId:'web:fixture',active:true,canSubmit:true,stage:'tool'})]) }}).mount('#app');
+        createApp({setup() { const actions=ref(); return () => h('div',[h('div',{id:'fixture-composer',ref:actions}),h(ComputerControl,{apiBase:location.origin,projectId:'fixture',sessionId:'web:fixture',active:true,canSubmit:true,stage:'tool',actionsTarget:actions.value})]) }}).mount('#app');
       `,
       configureServer(server) {
         server.middlewares.use((request, response, next) => {
@@ -108,3 +101,10 @@ test('computer controls render safe defaults, exact-action review and independen
     await rm(join(directory, 'profile'), { recursive: true, force: true, maxRetries: 12, retryDelay: 250 })
   }
 }))
+
+
+test('composer has no Computer use menu entry or imperative window-sharing launcher', async () => {
+  const source = await readFile(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /computerControl|t\('Computer use'\)/)
+  assert.match(source, /<ComputerControl v-if="canUseComputer"/)
+})

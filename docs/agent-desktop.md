@@ -1,7 +1,7 @@
 # Isolated agent-desktop backend
 
 The native backend bridges the **existing ComputerDesktop contract**:
-list, bind, observe, release, foreground permission, and all eleven existing
+list, bind, observe, release, and all eleven existing
 operations. It does not expose agent-desktop's other commands. This is the sole
 default Windows backend; no environment switch or legacy backend fallback exists.
 Missing or incompatible native artifacts fail closed. Real desktop acceptance
@@ -13,13 +13,14 @@ remains a separate verification gate.
 | --- | --- | --- |
 | Filtered window list/bind/observe | UUIDs, process generation, selected root identity, password-first tree | Compiled; pure/mock tests; actual provider checks pending |
 | Window screenshots | Upstream ExactWindow, WGC then same-HWND PrintWindow, bounded PNG | Source audit/build; real capture pending |
-| UIA actions | invoke, set_value, toggle, select, scroll; single exact pattern | Compiled; pure/mock approval/receipt tests; real actions pending |
+| UIA actions | invoke, set_value, toggle, select, scroll; single exact pattern, no per-action prompt | Compiled; pure/mock receipt tests; real actions pending |
 | Foreground | click, move, drag, wheel, press_key, type_text via independent AOT guard | Compiled bridge under review; fake input and idle lifecycle tests; real input pending |
 | IPC/build | Dedicated Node process, strict wire checks, isolated Rust owner, native release-only ABI loop | Actual Node and Electron-as-Node loading and relocation tests |
 
 Authorization still belongs to `ComputerService`: exact selected window, local
-owner/Project/session, grant expiry, separate foreground permission and immutable
-single-use per-action approval. Loading a skill, installing Rust or selecting this
+owner/Project/session, grant expiry and immutable
+single-use per-action approval for foreground input. Supported UIA actions run directly
+within that target; applications may still activate a window in response. Loading a skill, installing Rust or selecting this
 backend is not permission to act. Unknown outcomes revoke access and are never
 replayed. No actual UI test has been run through shell/UIA commands.
 
@@ -176,3 +177,22 @@ actual guard metadata, and idle EOF/owner-death cleanup **without any begin/exec
 lease**. They are not real OS key-release evidence. Relocation tests check actual
 Node/Electron-as-Node addon ABI and guard metadata without opening a target.
 No full-repository test/typecheck or production-readiness claim is made.
+
+
+### Input-review policy compatibility
+
+The current `shadow-password-first-v4` worker/addon pair removes the obsolete
+`foreground` permission command and `bind.foregroundInput` flag. The host executes
+supported UIA actions directly and reviews foreground input only. Old v3 addons
+are rejected by the v4 worker identity check; do not mix these versions.
+
+A source-pair check can be performed without deploying artifacts or touching a
+real window: build the addon with `cargo +1.90 build --locked --offline --lib`
+from `integrations/agent-desktop` (or another installed supported Rust >=1.89),
+then set the **test-only** `SHADOW_TEST_COMPUTER_ADDON` environment variable to
+the resulting `target/debug/shadow_agent_desktop.dll` when running
+`src/execution/computer/agent-desktop_test.ts`. The release-only ABI test copies
+the fresh addon and production worker sources to a temporary fixture; it does
+not replace installed artifacts, list/bind/observe a window, or start the input
+guard. Production worker loading has no such override. Passing this check is
+not release packaging, live UIA/input verification, or deployment acceptance.

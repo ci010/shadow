@@ -97,7 +97,8 @@ test('foreground uses independent AOT guard, sticky cancellation and no upstream
  assert.match(input,/method=="execute" \{ \*started=true; \}/);
  assert.match(input,/\*started \|= effect/);
  assert.doesNotMatch(input,/powershell|cmd\.exe|\.shell\(/i);
- assert.match(host,/foreground_not_allowed/);
+ assert.doesNotMatch(host,/foreground_not_allowed|foregroundInput|window\.foreground/);
+ assert.match(host,/state\.targets\.get\(id\)\.cloned\(\)\.ok_or\("window_unavailable"\)/);
  assert.match(host,/previous\.frame!=current\.frame/);
  assert.match(host,/focused\.signature!=previous\.signature/);
  assert.match(host,/GetGUIThreadInfo/);

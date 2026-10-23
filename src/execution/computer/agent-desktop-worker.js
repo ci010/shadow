@@ -3,33 +3,24 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { Worker, isMainThread, parentPort } from 'node:worker_threads'
+import { nativeResponse } from './agent-desktop-errors.js'
 import { ComputerActionSchema } from './agent-desktop-actions.js'
 
 const uuid = z.string().uuid()
 const target = { targetId: uuid }
 const requestSchema = z.discriminatedUnion('method', [
   z.object({ id: uuid, method: z.literal('list'), processId: z.number().int().positive().optional() }).strict(),
-  z.object({ id: uuid, method: z.literal('bind'), windowId: uuid, foregroundInput: z.boolean().optional() }).strict(),
+  z.object({ id: uuid, method: z.literal('bind'), windowId: uuid }).strict(),
   z.object({ id: uuid, method: z.literal('observe'), ...target, screenshot: z.boolean() }).strict(),
   z.object({ id: uuid, method: z.literal('act'), ...target, observationId: uuid, actionId: uuid, action: ComputerActionSchema }).strict(),
-  z.object({ id: uuid, method: z.literal('foreground'), ...target }).strict(),
   z.object({ id: uuid, method: z.literal('release'), ...target }).strict(),
-])
-const codes = z.enum(['unavailable', 'window_unavailable', 'protected_target', 'stale_observation',
-  'unsupported_action', 'outcome_unknown', 'invalid_request', 'capture_failed', 'host_failure',
-  'foreground_not_allowed', 'user_interrupted', 'focus_denied', 'keyboard_focus_changed',
-  'input_outside_window', 'input_unavailable', 'unsupported_shortcut'])
-const nativeResponse = z.union([
-  z.object({ result: z.unknown().refine(v => v !== undefined) }).strict(),
-  z.object({ error: z.object({ code: codes, reason: z.string().max(1024).nullable().optional() }).strict() }).strict()
-    .transform(value => ({ error: { code: value.error.code } })), // never publish native diagnostic/content strings
 ])
 const identitySchema = z.object({
   protocol: z.literal(1), backend: z.literal('agent-desktop'),
   revision: z.literal('5a2c9ad43e269164a8adc8978a733c40b1d38a8b'),
   capabilities: z.object({
-    restricted: z.literal(true), patch: z.literal('shadow-password-first-v3'),
-    methods: z.tuple([z.literal('list'), z.literal('bind'), z.literal('observe'), z.literal('act'), z.literal('foreground'), z.literal('release')]),
+    restricted: z.literal(true), patch: z.literal('shadow-password-first-v4'),
+    methods: z.tuple([z.literal('list'), z.literal('bind'), z.literal('observe'), z.literal('act'), z.literal('release')]),
     actions: z.tuple(['invoke', 'set_value', 'toggle', 'select', 'scroll', 'click', 'move', 'drag', 'wheel', 'press_key', 'type_text'].map(value => z.literal(value))),
     screenshot: z.literal(true), input: z.literal(true), clipboard: z.literal(false),
     values: z.literal(true), nodeBounds: z.literal(true), guard: z.literal('shadow-input-guard-v1'),

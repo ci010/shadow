@@ -57,3 +57,48 @@ test('malformed native replies terminate the host and never become tool data', a
   await assert.rejects(desktop.request({ method: 'list' }, new AbortController().signal), error =>
     error instanceof ComputerError && error.code === 'host_protocol' && !error.message.includes('PRIVATE'))
 })
+
+
+test('native diagnostic allowlist preserves only static codes, never provider content', async () => {
+  const { nativeResponse, diagnosticReasons } = await import('./agent-desktop-errors.js')
+  for (const reason of diagnosticReasons) {
+    assert.deepEqual(nativeResponse.parse({ error: { code: 'observation_failed', reason } }),
+      { error: { code: 'observation_failed', reason } })
+  }
+  for (const reason of ['private window title and value', 'uia_value_read: SECRET', null, undefined]) {
+    assert.deepEqual(nativeResponse.parse({ error: { code: 'observation_failed', reason } }),
+      { error: { code: 'observation_failed' } })
+  }
+  assert.equal(nativeResponse.safeParse({ error: { code: 'PRIVATE', reason: 'uia_value_read' } }).success, false)
+})
+
+test('UIA and desktop gate failures remain distinct across stdio without lock-screen assertions', async t => {
+  for (const [code, reason] of [['observation_failed', 'uia_root_protected_or_unknown'], ['desktop_unavailable', 'desktop_open'], ['unavailable', undefined]]) {
+    const desktop = new DesktopStdioTransport({ spawnHost: () => spawn(process.execPath, ['-e', `
+      require('node:readline').createInterface({input:process.stdin}).on('line', line => {
+        process.stdout.write(JSON.stringify({id:JSON.parse(line).id,error:${JSON.stringify({code, reason})}})+'\\n');
+      });
+    `], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }) })
+    t.after(() => desktop.interrupt())
+    await assert.rejects(desktop.request({method:'observe',targetId:crypto.randomUUID(),screenshot:false},new AbortController().signal), error =>
+      error instanceof ComputerError && error.code === code && !error.message.includes('An unlocked')
+      && (!reason || error.message.includes(reason)))
+    await desktop.interrupt()
+  }
+})
+
+
+test('every restricted native UIA diagnostic is allowlisted end to end', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { diagnosticReasons } = await import('./agent-desktop-errors.js')
+  const patch = await readFile(new URL('../../../integrations/agent-desktop/patches/shadow_observe.rs', import.meta.url), 'utf8')
+  const native = await readFile(new URL('../../../integrations/agent-desktop/src/windows.rs', import.meta.url), 'utf8')
+  const transport = await readFile(new URL('./stdio-transport.ts', import.meta.url), 'utf8')
+  for (const [, reason] of patch.matchAll(/diagnostic\("([a-z_]+)"\)/g)) {
+    assert.ok(diagnosticReasons.has(reason), reason)
+    assert.ok(native.includes(`"${reason}" => "${reason}"`), reason)
+    assert.ok(native.includes(`"reason":"${reason}"`), reason)
+    assert.ok(transport.includes(`'${reason}'`), reason)
+  }
+  assert.match(native, /shadow_observe_window\([^\n]+\)\.map_err\(uia_error\)/)
+})

@@ -21,7 +21,7 @@ export const ComputerReceiptSchema = z.object({
 export type ComputerReceipt = z.infer<typeof ComputerReceiptSchema>
 export const ComputerStatusSchema = ComputerOwnerSchema.extend({
   available: z.boolean(), busy: z.boolean(),
-  grant: z.object({ target: ComputerTargetSchema, expiresAt: z.string().datetime(), foregroundInput: z.boolean().default(false) }).strict().nullable(),
+  grant: z.object({ target: ComputerTargetSchema, expiresAt: z.string().datetime() }).strict().nullable(),
   pending: ComputerApprovalSchema.nullable(),
   executing: z.boolean(),
   lastAction: ComputerReceiptSchema.nullable(),

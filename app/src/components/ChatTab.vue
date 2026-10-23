@@ -286,7 +286,7 @@
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
-        <ComputerControl ref="computerControl" v-if="canUseComputer" :api-base="apiBase"
+        <ComputerControl v-if="canUseComputer" :api-base="apiBase" :actions-target="computerAccessActions"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
@@ -409,13 +409,10 @@
           </div>
           <div class="composer-toolbar">
             <div class="composer-controls">
-              <ComposerPopover ref="composerOptions" :label="mobileLayout ? t('Message options') : t('Add attachments or context')" :sheet="mobileLayout" :title="composerPopoverTitle" :disabled="mobileLayout ? pickingContext || submissionBusy : !(canOpenComposerPopover || canUseComputer) || pickingContext || submissionBusy" :width="220">
+              <span ref="computerAccessActions" class="contents" />
+              <ComposerPopover ref="composerOptions" :label="mobileLayout ? t('Message options') : t('Add attachments or context')" :sheet="mobileLayout" :title="composerPopoverTitle" :disabled="mobileLayout ? pickingContext || submissionBusy : !canOpenComposerPopover || pickingContext || submissionBusy" :width="220">
                 <template #trigger><span class="i-lucide-plus w-5 h-5" aria-hidden="true" /></template>
                 <template #default="{ close }">
-                  <button v-if="canUseComputer" class="context-action" @click="close(); computerControl?.open()">
-                    <span class="context-icon i-lucide-monitor" aria-hidden="true" />
-                    {{ t('Computer use') }} · {{ computerControl?.stateLabel }}
-                  </button>
                   <button class="context-action" :disabled="!canOpenComposerPopover" @click="close(); canPickContext ? pickContext('file') : openAttachmentPicker()">
                     <span class="context-icon i-lucide-file-plus" aria-hidden="true" />
                     {{ t('Add file') }}
@@ -747,7 +744,7 @@ const pastingFiles = ref(false)
 const attachmentInput = ref<HTMLInputElement>()
 const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && typeof File === 'function' && typeof FormData === 'function')
 const canPickContext = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
-const computerControl = ref<InstanceType<typeof ComputerControl>>()
+const computerAccessActions = ref<HTMLElement>()
 const canUseComputer = computed(() => isDirectChat.value && !isCall.value && !remoteConversation.value && !props.embedded
   && !!activeSessionId.value && installation.value.uiScopes.includes('main:admin'))
 const canOpenComposerPopover = computed(() => canAttachFiles.value || canPickContext.value)

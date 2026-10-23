@@ -80,7 +80,7 @@ test('disabled Main policy denies computer tool import and already imported exec
 })
 
 
-test('agent lists and selects without manual sharing; selection cannot enable input or approve mutations', async t => {
+test('agent lists and selects without manual sharing; selection does not approve mutations', async t => {
   await withTempWorkspace(async workspace => {
     const f = await fixture(t)
     await f.service.release(owner)
@@ -115,8 +115,7 @@ test('agent lists and selects without manual sharing; selection cannot enable in
     assert.match(toolResultText(await invoke({ action: 'select', windowId: crypto.randomUUID() })), /Refresh/)
     assert.match(toolResultText(await invoke({ action: 'select', windowId: f.desktop.window.id }, { recoveringToolCall: true })), /not replayed/)
     await invoke({ action: 'select', windowId: f.desktop.window.id })
-    assert.equal(f.service.status(owner).grant?.foregroundInput, false)
-    assert.deepEqual(f.desktop.calls.at(-1), { method: 'bind', windowId: f.desktop.window.id, foregroundInput: false })
+    assert.deepEqual(f.desktop.calls.at(-1), { method: 'bind', windowId: f.desktop.window.id })
     await tools.execute('invoke_tool', { name: 'computer_observe', args: { targetId: f.desktop.target.id } }, context)
     const action = tools.execute('invoke_tool', { name: 'computer_act', args: f.input() }, context)
     await new Promise(resolve => setImmediate(resolve))

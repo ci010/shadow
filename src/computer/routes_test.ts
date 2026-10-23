@@ -39,7 +39,7 @@ test('computer owner routes validate scope, strict decisions, body bounds and ex
   assert.equal(f.service.status(owner).grant, null)
 })
 
-test('foreground opt-in is strict and review PNGs are scoped, transient and never publicly cacheable', async t => {
+test('target selection is strict and review PNGs are scoped, transient and never publicly cacheable', async t => {
   const f = await fixture(t)
   await f.service.stopAll()
   const app = new Hono()
@@ -56,8 +56,7 @@ test('foreground opt-in is strict and review PNGs are scoped, transient and neve
   })
   await request(`${url}/windows`, {})
   assert.equal((await request(`${url}/share`, { windowId: f.desktop.window.id, foregroundInput: 'yes' })).status, 400)
-  assert.equal((await request(`${url}/share`, { windowId: f.desktop.window.id, foregroundInput: true })).status, 200)
-  assert.equal(f.service.status(owner).grant?.foregroundInput, true)
+  assert.equal((await request(`${url}/share`, { windowId: f.desktop.window.id })).status, 200)
   f.desktop.observation.screenshot = frame
   await f.service.observe(owner, f.desktop.target.id, true, f.signal)
   const execution = f.service.act(owner, { ...f.input(), action: { kind: 'move', x: 0, y: 0 } }, f.signal)
@@ -78,23 +77,14 @@ test('foreground opt-in is strict and review PNGs are scoped, transient and neve
 })
 
 
-test('enabling foreground for a selected target requires authenticated owner, exact target and strict body', async t => {
+test('the obsolete foreground permission endpoint is absent', async t => {
   const f = await fixture(t)
   const app = new Hono()
-  registerComputerRoutes(app, { service: f.service, projectId: owner.projectId,
-    authorize: request => request.headers.get('x-fixture-owner') === 'yes',
-    assertSession: id => { if (id !== owner.sessionId) throw new ComputerError('invalid_session', 'Wrong session', 403) } })
-  const url = `/api/computer/${encodeURIComponent(owner.sessionId)}/foreground`
-  const post = (path: string, body: object, authorized = true) => app.request(path, { method: 'POST',
-    headers: { 'content-type': 'application/json', ...(authorized ? { 'x-fixture-owner': 'yes' } : {}) }, body: JSON.stringify(body) })
+  registerComputerRoutes(app, { service: f.service, projectId: owner.projectId, authorize: () => true, assertSession: () => {} })
   const before = f.desktop.calls.length
-  assert.equal((await post(url, { targetId: f.desktop.target.id }, false)).status, 401)
-  assert.equal((await post('/api/computer/foreign/foreground', { targetId: f.desktop.target.id })).status, 403)
-  assert.equal((await post(url, { targetId: f.desktop.target.id, approved: true })).status, 400)
-  assert.equal((await post(url, { targetId: crypto.randomUUID() })).status, 403)
+  const response = await app.request(`/api/computer/${encodeURIComponent(owner.sessionId)}/foreground`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ targetId: f.desktop.target.id }),
+  })
+  assert.equal(response.status, 404)
   assert.equal(f.desktop.calls.length, before)
-  const response = await post(url, { targetId: f.desktop.target.id })
-  assert.equal(response.status, 200)
-  assert.equal((await response.json()).grant.foregroundInput, true)
-  assert.equal(f.service.status(owner).pending, null)
 })

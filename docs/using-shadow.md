@@ -56,20 +56,21 @@ runtime command must be updated; setup does not silently skip the connection.
 
 ## Windows computer use
 
-In a local Main conversation, open **Computer use** above the composer, refresh
-available windows, and explicitly share one already-open application. Sharing
-lasts up to 10 minutes; every modification requires its own **Approve once**
-decision. **Stop all desktop access** revokes the host-wide lease without closing
-the application. Browser work continues to use the existing browser tools.
+In a local Main conversation, ask for the application task. The assistant lists
+and selects a task-relevant existing window; no manual sharing or keyboard/mouse
+switch is needed. Access lasts up to 10 minutes. Supported UIA actions execute directly; foreground
+keyboard/mouse actions require their own **Approve once** decision. During access, the small monitor-stop button beside
+the composer (**Stop all desktop access**) revokes access without closing the app.
+No idle/ready or shared-window banner is shown. Browser work uses browser tools.
 
-This first version prefers Windows accessibility controls and window-only
-screenshots. **Allow foreground keyboard and mouse** is a separate, default-off
-sharing option; each input still needs approval, and coordinate reviews show
-the exact screenshot. Foreground actions briefly activate the window; taking
-over stops further input, not input already delivered. Elevated applications
-and remote desktops remain unsupported. Window contents go to the configured model.
-Read [computer use](computer-use.md) for privacy, recovery and compatibility
-boundaries before sharing sensitive applications.
+This version prefers Windows accessibility controls and window-only screenshots.
+UIA usually operates in the background, though applications can react by activating
+a window. Each keyboard/mouse input still needs approval; coordinate reviews show the exact
+screenshot. Foreground input uses the real interactive desktop and may take focus
+or move the user's pointer; it is not isolated background input. Taking over stops
+further input, not input already delivered. Elevated applications and remote
+desktops remain unsupported. Window contents go to the configured model.
+Read [computer use](computer-use.md) for privacy, recovery and compatibility limits.
 
 ## Language
 
