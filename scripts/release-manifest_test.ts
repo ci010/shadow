@@ -224,3 +224,25 @@ test('prepared release source fingerprint includes owned native patches but excl
     assert.equal(await sourceFingerprint(root), after)
   })
 })
+
+
+test('Unix release inventory verifies safegit binary/license and excludes preparation-only files', async () => {
+  await withTempWorkspace(async root => {
+    const target = desktopTarget('linux', 'x64')
+    const packaged = await fixture(root, target)
+    for (const name of ['safegit', 'LICENSE', 'release.json', 'BUILD.md', '.gitignore']) {
+      await file(root, `desktop/safegit/${name}`, `synthetic ${name}`)
+    }
+    const manifest = await createReleaseManifest(root, await sourceFingerprint(root), target)
+    assert(manifest.files['resources/safegit/safegit'])
+    assert(!manifest.files['resources/safegit/BUILD.md'])
+    assert(!manifest.files['resources/safegit/.gitignore'])
+    await file(packaged, 'resources/release-manifest.v1.json', JSON.stringify(manifest))
+    for (const name of ['safegit', 'LICENSE', 'release.json']) {
+      await file(packaged, `resources/safegit/${name}`, `synthetic ${name}`)
+    }
+    await verifyReleaseManifest(packaged, root, target)
+    await file(packaged, 'resources/safegit/safegit', 'tampered binary')
+    await assert.rejects(verifyReleaseManifest(packaged, root, target), /safegit/)
+  })
+})

@@ -34,24 +34,15 @@ function mount(t: TestContext, name: string, initial: Record<string, unknown>) {
   return { props, state: () => instance.$.setupState }
 }
 
-test('sidebar remote action opens the existing draft picker without allocating or changing routing ownership', () => {
+test('sidebar unified folder action opens the device-aware registration dialog', () => {
   const sidebar = readFileSync(new URL('./components/FoldersSidebar.vue', import.meta.url), 'utf8')
-  const chat = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
-  const workspace = readFileSync(new URL('./components/ChatWorkspace.vue', import.meta.url), 'utf8')
-  assert.match(sidebar, /action.id !== 'remote' \|\| props.remoteFolders/)
-  assert.match(sidebar, /id === 'remote'.*emit\('remote'\)/)
-  assert.match(chat, /:remote-folders="installation.mode === 'main'"/)
-  assert.match(chat, /@remote="createNewWebChat\(undefined, true, true\)"/)
-  const createDraft = chat.slice(chat.indexOf('function createNewWebChat('), chat.indexOf('function clearPendingAttachments('))
-  assert.match(createDraft, /emit\('primary-change', ''\)/)
-  assert.match(createDraft, /router.replace\(\{ name: 'chat', params: \{ projectId: props.projectId \} \}\)/)
-  assert.match(createDraft, /if \(props.managed\) emit\('navigate', ''\)/)
-  assert.match(createDraft, /if \(openRemotePicker\) await executionLocationSelector.value\?\.openRemote\(\)/)
-  assert.match(createDraft, /else chatInput.value\?\.focus/)
-  assert.match(createDraft, /createExecutionLocationDraft\(props.apiBase,/)
-  assert.doesNotMatch(createDraft, /\.prepare\(|fetch\(/)
-  assert.match(workspace, /@primary-change="primaryChanged"/)
-  assert.match(workspace, /function primaryChanged\(\)[\s\S]*?childId.value = ''/)
+  const dialog = readFileSync(new URL('./components/FolderDialog.vue', import.meta.url), 'utf8')
+  assert.match(sidebar, /const folderActions = computed\(\(\) => FOLDER_ACTIONS\)/)
+  assert.doesNotMatch(sidebar, /id === 'remote'/)
+  assert.match(sidebar, /else dialogMode.value = id/)
+  assert.doesNotMatch(sidebar, /id === 'remote'.*emit\('remote'\)/)
+  assert.match(dialog, /props.client.selectDirectory\(nodeId.value, path.value.trim\(\), current.signal\)/)
+  assert.doesNotMatch(dialog, /shadowDesktop|selectDirectory\?\./)
 })
 
 test('direct picker loads scoped folders and node inventory, preserves offline targets, cancels and can retry errors', async t => {
@@ -66,7 +57,7 @@ test('direct picker loads scoped folders and node inventory, preserves offline t
     }))
   })
   const { props, state } = mount(t, 'ExecutionLocationSelector', { apiBase: 'http://localhost/projects/a/', projectId: 'a' })
-  state().popover = { show: () => { void state().refresh() } }
+  state().popover = { show: () => { state().menuOpened() } }
   await state().openRemote()
   assert.equal(state().loading, true)
   const capability = { capabilityId: 'code', kind: 'workdir', displayName: 'Code', online: true }

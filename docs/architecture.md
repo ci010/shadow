@@ -324,17 +324,13 @@ eligibility, not evidence of completion. There is no startup scan or physical
 purge. Legacy retirement config is inert; upgrading requires explicit opt-in to
 the ordinary automation.
 
-Migration is explicit and offline; see [data migration](data-migration.md).
-Startup refuses an active/interrupted migration lock or detectable unmigrated
-legacy catalog instead of silently creating an empty Default. The copy tool
-retains old data, verifies ordinary files and SQLite recovery, and publishes
-`app.json` last. A Project migration marker supports bounded access to historical
-absolute paths under that same application's old managed Home; arbitrary remote
-paths and external repository paths are never reinterpreted.
+A retained Project layout marker supports bounded access to historical absolute
+paths under that same application's old managed Home; arbitrary remote paths
+and external repository paths are never reinterpreted. Historical migration
+commands are no longer shipped.
 
-Copilot credentials remain in their existing host/profile location; this
-migration does not change the protected Child credential storage or reset Child
-pairing identities. Main registry files are copied intact into `devices/`.
+Copilot credentials remain in their existing host/profile location. Child
+credentials use protected storage, and Main registry files live in `devices/`.
 Current JSONL and SQLite records keep distinct `projectId` and `folderId`
 ownership; unsupported formats fail rather than reinterpret old IDs.
 
@@ -2604,8 +2600,11 @@ are short, grouped and rate-limited, with question prompts taking priority.
 Autoplay restrictions and device mute still apply; a closed or suspended renderer
 cannot notify. Each application window owns its own sound monitor.
 
-Installation context and route policy distinguish Main/Child and UI scope.
-These client-side policies are presentation rules, not server authorization.
+Installation context distinguishes Main, Child, and mobile-client surfaces.
+An authenticated connection grants management access; the renderer does not apply
+additional UI roles or scope checks. Connection availability, Child-local recovery,
+mobile backend route restrictions, and device/browser authentication remain in
+place. Client-side presentation rules are not server authorization.
 The former Workspaces page is consolidated into each node's capability details;
 `/workspaces` redirects to `/nodes`. Nodes consumes a versioned, allowlisted
 read-only inventory alongside separate Main desktop administration commands,
@@ -3015,14 +3014,24 @@ the full ID, which always wins. Renaming a folder changes its name selectors,
 not its full ID. Paths, arbitrary UUID prefixes and `$alias/path` expressions
 are not switching endpoints.
 
+Use this tool when a session needs a folder as its ongoing working context
+(default cwd and folder-scoped instructions), not as a mandatory first step for
+every task involving that folder. A task spanning folders may be better served
+by explicit paths or separate subagents/sessions with their own folder contexts,
+rather than serially switching the parent session. These are task-dependent
+choices, not a requirement to delegate or a prohibition on switching. Explicit
+paths do not change the session context; applicable directory instructions still
+need to be read and followed.
+
 The tool must be the sole direct top-level call. Parallel batches and nested
 script invocations cannot switch; other calls in a rejected mixed batch still
 run in the old context. Availability and root `AGENTS.md` preparation happen
 before commit, under the existing folder access lease. Missing root instructions
 are explicit; unreadable or oversized instructions fail preparation. Root
 instructions apply only to that folder tree; nested `AGENTS.md` files must be
-read when entering their subtrees. Current Project conventions and a discoverable
-Skill metadata index accompany the transition; skill bodies are not injected
+read when entering their subtrees. Only selected-folder Skill metadata accompanies
+the transition; Project conventions and Project/global skill discovery already
+provided by the system prompt are not repeated. Skill bodies are not injected
 or executed by discovery. Project/global skills retain `v:skills/<name>`.
 The narrow repository convention is `.agents/skills/<name>/SKILL.md`, with
 frontmatter name matching the directory. Selected-folder skills are separately
@@ -3307,3 +3316,29 @@ accepts `{}`), and remove port/launch/profile/routing flags from `.chrome-devtoo
 and preloads. Do not delete user profiles as part of this migration. Establish an
 explicit user-owned connection through browser_setup. See the built-in Chrome
 skill's `references/mcp-args.md` for connection evidence and permitted flags.
+
+### Folder-local MCP declarations
+
+Local selected folders recognize explicit `.mcp.json` (`mcpServers`) and
+`.vscode/mcp.json` (`servers`, including VS Code `type: "http"`) declarations.
+`use_project` validates these before committing and appends only folder-local
+source discovery. Invalid/unreadable declarations fail the switch without
+printing file values. No declaration is copied into Project configuration.
+Both files may contribute; source IDs include a folder/file hash so their
+servers cannot overwrite Project sources or one another. Folder-relative
+stdio execution uses that folder as cwd. These files are JSON, not JSONC;
+editor variable/input substitution is not implemented. Managed Chrome must
+still use the built-in browser source.
+
+The session importer resolves folder sources lazily for `v:tools` reads/search
+and `invoke_tool`. Search reads cached metadata only and never connects; an
+unindexed source advertises its status and the exact initialization call:
+`invoke_tool({ name: "folder-<scope>-<server>", args: {} })`. This starts the
+declared service and returns contracts without executing any MCP tool; invoke
+a returned exact tool name to execute it. Empty server maps are valid and
+contribute no sources. Successful imports reuse
+the existing MCP metadata index. Switching removes old folder tool names from
+the current session overlay, not captured child overlays. Connections remain
+owned until session reset/sleep so borrowed children retain their handles.
+Folder declaration snapshots last for that selected scope; switch away/back
+(or start a new session) to reload edits. Remote folders have no Main fallback.

@@ -1,3 +1,4 @@
+import { parseDirectoryListing } from '../../src/folders/picker-contract.ts'
 import { t } from './i18n.ts'
 import type { CloneOperation, FolderRecord } from '../../src/folders/contracts.ts'
 import { isRecord } from './folders-sidebar.ts'
@@ -98,6 +99,18 @@ export function createFoldersClient(apiBase: string, request: typeof fetch = fet
     return data
   }
   return {
+    async pickerDevices(signal?: AbortSignal) {
+      const data = await json('/picker/devices', { signal })
+      if (!Array.isArray(data.devices) || data.devices.some(d => !isRecord(d) || typeof d.nodeId !== 'string' || !d.nodeId ||
+        typeof d.name !== 'string' || !['main', 'child'].includes(String(d.role)) || typeof d.online !== 'boolean' || typeof d.supported !== 'boolean')) throw invalidResponse()
+      return data.devices as { nodeId: string; name: string; role: 'main' | 'child'; online: boolean; supported: boolean }[]
+    },
+    async browseDirectory(nodeId: string, path: string, signal?: AbortSignal) {
+      return parseDirectoryListing((await json('/picker/browse', { method: 'POST', body: JSON.stringify({ nodeId, path }), signal })).listing)
+    },
+    async selectDirectory(nodeId: string, path: string, signal?: AbortSignal) {
+      return parseFolder((await json('/picker/select', { method: 'POST', body: JSON.stringify({ nodeId, path }), signal })).folder)
+    },
     async list(signal?: AbortSignal) {
       const data = await json('', { signal })
       if (!Array.isArray(data.folders)) throw invalidResponse()

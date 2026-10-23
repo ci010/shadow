@@ -52,11 +52,20 @@ test('Node-only exec rejects remote workdirs without dispatch or a local shell f
 
 test('ExecTool remote path sends only capability-relative cwd and does not inherit Main shell or environment', async () => {
   const { tool, context, requests } = fixture()
-  assert.equal(await tool.execute({ script: 'pwd', cwd: 'nested', args: ['one'] }, context), '(no output, exit code 0)')
+  const previous = process.env.SHADOW_SAFEGIT_PATH
+  try {
+    process.env.SHADOW_SAFEGIT_PATH = 'C:\\Main\\safegit.exe'
+    assert.equal(await tool.execute({ script: 'pwd', cwd: 'nested', args: ['one'] }, context), '(no output, exit code 0)')
+  } finally {
+    if (previous === undefined) delete process.env.SHADOW_SAFEGIT_PATH
+    else process.env.SHADOW_SAFEGIT_PATH = previous
+  }
   assert.equal(requests[0]?.operation, 'workdir.process.execute-once')
   assert.equal(requests[0]?.capabilityId, 'opaque')
   assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested', args: ['one'] })
   assert.equal(requests[0]?.turnId, 'turn')
+  assert(!JSON.stringify(requests).includes('SHADOW_SESSION_DATA_DIR'))
+  assert(!JSON.stringify(requests).includes('C:\\Main'))
 })
 
 test('ExecTool remote rejects unsupported execution modes and malformed inputs before dispatch', async () => {

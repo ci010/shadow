@@ -1813,3 +1813,45 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 }
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: creator retries failed managed worker in place with stale retry protection`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store = new Store(join(workspace, 'sessions')); await store.init()
+      const f = fixture(workspace, store, { managedReview: true })
+      try {
+        await f.sessions.start(); await f.sessions.buildSession('web:root'); await f.sessions.buildSession('web:other')
+        const { sessionId } = JSON.parse(await f.subagent.execute({ mode: 'task', task: 'Keep original assignment', description: 'Retry fixture' }, sourceContext(workspace, f)))
+        await assert.rejects(f.sessions.taskAction('web:root', sessionId, 'retry', f.sessions.getSessionState(sessionId)!.task!.version), /failed/)
+        ;(await f.next(sessionId)).reject(new Error('ECONNRESET fixture'))
+        await waitFor(() => f.reports.some(r => r.type === 'subagent-failed'))
+        // Completion events are emitted before their report promise settles.
+        await delay(10)
+        const failed = f.sessions.getSessionState(sessionId)!
+        const version = failed.task!.version
+        const physicalId = SessionManager.currentPhysicalId(failed)
+        await assert.rejects(f.sessions.taskAction('web:other', sessionId, 'retry', version), /denied|creator/)
+        const retry = f.sessions.taskAction('web:root', sessionId, 'retry', version)
+        const duplicate = assert.rejects(f.sessions.taskAction('web:root', sessionId, 'retry', version), /version|failed|settle/i)
+        await retry
+        await duplicate
+        const continued = await f.next(sessionId)
+        assert.equal(SessionManager.currentPhysicalId(f.sessions.getSessionState(sessionId)!), physicalId)
+        assert.ok(JSON.stringify(continued.messages).includes('Keep original assignment'))
+        assert.ok(JSON.stringify(continued.messages).includes('do not blindly replay'))
+        continued.reject(new Error('Second network failure'))
+        await waitFor(() => f.reports.filter(r => r.type === 'subagent-failed').length === 2)
+        await delay(10)
+        const failureIds = f.reports.filter(r => r.type === 'subagent-failed').map(r => r.id)
+        assert.equal(new Set(failureIds).size, 2)
+        await f.sessions.taskAction('web:root', sessionId, 'retry', f.sessions.getSessionState(sessionId)!.task!.version)
+        ;(await f.next(sessionId)).resolve(done('Recovered result'))
+        await waitFor(() => f.reports.some(r => r.type === 'subagent-review-requested'))
+        await f.sessions.reviewTask('web:root', sessionId, 1, 'pass', '')
+        assert.equal(f.reports.filter(r => r.type === 'subagent-complete').length, 1)
+        assert.equal(f.sessions.getSessionState(sessionId)!.task!.status, 'closed')
+        await assert.rejects(f.sessions.taskAction('web:root', sessionId, 'retry', f.sessions.getSessionState(sessionId)!.task!.version), /failed/)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+}

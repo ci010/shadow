@@ -1,6 +1,7 @@
+import { browseDirectories, pickerPath, FOLDER_PICKER_CAPABILITY, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../folders/picker.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, unlink, writeFile, stat } from 'node:fs/promises'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isClusterIdentifier } from '../cluster/contracts.ts'
 import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
 import type { JobRequestV1 } from './contracts.ts'
@@ -23,6 +24,7 @@ interface Allocation {
 
 /** The allocation root is Child-owned metadata, never a filesystem capability. */
 export class ManagedChildWorkdirs {
+  readonly #picked = new Map<string, string>()
   readonly #allocations = new Map<string, Allocation>()
   readonly #unavailable = new Set<string>()
   #writes: Promise<unknown> = Promise.resolve()
@@ -39,7 +41,7 @@ export class ManagedChildWorkdirs {
     for (const binding of staticWorkdirs) {
       if (!isClusterIdentifier(binding.capabilityId) || !isAbsolute(binding.rootPath) ||
         isManagedWorkdir(binding.capabilityId) || binding.capabilityId === MANAGED_SESSION_CAPABILITY ||
-        binding.capabilityId === 'process-execute' || ids.has(binding.capabilityId)) {
+        binding.capabilityId === FOLDER_PICKER_CAPABILITY || binding.capabilityId.startsWith('picked-v1:') || binding.capabilityId === 'process-execute' || ids.has(binding.capabilityId)) {
         throw new TypeError('Reserved or duplicate Child capability ID')
       }
       ids.add(binding.capabilityId)
@@ -60,7 +62,26 @@ export class ManagedChildWorkdirs {
         throw new Error('Configured workdirs must not overlap managed session storage')
       }
     }
+    try {
+      const metadata = join(this.#root, 'picked-folders.json')
+      const info = await lstat(metadata)
+      if (!info.isFile() || info.size > 4 * 1024 * 1024) throw new Error('Invalid picked folder metadata')
+      const records: unknown = JSON.parse(await readFile(metadata, 'utf8'))
+      if (!Array.isArray(records)) throw new Error('Invalid picked folder metadata')
+      for (const record of records) {
+        if (!record || Object.keys(record).sort().join(',') !== 'capabilityId,path' || typeof record.path !== 'string' ||
+          record.capabilityId !== this.#pickedId(pickerPath(record.path)) || this.#picked.has(record.capabilityId)) throw new Error('Invalid picked folder metadata')
+        let root: string
+        try { root = await realpath(record.path) } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+          root = resolve(record.path)
+        }
+        if (contains(root, this.#root) || contains(this.#root, root)) throw new Error('Picked folders must not overlap managed session storage')
+        this.#picked.set(record.capabilityId, record.path)
+      }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     for (const entry of await readdir(this.#root, { withFileTypes: true })) {
+      if (entry.isFile() && (entry.name === 'picked-folders.json' || /^\.picked-[a-f0-9-]{36}\.pending$/.test(entry.name))) continue
       if (!entry.isDirectory() || !/^[0-9a-f]{64}$/.test(entry.name)) throw new Error('Invalid managed storage entry')
       const directory = join(this.#root, entry.name)
       await this.#directory(directory)
@@ -76,7 +97,9 @@ export class ManagedChildWorkdirs {
 
   get capabilities(): CapabilityDescriptorV1[] {
     this.#ready()
-    return [{
+    return [{ version: 1, nodeId: this.nodeId, capabilityId: FOLDER_PICKER_CAPABILITY,
+      kind: 'shell', displayName: 'Owner folder picker', permissions: [FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION], online: true },
+      ...[...this.#picked].map(([capabilityId, rootPath]) => this.#descriptor({ capabilityId, rootPath, displayName: basename(rootPath) || rootPath })), {
       version: 1, nodeId: this.nodeId, capabilityId: MANAGED_SESSION_CAPABILITY,
       kind: 'shell', displayName: 'Managed session allocation',
       permissions: [MANAGED_SESSION_OPERATION], online: true,
@@ -87,10 +110,11 @@ export class ManagedChildWorkdirs {
 
   get operationHandlers(): readonly (LocalJobOperationHandler | LocalProcessOperationHandler)[] {
     return [{
-      handles: operation => operation === MANAGED_SESSION_OPERATION || [
+      handles: operation => [FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(operation) || operation === MANAGED_SESSION_OPERATION || [
         'filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity',
       ].includes(operation),
       execute: async (request, signal) => {
+        if ([FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation)) return this.#pick(request, signal)
         if (request.operation === MANAGED_SESSION_OPERATION) return this.#allocate(request, signal)
         const bindings = await this.#bindings(request, signal)
         const handlers = [new CapabilityFilesystem(bindings), new CapabilityGit(bindings), new CapabilityWorkdirIdentity(bindings)]
@@ -133,6 +157,12 @@ export class ManagedChildWorkdirs {
 
   async #bindings(request: JobRequestV1, signal: AbortSignal): Promise<readonly WorkdirCapabilityBinding[]> {
     signal.throwIfAborted()
+    const picked = this.#picked.get(request.capabilityId)
+    if (picked) {
+      const current = await realpath(picked)
+      if (contains(current, this.#ready()) || contains(this.#ready(), current)) throw new Error('Picked folder overlaps managed session storage')
+      return [{ capabilityId: request.capabilityId, rootPath: picked }]
+    }
     if (!isManagedWorkdir(request.capabilityId)) return this.staticWorkdirs
     const record = this.#allocations.get(request.capabilityId)
     if (!record || record.projectScope !== request.managedProject) throw new Error('Managed session project access denied')
@@ -141,6 +171,37 @@ export class ManagedChildWorkdirs {
     await this.#directory(this.#path(record.capabilityId))
     signal.throwIfAborted()
     return [{ capabilityId: record.capabilityId, rootPath: this.#path(record.capabilityId) }]
+  }
+
+  #pickedId(path: string): string { return `picked-v1:${createHash('sha256').update(path).digest('hex')}` }
+
+  async #pick(request: JobRequestV1, signal: AbortSignal): Promise<string> {
+    if (request.capabilityId !== FOLDER_PICKER_CAPABILITY || request.nodeId !== this.nodeId ||
+      !request.args || typeof request.args !== 'object' || Array.isArray(request.args) ||
+      Object.keys(request.args).join(',') !== 'path') throw new TypeError('Invalid owner picker request')
+    const path = (request.args as { path: unknown }).path
+    if (request.operation === FOLDER_BROWSE_OPERATION) return JSON.stringify(await browseDirectories(path, signal))
+    const rootPath = await realpath(pickerPath(path))
+    if (!(await stat(rootPath)).isDirectory() || contains(rootPath, this.#ready()) || contains(this.#ready(), rootPath)) {
+      throw new Error('Selected folder must not overlap managed session storage')
+    }
+    const capabilityId = this.#pickedId(rootPath)
+    const result = this.#writes.then(async () => {
+      signal.throwIfAborted()
+      await this.#directory(this.#ready())
+      const records = new Map(this.#picked).set(capabilityId, rootPath)
+      const temporary = join(this.#ready(), `.picked-${randomUUID()}.pending`)
+      try {
+        await writeFile(temporary, JSON.stringify([...records].map(([capabilityId, path]) => ({ capabilityId, path }))), { flag: 'wx', mode: 0o600 })
+        await rename(temporary, join(this.#ready(), 'picked-folders.json'))
+      } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error }) }
+      this.#picked.set(capabilityId, rootPath)
+      const descriptor = this.#descriptor({ capabilityId, rootPath, displayName: basename(rootPath) || rootPath })
+      await this.onCapability?.(descriptor)
+      return JSON.stringify({ version: 1, nodeId: this.nodeId, capabilityId, displayName: descriptor.displayName, displayPathSnapshot: rootPath })
+    })
+    this.#writes = result.catch(() => {})
+    return result
   }
 
   #allocate(request: JobRequestV1, signal: AbortSignal): Promise<string> {

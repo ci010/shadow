@@ -8,6 +8,64 @@ both devices. This is not a production distributed-release certification.
 Browser access and device pairing are different. **Connect browser** authorizes
 a web UI; it does not register a Child or make that browser an execution node.
 
+## Main workspace on Child
+
+After the existing Child pairing and Main approval, Child opens the same Main
+projects, conversations and application settings automatically. No second
+invitation, browser login, role switch or separate HTTPS deployment is required.
+The Child runtime remains an execution node and does not start a second Main.
+The old Child-only status/inventory home and its navigation entry have been
+removed. While the workspace is unavailable, only a small connection recovery
+screen is shown, with automatic retry and a manual retry button. Execution-node
+`connected` only confirms the execution transport, not workspace HTTP admission.
+The recovery screen displays a bounded error code and HTTP status instead of assuming
+that every failure means approval is pending. For example, `unauthorized` (401)
+can indicate local gateway admission, `main_workspace_challenge_http_404` is a missing Main
+workspace challenge route, and `main_workspace_approval_unavailable` means Main
+explicitly reported that the credential is unavailable (not necessarily pending).
+Backend `[child-workspace]` diagnostics include only stage/code/status, never the
+endpoint, credential, signed proof or arbitrary upstream response body.
+
+Device endpoints with a reverse-proxy path prefix retain that prefix for both
+challenge and workspace request URLs, matching the execution transport.
+
+To diagnose a connection failure without re-pairing, open the existing Child
+installation with Main online, record the recovery screen's code/HTTP status,
+and correlate it with backend `[child-workspace]` stage diagnostics. A local
+401 fails before the Main challenge; a challenge failure and a tunneled request
+failure are different stages. Do not create another invitation for an already
+approved identity solely because the workspace probe failed.
+
+In desktop development, `main_workspace_connection_failed` can also mean the
+browser could not read the loopback response, not that Main is offline. If local
+readiness succeeds but workspace requests fail with `TypeError: immutable` in
+the backend, rebuild and restart Child with the response-header fix: the proxy
+must copy upstream headers before the local gateway adds its CORS headers.
+
+Approval now explicitly describes workspace access: only approve a desktop you
+trust with the single-owner Main workspace. Existing approved public-key devices
+use the same verified identity; credentials without a registered signing public
+key cannot access this path. Revoking a device prevents subsequent workspace
+requests and aborts its active streams. No device secret is exposed to Vue or
+accepted as a general Main administrator bearer token.
+
+The Child renderer uses its existing launch-protected loopback gateway. Its
+backend signs a fresh single-use Main challenge for each proxied request; Main
+binds admitted requests to that registered device identity. This dedicated
+workspace tunnel shares the existing device listener and transport consent; it
+does not add a port or expose the ordinary unauthenticated gateway. Native mobile
+and ordinary browser authentication retain their separate authorization rules.
+Local runtime control, pairing/cluster ingress and browser/mobile credential
+endpoints cannot be tunneled; device enrollment still requires local Main access.
+
+**Transport limitation:** the built-in trusted-LAN/VPN device listener is HTTP.
+Workspace traffic has the same unencrypted transport limitation as execution
+traffic. Use a trusted encrypted VPN or an existing HTTPS device endpoint; do not
+expose this listener on an untrusted network. Device proof authenticates Child,
+not confidentiality or a general HTTP man-in-the-middle defense. Application
+files and uploads refer to Main's data, not Child's local home. Native local
+computer/capture helpers are not made remotely available by this feature.
+
 ## Before starting
 
 - Put both devices on a trusted LAN or VPN. The built-in device listener uses
@@ -48,7 +106,7 @@ a web UI; it does not register a Child or make that browser an execution node.
    Paste it into **Pairing invitation**. Main's address appears for review;
    there is no need to enter an ID or PIN separately. Confirm the device name. Choose
    separate **Child home** and **Shared work folder** paths and acknowledge
-   the execution/transport scope. Select **Pair and open local status**.
+   the execution/transport scope. Select **Pair and open workspace**.
    The Child creates its identity through its OS credential store, not in the
    renderer. The shared folder is advertised as the `desktop-workdir`
    capability after authentication.

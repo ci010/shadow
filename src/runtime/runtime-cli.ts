@@ -103,8 +103,7 @@ export function deriveRuntimePaths(
       'devices',
       'registry.v1.json',
     ),
-    // Child protected identity has its own lifecycle; this Main-layout migration
-    // must not silently change the location of existing Child pairing credentials.
+    // Child protected identity has its own lifecycle, separate from Main devices.
     childCredentialPath: path.join(
       resolvedDataDir,
       'credentials',

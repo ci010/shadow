@@ -4,13 +4,14 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
 import { JsonlSessionStore } from '../src/sessions/session-store-jsonl.ts'
+import { projectStoragePath } from '../src/utils/data-paths.ts'
 import { resolveSessionLocations } from '../src/sessions/locality.ts'
 import { MicroAppStore } from '../src/microapps/store.ts'
 import { exportAcceptanceRecovery } from './microapp-acceptance-recovery.ts'
 
 async function fixture(home: string) {
   const state = { sessionId: 'a2a:recovery', segmentIndex: 0, mode: 'session' as const }
-  const sessions = new JsonlSessionStore(join(home, '.sessions'))
+  const sessions = new JsonlSessionStore(projectStoragePath(home, '.sessions'))
   await sessions.init()
   await sessions.saveState(state.sessionId, state)
   const location = resolveSessionLocations(home, state).workdir

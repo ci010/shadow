@@ -1,3 +1,4 @@
+import { FOLDER_PICKER_CAPABILITY, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../../folders/picker.ts'
 import { CHROME_MCP_PACKAGE } from '../../browser/chrome-contract.ts'
 import { SessionProxyTool } from '../../tools/session-proxy.ts'
 import { createSelfSessionHandler } from '../../vfs/session.ts'
@@ -428,7 +429,7 @@ export async function createProjectRuntime(
   await knowledgeMaintenance.init()
   cleanup.push(() => knowledgeMaintenance.stop())
   registerKnowledgeRoutes(app, { workspace, skills, authorize: dependencies.authorize, maintenance: knowledgeMaintenance })
-  const importTool = new ImportTool(loadable, workspace, project.id, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport)
+  const importTool = new ImportTool(loadable, workspace, project.id, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport, id => { const folder = folderRegistry.list().find(folder => folder.id === id); return folder?.kind === 'local' ? { id: folder.id, path: folder.path } : undefined })
   cleanup.push(() => importTool.shutdownBrowser())
   tools.register(new SearchTool(workspace, webSearchTool, vfs, dependencies.localExecutor !== false))
   tools.register(new InvokeTool(importTool))
@@ -756,8 +757,6 @@ export async function createProjectRuntime(
     },
   })
   cleanup.push(async () => { await sessions.stop(); initiatives.close() })
-  initiatives.migrateLegacyMarkdown()
-  initiatives.migrateWorkItems()
   const topics = new TopicService({
     projectId: project.id,
     sessions,
@@ -898,9 +897,7 @@ export async function createProjectRuntime(
   })
   tools.register(new UseProjectTool({
     projectId: project.id, folders: folderRegistry,
-    skills: ctx => skills.getMetadataSummary(ctx.admin, ctx.sessionId) || '',
-    conventions: () => conventions.prompt() || '',
-    switched: ctx => importTool.clearFolderSkillTools(ctx.tools),
+    switched: ctx => { importTool.clearFolderSkillTools(ctx.tools); importTool.clearFolderMcpTools(ctx.tools) },
   }))
   context.register(initiativeProvider(initiatives))
   context.register({ name: 'project-conventions', getPromptSection: () => conventions.prompt() })
@@ -1353,6 +1350,10 @@ export async function createProjectRuntime(
   for (const tool of channelTools(channels)) importTool.registerBuiltin(tool.name, tool)
   const folders = new FolderService({
     registry: folderRegistry,
+    picker: { inventory: () => mainCluster.getNodeInventory(), executor: new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+      if (request.sessionId !== 'owner-folder-picker' || request.capabilityId !== FOLDER_PICKER_CAPABILITY ||
+        ![FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation)) throw new Error('Invalid owner picker operation')
+    }) },
     remoteExecutor,
     createSession: async (folder, requestId) => {
       const chatId = `chat-${requestId ?? randomUUID()}`

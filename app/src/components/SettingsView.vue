@@ -1,8 +1,7 @@
 <template>
   <div class="settings-view">
     <header class="settings-heading"><h1>{{ t('App settings') }}</h1><p>{{ t('Provider connections and web search settings are shared across Projects. Model defaults can be overridden by Projects and conversations.') }}</p></header>
-    <DesktopRoleSettings />
-    <p v-if="!available" role="status">{{ t('Settings are managed by Main administrators.') }}</p>
+    <p v-if="!sections.length" role="status">{{ t('Settings are managed by Main administrators.') }}</p>
     <div v-else class="settings-layout">
       <nav class="settings-navigation" :aria-label="t('Settings sections')">
         <RouterLink v-for="item in sections" :key="item.id" :to="{ name: 'settings', params: { section: item.id } }"
@@ -11,6 +10,7 @@
         </RouterLink>
       </nav>
       <div class="settings-section">
+        <NodesView v-if="section === 'nodes'" :api-base="apiBase" embedded />
         <ModelDefaultsForm v-if="section === 'models'" :api-base="apiBase" scope="app" />
         <WebSearchSettings v-if="section === 'web-search'" :api-base="apiBase" />
         <ProxySettings v-if="section === 'proxy'" :api-base="apiBase" />
@@ -20,7 +20,7 @@
           <p>{{ t('Choose the language used by this app. Your choice is saved on this device and does not change agent responses.') }}</p>
           <LanguageSelector />
         </section>
-        <ProvidersView v-show="section === 'providers'" v-bind="props" embedded :active="section === 'providers'"
+        <ProvidersView v-if="available" v-show="section === 'providers'" v-bind="props" embedded :active="section === 'providers'"
           @configured="$emit('configured')" @retry="$emit('retry')" @close="$emit('close')" />
       </div>
     </div>
@@ -29,9 +29,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import DesktopRoleSettings from './DesktopRoleSettings.vue'
 import { RouterLink, useRoute } from 'vue-router'
 import type { ProviderSetupStatus } from '../provider-setup.ts'
+import { useInstallationContext } from '../composables/useInstallationContext.ts'
+import NodesView from './NodesView.vue'
 import ProvidersView from './ProvidersView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
 import WebSearchSettings from './WebSearchSettings.vue'
@@ -43,19 +44,24 @@ import { t } from '../i18n.ts'
 const props = defineProps<{ apiBase: string; status: ProviderSetupStatus | null; error: string; checking: boolean; available: boolean }>()
 defineEmits<{ configured: []; retry: []; close: [] }>()
 const route = useRoute()
-const sections = [
+const context = useInstallationContext()
+const sections = computed(() => [
+  { id: 'nodes', get label() { return t('Nodes') }, icon: 'i-lucide-network' },
   { id: 'providers', get label() { return t('Providers') }, icon: 'i-lucide-cpu' },
   { id: 'models', get label() { return t('Models') }, icon: 'i-lucide-sliders-horizontal' },
   { id: 'web-search', get label() { return t('Web search') }, icon: 'i-lucide-search' },
   { id: 'proxy', get label() { return t('Proxy') }, icon: 'i-lucide-network' },
   { id: 'sounds', get label() { return t('Sounds') }, icon: 'i-lucide-volume-2' },
   { id: 'language', get label() { return t('Language') }, icon: 'i-lucide-languages' },
-]
-const section = computed(() => sections.find(item => item.id === route.params.section)?.id ?? 'providers')
+].filter(item => item.id === 'nodes'
+  ? context.value.mode !== 'client'
+  : props.available))
+const section = computed(() => sections.value.find(item => item.id === route.params.section)?.id
+  ?? (props.available ? 'providers' : sections.value[0]?.id))
 </script>
 
 <style scoped>
-.settings-view { width: 100%; max-width: 1240px; min-width: 0; margin: 0 auto; padding: 28px 24px 48px; color: var(--c-text); }
+.settings-view { box-sizing: border-box; width: 100%; max-width: 1240px; min-width: 0; margin: 0 auto; padding: 28px 24px 48px; color: var(--c-text); }
 .settings-heading { margin-bottom: 28px; }
 .settings-heading h1 { margin: 0 0 8px; font-size: 24px; }
 .settings-heading p { margin: 0; color: var(--c-text-secondary); font-size: 14px; }
@@ -66,7 +72,9 @@ const section = computed(() => sections.find(item => item.id === route.params.se
 .settings-navigation a:hover, .settings-navigation .selected { background: var(--c-bg-muted); color: var(--c-text); }
 .settings-navigation .selected { font-weight: 600; }
 .settings-navigation a:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.settings-section { min-width: 0; }
+.settings-section { width: 100%; min-width: 0; }
+/* Subpages share the column geometry; only individual fields may be narrower. */
+.settings-section > :deep(*) { box-sizing: border-box; width: 100%; max-width: none; margin-inline: 0; }
 @media (max-width: 700px) {
   .settings-view { padding: 20px 16px 32px; }
   .settings-heading { margin-bottom: 20px; }

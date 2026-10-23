@@ -318,7 +318,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
     const general = await readFile(join(root, 'src', 'agent', 'types', 'builtin', 'general', 'AGENT.md'), 'utf8')
     const agent = general.replace('root: true', 'root: true\nallowedTools: [read, search, write, edit, exec, work, ask, reply, cancel, continuation, log, invoke_tool, session, sql]')
       + (testBoundaries ? `\n\n## Isolated acceptance boundaries (not product requirements)\n\n${testBoundaries}\n` : '')
-    const agentDir = join(project.home, 'agents', 'app-acceptance'); await mkdir(agentDir, { recursive: true })
+    const agentDir = join(project.home, 'config', 'agents', 'app-acceptance'); await mkdir(agentDir, { recursive: true })
     await writeFile(join(agentDir, 'AGENT.md'), agent)
     const env: NodeJS.ProcessEnv = {
       ...acceptanceRuntimeEnv(directory, process.env),

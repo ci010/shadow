@@ -4,7 +4,7 @@ Desktop packaging uses Vite 8 (the Rolldown-backed version already used by the r
 
 ## Entries and layout
 
-- `resources/backend/dist/src/index.js`: legacy backend CLI, Main, Child, pairing, and the built-in `data-migration` command. Migration is an ordinary reachable CLI branch, not a removable asset or a separate executable.
+- `resources/backend/dist/src/index.js`: backend CLI, Main, Child, and pairing.
 - `resources/backend/dist/src/a2a/mcp-cli.js`: standalone MCP CLI.
 - `resources/backend/dist/src/script-runtime/worker.js`: isolated VM/host-script process.
 - `resources/backend/dist/src/channels/feishu-worker.js`: Feishu worker thread.

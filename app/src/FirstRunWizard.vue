@@ -1,6 +1,5 @@
 <template>
-	<DataLayoutUpgrade v-if="upgradeLayout" :api="api" :initial-layout="upgradeLayout" @complete="resumeUpgrade" />
-	<main v-else class="setup-shell">
+	<main class="setup-shell">
 		<section class="setup-panel" aria-labelledby="setup-title">
 			<header class="setup-header">
 				<img class="brand-mark" :src="shadowLogo" alt="" aria-hidden="true" draggable="false">
@@ -102,7 +101,8 @@
 						<div class="directory-field"><input id="child-workdir" v-model="child.workdir" class="directory-input" required :disabled="busy"><button type="button" class="secondary-button" :disabled="busy" @click="pickChildFolder('workdir')">{{ t('Browse…') }}</button></div>
 						<p class="field-help">{{ t('Use separate folders, not a drive root. Child home stays fixed after the first attempt so retries retain this device\'s identity. You can correct the endpoint and work folder until pairing succeeds. No existing data is moved or deleted.') }}</p>
 						<label class="consent-row"><input v-model="executionConsent" type="checkbox" :disabled="busy" required><span>{{ t('I allow the approved Main to read/write the work folder, create managed workdirs under Child home, and execute commands as my OS account.') }} <strong>{{ t('Shell access is not a sandbox and can access other host files.') }}</strong> {{ t('Pair only with a Main you trust with this access.') }}</span></label>
-						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || childSetupBlocked || !executionConsent || !!transportError || !manualPairing && !!invitationPreview.error">{{ busy ? t('Submitting pairing request…') : t('Pair and open local status') }}</button></div>
+						<p>{{ t('After approval, this Child can operate Main’s projects, sessions and application settings without another login. Workspace traffic uses the same device transport; trusted-network HTTP is not encrypted.') }}</p>
+						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || childSetupBlocked || !executionConsent || !!transportError || !manualPairing && !!invitationPreview.error">{{ busy ? t('Submitting pairing request…') : t('Pair and open workspace') }}</button></div>
 					</form>
 				</div>
 
@@ -165,8 +165,6 @@
 import DesktopRoleSettings from './components/DesktopRoleSettings.vue'
 import { t } from './i18n.ts'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import DataLayoutUpgrade from './DataLayoutUpgrade.vue'
-import type { DataLayoutView } from '../../desktop/src/bootstrap/data-layout-controller.ts'
 import ProviderSetup from './ProviderSetup.vue'
 import { createProviderSetupClient, providerDisplayName, type ProviderSetupStatus } from './provider-setup.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
@@ -223,8 +221,6 @@ const directoryPath = ref('')
 const localExecutor = ref(props.initialState?.mode === 'main'
 	? props.initialState.localExecutor ?? loadLocalExecutorChoice()
 	: true)
-const upgradeLayout = ref<DataLayoutView | null>(null)
-async function resumeUpgrade() { upgradeLayout.value = null; await continueMain(true) }
 const busy = ref(false)
 const actionError = ref('')
 const executionConsent = ref(false)
@@ -405,24 +401,19 @@ async function continueMain(useChosenDirectory = false): Promise<void> {
 			}
 			const result = await commitMainDirectoryChoice(props.api, directoryPath.value, directorySelection.value)
 			lifetime.signal.throwIfAborted()
-			if (!result.ok) throw new Error(result.code === 'migration-required' ? 'migration-required' : 'Directory setup failed')
+			if (!result.ok) throw new Error('Directory setup failed')
 			state.value = result.state
 			directorySelection.value = null
 		}
 		if (state.value.mode === 'main' && state.value.step === 'initialize-main') {
 			const result = await props.api.bootstrap.initializeMain()
 			lifetime.signal.throwIfAborted()
-			if (!result.ok) throw new Error(result.code === 'migration-required' ? 'migration-required' : 'Initialization failed')
+			if (!result.ok) throw new Error('Initialization failed')
 			state.value = result.state
 		}
 		await connectProviderRuntime()
 	} catch (error) {
 		await reloadSavedProgress()
-		if (error instanceof Error && error.message === 'migration-required') {
-			upgradeLayout.value = await props.api.bootstrap.dataLayoutStatus?.() ?? null
-			if (!upgradeLayout.value) actionError.value = t('Data upgrade is required. Update Desktop or use the bundled offline migration diagnostics.')
-			return
-		}
 		if (state.value?.step === 'choose-data-directory') automaticDirectory.value = false
 		if (!lifetime.signal.aborted) actionError.value = t('Setup could not finish. Check the data folder permissions and desktop connection, then retry. Existing data is preserved.')
 	} finally { busy.value = false }

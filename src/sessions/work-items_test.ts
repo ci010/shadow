@@ -28,7 +28,6 @@ function setup(home: string) {
     [id, { sessionId: id, segmentIndex: 0, mode: 'session' }]))
   states.set('temporary', { sessionId: 'temporary', segmentIndex: 0, mode: 'task' })
   const store = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
-  store.migrateWorkItems()
   let changed = 0
   const alignment = new WorkAlignment(store, { state: id => states.get(id), evidence: async () => {},
     changed: async () => { changed++ }, fresh: async () => {}, successor: async () => 'peer' })
@@ -41,37 +40,6 @@ function setup(home: string) {
   }
   return { store, alignment, create, manage, states, changed: () => changed }
 }
-
-test('work migration retains identities, history, ownership, acceptance and durable archive fencing', async () => withTempWorkspace(async home => {
-  let store = new InitiativeStore(home, { trackWork: true, isSessionKnown: () => true })
-  try {
-    store.query("INSERT INTO initiatives(id,title,goal,context) VALUES ('release','Release','Both outcomes','Historical context');" +
-      "INSERT INTO initiative_items(id,initiative_id,title,assignee_session_id) VALUES ('verify','release','Verify both','worker');", 'owner')
-    const before = store.workRecords()[0]!
-    store.setWorkFocus('worker', before.key)
-    store.startWorkEffect(randomUUID(), 'worker', 'exec', [{ key: before.key, revision: before.revision }])
-    store.migrateWorkItems()
-    const item = store.workRecords().find(record => record.key === before.key)!
-    assert.deepEqual(item.definition, before.definition)
-    assert.equal(item.revision, before.revision)
-    assert.equal(item.workflow?.assignee, 'worker')
-    assert.equal(item.workflow?.manager, 'owner')
-    assert.equal(item.workflow?.parentKey, 'initiative:release')
-    assert.equal(store.workFocus('worker'), before.key)
-    assert.equal(store.workEffects()[0]?.stamps[0]?.key, before.key)
-    assert.equal(store.initiativeView('release').items.length, 2)
-    assert(store.workHistory('initiative:release').some(event => event.kind === 'legacy_initiative'))
-    const migrated = store.workRecords()
-    store.migrateWorkItems()
-    assert.deepEqual(store.workRecords(), migrated)
-    assert.throws(() => store.query("UPDATE initiative_items SET status='done' WHERE id='verify'", 'worker'), /historical archive/)
-    store.close()
-    store = new InitiativeStore(home, { isSessionKnown: () => true })
-    assert.equal(store.unifiedWork, true)
-    assert.deepEqual(store.workRecords(), migrated)
-    assert.throws(() => store.query("UPDATE initiatives SET goal='Different' WHERE id='release'", 'owner'), /historical archive/)
-  } finally { store.close() }
-}))
 
 test('short completion lookup never commits after cancellation or a concurrent Work change', async () => withTempWorkspace(async home => {
   const f = setup(home)

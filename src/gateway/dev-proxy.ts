@@ -115,6 +115,16 @@ export function devProxyPlugin(target: string): GatewayPlugin {
         const resHeaders = new Headers(res.headers)
         resHeaders.delete('connection')
         resHeaders.delete('transfer-encoding')
+        // fetch decodes upstream compression. Do not label decoded bytes as gzip/br.
+        resHeaders.delete('content-encoding')
+        resHeaders.delete('content-length')
+        if (url.pathname === '/@vite/client' && res.ok) {
+          // Follow the authenticated gateway origin, including its dynamic Child port.
+          // Suppress Vite's direct-server fallback: it bypasses the device tunnel.
+          const source = (await res.text()).replace(/const hmrPort = [^;]+;/, 'const hmrPort = importMetaUrl.port;')
+          return new Response(source, { status: res.status, headers: resHeaders })
+        }
+
         return new Response(res.body, {
           status: res.status,
           statusText: res.statusText,

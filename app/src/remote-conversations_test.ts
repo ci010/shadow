@@ -174,7 +174,7 @@ test('remote selector and chat surfaces compile with accessible device selection
     assert.deepEqual(compiled.errors, [], file)
     for (const style of descriptor.styles) assert.deepEqual(compileStyle({ source: style.content, filename: file, id: 'remote-test', scoped: true }).errors, [])
     if (file === 'ChatTab.vue') {
-      assert.match(source, /v-if="!activeSessionId && installation.mode === 'main'"/)
+      assert.match(source, /v-if="\(installation.mode === 'main' \|\| installation.mainWorkspace === true\)"/)
       assert.match(source, /await draft.value.prepare\(controller.signal\)/)
       assert.match(source, /Remove local attachments before selecting a remote workspace/)
     }

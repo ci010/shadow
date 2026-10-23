@@ -18,6 +18,25 @@ Only the designated parent or independently created review session can submit a 
 
 `task({action:"read",sessionId})` inspects the durable record. Manual `set_reviewer/request_changes/run/close/cancel` actions are no longer exposed by the tool. The manager retains legacy lifecycle methods for compatibility tests and old records; managed workflows reject their mutation path.
 
+## Retrying a failed worker
+
+Read `task({action:"read",sessionId})`, inspect the failed execution and existing
+artifacts, then call `task({action:"retry",sessionId,expectedVersion:record.version})`.
+Only the original creator may retry a settled failed local task whose lifecycle
+is still `working`. Calls, A2A, cancellation, successful submissions, reviewer
+failures and blocked/budget decisions are not restarted by this command. A stale
+version or an active execution/report is rejected, including concurrent retries.
+
+Retry admits a new continuation turn in the **same session**, retaining history,
+assignment, role, inference settings, Work binding and review policy. It does not
+replay a failed HTTP request or tool batch. The continuation explicitly requires
+checking recorded results and artifacts before repeating actions with uncertain
+side effects; this is guidance, not an exactly-once guarantee for external tools.
+Failed worker workflow terminal/delivery flags are reset; submission revision and
+review budget are preserved. Subsequent completion must still pass normal review.
+Failure event IDs include the run ID so a later failed attempt is not suppressed
+as a duplicate of the previous failure. Restart alone never starts a retry.
+
 ## Delivery and continuation
 
 - Worker completion becomes an in-review submission. Agent mode does not send intermediate submissions or reviewer finals as parent success completions.

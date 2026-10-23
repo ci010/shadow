@@ -36,6 +36,7 @@ test('app and Project layout helpers describe canonical roots without creating d
   ]) assert.equal(workspacePath(home, entry!), resolve(home, expected!))
   assert.equal(projectStoragePath(home, '__proto__'), join(home, '__proto__'))
   assert.equal(projectStoragePath(home, 'constructor'), join(home, 'constructor'))
+  assert.equal(projectStoragePath(home, 'projects', 'old.md'), join(home, 'projects', 'old.md'))
   await assert.rejects(readFile(join(home, 'config', 'SOUL.md')), { code: 'ENOENT' })
 })
 
@@ -60,6 +61,7 @@ test('historical absolute paths resolve only within the migrated managed Home an
     join(home, 'workdirs', 'web_chat-123', 'uploads', 'photo.png'))
   assert.equal(resolveLegacyProjectPath(home, join(legacyHome, '.tmp', 'output.txt')), join(home, 'tmp', 'output.txt'))
   assert.equal(resolveLegacyProjectPath(home, join(legacyHome, 'memory', 'wiki.md')), join(home, 'memory', 'wiki.md'))
+  assert.equal(resolveLegacyProjectPath(home, join(legacyHome, 'projects', 'old.md')), join(home, 'state', 'legacy-initiatives', 'old.md'))
   assert.equal(resolveLegacyProjectPath(home, join(legacyHome, '..', 'config', 'bots.v1.json')),
     join(home, 'config', 'bots.v1.json'))
   const external = join(root, 'external', 'repo.txt')

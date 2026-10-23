@@ -1,4 +1,14 @@
-import type { Menu, MenuItemConstructorOptions } from 'electron'
+import type { Menu, MenuItemConstructorOptions, nativeImage } from 'electron'
+
+/** Tray images use logical points on macOS, not the app icon's raster dimensions. */
+export function createTrayImage(
+  path: string,
+  images: Pick<typeof nativeImage, 'createFromPath'>,
+  platform = process.platform,
+) {
+  if (platform !== 'darwin') return path
+  return images.createFromPath(path).resize({ width: 18, height: 18, quality: 'best' })
+}
 
 interface TrayTarget {
   setToolTip(text: string): void

@@ -14,7 +14,6 @@ export const githubDefinition = { objective: 'Deliver the requested correction',
 export async function createGitHubFixture(home: string) {
   const states = new Map<string, SessionState>(['worker', 'manager', 'web:orchestrator'].map(id => [id, { sessionId: id, segmentIndex: 0, mode: 'session' }]))
   const works = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
-  works.migrateWorkItems()
   const alignment = new WorkAlignment(works, { state: id => states.get(id), evidence: async () => {},
     changed: async () => {}, fresh: async () => {}, successor: async () => 'worker' })
   const work = workRecordSchema.parse(await alignment.execute({ kind: 'session', sessionId: 'worker' }, 'create', undefined, undefined,

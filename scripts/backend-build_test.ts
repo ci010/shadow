@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
@@ -9,6 +9,15 @@ import { buildBackend } from './backend-build.ts'
 import { backendEntries, compileBackend } from './backend-bundle.ts'
 
 async function fixture(root: string): Promise<void> {
+  if (process.platform === 'win32') {
+    const repository = fileURLToPath(new URL('..', import.meta.url))
+    const source = join(repository, 'integrations/agent-desktop')
+    const target = join(root, 'integrations/agent-desktop')
+    await mkdir(target, { recursive: true })
+    for (const path of [`artifacts/win32-${process.arch}`, 'LICENSE', 'NOTICE']) {
+      await cp(join(source, path), join(target, path), { recursive: true })
+    }
+  }
   await mkdir(join(root, 'src'), { recursive: true })
   await writeFile(join(root, 'package.json'), '{"type":"module"}')
   for (const entry of backendEntries.filter(name => name !== 'index')) {
@@ -134,6 +143,7 @@ test('built session routes and usage aggregates run with native Node', async () 
       const state = { sessionId: 'web:stats-fixture', projectId: 'fixture', segmentIndex: 0 };
       const usageManager = Object.create(SessionManager.prototype);
       Object.assign(usageManager, {
+        sessionStates: { [state.sessionId]: state },
         listHistoryStates: async () => [state],
         readSessionState: async id => id === state.sessionId ? state : undefined,
         deps: { projectId: 'fixture', store: { async *readSessionLog(id) {

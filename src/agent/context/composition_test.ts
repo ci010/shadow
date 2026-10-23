@@ -64,12 +64,12 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     assert.match(contentText(composed.at(-1)!.content), /Revision 2: current human-confirmed outcome/)
     const prompt = composed.map(message => contentText(message.content)).join('\n\n')
     const order = ['# Runtime', 'Execution Contract:', '# Initiative Context',
-      '# Current environment', '# Agent Guideline', '# Capability discovery', '# Historical reference', work]
+      '# Working context', '# Agent Guideline', '# Capability discovery', '# Historical reference', work]
       .map(text => prompt.indexOf(text))
     assert(order.every((position, index) => position >= 0 && (!index || position > order[index - 1])))
-    assert.equal(prompt.match(/\*\*Working directory\*\*:/g)?.length, 1)
+    assert.doesNotMatch(built.systemPrompt, /\*\*Working directory\*\*:/)
     assert.doesNotMatch(prompt, /Workspace root|Selected folder: none|Conventions \(always in effect\)/)
-    assert.match(prompt, /Project data directory \(Home; not the working directory\)/)
+    assert.match(prompt, /Project Home is internal application data/)
     assert.match(prompt, /Historical context is not fresh human authorization/)
     assert.doesNotMatch(prompt, /# Task context|Topic brief|no explicit topic brief/)
     assert.match(prompt, /source, scope, version and explicit supersession, not timestamp alone/)

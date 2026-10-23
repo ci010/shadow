@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execFileSync, fork } from 'node:child_process'
 import { once } from 'node:events'
 import { createRequire } from 'node:module'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
@@ -34,7 +34,7 @@ import { directoryFingerprint } from './release-manifest.ts'
 // Relocate outside the repository: dependencies cannot resolve from development.
 test('relocated Vite backend preserves CLI, assets, WASM and isolated script entry', { timeout: 120_000 }, async () => {
   const repository = fileURLToPath(new URL('..', import.meta.url))
-  const root = await mkdtemp(join(tmpdir(), 'shadow-bundle-relocated-'))
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'shadow-bundle-relocated-'))
   try {
     const target = join(root, 'resources/backend')
     const prepared = join(root, 'prepared')
@@ -79,13 +79,6 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
     execFileSync(process.execPath, ['--input-type=module', '-e',
       `const backend = await import(${JSON.stringify(pathToFileURL(entry).href)}); if(typeof backend.runRootProcessEntry !== 'function') throw Error('missing CLI');`],
     { cwd: root, encoding: 'utf8', stdio: 'pipe' })
-    const data = join(root, 'synthetic-data')
-    await mkdir(join(data, 'config'), { recursive: true })
-    await mkdir(join(data, 'workspace.projects/projects/default/workspace'), { recursive: true })
-    await writeFile(join(data, 'config/bot.config.json'), JSON.stringify({ agent: { workspace: data } }))
-    await writeFile(join(data, 'workspace.projects/projects.v2.json'), JSON.stringify({ version: 2, projects: [{ id: 'default' }], folders: [] }))
-    const plan = execFileSync(process.execPath, [entry, 'data-migration', '--data-dir', data, '--plan'], { cwd: root, encoding: 'utf8', stdio: 'pipe' })
-    assert.match(plan, /"preliminary":true/)
     const electron: string = createRequire(new URL('../desktop/package.json', import.meta.url))('electron')
     const processor = join(root, 'processor')
     await mkdir(processor)
@@ -110,14 +103,9 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
         env: { ...process.env, NODE_OPTIONS: '', ELECTRON_RUN_AS_NODE: '1', ESBUILD_BINARY_PATH: '' },
       })
     }
-    const electronPlan = execFileSync(electron, [entry, 'data-migration', '--data-dir', data, '--plan'], {
-      cwd: root, encoding: 'utf8', stdio: 'pipe', env: { ...process.env, NODE_OPTIONS: '', ELECTRON_RUN_AS_NODE: '1' },
-    })
-    assert.match(electronPlan, /"preliminary":true/)
     execFileSync(process.execPath, [join(target, 'dist/src/a2a/mcp-cli.js'), '--help'], { cwd: root, stdio: 'pipe' })
     execFileSync(process.execPath, ['--import', pathToFileURL(join(target, 'dist/src/execution/network/proxy-preload.js')).href,
       '-e', ''], { cwd: root, stdio: 'pipe', env: { ...process.env, SHADOW_APP_NETWORK_PROXY: '', NODE_OPTIONS: '' } })
-    await assert.rejects(readFile(join(data, 'app.json')), { code: 'ENOENT' })
     const worker = new Worker(pathToFileURL(join(target, 'dist/src/utils/image-codec-worker.js')), {
       execArgv: [], workerData: { bytes: Uint8Array.from(png()), width: 1, height: 1 },
     })

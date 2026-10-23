@@ -17,7 +17,7 @@
     </template>
     <template #actions>
       <Teleport :to="mobile.actionsTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.actionsTarget.value">
-          <DesktopBrowserAccess v-if="isMain && desktopWebPairing" :api="desktopWebPairing" />
+          <DesktopBrowserAccess v-if="isMain && !installationContext.mainWorkspace && desktopWebPairing" :api="desktopWebPairing" />
           <MobileConnection v-if="mobileSession" :session="mobileSession" connected />
           <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">{{ t('Sign out') }}</button>
           <button v-if="browserNotifications" class="theme-toggle" :disabled="browserNotifications.requesting.value"
@@ -53,10 +53,10 @@
       </div>
       <ConnectionStatus :child-title="showChildRecovery ? recoveryTitle : undefined" :live-error="liveError"
         :notification-error="monitoringError || sounds.error.value"
-        @retry="livePool.retry()" @manage-node="router.push({ name: 'nodes' })" />
+        @retry="livePool.retry()" @manage-node="router.push({ name: 'settings', params: { section: 'nodes' } })" />
       <div
         class="route-content"
-        :class="{ 'chat-route': workspaceRoutes.includes(String(route.name)) }"
+        :class="{ 'chat-route': workspaceRoutes.includes(String(route.name)), 'settings-route': route.name === 'settings' }"
       >
       <router-view v-slot="{ Component, route: viewRoute }">
         <KeepAlive :key="resolvedBase" include="ProjectsWorkspace">
@@ -97,6 +97,7 @@ import IoHost from './components/io/IoHost.vue'
 import { createIoBridge, ioBridgeKey } from './io/bridge.ts'
 import { projectChatLocation } from './projects.ts'
 import { projectBase } from './api-url.ts'
+import { watchFrontendLogScope } from './frontend-log-scope.ts'
 import { useLiveClientPool } from './composables/useLiveClient.ts'
 import type { LiveStatus } from './live-client.ts'
 import { useAppNotificationSounds } from './composables/useAppNotificationSounds.ts'
@@ -117,7 +118,7 @@ watch(() => route.fullPath, (path) => {
 const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
 const { sounds, monitoringError, toggle: toggleSounds, browserNotifications } = useAppNotificationSounds(() => ({
-  base: installationContext.value.apiBase, allowed: installationContext.value.uiScopes.includes('chat:read'),
+  base: installationContext.value.apiBase, allowed: true,
 }))
 const livePool = useLiveClientPool()
 const liveStatuses = ref<readonly LiveStatus[]>([])
@@ -137,22 +138,15 @@ const resolvedBase = computed(() => installationContext.value.apiBase)
 // Dev diagnostics follow only an explicit visible Project; never infer ownership
 // from a log payload or silently attribute host/unscoped logs to a default Project.
 if (import.meta.env.DEV) {
-  const stopWatch = watch(() => typeof route.params.projectId === 'string'
-    ? projectBase(resolvedBase.value, route.params.projectId) : undefined, (base, _old, onCleanup) => {
-    const controller = new AbortController()
-    let stop = () => {}
-    onCleanup(() => { controller.abort(); stop() })
-    if (base) void import('./frontend-log.ts').then(async module => {
-      if (!controller.signal.aborted) stop = await module.startFrontendLog(base, controller.signal)
-    }).catch(() => {})
-  }, { immediate: true })
+  const stopWatch = watchFrontendLogScope(() => typeof route.params.projectId === 'string'
+    ? projectBase(resolvedBase.value, route.params.projectId) : undefined)
   onUnmounted(stopWatch)
   if (import.meta.hot) import.meta.hot.dispose(stopWatch)
 }
 const contentBase = computed(() => typeof route.params.projectId === 'string' && !workspaceRoutes.includes(String(route.name))
   ? projectBase(resolvedBase.value, route.params.projectId) : resolvedBase.value)
 const showChildRecovery = computed(() =>
-  installationContext.value.mode === 'child' &&
+  installationContext.value.mode === 'child' && !installationContext.value.mainWorkspace &&
   installationContext.value.mainConnection !== 'connected'
 )
 const recoveryTitle = computed(() =>
@@ -164,12 +158,12 @@ const recoveryTitle = computed(() =>
 const logCount = ref(0)
 
 // ── Model selector ──────────────────────────────────────────
-const isMain = computed(() => installationContext.value.mode === 'main' || installationContext.value.mode === 'client')
+const isMain = computed(() => installationContext.value.mainWorkspace === true || installationContext.value.mode === 'main' || installationContext.value.mode === 'client' || installationContext.value.mainConnection === 'connected')
 const providerStatus = ref<ProviderSetupStatus | null>(null)
 const checkingProvider = ref(true)
 const providerError = ref('')
 provideProviderReadiness({ status: providerStatus, checking: checkingProvider, error: providerError, enabled: isMain,
-  canConfigure: computed(() => isMain.value && installationContext.value.uiScopes.includes('main:admin')),
+  canConfigure: isMain,
   retry: () => { void refreshProvider(true) },
 })
 const providerViewProps = computed(() => ({
@@ -177,7 +171,7 @@ const providerViewProps = computed(() => ({
   status: providerStatus.value,
   error: providerError.value,
   checking: checkingProvider.value,
-  available: isMain.value && installationContext.value.uiScopes.includes('main:admin'),
+  available: isMain.value,
 }))
 const providerViewEvents = {
   configured: providerConfigured,
@@ -284,6 +278,7 @@ onUnmounted(() => {
 }
 .route-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 .route-content.chat-route { display: flex; padding: 0; overflow: hidden; }
+.route-content.settings-route { scrollbar-gutter: stable; }
 .setup-content-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 
 .tab-nav {

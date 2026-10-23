@@ -15,7 +15,7 @@
         @opening="$emit('coordinator-opening')" @open="$emit('select', $event)" />
     </template>
     <template #project-actions>
-      <button v-if="canManageKnowledge" class="project-settings" :aria-label="t('{name} knowledge', { name: project.name })" :title="t('{name} knowledge', { name: project.name })"
+      <button class="project-settings" :aria-label="t('{name} knowledge', { name: project.name })" :title="t('{name} knowledge', { name: project.name })"
         @click="$emit('knowledge')">
         <span class="i-lucide-book-open w-3.5 h-3.5" aria-hidden="true" />
       </button>
@@ -46,7 +46,6 @@ import type { ProjectLiveLease } from '../project-live-state.ts'
 import { HomeTreeCacheKey } from '../home-tree-cache.ts'
 import { createBotSettingsClient } from '../bot-settings.ts'
 import type { SidebarBot } from '../bot-sidebar.ts'
-import { useInstallationContext } from '../composables/useInstallationContext.ts'
 
 const props = withDefaults(defineProps<{
   apiBase: string; project: ProjectRecord; selectedProjectId: string; selectedSessionId: string
@@ -59,8 +58,6 @@ const props = withDefaults(defineProps<{
 }>(), { dashboardSelected: true })
 const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; knowledge: []; 'session-automation': [sessionId: string, jobId?: string]; 'coordinator-opening': [] }>()
 const scope = computed(() => projectBase(props.apiBase, props.project.id))
-const installation = useInstallationContext()
-const canManageKnowledge = computed(() => installation.value.uiScopes.includes('main:admin'))
 const liveState = useProjectLiveState()
 const homeCache = inject(HomeTreeCacheKey, undefined)
 const sessions = ref<SidebarSession[]>([])

@@ -11,8 +11,7 @@
         <button type="button" :disabled="loading || !!deletion" @click="refresh">{{ t('Refresh') }}</button>
       </div>
     </header>
-    <p v-if="!canManage" role="alert">{{ t('Knowledge management requires Main administrator access.') }}</p>
-    <template v-else>
+    <template>
       <KnowledgeMaintenance v-show="!selectedId" :api-base="apiBase" :project-id="projectId" :revision="maintenanceRevision" :active="active"
         @select="select" @changed="refresh" />
       <p v-if="loading" role="status">{{ t('Loading knowledge...') }}</p>
@@ -94,7 +93,6 @@ import { enumLabel } from '../display-labels.ts'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { createKnowledgeClient, filterKnowledge, knowledgeRelations, type KnowledgeCatalog, type KnowledgeDetail, type KnowledgeEntry, type KnowledgeKind } from '../knowledge.ts'
 import { renderKnowledgeMarkdown } from '../knowledge-markdown.ts'
 import KnowledgeGraph from './KnowledgeGraph.vue'
@@ -105,8 +103,6 @@ const props = withDefaults(defineProps<{ apiBase: string; projectId: string; ent
 const emit = defineEmits<{ select: [id: string]; home: []; catalog: [entries: KnowledgeEntry[]] }>()
 const router = useRouter()
 const route = useRoute()
-const context = useInstallationContext()
-const canManage = computed(() => context.value.uiScopes.includes('main:admin'))
 const selectedId = ref(props.entryId ?? '')
 const scroll = ref<HTMLDivElement>()
 const previewElement = ref<HTMLDivElement>()
@@ -197,7 +193,7 @@ async function loadDetail() {
   detail.value = detailCache.get(selectedId.value)
   detailError.value = ''
   detailLoading.value = false
-  if (!props.active || !canManage.value || !selectedId.value || !entriesById.value.has(selectedId.value)) return
+  if (!props.active || !selectedId.value || !entriesById.value.has(selectedId.value)) return
   if (detail.value) return
   const request = new AbortController()
   detailRequest = request
@@ -219,7 +215,7 @@ async function refresh() {
   loading.value = false
   const request = new AbortController()
   catalogRequest = request
-  if (!props.active || !canManage.value) return
+  if (!props.active) return
   loading.value = true
   error.value = ''
   try {
@@ -255,9 +251,9 @@ watch(selectedId, (id, previous) => {
 })
 watch(detail, () => restoreScroll(selectedId.value), { flush: 'post' })
 watch(() => props.entryId, id => { selectedId.value = id ?? '' })
-watch(() => [props.apiBase, canManage.value, props.active] as const, ([base, allowed, active], previous) => {
+watch(() => [props.apiBase, props.active] as const, ([base, active], previous) => {
   deletion.value = undefined
-  if (base !== previous?.[0] || allowed !== previous?.[1]) {
+  if (base !== previous?.[0]) {
     detailCache.clear()
     scrollPositions.clear()
     catalog.value = { entries: [], links: [] }

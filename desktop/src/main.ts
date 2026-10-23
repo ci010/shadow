@@ -33,10 +33,7 @@ import {
   launchProfilePath,
 } from './bootstrap/launch-profile.js'
 import { AtomicMainAgentConfigInitializer } from './bootstrap/main-agent-config.js'
-import { DataLayoutController } from './bootstrap/data-layout-controller.js'
-import { createDataLayoutCommand } from './bootstrap/data-layout-command.js'
-import { detectDataLayout } from './bootstrap/data-layout-startup.js'
-import { BootstrapCoordinator } from './bootstrap/coordinator.js'
+import { type EnsureRuntimeResult, BootstrapCoordinator } from './bootstrap/coordinator.js'
 import { assertRoleDataIsolation } from './bootstrap/role-data-isolation.js'
 import { DesktopRoleProfiles, parseRoleSwitchArguments } from './bootstrap/role-profiles.js'
 import { RuntimeStartup } from './bootstrap/runtime-startup.js'
@@ -57,7 +54,9 @@ import {
 import {
   type RendererTarget,
   resolveRendererTarget,
+  rendererTargetController,
 } from './renderer-target.js'
+import { RendererReadiness } from './renderer-readiness.js'
 import { isAllowedExternalUrl } from './security-policy.js'
 import { installNavigationPolicy } from './navigation.js'
 import {
@@ -68,7 +67,7 @@ import { installRuntimeRequestAuthorization, type RuntimeAuthorization } from '.
 import { parseWizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { desktopIconPath, desktopTrayIconPath, framelessWindowOptions, installWindowControls, MAIN_WINDOW_MAX_LISTENERS, removeNativeMenus } from './window-controls.js'
-import { installTrayMenu } from './tray.js'
+import { createTrayImage, installTrayMenu } from './tray.js'
 import { createDevelopmentRestart } from './development-restart.js'
 import { installBackgroundWindow } from './background-window.js'
 import { installFolderDirectoryPicker } from './folder-directories.js'
@@ -126,22 +125,12 @@ export function enforceNavigationPolicy(
   })
 }
 
-export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: RuntimeStartup): void {
+export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: RuntimeStartup, prepareRenderer: (result: EnsureRuntimeResult, retry?: boolean) => Promise<EnsureRuntimeResult> = async result => result): void {
   const assertBootstrapSender = (event: Electron.IpcMainInvokeEvent): void => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
       throw new Error('Bootstrap commands require the desktop main frame')
     }
   }
-  ipcMain.handle(IPC_CHANNELS.dataLayoutStatus, (event, ...args: unknown[]) => {
-    assertBootstrapSender(event)
-    parseNoArguments(args)
-    return coordinator.dataLayoutStatus()
-  })
-  ipcMain.handle(IPC_CHANNELS.upgradeDataLayout, (event, ...args: unknown[]) => {
-    assertBootstrapSender(event)
-    parseNoArguments(args)
-    return coordinator.upgradeDataLayout()
-  })
   ipcMain.handle(IPC_CHANNELS.childSetup, (event, ...args: unknown[]) => {
     assertBootstrapSender(event)
     parseNoArguments(args)
@@ -191,13 +180,13 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator, startup: 
     IPC_CHANNELS.ensureRuntime,
     (event, ...rawArguments: unknown[]) => {
       assertBootstrapSender(event)
-      return handleEnsureRuntime({ ensureRuntime: () => startup.current() }, rawArguments)
+      return handleEnsureRuntime({ ensureRuntime: async () => prepareRenderer(await startup.current()) }, rawArguments)
     },
   )
   ipcMain.handle(IPC_CHANNELS.retryRuntime, (event, ...args: unknown[]) => {
     assertBootstrapSender(event)
     parseNoArguments(args)
-    return startup.start()
+    return startup.start().then(result => prepareRenderer(result, true))
   })
   ipcMain.handle(
     IPC_CHANNELS.getMainDirectorySelection,
@@ -309,6 +298,7 @@ async function start(): Promise<void> {
   let taskbarActivity: TaskbarActivity | undefined
   let microApps: DesktopMicroApps | undefined
   let activityAuthorization: RuntimeAuthorization | null = null
+  let rendererAuthorization: RuntimeAuthorization | null = null
   const sendRuntimeEndpoint = (message: RuntimeEndpointMessage): void => {
     if (process.env.SHADOW_DESKTOP_DEV_IPC === '1' && process.connected) {
       process.send?.(message, () => {})
@@ -338,6 +328,7 @@ async function start(): Promise<void> {
     packaged: app.isPackaged,
   }, (authorization): void => {
     onAuthorizationChanged(authorization)
+    rendererAuthorization = authorization
     const status = runtimeHost.status
     activityAuthorization = status.phase === 'ready' && status.role === 'main' ? authorization : null
     taskbarActivity?.setAuthorization(activityAuthorization)
@@ -348,10 +339,6 @@ async function start(): Promise<void> {
     void publication.setAuthorization(activityAuthorization)
   }, createUtilityProcessSpawn((entry, args, options) => utilityProcess.fork(entry, args, options), undefined, restart))
   const childPairingCommand = createBackendPairingCommand({
-    executablePath: process.execPath, appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath, userDataPath: roleUserDataPath, packaged: app.isPackaged,
-  })
-  const dataLayoutCommand = createDataLayoutCommand({
     executablePath: process.execPath, appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath, userDataPath: roleUserDataPath, packaged: app.isPackaged,
   })
@@ -369,7 +356,6 @@ async function start(): Promise<void> {
     ),
     new FileChildBootstrap(configPath, childPairingCommand, undefined, undefined,
       async paths => assertRoleDataIsolation(paths, await otherRoleConfigPath('main'), 'main')),
-    new DataLayoutController(detectDataLayout, dataLayoutCommand),
     async paths => assertRoleDataIsolation(paths, await otherRoleConfigPath('child'), 'child'),
   )
   if (roles.explicit) {
@@ -387,13 +373,12 @@ async function start(): Promise<void> {
     stop: async () => {
       try {
         await microApps?.shutdown()
-        await Promise.all([runtimeHost.stop(), childPairingCommand.stop(), dataLayoutCommand.stop()])
+        await Promise.all([runtimeHost.stop(), childPairingCommand.stop()])
       } finally { await publication.close() }
     },
   })
   const startup = new RuntimeStartup(() => coordinator.ensureRuntime(), () => runtimeHost.status)
   if ((await coordinator.load()).step === 'complete') void startup.start()
-  registerIpcHandlers(coordinator, startup)
   ipcMain.handle(IPC_CHANNELS.switchRole, async (event, ...args: unknown[]) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
       throw new Error('Role switching requires the desktop main frame')
@@ -403,7 +388,7 @@ async function start(): Promise<void> {
     await startup.current() // A pending startup must finish before the stop boundary.
     await coordinator.switchRole(targetRole, async current => {
       await microApps?.shutdown()
-      await Promise.all([runtimeHost.stop(), childPairingCommand.stop(), dataLayoutCommand.stop()])
+      await Promise.all([runtimeHost.stop(), childPairingCommand.stop()])
       await roles.select(targetRole, current)
     })
     // User initiated only. The normal quit lifecycle completes before another runtime starts.
@@ -414,13 +399,61 @@ async function start(): Promise<void> {
     return { restart: app.isPackaged || !!restart }
   })
   const developmentUrl = process.env.VITE_DEV_URL?.trim()
-  const target = resolveRendererTarget({
+  const localTarget = resolveRendererTarget({
     rendererDistPath: app.isPackaged
       ? join(process.resourcesPath, 'app-dist')
       : join(app.getAppPath(), '..', 'app', 'dist'),
     ...(developmentUrl ? { developmentUrl } : {}),
   })
+  const renderer = rendererTargetController(localTarget)
+  const target = renderer.target
+  const childRendererReadiness = new RendererReadiness(() => restoreLocalRenderer())
+  registerIpcHandlers(coordinator, startup, async (result, retry) => {
+    if (!result.ok || result.context.mode !== 'child' || !mainWindow) return result
+    if (retry) childRendererReadiness.retry()
+    if (childRendererReadiness.failed) return { ok: false, code: 'runtime-unavailable' }
+    const remoteTarget = resolveRendererTarget({ rendererDistPath: '', developmentUrl: result.context.apiBase })
+    if (remoteTarget.kind !== 'url') return result
+    if (mainWindow.webContents.getURL().startsWith(`${remoteTarget.origin}/`)) { childRendererReadiness.ready(); return result }
+    // Probe before leaving local recovery. The token never enters URLs or renderer JavaScript.
+    if (!rendererAuthorization || rendererAuthorization.apiBase !== result.context.apiBase) return { ok: false, code: 'runtime-unavailable' }
+    try {
+      const response = await fetch(remoteTarget.url, {
+        headers: { Authorization: `Bearer ${rendererAuthorization.launchToken}` },
+        signal: AbortSignal.timeout(15000), redirect: 'error',
+      })
+      await response.body?.cancel()
+      if (!response.ok || !response.headers.get('content-type')?.includes('text/html')) return { ok: false, code: 'runtime-unavailable' }
+    } catch { return { ok: false, code: 'runtime-unavailable' } }
+    renderer.select(remoteTarget)
+    setTimeout(() => {
+      void mainWindow?.loadURL(remoteTarget.url).catch(() => restoreLocalRenderer())
+    }, 0)
+    return result
+  })
   mainWindow = createMainWindow(target, !initialApp, roleUserDataPath)
+  const restoreLocalRenderer = (): void => {
+    if (!mainWindow || target.origin === localTarget.origin) return
+    childRendererReadiness.fail()
+    renderer.select(localTarget)
+    void (localTarget.kind === 'url' ? mainWindow.loadURL(localTarget.url) : mainWindow.loadFile(localTarget.filePath))
+      .catch(() => console.error('[desktop] Local recovery renderer could not be loaded.'))
+  }
+  // A document 200 is not readiness: entry scripts may still fail. The remote
+  // renderer must reach bootstrap.ensureRuntime, otherwise restore local recovery.
+  mainWindow.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => {
+    if (isMainFrame && !inPlace && target.origin !== localTarget.origin) {
+      childRendererReadiness.wait()
+    }
+  })
+  mainWindow.once('closed', () => childRendererReadiness.ready())
+  mainWindow.webContents.on('did-navigate', (_event, _url, status) => {
+    if (status >= 400) restoreLocalRenderer()
+  })
+  mainWindow.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
+    if (isMainFrame && code !== -3) restoreLocalRenderer() // ERR_ABORTED is an intentional replacement.
+  })
+
   installTaskNotifications(ipcMain, mainWindow, target, {
     supported: () => Notification.isSupported(),
     create: message => new Notification({ ...message, icon: desktopIconPath(), silent: true }),
@@ -449,7 +482,7 @@ async function start(): Promise<void> {
     if (!runtime.ok || !activityAuthorization) throw new Error('Local Main is unavailable')
     await microApps!.open(identity)
   }
-  mainTray = new Tray(desktopTrayIconPath(app.isPackaged))
+  mainTray = new Tray(createTrayImage(desktopTrayIconPath(app.isPackaged), nativeImage))
   const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit(), restart, !app.isPackaged)
   const disposeBackground = installBackgroundWindow(app, mainWindow)
   app.once('will-quit', () => {

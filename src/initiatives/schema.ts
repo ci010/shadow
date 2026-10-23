@@ -125,9 +125,6 @@ CREATE TABLE IF NOT EXISTS initiative_entries (
  kind TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS initiative_entries_parent ON initiative_entries(initiative_id, created_at);
-CREATE TABLE IF NOT EXISTS initiative_legacy_imports (
- slug TEXT PRIMARY KEY REFERENCES initiatives(id), source_hash TEXT NOT NULL
-) STRICT;
 CREATE VIEW IF NOT EXISTS initiative_ready_items AS
  SELECT i.* FROM initiative_items i JOIN initiatives p ON p.id=i.initiative_id
  WHERE p.status='active' AND i.status IN ('pending','in_progress') AND NOT EXISTS (

@@ -1,3 +1,4 @@
+import { childWorkspacePlugin } from './child-workspace.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -142,6 +143,16 @@ export async function startProductionChildRuntime(
   const localControl = options.localControl
     ? new ChildLocalControlService({
       ...options.localControl,
+      workspace: childWorkspacePlugin({
+        endpoint: config.mainEndpoint,
+        proof: async (signal, path) => {
+          const credential = await resolveDeviceCredentialForConnect(credentialProvider, reference,
+            { endpoint: config.mainEndpoint, localNodeId: config.localNodeId, signal })
+          return requestDeviceChallengeProtocol(config.mainEndpoint, {
+            deviceId: reference.deviceId, nodeId: reference.nodeId, credentialId: reference.credentialId,
+          }, credential.proof, options.fetchChallenge, signal, path)
+        },
+      }),
       requestShutdown: () => runtime?.shutdown(),
       nodeInventory: () => childLocalNodeInventory(config, capabilities(), '0.1.0', connection === 'connected' ? 'connected' : 'offline'),
       childStatus: () => ({

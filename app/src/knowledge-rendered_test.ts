@@ -376,7 +376,7 @@ test('closing a Knowledge tab aborts pending reads and never sends deletion', as
   assert(calls.every(call => !call.method || call.method === 'GET'))
 })
 
-test('knowledge tab isolates late responses on project changes and denies unprivileged browsing', async t => {
+test('knowledge tab isolates late responses on project changes without a retired scope gate', async t => {
   const requests: Array<{ signal?: AbortSignal | null; finish: (value: unknown) => void }> = []
   t.mock.method(globalThis, 'fetch', (_url: URL, init: RequestInit) => new Promise<Response>(resolve => {
     requests.push({ signal: init.signal, finish: value => resolve(Response.json(value)) })
@@ -394,7 +394,8 @@ test('knowledge tab isolates late responses on project changes and denies unpriv
   assert.match(view.text(), /Node skill/)
   view.scope.value = { uiScopes: [] }
   await settle()
-  assert.match(view.text(), /requires Main administrator/)
+  assert.doesNotMatch(view.text(), /requires Main administrator/)
+  assert.match(view.text(), /Node skill/)
   assert.equal(requests.length, 2)
 })
 

@@ -13,19 +13,26 @@ export type ChallengeFetch = (
 
 export class DeviceApprovalUnavailableError extends Error {}
 
+export class DeviceChallengeRequestError extends Error {
+  constructor(readonly status: number) {
+    super(`Main challenge request failed with status ${status}`)
+  }
+}
+
 export async function requestDeviceChallengeProtocol(
   endpoint: string,
   authentication: DeviceAuthenticationV1,
   proof: DeviceCredentialProof,
   fetchChallenge: ChallengeFetch = fetch,
   signal?: AbortSignal,
+  challengePath = '/cluster/v1/challenges',
 ): Promise<string> {
   const url = new URL(endpoint)
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new TypeError('Main endpoint must use http or https')
   }
   const basePath = url.pathname.replace(/\/+$/, '')
-  url.pathname = `${basePath}/cluster/v1/challenges`
+  url.pathname = `${basePath}${challengePath}`
   url.search = ''
   url.hash = ''
   const response = await fetchChallenge(url, {
@@ -39,9 +46,7 @@ export async function requestDeviceChallengeProtocol(
       const body = await response.json().catch(() => null)
       if (body?.error === 'credential_not_available') throw new DeviceApprovalUnavailableError('Main approval is unavailable for this credential')
     }
-    throw new Error(
-      `Main challenge request failed with status ${response.status}`,
-    )
+    throw new DeviceChallengeRequestError(response.status)
   }
   const challenge = parseChallenge(await response.json())
   if (

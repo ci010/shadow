@@ -23,6 +23,7 @@ import type { SessionState } from './session-store.ts'
 import { isRuntimeContextEvent } from './runtime-context-event.ts'
 
 class SwitchingSession extends BaseSession {
+  input() { return this.appendMessages({ model: 'test', temperature: 0, contextWindow: 100000 }, { role: 'user', content: 'Actual user' }) }
   run() {
     const signal = new AbortController().signal
     const ctx: ExecutionContext = { projectId: 'test-project', sessionId: this.id, physicalSessionId: this.physicalSessionId,
@@ -67,7 +68,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const bus = new Bus(), changes: string[] = []
       bus.on('session.changed', e => { changes.push(e.sessionId) })
       const base = new Tools(home)
-      base.register(new UseProjectTool({ projectId: 'test-project', folders, skills: () => 'indexed-skill', conventions: () => 'Project convention' }))
+      base.register(new UseProjectTool({ projectId: 'test-project', folders }))
       base.register(new ReadTool(home))
       base.register(new ExecTool(home, 10000, new CommandHandlerManager(), new ProcessManager(), defaultManagedShell(), {} as BackgroundTaskManager))
       const tools = new SessionTools(base, home)
@@ -89,12 +90,19 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       } }
       try {
         const session = new SwitchingSession(home, state.sessionId, state, [{ role: 'system', content: 'Unchanged system policy' }], provider, tools, bus, store, ref => folders.lookupWorkdir(ref) ?? { node: 'missing' })
+        await session.input()
+        assert(isRuntimeContextEvent(session.history[1]!))
+        assert.equal(session.history[2]?.content, 'Actual user')
+        await session.input()
+        assert.equal(session.history.filter(isRuntimeContextEvent).length, 1, 'Repeated input deduplicates initial snapshot')
         await session.run()
         const result = (id: string) => session.history.find(m => m.tool_call_id === id)?.content as string
-        assert.match(result('a'), /Instructions a/)
-        assert.match(result('a'), /Project convention/)
-        assert.match(result('a'), /indexed-skill/)
-        assert.match(result('a'), /supersedes the old default/)
+        assert.match(result('a'), /Working context committed/)
+        assert.doesNotMatch(result('a'), /Instructions a/)
+        assert(JSON.stringify(session.history).includes('Instructions a'))
+        assert.doesNotMatch(result('a'), /Project instructions|Discoverable skills|available_skills|Unchanged system policy/)
+        assert.match(state.workingContext!, /Selected-folder skills/)
+        assert.match(state.workingContext!, /supersedes the old default/)
         assert.equal(result('read-a'), 'a')
         assert.match(result('bad'), /Unknown/)
         assert.match(result('parallel'), /sole direct top-level/)
@@ -103,7 +111,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert(result('exec-b').includes(b.path))
         assert.equal(state.folderId, b.id)
         assert.deepEqual(changes, [state.sessionId, state.sessionId])
-        assert.equal(session.history.filter(isRuntimeContextEvent).length, 2)
+        assert.equal(session.history.filter(isRuntimeContextEvent).length, 3)
+        for (const id of ['a', 'b']) {
+          const index = session.history.findIndex(m => m.tool_call_id === id)
+          assert(isRuntimeContextEvent(session.history[index + 1]!))
+        }
         const restored = await store.getState(state.sessionId)
         assert.equal(restored?.folderId, b.id)
         assert.equal(restored?.workdir?.capabilityId, `local-project-v1:${b.id}`)
@@ -142,7 +154,7 @@ test('remote, unavailable and nested switch fail before committing', async () =>
     switchProjectFolder: async () => { throw new Error('must not commit') } } as unknown as ExecutionContext
   const remote = { path: 'C:\\DO-NOT-READ', identity: { version: 1 as const, rootId: 'a'.repeat(64), ancestorIds: [] }, id: 'remote', kind: 'remote' as const, name: 'remote', createdAt: '', projectId: 'p',
     workdir: { version: 1 as const, nodeId: 'child', capabilityId: 'repo', displayPathSnapshot: 'C:\\DO-NOT-READ' } }
-  const tool = new UseProjectTool({ projectId: 'p', folders: { list: () => [remote], requireAvailable: async () => remote, acquireAccess: () => () => {} }, skills: () => '', conventions: () => '' })
+  const tool = new UseProjectTool({ projectId: 'p', folders: { list: () => [remote], requireAvailable: async () => remote, acquireAccess: () => () => {} } })
   await assert.rejects(tool.execute({ folder: 'remote' }, context), /Remote folder switching is unavailable/)
   await assert.rejects(tool.execute({ folder: 'remote' }, { ...context, scriptInvocation: true }), /sole direct/)
   await assert.rejects(tool.execute({ folder: 'remote' }, { ...context, projectId: 'foreign' }), /mismatch/)
@@ -154,7 +166,7 @@ test('unavailable folder and unreadable root instructions never reach the commit
     const folders = new FolderRegistry(home); await folders.init()
     await mkdir(join(home, 'repo'))
     const folder = await folders.register(join(home, 'repo'))
-    const tool = new UseProjectTool({ projectId: 'p', folders, skills: () => '', conventions: () => '' })
+    const tool = new UseProjectTool({ projectId: 'p', folders })
     let commits = 0
     const ctx = { projectId: 'p', toolCallName: 'use_project', signal: new AbortController().signal,
       switchProjectFolder: async () => { commits++; return 'committed' } } as unknown as ExecutionContext

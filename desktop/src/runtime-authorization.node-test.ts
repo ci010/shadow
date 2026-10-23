@@ -143,3 +143,14 @@ test('embedded apps in trusted WebContents never inherit the host launch credent
     assert.equal(webRequest.request('http://127.0.0.1:43123/api', {}, 42, frame).Authorization, undefined)
   }
 })
+
+test('HMR uses the exact loopback HTTP authority, never leaking credentials to LAN or embedded sockets', () => {
+  const webRequest = new FakeWebRequest()
+  const update = installRuntimeRequestAuthorization({ webRequest }, details => details.webContentsId === 42)
+  update({ apiBase: 'http://127.0.0.1:43123', launchToken: 'child-private' })
+  assert.equal(webRequest.request('ws://127.0.0.1:43123/?token=hmr', {}, 42).Authorization, 'Bearer child-private')
+  for (const url of ['ws://192.168.1.10:43123/', 'ws://127.0.0.1:43124/', 'wss://127.0.0.1:43123/']) {
+    assert.equal(webRequest.request(url, {}, 42).Authorization, undefined)
+  }
+  assert.equal(webRequest.request('ws://127.0.0.1:43123/', {}, 42, { parent: {} }).Authorization, undefined)
+})

@@ -1,3 +1,4 @@
+import { prepareWorkingContext } from '../agent/context/working-context.ts'
 import { withRateLimitWaiting, type RateLimitWait } from '../providers/retry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
@@ -58,6 +59,7 @@ export abstract class BaseSession {
   protected usage: LLMResponseUsage | undefined
   protected responseContext: ResponseContext | undefined
   private messagePersistenceFailed = false
+  private boundedSystemTask = false
   private providerFailure?: ProviderFailureKind
   private providerWaiting?: RateLimitWait
   get rateLimitWait(): RateLimitWait | undefined { return this.providerWaiting }
@@ -127,6 +129,7 @@ export abstract class BaseSession {
     ...messages: ChatMessage[]
   ): Promise<void> {
     if (messages.length === 0) return
+    if (messages.some(message => message.role === 'user')) await this.ensureWorkingContext()
     const now = new Date().toISOString()
     const stampedMessages = messages.map(message => ({ ...message, timestamp: now }))
     this.messages.push(...stampedMessages)
@@ -229,6 +232,24 @@ export abstract class BaseSession {
     })
   }
 
+  /** Same host-owned task boundary used for Work-context publication below. */
+  private isBoundedSystemTask(channel: string): boolean {
+    return this.state.mode === 'task' && this.state.agentType === channel && channel === 'work-organizer'
+  }
+
+  /** Initialize before first user input; replay committed snapshots after interrupted publication. */
+  protected async ensureWorkingContext(admin = false): Promise<void> {
+    if (this.boundedSystemTask) return
+    if (this.state.workingContext === undefined) {
+      const workdir = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).workdir
+      const folder = this.state.folderId ? this.tools.workingContextFolder(this.state.folderId) : undefined
+      const content = await prepareWorkingContext(workdir, this.state.folderId, folder, undefined, admin)
+      await this.store.saveState(this.id, { ...this.state, workingContext: content })
+      this.state.workingContext = content
+    }
+    await this.recordContextEvent('working-context', this.state.workingContext)
+  }
+
   // ── Core LLM ↔ tool loop ───────────────────────────────────────────────
 
   protected async runLlmLoop(
@@ -237,6 +258,7 @@ export abstract class BaseSession {
     signal: AbortSignal,
     turnId: string = crypto.randomUUID(),
   ): Promise<string> {
+    this.boundedSystemTask = this.isBoundedSystemTask(executionContext.channel)
     const model = executionContext.model ?? llm.model
     const temperature = executionContext.temperature ?? llm.temperature
     const maxTokens = executionContext.maxTokens ?? llm.maxTokens
@@ -264,6 +286,7 @@ export abstract class BaseSession {
       }), { ...executionContext, recoveringToolCall: true }, llm, signal, transientResults)
     }
 
+    await this.ensureWorkingContext()
     for (let i = 0; budget.remaining > 0; i++) {
       // Resolve at inference boundaries, not by mutating any in-flight call's context.
       const current = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).workdir
@@ -276,7 +299,7 @@ export abstract class BaseSession {
           executor: this.remoteExecutor ?? failMissingRemoteExecutor(),
         } : undefined,
       }
-      if (this.state.workingContext !== undefined) await this.recordContextEvent('working-context', this.state.workingContext)
+      if (!this.boundedSystemTask && this.state.workingContext !== undefined) await this.recordContextEvent('working-context', this.state.workingContext)
       const toolDefs = this.tools.getDefinitions()
       signal.throwIfAborted()
 
@@ -286,9 +309,7 @@ export abstract class BaseSession {
         ? { ...this.responseContext, responseId: `${turnId}:${i}` } : undefined
       const workGuard = this.tools.getWorkGuard()
       executionContext = { ...executionContext, workStamps: workGuard?.snapshot(this.id) }
-      const boundedSystemTask = this.state.mode === 'task' &&
-        this.state.agentType === executionContext.channel &&
-        this.state.agentType === 'work-organizer'
+      const boundedSystemTask = this.isBoundedSystemTask(executionContext.channel)
       await this.recordContextEvent('work', boundedSystemTask ? '' : workGuard?.prompt(this.id, executionContext) ?? '')
       const durableMessages = modelMessages(this.messages, executionContext.channel === 'qq')
       const inferenceMessages = transientResults.size ? modelMessages(this.messages.map(message =>
@@ -540,15 +561,14 @@ export abstract class BaseSession {
               const next = { ...this.state, folderId: prepared.folderId, workdir: prepared.workdir }
               const resolved = resolveSessionLocations(this.workspace, next, undefined, this.workdirCapabilityLookup).workdir
               if (!resolved.available || resolved.locality !== 'local') throw new Error('Target folder execution unavailable; prior context retained.')
-              const previous = { folderId: this.state.folderId ?? null, cwd: executionContext.cwd ?? null }
-              const content = `Previous working context: ${JSON.stringify(previous)}\n\n${prepared.content}`
+              const content = prepared.content
               // The existing state store is the commit point. Recovery replays this
               // snapshot if interrupted before the result/context event is appended.
               await this.store.saveState(this.id, { ...next, workingContext: content })
               Object.assign(this.state, next, { workingContext: content })
               this.clearReadCache()
               this.bus.emit('session.changed', { sessionId: this.id })
-              return content
+              return `Working context committed: folder=${JSON.stringify(prepared.folderId)}. Canonical runtime-context-working-context snapshot follows this tool result before inference.`
             } : undefined,
             afterToolResultPublished: callback => {
               const callbacks = publishedCallbacks.get(tc.id) ?? []
@@ -619,6 +639,7 @@ export abstract class BaseSession {
     }
     const silent = input.kind === 'message' && input.policy === 'silent'
     const msg = inputContext(this.id, input)
+    this.boundedSystemTask = this.isBoundedSystemTask(msg.channel)
     const senderName = msg.senderName ?? msg.senderId
     const isGroup = !!msg.isGroup
     const queryId = crypto.randomUUID().replace(/-/g, '').slice(0, 12)
@@ -727,6 +748,7 @@ export abstract class BaseSession {
           tool_call_id: call.id,
           name: call.function.name,
         })))
+        await this.ensureWorkingContext(msg.admin === true)
         const message = await buildUserChatMessage(
           input, this.workspace, messageWorkdir,
         )

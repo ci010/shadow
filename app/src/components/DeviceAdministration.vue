@@ -78,6 +78,7 @@
     <div v-if="pending.length" class="pending-section">
       <h3>{{ t('Verify pending devices') }}</h3>
       <p>{{ t('Only approve a request you recognize. Approval is not a connection; wait for Connected in the device inventory.') }}</p>
+      <p>{{ t('An approved Child desktop can also operate this Main’s projects, sessions and application settings. Device removal revokes workspace access too. Approve only a desktop you trust with your Main workspace.') }}</p>
       <PendingDeviceApproval v-for="device in pending" :key="`${device.pendingId}:${device.deviceIdentityFingerprint}:${device.credentialId}`"
         :device="device" :disabled="!!action || !!loadError" :busy="action === device.pendingId" @approve="approveDevice" />
     </div>

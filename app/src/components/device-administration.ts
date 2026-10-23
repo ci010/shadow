@@ -46,8 +46,8 @@ export class DeviceAdministrationAccessError extends Error {
   }
 }
 
-export function canAdministerDevices(context: { mode: InstallationContextV1['mode']; uiScopes: readonly InstallationContextV1['uiScopes'][number][] }): boolean {
-  return context.mode === 'main' && context.uiScopes.includes('nodes:admin')
+export function canAdministerDevices(context: { mode: InstallationContextV1['mode'] }): boolean {
+  return context.mode === 'main'
 }
 
 export function isLocalDeviceAddress(address: string): boolean {
