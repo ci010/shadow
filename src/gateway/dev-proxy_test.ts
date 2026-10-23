@@ -73,3 +73,19 @@ test('dev proxy bridges text, binary, and HMR protocol using a native client', {
     })
   }
 })
+
+test('proxied Vite client follows the renderer loopback port and disables direct-server fallback', async t => {
+  const { gzipSync } = await import('node:zlib')
+  const upstream = createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/javascript', 'Content-Encoding': 'gzip' })
+    response.end(gzipSync('const importMetaUrl = new URL(import.meta.url); const hmrPort = null; if (!hmrPort) connectDirect();'))
+  })
+  upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening')
+  t.after(() => { upstream.closeAllConnections(); upstream.close() })
+  const app = new Hono()
+  devProxyPlugin(`http://127.0.0.1:${(upstream.address() as { port: number }).port}`)(app)
+  const result = await app.request('/@vite/client')
+  assert.equal(result.headers.get('content-encoding'), null)
+  assert.equal(result.headers.get('content-length'), null)
+  assert.match(await result.text(), /const hmrPort = importMetaUrl.port;/)
+})

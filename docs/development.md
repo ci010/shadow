@@ -56,6 +56,51 @@ CommonJS loaders and adjacent runtime files must retain their original layout.
 Build on the target platform; copying this output to another OS or architecture
 does not replace esbuild's native executable.
 
+### Child UI, loopback secure context, and hot reload
+
+After a paired desktop Child starts, Electron keeps the bundled/local renderer for
+setup and recovery, probes Main's UI through the authenticated Child gateway,
+and then loads that UI at **`http://127.0.0.1:<child-port>/`**. HTML, CSS, JavaScript,
+API traffic, and Vite HMR all traverse the Child's local gateway and its approved
+device connection to Main. The window does not navigate to Main's LAN address;
+no Main bearer token is handed to frontend JavaScript. Local launch authorization
+is attached by Electron only for the trusted main frame and exact Child authority
+(including its `ws:` HMR counterpart), not embedded frames or another port.
+Failed UI probes retain local recovery; failed remote document loads return to it.
+A remote page must reach the desktop bootstrap handshake within 20 seconds; an
+HTML-200 page with broken entry scripts returns to local recovery too. Retry is
+explicit after such a failure, rather than looping between renderers.
+Revoking the device also terminates its active HMR connection.
+
+For hot reload, run Main with `pnpm dev`; Main uses its local Vite instance, and
+the Child's Vite instance is used only for local setup/recovery. Vite binds to
+`127.0.0.1` by default, including the development launcher. Do not expose its
+unauthenticated port on the LAN: use the approved Main device endpoint instead.
+An explicit `VITE_DEV_HOST` override is still possible but is not needed for
+Child access. Proxied `/@vite/client` uses the renderer's own loopback port and
+does not fall back to a direct Vite-server socket. Vite's filesystem deny list
+also excludes local bot configuration and runtime `workspace/` trees.
+
+HTTP loopback is a potentially trustworthy origin in Chromium, so the Child
+retains a secure context without deploying a LAN HTTPS certificate for its
+renderer. This fixes the *origin prerequisite*, not every permission or device
+requirement: microphone/camera/screen APIs still depend on Electron's media
+permission policy, OS permissions and available devices; clipboard writes may
+require focus/user activation. The frontend checks secure-context/media support
+in `app/src/io/adapters.ts` and `audio-input.ts`; notifications also check
+`isSecureContext`. No `webSecurity` disablement or insecure-origin override is used.
+Opening Main's LAN HTTP URL directly in a browser is different and does not gain
+loopback secure-context privileges.
+
+Main/Child transport policy is unchanged: non-loopback HTTP still requires the
+existing explicit `allowInsecureLocalTransport` opt-in; otherwise use HTTPS.
+Loopback rendering does **not** encrypt or relax the device transport. Automated
+tests cover remote resource bytes, loopback-only navigation/credential policy,
+authenticated bidirectional HMR text/binary traffic, and trust revocation using
+multiple local ports. They do not certify real two-device LAN networking,
+packaged Electron/OS media permissions, clipboard activation, or a physical
+microphone/camera/screen session; verify those on the target devices.
+
 ### Local download tool
 
 The optional `download` tool requires **aria2 1.37.0**. It is bundled in desktop

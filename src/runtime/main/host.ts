@@ -143,7 +143,7 @@ export async function startProjectHost(
     clientKey: request => clientAddresses.resolve(request),
   }))
   cleanup.push(() => mainCluster.closeNodeConnections())
-  deviceUi = new MainDeviceUi(mainCluster, clientAddresses, request => Promise.resolve(app.fetch(request)))
+  deviceUi = new MainDeviceUi(mainCluster, clientAddresses, request => Promise.resolve(app.fetch(request)), process.env.VITE_DEV_URL)
   cleanup.push(() => deviceUi?.close())
   const deviceNetwork = new MainDeviceNetwork({
     uiPlugin: deviceUi.plugin(),

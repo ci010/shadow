@@ -121,12 +121,12 @@ export default defineConfig({
   optimizeDeps: { include: highlightingDeps, exclude: ['emf-converter'] },
   build: { rollupOptions: { external: ['@napi-rs/canvas'] } },
   server: {
-    host: process.env.VITE_DEV_HOST ?? '0.0.0.0',
+    host: process.env.VITE_DEV_HOST ?? '127.0.0.1',
     port: 5273,
     strictPort: true,
     proxy: routing.proxy,
     fs: {
-      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.pin',
+      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.pin', '**/bot.config.json', '**/workspace/**',
         ...(process.env.SHADOW_BROWSER_PIN_FILE ? [normalizePath(resolve(process.env.SHADOW_BROWSER_PIN_FILE))] : [])],
     },
   },
