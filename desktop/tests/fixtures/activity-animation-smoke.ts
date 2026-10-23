@@ -32,6 +32,11 @@ async function main(){
  for(const stage of ['idle','waiting','waiting-for-call','inactive','completed','failed','cancelled','pending']){await change(stage,'completed',rail);assert.equal(await wave(),false,stage);assert.equal(await animation(),'none',stage)}
  for(const child of ['running','waiting','pending','completed','failed','cancelled']){
  await change('idle',child,rail);assert.equal(await wave(),child==='running',child);assert.equal(await animation(),child==='running'?'composer-breathe':'none',child)
+ if(child==='running'){
+ assert.equal(await run(`!!document.querySelector('.folder-session-row .activity-symbol .i-lucide-git-branch')`),true,'delegated work uses a fork on the left')
+ assert.equal(await run(`!!document.querySelector('.folder-session-row .activity-symbol .working-wave')`),false,'delegated left icon does not animate')
+ }
+ if(child==='waiting')assert.equal(await run(`!!document.querySelector('.folder-session-row .activity-symbol .i-lucide-message-circle-question')`),true,'waiting retains priority')
  }
  }
  await change('llm','running');assert.equal(await run(`document.querySelectorAll('.chat-working .working-wave').length`),1,'combined work has one wave');assert.equal(await run(`document.querySelectorAll('.chat-working').length`),1);

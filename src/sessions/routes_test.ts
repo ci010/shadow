@@ -498,3 +498,36 @@ test('Work status stays Project-bound and returns 404 for missing/deleted sessio
   assert.deepEqual(await response.json(), { records: [], effects: [] })
   assert.deepEqual(snapshots, ['web:existing'])
 })
+
+
+test('session graph marks enabled cron targets, not creators or ID patterns, and reflects changes', async () => {
+  const ids = ['web:target', 'web:creator', 'cron:lookalike', 'web:disabled', 'web:fresh-owner']
+  const manager = {
+    listHistorySessions: async () => ids.map(sessionId => ({ sessionId, segmentIndex: 0 })),
+    readSessionState: async (sessionId: string) => ({ sessionId, segmentIndex: 0 }),
+    getFirstUserMessage: async () => null,
+    getSessionInferenceDefaults: () => ({ model: 'test' }),
+    yields: new Map(), inputs: new Map(),
+  } as unknown as SessionManager
+  const jobs: import('../cron/service.ts').CronJob[] = []
+  const app = new Hono()
+  sessionsApiPlugin(manager, { cron: { listJobs: () => jobs } })(app)
+  const marked = async () => {
+    const response = await app.request('/api/sessions/graph')
+    assert.equal(response.status, 200)
+    return (await response.json()).sessions.filter((s: { hasCron: boolean }) => s.hasCron).map((s: { sessionId: string }) => s.sessionId)
+  }
+  assert.deepEqual(await marked(), [])
+  jobs.push(
+    { id: 'unrelated-id', schedule: 'every 1h', createdAt: '2026-01-01', target: { sessionId: 'web:target' }, originSessionId: 'web:creator' },
+    { id: 'disabled', schedule: 'every 1h', createdAt: '2026-01-01', target: { sessionId: 'web:disabled' }, enabled: false },
+    { id: 'fresh', schedule: 'every 1h', createdAt: '2026-01-01', session: 'fresh', originSessionId: 'web:fresh-owner' },
+  )
+  assert.deepEqual(await marked(), ['web:target'])
+  jobs[0].enabled = false
+  assert.deepEqual(await marked(), [])
+  jobs[1].enabled = true
+  assert.deepEqual(await marked(), ['web:disabled'])
+  jobs.splice(0)
+  assert.deepEqual(await marked(), [])
+})

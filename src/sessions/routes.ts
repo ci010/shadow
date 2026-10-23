@@ -18,6 +18,7 @@ import type { SessionRecovery } from './session-store.ts'
 import { FolderError } from '../folders/registry.ts'
 import { isLearningAutomationSession } from './session-purpose.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
+import { cronContextMode, type CronService } from '../cron/service.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { physicalSessionId, SessionIdentityError } from './session-identity.ts'
 import {
@@ -184,6 +185,7 @@ async function sessionFileBase(
 export function sessionsApiPlugin(
   sessions: SessionManager | undefined,
   options: {
+    cron?: Pick<CronService, 'listJobs'>
     authorizeContext?: (request: Request) => boolean | Promise<boolean>
     authorizeRename?: (request: Request) => boolean | Promise<boolean>
     authorizeOwnerDecision?: (request: Request) => boolean | Promise<boolean>
@@ -271,6 +273,11 @@ export function sessionsApiPlugin(
         timestamp: string | null
       }> = []
 
+      // Only enabled schedules delivering to this conversation count; fresh jobs
+      // belong to their runs, not the conversation that created them.
+      const cronTargets = new Set(options.cron?.listJobs()
+        .filter(job => job.enabled !== false && cronContextMode(job) === 'existing')
+        .map(job => job.target?.sessionId))
       const enrichedSessions = []
       for (const session of list) {
         const state = await sessions.readSessionState(session.sessionId)
@@ -304,6 +311,7 @@ export function sessionsApiPlugin(
           ...execution,
           automation,
           completed: state?.completed ?? false,
+          hasCron: cronTargets.has(session.sessionId),
           title: automation?.config?.source === 'system' ? automation.name : state?.name ?? state?.topic?.title ?? state?.generatedTitle ?? state?.chatName ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,

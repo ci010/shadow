@@ -1,7 +1,7 @@
 <template>
   <span class="session-activity" :class="[activity.kind, { working: activity.working, compact, 'icon-only': iconOnly, 'status-icons': statusIcons }]" :title="label" :aria-label="compact ? label : undefined" :role="compact ? 'img' : undefined">
     <span v-if="!hideSymbol && (iconOnly || stage || !delegatedLabel)" class="activity-symbol" aria-hidden="true">
-      <WorkingWave v-if="activity.kind === 'running'" />
+      <WorkingWave v-if="activity.kind === 'running' && !delegatedRunning" />
       <span v-else-if="compact || statusIcons" :class="statusIcon" class="status-icon" />
       <span v-else-if="activity.kind === 'waiting'" class="i-lucide-message-circle-question attention-icon" />
       <span v-else-if="activity.working && !isWaitingStage(activity.kind)" class="activity-spinner" />
@@ -25,17 +25,21 @@ import { computed } from 'vue'
 import { isWaitingStage, isWorkingStage, sessionActivity } from '../session-activity.ts'
 import { subagentActivityLabel, type SubagentActivity } from '../subagent-executions.ts'
 
-const props = defineProps<{ stage?: string | null; compact?: boolean; iconOnly?: boolean; statusIcons?: boolean; hideSymbol?: boolean; subagents?: SubagentActivity }>()
+const props = defineProps<{ stage?: string | null; hasCron?: boolean; compact?: boolean; iconOnly?: boolean; statusIcons?: boolean; hideSymbol?: boolean; subagents?: SubagentActivity }>()
 const activity = computed(() => sessionActivity(props.iconOnly && !isWorkingStage(props.stage)
   ? props.subagents?.waiting ? 'waiting' : props.subagents?.running ? 'running' : props.subagents?.pending ? 'pending' : props.stage
   : props.stage))
+const delegatedRunning = computed(() => props.iconOnly && !isWorkingStage(props.stage)
+  && activity.value.kind === 'running' && !!props.subagents?.running)
 const icons: Record<string, string> = {
   llm: 'i-lucide-brain', tool: 'i-lucide-wrench', waiting: 'i-lucide-message-circle-question',
   'waiting-for-call': 'i-lucide-git-branch', idle: 'i-lucide-circle-check', inactive: 'i-lucide-moon',
   pending: 'i-lucide-clock', running: 'i-lucide-play', completed: 'i-lucide-circle-check',
   failed: 'i-lucide-circle-alert', cancelled: 'i-lucide-circle-slash', unknown: 'i-lucide-circle-help',
 }
-const statusIcon = computed(() => icons[activity.value.kind])
+// Apply after delegated activity promotion; schedules replace only the idle moon.
+const statusIcon = computed(() => delegatedRunning.value ? 'i-lucide-git-branch' : props.hasCron && activity.value.kind === 'inactive'
+  ? 'i-lucide-alarm-clock' : icons[activity.value.kind])
 const delegatedLabel = computed(() => subagentActivityLabel(props.subagents))
 const subagentCount = computed(() => props.subagents ? props.subagents.running + props.subagents.waiting + props.subagents.pending : 0)
 const label = computed(() => [props.stage || !delegatedLabel.value ? activity.value.label : '', delegatedLabel.value].filter(Boolean).join(' · '))

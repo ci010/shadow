@@ -1412,7 +1412,7 @@ export async function createProjectRuntime(
       assertAccess: id => sessions.assertFolderAccess(id),
     }),
     topicsPlugin(topics, dependencies.authorize),
-    sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
+    sessionsApiPlugin(sessions, { cron: cronService, authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
     projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => organizationController.status(), (signal,mode) => organizationController.organize(signal,mode)),
     githubPlugin(github, dependencies.authorize),
     backgroundTasksPlugin(backgroundTasks, async id => !!await sessions.readSessionState(id)),

@@ -30,7 +30,7 @@
         </span>
       </template>
       <template #icon>
-        <SessionActivity :stage="sidebarSessionIconStage(activityStage(session), session.completed)" :subagents="delegatedActivity(session)" compact icon-only status-icons />
+        <SessionActivity :stage="sidebarSessionIconStage(activityStage(session), session.completed)" :has-cron="session.hasCron" :subagents="delegatedActivity(session)" compact icon-only status-icons />
       </template>
       <template #meta><WorkingWave v-if="isAnimating(session)" class="session-working-wave" /></template>
       <template #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
