@@ -49,8 +49,8 @@ async function main() {
     if (scope === '.mobile-global-navigation button' && !await execute(`!!${visible('.mobile-global-navigation .tab')}`)) {
       await click('.mobile-preferences-toggle')
     }
-    await wait(`[...document.querySelectorAll(${JSON.stringify(scope)})].some(el => window.__isVisible(el) && el.textContent.trim() === ${JSON.stringify(label)})`)
-    await execute(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(scope)})].find(el => window.__isVisible(el) && el.textContent.trim() === ${JSON.stringify(label)});
+    await wait(`[...document.querySelectorAll(${JSON.stringify(scope)})].some(el => window.__isVisible(el) && (el.querySelector('.tree-primary')?.textContent ?? el.textContent).trim() === ${JSON.stringify(label)})`)
+    await execute(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(scope)})].find(el => window.__isVisible(el) && (el.querySelector('.tree-primary')?.textContent ?? el.textContent).trim() === ${JSON.stringify(label)});
       if (!el) throw new Error('Missing visible button: ' + ${JSON.stringify(label)}); el.focus(); el.click(); })()`)
     await frame()
   }
@@ -260,9 +260,9 @@ async function main() {
     })()`)
     await execute(`{ const input = ${visible('textarea')}; input.value='Unsent investigation draft'; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
     await open()
-    await text('Nodes', '.mobile-global-navigation button')
+    await text('Settings', '.mobile-global-navigation button')
     await drawerClosed()
-    await wait(`window.__mobileFixture.router.currentRoute.value.name === 'nodes'`)
+    await wait(`window.__mobileFixture.router.currentRoute.value.name === 'settings'`)
     assert.equal(await execute(`!!${visible('.fixture-destination')}`), true)
     await open()
     await text('Chat', '.mobile-global-navigation button')
@@ -280,7 +280,9 @@ async function main() {
     await more('Session details')
     await wait(`!!${visible('[role="dialog"][aria-label="Session details"]')}`)
     assert.match(await execute(`${visible('.session-details')}.innerText`), /C:\\synthetic/)
+    await wait(`${visible('[role="dialog"][aria-label="Session details"]')}.contains(document.activeElement)`)
     await escape()
+    await wait(`!${visible('[role="dialog"][aria-label="Session details"]')}`)
     await more('Rename session')
     await wait(`!!${visible('input[aria-label="Session name"]')}`)
     assert.equal(await execute(`document.activeElement === ${visible('input[aria-label="Session name"]')}`), true,
@@ -288,6 +290,11 @@ async function main() {
     await execute(`{ const input = ${visible('input[aria-label="Session name"]')}; input.value='Renamed on phone'; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
     await text('Save', '.session-rename button')
     await wait(`${visible('.mobile-document-title')}?.textContent.includes('Renamed on phone')`)
+    // Saving the inline rename form returns to Session details; dismiss that
+    // dialog before exercising document shortcuts, which deliberately ignore overlays.
+    await wait(`${visible('[role="dialog"][aria-label="Session details"]')}.contains(document.activeElement)`)
+    await escape()
+    await wait(`!${visible('[role="dialog"][aria-label="Session details"]')}`)
     await execute(`window.__retainedComposer = ${visible('textarea')}; window.__retainedHistory = ${visible('.chat-messages')}; window.__retainedHistory.scrollTop = 60; window.__retainedScroll = window.__retainedHistory.scrollTop; void 0;`)
     await click('[aria-label="Switch view"]')
     assert.equal(await execute(`[...document.querySelectorAll('.mobile-view-row button')].filter(window.__isVisible).find(el => el.textContent.trim() === 'Diagnosis').getBoundingClientRect().height >= 44`), true)
@@ -356,7 +363,7 @@ async function main() {
     await key('w', true)
     assert.equal(await execute(`${visible('.diagnosis-tab button')}.getAttribute('aria-selected')`), 'true', 'The pinned diagnosis view cannot be closed')
     await key('Tab', true)
-    assert.equal(await execute(`${visible('.document-tabs [role="tab"]')}.getAttribute('aria-selected')`), 'true')
+    assert.equal(await execute(`${visible('.document-tabs [role="tab"]')}.getAttribute('aria-selected')`), 'true', JSON.stringify(await execute(`[...document.querySelectorAll('.document-tablist [role="tab"]')].filter(window.__isVisible).map(el => ({text:el.textContent.trim(),selected:el.getAttribute('aria-selected')}))`)))
     await key('Tab', true, true)
     assert.equal(await execute(`${visible('.diagnosis-tab button')}.getAttribute('aria-selected')`), 'true')
     await key('w', true, true)

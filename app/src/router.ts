@@ -2,7 +2,6 @@ import { createRouter, createWebHashHistory, createWebHistory, type RouteRecordR
 import LogsTab from './components/LogsTab.vue'
 import SpansTab from './components/SpansTab.vue'
 import ProjectsWorkspace from './components/ProjectsWorkspace.vue'
-import NodesView from './components/NodesView.vue'
 import SettingsView from './components/SettingsView.vue'
 
 const routes: RouteRecordRaw[] = [
@@ -16,10 +15,10 @@ const routes: RouteRecordRaw[] = [
   }) },
   { path: '/projects/:projectId/settings/:section(general|models|bots|agents|learning)?', name: 'project-settings', component: ProjectsWorkspace },
   { path: '/workspaces', redirect: '/nodes' },
-  { path: '/nodes', name: 'nodes', component: NodesView },
+  { path: '/nodes', name: 'nodes', redirect: '/settings/nodes' },
   { path: '/providers', name: 'providers', redirect: '/settings/providers' },
   { path: '/settings/channels', redirect: '/projects/default/settings/bots' },
-  { path: '/settings/:section(providers|models|web-search|proxy|sounds|language)?', name: 'settings', component: SettingsView },
+  { path: '/settings/:section(providers|models|web-search|proxy|sounds|language|nodes)?', name: 'settings', component: SettingsView },
   { path: '/approvals', redirect: '/nodes' },
   { path: '/agents/:agentName?', redirect: to => ({ name: 'agents', params: { projectId: 'default', agentName: to.params.agentName }, query: to.query, hash: to.hash }) },
   { path: '/projects/:projectId/agents/:agentName?', name: 'agents', redirect: to => ({ name: 'project-settings', params: { projectId: to.params.projectId, section: 'agents' }, query: { ...to.query, ...(to.params.agentName ? { agent: to.params.agentName } : {}) }, hash: to.hash }) },

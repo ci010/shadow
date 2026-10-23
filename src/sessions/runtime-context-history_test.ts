@@ -60,8 +60,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(requests.length, 3)
         assert.equal(effects, 2)
         const events = session.history.filter(isRuntimeContextEvent)
-        assert.equal(events.length, 2, 'Work A and Work B only; receipts do not trigger repeated work events')
-        assert.deepEqual(requests.map(messages => messages.filter(isRuntimeContextEvent).length), [1, 2, 2])
+        assert.equal(events.length, 3, 'Initial working context plus Work A and Work B; receipts do not repeat snapshots')
+        assert.deepEqual(requests.map(messages => messages.filter(isRuntimeContextEvent).length), [2, 3, 3])
         const saved = await Array.fromAsync(store.readSessionLog(physicalSessionId(state)))
         store.close?.()
         store = new Store(directory)
@@ -103,7 +103,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const persisted = (await Array.fromAsync(store.readSessionLog(physicalSessionId(state)))).filter(row => row.role) as unknown as ChatMessage[]
       const bus = new Bus()
       const provider: LLMProvider = { name: 'fixture', listModels: () => [], chat: async messages => {
-        assert.deepEqual(messages.filter(isRuntimeContextEvent), persisted)
+        assert.deepEqual(messages.filter(isRuntimeContextEvent).slice(0, 1), persisted)
+        assert.equal(messages.filter(isRuntimeContextEvent).length, 2)
         return { content: 'Substantive result for the conversation reader', toolCalls: [] }
       } }
       const session = new EventSession(workspace, state.sessionId, state, [
@@ -112,7 +113,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await session.run()
         const after = (await Array.fromAsync(store.readSessionLog(physicalSessionId(state)))).filter(row => row.name === 'runtime-context')
-        assert.deepEqual(after, persisted, 'Stored legacy record is preserved exactly, never cleared or replaced')
+        assert.deepEqual(after.slice(0, 1), persisted, 'Stored legacy record is preserved exactly, never cleared or replaced')
+        assert.equal(after.length, 2, 'Only initial working-context snapshot added')
       } finally { store.close?.(); bus.stopAll() }
     })
   })

@@ -56,6 +56,51 @@ CommonJS loaders and adjacent runtime files must retain their original layout.
 Build on the target platform; copying this output to another OS or architecture
 does not replace esbuild's native executable.
 
+### Child UI, loopback secure context, and hot reload
+
+After a paired desktop Child starts, Electron keeps the bundled/local renderer for
+setup and recovery, probes Main's UI through the authenticated Child gateway,
+and then loads that UI at **`http://127.0.0.1:<child-port>/`**. HTML, CSS, JavaScript,
+API traffic, and Vite HMR all traverse the Child's local gateway and its approved
+device connection to Main. The window does not navigate to Main's LAN address;
+no Main bearer token is handed to frontend JavaScript. Local launch authorization
+is attached by Electron only for the trusted main frame and exact Child authority
+(including its `ws:` HMR counterpart), not embedded frames or another port.
+Failed UI probes retain local recovery; failed remote document loads return to it.
+A remote page must reach the desktop bootstrap handshake within 20 seconds; an
+HTML-200 page with broken entry scripts returns to local recovery too. Retry is
+explicit after such a failure, rather than looping between renderers.
+Revoking the device also terminates its active HMR connection.
+
+For hot reload, run Main with `pnpm dev`; Main uses its local Vite instance, and
+the Child's Vite instance is used only for local setup/recovery. Vite binds to
+`127.0.0.1` by default, including the development launcher. Do not expose its
+unauthenticated port on the LAN: use the approved Main device endpoint instead.
+An explicit `VITE_DEV_HOST` override is still possible but is not needed for
+Child access. Proxied `/@vite/client` uses the renderer's own loopback port and
+does not fall back to a direct Vite-server socket. Vite's filesystem deny list
+also excludes local bot configuration and runtime `workspace/` trees.
+
+HTTP loopback is a potentially trustworthy origin in Chromium, so the Child
+retains a secure context without deploying a LAN HTTPS certificate for its
+renderer. This fixes the *origin prerequisite*, not every permission or device
+requirement: microphone/camera/screen APIs still depend on Electron's media
+permission policy, OS permissions and available devices; clipboard writes may
+require focus/user activation. The frontend checks secure-context/media support
+in `app/src/io/adapters.ts` and `audio-input.ts`; notifications also check
+`isSecureContext`. No `webSecurity` disablement or insecure-origin override is used.
+Opening Main's LAN HTTP URL directly in a browser is different and does not gain
+loopback secure-context privileges.
+
+Main/Child transport policy is unchanged: non-loopback HTTP still requires the
+existing explicit `allowInsecureLocalTransport` opt-in; otherwise use HTTPS.
+Loopback rendering does **not** encrypt or relax the device transport. Automated
+tests cover remote resource bytes, loopback-only navigation/credential policy,
+authenticated bidirectional HMR text/binary traffic, and trust revocation using
+multiple local ports. They do not certify real two-device LAN networking,
+packaged Electron/OS media permissions, clipboard activation, or a physical
+microphone/camera/screen session; verify those on the target devices.
+
 ### Local download tool
 
 The optional `download` tool requires **aria2 1.37.0**. It is bundled in desktop
@@ -117,14 +162,31 @@ this path, and production renderers do not install hooks. Restart the dev backen
 after updating backend code; reload the renderer after updating frontend code.
 No automatic restart is performed by this feature.
 
-The hook is installed only after an authenticated capability GET succeeds for an
-explicit Project in the visible route. It captures subsequent `console.log`,
-`info`, `warn`, `error`, `window.error` and `unhandledrejection`; not startup output,
+In a development renderer, the hook is installed synchronously for an explicit
+Project in the visible route, before its child components render. An authenticated
+capability GET gates transmission (not capture), so initial render warnings are
+buffered while it is pending. It captures `console.log`, `info`, `warn`, `error`,
+`window.error` and `unhandledrejection`; not output before the scoped App setup,
 DOM/user inputs or network payloads. It preserves the original console behavior.
-Route changes/unmount/HMR discard the local queue and restore hooks. An unscoped
-route has no capture. A client-generated tab ID is unverified; there is no session
-association. Global console events are associated with the visible route, not
+Capability/network failures and transient POST failures (429/5xx) retry on
+subsequent one-second flushes while there are queued events; queues remain bounded
+and delivery is best-effort, not exactly-once. Permanent invalid POST batches are
+dropped; POST 401/403/404 stops capture. Batches also respect the UTF-8 byte limit,
+not just the event/character limits. Capture continues during an in-flight request.
+A disabled/404 capability restores hooks without sending. Project or API-base
+changes, unmount and HMR discard the local queue, abort requests and restore hooks
+synchronously. An unscoped route has no capture. A client-generated tab ID is
+unverified; there is no session association. Global console events are associated with the visible route, not
 proven to originate in that Project (including background components).
+
+Transport uses `credentials: 'same-origin'`, matching normal API requests: web
+cookies stay on same-origin deployments, while cross-port Electron development
+requests use the host-injected launch `Authorization` header. The gateway keeps
+its explicit origin allowlist and does not enable cross-origin cookie credentials.
+Using `include` here causes browsers to reject even HTTP 200 responses from the
+dev gateway, because it intentionally omits `Access-Control-Allow-Credentials`.
+The real-browser regression is `app/src/frontend-log-browser_test.ts` (isolated
+Electron profile, two ephemeral loopback ports, real gateway/preflight/ingestion).
 
 Ingestion uses existing Project gateway authentication and a Project-owned memory
 ring, never a body-supplied Project ID. `POST /projects/<id>/api/runtime/frontend-logs`
@@ -142,3 +204,30 @@ may still contain unlabeled secrets: avoid logging private data. Log text,
 including HTML, newlines and apparent instructions, remains untrusted JSONL data;
 reads do not render HTML or execute browser JavaScript. Failed diagnostic requests
 are silent, are not retried, and cannot recursively log through the hook.
+
+### Vite lazy syntax-highlighting dependencies
+
+`app/highlighting-deps.ts` explicitly includes all literal lazy Shiki imports in
+`app/src/file-highlighting.ts` in the initial dependency optimization batch. Keep
+the list synchronized when adding grammars (the browser integration test checks
+this). This does not eagerly load grammars into the renderer.
+
+Every programmatic Vite test using the real app root must set a unique disposable
+`cacheDir`: otherwise even a test with `noDiscovery: true, include: []` can replace
+`app/node_modules/.vite/deps` metadata underneath the running development server.
+Its in-memory transforms can continue referring to the old dependency hash while
+the disk metadata has changed, yielding `504 Outdated Optimize Dep` even after a
+browser refresh. Do not run a second Vite instance against the live cache.
+
+After applying optimizer configuration changes, restart the Vite development
+server at an operator-chosen time, then reload the renderer. A renderer reload
+alone cannot repair mismatched live optimizer state. No backend restart is needed
+for the optimizer change; backend diagnostic-redaction changes require restarting
+the backend process. New redaction does not recover information from old events.
+Development frontend logs retain only allowlisted loopback Vite optimized
+Shiki/chunk module paths, not URL host/port, credentials, query or fragment. Browser
+network-panel status lines are not console events and are not intercepted.
+
+Focused regression (real Vite transforms, Electron browser dynamic imports, JSON,
+TypeScript and Markdown fenced languages, followed by a fresh page load):
+`pnpm exec node --import tsx --test app/src/highlighting-vite_test.ts`.

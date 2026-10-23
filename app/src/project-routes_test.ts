@@ -28,6 +28,15 @@ function applicationRouter(protocol: 'http:' | 'file:'): VueRouter.Router {
 }
 
 for (const protocol of ['http:', 'file:'] as const) {
+  test(`${protocol} nodes live under settings and legacy links redirect`, async () => {
+    const router = applicationRouter(protocol)
+    for (const location of ['/settings/nodes', '/nodes', '/workspaces', '/approvals', { name: 'nodes' }]) {
+      await router.push(location)
+      assert.equal(router.currentRoute.value.name, 'settings')
+      assert.equal(router.currentRoute.value.params.section, 'nodes')
+      assert.equal(router.currentRoute.value.path, '/settings/nodes')
+    }
+  })
   test(`${protocol} project routes retain project, session, automation, child pane and hash`, async () => {
     const router = applicationRouter(protocol)
     for (const path of [

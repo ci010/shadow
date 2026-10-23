@@ -6,11 +6,10 @@ import App from './App.vue'
 import router from './router.ts'
 import { createInstallationContextProvider } from './composables/useInstallationContext.ts'
 import { createLocalMainAdminContext } from './installation-context.ts'
-import DataLayoutUpgrade from './DataLayoutUpgrade.vue'
 import FirstRunWizard from './FirstRunWizard.vue'
 import RuntimeRecovery from './RuntimeRecovery.vue'
 import DesktopFrame from './DesktopFrame.vue'
-import ChildDesktop from './ChildDesktop.vue'
+import ChildWorkspace from './ChildWorkspace.vue'
 import BrowserAuth from './BrowserAuth.vue'
 import { browserSessionKey, createBrowserSession, mountBrowserSession } from './web-auth.ts'
 import {
@@ -43,9 +42,10 @@ function desktopRoot(component: Component, props?: Record<string, unknown>) {
 
 function mountMainApp(installationContext: InstallationContextV1): void {
 	if (installationContext.mode === 'child') {
-		createApp(ChildDesktop, { apiBase: installationContext.apiBase })
+		createApp(ChildWorkspace, { apiBase: installationContext.apiBase })
+			.use(router)
 			.use(i18n)
-			.use(createInstallationContextProvider(installationContext))
+			.use(createInstallationContextProvider({ ...installationContext, mainWorkspace: true }))
 			.mount('#app')
 		return
 	}
@@ -59,15 +59,6 @@ function mountMainApp(installationContext: InstallationContextV1): void {
 function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapOutcome): void {
 	if (outcome.view === 'app') {
 		mountMainApp(outcome.context)
-		return
-	}
-
-	if (outcome.view === 'data-upgrade') {
-		const upgrade = createApp(desktopRoot(DataLayoutUpgrade, {
-			api, initialLayout: outcome.layout,
-			onComplete: async () => { upgrade.unmount(); await api.bootstrap.retryRuntime?.(); await startDesktopApp(api) },
-		}))
-		upgrade.use(i18n).mount('#app')
 		return
 	}
 

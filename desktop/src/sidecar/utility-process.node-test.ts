@@ -69,6 +69,9 @@ for (const role of ['main', 'child'] as const) {
           if (armed) assert.deepEqual(argv.splice(0, 2), [JSON.stringify([preload]), entryPath])
           assert.deepEqual(argv, [role === 'main' ? 'server' : 'child', 'start', '--config', 'synthetic config.json', ...(role === 'main' ? ['--local-executor'] : [])])
           assert.equal(options.execArgv, undefined)
+          // Match Electron's actual env validation, not Node spawn's permissive contract.
+          assert.ok(Object.values(options.env ?? {}).every(value => typeof value === 'string'))
+          assert.equal(Object.hasOwn(options.env ?? {}, 'SHADOW_DESKTOP_MEDIA_KEY'), role === 'main')
           assert.equal((options.env as NodeJS.ProcessEnv | undefined)?.ELECTRON_RUN_AS_NODE, undefined)
           return child
         }),

@@ -101,6 +101,17 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
         assert.equal((await unavailable.json()).error, 'a2a_unavailable')
         assert.equal((await fetch(base + path, { method })).status, 401, 'No anonymous fallback for missing A2A credentials')
       }
+      // Owner picker stays behind the same Project/UI admission as registration.
+      const picker = '/projects/default/api/folders/picker'
+      assert.equal((await fetch(base + picker + '/devices')).status, 401)
+      assert.equal((await fetch(base + picker + '/browse', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nodeId: 'fixture-main', path: pathA }) })).status, 401)
+      const pickerDevices = await json<{ devices: { nodeId: string; role: string }[] }>(picker + '/devices')
+      assert.ok(pickerDevices.devices.some(d => d.nodeId === 'fixture-main' && d.role === 'main'))
+      const pickedMain = await json<{ listing: { path: string } }>(picker + '/browse', 'POST', { nodeId: 'fixture-main', path: pathA })
+      assert.equal(pickedMain.listing.path, pathA)
+      const registeredMain = await json<{ folder: FolderRecord }>(picker + '/select', 'POST', { nodeId: 'fixture-main', path: pathA })
+      assert.notEqual(registeredMain.folder.kind, 'remote')
       assert.equal((await fetch(base + '/api/projects')).status, 401)
       assert.equal((await fetch(base + '/api/live?topics=[]')).status, 401)
       assert.equal((await fetch(base + '/nodes/v1/network')).status, 401)
@@ -313,7 +324,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal((await request(a + '/api/automations', 'POST', {})).status, 404)
       const addBot = async (scope: string, name: string) =>
         (await json<{ channel: BotInstanceStatus }>(scope + '/api/channels', 'POST',
-          { platform: 'qq', displayName: name, config: { enabled: false } }, 201)).channel
+          { purpose: 'service', platform: 'qq', displayName: name, config: { enabled: false } }, 201)).channel
       const botsA = await Promise.all([addBot(a, 'Bot one'), addBot(a, 'Bot two')])
       const botB = await addBot(b, 'Bot one')
       assert.notEqual(botsA[0].id, botsA[1].id)

@@ -28,7 +28,6 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       ['call', { sessionId: 'call', segmentIndex: 0, mode: 'call', parentSessionId: 'task' }],
     ])
     const notes = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
-    notes.migrateWorkItems()
     const alignment = new WorkAlignment(notes, {
       state: id => states.get(id), evidence: async () => {}, changed: async () => {},
       fresh: async () => {}, successor: async () => undefined,

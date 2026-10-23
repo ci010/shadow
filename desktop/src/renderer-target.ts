@@ -24,3 +24,14 @@ export function resolveRendererTarget(options: {
 function isLoopbackHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
 }
+/** Policies retain this stable reference while bootstrap moves between local recovery and Child UI. */
+export function rendererTargetController(initial: RendererTarget): {
+  readonly target: RendererTarget
+  select(target: RendererTarget): void
+} {
+  let current = initial
+  return {
+    target: new Proxy(initial, { get: (_object, key) => Reflect.get(current, key) }),
+    select(target) { current = target },
+  }
+}

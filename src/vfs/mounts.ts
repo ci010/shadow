@@ -21,56 +21,9 @@ import { join, resolve } from 'node:path'
 import { isNotFoundError } from '../utils/runtime.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
 import { WriteTool } from '../tools/filesystem.ts'
+import { formatSessionMessage, formatSessionHistory } from '../sessions/history-view.ts'
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-function formatSessionMessage(
-  msg: ChatMessage,
-  index: number,
-  highlight = false,
-): string[] {
-  const role = msg.role.toUpperCase()
-  let body: string
-  if (msg.role === 'assistant' && msg.tool_calls?.length) {
-    const calls = msg.tool_calls
-      .map((tc: NonNullable<ChatMessage['tool_calls']>[number]) =>
-        `  [call ${tc.id}] ${tc.function.name}(${tc.function.arguments})`
-      )
-      .join('\n')
-    body = msg.content ? `${msg.content}\n${calls}` : calls
-  } else if (msg.role === 'tool') {
-    body = `[result for ${msg.tool_call_id ?? '?'}] ${msg.content ?? ''}`
-  } else {
-    const c = msg.content
-    if (Array.isArray(c)) {
-      body = c
-        .map(
-          (
-            part: { type: string; text?: string; image_url?: { url: string } },
-          ) => {
-            if (part.type === 'text') return part.text ?? ''
-            if (part.type === 'image_url') {
-              return `[image: ${part.image_url?.url ?? ''}]`
-            }
-            return `[${part.type}]`
-          },
-        )
-        .join(' ')
-    } else {
-      body = String(c ?? '')
-    }
-  }
-  const prefix = highlight ? `>>> #${index} ` : `    #${index} `
-  const time = msg.timestamp ? ` ${msg.timestamp}` : ''
-  return [
-    `${prefix}[${role}]${msg.name ? ` (${msg.name})` : ''}${time}`,
-    body,
-  ]
-}
-
-function formatSessionHistory(messages: ChatMessage[]): string {
-  return messages.map((message, index) => formatSessionMessage(message, index + 1).join('\n')).join('\n\n')
-}
 
 // ── Sessions ─────────────────────────────────────────────────────────────
 
@@ -117,18 +70,13 @@ export function createSessionsHandler(
       return lines.join('\n')
     }
 
-    const qIdx = subpath.indexOf('?')
-    const sessionKey = qIdx >= 0 ? subpath.slice(0, qIdx) : subpath
-    const params = qIdx >= 0
-      ? new URLSearchParams(subpath.slice(qIdx + 1))
-      : null
-
-    const rawIndex = params?.has('index')
-      ? parseInt(params.get('index')!, 10)
-      : -20
-    const pageSize = params?.has('page_size')
-      ? Math.min(100, Math.max(1, parseInt(params.get('page_size')!, 10)))
-      : 20
+    if (subpath.includes('?')) throw new Error('Session query parameters are not supported. Use /overview or /full and read.offset (1-based line)/read.limit, not index/page_size.')
+    if (subpath.includes('/calls/')) {
+      const entries = await list(context, { subpath })
+      return entries.find(entry => entry.name === subpath)!.content
+    }
+    const overview = subpath.endsWith('/overview')
+    const sessionKey = subpath.replace(/\/(overview|full)$/, '')
 
     const isPhysicalId = !sessionKey.includes(':')
 
@@ -172,14 +120,12 @@ export function createSessionsHandler(
 
     if (total === 0) return `${sessionLabel}\nNo history yet.`
 
-    const offset = rawIndex < 0
-      ? Math.max(0, total + rawIndex)
-      : Math.min(rawIndex, total)
+    const offset = Math.max(0, total - 20)
 
     const { messages } = await sessions.getHistory(sessionKey, {
       physicalId: isPhysicalId ? sessionKey : undefined,
       offset,
-      pageSize,
+      pageSize: 20,
     })
 
     const start = offset + 1
@@ -192,21 +138,13 @@ export function createSessionsHandler(
 
     for (const [idx, msg] of messages.entries()) {
       lines.push('')
-      lines.push(...formatSessionMessage(msg, offset + idx + 1))
+      const priorCall = messages.slice(0, idx)
+        .flatMap(message => message.tool_calls ?? [])
+        .findLast(call => call.id === msg.tool_call_id)
+      lines.push(...formatSessionMessage(msg, offset + idx + 1, false, overview, physicalId, priorCall))
     }
 
-    if (end < total) {
-      lines.push(
-        `→ ${
-          total - end
-        } more message(s). Use read("v:sessions/${sessionKey}?index=${end}") to continue.`,
-      )
-    }
-    if (offset > 0) {
-      lines.push(
-        `← ${offset} earlier message(s). Use read("v:sessions/${sessionKey}?index=0") to read from the start.`,
-      )
-    }
+    if (offset > 0) lines.push('Earlier history: use read.offset=1 and read.limit for line paging. /overview omits tool payloads.')
 
     return lines.join('\n')
   }
@@ -216,7 +154,26 @@ export function createSessionsHandler(
     context.signal.throwIfAborted()
     const all = await (sessions.listHistorySessions?.() ?? sessions.listSessions())
     const entries = []
-    const subpath = options?.subpath
+    const requested = options?.subpath
+    if (!requested?.startsWith('remote:') && requested?.includes('?')) throw new Error('Session query parameters are not supported. Use /overview or /full and read.offset/read.limit, not index/page_size.')
+    if (requested && !requested.startsWith('remote:') && requested.includes('/calls/')) {
+      const match = /^([^/]+)\/calls\/([^/]+)$/.exec(requested)
+      if (!match || match[1].includes(':')) throw new Error('Tool-call references require a physical session ID and an encoded call ID.')
+      const callId = decodeURIComponent(match[2])
+      const { messages } = await sessions.getHistory(match[1], { physicalId: match[1], maxMessages: Number.MAX_SAFE_INTEGER })
+      context.signal.throwIfAborted()
+      const selected: string[] = []
+      for (const [index, message] of messages.entries()) {
+        const call = message.role === 'assistant' ? message.tool_calls?.find(call => call.id === callId) : undefined
+        if (call) selected.push(formatSessionMessage({ ...message, tool_calls: [call] }, index + 1).join('\n'))
+        if (message.role === 'tool' && message.tool_call_id === callId) selected.push(formatSessionMessage(message, index + 1).join('\n'))
+      }
+      if (!selected.length || !messages.some(message => message.role === 'assistant' && message.tool_calls?.some(call => call.id === callId))) throw new Error(`Unknown tool call ${JSON.stringify(callId)} in physical session ${match[1]}.`)
+      return [{ name: requested, content: options?.content === false ? '' : `Physical Session ID: ${match[1]}; tool call: ${callId}\n\n${selected.join('\n\n')}` }]
+    }
+    const overview = requested?.endsWith('/overview') ?? false
+    const subpath = requested?.startsWith('remote:') ? requested : requested?.replace(/\/(overview|full)$/, '')
+    const viewSuffix = requested?.match(/\/(overview|full)$/)?.[0] ?? ''
     const selected = (name: string) => !subpath || name === subpath || name.startsWith(`${subpath}/`)
     if (subpath?.startsWith('remote:')) {
       if (!remote) throw new Error('A2A is not configured in this Project.')
@@ -231,9 +188,9 @@ export function createSessionsHandler(
       context.signal.throwIfAborted()
       if (total === 0) return []
       return [{
-        name: subpath,
+        name: subpath + viewSuffix,
         content: options?.content === false ? ''
-          : `Physical Session ID: ${subpath}\n\n${formatSessionHistory(messages)}`,
+          : `Physical Session ID: ${subpath}\n\n${formatSessionHistory(messages, overview, subpath)}`,
       }]
     }
     if (remote?.canDiscover(context)) entries.push(...remote.entries(context, options))
@@ -246,7 +203,7 @@ export function createSessionsHandler(
       context.signal.throwIfAborted()
       if (!selected(s.sessionId)) continue
       if (options?.content === false) {
-        entries.push({ name: s.sessionId, content: '' })
+        entries.push({ name: s.sessionId + viewSuffix, content: '' })
         continue
       }
       const state = await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(s.sessionId)
@@ -260,10 +217,10 @@ export function createSessionsHandler(
       const { messages: history } = await sessions.getHistory(s.sessionId, {
         maxMessages: Number.MAX_SAFE_INTEGER,
       })
-      const historyText = formatSessionHistory(history)
+      const historyText = formatSessionHistory(history, overview, state ? physicalSessionId(state) : undefined)
 
       entries.push({
-        name: s.sessionId,
+        name: s.sessionId + viewSuffix,
         content: parts.join('  ') + '\n\n' + historyText,
       })
     }

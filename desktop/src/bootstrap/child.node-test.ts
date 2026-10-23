@@ -81,7 +81,7 @@ test('pairing is privileged, persists Child role and resumes local runtime witho
   if (!result.ok) return
   assert.equal(result.context.mode, 'child')
   assert.equal(result.context.mainConnection, 'connecting')
-  assert.deepEqual(result.context.uiScopes, [])
+  assert.equal('uiScopes' in result.context, false)
   assert.deepEqual(launches, [{ version: 1, role: 'child', port: 43124 }])
   await assert.rejects(coordinator.clear(), /identity is retained/)
   assert.equal((await coordinator.pairChild(input(directory))).ok, false)

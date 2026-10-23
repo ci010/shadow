@@ -189,7 +189,7 @@ const client = createFoldersClient(props.apiBase)
 const groupExpanded = ref(true)
 const componentId = useId()
 const domId = (id: string) => props.grouped ? `${componentId}-${id}` : id
-const folderActions = computed(() => FOLDER_ACTIONS.filter(action => action.id !== 'remote' || props.remoteFolders))
+const folderActions = computed(() => FOLDER_ACTIONS)
 const folders = ref<FolderRecord[]>([])
 const groups = computed(() => groupFolderSessions(folders.value, props.sessions))
 const executionsByOwner = computed(() => activeSubagentsByOwner(props.sessions, props.stages))
@@ -382,7 +382,6 @@ function runAction(id: typeof FOLDER_ACTIONS[number]['id'] | 'remove' | 'move') 
   if (id === 'remove' || id === 'move') {
     if (menuFolder.value) emit('manage', menuFolder.value, id)
   } else if (id === 'scratch') startScratchDraft()
-  else if (id === 'remote') { selectedFolderId.value = ''; emit('remote') }
   else dialogMode.value = id
 }
 function menuKeydown(event: KeyboardEvent) {

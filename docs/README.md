@@ -45,7 +45,6 @@ Start with the [project README](../README.md) for installation and commands,
   and [session retirement](session-retirement.md)
 - [Startup profiling](startup-profiling.md)
 - [Desktop release verification](release.md) and [desktop bundling](desktop-bundling.md)
-- [Data migration](data-migration.md) and [desktop data upgrade](desktop-data-upgrade.md)
 - [Two-device Electron pairing](desktop-pairing.md) and [desktop Main / Child profiles](desktop-roles.md)
 - [Live event-wait acceptance](event-wait-acceptance.md)
 
@@ -65,3 +64,5 @@ history, rather than maintained alongside current instructions.
 Runtime prompts under `src/agent/types/builtin/`, `src/agent/context/`,
 `src/sessions/handoff/` and `src/skills/builtin/` are agent inputs, not contributor
 documentation. Editing them changes runtime behavior.
+
+- [Git and GitHub agent workflow](git-github.md): bundled safegit commit/push policy, platform limitations and optional gh setup.

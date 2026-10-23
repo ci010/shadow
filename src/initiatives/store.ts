@@ -1,10 +1,10 @@
 import { projectFocusSnapshotSchema, type ProjectFocusSnapshot } from '../projects/focus-contract.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
-import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { constants, DatabaseSync } from 'node:sqlite'
-import { HANDOFF_VIEW, ITEM_ACTIVITY_VIEW, SCHEMA, TABLE_COLUMNS } from './schema.ts'
+import { ITEM_ACTIVITY_VIEW, SCHEMA, TABLE_COLUMNS } from './schema.ts'
 import { parseSql, type Statement, type Value } from './sql.ts'
 import { WORK_SCHEMA, WorkConflict, workKey, workRecordSchema, workSubjectSchema, workObservationSchema,
   type WorkSubject, type WorkAuthority, type WorkRecord, type WorkObservation } from './work-contract.ts'
@@ -60,22 +60,15 @@ export class InitiativeStore {
     try {
       this.#db.exec('PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL;')
       const version = this.#db.prepare('PRAGMA user_version').get() as { user_version: number }
-      if (![0, 1, 2, 3, 4, 5, 6].includes(version.user_version)) throw new Error('Unsupported initiative database version')
-      this.#unifiedWork = version.user_version === 6
+      if (![0, 5, 6].includes(version.user_version)) throw new Error('Unsupported initiative database version')
+      this.#unifiedWork = version.user_version !== 5
       if (version.user_version === 0) {
         const tables = this.#db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()
         if (tables.length) throw new Error('Unrecognized initiative database schema')
-        this.#db.exec(`BEGIN IMMEDIATE; ${SCHEMA} ${ITEM_ACTIVITY_VIEW} PRAGMA user_version=3; COMMIT;`)
-      } else if (version.user_version < 3) {
-        this.#db.exec(`BEGIN IMMEDIATE; DROP VIEW IF EXISTS initiative_item_activity;
-          DROP VIEW IF EXISTS initiative_handoffs; ${HANDOFF_VIEW} ${ITEM_ACTIVITY_VIEW}
-          PRAGMA user_version=3; COMMIT;`)
-      }
-      if (version.user_version < 5) {
-        this.#db.exec(`BEGIN IMMEDIATE; ${WORK_SCHEMA} PRAGMA user_version=5; COMMIT;`)
+        this.#db.exec(`BEGIN IMMEDIATE; ${SCHEMA} ${ITEM_ACTIVITY_VIEW} ${WORK_SCHEMA} PRAGMA user_version=6; COMMIT;`)
       }
       this.#db.exec('CREATE TABLE IF NOT EXISTS work_observations (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT; CREATE TABLE IF NOT EXISTS project_focus_summary (id TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;')
-      this.#db.exec('CREATE TABLE IF NOT EXISTS work_session_links (session_id TEXT NOT NULL, work_key TEXT NOT NULL, PRIMARY KEY(session_id,work_key)) STRICT; INSERT OR IGNORE INTO work_session_links SELECT session_id,work_key FROM work_focus WHERE work_key IS NOT NULL;')
+      this.#db.exec('CREATE TABLE IF NOT EXISTS work_session_links (session_id TEXT NOT NULL, work_key TEXT NOT NULL, PRIMARY KEY(session_id,work_key)) STRICT;')
       const integrity = this.#db.prepare('PRAGMA quick_check').all()
       if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || this.#db.prepare('PRAGMA foreign_key_check').all().length) {
         throw new Error('Corrupt initiative database')
@@ -189,70 +182,6 @@ export class InitiativeStore {
   }
 
   get unifiedWork(): boolean { return this.#unifiedWork }
-
-  /** Keep old keys, journals and SQL tables as archives; all live work facts move together. */
-  migrateWorkItems(): void {
-    this.#transaction('work-migration', () => {
-      const saved = this.#all('SELECT data FROM work_contracts').map(row => workRecordSchema.parse(JSON.parse(String(row.data))))
-      const records = new Map(saved.map(record => [record.key, structuredClone(record)]))
-      const now = new Date().toISOString()
-      const missing = (subject: WorkSubject, objective: string): WorkRecord => ({
-        key: workKey(subject), subject, revision: 1, sequence: 0,
-        definition: { objective: objective.slice(0, 4000) || 'Review imported work',
-          acceptance: ['Acceptance was not recorded. Establish observable criteria before executing this imported work.'],
-          boundaries: [], evidence: [] },
-        origin: 'agent_interpretation', changedBy: 'work-migration', changedAt: now,
-        change: 'understanding', reason: 'Imported historical work; missing acceptance is unknown, not permission.', paused: true,
-      })
-      const parents = this.#all('SELECT * FROM initiatives')
-      for (const row of parents) {
-        const subject = { kind: 'initiative' as const, initiativeId: String(row.id) }
-        const record = records.get(workKey(subject)) ?? missing(subject, String(row.goal || row.title))
-        if (record.workflow) continue
-        record.workflow = {
-          title: String(row.title).slice(0, 160), manager: row.owner_session_id as string | null,
-          assignee: row.owner_session_id as string | null, assignmentRevision: 1,
-          status: row.status === 'completed' ? 'done' : row.status === 'cancelled' ? 'cancelled' : 'pending', dependencies: [],
-        }
-        records.set(record.key, record)
-        this.#workEvent(record.key, 'work-migration', 'legacy_initiative', row)
-      }
-      for (const row of this.#all('SELECT * FROM initiative_items')) {
-        const parent = parents.find(parent => parent.id === row.initiative_id)!
-        const subject = { kind: 'item' as const, initiativeId: String(row.initiative_id), itemId: String(row.id) }
-        const record = records.get(workKey(subject)) ?? missing(subject, String(row.title))
-        if (record.workflow) continue
-        record.workflow = {
-          title: String(row.title).slice(0, 160), parentKey: `initiative:${row.initiative_id}`,
-          manager: parent.owner_session_id as string | null, assignee: row.assignee_session_id as string | null,
-          assignmentRevision: 1, status: row.status as NonNullable<WorkRecord['workflow']>['status'],
-          ...(row.blocked_reason ? { blockedReason: String(row.blocked_reason).slice(0, 2000) } : {}),
-          dependencies: this.#all('SELECT depends_on_item_id FROM initiative_item_deps WHERE item_id=?', [row.id!])
-            .map(edge => `item:${edge.depends_on_item_id}`),
-        }
-        records.set(record.key, record)
-        this.#workEvent(record.key, 'work-migration', 'legacy_item', row)
-      }
-      for (const record of records.values()) {
-        if (!record.workflow && record.subject.kind === 'topic') record.workflow = {
-          title: record.definition.objective.slice(0, 160), manager: record.subject.sessionId,
-          assignee: record.subject.sessionId, assignmentRevision: 1, status: 'pending', dependencies: [],
-        }
-      }
-      this.#validateWorkGraph([...records.values()])
-      for (const record of records.values()) {
-        if (saved.find(old => old.key === record.key)?.workflow) continue
-        if (record.workflow) record.workflow.assignmentStarted = !!record.adoption
-        const next = workRecordSchema.parse({ ...record, sequence: record.sequence + 1 })
-        const existing = this.#one('work_contracts', record.key)
-        if (existing) this.#write('UPDATE work_contracts SET sequence=?,data=? WHERE id=?', [next.sequence, JSON.stringify(next), next.key])
-        else this.#insert('work_contracts', { id: next.key, sequence: next.sequence, data: JSON.stringify(next) })
-        this.#workEvent(next.key, 'work-migration', 'work_unified', next)
-      }
-      this.#db.exec('PRAGMA user_version=6')
-    })
-    this.#unifiedWork = true
-  }
 
   #validateWorkGraph(records: WorkRecord[]): void {
     const byKey = new Map(records.map(record => [record.key, record]))
@@ -501,61 +430,6 @@ export class InitiativeStore {
       : `${Buffer.from(text).subarray(0, bytes - 100).toString('utf8')}\n[Summary truncated; query individual fields.]`
   }
 
-  migrateLegacyMarkdown(): { imported: number; skipped: number } {
-    return this.migrateLegacy(projectStoragePath(this.home, 'projects'))
-  }
-
-  /** root is this Home's state/legacy-initiatives directory. Originals remain immutable legacy archives. */
-  migrateLegacy(legacyRoot: string): { imported: number; skipped: number } {
-    if (this.#closed) throw new Error('InitiativeStore is closed')
-    if (this.#busy) throw new Error('Reentrant InitiativeStore access is not supported')
-    const root = resolve(legacyRoot)
-    if (root !== projectStoragePath(this.home, 'projects')) throw new Error('Legacy imports must use this Project state/legacy-initiatives directory')
-    if (!existsSync(root)) return { imported: 0, skipped: 0 }
-    if (lstatSync(root).isSymbolicLink() || realpathSync(root) !== projectStoragePath(realpathSync(this.home), 'projects')) throw new Error('Legacy root must not redirect outside Home')
-    return this.#transaction('legacy-import', () => {
-      let imported = 0
-      let skipped = 0
-      const children = readdirSync(root, { withFileTypes: true })
-      if (children.length > MAX_TABLE_ROWS) throw new Error('Legacy directory limit exceeded')
-      for (const child of children) {
-        if (child.isSymbolicLink()) throw new Error(`Legacy source is a symbolic link: ${child.name}`)
-        if (!child.isDirectory()) continue
-        this.#slug(child.name)
-        const file = join(root, child.name, 'project.md')
-        if (!existsSync(file)) continue
-        const stat = lstatSync(file)
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_TEXT_BYTES) throw new Error(`Invalid legacy source: ${child.name}`)
-        const bytes = readFileSync(file)
-        const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-        const hash = createHash('sha256').update(bytes).digest('hex')
-        const prior = this.#all('SELECT source_hash FROM initiative_legacy_imports WHERE slug=?', [child.name])[0]
-        if (prior) {
-          if (prior.source_hash !== hash) throw new Error(`Legacy archive changed after import: ${child.name}`)
-          skipped++
-          continue
-        }
-        if (this.#one('initiatives', child.name)) throw new Error(`Legacy initiative conflicts with existing ID: ${child.name}`)
-        const legacy = this.#parseLegacy(child.name, content)
-        const now = new Date().toISOString()
-        this.#insert('initiatives', {
-          id: child.name, title: child.name, goal: legacy.goal, context: legacy.context,
-          status: legacy.status, created_by_session_id: 'legacy-import', owner_session_id: null,
-          created_at: legacy.createdAt, updated_at: now, revision: 1,
-        })
-        this.#entry(child.name, null, 'legacy', content)
-        if (legacy.progress && legacy.progress !== '(No progress yet)') this.#entry(child.name, null, 'progress', legacy.progress)
-        if (legacy.notes && legacy.notes !== '(No notes yet)') this.#entry(child.name, null, 'note', legacy.notes)
-        this.#entry(child.name, null, 'audit', JSON.stringify({ operation: 'legacy-import', source: `projects/${child.name}/project.md`, source_hash: hash }))
-        this.#insert('initiative_legacy_imports', { slug: child.name, source_hash: hash })
-        imported++
-        this.#checkStorageBounds()
-      }
-      this.#validateDatabase()
-      return { imported, skipped }
-    })
-  }
-
   #installAuthorizer(): void {
     // Added in Node 24.10, before our 24.15 minimum; some @types/node releases
     // omit it. Keep both the engine allowlist and closed parser boundaries.
@@ -563,14 +437,13 @@ export class InitiativeStore {
     if (!db.setAuthorizer) throw new Error('InitiativeStore requires node:sqlite setAuthorizer (use Node 24.15+)')
     const codes = constants as unknown as Record<string, number>
     const workTables = ['work_contracts', 'work_contract_events', 'work_effects', 'work_focus', 'work_session_links', 'work_observations', 'project_focus_summary']
-    const readable = new Set([...Object.keys(TABLE_COLUMNS), 'initiative_legacy_imports', ...workTables])
+    const readable = new Set([...Object.keys(TABLE_COLUMNS), ...workTables])
     db.setAuthorizer((action, arg1, arg2, database) => {
       if (database && database !== 'main') return codes.SQLITE_DENY!
       if (action === codes.SQLITE_SELECT || action === codes.SQLITE_TRANSACTION) return codes.SQLITE_OK!
-      if (action === codes.SQLITE_PRAGMA && arg1 === 'user_version' && arg2 === '6' && this.#actor === 'work-migration') return codes.SQLITE_OK!
       if (action === codes.SQLITE_READ && arg1 && readable.has(arg1)) return codes.SQLITE_OK!
       if (action === codes.SQLITE_FUNCTION && ['actor_session_id', 'session_is_inactive', 'session_activity', 'count', 'sum', 'length', 'coalesce', 'trim'].includes(arg2 ?? '')) return codes.SQLITE_OK!
-      if (this.#writeAccess && [codes.SQLITE_INSERT, codes.SQLITE_UPDATE, codes.SQLITE_DELETE].includes(action) && arg1 && [...BASE_TABLES, 'initiative_legacy_imports', ...workTables].includes(arg1)) return codes.SQLITE_OK!
+      if (this.#writeAccess && [codes.SQLITE_INSERT, codes.SQLITE_UPDATE, codes.SQLITE_DELETE].includes(action) && arg1 && [...BASE_TABLES, ...workTables].includes(arg1)) return codes.SQLITE_OK!
       return codes.SQLITE_DENY!
     })
   }
@@ -931,12 +804,4 @@ export class InitiativeStore {
     }
   }
 
-  #parseLegacy(slug: string, content: string): { goal: string; context: string; progress: string; notes: string; status: string; createdAt: string } {
-    const normalized = content.replace(/\r\n/g, '\n')
-    const match = normalized.match(/^# Project: ([^\n]+)\n\n\*\*Status\*\*: (active|completed)\n(?:\*\*Completed\*\*: ([^\n]+)\n)?\*\*Created\*\*: ([^\n]+)\n\*\*Goal\*\*: ([^\n]+)\n\n## Context\n([\s\S]*?)\n## Progress\n([\s\S]*?)\n## Notes\n([\s\S]*)$/)
-    if (!match || match[1] !== slug || !Number.isFinite(Date.parse(match[4]!)) || (match[3] && !Number.isFinite(Date.parse(match[3])))) {
-      throw new Error(`Malformed legacy project: ${slug}; original file was not changed`)
-    }
-    return { goal: match[5]!, context: match[6]!.trim(), progress: match[7]!.trim(), notes: match[8]!.trim(), status: match[2]!, createdAt: match[4]! }
-  }
 }

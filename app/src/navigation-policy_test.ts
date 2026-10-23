@@ -16,65 +16,17 @@ test('local Main admin sees product and diagnostic routes', () => {
 
   assertEquals(routeNames(context), [
     'chat',
-    'nodes',
     'settings',
     'spans',
     'logs',
   ])
 })
 
-test('Main-facing navigation is scope-aware rather than role-gated', () => {
-  const context: InstallationContextV1 = {
-    ...createLocalMainAdminContext('http://localhost'),
-    mode: 'child',
+test('authenticated contexts ignore retired scopes for product and diagnostic navigation', () => {
+  for (const mode of ['main', 'child', 'client'] as const) {
+    const context = { ...createLocalMainAdminContext('http://localhost'), mode, uiScopes: [] }
+    assertEquals(routeNames(context), ['chat', 'settings', 'spans', 'logs'])
   }
-
-  assertEquals(routeNames(context), [
-    'chat',
-    'nodes',
-    'spans',
-    'logs',
-  ])
-})
-
-test('restricted Child sees only routes allowed by its scopes', () => {
-  const context: InstallationContextV1 = {
-    ...createLocalMainAdminContext('http://localhost'),
-    mode: 'child',
-    uiScopes: ['chat:read'],
-  }
-
-  assertEquals(routeNames(context), [
-    'chat',
-    'nodes',
-  ])
-})
-
-test('Main node administration requires nodes:admin', () => {
-  const context: InstallationContextV1 = {
-    ...createLocalMainAdminContext('http://localhost'),
-    uiScopes: ['nodes:admin'],
-  }
-
-  assertEquals(routeNames(context), ['nodes'])
-})
-
-test('Settings replaces Providers as the Main administration tab', () => {
-  const context = createLocalMainAdminContext('http://localhost')
-  assertEquals(navigationFor(context).find((item) => item.name === 'settings'), {
-    name: 'settings', label: 'Settings', group: 'primary',
-  })
-  assertEquals(routeNames({ ...context, uiScopes: ['chat:read'] }), ['chat'])
-})
-
-test('Child local surfaces do not require Main administration scopes', () => {
-  const context: InstallationContextV1 = {
-    ...createLocalMainAdminContext('http://localhost'),
-    mode: 'child',
-    uiScopes: [],
-  }
-
-  assertEquals(routeNames(context), ['nodes'])
 })
 
 test('diagnostic routes are grouped without adding a product route', () => {
@@ -90,6 +42,5 @@ test('app content follows navigation without a persistent runtime status row', a
   const app = await readFile(new URL('./App.vue', import.meta.url), 'utf8')
   assert.doesNotMatch(app, /runtime-status|runtime-dot|roleLabel|mainConnectionLabel/)
   assert.match(app, /<main class="app-main">/)
-  assert.match(app, /v-if="showChildRecovery"/)
-  assert.match(app, /<router-link :to="\{ name: 'nodes' \}">Manage this node<\/router-link>/)
+    assert.match(app, /@manage-node="router.push\(\{ name: 'settings', params: \{ section: 'nodes' \} \}\)"/)
 })

@@ -1,4 +1,3 @@
-import type { DataLayoutView } from '../../desktop/src/bootstrap/data-layout-controller.ts'
 import { t } from './i18n.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
 import { parseRuntimeFailure, type RuntimeFailure } from './runtime-recovery.ts'
@@ -39,7 +38,7 @@ export type BootstrapCommandResult =
 	| { readonly ok: true; readonly state: WizardState }
 	| {
 		readonly ok: false
-		readonly code: 'invalid-state' | 'invalid-selection' | 'write-failed' | 'migration-required' | 'initialize-failed' | 'launch-failed'
+		readonly code: 'invalid-state' | 'invalid-selection' | 'write-failed' | 'initialize-failed' | 'launch-failed'
 		readonly state: WizardState
 	}
 
@@ -82,8 +81,6 @@ export interface ShadowDesktopApi {
 	}
 	readonly bootstrap: {
 		switchRole?(role: 'main' | 'child', executionConsent: boolean): Promise<{ restart: boolean }>
-		dataLayoutStatus?(): Promise<DataLayoutView | null>
-		upgradeDataLayout?(): Promise<DataLayoutView>
 		load(): Promise<WizardState>
 		dispatch(event: RendererWizardEvent): Promise<WizardState>
 		clear?(): Promise<void>
@@ -113,7 +110,6 @@ export type EnsureRuntimeResult =
 	}
 
 export type RendererBootstrapOutcome =
-	| { readonly view: 'data-upgrade'; readonly layout: DataLayoutView }
 	| { readonly view: 'app'; readonly context: InstallationContextV1 }
 	| { readonly view: 'wizard'; readonly initialState: WizardState | null; readonly loadError: boolean }
 	| { readonly view: 'runtime-recovery'; readonly role?: InstallationMode; readonly code?: string; readonly failure?: RuntimeFailure }
@@ -167,13 +163,6 @@ export async function resolveDesktopBootstrap(api: ShadowDesktopApi): Promise<Re
 		initialState = await loadDesktopBootstrap(api)
 	} catch {
 		return { view: 'wizard', initialState: null, loadError: true }
-	}
-
-	if (initialState.mode === 'main' && api.bootstrap.dataLayoutStatus) {
-		try {
-			const layout = await api.bootstrap.dataLayoutStatus()
-			if (layout && (layout.status !== 'ready' || layout.running)) return { view: 'data-upgrade', layout }
-		} catch { return { view: 'runtime-recovery', role: 'main', code: 'data-layout-detection-failed' } }
 	}
 
 	if (shouldShowFirstRun(initialState)) {

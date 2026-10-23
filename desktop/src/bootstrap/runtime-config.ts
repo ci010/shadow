@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { assertDataLayoutReady } from './data-layout-startup.js'
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { isAbsolute, dirname, join, parse, resolve } from 'node:path'
 
@@ -42,7 +41,6 @@ export class AtomicRuntimeConfigWriter implements RuntimeConfigWriter {
     } catch (error) {
       if (!isMissingRuntimeConfig(error)) throw error
     }
-    await assertDataLayoutReady(absoluteDataDir)
     const config: MainRuntimeConfig = {
       version: 1,
       mode: 'main',

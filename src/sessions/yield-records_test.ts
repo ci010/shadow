@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import { migrateSessionsToSqlite } from '../../scripts/migrate-sessions-to-sqlite.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
@@ -156,34 +155,6 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 }
-
-test('JSONL-to-SQLite migration retains decision identities, sources and outcome facts', async () => {
-  await withTempWorkspace(async workspace => {
-    const directory = join(workspace, 'sessions')
-    const source = new JsonlSessionStore(directory)
-    await source.init()
-    const state: SessionState = { sessionId: 'web:worker', segmentIndex: 0, physicalIdVersion: 2, decisionOwnerSessionId: 'web:worker' }
-    await source.saveState(state.sessionId, state)
-    const records = new YieldRecords(source, () => state)
-    const saved = await records.open(request(), 'call')
-    const record: YieldDecisionRecord = { request: saved, closed: { at: saved.createdAt, reason: 'cancelled', message: 'Cancelled' } }
-    await records.write(record)
-    record.invalidated = { reference: { sessionId: state.sessionId, physicalId: saved.origin!.physicalId, requestId: saved.id },
-      at: saved.createdAt, reason: 'Original premise corrected' }
-    await source.appendRawEvents(saved.origin!.physicalId, [
-      { decision_input: { id: 'original-goal', text: 'Keep the original scope', at: saved.createdAt } },
-      { yield_invalidation: record.invalidated },
-    ])
-    await migrateSessionsToSqlite(directory)
-    const target = new SqliteSessionStore(directory)
-    try {
-      await target.init()
-      assert.equal((await target.getState(state.sessionId))?.decisionOwnerSessionId, 'web:worker')
-      assert.deepEqual(await new YieldRecords(target, () => state).read(state.sessionId), [record])
-      assert.equal((await new YieldRecords(target, () => state).context(state.sessionId)).userInputs[0]?.quote, 'Keep the original scope')
-    } finally { target.close() }
-  })
-})
 
 function gatedJournal() {
   const opening = Promise.withResolvers<YieldRequest>()

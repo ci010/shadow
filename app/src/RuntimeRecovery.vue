@@ -7,7 +7,7 @@
 				<p class="message">{{ reason }} {{ t('Your setup is still saved.') }}</p>
 				<p v-if="duration" class="message">{{ duration }}</p>
 			</div>
-			<DesktopRoleSettings />
+			<DesktopRoleSettings class="recovery-role-settings" />
 			<p v-if="actionFailed" class="notice" role="alert">{{ actionFailed }}</p>
 			<p v-if="busy" class="status" role="status">{{ activeAction === 'retry' ? t('Starting the runtime again…') : activeAction === 'log' ? t('Locating the startup log…') : t('Resetting setup…') }}</p>
 			<div v-if="revealLog" class="diagnostics">
@@ -106,6 +106,8 @@ async function resetSetup(): Promise<void> {
 	box-shadow: 0 18px 48px rgba(25, 49, 39, .1);
 }
 .recovery-panel > div { min-width: 0; overflow-wrap: anywhere; }
+/* Role settings is a full section, not an item in the 44px brand column. */
+.recovery-role-settings { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
 .brand-mark {
 	width: 44px;
 	height: 44px;

@@ -13,6 +13,8 @@ export interface DeviceChallengeApiOptions {
   readonly now?: () => Date
   readonly maxBodyBytes?: number
   readonly requestsPerMinute?: number
+  readonly path?: string
+  readonly audience?: (url: string) => string
 }
 
 interface ClientWindow {
@@ -35,7 +37,7 @@ export function deviceChallengeApiPlugin(
   const clients = new Map<string, ClientWindow>()
 
   return (app: Hono) => {
-    app.post('/cluster/v1/challenges', async (context) => {
+    app.post(options.path ?? '/cluster/v1/challenges', async (context) => {
       const requestTime = now()
       const client = options.clientKey(context.req.raw).trim()
       if (!client) {
@@ -70,7 +72,7 @@ export function deviceChallengeApiPlugin(
       try {
         const challenge = options.authority.issue(
           authentication,
-          nodeWebSocketAudience(context.req.url),
+          (options.audience ?? nodeWebSocketAudience)(context.req.url),
           requestTime,
         )
         return context.json(challenge, 201, { 'Cache-Control': 'no-store' })

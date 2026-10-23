@@ -496,7 +496,7 @@ watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], 
 watch(() => [route?.name, route?.params?.projectId, props.active, props.projectId, props.contextKey], () => {
   if (!props.projectNavigationEnabled || !props.active || !props.projectId || route?.params?.projectId !== props.projectId) return
   const tab = route?.name === 'project-settings' ? 'settings' : route?.name === 'agents' ? 'settings' : undefined
-  if (tab && installation.value.uiScopes.includes('main:admin')) tabs.value = openProjectTab(tabs.value, tab)
+  if (tab) tabs.value = openProjectTab(tabs.value, tab)
   else if (projectTabFromKey(tabs.value.selected)) selectTab('')
 }, { immediate: true })
 watch(() => [props.apiBase, props.contextKey], () => { knowledgeLabels.value = {} })

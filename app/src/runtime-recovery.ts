@@ -1,7 +1,7 @@
 import { t, formatNumber } from './i18n.ts'
 export const STARTUP_FAILURE_KINDS = [
 	'spawn-error', 'configuration-error', 'port-conflict', 'readiness-timeout',
-	'early-exit', 'migration-failure', 'main-unreachable', 'crash',
+	'early-exit', 'main-unreachable', 'crash',
 ] as const
 
 export interface RuntimeFailure {
@@ -31,7 +31,6 @@ const REASONS: Record<RuntimeFailure['kind'], string> = {
 	get 'port-conflict'() { return t('The runtime port is already in use. Close any other Shadow instance before retrying.') },
 	get 'readiness-timeout'() { return t('The runtime did not become ready before the startup deadline.') },
 	get 'early-exit'() { return t('The runtime process exited before it was ready.') },
-	get 'migration-failure'() { return t('The runtime could not finish updating its saved data.') },
 	get 'main-unreachable'() { return t('This Child could not reach Main. Check that Main is running and reachable.') },
 	get 'crash'() { return t('The runtime process stopped unexpectedly.') },
 }

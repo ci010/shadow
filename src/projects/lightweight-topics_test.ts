@@ -25,7 +25,6 @@ test('self metadata schema has no topic and historical topic values remain disco
 test('ordinary no-Work sessions are globally rendered; persisted associations survive focus clearing without duplicate roots or Work completion', async () => withTempWorkspace(async home => {
   const states = [state('web:question', { description: 'A normal question', completed: true }), state('web:work'), state('internal:task', { mode: 'task', parentSessionId: 'web:work' }), state('internal:call', { mode: 'call', parentSessionId: 'web:work' }), state('organizer', { agentType: 'work-organizer' })]
   const store = new InitiativeStore(home, { isSessionKnown: id => states.some(s => s.sessionId === id) })
-  store.migrateWorkItems()
   const alignment = new WorkAlignment(store, { state: id => states.find(s => s.sessionId === id), evidence: async () => {}, changed: async () => {}, fresh: async () => {}, successor: async () => undefined })
   const sessions = { alignment, listHistoryStates: async () => states, inputs: new Map(), yields: new Map(), isWaitingForCall: () => false, getActiveSession: () => undefined } as unknown as SessionManager
   try {

@@ -107,6 +107,13 @@ jobs:
       - uses: ./.github/actions/restore-prepared
         with:
           target: desktop
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build pinned Windows desktop native resources
+        run: |
+          node integrations/agent-desktop/scripts/fetch.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node integrations/agent-desktop/scripts/build.mjs x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native Windows release tests
         run: pnpm test:release
       - name: Native process crash and recovery regressions

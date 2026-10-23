@@ -52,7 +52,7 @@ test('switching selects folder skill discovery, resources and lazy activation wi
       tools, signal: new AbortController().signal, toolCallName: 'use_project',
       switchProjectFolder: async prepared => { const folder = folders.get(prepared.folderId)!; selected = { folderId: folder.id, path: folder.path }; ctx.folderId = folder.id; ctx.cwd = folder.path; return prepared.content },
     } as ExecutionContext
-    const switcher = new UseProjectTool({ projectId: 'p', folders, skills: () => 'Project global-guide', conventions: () => '', switched: ctx => loader.clearFolderSkillTools(ctx.tools) })
+    const switcher = new UseProjectTool({ projectId: 'p', folders, switched: ctx => loader.clearFolderSkillTools(ctx.tools) })
     const read = async (path: string) => requireToolText(await tools.execute('read', { path }, ctx))
     const invoke = async (name: string, context = ctx) => requireToolText(await context.tools.execute('invoke_tool', { name, args: {} }, context))
     try {
@@ -62,6 +62,7 @@ test('switching selects folder skill discovery, resources and lazy activation wi
       assert.equal(await invoke('global_app'), 'global app result')
       const app = await switcher.execute({ folder: 'app' }, ctx)
       assert.match(app, /v:skills\/folder\/app-guide/)
+      assert.doesNotMatch(app, /global-guide|Global same-name skill|available_skills/)
       assert.doesNotMatch(app, /app body/)
       assert.doesNotMatch(app, /docs-guide/)
       const index = await read('v:skills')

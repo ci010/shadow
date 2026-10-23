@@ -83,6 +83,11 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           else if (path === '/api/provider/setup') data = { provider: 'openai', model: 'gpt-test', ready: true, hasApiKey: false, authMode: 'none' }
           else if (path === '/api/config') data = { agent: { model: 'gpt-test', workspace: 'synthetic', temperature: 0.5 } }
           else if (path === '/debug/models') data = { models: ['gpt-test', 'gpt-alternate'] }
+          else if (path === '/api/runtime/frontend-logs' && request.method === 'GET') data = { events: [] }
+          else if (path === '/api/bot-chat-setup/request') data = { request: null }
+          else if (/^\/api\/computer\/[^/]+$/.test(path)) data = { projectId: scope?.[1] ?? 'work', sessionId: decodeURIComponent(path.split('/').at(-1)!), available: false, busy: false, grant: null, pending: null, executing: false, lastAction: null }
+          else if (path === '/api/audio/status') data = { asr: { ready: false, route: 'local' }, tts: { ready: false, route: 'local' } }
+          else if (operation === 'work') data = { records: [], effects: [] }
           else if (path === '/api/folders') data = { folders: [] }
           else if (path === '/api/channels') data = { channels: [] }
           else if (path === '/api/automations') data = { automations: [] }
@@ -109,9 +114,9 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
             const name = JSON.parse(body).name
             names.set(sessionId, name)
             data = { sessionId, name }
-          } else if (operation === 'files') data = { path: '', entries: [{ name: 'notes.txt', type: 'file', ext: '.txt', size: 23, mtime: null }] }
-          else if (operation === 'preview') data = { binary: false, size: 23, content: 'Synthetic document body', encoding: 'utf-8' }
-          else if (operation === 'git/status') data = { available: false, reason: 'not_repository', changes: [] }
+          } else if (operation === 'workspace/files') data = { path: '', entries: [{ name: 'notes.txt', type: 'file', ext: '.txt', size: 23, mtime: null }] }
+          else if (operation === 'workspace/preview') data = { binary: false, size: 23, content: 'Synthetic document body', encoding: 'utf-8' }
+          else if (operation === 'workspace/git/status') data = { available: false, reason: 'not_repository', changes: [] }
           else { unexpected.push(`${request.method} ${url.pathname}`); response.statusCode = 404; data = { error: 'Unstubbed mobile fixture endpoint' } }
           response.setHeader('Content-Type', 'application/json')
           response.end(JSON.stringify(data))

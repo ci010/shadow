@@ -513,7 +513,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
         await until(() => f.requests.length === 4 && f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
         assert.match(await command.execute(ctx, 'reflector'), /Session: cron:/)
         await until(() => !learning.status().pipelines.reflector.dispatching)
-        assert.match(JSON.stringify(f.requests.at(-1)!.messages), new RegExp(`index=${initialCount}`))
+        assert.match(JSON.stringify(f.requests.at(-1)!.messages), new RegExp(`messages \\[${initialCount},`))
         learning.update({ ...config, enabled: false })
         assert.equal(f.cron.listJobs().every(job => job.enabled === false), true)
         assert.match(await command.execute(ctx, 'encapsulator'), /No new activity/)

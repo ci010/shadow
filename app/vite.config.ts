@@ -11,6 +11,7 @@ import { TLSSocket } from 'node:tls'
 import { SCOPED_BACKEND_PATTERN } from '../src/gateway/route-kind.ts'
 import { parseRuntimeEndpointMessage } from '../desktop/src/control/runtime-endpoint.ts'
 import { pdfViewerAssets } from './pdf-viewer-assets.ts'
+import { highlightingDeps } from './highlighting-deps.ts'
 
 // Default backend gateway (the Shadow bot). Override with VITE_API_TARGET if
 // you run the bot on a non-default host/port.
@@ -109,18 +110,23 @@ function archiveLicenses(): Plugin {
 
 export default defineConfig({
   base: './',
+  // Component tests that use configFile:false may rebuild Vite's default cache.
+  // Keep the running app's optimized modules out of that shared directory.
+  cacheDir: 'node_modules/.vite-shadow-app',
   plugins: [routing.plugin, pdfViewerAssets(), archiveLicenses(), vue(), UnoCSS({
     configFile: fileURLToPath(new URL('./unocss.config.ts', import.meta.url)),
   })],
-  optimizeDeps: { exclude: ['emf-converter'] },
+  // Lazy Shiki entrypoints must be in the initial optimizer batch, not discovered
+  // while a file preview is opening (which invalidates already served import URLs).
+  optimizeDeps: { include: highlightingDeps, exclude: ['emf-converter'] },
   build: { rollupOptions: { external: ['@napi-rs/canvas'] } },
   server: {
-    host: process.env.VITE_DEV_HOST ?? '0.0.0.0',
+    host: process.env.VITE_DEV_HOST ?? '127.0.0.1',
     port: 5273,
     strictPort: true,
     proxy: routing.proxy,
     fs: {
-      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.pin',
+      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.pin', '**/bot.config.json', '**/workspace/**',
         ...(process.env.SHADOW_BROWSER_PIN_FILE ? [normalizePath(resolve(process.env.SHADOW_BROWSER_PIN_FILE))] : [])],
     },
   },

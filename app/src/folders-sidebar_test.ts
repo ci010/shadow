@@ -5,10 +5,9 @@ import { sidebarSessionIconStage, groupFolderSessions, isAbsoluteFolderPath, par
 const folder = { id: 'folder-a', name: 'same-name', path: 'C:\\fixtures\\one', createdAt: '2026-09-10T00:00:00Z' }
 const automation = { jobId: 'scheduled-task', name: 'Scheduled review', runId: 'run-1', startedAt: '2026-09-16T00:00:00Z', contextMode: 'fresh' }
 
-test('the folder menu keeps remote folders beside local folders', () => {
+test('the folder menu has one unified folder entry for every device', () => {
   assert.deepEqual(FOLDER_ACTIONS, [
     { id: 'open', label: 'Open folder' },
-    { id: 'remote', label: 'Open remote folder' },
     { id: 'clone', label: 'Clone repository' },
     { id: 'scratch', label: 'Start from scratch' },
   ])

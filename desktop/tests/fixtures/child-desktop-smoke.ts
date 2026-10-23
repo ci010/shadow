@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
-import { app, BrowserWindow, session } from 'electron'
+import { app, BrowserWindow, session, utilityProcess } from 'electron'
+import { writeFile } from 'node:fs/promises'
+import { once } from 'node:events'
+import { createUtilityProcessSpawn } from '../../src/sidecar/utility-process.js'
 import { installBackgroundWindow } from '../../src/background-window.js'
 
 app.setPath('userData', join(process.cwd(), 'profile'))
@@ -10,6 +13,14 @@ app.on('window-all-closed', () => {})
 
 async function main() {
   await app.whenReady()
+  // Exercise the real Electron API: undefined Child-only env entries used to
+  // synchronously throw "Invalid value for env", before any backend was run.
+  const utilityEntry = join(process.cwd(), 'utility-child.cjs')
+  await writeFile(utilityEntry, 'process.exit(0)')
+  const spawnUtility = createUtilityProcessSpawn((entry, args, options) => utilityProcess.fork(entry, args, options))
+  const utility = spawnUtility('unused', [utilityEntry], { env: { ...process.env, SHADOW_DESKTOP_MEDIA_KEY: undefined } })
+  const [utilityExit] = await once(utility, 'exit')
+  assert.equal(utilityExit, 0, 'Child utility must start with an absent Main media key')
   const base = process.env.CHILD_SMOKE_URL!
   session.defaultSession.webRequest.onBeforeRequest((details, done) => done({ cancel: !details.url.startsWith(base) }))
   const window = new BrowserWindow({ show: false, width: 1100, height: 900,
@@ -67,31 +78,22 @@ async function main() {
     assert.equal(await run('fixture.completed'), true)
     await run(`fixture.openChild();new Promise(r=>setTimeout(r,100))`)
     const offline = await run(`document.body.innerText`)
-    assert.match(offline, /Not connected to Main/)
-    assert.match(offline, /sha256:1234567890abcdef/)
-    assert.ok(!offline.includes('Connected to Main'))
-    assert.match(offline, /not proxied/)
+    assert.match(offline, /Main workspace unavailable/)
+    assert.match(offline, /main_workspace_econnrefused/)
+    assert.ok(!offline.includes('This Child'))
+    assert.equal(await run(`document.querySelector('.child-status') === null && document.querySelector('.child-shell') === null`), true)
     for (const width of [1100, 400]) {
       window.setSize(width, 900)
-      assert.equal(await run(`new Promise(r=>setTimeout(()=>r(document.documentElement.scrollWidth<=innerWidth+1),60))`), true, `Child shell overflow at ${width}`)
+      assert.equal(await run(`new Promise(r=>setTimeout(()=>r(document.documentElement.scrollWidth<=innerWidth+1),60))`), true)
     }
-    await run(`fixture.connection='connected';document.querySelector('.child-status button').click();new Promise(r=>setTimeout(r,100))`)
-    assert.match(await run('document.body.innerText'), /Connected to Main/)
     const disposeBackground = installBackgroundWindow(app, window)
-    window.show()
-    window.close()
-    assert.equal(window.isDestroyed(), false, 'Closing Child must not destroy its window or quit the owner')
+    window.show(); window.close()
+    assert.equal(window.isDestroyed(), false)
     assert.equal(window.isVisible(), false)
-    assert.match(await run('document.body.innerText'), /Connected to Main/)
     app.emit('activate', {} as Electron.Event, false)
-    assert.equal(window.isVisible(), true, 'Dock activation must reopen the same Child window')
-    window.hide()
-    disposeBackground()
-    await run(`fixture.statusFailure=true;document.querySelector('.child-status button').click();new Promise(r=>setTimeout(r,100))`)
-    const failedStatus = await run('document.body.innerText')
-    assert.match(failedStatus, /Main connection is unknown/)
-    assert.ok(!failedStatus.includes('Connected to Main'))
-    assert.equal(await run(`fixture.requests.every(url=>url.endsWith('/local/v1/child')||url.endsWith('/local/v1/nodes'))`), true)
+    assert.equal(window.isVisible(), true)
+    window.hide(); disposeBackground()
+    assert.equal(await run(`fixture.requests.every(url=>url.endsWith('/api/projects'))`), true)
     await run(`fixture.openRoleSettings('main');new Promise(r=>setTimeout(r,80))`)
     assert.equal(await run('fixture.switches.length'), 0, 'Merely opening settings never switches the runtime')
     await run(`document.querySelector('.desktop-role-settings button').click();new Promise(r=>setTimeout(r,30))`)
@@ -107,6 +109,14 @@ async function main() {
     await run(`fixture.switchFails=true;document.querySelector('.desktop-role-settings button').click();new Promise(r=>setTimeout(r,30))`)
     assert.match(await run('document.body.innerText'), /Close and reopen Shadow/)
     assert.deepEqual(await run('fixture.switches[1]'), { role: 'main', executionConsent: false })
+    await run(`fixture.openRecovery();new Promise(r=>setTimeout(r,80))`)
+    for (const width of [1100, 400]) {
+      window.setSize(width, 900)
+      await run(`new Promise(r=>setTimeout(r,60))`)
+      const recoveryLayout = await run(`(() => { const role=document.querySelector('.desktop-role-settings'); const panel=document.querySelector('.recovery-panel'); return {width:role.getBoundingClientRect().width,panelWidth:panel.getBoundingClientRect().width,column:getComputedStyle(role).gridColumn}; })()`)
+      assert.ok(recoveryLayout.width >= recoveryLayout.panelWidth - 65, `Recovery role card must span the brand and text columns at ${width}: ${JSON.stringify(recoveryLayout)}`)
+      assert.equal(recoveryLayout.column, '1 / -1')
+    }
     console.log('CHILD_SMOKE_OK')
   } finally { window.destroy() }
   app.exit(0)

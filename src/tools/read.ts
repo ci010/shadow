@@ -190,7 +190,7 @@ export class ReadTool implements Tool<ToolResult> {
   readonly supportsRemoteWorkdir = true
   readonly description =
     'Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. ' +
-    'Text supports offset/limit, including URLs and virtual text. Session line ranges use the same view as grep; omit ranges for recent messages. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.'
+    'Text supports offset/limit, including URLs and virtual text. Local session /overview omits tool payloads and links exact /calls/<id> details; /full retains payloads. Line ranges match grep on that path; omit ranges for the last 200 lines. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -245,12 +245,18 @@ export class ReadTool implements Tool<ToolResult> {
       const rel = isAbsolute(raw) ? relative(this.workspace, raw) : raw
       // Only check virtual mounts for paths that don't escape the workspace
       if (!rel.startsWith('..')) {
-        if (!listMode && (args.offset !== undefined || args.limit !== undefined)
-          && /^v:sessions\/(?!remote:)[^?]+$/.test(rel.replace(/\\/g, '/'))) {
+        if (!listMode && /^v:sessions\/(?!remote:)[^?]+$/.test(rel.replace(/\\/g, '/')) && !rel.endsWith('/brief')) {
           const entries = await this.virtualFs.list(rel, context)
           const entry = entries?.find(entry => entry.path === rel.replace(/\\/g, '/'))
-          if (!entry) throw new Error('Session search view not found. Use the returned session reference; message paging uses ?index=0&page_size=20.')
-          return this.pageText(entry.content, args, showLineNumbers)
+          if (!entry) throw new Error('Session search view not found. Use the returned session reference; use read.offset/read.limit for line paging.')
+          const pageArgs = args.offset === undefined && args.limit === undefined
+            ? { ...args, offset: Math.max(1, entry.content.split('\n').length - 199), limit: 200 }
+            : args.limit === undefined ? { ...args, limit: 200 } : args
+          const page = this.pageText(entry.content, pageArgs, showLineNumbers)
+          if (args.offset === undefined && args.limit === undefined && Number(pageArgs.offset) > 1) {
+            return `[recent lines ${pageArgs.offset}–${entry.content.split('\n').length}; use offset=1 and limit to read earlier lines]\n\n${page}`
+          }
+          return page
         }
         const result = this.virtualFs.resolve(rel, context)
         if (result != null) {
@@ -261,7 +267,7 @@ export class ReadTool implements Tool<ToolResult> {
             validateContentTokens(page, '.txt')
             return page
           }
-          return this.pageText(content, args, showLineNumbers)
+          return this.pageText(content, /^v:sessions\/(?!remote:)/.test(rel) && args.limit === undefined ? { ...args, limit: 200 } : args, showLineNumbers)
         }
       }
     }

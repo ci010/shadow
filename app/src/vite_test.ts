@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createServer as createHttpServer } from 'node:http'
 import { EventEmitter, once } from 'node:events'
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createConnection } from 'node:net'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -16,6 +16,13 @@ import unoConfig from '../unocss.config.ts'
 import { BrowserAuth } from '../../src/gateway/web-auth.ts'
 import { GatewayClientAddressRegistry, registerGatewayRoutes, serveGateway } from '../../src/gateway/server.ts'
 import { upgradeGatewayWebSocket } from '../../src/gateway/websocket.ts'
+
+// A second Vite server must never replace the live app's optimizer metadata.
+async function isolatedCache(t: TestContext): Promise<string> {
+  const directory = await mkdtemp(resolve('.shadow-test-vite-cache-'))
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
+  return directory
+}
 
 for (const desktop of [false, true]) {
   test(`LAN Vite preserves PIN, pairing, API and WebSocket authentication (${desktop ? 'desktop' : 'standalone'})`, async t => {
@@ -42,6 +49,7 @@ for (const desktop of [false, true]) {
     const vite = await createServer({
       root: fileURLToPath(new URL('..', import.meta.url)),
       configFile: false, envFile: false, logLevel: 'silent',
+      cacheDir: await isolatedCache(t),
       optimizeDeps: { noDiscovery: true, include: [] },
       plugins: [routing.plugin],
       server: {
@@ -111,6 +119,7 @@ test('Vite never serves a local PIN file through filesystem or raw module URLs',
   await writeFile(file, 'synthetic-private-pin')
   const vite = await createServer({
     root, configFile: false, envFile: false, logLevel: 'silent',
+    cacheDir: await isolatedCache(t),
     optimizeDeps: { noDiscovery: true, include: [] },
     server: { host: '127.0.0.1', port: 0, strictPort: false, watch: null, fs: config.server!.fs },
   })
@@ -144,6 +153,7 @@ test('Vite 8 transforms Vue and proxies inventory without intercepting the Nodes
     configFile: false,
     envFile: false,
     logLevel: 'silent',
+    cacheDir: await isolatedCache(t),
     optimizeDeps: { noDiscovery: true, include: [] },
     server: {
       ...config.server,
@@ -228,6 +238,7 @@ test('desktop Vite waits for IPC readiness and retargets every backend route wit
   const vite = await createServer({
     root: fileURLToPath(new URL('..', import.meta.url)),
     configFile: false, envFile: false, logLevel: 'silent',
+    cacheDir: await isolatedCache(t),
     optimizeDeps: { noDiscovery: true, include: [] },
     plugins: [routing.plugin],
     server: { host: '127.0.0.1', port: 0, strictPort: false, watch: null, proxy: routing.proxy },

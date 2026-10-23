@@ -53,7 +53,8 @@
       "icon": "assets/icon.ico",
       "extraResources": [
         { "from": "service", "to": "service", "filter": ["**/*"] },
-        { "from": "aria2/aria2c.exe", "to": "aria2/aria2c.exe" }
+        { "from": "aria2/aria2c.exe", "to": "aria2/aria2c.exe" },
+        { "from": "safegit", "to": "safegit", "filter": ["safegit.exe", "LICENSE", "release.json"] }
       ]
     },
     "mac": {
@@ -65,7 +66,8 @@
       "entitlementsInherit": "assets/entitlements.mac.plist",
       "notarize": false,
       "extraResources": [
-        { "from": "aria2/aria2c", "to": "aria2/aria2c" }
+        { "from": "aria2/aria2c", "to": "aria2/aria2c" },
+        { "from": "safegit", "to": "safegit", "filter": ["safegit", "LICENSE", "release.json"] }
       ]
     },
     "linux": {
@@ -74,7 +76,8 @@
       "category": "Utility",
       "executableName": "shadow",
       "extraResources": [
-        { "from": "aria2/aria2c", "to": "aria2/aria2c" }
+        { "from": "aria2/aria2c", "to": "aria2/aria2c" },
+        { "from": "safegit", "to": "safegit", "filter": ["safegit", "LICENSE", "release.json"] }
       ]
     },
     "nsis": {

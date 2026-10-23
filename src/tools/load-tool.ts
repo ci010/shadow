@@ -1,3 +1,4 @@
+import { discoverFolderMcp, type FolderMcpSource } from '../mcp/folder.ts'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { LOCAL_EXECUTOR_DISABLED } from '../execution/coordinator-policy.ts'
 import { readFile } from 'node:fs/promises'
@@ -39,6 +40,7 @@ import { toolResultText } from './tool.ts'
  */
 export interface McpLoadable {
   config: McpServerConfig
+  folderSource?: FolderMcpSource
   /**
    * Absolute path to a JSON config file with persistent extra args.
    * Format: `{ "args": ["--no-usage-statistics"] }`.
@@ -182,6 +184,7 @@ function selectedAppPage(result: ToolResult, origin: string): number {
  * are cleared on sleep so they never persist across session boundaries.
  */
 export class ImportTool implements Tool {
+  private readonly folderSources = new WeakMap<SessionTools, { id?: string; entries: Map<string, McpLoadable> }>()
   private readonly configured = new Map<string, McpLoadable>()
   private readonly skillTools = new WeakMap<SessionTools, Map<string, ScriptLoadable>>()
   private readonly builtins: Map<string, LoadableEntry>
@@ -224,6 +227,7 @@ export class ImportTool implements Tool {
     private getSkillDirectory: SkillDirectoryResolver = () => undefined,
     private mcpIndex = new McpToolIndex(workspace),
     private canLoad?: (entry: LoadableEntry) => boolean,
+    private resolveFolder?: (id: string) => { id: string; path: string } | undefined,
     sharedChrome?: SharedChrome,
   ) {
     this.sharedChrome = sharedChrome ?? new SharedChrome(resolve(workspace, 'browser-profiles'))
@@ -386,7 +390,29 @@ export class ImportTool implements Tool {
   }
 
   private catalogFor(tools: SessionTools): Map<string, LoadableEntry> {
-    return new Map([...this.loadable, ...(this.skillTools.get(tools) ?? [])])
+    return new Map([...this.loadable, ...(this.folderSources.get(tools)?.entries ?? []), ...(this.skillTools.get(tools) ?? [])])
+  }
+
+  clearFolderMcpTools(tools: SessionTools): void {
+    for (const tool of tools.activeDynamicTools()) {
+      if (/^folder-[a-f0-9]{16}-.*__/.test(tool.name)) tools.unregister(tool.name)
+    }
+    this.folderSources.delete(tools)
+  }
+
+  private async prepareFolder(tools: SessionTools, folderId?: string): Promise<void> {
+    if (!this.resolveFolder || (this.folderSources.has(tools) && this.folderSources.get(tools)?.id === folderId)) return
+    const folder = folderId ? this.resolveFolder(folderId) : undefined
+    const sources = folder ? await discoverFolderMcp(folder) : []
+    if (sources.some(source => this.loadable.has(source.config.name))) throw new Error('Folder MCP namespace conflicts with a Project source; rename the Project source.')
+    const names = new Set(sources.map(source => source.config.name))
+    for (const tool of tools.activeDynamicTools()) {
+      const server = tool.name.split('__')[0]
+      if (/^folder-[a-f0-9]{16}-/.test(server) && !names.has(server)) tools.unregister(tool.name)
+    }
+    // Retain connections until owner sleep: captured children may still hold adapters.
+    // Only this session's overlay loses the old names; never revoke a borrowed child handle.
+    this.folderSources.set(tools, { id: folderId, entries: new Map(sources.map(source => [source.config.name, { config: source.config, folderSource: source }])) })
   }
 
   /** Drop only this session's selected-folder imports; captured child/in-flight handles retain their scope. */
@@ -519,6 +545,7 @@ export class ImportTool implements Tool {
   }
 
   async virtualEntries(context: ExecutionContext, options?: VirtualListOptions): Promise<VirtualEntry[]> {
+    if (!context.remoteWorkdir) await this.prepareFolder(context.tools, context.folderId)
     const requester = context.tools
     const signal = AbortSignal.any([context.signal, requester.dynamicSignal, requester.ownerSignal])
     signal.throwIfAborted()
@@ -567,7 +594,7 @@ export class ImportTool implements Tool {
                   if (chromeToolAllowed(entry.config, info) && (!entry.toolFilter || entry.toolFilter.has(info.name))) add(mcpToolContract(entry.config, info), undefined, indexed.indexedAt)
                 }
               } else {
-                warning = 'Tool metadata is not indexed. Read v:skills/mcp-config for indexing, or initialize built-in browser sources with browser_setup. Search never connects services.'
+                warning = entry.folderSource ? `Tool metadata is not indexed. Call invoke_tool({name: ${JSON.stringify(name)}, args: {}}) to start the configured service and return contracts without executing a tool; then invoke_tool with a returned exact tool name. Search never connects services.` : 'Tool metadata is not indexed. Read v:skills/mcp-config for indexing, or initialize built-in browser sources with browser_setup. Search never connects services.'
               }
             }
           } else if (isFactoryLoadable(entry)) {
@@ -687,6 +714,7 @@ export class ImportTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    if (!context.remoteWorkdir) await this.prepareFolder(context.tools, context.folderId)
     const error = this.contextError(String(args.source ?? ''), context)
     if (error) return error
     return await this.importSource(args, context.tools, { signal: context.signal, cwd: context.cwd ?? this.workspace })
@@ -716,13 +744,30 @@ export class ImportTool implements Tool {
       !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsRemoteWorkdir === true
   }
 
+  /** Explicit source initialization returns contracts, never executes an MCP tool. */
+  async initializeSource(name: string, args: Record<string, unknown>, context: ExecutionContext): Promise<string | undefined> {
+    if (context.remoteWorkdir) return undefined
+    await this.prepareFolder(context.tools, context.folderId)
+    const entry = this.catalogFor(context.tools).get(name)
+    if (!entry || !isMcpLoadable(entry)) return undefined
+    if (Object.keys(args).length) return 'Error: MCP source initialization requires args: {}; invoke a returned exact tool name to execute a tool.'
+    if (!context.tools.canUseDynamic(name)) return 'Error: MCP source is unavailable for this agent type.'
+    const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}${name}`, context)
+    if (denied) return denied
+    const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
+    const result = await this.withImports(context.tools, signal, () => this.loadByName(name, context.tools, [], { signal, cwd: context.cwd }))
+    return typeof result === 'string' ? result : `Initialized MCP source ${name}; no tool executed.\n${toolInvocationContract(result)}`
+  }
+
   /** Import the catalog entry that owns a dynamic tool name, when determinable. */
   async importForInvocation(
     toolName: string,
     sessionTools: SessionTools,
     signal?: AbortSignal,
     cwd?: string,
+    folderId?: string,
   ): Promise<string | undefined> {
+    await this.prepareFolder(sessionTools, folderId)
     if (!sessionTools.canUseDynamic(toolName)) return undefined
     if (toolName.startsWith('chrome-devtools__') && this.sessionBrowsersEnabled()) {
       const target = this.browsers.resolve(sessionTools)
@@ -746,7 +791,7 @@ export class ImportTool implements Tool {
     const unprefixedName = toolName.slice(separator + 2)
     let result: string | undefined
 
-    for (const [catalogName, entry] of this.loadable) {
+    for (const [catalogName, entry] of this.catalogFor(sessionTools)) {
       if (!isMcpLoadable(entry) || entry.config.name !== serverName) continue
       if (entry.toolFilter && !entry.toolFilter.has(unprefixedName)) continue
 
@@ -883,9 +928,9 @@ export class ImportTool implements Tool {
     }
     try {
       const adapters = await this.connectMcp(
-        { ...connOwner.config, args: effectiveArgs }, connKey, sessionTools, entry.toolFilter, options,
-        () => this.loadable.get(name) === entry && this.browsers.forTools(sessionTools)?.active !== false,
-        this.configured.get(name) === entry && !extraCliArgs.length && !managedChrome ? entry.config : undefined,
+        { ...connOwner.config, args: effectiveArgs }, connKey, sessionTools, entry.toolFilter, { ...options, cwd: entry.folderSource?.cwd ?? options.cwd },
+        () => this.catalogFor(sessionTools).get(name) === entry && this.browsers.forTools(sessionTools)?.active !== false,
+        (this.configured.get(name) === entry || entry.folderSource) && !extraCliArgs.length && !managedChrome ? entry.config : undefined,
       )
       return adapters
     } catch (error) {
@@ -920,7 +965,7 @@ export class ImportTool implements Tool {
     }
     const connect = async () => {
       checkCurrent()
-      const conn = new McpConnection(config, browserRoot ?? this.workspace, browserRoot)
+      const conn = new McpConnection(config, browserRoot ?? options.cwd ?? this.workspace, browserRoot)
       try {
         await conn.connect(options.signal)
         checkCurrent()

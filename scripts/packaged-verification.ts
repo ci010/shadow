@@ -89,6 +89,15 @@ export async function createVerificationDirectory(parent = tmpdir()): Promise<st
   return mkdtemp(join(await realpath(parent), 'shadow-packaged-acceptance-'))
 }
 
+/** Seed a fresh-layout smoke installation; legacy config/ would block startup. */
+export async function prepareVerificationData(dataDir: string): Promise<void> {
+  await mkdir(dataDir, { recursive: true })
+  await writeFile(join(dataDir, 'app.json'), JSON.stringify({
+    agent: { workspace: dataDir, model: 'gpt-4.1', sessionStorage: 'sqlite' },
+    channels: {}, mcp: {},
+  }))
+}
+
 export function backendCommand(
   packagedRoot: string, bootstrap: string, target: DesktopTarget = desktopTarget(),
 ): { executable: string; args: string[] } {

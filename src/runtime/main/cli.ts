@@ -1,6 +1,4 @@
 import { readFile } from 'node:fs/promises'
-import { assertDataLayoutReady } from '../../storage/data-layout-startup.ts'
-import { runDataMigrationCli } from '../../storage/data-migration-cli.ts'
 import process from 'node:process'
 import { resolve } from 'node:path'
 import { loadConfig } from '../../config/loader.ts'
@@ -46,12 +44,8 @@ export async function runBackendCli(
 
 export async function runRootProcessEntry(
   hooks: BackendProcessHooks = nodeProcessHooks,
-): Promise<ProcessEntryResult | { readonly route: 'web-pair' | 'child-pair' | 'data-migration' }> {
-  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'web' || hooks.argv[1] === 'data-migration' ? 1 : 2)
-  if (runtimeArgs[0] === 'data-migration') {
-    await runDataMigrationCli(runtimeArgs.slice(1))
-    return { route: 'data-migration' }
-  }
+): Promise<ProcessEntryResult | { readonly route: 'web-pair' | 'child-pair' }> {
+  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'web' ? 1 : 2)
   if (runtimeArgs[0] === 'child' && runtimeArgs[1] === 'pair') {
     try { await runChildPairingCli(runtimeArgs.slice(2)) }
     catch (error) {
@@ -75,7 +69,6 @@ export async function runRootProcessEntry(
   })
   return runProcessEntry(hooks.argv, {
     loadConfig,
-    prepareMainData: assertDataLayoutReady,
     startMainRuntime: startLocalMainRuntime,
     startChildRuntime: (config, paths, context) => {
       if (

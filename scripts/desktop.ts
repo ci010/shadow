@@ -1,6 +1,8 @@
+import { ensureDevelopmentSafegit } from './development-safegit.ts'
 import { consumeStartupProfileArm } from './startup-profile.ts'
 import { createRequire } from 'node:module'
 import { stageBackend } from './backend-bundle.ts'
+import { copyAgentDesktopAssets } from './agent-desktop-assets.ts'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { pnpmInvocation, runPnpm } from './processes.ts'
@@ -10,6 +12,7 @@ import { prepareReleaseDownloads } from './release-downloads.ts'
 import { desktopTarget } from './desktop-target.ts'
 import { verifyPreparedBuild } from './prepared-build.ts'
 import { prepareAria2Signing, verifyAria2Package } from './aria2-package.ts'
+import { prepareSafegit, prepareSafegitSigning } from './safegit-package.ts'
 
 const mode = process.argv[2] ?? 'build'
 if (mode !== 'build' && mode !== 'dev' && mode !== 'package') {
@@ -17,6 +20,7 @@ if (mode !== 'build' && mode !== 'dev' && mode !== 'package') {
 }
 
 const target = mode !== 'dev' ? desktopTarget() : undefined
+if (mode === 'dev') await ensureDevelopmentSafegit(process.cwd())
 const sourceHash = mode === 'package' ? await verifyPreparedBuild(process.cwd(), 'desktop')
   : target ? await sourceFingerprint(process.cwd()) : undefined
 if (mode !== 'package') {
@@ -28,16 +32,21 @@ if (target) {
   if (mode !== 'package') await runPnpm(['build:app'])
   // Reuse the same checked Vite output as development (or the verified prepared build).
   await stageBackend(process.cwd(), resolve('desktop/backend'))
+  // Prepared JS comes from Linux; native resources come from this target runner.
+  // Stage them only after verification, without mutating the prepared outputs.
+  await copyAgentDesktopAssets(process.cwd(), resolve('desktop/backend/dist'))
   const electronDist = await prepareReleaseDownloads(process.cwd(), process.env, target)
   await verifyAria2Package(process.cwd(), target)
   await prepareAria2Signing(process.cwd(), target)
+  await prepareSafegit(process.cwd(), target.platform, target.arch)
+  await prepareSafegitSigning(process.cwd(), target.platform)
   await createReleaseManifest(process.cwd(), sourceHash!)
   await runPnpm(['--filter', '@shadow/desktop', 'dist', target.builderFlag, target.format, `--${target.arch}`, `--config.electronDist=${electronDist}`])
 } else {
   const port = process.env.VITE_DEV_PORT ?? '5273'
   const url = `http://127.0.0.1:${port}`
   const vite = spawn(process.execPath, [
-    'node_modules/vite/bin/vite.js', '--host', process.env.VITE_DEV_HOST ?? '0.0.0.0',
+    'node_modules/vite/bin/vite.js', '--host', process.env.VITE_DEV_HOST ?? '127.0.0.1',
     '--port', port, '--strictPort',
   ], {
     cwd: 'app',

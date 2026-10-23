@@ -222,38 +222,3 @@ test('invalid edited paths do not fall back to the previously selected directory
 	await rejects(commitMainDirectoryChoice(api, '~/.shadow', { selectionId: 'old', displayName: 'old' }), /absolute/)
 	assertEquals(writes, 0)
 })
-
-test('legacy complete profile opens upgrade view without backend initialization', async () => {
-  let starts = 0
-  const layout = { status: 'migration-required', dataDir: 'C:\\legacy', running: false } as const
-  const api = { bootstrap: {
-    load: async () => mainState('complete'), dataLayoutStatus: async () => layout,
-    ensureRuntime: async () => { starts++; return { ok: true, context: realContext } },
-  } } as unknown as ShadowDesktopApi
-  deepStrictEqual(await resolveDesktopBootstrap(api), { view: 'data-upgrade', layout })
-  assertEquals(starts, 0)
-})
-
-test('upgraded profile continues normal startup and blocked interrupted profile never starts', async () => {
-  let blocked = true, starts = 0
-  const api = { bootstrap: {
-    load: async () => mainState('complete'),
-    dataLayoutStatus: async () => ({ status: blocked ? 'blocked' : 'ready', dataDir: '/profile', running: false, reason: 'inspect interrupted migration' }),
-    ensureRuntime: async () => { starts++; return { ok: true, context: realContext } },
-  } } as unknown as ShadowDesktopApi
-  assertEquals((await resolveDesktopBootstrap(api)).view, 'data-upgrade')
-  assertEquals(starts, 0)
-  blocked = false
-  assertEquals((await resolveDesktopBootstrap(api)).view, 'app')
-  assertEquals(starts, 1)
-})
-
-test('detector failures remain recovery and do not start backend', async () => {
-  let starts = 0
-  const api = { bootstrap: {
-    load: async () => mainState('complete'), dataLayoutStatus: async () => { throw Error('unreadable receipt') },
-    ensureRuntime: async () => { starts++; return { ok: true, context: realContext } },
-  } } as unknown as ShadowDesktopApi
-  assertEquals((await resolveDesktopBootstrap(api)).view, 'runtime-recovery')
-  assertEquals(starts, 0)
-})

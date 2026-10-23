@@ -1197,7 +1197,7 @@ ${JSON.stringify(request)}`,
     // Persist before publishing: restart never replays writes or a successful delivery.
     if (kind !== 'review') await this.saveReviewTask(state, { ...task, workflow: { ...w, delivered: true } })
     await this.deps.events.emit({
-      id: `task-review:${state.sessionId}:${task.revision}:${kind}`, type: kind === 'review' ? 'subagent-review-requested' : kind === 'passed' ? 'subagent-complete' : 'subagent-failed',
+      id: `task-review:${state.sessionId}:${task.revision}:${kind}${kind === 'failed' ? `:${task.activeRunId ?? 'none'}` : ''}`, type: kind === 'review' ? 'subagent-review-requested' : kind === 'passed' ? 'subagent-complete' : 'subagent-failed',
       source: 'subagent', targetSessionId: kind === 'review' ? task.creatorSessionId : state.reportTo ?? task.creatorSessionId, senderName: 'Task review', content,
       origin: { sessionId: state.sessionId, inputId: state.executionKey ?? state.sessionId, source: { kind: 'session', sessionId: state.sessionId } },
       meta: { kind: 'subagent', sourceSessionId: state.sessionId, mode: 'task', executionStatus: kind === 'passed' ? 'completed' : kind === 'failed' ? 'failed' : 'pending', revision: task.revision, taskStatus: task.status },
@@ -1341,10 +1341,19 @@ ${JSON.stringify(request)}`,
       const task = state.task
       if (![task.creatorSessionId, task.workerSessionId, task.reviewerSessionId].includes(actorSessionId)) throw new Error('Task access denied')
       if (action === 'read') return structuredClone(task)
-      if (task.workflow) throw new Error('Managed review tasks use structured review, not manual lifecycle commands')
+      if (task.workflow && action !== 'retry') throw new Error('Managed review tasks use structured review, not manual lifecycle commands')
       if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== task.version) throw new Error('Task version conflict; read the current task before retrying')
       let next: TaskRecord
-      if (action === 'run') {
+      if (action === 'retry') {
+        if (actorSessionId !== task.creatorSessionId) throw new Error('Only the creator may retry a failed task')
+        if (state.mode !== 'task' || state.executionStatus !== 'failed' || task.status !== 'working') throw new Error('Only a failed local worker may be retried')
+        if (this.sessions[sessionId] || this.reporting.has(sessionId) || this.preparations.has(sessionId)) throw new Error('Wait for the previous execution and report to settle')
+        if (task.workflow && (task.workflow.terminal !== 'failed' || task.workflow.decision)) throw new Error('Review decisions cannot be retried as worker failures')
+        next = { ...task, activeRunId: undefined, version: task.version + 1,
+          ...(task.workflow ? { workflow: { ...task.workflow, terminal: undefined, failure: undefined, delivered: undefined, submission: undefined, reviewerSessionId: undefined } } : {}) }
+        runInput = { id: crypto.randomUUID(), kind: 'message', content: 'Continue the original assignment after the previous execution failed. Inspect the recorded history, tool results, and existing artifacts before acting. Preserve completed work; do not blindly replay tool calls or repeat side effects whose outcome is uncertain. Verify uncertain outcomes first. This is a continuation of the same task, not a new assignment.', policy: 'next-step', timestamp: new Date().toISOString(), source: { kind: 'session', sessionId: actorSessionId } }
+        this.taskRunInputs.add(runInput)
+      } else if (action === 'run') {
         if (actorSessionId !== task.creatorSessionId) throw new Error('Only the creator may run a revision')
         if (!fields.content?.trim()) throw new Error('A revision run requires explicit instructions')
         if (this.sessions[sessionId] || this.reporting.has(sessionId) || !['completed', 'failed', 'cancelled'].includes(state.executionStatus ?? '')) throw new Error('Wait for the previous run and its report to settle')

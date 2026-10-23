@@ -5,11 +5,12 @@ import type { Tool, ToolParameters } from './tool.ts'
 /** Review authority comes exclusively from the authenticated session identity. */
 export class TaskTool implements Tool {
   readonly name = 'task'
-  readonly description = 'Submit a structured verdict for a fixed local task revision, or inspect its review record. Only the designated reviewer (parent by default) may review; worker finals never accept themselves. Changes automatically rerun the original worker; PASS delivers once; blocked escalates. Agent reviewers are created by the workflow. Calls and A2A are unsupported; Work is unchanged.'
+  readonly description = 'Submit a structured verdict for a fixed local task revision, or inspect its review record. Only the designated reviewer (parent by default) may review; worker finals never accept themselves. Changes automatically rerun the original worker; PASS delivers once; blocked escalates. Agent reviewers are created by the workflow. Calls and A2A are unsupported; Work is unchanged. Read then retry a settled failed local worker in its original history using expectedVersion; creator only, not calls or A2A. Retry continues from recorded results, never blindly replays tools.'
   readonly supportsRemoteWorkdir = true
   readonly parameters: ToolParameters = {
     type: 'object', properties: {
-      action: { type: 'string', enum: ['read', 'review'] },
+      action: { type: 'string', enum: ['read', 'review', 'retry'] },
+      expectedVersion: { type: 'integer', description: 'retry only: exact task version returned by read; prevents stale or duplicate retries.' },
       sessionId: { type: 'string', description: 'Original worker session ID.' },
       outcome: { type: 'string', enum: ['pass', 'changes_requested', 'blocked'], description: 'review only: structured verdict for the exact submission. Changes automatically rerun the worker; blocked escalates.' },
       revision: { type: 'integer', description: 'Exact submission revision from the review request.' },
@@ -27,6 +28,10 @@ export class TaskTool implements Tool {
     if (args.action === 'review') {
       if (!Number.isSafeInteger(args.revision) || !['pass', 'changes_requested', 'blocked'].includes(String(args.outcome))) throw new TypeError('Review requires exact revision and structured outcome')
       return JSON.stringify(await this.manager.reviewTask(context.sessionId, args.sessionId, args.revision as number, args.outcome as 'pass' | 'changes_requested' | 'blocked', String(args.content ?? '')))
+    }
+    if (args.action === 'retry') {
+      if (!Number.isSafeInteger(args.expectedVersion)) throw new TypeError('Retry requires expectedVersion from task read')
+      return JSON.stringify(await this.manager.taskAction(context.sessionId, args.sessionId, 'retry', args.expectedVersion as number))
     }
     if (args.action !== 'read') throw new TypeError('Use review with a structured outcome; manual task orchestration is internal only')
     return JSON.stringify(await this.manager.taskAction(context.sessionId, args.sessionId, args.action, args.expectedVersion as number | undefined, { ...args, reviewerSessionId: args.reviewerSessionId === '' ? null : args.reviewerSessionId } as { reviewerSessionId?: string | null; revision?: number; content?: string }))

@@ -2,7 +2,7 @@
   <section class="product-page fade-in">
     <header class="page-header">
       <div class="min-w-0">
-        <h1 ref="heading" tabindex="-1">{{ t('Nodes') }}</h1>
+        <component :is="embedded ? 'h2' : 'h1'" ref="heading" tabindex="-1">{{ t('Nodes') }}</component>
         <p class="page-summary">{{ t('Devices and the capabilities they provide.') }}</p>
       </div>
       <div class="context-strip" :aria-label="t('Administration access')">
@@ -12,12 +12,14 @@
       </div>
     </header>
 
+    <DesktopRoleSettings />
+
     <DeviceAdministration v-if="canAdministerDevices(context)" :api-base="apiBase" :nodes="nodes" @changed="refresh" />
 
     <p v-if="error" class="inventory-error" role="alert">{{ error }}</p>
     <p v-else-if="loading && !loaded" class="inventory-status" role="status">{{ t('Loading devices…') }}</p>
     <p v-else-if="loaded" class="inventory-status">
-      {{ context.mode === 'child' ? t('Capabilities provided by this Child.') : t('Main and registered Child devices.') }}
+      {{ context.mode === 'child' && !context.mainWorkspace ? t('Capabilities provided by this Child.') : t('Main and registered Child devices.') }}
       {{ t('Updated') }} {{ updatedAt }}{{ t('. Refreshes automatically while visible.') }}
     </p>
 
@@ -96,10 +98,11 @@ import { t, formatDateTime } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { CAPABILITY_LABELS, capabilityAvailability, capabilitySummary, fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
+import DesktopRoleSettings from './DesktopRoleSettings.vue'
 import DeviceAdministration from './DeviceAdministration.vue'
 import { canAdministerDevices, revokeDevice } from './device-administration.ts'
 
-const props = defineProps<{ apiBase: string }>()
+const props = defineProps<{ apiBase: string; embedded?: boolean }>()
 const context = useInstallationContext()
 const nodes = ref<readonly NodeInventoryEntry[]>([])
 const activeNodes = computed(() => nodes.value.filter(node => node.connection !== 'revoked'))
@@ -172,7 +175,7 @@ async function refresh() {
   controller = current
   loading.value = true
   try {
-    const result = await fetchNodeInventory(props.apiBase, context.value.mode, AbortSignal.any([current.signal, AbortSignal.timeout(10_000)]))
+    const result = await fetchNodeInventory(props.apiBase, context.value.mainWorkspace ? 'main' : context.value.mode, AbortSignal.any([current.signal, AbortSignal.timeout(10_000)]))
     if (controller !== current) return
     nodes.value = result.nodes
     loaded.value = true

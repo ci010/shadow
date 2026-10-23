@@ -103,12 +103,6 @@ export class ProjectCatalog {
   }
 
   async init(): Promise<void> {
-    try {
-      await lstat(join(this.hostHome, '.layout-migration', 'copy.lock'))
-      throw new Error('Data-layout migration is in progress or was interrupted. Keep Shadow stopped until the migration receipt is verified and its lock is released.')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
     await mkdir(this.hostHome, { recursive: true })
     try {
       const data: unknown = JSON.parse(await readFile(this.filePath, 'utf8'))
@@ -177,18 +171,6 @@ export class ProjectCatalog {
       this.#data = data as CatalogData
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      const legacyCatalogs = [
-        join(this.hostHome, 'workspace.projects', 'projects.v2.json'),
-        join(`${this.hostHome}.projects`, 'projects.v2.json'),
-      ]
-      for (const legacyCatalog of legacyCatalogs) {
-        try {
-          await lstat(legacyCatalog)
-          throw new Error(`Legacy project data detected at ${legacyCatalog}. Stop Shadow and run the explicit data-layout migration before starting; no new catalog was created.`)
-        } catch (legacyError) {
-          if ((legacyError as NodeJS.ErrnoException).code !== 'ENOENT') throw legacyError
-        }
-      }
       const data: CatalogData = {
         version: 2, projects: [{ id: DEFAULT_PROJECT_ID, name: 'Default', createdAt: new Date().toISOString() }], folders: [],
       }
@@ -378,7 +360,9 @@ export class ProjectCatalog {
           throw new FolderError('folder_busy', 'A clone is using this folder. Wait for it to finish or cancel it.', 409)
         }
       }
-      if (conflict) throw new FolderError('folder_overlap_conflict', 'Another registered folder overlaps this folder. Remove the overlapping registration before changing ownership.', 409)
+      // Removing a registration cannot introduce cross-project ownership overlap.
+      // Keep the overlap guard for moves, but allow nested registrations to be removed.
+      if (targetProjectId !== undefined && conflict) throw new FolderError('folder_overlap_conflict', 'Another registered folder overlaps this folder. Remove the overlapping registration before changing ownership.', 409)
       // All activity checks and the durable rename share one synchronous commit point.
       // No new admission can interleave between these checks and revocation.
       if (this.#access.get(projectId)) throw new FolderError('folder_busy', 'Wait for active project requests and work to finish, then retry.', 409)

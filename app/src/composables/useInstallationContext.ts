@@ -14,7 +14,7 @@ import {
 
 type InstallationContextRef = DeepReadonly<Ref<InstallationContextV1>>
 
-const installationContextKey: InjectionKey<InstallationContextRef> = Symbol(
+export const installationContextKey: InjectionKey<InstallationContextRef> = Symbol(
   'installation-context',
 )
 

@@ -30,6 +30,9 @@ export function resolveLegacyProjectPath(home: string, path: string): string {
   if (oldHome === undefined) return path
   if (!oldHome) return root
   const entry = oldHome.split(sep)[0]!
+  // Archives are no longer a service storage root; historical links can still
+  // name Markdown retained by the completed layout migration.
+  if (entry === 'projects') return resolve(root, 'state', 'legacy-initiatives', ...oldHome.split(sep).slice(1))
   return Object.hasOwn(PROJECT_STORAGE_ENTRIES, entry)
     ? projectStoragePath(root, oldHome)
     : resolve(projectDataPaths(root).workdirs, oldHome)

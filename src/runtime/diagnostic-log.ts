@@ -1,3 +1,4 @@
+import { redactDiagnosticUrls } from './module-diagnostic.ts'
 import { getProjectScope } from '../projects/scope.ts'
 
 export const READINESS_RESULTS = ['ready', 'invalid_credentials', 'permission_denied', 'network_error', 'cancelled_error'] as const
@@ -9,13 +10,13 @@ export const RUNTIME_LOG_LIMIT = 200
  * not partially parsed. Console strings are not a reliable structured security boundary.
  * Never export arbitrary OTLP attributes, resources or structured bodies. */
 export function redactRuntimeText(value: string): string {
+  value = redactDiagnosticUrls(value)
   // Covers camel/snake/kebab keys, JSON and util.inspect output, HTTP headers,
   // command arguments and multiline payloads. Omit the entire message if uncertain.
   if (/\b[\w.-]*(?:token|secret|password|passwd|credential|api[-_]?key)[\w.-]*\s*["']?\s*[:=]/i.test(value) || /(?:--data(?:-raw|-binary)?\b|--header\b|(?:^|\s)-H\s)/.test(value) || /(?:authorization|proxy[-_ ]?authorization|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|client[-_ ]?secret|password|passwd|credential|private[-_ ]?key|cookie|set[-_ ]?cookie|secret|bearer\s|basic\s|(?:request|response)[-_ ]?body|\b(?:headers|body|payload|token|prompt|messages|request|response|input|output|content|signature|key|auth)\s*["']?\s*[:=])/i.test(value)) {
     return '[REDACTED: credential, header or payload-bearing message]'
   }
   return value
-    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi, '[REDACTED URL]')
     .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]+/g, '[REDACTED TOKEN]')
     .slice(0, 4096)
 }

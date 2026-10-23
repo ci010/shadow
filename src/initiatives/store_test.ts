@@ -1,7 +1,7 @@
 import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { constants, DatabaseSync } from 'node:sqlite'
 import { test, type TestContext } from 'node:test'
@@ -10,6 +10,11 @@ import { parseSql } from './sql.ts'
 
 function fixture(t: TestContext, isSessionActive?: (id: string) => boolean | undefined, isSessionKnown?: InitiativeStoreOptions['isSessionKnown']) {
   const home = resolve('src', 'initiatives', `.test-${randomUUID()}`)
+  // Exercise the retained historical SQL archive contract, not current Work creation.
+  new InitiativeStore(home).close()
+  const archive = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+  archive.exec('PRAGMA user_version=5')
+  archive.close()
   const store = new InitiativeStore(home, { isSessionActive, isSessionKnown })
   t.after(() => { store.close(); rmSync(home, { recursive: true, force: true }) })
   const query = (sql: string, actor = 'owner') => store.query(sql, actor)
@@ -40,7 +45,6 @@ test('CRUD, actor stamping, append-only audit, revisions, and reopen', (t) => {
   try { assert.equal(reopened.query('SELECT * FROM initiatives', 'reader').results[0]!.rows[0]!.goal, 'Ship safely') }
   finally { reopened.close() }
   assert.throws(() => f.query('SELECT * FROM initiatives'), /closed/)
-  assert.throws(() => f.store.migrateLegacyMarkdown(), /closed/)
 })
 
 test('independent Project Home databases cannot observe or modify one another', (t) => {
@@ -51,7 +55,6 @@ test('independent Project Home databases cannot observe or modify one another', 
   b.query("UPDATE initiatives SET goal='Other Project' WHERE id='build'")
   assert.equal(a.rows('SELECT goal FROM initiatives')[0]!.goal, 'Ship it')
   assert.equal(b.rows('SELECT goal FROM initiatives')[0]!.goal, 'Other Project')
-  assert.throws(() => a.store.migrateLegacy(projectStoragePath(b.home, 'projects')), /this Project/)
 })
 
 test('work reference validation is Project-local, read-only and checks the item parent', (t) => {
@@ -352,9 +355,6 @@ test('new assignment and ownership targets must belong to the current Project wh
   assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='new-owner'"), /owner/)
   assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work' AND assignee_session_id='worker'", 'new-owner'), /current assignee/)
   assert.equal(f.rows('SELECT assignee_session_id FROM initiative_items')[0]!.assignee_session_id, 'worker')
-  writeLegacy(f.home, 'legacy-known-check', legacy('legacy-known-check'))
-  assert.deepEqual(f.store.migrateLegacyMarkdown(), { imported: 1, skipped: 0 })
-  assert.equal(f.rows("SELECT owner_session_id FROM initiatives WHERE id='legacy-known-check'")[0]!.owner_session_id, null)
 })
 
 test('item activity exposes stopped assignees under a live coordinator without mutating work', (t) => {
@@ -402,40 +402,6 @@ test('completing initiatives requires terminal items and satisfied dependencies 
   f.item('cancelled-a', 'cancelled-work'); f.item('cancelled-b', 'cancelled-work')
   f.query("INSERT INTO initiative_item_deps (item_id,depends_on_item_id) VALUES ('cancelled-a','cancelled-b'); UPDATE initiative_items SET status='cancelled' WHERE initiative_id='cancelled-work'; UPDATE initiatives SET status='completed' WHERE id='cancelled-work'")
   assert.equal(f.rows("SELECT status FROM initiatives WHERE id='cancelled-work'")[0]!.status, 'completed')
-})
-
-for (const version of [1, 2]) test(`version-${version} databases gain attention views without releasing assignments`, (t) => {
-  const f = fixture(t)
-  f.create(); f.item('work')
-  f.query("UPDATE initiative_items SET assignee_session_id='worker' WHERE id='work' AND assignee_session_id IS NULL")
-  const initiatives = f.rows('SELECT * FROM initiatives')
-  const items = f.rows('SELECT * FROM initiative_items')
-  const entries = f.rows('SELECT * FROM initiative_entries')
-  f.store.close()
-  const db = new DatabaseSync(projectStoragePath(f.home, 'initiatives.sqlite'))
-  db.exec(`DROP VIEW initiative_item_activity; DROP VIEW initiative_handoffs;
-    CREATE VIEW initiative_handoffs AS SELECT p.*, 1 AS needs_handoff FROM initiatives p
-      WHERE p.status='active' AND (p.owner_session_id IS NULL OR session_is_inactive(p.owner_session_id)=1);
-    ${version === 2 ? `CREATE VIEW initiative_item_activity AS SELECT i.*,
-      session_activity(i.assignee_session_id) AS assignee_activity,
-      CASE WHEN i.status IN ('pending','in_progress','blocked') AND session_activity(i.assignee_session_id)='inactive'
-      THEN 1 ELSE 0 END AS needs_handoff FROM initiative_items i;` : ''}
-    PRAGMA user_version=${version}`)
-  db.close()
-  const reopened = new InitiativeStore(f.home, { isSessionActive: () => false })
-  try {
-    const rows = (sql: string) => reopened.query(sql, 'owner').results[0]!.rows
-    assert.deepEqual(rows('SELECT id,assignee_activity,needs_attention,needs_handoff FROM initiative_item_activity'), [
-      { id: 'work', assignee_activity: 'inactive', needs_attention: 1, needs_handoff: 1 },
-    ])
-    assert.deepEqual(rows('SELECT owner_activity,needs_attention,needs_handoff FROM initiative_handoffs'), [
-      { owner_activity: 'inactive', needs_attention: 1, needs_handoff: 1 },
-    ])
-    assert.deepEqual(rows('SELECT * FROM initiatives'), initiatives)
-    assert.deepEqual(rows('SELECT * FROM initiative_items'), items)
-    assert.deepEqual(rows('SELECT * FROM initiative_entries'), entries)
-    assert.throws(() => reopened.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='owner'", 'peer'), /owner/)
-  } finally { reopened.close() }
 })
 
 test('ownership, item state consistency and completed initiative controls', (t) => {
@@ -491,60 +457,6 @@ test('aborting from lifecycle callback rolls back the entire query', (t) => {
   f.create()
   assert.throws(() => f.store.query("UPDATE initiatives SET goal='not persisted' WHERE id='build'; SELECT * FROM initiative_handoffs", 'owner', controller.signal), /abort/i)
   assert.equal(f.rows('SELECT goal FROM initiatives')[0]!.goal, 'Ship it')
-})
-
-function legacy(slug: string, status = 'active'): string {
-  return `# Project: ${slug}\n\n**Status**: ${status}\n${status === 'completed' ? '**Completed**: 2026-09-15T00:00:00.000Z\n' : ''}**Created**: 2026-09-01T00:00:00.000Z\n**Goal**: Legacy goal\n\n## Context\n\nLegacy **Markdown** context\n\n## Progress\n\nCompleted phase one\n\n## Notes\n\nImportant notes\n`
-}
-
-function writeLegacy(home: string, slug: string, content: string): string {
-  const directory = projectStoragePath(home, 'projects', slug)
-  mkdirSync(directory, { recursive: true })
-  const file = join(directory, 'project.md')
-  writeFileSync(file, content)
-  return file
-}
-
-test('legacy migration preserves originals, imports context/history, is idempotent after reopen', (t) => {
-  const f = fixture(t)
-  const file = writeLegacy(f.home, 'legacy', legacy('legacy'))
-  writeLegacy(f.home, 'finished', legacy('finished', 'completed'))
-  assert.deepEqual(f.store.migrateLegacyMarkdown(), { imported: 2, skipped: 0 })
-  assert.equal(readFileSync(file, 'utf8'), legacy('legacy'))
-  const imported = f.rows("SELECT * FROM initiatives WHERE id='legacy'")[0]!
-  assert.equal(imported.owner_session_id, null)
-  assert.equal(imported.created_by_session_id, 'legacy-import')
-  assert.equal(imported.context, 'Legacy **Markdown** context')
-  assert.equal(f.rows("SELECT content FROM initiative_entries WHERE initiative_id='legacy' AND kind='legacy'")[0]!.content, legacy('legacy'))
-  assert.equal(f.rows("SELECT content FROM initiative_entries WHERE initiative_id='legacy' AND kind='progress'")[0]!.content, 'Completed phase one')
-  assert.equal(f.rows("SELECT content FROM initiative_entries WHERE initiative_id='legacy' AND kind='note'")[0]!.content, 'Important notes')
-  assert.equal(f.rows("SELECT status FROM initiatives WHERE id='finished'")[0]!.status, 'completed')
-  assert.deepEqual(f.store.migrateLegacyMarkdown(), { imported: 0, skipped: 2 })
-  f.store.close()
-  const reopened = new InitiativeStore(f.home)
-  try {
-    assert.deepEqual(reopened.migrateLegacyMarkdown(), { imported: 0, skipped: 2 })
-    assert.match(reopened.getSummary('legacy')!, /needs_attention/)
-    assert.doesNotMatch(reopened.getSummary('finished')!, /needs_attention/)
-    writeFileSync(file, legacy('legacy') + 'Edited old truth')
-    assert.throws(() => reopened.migrateLegacyMarkdown(), /archive changed/)
-  } finally { reopened.close() }
-})
-
-test('malformed, conflicting, or invalid UTF-8 legacy records fail explicitly and atomically', (t) => {
-  const f = fixture(t)
-  const valid = writeLegacy(f.home, 'a-good', legacy('a-good'))
-  const bad = writeLegacy(f.home, 'z-bad', 'arbitrary replacement markdown')
-  assert.throws(() => f.store.migrateLegacyMarkdown(), /Malformed/)
-  assert.deepEqual(f.rows('SELECT * FROM initiatives'), [])
-  assert.equal(readFileSync(valid, 'utf8'), legacy('a-good'))
-  assert.equal(readFileSync(bad, 'utf8'), 'arbitrary replacement markdown')
-  writeFileSync(bad, Buffer.from([0xff]))
-  assert.throws(() => f.store.migrateLegacyMarkdown(), /encoded data/)
-  assert.deepEqual(f.rows('SELECT * FROM initiatives'), [])
-  writeFileSync(bad, legacy('z-bad'))
-  f.create('a-good')
-  assert.throws(() => f.store.migrateLegacyMarkdown(), /conflicts/)
 })
 
 test('corrupt persisted records fail on reopen rather than being silently repaired', (t) => {
@@ -629,4 +541,24 @@ test('runtime lifecycle callback cannot reenter database or close it mid-query',
   f.create()
   assert.throws(() => f.query('SELECT * FROM initiative_handoffs'), /Reentrant/)
   assert.equal(f.rows('SELECT * FROM initiatives').length, 1)
+})
+
+
+test('fresh databases use current Work schema and reopen without importing historical sources', (t) => {
+  const home = resolve('src', 'initiatives', `.test-${randomUUID()}`)
+  const store = new InitiativeStore(home)
+  t.after(() => { store.close(); rmSync(home, { recursive: true, force: true }) })
+  assert.equal(store.unifiedWork, true)
+  assert.throws(() => store.query("INSERT INTO initiatives (id) VALUES ('old')", 'owner'), /historical archive/)
+  store.workEvent('initiative:historical', 'legacy-import', 'legacy_initiative', { title: 'Retained history' })
+  store.close()
+  const db = new DatabaseSync(projectStoragePath(home, 'initiatives.sqlite'))
+  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 6)
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='initiative_legacy_imports'").get(), undefined)
+  db.close()
+  const reopened = new InitiativeStore(home)
+  try {
+    assert.equal(reopened.unifiedWork, true)
+    assert.deepEqual(reopened.workHistory('initiative:historical')[0]!.data, { title: 'Retained history' })
+  } finally { reopened.close() }
 })

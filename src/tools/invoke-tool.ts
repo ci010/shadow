@@ -3,6 +3,7 @@ import type { SessionTools } from './registry.ts'
 import type { Tool, ToolParameters, ToolResult } from './tool.ts'
 
 export interface DynamicToolImporter {
+  initializeSource?(name: string, args: Record<string, unknown>, context: ExecutionContext): Promise<string | undefined>
   canInvokeFromRemote?(toolName: string): boolean
   resolveInvocationTools?(toolName: string, context: ExecutionContext, instance?: string): SessionTools | string
   importForInvocation(
@@ -10,6 +11,7 @@ export interface DynamicToolImporter {
     sessionTools: SessionTools,
     signal?: AbortSignal,
     cwd?: string,
+    folderId?: string,
   ): Promise<string | undefined>
 }
 
@@ -20,7 +22,7 @@ export class InvokeTool implements Tool<ToolResult> {
   readonly name = 'invoke_tool'
   readonly supportsRemoteWorkdir = true
   readonly description =
-    'Execute an exact tool name, loading it lazily. Validates arguments against the current schema; invalid arguments return the contract without execution.'
+    'Execute an exact tool name, loading it lazily. To initialize an MCP source without executing its tools, pass its source name with args: {} and use the returned contracts. Validates arguments against the current schema; invalid arguments return the contract without execution.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -70,8 +72,11 @@ export class InvokeTool implements Tool<ToolResult> {
       signal: AbortSignal.any([context.signal, context.tools.dynamicSignal, context.tools.ownerSignal, target.dynamicSignal]),
     }
 
-    if (!context.tools.hasDynamic(name) && this.importer) {
-      const result = await this.importer.importForInvocation(name, context.tools, context.signal, context.cwd)
+    const initialized = await this.importer?.initializeSource?.(name, toolArgs as Record<string, unknown>, context)
+    if (initialized !== undefined) return initialized
+
+    if (this.importer) {
+      const result = await this.importer.importForInvocation(name, context.tools, context.signal, context.cwd, context.folderId)
       if (!context.tools.hasDynamic(name)) {
         if (result) return result.startsWith('Error') ? result : `Error: ${result}`
         return `Error: dynamic tool "${name}" is not active and could not be imported automatically. Search with handler "grep" and path "v:tools", then read matching paths for current tool IDs.`

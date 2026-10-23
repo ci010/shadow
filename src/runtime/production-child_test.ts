@@ -173,6 +173,8 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals(body.nodes[0].capabilities, [{
     capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,
   }, {
+    capabilityId: 'owner-folder-picker-v1', kind: 'shell', displayName: 'Owner folder picker', online: true,
+  }, {
     capabilityId: 'managed-sessions-v1', kind: 'shell', displayName: 'Managed session allocation', online: true,
   }, {
     capabilityId: 'folder-root', kind: 'workdir', displayName: 'Child folder', online: true, displayPath: folders,
@@ -182,7 +184,7 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals((await fetch(
     `http://127.0.0.1:${localControlPort}/nodes/v1`,
     { headers: { Authorization: 'Bearer production-child-secret' } },
-  )).status, 404)
+  )).status, 503) // Main workspace proxy is explicit about an unavailable/unapproved Main.
   assertEquals(await Promise.all([runtime.shutdown(), runtime.shutdown()]), [
     undefined,
     undefined,

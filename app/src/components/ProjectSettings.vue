@@ -67,7 +67,7 @@ const props = defineProps<{ apiBase: string; hostApiBase: string; projectId: str
 defineOptions({ name: 'ProjectSettings' })
 const route = useRoute()
 const installation = useInstallationContext()
-const available = computed(() => installation.value.mode !== 'child' && installation.value.uiScopes.includes('main:admin'))
+const available = computed(() => installation.value.mode !== 'child' || installation.value.mainWorkspace === true || installation.value.mainConnection === 'connected')
 const sections = [{ id: 'general', get label() { return t('General') } }, { id: 'models', get label() { return t('Models') } }, { id: 'agents', get label() { return t('Agents') } }, { id: 'bots', get label() { return t('Bots') } }, { id: 'learning', get label() { return t('Learning') } }]
 const section = computed(() => typeof route.params.section === 'string' ? route.params.section : 'general')
 const botsOpened = ref(false)
@@ -103,7 +103,7 @@ function accept(value: ProjectConfig, section?: 'agent' | 'learning') {
   }
 }
 async function load() {
-  if (!available.value) { error.value = t('Project settings require a Main administrator.'); return }
+  if (!available.value) { error.value = t('Main is unavailable'); return }
   request?.abort()
   const controller = new AbortController()
   request = controller

@@ -18,7 +18,6 @@ const actor = (sessionId: string) => ({ kind: 'session' as const, sessionId })
 function fixture(home: string) {
   const states = new Map<string, SessionState>([owner, worker, peer].map(sessionId => [sessionId, { sessionId, segmentIndex: 0, mode: 'session' }]))
   const store = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
-  store.migrateWorkItems()
   const changes: WorkRecord[] = []
   const alignment = new WorkAlignment(store, {
     state: id => states.get(id), evidence: async source => { assert.equal(source.sessionId, owner) },

@@ -88,7 +88,7 @@ test('virtual session search includes earlier history while glob avoids loading 
 })
 
 for (const version of [1, 2] as const) {
-  test(`physical session v${version} line ranges read the full segment without changing message paging`, async () => {
+  test(`physical session v${version} line ranges read the full segment with line-only paging`, async () => {
     const id = 'web:chat-00000000-0000-4000-8000-000000000008'
     const physicalId = newPhysicalSessionId(id, 8, version)
     const messages = Array.from({ length: 120 }, (_, i) => ({
@@ -124,12 +124,9 @@ for (const version of [1, 2] as const) {
     assert.equal(requireToolText(await read.execute({ path, offset: line, limit: 1, flag: 'n' }, context)), `${line}  line two 119`)
     assert.equal(requireToolText(await read.execute({ path: path.replaceAll('/', '\\'), offset: line }, context)), 'line two 119')
     const recent = requireToolText(await read.execute({ path }, context))
-    assert.match(recent, /Messages 101–120 of 120/)
+    assert.match(recent, /segment message 119/)
     assert.doesNotMatch(recent, /segment message 0\n/)
-    const page = requireToolText(await read.execute({ path: `${path}?index=0&page_size=35` }, context))
-    assert.match(page, /Messages 1–35 of 120/)
-    assert.match(page, /segment message 34\n/)
-    assert.doesNotMatch(page, /segment message 35\n/)
+    await assert.rejects(read.execute({ path: `${path}?index=0&page_size=35` }, context), /read.offset/)
     assert.equal(await search.execute({ handler: 'glob', path: 'v:sessions', query: '*' }, context), `v:sessions/${id}`)
   })
 }
@@ -419,4 +416,84 @@ test('remote workdir virtual sessions stay on the control plane for handler/path
   for (const path of ['src', 'v:tools', 'v:sessions-other']) {
     assert.match(await search.execute({ handler: 'glob', path, query: '**' }, context), /only v:sessions searches/)
   }
+})
+
+test('session overview/full paths share read and grep coordinates for logical and physical IDs', async () => {
+  const logical = 'web:overview'
+  const physical = newPhysicalSessionId(logical, 0, 2)
+  const messages = [
+    { role: 'user' as const, content: 'Outward question\nsecond line' },
+    { role: 'assistant' as const, content: 'Outward answer', tool_calls: [{ id: 'call-1', type: 'function' as const, function: { name: 'read', arguments: JSON.stringify({ secretArgument: 'x'.repeat(150000) }) } }] },
+    { role: 'tool' as const, tool_call_id: 'call-1', content: 'secretResult'.repeat(15000) },
+    { role: 'assistant' as const, content: 'Final outward answer' },
+  ]
+  const handlers = createSessionsHandler({
+    listSessions: () => [{ sessionId: logical, segmentIndex: 0 }],
+    getSessionState: key => key === logical ? { sessionId: logical, segmentIndex: 0, config: {} } : null,
+    getHistory: async () => ({ messages, total: messages.length }),
+  })
+  const vfs = new VirtualFs()
+  vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const read = new ReadTool('.', vfs)
+  const search = new SearchTool('.', undefined, vfs)
+  for (const id of [logical, physical]) {
+    const path = `v:sessions/${id}/overview`
+    const overview = requireToolText(await read.execute({ path }, context))
+    assert.match(overview, /Outward question[\s\S]*Outward answer[\s\S]*read\(…\)[\s\S]*result for call-1[\s\S]*Final outward answer/)
+    assert.doesNotMatch(overview, /secretArgument|secretResult/)
+    assert.ok(overview.length < 1000)
+    const match = await search.execute({ handler: 'grep', path, query: '^second line$' }, context)
+    const line = Number(match.match(/Line (\d+):/)?.[1])
+    assert.ok(line > 1)
+    const page = requireToolText(await read.execute({ path, offset: line, limit: 1, flag: 'n' }, context))
+    assert.match(page, new RegExp(`^${line}  second line\\n\\n\\[truncated:`))
+    assert.doesNotMatch(page, /Outward answer/)
+    assert.equal(await search.execute({ handler: 'glob', path, query: '**' }, context), path)
+    const full = await vfs.list(`v:sessions/${id}/full`, context)
+    const bare = await vfs.list(`v:sessions/${id}`, context)
+    assert.equal(full?.[0].content, bare?.[0].content)
+    assert.match(full![0].content, /secretArgument/)
+    assert.match(full![0].content, /secretResult/)
+    await assert.rejects(read.execute({ path: `v:sessions/${id}?page_size=1`, offset: 1, limit: 1 }, context), /read.offset/)
+    await assert.rejects(search.execute({ handler: 'grep', path: `v:sessions/${id}?index=0`, query: 'x' }, context), /read.offset/)
+  }
+})
+
+test('overview drill-down targets isolate encoded tool-call IDs and survive logical rollover', async () => {
+  const logical = 'web:call-target'
+  const physical = newPhysicalSessionId(logical, 0, 2)
+  let segmentIndex = 0
+  const callId = 'call /?%:#one'
+  const messages = [
+    { role: 'assistant' as const, content: 'Running two reads', tool_calls: [
+      { id: callId, type: 'function' as const, function: { name: 'read', arguments: '{"path":"selected.txt"}' } },
+      { id: 'other', type: 'function' as const, function: { name: 'read', arguments: '{"path":"unrelated.txt"}' } },
+    ] },
+    { role: 'tool' as const, tool_call_id: 'other', content: 'unrelated-result' },
+    { role: 'tool' as const, tool_call_id: callId, content: 'selected-result\nsecond result line' },
+  ]
+  const handlers = createSessionsHandler({
+    listSessions: () => [{ sessionId: logical, segmentIndex }],
+    getSessionState: key => key === logical ? { sessionId: logical, segmentIndex, physicalIdVersion: 2, config: {} } : null,
+    getHistory: async (_key, query) => ({ messages: query?.physicalId === physical || segmentIndex === 0 ? messages : [], total: 3 }),
+  })
+  const vfs = new VirtualFs()
+  vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const read = new ReadTool('.', vfs)
+  const search = new SearchTool('.', undefined, vfs)
+  const overview = requireToolText(await read.execute({ path: `v:sessions/${logical}/overview`, offset: 1, limit: 100 }, context))
+  const target = `v:sessions/${physical}/calls/${encodeURIComponent(callId)}`
+  assert.ok(overview.includes(target), overview)
+  segmentIndex = 1
+  const result = requireToolText(await read.execute({ path: target }, context))
+  assert.match(result, /selected.txt[\s\S]*selected-result/)
+  assert.doesNotMatch(result, /unrelated.txt|unrelated-result|\[call other\]/)
+  const match = await search.execute({ handler: 'grep', path: target, query: '^second result line$' }, context)
+  const line = Number(match.match(/Line (\d+):/)?.[1])
+  assert.ok(line > 0)
+  assert.equal(requireToolText(await read.execute({ path: target, offset: line, limit: 1 }, context)), 'second result line')
+  await assert.rejects(read.execute({ path: `v:sessions/${physical}/calls/missing` }, context), /Unknown tool call/)
+  await assert.rejects(read.execute({ path: `v:sessions/${logical}/calls/other`, offset: 1, limit: 1 }, context), /physical session ID/)
 })

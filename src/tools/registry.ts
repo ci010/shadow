@@ -1,3 +1,4 @@
+import { UseProjectTool } from './use-project.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { trace } from '@opentelemetry/api'
 import { join } from 'node:path'
@@ -64,6 +65,12 @@ export class Tools {
 
   unregister(name: string): boolean {
     return this.tools.delete(name)
+  }
+
+  /** Host context preparation is independent of the model's tool allowlist. */
+  workingContextFolder(id: string) {
+    const selector = this.tools.get('use_project')
+    return selector instanceof UseProjectTool ? selector.selectedFolder(id) : undefined
   }
 
   get(name: string): Tool | undefined {
@@ -620,6 +627,8 @@ export class SessionTools extends Tools {
     const failures = results.filter(result => result.status === 'rejected')
     if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Session resource cleanup failed')
   }
+
+  override workingContextFolder(id: string) { return this.base.workingContextFolder(id) }
 
   override get(name: string): Tool | undefined {
     if (!this.isToolAllowed(name)) return undefined

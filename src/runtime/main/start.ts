@@ -1,5 +1,3 @@
-import { resolve } from 'node:path'
-import { assertDataLayoutReady } from '../../storage/data-layout-startup.ts'
 import type { Config } from '../../config/schema.ts'
 import type { MainRuntimeHandle, MainRuntimeOptions } from './contracts.ts'
 import { createProjectRuntime } from './project-runtime.ts'
@@ -10,7 +8,6 @@ export async function startMainRuntime(
   config: Config,
   options: MainRuntimeOptions = {},
 ): Promise<MainRuntimeHandle> {
-  await assertDataLayoutReady(resolve(options.dataDir ?? config.agent.workspace))
   await initializeBackendNetwork(config.network?.proxyEnabled ?? true)
   return startProjectHost(config, options, createProjectRuntime)
 }

@@ -3,11 +3,16 @@
 > **Current runtime: unified work (database version 6).** `work` is the public
 > mutation interface for definitions, assignment, progress and dependencies.
 > `work_contracts` stores complete work items; `work tree` derives Initiative
-> views from a root and descendants. `migrateWorkItems()` atomically incorporates
-> legacy rows, retains old keys and journals, and makes legacy SQL tables
-> read-only archives. No new Topic contracts are created. The SQL API described
-> below is retained for migration, archive reads and historical fixtures, not
-> as a second live authority.
+> views from a root and descendants. New databases initialize directly at the
+> current schema. Historical imports and schema upgrades are no longer run at
+> startup. Existing keys, journals and archive tables remain readable; no new
+> Topic contracts are created. The SQL API described below is retained for
+> archive reads and historical fixtures, not as a second live authority.
+
+Version 5 remains supported for direct historical Initiative API callers and SQL
+contract fixtures; it is not upgraded or imported at startup. New Project runtimes
+initialize version 6, whose Initiative SQL tables are read-only archives. Earlier
+schema versions are rejected instead of silently upgraded.
 
 The public `sql` tool separately exposes read-only current `work_items` and
 `work_dependencies` projections plus guarded Project conventions. It does not
@@ -81,8 +86,7 @@ Supply `isSessionKnown(id)` to validate that new owner/assignee targets belong t
 this Project runtime. Initial initiative ownership, delegated assignments, claims,
 and handoffs reject unknown targets when that callback is present. Existing stored
 owners/assignees are not revalidated against membership on reads: deleted sessions
-retain history and can surface inactive handoffs. Null/unassigned targets and legacy
-imports are unaffected. Omitting this optional callback preserves standalone use;
+retain history and can surface inactive handoffs. Null/unassigned targets are unaffected. Omitting this optional callback preserves standalone use;
 runtime integrations should supply it in addition to `isSessionActive`.
 
 `initiative_item_activity` is read-only and exposes the item fields plus
@@ -98,25 +102,15 @@ completed work. Cancelled items impose no dependency requirement. These checks
 cover transaction commit and database reopen, so invalid completed records fail
 explicitly instead of being silently repaired.
 
-## Legacy migration
+## Verification
 
-Call `migrateLegacyMarkdown()` at Project runtime startup **after disabling legacy
-ProjectTool writes**. `migrateLegacy(root)` accepts only that same Home's `projects`
-directory. Recognized `projects/<slug>/project.md` records are imported atomically;
-their entire Markdown survives as a legacy entry, and context/goal/status populate
-the new record. Non-placeholder progress and notes also become separately
-queryable `progress` and `note` entries. Since old files did not record session ownership, imported
-initiatives start unowned and need an explicit claim.
-
-Original files remain byte-for-byte legacy archives, never a second writable
-authority. A private import ledger records content hashes: repeated imports skip
-unchanged records, but changed archives, ID conflicts, invalid UTF-8, malformed
-Markdown, and corrupt database records fail explicitly without replacing data.
-Noncanonical Markdown produced by the old full-file replacement action requires
-manual repair; migration will not guess or silently discard it.
+Historical Markdown imports and Work unification have been retired after migration
+of existing applications. Runtime startup does not scan or modify old folders.
+Previously imported Markdown entries, audit records and Work journals remain
+readable in the database; this cleanup does not delete user archives.
 
 Run focused verification:
 
 ```powershell
-pnpm exec node --import tsx --test src\initiatives\store_test.ts
+pnpm exec node --import tsx --test src\initiatives\store_test.ts src\sessions\work-items_test.ts
 ```

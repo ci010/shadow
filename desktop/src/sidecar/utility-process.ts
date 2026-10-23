@@ -36,7 +36,9 @@ export function createUtilityProcessSpawn(
     }
     const entry = argv.shift()
     if (!entry || entry.startsWith('-')) throw new Error('Backend entry path is required')
-    const env = { ...options.env }
+    // Node spawn accepts undefined entries, but Electron utilityProcess.fork
+    // rejects them synchronously (notably Child's absent Main media key).
+    const env = Object.fromEntries(Object.entries(options.env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined))
     delete env.ELECTRON_RUN_AS_NODE
     // Never inherit availability from a shell or a packaged parent's environment.
     delete env.SHADOW_DEV_RESTART_TOOL
