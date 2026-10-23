@@ -5,34 +5,49 @@ adapter is pinned to `chrome-devtools-mcp@1.10.1`; upgrading requires reviewing
 routing, schemas and disconnect behavior. This is not a promise about arbitrary
 custom MCP servers or host commands.
 
-## User-owned connections
+## Project-managed copied profile (default)
 
-Start with browser_setup discover. Ask which running browser and human profile
-to share, and explain browser-wide CDP access (not profile isolation).
+Start with browser_setup discover. Ask for an explicit absolute Chrome executable,
+source user data root and Default/Profile N directory, and confirm copying plus
+browser-wide sharing by permitted sessions in this Project. Only recognized Chrome
+installation paths are accepted, not arbitrary executable programs. action managed makes
+an opaque selected-profile + Local State copy and launches only that independent
+copy. It does not parse credentials, modify the source, infer last-used profiles,
+fall back to a blank profile or overwrite old copies. Missing/locked/unsupported
+sources fail. Have the user close a locked source; never kill it or remove locks.
+Encrypted credentials and live databases may not transfer; login is not promised.
 
-- Chrome 144+: the user enables remote debugging at
-  `chrome://inspect/#remote-debugging` and approves the Chrome connection prompt.
-  Bind `autoConnect` with explicitly chosen stable/beta/dev/canary channel.
-  Optional absolute `userDataDir` is a user-identified data root, not a profile
-  selector. Auto-connect reads DevToolsActivePort; it does not launch Chrome.
-- Alternatively attach an already-enabled loopback HTTP(S) origin or browser
-  WebSocket endpoint, including compatible Edge/Brave/Electron. Examples:
-  `http://127.0.0.1:9222`, `ws://127.0.0.1:9222/devtools/browser/...`.
-- Chrome 136+ ignores command-line remote-debugging-port/pipe for its default
-  data directory. Do not bypass this with profile copies, another process sharing
-  the directory, or an agent-initiated restart. Do not scan ports or enable debugging.
+One SharedChrome manager belongs to each Project runtime (not a global pool or
+session slot). Concurrent setup is deduplicated; every session explicitly binds
+and has an isolated MCP registry. Manager launch uses a unique private directory,
+--remote-debugging-address=127.0.0.1 and --remote-debugging-port=0, reads only the
+managed DevToolsActivePort, and passes a validated loopback WebSocket endpoint to
+the pinned adapter. Sync/extensions are disabled. No port scanning or source CDP
+attachment occurs. Browser state is shared, permissions are not; coordinate pages.
 
-Setup loads MCP contracts without browser business RPCs. `ready` means adapter
-ready, not verified browser/profile identity. On first browser operation Chrome
-may ask the user to authorize access. Use list_pages to check the intended target.
-If incorrect, disconnect and ask the user, never silently switch browsers.
+Session close/sleep/reset only disconnects MCP. Project shutdown stops only the
+manager's retained child handle. A confirmed child exit permits relaunch against
+the same copy, never destructive recopy. A new Project runtime creates a unique
+copy; old copies remain for user-controlled cleanup. A different source/executable
+cannot replace an initialized choice. A live but unusable child is not replaced
+with another process. Local CDP is not authenticated; protect host access.
 
-Bindings last until close/sleep/reset and are inspectable with setup list. These
-operations disconnect MCP only; the browser stays user-owned. Reconnect using the
-same still-approved choice without repeating OS setup unless needed; reconfirm
-changed scope/target. No global browser permission or sensitive binding is saved.
-Leaf calls borrow bindings but cannot connect or disconnect them.
+## Explicit compatibility connections
 
+Only when explicitly requested, autoConnect connects human-owned Chrome 144+
+with user-enabled debugging at chrome://inspect/#remote-debugging and approval
+of Chrome's prompt. Supply the chosen stable/beta/dev/canary channel and optional
+absolute root. This reads DevToolsActivePort, not a profile isolation selector.
+Alternatively attach an already-enabled loopback HTTP(S) origin or browser WS(S)
+endpoint, including compatible Edge/Brave/Electron. Do not scan ports or enable
+debugging yourself. Chrome 136+ rejects debugging flags against its default root;
+never launch against that root or bypass its locks. No silent fallback from
+managed copying to human-owned attachment is allowed.
+
+Setup loads MCP contracts without browser business RPCs. ready means adapter-ready,
+not verified profile/login identity. Use list_pages to verify the target first.
+Bindings are session-only; reconnect explicitly with the still-approved choice.
+Reconfirm changed scope/target. Leaf calls borrow but cannot connect/disconnect.
 ## Routing and imports
 
 Every page tool requires an explicit integer pageId. select_page is hidden and
@@ -50,7 +65,7 @@ are fixed per binding. Empty Chrome preloads require an existing owner binding.
 
 ## Migration and recovery
 
-The former slot pool and launch/profile-copy mechanism are removed. Old user data,
+The former per-session slot pool is not restored. Old user data,
 profiles and leases are not deleted or migrated and old processes are not killed.
 Remove obsolete `tools.chrome` fields (only an empty compatibility object remains),
 and remove obsolete port/launch/profile flags from adapter configuration/preloads.
@@ -87,7 +102,8 @@ test exercises the actual BrowserManager with synthetic DevToolsActivePort data
 and mocked Puppeteer connect/launch, proving failure does not fall back to launch.
 Without the environment variable these tests explicitly skip, never download.
 
-Other lifecycle tests mock MCP connections. No tests here verify actual Chrome
+Lifecycle/copy tests use synthetic profile files and injected process/MCP boundaries.
+No tests here verify actual Chrome launch, login inheritance, encryption portability,
 consent UI, OS-specific channel discovery, browser-wide profile visibility or live
 CDP behavior. App handoff failures preserve the shared binding; only a positively
 identified new page is eligible for cleanup under the caller's close_page permission.

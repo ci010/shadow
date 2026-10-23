@@ -6,28 +6,29 @@ import type { Tool, ToolParameters } from './tool.ts'
 
 const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('discover') }).strict(),
+  z.object({ action: z.literal('managed'), executablePath: z.string().trim().min(1), userDataDir: z.string().trim().min(1), profileDirectory: z.string().regex(/^(Default|Profile [0-9]+)$/) }).strict(),
   z.object({ action: z.literal('autoConnect'), channel: z.enum(['stable', 'beta', 'dev', 'canary']), userDataDir: z.string().trim().min(1).optional() }).strict(),
   z.object({ action: z.literal('attach'), endpoint: z.string().min(1) }).strict(),
   z.object({ action: z.literal('list') }).strict(),
   z.object({ action: z.literal('close'), instance: z.string().min(1) }).strict(),
 ])
 
-export const browserConnectionGuide = `Ask the user which running browser and human profile Shadow should share before connecting. Use the existing conversation ask/input flow; do not infer permission from a discovered path.
-Recommended: Chrome 144+ supports user-authorized remote debugging at chrome://inspect/#remote-debugging. The user opens that page in their chosen Chrome, enables it themselves, and approves Chrome's connection prompt. Then explicitly bind autoConnect with their chosen channel (stable/beta/dev/canary). For a nonstandard user data root, the user can identify it from chrome://version (Profile Path parent); userDataDir plus autoConnect reads DevToolsActivePort, it does not start a browser. A profile path alone does not enable attachment.
-Alternatively, the user supplies an already-enabled loopback CDP HTTP origin or browser WebSocket endpoint for Chrome/Edge/Brave/Electron. Shadow does not scan ports, inspect profile contents, copy profiles, enable debugging, launch, stop or restart browsers. Chrome 136+ ignores command-line remote-debugging-port/pipe on its default data directory; do not bypass that restriction or launch a second process sharing a user-data-dir.
-CDP attaches to the browser, NOT a single human profile. Other profiles/tabs exposed by that browser may be accessible. Confirm this browser-wide access boundary with the user; use list_pages to identify intended pages and pass pageId each time. If the wrong pages appear, disconnect and ask the user to correct the browser choice, never silently pick another target.
-Binding is session-only, visible via list, and forgotten on sleep/reset/close; reconnect explicitly afterwards using the previously approved choice if still applicable. Do not repeat browser/OS setup unless needed; reconfirm when the target or access scope changes. close disconnects Shadow, not the user's browser. Discovery is guidance only: no local browser/profile inspection has occurred.`
-
+export const browserConnectionGuide = `Default: use an application-managed Chrome with a COPY of the user's explicitly selected profile, never launch against their original directory. Ask the user to identify the Chrome executable, absolute user data ROOT and profile directory (Default or Profile N, from chrome://version). Confirm copying this profile and browser-wide access by all permitted sessions in this Project before action managed. Managed launch accepts only recognized Chrome installation paths, not custom executables; other browsers require explicitly approved attach. Discovery does not inspect local profiles or launch anything. Do not read or print credential files.
+The first managed binding copies only that profile plus opaque Local State into a private unique Project directory, disables sync/extensions, and launches Chrome with loopback-only CDP. Close the source browser yourself before copying if it is locked; Shadow does not terminate it or bypass locks. Encrypted cookies/passwords and active database snapshots may not transfer; re-login in the managed browser may be required. Copies are sensitive and retained, never written back or silently refreshed.
+All sessions in this Project runtime share ONE managed browser process and its pages, but must bind explicitly and retain independent tool permissions/registries. Other Projects do not share it. Use list_pages and explicit pageId; coordinate concurrent edits to the same page. A different source cannot replace a running Project choice. close/sleep/reset disconnect only that session; the Project manager owns process shutdown. After a crash reconnect using the SAME choice; the existing copy is reused without overwriting. A new Project runtime makes a new unique copy; old copies remain for user-controlled cleanup.
+Compatibility only when explicitly requested: autoConnect uses Chrome 144+ user-enabled debugging (chrome://inspect/#remote-debugging and Chrome's approval prompt), chosen channel and optional root; attach uses a supplied already-enabled loopback CDP endpoint for Chrome/Edge/Brave/Electron. These access a human-owned browser directly, NOT the default isolation policy. Explain browser-wide access and obtain explicit approval; never silently fall back to them. Chrome 136+ rejects debugging flags against its default root. Do not bypass this protection.`
 export class BrowserSetupTool implements Tool {
   readonly name = 'browser_setup'
   readonly readonly = (args: Record<string, unknown>) => args.action === 'list' || args.action === 'discover'
-  readonly description = 'Guide user choice of a human-owned browser/profile and bind an already running browser. Start with discover, ask the user, then autoConnect (Chrome 144+ user-approved debugging) or attach (explicit loopback CDP). Browser-wide access, not profile isolation. Never launches/copies profiles; close and sleep only disconnect. Binding lasts until session reset.'
+  readonly description = 'Discover then explicitly bind the Project shared managed Chrome using a copy of a user-selected profile. Never launch the original profile. Independent session permissions; pageId routing. Compatibility autoConnect/attach require explicit user approval. close/sleep only disconnect; Project lifecycle owns shutdown.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['discover', 'autoConnect', 'attach', 'list', 'close'] },
+      action: { type: 'string', enum: ['discover', 'managed', 'autoConnect', 'attach', 'list', 'close'] },
+      executablePath: { type: 'string', description: 'managed only; explicitly selected absolute executable in a recognized Chrome installation. Custom programs are rejected.' },
+      profileDirectory: { type: 'string', description: 'managed only; explicitly selected Default or Profile N directory in userDataDir.' },
       channel: { type: 'string', enum: ['stable', 'beta', 'dev', 'canary'], description: 'autoConnect only; explicitly chosen Chrome installation channel.' },
-      userDataDir: { type: 'string', description: 'autoConnect only; optional user-identified absolute data ROOT, not Profile 1/Default. Requires running Chrome with user-enabled debugging. Does not isolate CDP to a profile.' },
+      userDataDir: { type: 'string', description: 'managed: required explicitly selected source data ROOT (not Default/Profile N). autoConnect: optional root for an already-running user-authorized browser.' },
       endpoint: { type: 'string', description: 'attach only; user-selected, already-enabled loopback CDP HTTP origin or browser WebSocket URL.' },
       instance: { type: 'string', description: 'close only; binding ID returned by this session. Disconnects, never closes the browser.' },
     },
@@ -48,6 +49,12 @@ export class BrowserSetupTool implements Tool {
     if (request.action === 'discover') return browserConnectionGuide
     if (context.tools.executionMode === 'call' || context.tools.dynamicOwner !== context.tools) {
       if (request.action !== 'list') return context.tools.rejectExecution('Leaf calls may borrow browser bindings; only their owner may connect or disconnect.')
+    }
+    if (request.action === 'managed') {
+      if (!isAbsolute(request.userDataDir) || !isAbsolute(request.executablePath)) return 'Error: managed requires absolute source root and executable paths.'
+      return this.setup({ action: 'open', target: { mode: 'managed', executablePath: request.executablePath,
+        userDataDir: request.userDataDir, profileDirectory: request.profileDirectory, arguments: [],
+      } }, context)
     }
     if (request.action === 'autoConnect') {
       if (request.userDataDir && !isAbsolute(request.userDataDir)) return 'Error: userDataDir must be an absolute user-identified data root.'

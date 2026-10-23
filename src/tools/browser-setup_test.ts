@@ -16,6 +16,8 @@ import { SearchTool } from './search.ts'
 import { BrowserSetupTool } from './browser-setup.ts'
 import { CHROME_MCP_PACKAGE } from '../browser/chrome-contract.ts'
 import { attachmentTarget } from '../browser/session-browsers.ts'
+import { SharedChrome } from '../browser/shared-chrome.ts'
+import { join } from 'node:path'
 import { ChromeToolSchema } from '../config/schema.ts'
 
 function fixture(t: TestContext, home: string) {
@@ -339,4 +341,54 @@ for (const cleanup of ['denied', 'failed'] as const) test(`app page cleanup ${cl
   assert.equal(f.disconnect.mock.callCount(), 0)
   f.call.mock.mockImplementation(async () => 'unrelated page is accessible')
   assert.equal(await f.invoke(ctx, { pageId: 2, function: '() => 1' }, receipt.instance), 'unrelated page is accessible')
+}))
+
+test('managed shared endpoint keeps session registries, permissions, binding IDs and cleanup independent', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home), owner = f.session(), peer = f.session()
+  const ensure = t.mock.method(SharedChrome.prototype, 'ensure', async () => 'ws://127.0.0.1:9555/devtools/browser/shared')
+  const shutdown = t.mock.method(SharedChrome.prototype, 'shutdown', async () => {})
+  const args = { action: 'managed', executablePath: join(home, 'synthetic-chrome'), userDataDir: join(home, 'synthetic-source'), profileDirectory: 'Default' }
+  const [first, second] = await Promise.all([f.setup(owner, args), f.setup(peer, args)]).then(values => values.map(value => JSON.parse(String(value))))
+  assert.notEqual(first.instance, second.instance)
+  assert.equal(first.owned, true)
+  assert.equal(first.mode, 'managed')
+  assert.match(first.lifetime, /Project runtime shared/)
+  assert.equal(f.connect.mock.callCount(), 2)
+  assert.deepEqual((f.connect.mock.calls[0].this as McpConnection).config.args, (f.connect.mock.calls[1].this as McpConnection).config.args)
+  assert.ok((f.connect.mock.calls[0].this as McpConnection).config.args!.includes('--page-id-routing'))
+  assert.deepEqual(await Promise.all([f.invoke(owner, { pageId: 1, function: '() => 1' }), f.invoke(peer, { pageId: 2, function: '() => 2' })]), ['A', 'B'])
+  assert.match(String(await f.setup(peer, { action: 'close', instance: first.instance })), /unknown browser instance/)
+  const before = ensure.mock.callCount()
+  assert.match(String(await f.setup({ ...owner, projectId: 'foreign' }, args)), /project binding mismatch/)
+  const blocked = f.session(['browser_setup'])
+  assert.match(String(await f.setup(blocked, args)), /not available|not active/)
+  const leaf = new CallTools(owner.tools, home)
+  leaf.setExecutionScope('call', [])
+  assert.match(String(await f.setup({ ...owner, tools: leaf }, args)), /only their owner/)
+  assert.equal(ensure.mock.callCount(), before)
+  await owner.tools.resetDynamicAndWait()
+  assert.equal(shutdown.mock.callCount(), 0)
+  assert.equal(await f.invoke(peer, { pageId: 2, function: '() => 2' }), 'B')
+  await f.setup(peer, { action: 'close', instance: second.instance })
+  assert.equal(shutdown.mock.callCount(), 0)
+  await f.importer.shutdownBrowser()
+  assert.equal(shutdown.mock.callCount(), 1)
+  await leaf.resetDynamicAndWait()
+}))
+test('session reset during managed initialization cannot publish a late binding or cancel a peer', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home), owner = f.session(), peer = f.session()
+  const started = Promise.withResolvers<void>(), endpoint = Promise.withResolvers<string>()
+  t.mock.method(SharedChrome.prototype, 'ensure', async () => { started.resolve(); return endpoint.promise })
+  const args = { action: 'managed', executablePath: join(home, 'synthetic-chrome'), userDataDir: join(home, 'synthetic-source'), profileDirectory: 'Default' }
+  const pending = f.setup(owner, args)
+  await started.promise
+  // reset aborts the binding. Shared initialization is Project-owned and continues.
+  const reset = owner.tools.resetDynamicAndWait()
+  const peerPending = f.setup(peer, args)
+  endpoint.resolve('ws://127.0.0.1:9555/devtools/browser/shared')
+  await reset
+  assert.match(String(await pending), /abort/i)
+  assert.ok(JSON.parse(String(await peerPending)).instance)
+  assert.deepEqual(JSON.parse(String(await f.setup(owner, { action: 'list' }))).instances, [])
+  assert.equal(await f.invoke(peer, { pageId: 2, function: '() => 2' }), 'B')
 }))

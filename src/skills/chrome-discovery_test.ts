@@ -41,6 +41,10 @@ test('browser capabilities are visible in the compact summary before tool discov
       const normalized = body.replace(/\s+/g, ' ')
       for (const contract of [
         /action: "discover"/,
+        /action: "managed"/,
+        /one loopback-CDP Chrome per Project runtime/,
+        /Source files are never modified/,
+        /Encrypted cookies\/passwords/,
         /action: "autoConnect", channel: "stable"/,
         /Chrome 144\+/,
         /Chrome 136\+/,

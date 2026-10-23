@@ -1,6 +1,8 @@
+import type { ManagedChromeChoice } from './shared-chrome.ts'
 import type { SessionTools } from '../tools/registry.ts'
 
 export type BrowserTarget =
+  | ({ mode: 'managed'; arguments: string[] } & ManagedChromeChoice)
   | { mode: 'attach'; endpoint: string; arguments: string[] }
   | { mode: 'autoConnect'; channel: 'stable' | 'beta' | 'dev' | 'canary'; userDataDir?: string; arguments: string[] }
 
@@ -81,7 +83,7 @@ export class SessionBrowsers {
     if (!instances.length && tools.dynamicOwner !== tools) {
       return 'Error: no browser instance is available to borrow. Ask the owning session to initialize its browser first.'
     }
-    return instances[0] ?? 'Error: no browser binding. Read browser_setup and use action discover to guide the user, then explicitly connect. Shadow never launches a browser.'
+    return instances[0] ?? 'Error: no browser binding. Read browser_setup and use action discover to guide the user, then explicitly connect. Use managed to copy an explicitly selected profile into the Project shared Chrome.'
   }
 
   async close(tools: SessionTools, instance: BrowserInstance): Promise<void> {

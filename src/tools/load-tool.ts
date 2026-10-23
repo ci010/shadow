@@ -21,7 +21,8 @@ import { SkillToolDeclarationsSchema, resolveSkillToolSource, type SkillToolDecl
 import type { Skill } from '../skills/loader.ts'
 import { readSkillDirectory } from '../skills/edit-store.ts'
 import { parseSkillFile } from '../skills/parse.ts'
-import { SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
+import { SharedChrome } from '../browser/shared-chrome.ts'
+import { attachmentTarget, SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
 import { CHROME_MCP_PACKAGE, chromeToolAllowed } from '../browser/chrome-contract.ts'
 import { BrowserSetupTool } from './browser-setup.ts'
 import type { VirtualEntry, VirtualListOptions } from '../vfs/virtual-fs.ts'
@@ -189,6 +190,7 @@ export class ImportTool implements Tool {
   private readonly scope = getProjectScope()
   private readonly projectId?: string
   private readonly browsers = new SessionBrowsers()
+  private readonly sharedChrome: SharedChrome
   readonly name = 'import_tool'
   readonly supportsRemoteWorkdir = true
   readonly description = 'Import a tool or MCP server into the current session. ' +
@@ -222,7 +224,9 @@ export class ImportTool implements Tool {
     private getSkillDirectory: SkillDirectoryResolver = () => undefined,
     private mcpIndex = new McpToolIndex(workspace),
     private canLoad?: (entry: LoadableEntry) => boolean,
+    sharedChrome?: SharedChrome,
   ) {
+    this.sharedChrome = sharedChrome ?? new SharedChrome(resolve(workspace, 'browser-profiles'))
     this.builtins = new Map(loadable)
     this.projectId = this.scope?.projectId ?? browserProjectId
     if (this.scope && browserProjectId && browserProjectId !== this.projectId) {
@@ -256,6 +260,9 @@ export class ImportTool implements Tool {
     }
   }
 
+  /** Project runtime cleanup; session teardown must never call this. */
+  async shutdownBrowser(): Promise<void> { await this.sharedChrome.shutdown() }
+
   private sessionBrowsersEnabled(): boolean {
     const entry = this.loadable.get('chrome-devtools')
     return !!(entry && isMcpLoadable(entry) && this.projectId)
@@ -264,8 +271,10 @@ export class ImportTool implements Tool {
   private browserReceipt(instance: BrowserInstance) {
     return {
       instance: instance.id, source: 'v:tools/chrome-devtools', mode: instance.target.mode,
-      owned: false, ready: instance.ready, binding: instance.target,
-      lifetime: 'Session only; sleep/reset disconnects and forgets this binding. Browser remains user-owned.',
+      owned: instance.target.mode === 'managed', ready: instance.ready, binding: instance.target,
+      lifetime: instance.target.mode === 'managed'
+        ? 'Project runtime shared browser; session close/sleep/reset only disconnects this binding. Project shutdown stops its managed child; copy is retained.'
+        : 'Session only; sleep/reset disconnects and forgets this binding. Browser remains user-owned.',
       scope: 'Browser-wide CDP access, not profile isolation. pageId addresses a page only.',
       usage: 'Search with handler "glob" or "grep" and path "v:tools/chrome-devtools/<instance>". Pass instance to invoke_tool({name:"chrome-devtools__...",instance,args:{...}}).',
     }
@@ -857,7 +866,12 @@ export class ImportTool implements Tool {
         const parsed = managedChromeArgs([...baseArgs, ...configArgs, ...extraCliArgs])
         const instance = this.browsers.forTools(sessionTools)
         if (!instance) throw new Error('No browser binding. Use browser_setup discover, then explicitly connect.')
-        effectiveArgs = [packageName, ...parsed.args, '--page-id-routing', ...instance.target.arguments]
+        options.signal.throwIfAborted()
+        const targetArgs = instance.target.mode === 'managed'
+          ? attachmentTarget(await this.sharedChrome.ensure(instance.target)).arguments
+          : instance.target.arguments
+        options.signal.throwIfAborted()
+        effectiveArgs = [packageName, ...parsed.args, '--page-id-routing', ...targetArgs]
       } catch (error) {
         return `Error loading Chrome: ${error instanceof Error ? error.message : String(error)}`
       }
