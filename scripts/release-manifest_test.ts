@@ -212,3 +212,15 @@ test('release downloads reject insecure sources and unverified service binaries'
   }
   assert.throws(() => verifyWinSW(Buffer.from('not WinSW')), /SHA-256 mismatch/)
 })
+
+test('prepared release source fingerprint includes owned native patches but excludes Cargo outputs', async () => {
+  await withTempWorkspace(async root => {
+    await file(root, 'integrations/agent-desktop/patches/shadow_observe.rs', 'v3')
+    const before = await sourceFingerprint(root)
+    await file(root, 'integrations/agent-desktop/patches/shadow_observe.rs', 'v4')
+    const after = await sourceFingerprint(root)
+    assert.notEqual(before, after)
+    await file(root, 'integrations/agent-desktop/target/debug/build-state', 'ephemeral')
+    assert.equal(await sourceFingerprint(root), after)
+  })
+})

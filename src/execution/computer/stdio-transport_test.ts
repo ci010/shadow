@@ -73,7 +73,7 @@ test('native diagnostic allowlist preserves only static codes, never provider co
 })
 
 test('UIA and desktop gate failures remain distinct across stdio without lock-screen assertions', async t => {
-  for (const [code, reason] of [['observation_failed', 'uia_root_protected_or_unknown'], ['desktop_unavailable', 'desktop_open'], ['unavailable', undefined]]) {
+  for (const [code, reason] of [['observation_failed', 'uia_process_unavailable'], ['observation_failed', 'uia_process_mismatch'], ['observation_failed', 'uia_root_protected_or_unknown'], ['desktop_unavailable', 'desktop_open'], ['unavailable', undefined]]) {
     const desktop = new DesktopStdioTransport({ spawnHost: () => spawn(process.execPath, ['-e', `
       require('node:readline').createInterface({input:process.stdin}).on('line', line => {
         process.stdout.write(JSON.stringify({id:JSON.parse(line).id,error:${JSON.stringify({code, reason})}})+'\\n');

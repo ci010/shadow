@@ -13,6 +13,7 @@ const errorReasonSchema = z.union([errorCodeSchema, z.enum([
   'uia_deadline',
   'uia_budget',
   'uia_process_mismatch',
+  'uia_process_unavailable',
   'uia_root_protected_or_unknown',
   'uia_geometry',
   'uia_state_unavailable',

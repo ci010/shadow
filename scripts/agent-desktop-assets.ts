@@ -1,5 +1,6 @@
 import { copyFile, mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { verifyNativeBuild } from './agent-desktop-integrity.ts'
 
 /** Allowlist only reviewed release artifacts; never copy Rust sources, target/,
  * refs_store, downloaded upstream checkout, or other private native state.
@@ -19,13 +20,14 @@ export async function copyAgentDesktopAssets(root: string, output: string, optio
   const guard = join('artifacts', `${platform}-${arch}`, 'shadow-input-guard.exe')
   const files = [artifact, guard, 'LICENSE', 'NOTICE']
   try {
+    await verifyNativeBuild(root, arch)
     for (const file of files) {
       const info = await stat(join(source, file))
       if (!info.isFile() || info.size === 0) throw new Error(`Invalid agent-desktop release asset: ${file}`)
     }
   } catch (error) {
     const triple = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
-    throw new Error(`agent-desktop native assets are missing or invalid for ${platform}-${arch}. From integrations/agent-desktop, run node scripts/fetch.mjs and node scripts/build.mjs ${triple} in a VS developer shell; then rebuild the backend. See integrations/agent-desktop/README.md.`, { cause: error })
+    throw new Error(`agent-desktop native assets are missing or invalid (or stale; rebuild required) for ${platform}-${arch}. From integrations/agent-desktop, run node scripts/fetch.mjs and node scripts/build.mjs ${triple} in a VS developer shell; then rebuild the backend. See integrations/agent-desktop/README.md.`, { cause: error })
   }
   for (const file of files) {
     const target = join(output, 'integrations/agent-desktop', file)

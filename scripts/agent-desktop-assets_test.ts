@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +9,7 @@ import { createRequire } from 'node:module'
 import test from 'node:test'
 import { copyAgentDesktopAssets } from './agent-desktop-assets.ts'
 import { compileBackend } from './backend-bundle.ts'
+import { recordNativeBuild } from './agent-desktop-integrity.ts'
 
 test('native asset staging is required on Windows by default and allowlisted', async () => {
   const root = await mkdtemp(join(tmpdir(), 'shadow-native-assets-'))
@@ -25,7 +26,25 @@ test('native asset staging is required on Windows by default and allowlisted', a
     await writeFile(join(source, 'artifacts/win32-x64/shadow-input-guard.exe'), 'synthetic guard; never execute')
     await writeFile(join(source, 'private-state.json'), 'must not copy')
     await writeFile(join(source, 'artifacts/win32-x64/secret.json'), 'must not copy')
+    // Existence alone must not admit an old addon. Build receipts bind sources and both binaries.
+    await assert.rejects(copyAgentDesktopAssets(root, output, opts), /stale/)
+    const repository = fileURLToPath(new URL('..', import.meta.url))
+    for (const file of ['integrations/agent-desktop/src', 'integrations/agent-desktop/patches', 'integrations/agent-desktop/scripts',
+      'integrations/agent-desktop/Cargo.toml', 'integrations/agent-desktop/Cargo.lock', 'integrations/agent-desktop/build.rs',
+      'src/execution/computer/agent-desktop-worker.js', 'src/execution/computer/agent-desktop-errors.js',
+      'src/execution/computer/stdio-transport.ts', 'src/execution/computer/windows-input.cs',
+      'scripts/agent-desktop-input-guard.ts', 'scripts/agent-desktop-integrity.ts']) {
+      await mkdir(join(root, file, '..'), { recursive: true })
+      await cp(join(repository, file), join(root, file), { recursive: true })
+    }
+    await recordNativeBuild(root, 'x64')
     assert.equal(await copyAgentDesktopAssets(root, output, opts), true)
+    await writeFile(join(root, 'src/execution/computer/agent-desktop-worker.js'), '// changed worker')
+    await assert.rejects(copyAgentDesktopAssets(root, output, opts), /stale/)
+    await recordNativeBuild(root, 'x64')
+    await writeFile(join(source, 'artifacts/win32-x64/shadow-agent-desktop.node'), 'changed binary')
+    await assert.rejects(copyAgentDesktopAssets(root, output, opts), /stale/)
+    await recordNativeBuild(root, 'x64')
     assert.deepEqual((await readdir(join(output, 'integrations/agent-desktop'))).sort(), ['LICENSE', 'NOTICE', 'artifacts'])
     assert.deepEqual((await readdir(join(output, 'integrations/agent-desktop/artifacts/win32-x64'))).sort(), ['shadow-agent-desktop.node', 'shadow-input-guard.exe'])
     await writeFile(join(source, 'artifacts/win32-x64/shadow-input-guard.exe'), '')

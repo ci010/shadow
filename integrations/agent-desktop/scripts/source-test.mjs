@@ -20,7 +20,7 @@ test('password-first extension has no bulk read, cache, value or input operation
  assert.match(patch, /if secret \{[\s\S]*?return Ok\(node\);/);
  assert.doesNotMatch(patch, /read_cached\(|read_live\(|read_label\(|TreeProperty::Value\b|SendInput\(|execute_action\(/);
  assert.match(patch, /expected_runtime_id/);
- assert.match(patch, /get_process_id\(\)\.ok\(\) != Some\(pid\)/);
+ assert.match(patch, /boundary.verify\(&element.0\)\?/);
 });
 test('adapter lives inside persistent owner receive loop with explicit cleanup', () => {
  const owner = read('src/owner.rs');
@@ -129,4 +129,46 @@ test('ordinary actions gate every dispatch and successful return on sticky cance
  assert.match(input,/verify_identity\(path\)\.map_err/);
  assert.match(input,/sync_channel\(1\)/);
  assert.match(input,/validate_result\(method,result\)\?/);
+});
+
+test('window ownership replaces provider PID equality across observation, action and foreground', () => {
+ const source=read('patches/shadow_observe.rs');
+ assert.match(source,/GetAncestor\(native, 2\)/);
+ assert.match(source,/compare_elements\(&current, &fresh\)/);
+ assert.match(source,/seen.contains\(&runtime\)/);
+ assert.doesNotMatch(source,/actual_pid != pid|element.get_process_id\(\).ok\(\) != Some\(pid\)/);
+ const visit=source.slice(source.indexOf('fn visit('),source.indexOf('/// Authorized bind-time'));
+ assert.ok(visit.indexOf('boundary.verify')<visit.indexOf('TreeProperty::Name'));
+ assert.equal((visit.match(/boundary.verify/g)??[]).length,3);
+ const find=source.slice(source.indexOf('fn find_runtime'),source.indexOf('/// Restricted foreground'));
+ assert.ok(find.indexOf('boundary.verify')<find.indexOf('TreeProperty::IsPassword'));
+ assert.match(source,/ancestry\(&boundary,&focused/);
+ assert.match(source,/ancestry\(&boundary,&hit/);
+ const action=source.slice(source.indexOf('pub fn shadow_action'),source.indexOf('fn find_runtime'));
+ assert.equal((action.match(/boundary.verify\(&target\)\?;[^\n]*?\*started = true;/g)??[]).length,5);
+});
+
+test('boundary resolves and compares only at the candidate, without caching live membership', () => {
+ const source=read('patches/shadow_observe.rs');
+ const verify=source.slice(source.indexOf('    fn verify(&self'),source.indexOf('fn provider_belongs'));
+ assert.equal((verify.match(/self.root\(\)/g)??[]).length,1);
+ assert.equal((verify.match(/compare_elements\(/g)??[]).length,1);
+ assert.ok(verify.indexOf('if root_candidate') < verify.indexOf('self.root()'));
+ for (const live of ['get_runtime_id()', 'get_process_id()', 'get_native_window_handle()', 'TreeProperty::IsPassword', 'get_parent(&current)']) assert.ok(verify.includes(live));
+ const visit=source.slice(source.indexOf('fn visit('),source.indexOf('/// Authorized bind-time'));
+ assert.equal((visit.match(/boundary.verify/g)??[]).length,3);
+ assert.ok(visit.lastIndexOf('boundary.verify') > visit.indexOf('uia_password_recheck'));
+});
+
+test('soft admission never recovers a failed or half-verified node', () => {
+ const source=read('patches/shadow_observe.rs');
+ const visit=source.slice(source.indexOf('fn visit('),source.indexOf('/// Authorized bind-time'));
+ assert.ok(visit.indexOf('continue_traversal') > visit.indexOf('uia_password_recheck'));
+ assert.match(visit,/children.push\(visit\([^\n]*\?\)/);
+ assert.doesNotMatch(visit,/unwrap_or_else|Err\([^\n]*=>[^\n]*truncated/);
+ assert.equal((visit.match(/continue_traversal\(deadline, soft\)\?/g)??[]).length,3);
+ assert.match(source,/if tree.subtree_truncated && tree.children.iter\(\).all/);
+ const host=read('src/windows.rs');
+ assert.match(host,/previous.bindings.get\(element_id\).ok_or\("stale_observation"\)/);
+ assert.match(host,/current.bindings.get\(element_id\) != Some\(runtime\)/);
 });

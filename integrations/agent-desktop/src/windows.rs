@@ -60,6 +60,7 @@ fn uia_error(error: agent_desktop_core::AdapterError) -> &'static str {
   "uia_identity_unavailable" => "uia_identity_unavailable",
   "uia_deadline" => "uia_deadline",
   "uia_budget" => "uia_budget",
+  "uia_process_unavailable" => "uia_process_unavailable",
   "uia_process_mismatch" => "uia_process_mismatch",
   "uia_root_protected_or_unknown" => "uia_root_protected_or_unknown",
   "uia_geometry" => "uia_geometry",
@@ -79,6 +80,7 @@ fn error_body(code: &'static str) -> Value {
   "uia_identity_unavailable" => json!({"error":{"code":"observation_failed","reason":"uia_identity_unavailable"}}),
   "uia_deadline" => json!({"error":{"code":"observation_failed","reason":"uia_deadline"}}),
   "uia_budget" => json!({"error":{"code":"observation_failed","reason":"uia_budget"}}),
+  "uia_process_unavailable" => json!({"error":{"code":"observation_failed","reason":"uia_process_unavailable"}}),
   "uia_process_mismatch" => json!({"error":{"code":"observation_failed","reason":"uia_process_mismatch"}}),
   "uia_root_protected_or_unknown" => json!({"error":{"code":"observation_failed","reason":"uia_root_protected_or_unknown"}}),
   "uia_geometry" => json!({"error":{"code":"observation_failed","reason":"uia_geometry"}}),
@@ -602,5 +604,33 @@ fn ready(guard:&mut crate::input::Guard,method:&str,started:&mut bool)->Result<(
   assert_eq!(error_body(uia_error(error)),json!({"error":{"code":"observation_failed","reason":"uia_root_protected_or_unknown"}}));
   assert_eq!(error_body("desktop_open"),json!({"error":{"code":"desktop_unavailable","reason":"desktop_open"}}));
   assert_eq!(error_body("capture_failed"),json!({"error":{"code":"capture_failed"}}));
+ }
+}
+
+#[cfg(test)]
+mod truncated_binding_tests {
+ use super::*;
+ #[test] fn omitted_target_has_no_binding_and_cannot_survive_action_revalidation() {
+  fn node(runtime: i32) -> agent_desktop_core::AccessibilityNode {
+   let mut n = agent_desktop_core::AccessibilityNode { ref_id: None, role: "Edit".into(), identity: Default::default(), presentation: Default::default(), children_count: None, subtree_truncated: false, children: vec![] };
+   n.identity.retained_object = Some(json!({"runtime":[runtime]}).to_string());
+   n.presentation.available_actions.push("invoke".into());
+   n
+  }
+  let mut tree = node(1); tree.children.push(node(2)); tree.children.push(node(3));
+  let old_signature = format!("{:?}",tree);
+  let mut previous = HashMap::new(); flatten(&tree,None,&mut Vec::new(),&mut previous);
+  let target = previous.get("2").unwrap();
+  // Soft traversal publishes only the first fully verified child.
+  tree.children.pop(); tree.subtree_truncated = true;
+  let mut current = HashMap::new(); let mut output = Vec::new();
+  flatten(&tree,None,&mut output,&mut current);
+  assert!(truncated(&tree)); assert_eq!(output.len(),2);
+  assert!(!current.contains_key("2"));
+  // These are the two independent production action gates. Even if someone
+  // supplies an old ID, neither the binding nor the whole-tree signature passes.
+  assert_ne!(current.get("2"),Some(target));
+  assert_ne!(format!("{:?}",tree),old_signature);
+  assert_eq!(current.get("2").ok_or("stale_observation"),Err("stale_observation"));
  }
 }

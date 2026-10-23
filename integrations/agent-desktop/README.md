@@ -71,8 +71,22 @@ HWND/PID/generation/root before/after. Minimized windows fail closed.
 owned COM client has connection/transaction timeouts. The walker is password-first:
 unknown password status is protected and the node/subtree is pruned; a protected
 or unknown root fails. No secret name/value/children are read, no bulk cache or
-label read occurs. Every visited node must have the bound PID; geometry uses
-checked integer endpoints. A post-content password check discards raced reads.
+label read occurs. Every visited node must prove membership through a bounded raw UIA ancestor chain
+ending at the freshly HWND-resolved root, matching both runtime ID and
+CompareElements. Every nonzero native HWND on that chain must have the selected
+window as GA_ROOT; a separate owned popup is rejected, not implicitly authorized.
+Provider PID is required/readable/nonzero but need not equal the HWND owner PID.
+The root still requires the bound PID, HWND and runtime identity. Cycles, unknown
+native-handle properties, foreign windows and changed identities fail closed for
+the complete observation (no partial actionable branches). Geometry uses checked
+integer endpoints. Password and membership are rechecked after content reads.
+The same boundary protects action lookup, every pattern dispatch and its feedback,
+and foreground target/focus/hit ancestry. No process-name/family whitelist was added.
+UIA is still a cooperative provider API, not a cryptographic attestation: runtime ID
+alone is never trusted, but malicious provider content and changes inside a single
+COM call cannot be independently attested. Existing deadlines/worker termination,
+OS process-generation validation and physical-input guard remain in force.
+No real desktop observation or injection is performed by build/unit tests.
 Role, focusability and supported patterns are read after classification. Nonsecret offscreen
 names/values are also observed and fingerprinted; only actions require enabled/onscreen. SetValue is advertised only
 for writable Edit values with original UTF-16 length strictly below 2000. Long
@@ -278,3 +292,92 @@ Revision-2 review hardening:
 - Additional pure/source tests cover cancellation-before-dispatch, readonly evidence,
   exact method schemas, bounded metadata parsing and offscreen signature changes.
   No real begin/execute/UI probe was used to test these changes.
+
+## Build freshness (worker/native pairing)
+
+Windows `pnpm dev` / `pnpm build` / `pnpm desktop:build` now reject missing,
+modified or stale native builds before successfully staging a backend. The native
+builder synchronizes the owned upstream patches, performs the locked release build,
+checks the host-architecture addon identity/ABI without UI calls, and records
+`artifacts/win32-<arch>/build-manifest.json`. The receipt binds both binary SHA-256s
+to native sources, patches, build scripts, worker and guard source. It is local
+build evidence, not a signature. Old artifacts without a receipt must be rebuilt;
+existence/nonzero size is no longer sufficient. Cross-architecture builds record
+hashes but still need target-device identity/ABI acceptance.
+
+The build fails with the exact native build command rather than silently running
+an expensive native compilation/toolchain install. Use a VS developer shell and
+an already installed Rust >=1.89; if your default Rust is older, select a suitable
+installed version with `RUSTUP_TOOLCHAIN` (for example `1.98.0`). Do not remove
+`--locked`. Then rerun the backend build. Native source/patch changes also invalidate
+prepared-release source fingerprints. `desktop:install` installs/verifies an
+already built release; it does not rebuild it or hot-replace a running application.
+
+A running dev backend uses `dist/integrations/agent-desktop/artifacts`, not the
+repository's source artifact directory. Updating only the source artifact does not
+repair that copied output. Normal backend build stages the verified artifacts.
+Existing loaded native worker processes cannot hot-reload a DLL; new disposable
+workers load the staged files. Do not overwrite a loaded DLL or restart an active
+session automatically.
+
+### PID diagnostic distinction
+
+`uia_process_unavailable` means the visit-time UIA ProcessId property read failed;
+`uia_process_mismatch` now means it succeeded but returned a PID different from
+the bound root PID. Neither includes provider content or PID values. Both reject
+the whole observation before password/name/value reads or subtree descent. The
+prior mismatch code conflated these cases; an old trace does not prove a foreign
+process. Updating the backend allowlist requires loading the newly built backend
+(normally a user-controlled restart), not just replacing the native DLL.
+
+Electron renderer children may legitimately be cross-process, but parentage or
+same executable alone does not authorize their UIA contents. This change does not
+relax target PID, password-first, identity, ancestry or action gates. Safe subtree
+pruning would require explicit partial-observation semantics, non-actionable
+omission markers and proof that snapshot/action/foreground validation cannot use
+omitted or cross-process descendants. That design is not implemented here.
+
+### Window-boundary cost refinement
+
+The first live tree-only VSCode observation passed after replacing provider-PID
+identity with window ancestry. A subsequent screenshot-request observation failed
+with `uia_deadline` in its UIA phase; this is not evidence of capture failure.
+The ancestry proof remains O(nodes * raw-depth), with no cross-node membership
+cache. Each proof now resolves HWND -> root only once at its terminal candidate
+(instead of twice) and calls CompareElements only there (instead of at every
+ancestor plus the terminal recheck). Runtime ID is only a candidate filter; fresh
+root PID/HWND/runtime validation and CompareElements remain mandatory. Nonroot
+HWND, PID, parent edges and ancestor password status are still read live. Both
+before/after content proofs and the post-content password/leaf identity checks
+remain. The same client and raw walker were already per-operation, not per-node.
+
+Counting explicit UIA API/property calls in the proof for raw depth d gives about
+6d+13 before versus 5d+6 now, per node-side (not a provider latency benchmark).
+Depth 10 thus drops from 73 to 56 calls; HWND-root resolutions per nonsecret
+observed node drop from four to two. Candidate/count and source-wiring tests cover
+this optimization. No global deadline increase or screenshot-path workaround was
+made; real-provider stable latency still requires live repeated observations.
+
+### Bounded observation admission
+
+Observation now admits at most 64 nodes, and stops starting child/sibling work
+2.5 seconds after entry. The global UIA hard deadline remains 5 seconds. This
+leaves a nominal 2.5-second reserve for completing the last admitted node and
+validating the final root. Every published content node has finished its second
+membership/password/runtime check. Protected placeholders are also boundary-
+rechecked and never receive runtime bindings. Soft checks run only at completed
+node boundaries, before first-child discovery, before child admission and before
+next-sibling discovery. They never recover verification/property errors; hard
+expiry always fails. A single hung COM call can still exhaust the reserve and
+must fail, not become a successful partial observation.
+
+Soft/node-budget exhaustion marks subtree_truncated, propagated to the existing
+wire `truncated` flag. A budget-exhausted tree with no nonprotected root child
+fails `uia_budget`, rather than presenting a root-only result as useful success.
+Omitted nodes have no wire ID or snapshot binding. Actions still require the
+previous binding, a fresh matching whole-tree signature and the same current
+binding, followed by live target checks. If timing produces a different truncated
+prefix, actions fail stale_observation; this is intentional fail-closed behavior,
+not permission to execute against unseen controls. Target-only action evidence
+reading does not use the observation soft budget. Screenshot capture retains its
+separate existing deadline; UIA deadline errors remain UIA errors.

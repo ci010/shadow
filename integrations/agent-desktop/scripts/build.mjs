@@ -16,6 +16,8 @@ if (!existsSync(resolve(root, 'Cargo.lock'))) {
  if (!process.argv.includes('--resolve-lock')) throw new Error('Missing local Cargo.lock; pass --resolve-lock for explicit initial resolution');
  run('cargo', ['generate-lockfile']);
 }
+// Refresh only the owned upstream patch before Cargo's incremental dependency check.
+run(process.execPath, ['scripts/fetch.mjs', '--sync']);
 run('cargo', ['build', '--release', '--locked', '--target', target]);
 const architecture = target === 'x86_64-pc-windows-msvc' ? 'x64' : 'arm64';
 const destination = resolve(root, 'artifacts', "win32-" + architecture);
@@ -23,4 +25,7 @@ mkdirSync(destination, { recursive: true });
 copyFileSync(resolve(root, 'target', target, 'release', 'shadow_agent_desktop.dll'), resolve(destination, 'shadow-agent-desktop.node'));
 const { buildInputGuard } = await import(pathToFileURL(resolve(root, "../../scripts/agent-desktop-input-guard.ts")).href);
 await buildInputGuard(resolve(root, "../.."), resolve(destination, "shadow-input-guard.exe"));
-console.log(`Built ${destination}/shadow-agent-desktop.node; not runtime-tested or signed by this script.`);
+if (architecture === process.arch) run(process.execPath, ['scripts/identity.mjs', resolve(destination, 'shadow-agent-desktop.node')]);
+const { recordNativeBuild } = await import(pathToFileURL(resolve(root, '../../scripts/agent-desktop-integrity.ts')).href);
+await recordNativeBuild(resolve(root, '../..'), architecture);
+console.log(`Built ${destination}; source/binary integrity recorded. No real desktop UI tested; not signed.`);
