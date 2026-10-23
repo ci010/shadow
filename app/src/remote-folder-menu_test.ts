@@ -34,11 +34,12 @@ function mount(t: TestContext, name: string, initial: Record<string, unknown>) {
   return { props, state: () => instance.$.setupState }
 }
 
-test('sidebar remote action opens a registration dialog on every UI instead of creating a remote chat draft', () => {
+test('sidebar unified folder action opens the device-aware registration dialog', () => {
   const sidebar = readFileSync(new URL('./components/FoldersSidebar.vue', import.meta.url), 'utf8')
   const dialog = readFileSync(new URL('./components/FolderDialog.vue', import.meta.url), 'utf8')
   assert.match(sidebar, /const folderActions = computed\(\(\) => FOLDER_ACTIONS\)/)
-  assert.match(sidebar, /id === 'remote'\) dialogMode.value = 'remote'/)
+  assert.doesNotMatch(sidebar, /id === 'remote'/)
+  assert.match(sidebar, /else dialogMode.value = id/)
   assert.doesNotMatch(sidebar, /id === 'remote'.*emit\('remote'\)/)
   assert.match(dialog, /props.client.selectDirectory\(nodeId.value, path.value.trim\(\), current.signal\)/)
   assert.doesNotMatch(dialog, /shadowDesktop|selectDirectory\?\./)

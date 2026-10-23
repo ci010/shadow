@@ -120,12 +120,13 @@ test('Git workflow is session-default without granting coordinator execution', a
   for (const name of ['general', 'sub', 'explore', 'orchestrator']) {
     const prompt = (await provider.getPromptSection(context({ agent: { ...agent, name } })))!
     assert.match(prompt, /stricttools\/safegit/)
+    assert.match(prompt, /Other Git commands use ordinary Git; safegit coverage alone does not require extra approval/)
     if (name === 'orchestrator') {
       assert.match(prompt, /Coordination grants no execution or publication permissions/)
       assert.doesNotMatch(prompt, /v:skills\/git-github/)
     } else {
       assert.match(prompt, /read `v:skills\/git-github`/)
-      assert.match(prompt, /If safegit is unavailable or fails, stop/)
+      assert.match(prompt, /The skill covers commit\/push failure handling/)
     }
   }
 })

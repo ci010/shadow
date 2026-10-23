@@ -203,3 +203,33 @@ test('late capability completion cannot resurrect a collector after a Project sw
   project.value = undefined
   stop()
 })
+
+
+test('frontend log starts and sends a UUID tab ID on HTTP without crypto.randomUUID', async t => {
+  const fake = fakeWindow()
+  const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+  const crypto = globalThis.crypto
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: fake.target })
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues: crypto.getRandomValues.bind(crypto) } })
+  t.after(() => {
+    if (windowDescriptor) Object.defineProperty(globalThis, 'window', windowDescriptor)
+    else Reflect.deleteProperty(globalThis, 'window')
+    if (cryptoDescriptor) Object.defineProperty(globalThis, 'crypto', cryptoDescriptor)
+    else Reflect.deleteProperty(globalThis, 'crypto')
+  })
+  const batches: Array<{ tabId: string; events: unknown[] }> = []
+  t.mock.method(globalThis, 'fetch', async (_url: string, options?: RequestInit) => {
+    if (options?.method === 'POST') batches.push(JSON.parse(options.body as string))
+    return Response.json({ enabled: true })
+  })
+  const stop = startFrontendLog('http://192.168.1.50/projects/default', new AbortController().signal)
+  t.after(stop)
+  await settle()
+  fake.target.console.warn('HTTP startup works')
+  fake.tick()
+  await settle()
+  assert.equal(batches.length, 1)
+  assert.match(batches[0]!.tabId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  assert.equal(batches[0]!.events.length, 1)
+})

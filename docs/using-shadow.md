@@ -141,8 +141,8 @@ App level. Project isolation is **not an OS sandbox**: permitted host tools stil
 run with the backend user's permissions.
 
 Use a Project's **+** menu to open a folder, clone a repository, or start
-from scratch without selecting a folder. **Open folder** and **Open remote folder**
-use the same in-app directory picker on web, Main, and Child; no native directory
+from scratch without selecting a folder. **Open folder** is the single entry point
+for the in-app directory picker on web, Main, and Child; no native directory
 dialog is opened. Choose Main or a paired Child by device name and node ID, browse
 subdirectories or go to the parent, or enter an absolute path on that device.
 Offline devices remain visible; reconnect and refresh to retry. A Child must be

@@ -409,9 +409,26 @@ grep, so a match's line number can be read directly. Physical segment references
 returned by compact/handoff also support line ranges and exact-reference search:
 their view contains that segment's full history, not the current segment or only
 the most recent messages. Root session discovery still lists logical sessions.
-Without a line range, session reads retain their recent-message window;
-`?index=0&page_size=20` uses
-message indices instead of lines. Plain URL text keeps its line structure;
+Local sessions also expose `/overview` (dialogue and a compact call/result index,
+with ordinary tool arguments/results hidden) and `/full` (complete tool payloads). Bare IDs
+retain the full view. Overview additionally shows bounded attempted `use_project`
+folder arguments and exact `write` calls to `v:session/self.json` (title,
+description, completed, and read-only cwd/projectDir roundtrip fields). Exact edits
+are labelled as edits, not final state; append is unsupported. Paired results show
+bounded observed evidence or metadata, not success inferred from a request.
+Malformed/oversized values and unknown metadata fields are summarized rather than
+dumped. Result details require a preceding matching call in the viewed history;
+a recent-message slice may omit that call. Formatting never looks ahead to future
+results, so prefix line coordinates remain stable. Overview entries include exact
+`v:sessions/<physical-id>/calls/<encoded-tool-call-id>` drill-down references:
+read one to retrieve only that call's arguments and paired results, without
+hunting through another view. These references remain pinned across logical
+session rollover, and their offset/limit pages only that selected resource.
+Unknown call IDs fail explicitly; these are tool-call IDs, not background
+execution IDs. Each view has its own line coordinates, shared by read and
+grep on that exact path. Without a line range, reads return the last 200 lines; use offset/limit to read the complete view.
+Query parameters, including legacy `index`/`page_size`, are rejected with migration
+guidance: pagination is exclusively read.offset/read.limit. Plain URL text keeps its line structure;
 `flag: "r"` preserves raw HTML. Large inline text must be paged.
 
 ## Inspect and cancel executions

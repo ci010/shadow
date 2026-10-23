@@ -1,3 +1,4 @@
+import { createUuid } from './uuid.ts'
 import { redactDiagnosticUrls } from '../../src/runtime/module-diagnostic.ts'
 
 export function redactFrontendText(value: string): string {
@@ -113,7 +114,7 @@ export function installFrontendLog(target: Window & { console: Console }, send: 
 export function startFrontendLog(base: string, signal: AbortSignal): () => void {
   if (signal.aborted) return () => {}
   const endpoint = `${base.replace(/\/$/, '')}/api/runtime/frontend-logs`
-  const tabId = crypto.randomUUID()
+  const tabId = createUuid()
   let active = true
   let enabled = false
   let checking: Promise<void> | undefined
