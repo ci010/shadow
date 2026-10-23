@@ -46,7 +46,7 @@ if (target) {
   const port = process.env.VITE_DEV_PORT ?? '5273'
   const url = `http://127.0.0.1:${port}`
   const vite = spawn(process.execPath, [
-    'node_modules/vite/bin/vite.js', '--host', process.env.VITE_DEV_HOST ?? '0.0.0.0',
+    'node_modules/vite/bin/vite.js', '--host', process.env.VITE_DEV_HOST ?? '127.0.0.1',
     '--port', port, '--strictPort',
   ], {
     cwd: 'app',

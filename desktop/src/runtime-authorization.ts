@@ -94,7 +94,9 @@ function isLoopbackOrigin(apiBase: string): boolean {
 
 function isExactOrigin(requestUrl: string, apiBase: string): boolean {
   try {
-    return new URL(requestUrl).origin === apiBase
+    const url = new URL(requestUrl)
+    if (url.protocol === 'ws:') url.protocol = 'http:'
+    return url.origin === apiBase
   } catch {
     return false
   }

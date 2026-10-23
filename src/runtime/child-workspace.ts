@@ -1,4 +1,7 @@
-import { DEVICE_UI_CHALLENGE, DEVICE_UI_REQUEST, deviceUiHeaders, deviceUiPath } from '../cluster/device-ui.ts'
+import WebSocket from 'ws'
+import { upgradeGatewayWebSocket } from '../gateway/websocket.ts'
+import { bridgeSockets } from '../gateway/socket-bridge.ts'
+import { DEVICE_UI_CHALLENGE, DEVICE_UI_REQUEST, DEVICE_UI_HMR, deviceUiHeaders, deviceUiRequestPath, deviceUiResourcePath } from '../cluster/device-ui.ts'
 import { DeviceApprovalUnavailableError, DeviceChallengeRequestError } from '../cluster/device-challenge-client.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 
@@ -11,7 +14,7 @@ export function childWorkspacePlugin(options: {
   return app => app.all('*', async c => {
     const url = new URL(c.req.url)
     const path = `${url.pathname}${url.search}`
-    if (!deviceUiPath(path)) return c.json({ error: 'not_found' }, 404)
+    if (!deviceUiRequestPath(path, c.req.method)) return c.json({ error: 'not_found' }, 404)
     let stage = 'challenge'
     try {
       const proof = await options.proof(AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(8000)]), DEVICE_UI_CHALLENGE)
@@ -24,6 +27,17 @@ export function childWorkspacePlugin(options: {
       headers.set('X-Shadow-Device-Proof', proof)
       headers.set('X-Shadow-Ui-Path', path)
       headers.set('X-Shadow-Ui-Method', c.req.method)
+      if (c.req.header('upgrade')?.toLowerCase() === 'websocket') {
+        if (!deviceUiResourcePath(path) || c.req.header('sec-websocket-protocol') !== 'vite-hmr') return c.notFound()
+        endpoint.pathname = endpoint.pathname.slice(0, -DEVICE_UI_REQUEST.length) + DEVICE_UI_HMR
+        endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:'
+        return await upgradeGatewayWebSocket(app, c, socket => {
+          bridgeSockets(socket, new WebSocket(endpoint, 'vite-hmr', {
+            headers: { 'X-Shadow-Device-Proof': proof, 'X-Shadow-Ui-Path': path }, handshakeTimeout: 8000,
+          }))
+        }, 'vite-hmr')
+      }
+
       const response = await (options.fetch ?? fetch)(endpoint, {
         method: 'POST', headers, redirect: 'error', signal: c.req.raw.signal,
         ...(!['GET', 'HEAD'].includes(c.req.method) ? { body: c.req.raw.body, duplex: 'half' } : {}),
