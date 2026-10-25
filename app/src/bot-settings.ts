@@ -32,6 +32,15 @@ export function botPatch(bot: BotInstanceStatus, draft: ChannelDraft, enabled: b
   return { displayName, config: channelPatch(botChannel(bot), draft, enabled) }
 }
 
+/** Resume from server facts, never browser-only completion flags or credential values. */
+export function qqSetupProgress(bot: BotInstanceStatus) {
+  const credentialsSaved = typeof bot.config.appId === 'string' && !!bot.config.appId.trim() && bot.secrets.secret === true
+  const connected = bot.state === 'connected'
+  return { credentialsSaved, connected,
+    step: !credentialsSaved ? 'credentials' : !connected ? 'connection' : 'access',
+    ownerReady: bot.purpose === 'personal' && connected && bot.ownerVerified === true }
+}
+
 export function parseBotStatus(value: unknown, projectId: string): BotInstanceStatus {
   if (!isRecord(value) || typeof value.id !== 'string' || !value.id
     || value.projectId !== projectId || typeof value.platform !== 'string'
@@ -86,6 +95,17 @@ export function createBotSettingsClient(base: string, projectId: string, request
       if (!isRecord(value)) throw new Error('Invalid WeChat login response')
       return value
     },
+    async pendingGroups(id: string, signal?: AbortSignal) {
+      const result = await json(`/${encodeURIComponent(id)}/pending-groups`, { method: 'GET', signal })
+      if (!isRecord(result) || !Array.isArray(result.groups)) throw new Error('Invalid discovery response')
+      return result.groups.map((entry: unknown) => {
+        if (!isRecord(entry) || entry.botInstanceId !== id || !['qq', 'feishu'].includes(String(entry.platform)) ||
+          typeof entry.conversationId !== 'string' || typeof entry.lastSeen !== 'number' ||
+          (entry.name !== undefined && typeof entry.name !== 'string')) throw new Error('Invalid discovery entry')
+        return { botInstanceId: id, platform: String(entry.platform), conversationId: entry.conversationId,
+          name: entry.name as string | undefined, lastSeen: entry.lastSeen }
+      })
+    },
     async challenge(id: string) {
       return await json(`/${encodeURIComponent(id)}/owner-challenge`, { method: 'POST' }) as { challenge: string; expiresAt: string }
     },
@@ -101,4 +121,10 @@ export function createBotSettingsClient(base: string, projectId: string, request
       if (!isRecord(result) || result.deleted !== true) throw new Error(t('Main did not confirm bot removal. Refresh before retrying.'))
     },
   }
+}
+
+/** Names are untrusted display data and deliberately excluded from the authoring prompt. */
+export function serviceGroupAuthoringRequest(group: { botInstanceId: string; platform: string; conversationId: string }): string {
+  return t('Prepare an explicit Agent binding for this discovered service group using authoring_change. Ask me which Agent and access scope to use; preserve other bindings. Validate and propose for owner review; do not publish automatically. Target:') + '\n' +
+    JSON.stringify({ botInstanceId: group.botInstanceId, platform: group.platform, conversationId: group.conversationId }, null, 2)
 }

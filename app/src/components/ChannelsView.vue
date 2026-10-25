@@ -25,7 +25,7 @@
           <span class="channel-state" :data-state="channel.state"><span class="channel-dot" aria-hidden="true" />{{ channelStateLabel(botChannel(channel)) }}</span>
           <div class="channel-actions">
             <button v-if="channel.platform === 'discord' && channel.purpose === 'service'" :aria-expanded="accessBot === channel.id" @click="accessBot = accessBot === channel.id ? undefined : channel.id">{{ t('Discord access') }}</button>
-            <button :disabled="!!saving" :aria-expanded="expanded === channel.id" :aria-controls="`channel-${channel.id}-editor`" @click="configure(channel)">{{ channel.configured ? t('Configure') : t('Set up') }}</button>
+            <button :disabled="!!saving" :aria-expanded="expanded === channel.id" :aria-controls="`channel-${channel.id}-editor`" @click="channel.platform === 'qq' ? continueQqSetup(channel) : configure(channel)">{{ channel.platform === 'qq' ? t('Continue QQ setup') : channel.configured ? t('Configure') : t('Set up') }}</button>
             <button v-if="channel.enabled" :disabled="!!saving" @click="changeConnection(channel, false)">{{ t('Disconnect') }}</button>
             <button v-else-if="channel.configured" :disabled="!!saving" @click="changeConnection(channel, true)">{{ t('Connect') }}</button>
             <button :disabled="!!saving" @click="removeBot(channel)">{{ t('Remove') }}</button>
@@ -37,6 +37,34 @@
           <button v-if="channel.purpose !== 'personal'" @click="changePurpose(channel, 'personal')">{{ t('Configure as personal assistant') }}</button>
           <button v-if="channel.purpose !== 'service' && channel.platform !== 'wechat'" @click="changePurpose(channel, 'service')">{{ t('Configure as service Bot') }}</button>
         </div>
+        <section v-if="channel.purpose === 'service' && ['qq', 'feishu'].includes(channel.platform)" class="owner-setup" :aria-label="t('Pending group authorization')">
+          <h4>{{ t('Pending group authorization') }}</h4>
+          <p>{{ t('Discovery is not authorization. No Agent runs and no message text is saved. Copy a target into a direct owner Web topic to prepare an authoring_change; publication still requires explicit review.') }}</p>
+          <button :disabled="!!saving || pendingLoading === channel.id" @click="loadPendingGroups(channel)">{{ t('Refresh pending groups') }}</button>
+          <p v-if="pendingErrors[channel.id]" role="alert">{{ pendingErrors[channel.id] }}</p>
+          <p v-if="pendingGroups[channel.id]?.length === 0">{{ t('No pending groups observed. Send a group message mentioning this service Bot, then refresh. Platform delivery and sender allowlists still apply.') }}</p>
+          <ul><li v-for="group in pendingGroups[channel.id]" :key="group.conversationId">
+            <strong>{{ group.name || t('Unnamed group') }}</strong> · {{ new Date(group.lastSeen).toLocaleString() }}
+            <p>{{ t('Select and copy this request into a direct owner Web topic. This does not publish or grant access.') }}</p>
+            <textarea readonly rows="5" :aria-label="t('Authoring request with discovered target')" :value="serviceGroupAuthoringRequest(group)" @focus="($event.target as HTMLTextAreaElement).select()" />
+          </li></ul>
+        </section>
+        <section v-if="channel.platform === 'qq'" class="owner-setup" :aria-label="t('QQ setup')">
+          <header class="owner-setup-heading"><div><span class="setup-eyebrow">{{ t('QQ setup') }}</span><h4>{{ t('Continue with this existing Bot') }}</h4></div></header>
+          <p class="setup-summary">{{ t('Progress uses saved settings and live status. No new Bot is created. Saved secrets are never displayed; leave them blank to keep them.') }}</p>
+          <ol class="setup-steps">
+            <li :class="{ 'step-done': qqSetupProgress(channel).credentialsSaved, 'step-current': qqSetupProgress(channel).step === 'credentials' }"><span class="step-number">1</span><div><strong>{{ t('Save QQ credentials') }}</strong><small>{{ qqSetupProgress(channel).credentialsSaved ? t('Credentials saved') : t('App ID and App Secret required') }}</small><button :disabled="!!saving" @click="continueQqSetup(channel)">{{ t('Continue QQ setup') }}</button></div></li>
+            <li :class="{ 'step-done': qqSetupProgress(channel).connected, 'step-current': qqSetupProgress(channel).step === 'connection' }"><span class="step-number">2</span><div><strong>{{ t('Check platform and connect') }}</strong><small>{{ channelStateLabel(botChannel(channel)) }}</small><button :disabled="!!saving" @click="openPortal(channel)">{{ t('Open QQ Open Platform') }}</button></div></li>
+            <li :class="{ 'step-current': qqSetupProgress(channel).step === 'access' }"><span class="step-number">3</span><div><strong>{{ channel.purpose === 'personal' ? t('Pair your account') : t('Review service access') }}</strong><small>{{ channel.purpose === 'personal' ? (qqSetupProgress(channel).ownerReady ? t('Verified owner bound') : t('Use owner pairing below after connection')) : t('Connection does not grant service access') }}</small></div></li>
+          </ol>
+          <div class="setup-next">
+            <strong>{{ t('QQ platform checklist — not verified by Shadow') }}</strong>
+            <ol><li v-for="instruction in definition('qq').instructions" :key="instruction">{{ instruction }}</li></ol>
+            <p>{{ t('Check sandbox testers, approved events and bot availability in QQ Open Platform. Saving credentials does not verify these settings or prove message delivery. Save and connect below, then refresh status.') }}</p>
+            <p v-if="channel.purpose === 'service'">{{ t('QQ service access uses explicit published Agent bindings via authoring_change, not the Discord access UI. This wizard only configures the connection; it does not publish an Agent, approve access or enable owner pairing.') }}</p>
+            <p v-else-if="channel.purpose !== 'personal'">{{ t('Choose a role explicitly before using this Bot. Connection alone does not authorize requests.') }}</p>
+          </div>
+        </section>
         <section v-if="channel.purpose === 'personal'" class="owner-setup" :class="{ 'owner-setup--ready': channel.ownerVerified }" :aria-label="t('Personal Bot setup')">
           <header class="owner-setup-heading">
             <div><span class="setup-eyebrow">{{ t('Personal Bot setup') }}</span><h4>{{ channel.ownerVerified ? t('Owner paired') : t('One more step: pair your account') }}</h4></div>
@@ -174,7 +202,7 @@ import { t } from '../i18n.ts'
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChannelId } from '../../../src/channels/setup-contract.ts'
 import { channelDefinitions, channelStateLabel, type ChannelDraft } from '../channel-settings.ts'
-import { botChannel, botDraft, botPatch, createBotSettingsClient, wechatLoginQr, type BotInstanceStatus } from '../bot-settings.ts'
+import { botChannel, botDraft, botPatch, createBotSettingsClient, wechatLoginQr, qqSetupProgress, serviceGroupAuthoringRequest, type BotInstanceStatus } from '../bot-settings.ts'
 import DiscordAccess from './DiscordAccess.vue'
 
 const props = defineProps<{ apiBase: string; projectId: string; available: boolean; active: boolean; reviewBotId?: string; requestedReviewId?: string }>()
@@ -213,6 +241,19 @@ async function wechatLogin(bot: BotInstanceStatus, operation: 'login' | 'wait') 
   } catch { if (!controller.signal.aborted) errors.value[bot.id] = t('WeChat login failed. Connect an unbound personal Bot and retry.') }
   finally { if (mutation === controller) { mutation = undefined; saving.value = undefined; await refresh() } }
 }
+const pendingGroups = ref<Record<string, Awaited<ReturnType<ReturnType<typeof createBotSettingsClient>['pendingGroups']>>>>({})
+const pendingErrors = ref<Record<string, string>>({})
+const pendingLoading = ref<string>()
+async function loadPendingGroups(bot: BotInstanceStatus) {
+  const project = props.projectId
+  pendingLoading.value = bot.id
+  try {
+    const groups = await createBotSettingsClient(props.apiBase, project).pendingGroups(bot.id)
+    if (props.projectId === project) { pendingGroups.value[bot.id] = groups; pendingErrors.value[bot.id] = '' }
+  } catch { if (props.projectId === project) pendingErrors.value[bot.id] = t('Could not load pending groups. Retry.') }
+  finally { if (props.projectId === project) pendingLoading.value = undefined }
+}
+watch(() => props.projectId, () => { pendingGroups.value = {}; pendingErrors.value = {}; pendingLoading.value = undefined })
 const pairings = ref<Record<string, string>>({})
 async function changePurpose(bot: BotInstanceStatus, purpose: 'personal' | 'service') { await update(bot, { purpose }) }
 async function pairOwner(bot: BotInstanceStatus) {
@@ -274,6 +315,14 @@ async function refresh(background = false) {
 function configure(channel: BotInstanceStatus) {
   drafts.value[channel.id] ??= botDraft(channel)
   expanded.value = expanded.value === channel.id ? undefined : channel.id
+}
+async function continueQqSetup(channel: BotInstanceStatus) {
+  drafts.value[channel.id] ??= botDraft(channel)
+  expanded.value = channel.id
+  await nextTick()
+  const editor = document.getElementById(`channel-${channel.id}-editor`)
+  editor?.scrollIntoView({ block: 'start' })
+  editor?.querySelector<HTMLInputElement>('input[name="appId"]')?.focus({ preventScroll: true })
 }
 function cancelConfiguration(channel: BotInstanceStatus) {
   drafts.value[channel.id] = botDraft(channel)

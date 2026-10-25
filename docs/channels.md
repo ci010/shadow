@@ -542,3 +542,56 @@ The built-in `bot-setup` skill and lazy-loaded `bot_setup` tool provide a Chat-l
 - Only host-stamped Web administrator contexts may invoke the tool. A paired channel owner, group chat, cross-Project context, script invocation or remote workdir cannot use it. Every card HTTP operation still passes existing server management authorization; no HTTP credential is exposed to the agent.
 
 **Current service boundary:** creating/configuring a service Bot connection is available inside Chat, but this card does not implement Agent creation/publication or grant a binding. Existing explicit published Agent/skill/tool/resource restrictions continue to apply. An unbound service Bot is not ready for business traffic. Do not report a complete service-publication setup based solely on connection status. This is a connection/personal-owner setup workflow, not a replacement for the separate authoring publication workflow.
+
+### Resume QQ setup in Settings
+
+Settings → Bots shows **Continue QQ setup** on each existing QQ Bot, including
+Bots created through chat. Use that Bot's entry rather than Add bot. The guide
+resumes from redacted saved credentials and current connection status: save App ID
+and App Secret, check QQ platform settings and connect, then configure role access.
+Saved App IDs and options are reused; leave a saved secret blank to retain it.
+The editor also supports Save without connecting for incomplete setup.
+
+QQ platform event approvals, sandbox testers, availability and end-to-end message
+delivery are not verified by this guide. Only a reported `connected` status marks
+the connection step complete; credentials saved or `running` does not. Personal
+Bots still require the existing private-chat owner challenge and explicit Web
+confirmation. QQ service Bots still require explicit published Agent bindings via
+`authoring_change`; this guide neither grants permissions nor provides Discord's
+service access UI. Refresh/reopening reconstructs progress from Main, not local
+completion flags. Unsaved edits and temporary owner challenges are not durable.
+
+### Pending service groups (QQ / Feishu)
+
+Bot settings include **Pending group authorization** for QQ and Feishu service
+Bots. Send a group message (normally @mention the Bot), then refresh that list.
+Platform event delivery and the existing sender allowlist still apply. Shadow
+records only the Bot, platform conversation ID, an available name, and last-seen
+time for unbound service groups. A name may be unavailable, especially for QQ
+guild channels and Feishu; Shadow does not fetch a directory merely to discover
+an unauthorized group. It does not create an Agent session, run tools, download
+attachments, save message text, or send a response for discovery. Direct messages,
+personal Bots and Discord's separate access workflow are not discovery targets.
+
+Select/copy the provided authoring request into a **direct owner Web topic in the
+same Project**. The request includes the exact Bot/platform/conversation target,
+not the untrusted group name. Specify the desired Agent, sender scope and grants;
+use `authoring_change` to create/edit an isolated Change, validate it, and propose
+it for explicit owner publication review. Existing bindings must be preserved.
+This copy entry does **not** automatically create a Change, publish an Agent, or
+authorize the group. Connection and discovery alone never bypass service binding.
+Once an enabled binding resolves, the group disappears from the pending list and
+normal authorized message handling remains unchanged. Disabled or removed bindings
+remain denied for Agent execution but can be rediscovered for explicit reauthorization;
+they do not break the pending list. `authoring_change inspect`
+also exposes pending targets in the Project inventory.
+
+Discovery is private Project-local metadata in `config/service-discovery.json`:
+at most 200 most-recent targets per Project, deduplicated by Bot/platform/ID, with
+30-day expiry. Disk writes are sampled at most once per minute, plus clean
+shutdown; the UI uses current in-memory times. A crash can lose discoveries since
+the last sample; send another group message to rediscover. Deleted or non-service
+Bots are excluded from settings/inventory; expired metadata is removed on the
+next observation or clean shutdown. The owner-authorized, no-store settings API
+is `GET /api/channels/:id/pending-groups`; it never selects a Project from a
+request body.

@@ -38,6 +38,7 @@ export function botSetupPlugin(options: {
     app.use('/api/channels/*', bodyLimit({
       maxSize: 256 * 1024, onError: c => c.json({ error: 'channel_config_too_large' }, 413),
     }))
+    app.get('/api/channels/:id/pending-groups', c => c.json({ groups: options.runtime.pendingServiceGroups(c.req.param('id')) }))
     app.get('/api/channels/:id/owner-candidate', c => c.json(options.runtime.ownerCandidate(c.req.param('id'))))
     app.post('/api/channels/:id/owner-challenge', c => {
       try { return c.json(options.runtime.createOwnerChallenge(c.req.param('id'))) }

@@ -47,6 +47,40 @@ const invalidConfigs = [
 ]
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: fallback title skips runtime context and uses the first user message`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const sessions = makeManager(workspace, store)
+      const sessionId = 'web:fallback-title'
+      try {
+        await store.saveState(sessionId, { sessionId, segmentIndex: 0, mode: 'session' })
+        await store.createSessionLog(newPhysicalSessionId(sessionId, 0, 1), [
+          ...(['working-context', 'work', 'audience'] as const).map(kind => ({
+            role: 'user' as const, name: 'runtime-context', content: [
+              { type: 'text' as const, text: `<event type="runtime-context-${kind}" source="runtime-context" event-id="12345678-1234-4123-8123-123456789abc" />` },
+              { type: 'text' as const, text: 'Runtime context snapshot, not a title' },
+            ],
+          })),
+        ])
+        await sessions.start()
+        equal(await sessions.getFirstUserMessage(sessionId), null)
+        await store.appendMessages(newPhysicalSessionId(sessionId, 0, 1), [
+          { role: 'user', timestamp: new Date().toISOString(), content: [{ type: 'text', text: '<sender id="admin" />' }, { type: 'text', text: 'First actual user message' }] },
+          { role: 'user', timestamp: new Date().toISOString(), content: 'Later user message' },
+        ])
+        equal(await sessions.getFirstUserMessage(sessionId), 'First actual user message')
+        equal((await sessions.getSessionDetails(sessionId))?.name, 'First actual user message')
+        const app = new Hono()
+        sessionsApiPlugin(sessions)(app)
+        equal((await (await app.request('/api/sessions/graph')).json()).sessions[0].title, 'First actual user message')
+      } finally {
+        await sessions.stop()
+        store.close?.()
+      }
+    })
+  })
+
   test(Store.name + ': self tool persists explicit metadata and completion separately from activity', async t => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions'))
     await store.init()

@@ -1004,6 +1004,8 @@ export class FeishuChannel extends AbstractChannel {
         && this._topicParent(rootId) === outerChatId
       const replyTo = managedTopic ? rootId as string : outerChatId
 
+      if (isGroup && !this.admitGroup(replyTo)) return
+
       // Hoist mentions early — used for both @bot stripping and mention detection
       const mentions = message['mentions'] as
         | Array<Record<string, unknown>>

@@ -16,6 +16,9 @@ import { AbstractChannel, type ChannelDecision } from './base.ts'
 import { unavailableCapabilities } from './capabilities.ts'
 import { BotInstanceStore, type BotInstance } from './bot-store.ts'
 import { botSetupPlugin } from './bot-setup.ts'
+import { AgentResourceStore } from '../agent-authoring/store.ts'
+import { ResourceBundleSchema } from '../agent-authoring/contracts.ts'
+import { ServiceDiscoveryStore } from './service-discovery.ts'
 import { ChannelManager } from './manager.ts'
 import type { ChannelId, ChannelState } from './setup-contract.ts'
 import { FeishuChannel } from './feishu.ts'
@@ -51,6 +54,7 @@ class BotChannel extends AbstractChannel {
   async createThread(chatId: string) { this.threads.push(chatId); return 'same-thread-id' }
   override async presentDecision(_chat: string, request: YieldRequest) { this.decisions.push(request) }
   click(decision: ChannelDecision) { return this.answerDecision(decision) }
+  groupAllowed(chatId: string, name?: string) { return this.admitGroup(chatId, name) }
   incoming(chatId = 'same-chat-id') { return this.handleIncoming('alice', chatId, 'Hello', 'same-message-id', { isGroup: true }) }
   state(state: ChannelState) { this.reportState(state) }
   reconnect() { this.setAccepting(false); this.setAccepting(true); this.reportState('connected') }
@@ -60,13 +64,14 @@ class BotChannel extends AbstractChannel {
   sessionId(chatId: string) { return this.logicalSessionId(chatId) }
 }
 
-async function runtime(t: TestContext, root: string, projectId: string, bots: number, platform: ChannelId = 'discord', actualIdentity?: string, scope?: ProjectScope) {
+async function runtime(t: TestContext, root: string, projectId: string, bots: number, platform: ChannelId = 'discord', actualIdentity?: string, scope?: ProjectScope, assigned: boolean | ((address: ChannelAddress) => boolean) = true) {
   const bus = new Bus()
   const store = new BotInstanceStore({ projectId, path: join(root, projectId, 'bots.json') })
   const instances = Array.from({ length: bots }, (_, index) => store.create(platform, `Bot ${index}`, platform === 'discord'
     ? { token: 'synthetic-token', enabled: true }
     : platform === 'qq' ? { appId: `${projectId}-${index}`, secret: 'synthetic-secret', enabled: true }
       : { appId: `${projectId}-${index}`, appSecret: 'synthetic-secret', enabled: true }))
+  const discovery = new ServiceDiscoveryStore(projectId, join(root, projectId, 'discovery.json'))
   const received: InboundMessage[] = []
   const receivedScopes: Array<string | undefined> = []
   const created: BotChannel[] = []
@@ -83,7 +88,7 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
     received.push(message)
     receivedScopes.push(getProjectScope()?.projectId)
     return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
-  }, { projectId, instanceStore: store, serviceAssigned: () => true, scope, factory: (id, _config, bot) => {
+  }, { projectId, instanceStore: store, serviceAssigned: address => typeof assigned === 'function' ? assigned(address) : assigned, serviceDiscovery: discovery, scope, factory: (id, _config, bot) => {
     assert.ok(bot)
     const channel = new BotChannel(id, bus, bot, actualIdentity)
     created.push(channel)
@@ -105,7 +110,7 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
     channel: platform, chatId: 'same-chat-id', channelAddress: address(bot),
     event: 'response', content: bot.displayName, media: ['uploads/same-file.png'], done: true,
   })
-  return { bus, store, instances, received, receivedScopes, created, manager, app, address, outbound, yields,
+  return { bus, store, instances, discovery, received, receivedScopes, created, manager, app, address, outbound, yields,
     promptInvalidations: () => promptInvalidations }
 }
 
@@ -558,4 +563,73 @@ test('real Feishu adapters isolate proxy credentials, identical inbound files, a
   })
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(received.length, 3)
+})
+
+
+test('unbound QQ service groups are display-only discoveries, isolated and protected by settings authorization', async t => {
+  const root = directory(t)
+  let assigned = false
+  const f = await runtime(t, root, 'discovery-A', 1, 'qq', undefined, undefined, () => assigned)
+  const bot = f.instances[0]!
+  await f.manager.updateBot(bot.id, { purpose: 'service' })
+  const channel = f.created.at(-1)!
+  assert.equal(channel.groupAllowed('same-chat-id', 'Available name'), false)
+  for (let i = 0; i < 2; i++) await assert.rejects(channel.incoming(), /Explicit service assignment/)
+  assert.equal(f.received.length, 0)
+  assert.equal(channel.sent.length, 0)
+  assert.equal(f.manager.pendingServiceGroups(bot.id).length, 1)
+  assert.equal(f.discovery.list()[0]?.conversationId, 'same-chat-id')
+  const url = `/api/channels/${bot.id}/pending-groups`
+  assert.equal((await f.app.request(url)).status, 401)
+  const response = await f.app.request(url, { headers: { 'x-fixture-authorized': 'yes' } })
+  assert.equal(response.headers.get('Cache-Control'), 'no-store')
+  assert.equal((await response.json()).groups.length, 1)
+  assert.deepEqual(f.manager.pendingServiceGroups('foreign-bot'), [])
+  assigned = true
+  assert.deepEqual(f.manager.pendingServiceGroups(bot.id), [])
+  assert.equal(channel.groupAllowed('same-chat-id'), true)
+  await channel.incoming()
+  assert.equal(f.received.length, 1)
+  f.store.update(bot.id, { config: { enabled: false } })
+  f.store.update(bot.id, { purpose: 'personal' })
+  f.store.update(bot.id, { config: { enabled: true } })
+  assert.deepEqual(f.manager.pendingServiceGroups(bot.id), [])
+  await assert.rejects(f.created.at(-1)!.incoming('private-not-discovered'), /Verified owner/)
+  assert.equal(f.discovery.list().length, 1)
+  assert.doesNotMatch(readFileSync(join(root, 'discovery-A', 'discovery.json'), 'utf8'), /Hello|alice|content|senderId/)
+})
+
+
+test('disabled, revoked and never-bound service groups are discoverable without running an Agent or breaking valid groups', async t => {
+  const root = directory(t)
+  const resources = new AgentResourceStore({ projectId: 'discovery-revoked', directory: join(root, 'resources') })
+  const f = await runtime(t, root, 'discovery-revoked', 1, 'qq', undefined, undefined,
+    address => !!resources.resolve(address)?.binding.enabled)
+  const bot = f.instances[0]!
+  const channel = f.created.at(-1)!
+  const binding = (conversationId: string, enabled = true) => ({ botInstanceId: bot.id, platform: 'qq', conversationId, enabled, agent: 'helper' })
+  const publish = async (bindings: unknown[]) => {
+    const bundle = ResourceBundleSchema.parse({ version: 1,
+      files: { 'agents/helper/AGENT.md': '---\nname: helper\ndescription: Test helper\nallowedTools: []\n---\nHelp the group.' }, bindings })
+    const draft = await resources.stage({ expectedRevision: resources.draft().revision, bundle })
+    await resources.publish(draft.revision)
+  }
+  await publish([binding('valid'), binding('disabled'), binding('revoked')])
+  await publish([binding('valid'), binding('disabled', false)])
+  for (const chatId of ['disabled', 'revoked']) assert.equal(resources.isManaged(f.address(bot, chatId)), true)
+  for (const chatId of ['disabled', 'revoked', 'never-bound']) {
+    assert.equal(channel.groupAllowed(chatId), false)
+    await assert.rejects(channel.incoming(chatId), /Explicit service assignment/)
+  }
+  assert.equal(f.received.length, 0)
+  assert.equal(channel.sent.length, 0)
+  assert.equal(channel.groupAllowed('valid'), true)
+  await channel.incoming('valid')
+  assert.equal(f.received.length, 1)
+  // Even a previously observed target is hidden as soon as a valid binding exists.
+  f.discovery.observe({ botInstanceId: bot.id, platform: 'qq', conversationId: 'valid' })
+  const response = await f.app.request(`/api/channels/${bot.id}/pending-groups`, { headers: { 'x-fixture-authorized': 'yes' } })
+  assert.equal(response.status, 200)
+  assert.deepEqual((await response.json()).groups.map((entry: { conversationId: string }) => entry.conversationId).sort(),
+    ['disabled', 'never-bound', 'revoked'])
 })
