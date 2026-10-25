@@ -25,7 +25,10 @@ function mount(t: TestContext, props: Record<string, unknown>) {
 	const module = { exports: {} as { default: Component } }
 	const require = createRequire(url)
 	new Function('require', 'module', 'exports', outputText)(
-		(id: string) => id.endsWith('.png') ? { default: 'fixture-logo.png' } : require(id), module, module.exports,
+		(id: string) => id.endsWith('.png') ? { default: 'fixture-logo.png' }
+			// The real role switcher is covered by the Electron Child recovery test.
+			: id === './components/DesktopRoleSettings.vue' ? { default: { render: () => null } }
+			: require(id), module, module.exports,
 	)
 	const renderer = createRenderer<Element, Element>({
 		createElement: element, createText: value => element('#text', value), createComment: value => element('#comment', value),

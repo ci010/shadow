@@ -201,6 +201,9 @@ export function installMediaPermissions(
     }],
   ] as const) {
     ipc.handle(channel, (event, ...args: unknown[]) => {
+      if (channel === MEDIA_CAPTURE_CHANNELS.pickerState
+        && event.sender === contents && event.senderFrame === contents.mainFrame
+        && !trustedContents(event.sender)) return null
       if (!trustedContents(event.sender) || event.senderFrame !== contents.mainFrame) {
         throw new TypeError('Media capture requires the trusted Main frame')
       }

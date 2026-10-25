@@ -89,6 +89,7 @@ export function desktopBackendRouting(
 }
 
 const routing = desktopBackendRouting()
+const privateWorkspace = normalizePath(resolve(fileURLToPath(new URL('../workspace', import.meta.url))))
 
 function archiveLicenses(): Plugin {
   const require = createRequire(import.meta.url)
@@ -126,7 +127,7 @@ export default defineConfig({
     strictPort: true,
     proxy: routing.proxy,
     fs: {
-      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.pin', '**/bot.config.json', '**/workspace/**',
+      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.pin', '**/bot.config.json', `${privateWorkspace}/**`,
         ...(process.env.SHADOW_BROWSER_PIN_FILE ? [normalizePath(resolve(process.env.SHADOW_BROWSER_PIN_FILE))] : [])],
     },
   },

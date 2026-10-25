@@ -198,6 +198,14 @@ test('arm and revoke IPC reject invalid senders, frames, URL and extra arguments
   assert.throws(() => h.invoke(MEDIA_CAPTURE_CHANNELS.arm, valid), /trusted Main frame/)
 })
 
+test('picker state snapshot is empty while the trusted Main document navigates', (t) => {
+  const h = harness()
+  t.after(h.dispose)
+  h.contents.emit('did-start-navigation', {}, 'http://127.0.0.1:5173/other', false, true)
+  assert.equal(h.invoke(MEDIA_CAPTURE_CHANNELS.pickerState, {}), null)
+  assert.throws(() => h.invoke(MEDIA_CAPTURE_CHANNELS.arm, valid), /trusted Main frame/)
+})
+
 test('history routes retain document trust and reload requires a fresh capture grant', async (t) => {
   const h = harness()
   t.after(h.dispose)

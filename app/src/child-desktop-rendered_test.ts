@@ -35,7 +35,7 @@ test('Child wizard validates consent; workspace recovery replaces the old local 
         import DesktopFrame from '/src/DesktopFrame.vue';
         import RoleSettings from '/src/components/DesktopRoleSettings.vue';
         import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
-        const f = window.fixture = { requests: [], pairs: [], fail: true, completed: false, connection: 'offline', statusFailure: false, role:'child', switches:[], switchFails:false };
+        const f = window.fixture = { requests: [], pairs: [], fail: true, completed: false, connection: 'offline', statusFailure: false, role:'child', switches:[], switchFails:false, holdWorkspace:false, completeWorkspaceCheck:null };
         const info = { endpoint:'http://192.168.1.5:43125',dataDir:'C:\\\\Child-home',workdir:'C:\\\\Work',
           displayName:'Child laptop',allowInsecureLocalTransport:true,saved:false };
         const api = window.shadowDesktop = { folders:{selectDirectory:async()=>null}, bootstrap:{
@@ -50,7 +50,10 @@ test('Child wizard validates consent; workspace recovery replaces the old local 
         mounted.mount('#app');
         window.fetch = async url => {
           f.requests.push(String(url));
-          if (String(url).endsWith('/api/projects')) return Response.json({error:'main_workspace_econnrefused'}, {status:503});
+          if (String(url).endsWith('/api/projects')) {
+            if(f.holdWorkspace) return new Promise(resolve=>{f.completeWorkspaceCheck=resolve});
+            return Response.json({error:'main_workspace_econnrefused'}, {status:503});
+          }
           if (String(url).endsWith('/local/v1/child')) {
             if(f.statusFailure) throw new Error('offline');
             return Response.json({version:1,nodeId:'child-1',mainEndpoint:info.endpoint,connection:f.connection,
@@ -86,6 +89,7 @@ test('Child wizard validates consent; workspace recovery replaces the old local 
     await build({ entryPoints: [resolve(repository, 'desktop', 'tests', 'fixtures', 'child-desktop-smoke.ts')],
       outfile: join(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs', external: ['electron'], logLevel: 'silent' })
     const env: NodeJS.ProcessEnv = { CHILD_SMOKE_URL: server.resolvedUrls.local[0] }
+    if (process.env.CHILD_RECOVERY_SCREENSHOTS) env.CHILD_RECOVERY_SCREENSHOTS = process.env.CHILD_RECOVERY_SCREENSHOTS
     for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
       if (process.env[key] !== undefined) env[key] = process.env[key]
     }
