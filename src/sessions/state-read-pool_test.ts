@@ -4,7 +4,7 @@ import { readStatePool } from './state-read-pool.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { join } from 'node:path'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 
 test('state read pool bounds concurrency at eight and preserves input order', async () => {
   let active = 0, peak = 0
@@ -36,15 +36,20 @@ test('state read pool drains failures and throws first input-order error', async
   await assert.rejects(readStatePool([], async () => 0, 0), RangeError)
 })
 
-test('parallel JSON state reads retain malformed-file tolerance and ownership validation', async () => {
+test('parallel JSON state reads preserve malformed files and report them for Project isolation', async () => {
   await withTempWorkspace(async root => {
     const store = new JsonlSessionStore(root)
     await store.init()
     for (let i = 0; i < 20; i++) await store.saveState(`web:${i}`, { sessionId: `web:${i}`, segmentIndex: i })
     await writeFile(join(root, 'broken.json'), '{not json')
     await writeFile(join(root, 'ignored.jsonl'), 'unrelated log')
-    assert.equal(Object.keys(await store.listAllStates()).length, 20)
-    assert.equal((await store.listSessions()).length, 20)
+    await assert.rejects(store.getState('broken'), /Invalid session state JSON/)
+    await assert.rejects(store.listAllStates(), /Invalid session state JSON/)
+    await assert.rejects(store.listSessions(), /Invalid session state JSON/)
+    assert.equal(await readFile(join(root, 'broken.json'), 'utf8'), '{not json')
+    await store.saveState('broken', { sessionId: 'broken', segmentIndex: 0 })
+    assert.equal(Object.keys(await store.listAllStates()).length, 21)
+    assert.equal((await store.listSessions()).length, 21)
     await writeFile(join(root, 'invalid-owner.json'), JSON.stringify({ sessionId: 'web:bad', ownershipVersion: 9000 }))
     await assert.rejects(store.listAllStates(), /ownership/i)
     await assert.rejects(store.listSessions(), /ownership/i)

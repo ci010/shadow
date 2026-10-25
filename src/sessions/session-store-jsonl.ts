@@ -1,25 +1,60 @@
-import { parseTaskRecord, TaskRecordError } from './task-record.ts'
+import { parseTaskRecord } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { retirementReceiptSchema } from './retirement-contract.ts'
 import { join } from 'node:path'
 import { readStatePool } from './state-read-pool.ts'
-import { appendFile, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
-import { parseSessionName, SessionNameError } from './session-name.ts'
+import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { parseSessionName } from './session-name.ts'
 import type {
   SessionState,
   SessionStore,
   StoredMessage,
 } from './session-store.ts'
 import { streamJsonlObjects } from '../utils/jsonl.ts'
-import { readFileIfExists, safeSessionId } from '../utils/paths.ts'
+import { safeSessionId } from '../utils/paths.ts'
 import { parseAutomationSessionRef } from '../cron/contracts.ts'
 import { validateOwnership, OwnershipValidationError } from '../projects/ownership.ts'
-import { normalizeInitiativeMetadata, InitiativeMetadataError } from './initiative-metadata.ts'
-import { parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
+import { normalizeInitiativeMetadata } from './initiative-metadata.ts'
+import { normalizeStoredTopicSessionFields, parseTopicSessionFields } from './topic-contract.ts'
 import { parsePhysicalIdVersion, SessionIdentityError } from './session-identity.ts'
-import { parseWorkPolicy, WorkPolicyError } from './work-policy.ts'
-import { parseContextResetAt, ContextResetMetadataError, parseDecisionOwner, DecisionOwnerMetadataError } from './session-store.ts'
-import { parseChannelBoundary, ChannelBoundaryMetadataError } from '../channels/integration-contract.ts'
+import { parseWorkPolicy } from './work-policy.ts'
+import { parseContextResetAt, parseDecisionOwner } from './session-store.ts'
+import { parseChannelBoundary } from '../channels/integration-contract.ts'
+
+async function readStateFile(path: string): Promise<string | undefined> {
+  try { return await readFile(path, 'utf8') }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+function parseStoredState(raw: string): SessionState {
+  let value: unknown
+  try { value = JSON.parse(raw) }
+  catch { throw new OwnershipValidationError('Invalid session state JSON; original data was preserved') }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new OwnershipValidationError('Invalid session state metadata')
+  }
+  const state = normalizeStoredTopicSessionFields(normalizeInitiativeMetadata(
+    validateOwnership(value as Record<string, unknown>),
+  )) as unknown as SessionState
+  if (typeof state.sessionId !== 'string' || !state.sessionId.trim()) throw new SessionIdentityError('Missing session identity')
+  if (state.task !== undefined) state.task = parseTaskRecord(state.task)
+  if (state.generatedTitle !== undefined) state.generatedTitle = parseSessionName(state.generatedTitle)
+  if (state.name !== undefined) state.name = parseSessionName(state.name)
+  if (state.chatName !== undefined) state.chatName = parseSessionName(state.chatName)
+  parsePhysicalIdVersion(state.physicalIdVersion)
+  parseContextResetAt(state.contextResetAt)
+  parseContextResetAt(state.lastUserMessageAt)
+  if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
+  parseChannelBoundary(state.channelBoundary)
+  parseDecisionOwner(state.decisionOwnerSessionId)
+  if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
+  if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
+  Object.assign(state, parseTopicSessionFields(state))
+  return state
+}
 
 /**
  * JSONL-file-backed session store.
@@ -50,36 +85,14 @@ export class JsonlSessionStore implements SessionStore {
   async getState(sessionKey: string): Promise<SessionState | null> {
     const active = await this.fresh.getActive(sessionKey)
     if (active) return active
-    const raw = await readFileIfExists(this.statePath(sessionKey))
-    if (!raw) return null
-
-    try {
-      const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
-      if (state.task !== undefined) state.task = parseTaskRecord(state.task)
-      if (!state.sessionId) return null
-      if (state.generatedTitle !== undefined) state.generatedTitle = parseSessionName(state.generatedTitle)
-      if (state.name !== undefined) state.name = parseSessionName(state.name)
-      if (state.chatName !== undefined) state.chatName = parseSessionName(state.chatName)
-      parsePhysicalIdVersion(state.physicalIdVersion)
-      parseContextResetAt(state.contextResetAt)
-      parseContextResetAt(state.lastUserMessageAt)
-      if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
-      parseChannelBoundary(state.channelBoundary)
-      parseDecisionOwner(state.decisionOwnerSessionId)
-      if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
-      if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
-      Object.assign(state, parseTopicSessionFields(state))
-      return state
-    } catch (error) {
-      if (error instanceof TaskRecordError || error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError || error instanceof DecisionOwnerMetadataError) throw error
-      return null
-    }
+    const raw = await readStateFile(this.statePath(sessionKey))
+    return raw === undefined ? null : parseStoredState(raw)
   }
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
     if (state.statePersistence) {
       if (sessionKey !== state.sessionId) throw new Error('Fresh automation key mismatch')
-      if (await readFileIfExists(this.statePath(sessionKey))) throw new Error('Existing legacy state cannot opt into fresh automation persistence')
+      if (await readStateFile(this.statePath(sessionKey)) !== undefined) throw new Error('Existing legacy state cannot opt into fresh automation persistence')
       return this.fresh.save(state)
     }
     if (await this.fresh.has(sessionKey)) throw new Error('Fresh automation policy cannot be removed')
@@ -140,34 +153,23 @@ export class JsonlSessionStore implements SessionStore {
       const entries = (await readdir(this.sessionsDir, { withFileTypes: true }))
         .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
       const reads = await readStatePool(entries, async entry => {
-        try { return { raw: await readFileIfExists(join(this.sessionsDir, entry.name)) } }
+        try { return { raw: await readStateFile(join(this.sessionsDir, entry.name)) } }
         catch (error) { return { error } }
       })
       for (const read of reads) {
         // Apply I/O and validation errors in directory order, as in the serial reader.
         if ('error' in read) throw read.error
         const raw = read.raw
-        if (!raw) continue
-        try {
-          const parsed = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
-          if (parsed.task !== undefined) parsed.task = parseTaskRecord(parsed.task)
-          if (!parsed.sessionId) continue
-          if (parsed.name !== undefined) parsed.name = parseSessionName(parsed.name)
-          if (parsed.chatName !== undefined) parsed.chatName = parseSessionName(parsed.chatName)
-          parsePhysicalIdVersion(parsed.physicalIdVersion)
-          parseContextResetAt(parsed.contextResetAt)
-          parseChannelBoundary(parsed.channelBoundary)
-          parseWorkPolicy(parsed.workPolicy)
-          Object.assign(parsed, parseTopicSessionFields(parsed))
-          results.push({
-            sessionId: parsed.sessionId,
-            ...(parsed.name !== undefined ? { name: parsed.name } : {}),
-            segmentIndex: parsed.segmentIndex ?? 0,
-            lastActivityAt: parsed.lastActivityAt,
-            folderId: typeof parsed.folderId === 'string' ? parsed.folderId : undefined,
-            ...parseTopicSessionFields(parsed),
-          })
-        } catch (error) { if (error instanceof TaskRecordError || error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
+        if (raw === undefined) continue
+        const parsed = parseStoredState(raw)
+        results.push({
+          sessionId: parsed.sessionId,
+          ...(parsed.name !== undefined ? { name: parsed.name } : {}),
+          segmentIndex: parsed.segmentIndex ?? 0,
+          lastActivityAt: parsed.lastActivityAt,
+          folderId: typeof parsed.folderId === 'string' ? parsed.folderId : undefined,
+          ...parseTopicSessionFields(parsed),
+        })
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     results.push(...await this.fresh.summaries())
@@ -180,29 +182,16 @@ export class JsonlSessionStore implements SessionStore {
       const entries = (await readdir(this.sessionsDir, { withFileTypes: true }))
         .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
       const reads = await readStatePool(entries, async entry => {
-        try { return { raw: await readFileIfExists(join(this.sessionsDir, entry.name)) } }
+        try { return { raw: await readStateFile(join(this.sessionsDir, entry.name)) } }
         catch (error) { return { error } }
       })
       for (const read of reads) {
         // Apply I/O and validation errors in directory order, as in the serial reader.
         if ('error' in read) throw read.error
         const raw = read.raw
-        if (!raw) continue
-        try {
-          const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
-          if (state.task !== undefined) state.task = parseTaskRecord(state.task)
-          if (!state.sessionId) continue
-          if (state.generatedTitle !== undefined) state.generatedTitle = parseSessionName(state.generatedTitle)
-          if (state.name !== undefined) state.name = parseSessionName(state.name)
-          if (state.chatName !== undefined) state.chatName = parseSessionName(state.chatName)
-          parsePhysicalIdVersion(state.physicalIdVersion)
-          parseContextResetAt(state.contextResetAt)
-          parseChannelBoundary(state.channelBoundary)
-          if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
-          if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
-          Object.assign(state, parseTopicSessionFields(state))
-          result[state.sessionId] = state
-        } catch (error) { if (error instanceof TaskRecordError || error instanceof ChannelBoundaryMetadataError || error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
+        if (raw === undefined) continue
+        const state = parseStoredState(raw)
+        result[state.sessionId] = state
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     Object.assign(result, await this.fresh.listActive())

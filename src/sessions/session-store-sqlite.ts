@@ -18,7 +18,7 @@ import { parseSessionRecovery, parseContextResetAt, ContextResetMetadataError, p
 import { parseAutomationSessionRef } from '../cron/contracts.ts'
 import { normalizeInitiativeMetadata, parseInitiativeId, InitiativeMetadataError } from './initiative-metadata.ts'
 import { validateOwnership, OwnershipValidationError } from '../projects/ownership.ts'
-import { parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
+import { normalizeStoredTopicSessionFields, parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
 import { parsePhysicalIdVersion } from './session-identity.ts'
 import { parseSessionName, SessionNameError } from './session-name.ts'
 import { parseWorkPolicy, WorkPolicyError } from './work-policy.ts'
@@ -102,7 +102,7 @@ function isPreloadTools(
 
 function parseMetadata(value: unknown): SessionMetadata | null {
   if (!isRecord(value)) return null
-  value = normalizeInitiativeMetadata(validateOwnership(value))
+  value = normalizeStoredTopicSessionFields(normalizeInitiativeMetadata(validateOwnership(value)))
   if (!isRecord(value)) return null
 
   const metadata: SessionMetadata = { ownershipVersion: 2, ...parseTopicSessionFields(value) }

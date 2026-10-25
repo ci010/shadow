@@ -7,6 +7,15 @@ export interface TopicMetadata {
 
 export class TopicMetadataError extends TypeError {}
 
+/** Read compatibility only; new sessions still cannot request the retired role. */
+export function normalizeStoredTopicSessionFields(record: Record<string, unknown>): Record<string, unknown> {
+  if (record.sessionKind !== 'orchestrator') return record
+  const normalized = { ...record }
+  delete normalized.sessionKind
+  if (normalized.agentType === 'orchestrator') normalized.agentType = 'general'
+  return normalized
+}
+
 export function parseTopicMetadata(value: unknown): TopicMetadata {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TopicMetadataError('Topic metadata must be an object')
