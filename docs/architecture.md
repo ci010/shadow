@@ -137,7 +137,18 @@ the `createProjectRuntime` composition factory:
    before starting any Project.
 
 Main's local readiness still waits for the initial Project starts to settle;
-it does not declare incomplete Project services ready. Optional web-search
+it does not declare incomplete Project services ready. Invalid or unreadable
+session storage isolates the affected Project, not the shared Main host. JSONL
+and SQLite reads report malformed records rather than silently treating them as
+missing sessions; original state and history stay untouched. Project status and
+diagnostics explicitly report the storage problem. After repairing the data,
+retrying the Project revalidates both stores and reserves its remote workdirs
+before starting services. While any Project's session ownership remains
+unverified, new remote-folder registrations and remote ownership changes are
+blocked instead of assuming the unreadable records own nothing.
+This fallback is limited to Project session storage; it does not replace invalid
+host configuration, credentials, or the Project catalog with defaults.
+Optional web-search
 network discovery is deferred to the first search, and external channel
 connections continue independently of local readiness. MCP startup registers
 its lazy catalog; it does not connect every configured server.
@@ -648,6 +659,12 @@ group chats, temporary executions and background events cannot exercise those
 owner rights. Publication still requires explicit exact-version human review.
 
 There is no dedicated management-session identity, role or creation API.
+Existing JSONL/SQLite records with the retired `sessionKind: orchestrator` are
+read as ordinary sessions, mapping the matching retired agent type to `general`.
+IDs, physical segments, lineage, Project/Folder ownership and conversation
+history are preserved. Reads do not rewrite the original record; a subsequent
+normal save persists the current metadata. New requests still reject the retired
+kind and unknown kinds remain invalid.
 The **Project workbench** is a Project view, not a session.
 Its default canvas is an expandable causal outline of goals, approaches, tasks
 and findings, with current notes, optional read-only HTML exhibits and native

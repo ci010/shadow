@@ -96,6 +96,7 @@ export class ProjectCatalog {
   #access = new Map<string, number>()
   #lifecycle = new Map<string, FolderLifecycle>()
   #observers = new Set<() => void>()
+  #unverifiedSessionProjects = new Set<string>()
 
   constructor(hostHome: string, private readonly reservedHomes: readonly string[] = []) {
     this.hostHome = resolve(hostHome)
@@ -259,6 +260,7 @@ export class ProjectCatalog {
       })
       this.#lifecycle.delete(id)
       this.#access.delete(id)
+      this.#unverifiedSessionProjects.delete(id)
     })
   }
 
@@ -340,6 +342,7 @@ export class ProjectCatalog {
       const relatedClaims: RemoteOwnershipClaim[] = []
       let conflict: boolean
       if (folder.kind === 'remote') {
+        this.#assertSessionOwnershipAvailable()
         const claims = this.remoteClaims(folder.workdir.nodeId)
         if (claims.some(claim => !claim.identity)) {
           throw new FolderError('remote_claim_identity_unavailable', 'Reconnect and verify the original remote folder capabilities before changing ownership.', 409)
@@ -432,6 +435,19 @@ export class ProjectCatalog {
     return structuredClone((this.#current().remoteClaims ?? []).filter(claim => !nodeId || claim.workdir.nodeId === nodeId))
   }
 
+  /** Rebuilt at startup; incomplete session scans cannot release unseen remote reservations. */
+  setSessionOwnershipAvailable(projectId: string, available: boolean): void {
+    if (available) this.#unverifiedSessionProjects.delete(projectId)
+    else this.#unverifiedSessionProjects.add(projectId)
+  }
+
+  #assertSessionOwnershipAvailable(): void {
+    if (this.#unverifiedSessionProjects.size) {
+      throw new FolderError('session_ownership_unavailable',
+        'Project session storage could not be verified. Repair it and retry the project before changing remote folder ownership.', 409)
+    }
+  }
+
   reserveRemoteWorkdirs(projectId: string, refs: readonly WorkdirRefV1[]): Promise<void> {
     return this.#transaction(() => {
       if (!this.get(projectId)) throw new FolderError('project_not_found', 'Project not found.', 404)
@@ -480,6 +496,7 @@ export class ProjectCatalog {
   }
 
   #assertRemoteOwnership(projectId: string, nodeId: string, identity: WorkdirIdentityV1, resolvingClaim = false): void {
+    this.#assertSessionOwnershipAvailable()
     if (!this.get(projectId)) throw new FolderError('project_not_found', 'Project not found.', 404)
     if (this.isDeleting(projectId)) throw new FolderError('project_deleting', 'Project deletion is pending.', 409)
     const claims = this.remoteClaims(nodeId)

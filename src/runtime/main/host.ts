@@ -61,14 +61,29 @@ export async function startProjectHost(
     }
   }
   const startupSessionStates = new Map<string, StartupOwnershipStates>()
+  const failures = new Map<string, string>()
+  const inspectSessionOwnership = async (id: string): Promise<StartupOwnershipStates | undefined> => {
+    const snapshot: StartupOwnershipStates = {}
+    catalog.setSessionOwnershipAvailable(id, false)
+    try {
+      await measureStartupProfile('ownership-project', () =>
+        reserveRemoteSessionWorkdirs(projectPaths(hostHome, id).home, catalog, id, snapshot),
+      { projectOrdinal: startupProjectOrdinal(id) })
+      catalog.setSessionOwnershipAvailable(id, true)
+      return snapshot
+    } catch {
+      const message = 'Session storage could not be validated. Original data is preserved. Repair the project session data and retry.'
+      failures.set(id, message)
+      // Never log parser messages: malformed JSON can contain private conversation data.
+      console.error(`[projects:${id}] session_storage_unavailable: ${message}`)
+      return undefined
+    }
+  }
   await startup.measure('ownership', async () => {
     for (const project of catalog.list()) {
       if (catalog.isDeleting(project.id)) continue
-      const snapshot: StartupOwnershipStates = {}
-      startupSessionStates.set(project.id, snapshot)
-      await measureStartupProfile('ownership-project', () =>
-        reserveRemoteSessionWorkdirs(projectPaths(hostHome, project.id).home, catalog, project.id, snapshot),
-      { projectOrdinal: startupProjectOrdinal(project.id) })
+      const snapshot = await inspectSessionOwnership(project.id)
+      if (snapshot) startupSessionStates.set(project.id, snapshot)
     }
   })
 
@@ -112,7 +127,6 @@ export async function startProjectHost(
   const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
   const stores = new Map<string, ProjectConfigStore>()
   const starts = new Map<string, Promise<void>>()
-  const failures = new Map<string, string>()
   const deletions = new Set<string>()
   let stopping = false
   let activeConfig = config
@@ -191,6 +205,9 @@ export async function startProjectHost(
     const work = (async () => {
       const project = catalog.get(id)
       if (!project) throw new Error('Project not found')
+      const startupStates = startupSessionStates.get(id) ?? await inspectSessionOwnership(id)
+      startupSessionStates.delete(id) // Retries must read current state, never reuse failed boot data.
+      if (!startupStates || stopping) return
       const scope = createProjectScope(id)
       scopes.set(id, scope)
       const paths = projectPaths(hostHome, id)
@@ -201,8 +218,6 @@ export async function startProjectHost(
       let runtime: ProjectRuntime | undefined
       try {
         const projectStartup = new StartupTimings('project', id)
-        const startupStates = startupSessionStates.get(id)
-        startupSessionStates.delete(id) // Retries must read current state, never reuse failed boot data.
         const projectConfig = await projectStartup.measure('config', () => store.init())
         runtime = await scope.run(() => factory(projectConfig, {
           startupSessionStates: startupStates,
@@ -335,7 +350,7 @@ export async function startProjectHost(
       const projects = catalog.list()[Symbol.iterator]()
       const worker = async () => {
         for (const project of projects) {
-          if (!catalog.isDeleting(project.id)) await start(project.id)
+          if (!catalog.isDeleting(project.id) && !failures.has(project.id)) await start(project.id)
         }
       }
       await Promise.all(Array.from({ length: Math.min(3, catalog.list().length) }, worker))
