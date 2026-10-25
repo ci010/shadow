@@ -11,6 +11,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Messaging channels](channels.md), [WeChat delivery](wechat-delivery.md),
   and [QQ owner questions](qq-owner-questions.md)
 - [Tools, skills and automations](tools-and-automations.md)
+- [Trusted Web Discord patrol](discord-patrol.md)
 - [Project conventions and shared Work](project-conventions.md)
 - [GitHub collaboration](github.md)
 - [Provider instances and multiple accounts](provider-instances.md)

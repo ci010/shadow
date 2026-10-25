@@ -75,3 +75,33 @@ test('saved enabled Discord Bots retry even after failed adapter was removed', a
   await manager.refreshFailedDiscordConnections()
   assert.equal(starts, 2)
 })
+
+// Trusted Web patrol has a distinct host-owned path, not the ingress sender route.
+test('trusted Discord transport selects only current Project Bot and guards connected adapter', async t => {
+  const { DiscordChannel } = await import('./discord.ts')
+  const root = join(process.cwd(), '.test-data', `discord-patrol-${randomUUID()}`)
+  mkdirSync(root, { recursive: true })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const store = new BotInstanceStore({ projectId: 'patrol', path: join(root, 'bots.json') })
+  const bot = store.create('discord', 'Test', { enabled: true, token: 'synthetic' }, undefined, 'personal')
+  const bus = new Bus()
+  let calls = 0
+  class PatrolAdapter extends DiscordChannel {
+    async start() { this.reportState('connected') }
+    async stop() { this.reportState('disconnected') }
+    async trustedWebRequest(path: string) { calls++; return { path } }
+  }
+  const manager = new ChannelManager(ConfigSchema.parse({}), bus, {} as SessionManager,
+    async () => ({ status: 'accepted', sessionId: 'test', inputId: 'test' }), {
+      projectId: 'patrol', instanceStore: store,
+      factory: () => new PatrolAdapter(bus, { token: 'synthetic' }),
+    })
+  t.after(() => manager.stopAll())
+  await manager.init()
+  await manager.startAll(new Hono())
+  assert.deepEqual(await manager.trustedDiscordRequest(bot.id, '/users/@me', {}), { path: '/users/@me' })
+  await assert.rejects(manager.trustedDiscordRequest('foreign', '/users/@me', {}), /not in this Project/)
+  assert.equal(calls, 1)
+  manager.beginShutdown()
+  await assert.rejects(manager.trustedDiscordRequest(bot.id, '/users/@me', {}), /not in this Project/)
+})
