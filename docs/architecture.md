@@ -2202,6 +2202,32 @@ Message Content intent can still limit visible fields. Web/peer/event/internal-v
 and remote-workdir contexts do not inherit a channel read capability. See
 [channel platform reads](tools-and-automations.md#channel-platform-reads).
 
+Project composition also explicitly injects `ChannelMessageStream` into the
+manager (`src/channels/message-stream.ts`, `src/runtime/main/project-runtime.ts`).
+Its bounded Project journal assigns local append positions to admitted creations,
+changes, thread discovery and collection gaps. Discord Gateway capture precedes
+trigger policy; ordinary unmentioned messages do not need a session/model turn.
+Other adapters contribute only at their existing admitted manager receive
+boundary. Personal owner/DM and service-assignment boundaries remain enforced;
+Discord changes/history re-use live sender admission rather than harvesting
+unbound or observation-only chats. No stream is created by a manager without
+explicit host injection.
+
+Lazy trusted-Web `channel_directory`, `channel_read`, and `channel_send`
+(`src/tools/channel-stream.ts`) use stable logical consumers, fixed batch payload
+positions and existing `Watermarks` claim/ack/retry/fencing. No read implies ack.
+Discord's bounded catch-up adapter (`src/channels/discord-stream.ts`) persists
+collection progress independently and dedupes retained message IDs. It cannot
+recover offline edits/deletes, and initial history is an explicit latest-100
+baseline, not complete history. Disconnects and expired cursors expose gaps.
+Sending uses a separate write-ahead idempotency result journal: ambiguity blocks
+automatic resend; a watermark is never send authority. Production
+`discord_patrol` delegates consumption/sending to this same path; old API cursors
+are not silently migrated. The event log is capped at 10,000 events/approximately
+16 MiB; full limitations and metadata lifecycle are in the
+[channel stream guide](channel-stream.md). This is not a universal platform
+archive, new webhook subscription or live-API deployment certification.
+
 These changes do not select an execution node. A new external-channel root without
 an explicit workdir uses Main's `<workspace>/<safeSessionId>` managed directory;
 session storage stays under Main's `<workspace>/.sessions`. Remote execution

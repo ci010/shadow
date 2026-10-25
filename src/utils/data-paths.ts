@@ -35,6 +35,7 @@ export function projectDataPaths(home: string) {
 export const PROJECT_STORAGE_ENTRIES: Readonly<Record<string, readonly string[]>> = Object.freeze({
   '.sessions': ['state', 'sessions'],
   '.events': ['state', 'events'],
+  '.channel-stream': ['state', 'channel-stream'],
   '.cron': ['state', 'cron'],
   '.learning': ['state', 'learning'],
   '.eval': ['state', 'eval'],

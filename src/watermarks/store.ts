@@ -31,6 +31,14 @@ export class Watermarks {
     try { const result = action(); this.journal.save(this.state); return structuredClone(result) }
     catch (error) { this.state = old; throw error }
   }
+  /** Explicit initial baseline only; never overrides an existing consumer's progress. */
+  initialize(source: string, value: string) {
+    key.parse(source); cursor.parse(value)
+    return this.change(() => {
+      if (Object.hasOwn(this.state.cursors, source) || this.state.batches.some(b=>b.source===source)) throw new Error('Consumer scope already initialized')
+      this.state.cursors[source]=value
+    })
+  }
   prepare(source: string, from: string | null, to: string | null) {
     key.parse(source); cursor.parse(from); cursor.parse(to)
     return this.change(() => {

@@ -205,6 +205,14 @@ export class DiscordIntegration implements ConversationPolicies {
       binding.target.guildId === location.guildId && binding.inheritThreads)
   }
 
+  /** Scope-only trusted Web collection gate; sender/platform permissions still use prepareIngress. */
+  streamAssigned(botId:string, conversation:string, parent?:string): boolean {
+    const bot=this.options.bots.get(botId)
+    if(this.closed || !bot.enabled || bot.purpose!=='service') return false
+    const bindings=this.options.store.bindings().filter(b=>b.botInstanceId===botId&&b.enabled)
+    return bindings.some(b=>b.target.kind==='channel' && (b.target.channelId===conversation || !!parent && b.target.channelId===parent && b.inheritThreads))
+  }
+
   resolve(sessionId: string): ResolvedConversationPolicy | undefined {
     const address = this.address(sessionId)
     if (!address) {

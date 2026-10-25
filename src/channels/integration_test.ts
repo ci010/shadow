@@ -1169,3 +1169,16 @@ test('portable classifier workflow and real managed adapter use reviewed zero-to
     assert.equal(calls,2,'normal rules/buffering do not classify')
   } finally {await adapter.stop()}
 })
+
+test('trusted stream scope only inherits enabled configured channel parents, not unbound or service DM targets', async t => {
+  const f = await fixture(t)
+  assert.equal(f.integration.streamAssigned(f.bot.id, '201'), true)
+  assert.equal(f.integration.streamAssigned(f.bot.id, '203', '201'), true)
+  assert.equal(f.integration.streamAssigned(f.bot.id, '999'), false)
+  assert.equal(f.integration.streamAssigned(f.bot.id, '999', '998'), false)
+  assert.equal(f.integration.streamAssigned(f.bot.id, '204'), false)
+  await f.approve({ kind: 'bindings.save', bindings: [{ ...f.a, inheritThreads: false }] })
+  assert.equal(f.integration.streamAssigned(f.bot.id, '203', '201'), false)
+  await f.approve({ kind: 'bindings.save', bindings: [{ ...f.a, enabled: false }] })
+  assert.equal(f.integration.streamAssigned(f.bot.id, '201'), false)
+})

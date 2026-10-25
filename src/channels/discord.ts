@@ -1007,6 +1007,7 @@ export class DiscordChannel extends AbstractChannel {
           const parentId = thread.parent_id as string
           if (threadId && parentId) {
             this.threadParentMap.set(threadId, parentId)
+            if(isDiscordId(threadId)&&isDiscordId(parentId)) await this.collectStream({kind:'discovered',conversation:threadId,parent:parentId},true)
           }
         }
         console.debug(
@@ -1023,6 +1024,7 @@ export class DiscordChannel extends AbstractChannel {
       if (threadId && parentId) {
         this.threadParentMap.set(threadId, parentId)
         if (threadName) this.channelNameCache.set(threadId, threadName)
+        if(isDiscordId(threadId)&&isDiscordId(parentId)) await this.collectStream({kind:'discovered',conversation:threadId,parent:parentId},true)
         console.debug(
           `[discord] THREAD_CREATE: ${threadId} -> parent ${parentId}`,
         )
@@ -1036,6 +1038,24 @@ export class DiscordChannel extends AbstractChannel {
         this.threadParentMap.delete(threadId)
         console.debug(`[discord] THREAD_DELETE: removed ${threadId}`)
       }
+      return
+    }
+
+    if (event === 'MESSAGE_DELETE_BULK') {
+      if(!isDiscordId(data.channel_id))return
+      const ids=z.array(z.string().regex(/^[0-9]{1,20}$/)).max(100).parse(data.ids)
+      for(const message of ids)await this.collectStream({kind:'deleted',conversation:data.channel_id,message,
+        ...(this.threadParentMap.get(data.channel_id)?{parent:this.threadParentMap.get(data.channel_id)}:{})},!!data.guild_id)
+      return
+    }
+
+    if (event === 'MESSAGE_UPDATE' || event === 'MESSAGE_DELETE') {
+      if (!isDiscordId(data.id) || !isDiscordId(data.channel_id)) return
+      const parent = this.threadParentMap.get(data.channel_id)
+      const author = data.author ? discordRecord(data.author) : {}
+      await this.collectStream({kind:event === 'MESSAGE_DELETE'?'deleted':'updated',conversation:data.channel_id,message:data.id,
+        ...(isDiscordId(author.id)?{sender:author.id}:{}), ...(typeof data.content==='string'?{content:data.content.slice(0,32000)}:{}), ...(typeof data.edited_timestamp==='string'?{detail:data.edited_timestamp,...(z.string().datetime({offset:true}).safeParse(data.edited_timestamp).success?{revision:data.edited_timestamp}:{})}:{}),
+        ...(parent?{parent}:{})}, !!data.guild_id)
       return
     }
 
@@ -1089,6 +1109,10 @@ export class DiscordChannel extends AbstractChannel {
         if (admission) this.integration?.discard(admission.admissionId)
         return
       }
+      if (processedRevision === undefined && isDiscordId(data.id) && isDiscordId(data.channel_id)) {
+        await this.collectStream({kind:'created',conversation:data.channel_id,message:data.id,sender:author.id,content:typeof content==='string'?content.slice(0,32000):'',
+          ...((this.threadParentMap.get(data.channel_id) ?? admission?.location.parentId)?{parent:this.threadParentMap.get(data.channel_id) ?? admission?.location.parentId ?? undefined}:{})}, !!guildId)
+      }
       const sessionTriggerMode = admission?.trigger ?? state?.config?.triggerMode ?? this.triggerMode
       const approval = /^\/shadow-approve ([a-f0-9-]{36}) ([a-f0-9]{64})\s*$/i.exec(content)
       if (approval && this.integration && admission) {
@@ -1141,6 +1165,8 @@ export class DiscordChannel extends AbstractChannel {
       }
       if (processedRevision !== undefined) silent = false
       // DMs (no guildId) always pass through
+
+      if (silent && this.hasStreamCollector) { if (admission) this.integration?.discard(admission.admissionId); return }
 
       // Add reaction to acknowledge receipt
       if (!silent && this.reactionEmoji) {

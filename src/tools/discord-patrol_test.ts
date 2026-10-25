@@ -92,3 +92,15 @@ test('concurrent reads conflict before replacing pending batch; deleted initial 
   assert.deepEqual((await f.run({action:'read',channel:'10'})).messages.map((m:any)=>m.id),['4'])
  }finally{f.cleanup()}
 })
+test('production compatibility delegates consumption and send without a second patrol cursor/API history store',async()=>{
+ const workspace=mkdtempSync(join(process.cwd(),'.patrol-transition-test-'))
+ const calls:Array<{action:string;args:Record<string,unknown>}>=[]
+ const tool=new DiscordPatrolTool(workspace,'p',{authorized:()=>true,bots:()=>[],api:()=>async()=>{throw Error('legacy API history must not run')},stream:async(action,args)=>{calls.push({action,args});return JSON.stringify({events:[],batch:null})}})
+ const context={projectId:'p',sessionId:'web:owner',signal:new AbortController().signal} as ExecutionContext
+ try {
+  await tool.execute({action:'read',bot:'bot',channel:'10',consumer:'stable'},context)
+  await tool.execute({action:'reply',bot:'bot',channel:'10',content:'answer',key:'stable-key'},context)
+  assert.equal(calls[0].args.consumer,'stable');assert.deepEqual(calls[0].args.conversations,['10'])
+  assert.equal(calls[1].action,'send');assert.equal(calls[1].args.idempotencyKey,'stable-key')
+ } finally {rmSync(workspace,{recursive:true,force:true})}
+})
