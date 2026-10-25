@@ -513,6 +513,19 @@ export class ChannelManager {
     }
   }
 
+  async trustedDiscordRequest(botId: string, path: string, init: RequestInit): Promise<unknown> {
+    const bot = this.options?.instanceStore.list().find(value => value.id === botId && value.platform === 'discord')
+    if (!bot || this.closing) throw new Error('Discord Bot is not in this Project')
+    this.options!.instanceStore.assertAccess(botId)
+    const channel = this.availableByKey(botId)
+    if (!(channel instanceof DiscordChannel)) throw new Error('Discord Bot must be connected')
+    const verify = channel.connectionGuard()
+    const result = await channel.withConnection(() => channel.trustedWebRequest(path, init))
+    verify()
+    if (this.availableByKey(botId) !== channel) throw new Error('Discord connection changed')
+    return result
+  }
+
   private availableByKey(name: string): BaseChannel | undefined {
     if (this.transportsStopping) return undefined
     if (isChannelId(name) || (this.options && name !== 'web')) {

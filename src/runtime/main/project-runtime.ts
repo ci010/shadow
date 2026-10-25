@@ -1,3 +1,5 @@
+import { DiscordPatrolTool } from '../../tools/discord-patrol.ts'
+import { WatermarkTool } from '../../tools/watermark.ts'
 import { profileBindings } from '../../agent-authoring/capability-profiles.ts'
 import { FOLDER_PICKER_CAPABILITY, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../../folders/picker.ts'
 import { CHROME_MCP_PACKAGE } from '../../browser/chrome-contract.ts'
@@ -772,6 +774,7 @@ export async function createProjectRuntime(
   })
   tools.register(new SessionTool(topics))
   tools.register(new TaskTool(sessions))
+  importTool.registerBuiltin('watermark', new WatermarkTool(workspace, project.id))
   initiatives.recoverWorkEffects()
   const alignment: WorkAlignment = new WorkAlignment(initiatives, {
     state: id => sessions.getSessionState(id),
@@ -1349,6 +1352,11 @@ export async function createProjectRuntime(
     if (!state || !sessionId.startsWith('web:') || (state.mode ?? 'session') !== 'session'
       || state.parentSessionId || state.automation) throw new Error('Bot setup requires a user-owned Web conversation.')
     sessions.assertFolderAccess(sessionId)
+  }))
+  importTool.registerBuiltin('discord_patrol', new DiscordPatrolTool(workspace, project.id, {
+    authorized: id => canAuthor(id) && !sessions.getSessionState(id)?.parentSessionId,
+    bots: () => botStore.list().filter(bot => bot.platform === 'discord').map(bot => ({ id: bot.id, platform: bot.platform, purpose: bot.purpose })),
+    api: bot => (path, init) => channels.trustedDiscordRequest(bot, path, init ?? {}),
   }))
   discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
   const channelConfigurationTool = ownerChannelConfigurationTool(channelIntegrations, memoryDomains, channels.discordTransport(), canAuthor)

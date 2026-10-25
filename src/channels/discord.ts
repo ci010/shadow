@@ -150,6 +150,11 @@ export class DiscordChannel extends AbstractChannel {
     this.observationProcessor = this.createObservationProcessor()
   }
 
+  /** Host-owned trusted Web tool transport; never exposed as an arbitrary REST tool. */
+  trustedWebRequest(path: string, init: RequestInit): Promise<unknown> {
+    return this.api(path, init)
+  }
+
   directory(guildId: string | undefined, after: string | undefined, signal: AbortSignal) {
     return discordDirectory((path, init) => this.api(path, init), signal, guildId, after)
   }

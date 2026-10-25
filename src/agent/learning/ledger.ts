@@ -1,8 +1,9 @@
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { z } from 'zod'
-import { writePrivateFile } from '../../config/store.ts'
+import { Journal } from '../../watermarks/journal.ts'
+import { ConsumptionCore } from '../../watermarks/core.ts'
 import type { LearningOutcome } from '../../cron/contracts.ts'
 
 export const pipelines = ['reflector', 'encapsulator', 'soulReflector'] as const
@@ -54,10 +55,12 @@ export class LearningLedger {
   private state: z.infer<typeof stateSchema>
   private committed: z.infer<typeof stateSchema>
   private readonly file: string
+  private readonly journal: Journal<z.infer<typeof stateSchema>>
   constructor(readonly workspace: string, readonly projectId: string) {
     this.file = projectStoragePath(workspace, '.learning', 'state.v1.json')
+    this.journal = new Journal(this.file, value => stateSchema.parse(value))
     if (existsSync(this.file)) {
-      this.state = stateSchema.parse(JSON.parse(readFileSync(this.file, 'utf8')))
+      this.state = this.journal.read(undefined as never)
       if (this.state.projectId !== projectId) throw new Error('Learning journal belongs to a different Project')
     } else {
       const legacyFile = projectStoragePath(workspace, 'memory', '.reflect-watermark.json')
@@ -72,23 +75,37 @@ export class LearningLedger {
   private save(): void {
     try {
       stateSchema.parse(this.state)
-      mkdirSync(projectStoragePath(this.workspace, '.learning'), { recursive: true })
-      writePrivateFile(this.file, JSON.stringify(this.state) + '\n')
+      this.journal.save(this.state)
       this.committed = structuredClone(this.state)
     } catch (error) {
       this.state = structuredClone(this.committed)
       throw error
     }
   }
-  cursor(source: Omit<LearningSource, 'offset' | 'end'>): number {
+  private sourceCursor(source: Omit<LearningSource, 'offset' | 'end'>): number {
     const known = this.state.cursors[source.physicalId]
     if (known !== undefined) return known
     const legacy = this.state.legacy[source.sessionId]
     if (!legacy || source.segmentIndex > legacy.segmentIndex) return 0
     return source.segmentIndex < legacy.segmentIndex ? Number.MAX_SAFE_INTEGER : legacy.messageCount
   }
+  private core(knownSource?: Omit<LearningSource, 'offset' | 'end'>) {
+    return new ConsumptionCore<number, LearningBatch>({
+      batches: () => this.state.batches,
+      cursor: (key, batch) => {
+        const source = knownSource?.physicalId === key ? knownSource : batch?.sources.find(s => s.physicalId === key)
+        return source ? this.sourceCursor(source) : (this.state.cursors[key] ?? 0)
+      },
+      advance: (key, value) => { this.state.cursors[key] = value },
+      consumer: batch => batch.pipeline,
+      ranges: batch => batch.sources.map(s => ({ source: s.physicalId, from: s.offset, to: s.end })),
+    })
+  }
+  cursor(source: Omit<LearningSource, 'offset' | 'end'>): number {
+    return this.core(source).cursor(source.physicalId)
+  }
   pending(pipeline: Pipeline): LearningBatch | undefined {
-    return structuredClone(this.state.batches.find(batch => batch.pipeline === pipeline && batch.state !== 'done'))
+    return structuredClone(this.core().pending(pipeline))
   }
   batchFor(sessionId: string): LearningBatch | undefined {
     return structuredClone(this.state.batches.find(batch => batch.attempts.at(-1) === sessionId && batch.state === 'running'))
@@ -103,22 +120,18 @@ export class LearningLedger {
       .flatMap(batch => batch.events).filter(event => !consumed.has(event.id)).slice(0, 40))
   }
   create(pipeline: Pipeline, sources: LearningSource[], inputEvents: LearningEvent[]): LearningBatch {
-    if (this.pending(pipeline)) throw new Error('Learning pipeline already has unfinished work')
     const batch = batchSchema.parse({ id: randomUUID(), createdAt: new Date().toISOString(), pipeline, sources, inputEvents,
       events: [], artifacts: [], evaluated: [], attempts: [], state: 'pending' })
-    this.state.batches.push(batch); this.save()
+    this.core().create(batch); this.save()
     return structuredClone(batch)
   }
   bind(id: string, sessionId: string): void {
     const batch = this.required(id)
-    if (batch.state !== 'pending') throw new Error('Learning batch is not pending')
-    batch.attempts.push(sessionId); batch.state = 'running'; delete batch.proposal
+    this.core().claim(id, sessionId); delete batch.proposal
     this.save()
   }
   private required(id: string): LearningBatch {
-    const batch = this.state.batches.find(batch => batch.id === id)
-    if (!batch) throw new Error('Unknown learning batch')
-    return batch
+    return this.core().required(id)
   }
   artifact(id: string, artifact: LearningArtifact, evaluation?: string): void {
     const batch = this.required(id)
@@ -145,14 +158,13 @@ export class LearningLedger {
     if (!sessionId) throw new Error('Learning batch has no execution')
     this.state.outcomes[sessionId] = outcome
     if (outcome.status === 'applied' || outcome.status === 'no_change') {
-      for (const source of batch.sources) this.state.cursors[source.physicalId] = source.end
       if (batch.pipeline !== 'reflector') {
         this.state.consumed[batch.pipeline] = [...new Set([
           ...this.state.consumed[batch.pipeline], ...batch.inputEvents.map(event => event.id),
         ])]
       }
-      batch.state = 'done'
-    } else batch.state = 'pending'
+      this.core().settle(id, sessionId, true)
+    } else this.core().settle(id, sessionId, false)
     this.save()
     return structuredClone(outcome)
   }
@@ -164,7 +176,7 @@ export class LearningLedger {
       status: batch.artifacts.length || batch.events.length ? 'partial' : 'blocked',
       summary: error, artifacts: batch.artifacts.length, events: batch.events.length, evaluated: batch.evaluated.length,
     }
-    batch.state = 'pending'; batch.error = error; delete batch.proposal
+    this.core().recover(id); batch.error = error; delete batch.proposal
     this.save()
   }
 }
