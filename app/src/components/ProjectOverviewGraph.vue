@@ -27,6 +27,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import { markdownHighlight } from '../markdown-highlight.ts'
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -41,6 +42,7 @@ import { t } from '../i18n.ts'
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 const markdown = new Marked({ breaks: true })
+markdown.use(markdownHighlight())
 function outcomeMarkdown(text: string) { return DOMPurify.sanitize(markdown.parse(text, { async: false }) as string) }
 import type { ProjectWorkOverview } from '../../../src/projects/work-overview.ts'
 import { parseYieldDecisionRecord, type YieldDecisionRecord } from '../../../src/sessions/yield-contract.ts'

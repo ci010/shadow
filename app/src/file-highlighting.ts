@@ -170,3 +170,20 @@ export async function highlightFile(
   })
   return preserveHighlightSource(source, tokens.flat())
 }
+
+/** Explicit Markdown fence labels only; never guess a language from code. */
+export function fenceLanguage(label: string): FileLanguage | undefined {
+  const aliases: Record<string, FileLanguage> = {
+    js: 'javascript', ts: 'typescript', sh: 'shellscript', shell: 'shellscript', bash: 'shellscript',
+    zsh: 'shellscript', py: 'python', rb: 'ruby', 'c++': 'cpp', 'c#': 'csharp',
+    cs: 'csharp', ps: 'powershell', ps1: 'powershell', yml: 'yaml', md: 'markdown',
+  }
+  return (Object.hasOwn(aliases, label) ? aliases[label] : undefined)
+    ?? (Object.hasOwn(languages, label) ? label as FileLanguage : undefined)
+}
+
+export async function prepareFenceHighlighter(language: FileLanguage): Promise<HighlighterCore> {
+  const engine = await sharedHighlighter()
+  await loadLanguage(engine, language)
+  return engine
+}

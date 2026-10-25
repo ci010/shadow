@@ -1,3 +1,4 @@
+@import "./markdown-highlight.css";
 :root {
   color-scheme: light;
   --font-sans: 'Inter', system-ui, sans-serif;

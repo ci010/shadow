@@ -488,6 +488,7 @@
 </template>
 
 <script setup lang="ts">
+import { markdownHighlight } from '../markdown-highlight.ts'
 import { t, formatNumber } from '../i18n.ts'
 import { formatUsageCost, validCostUsage, type CostUsage } from '../usage-cost.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
@@ -641,6 +642,7 @@ function openConversationLink(event: MouseEvent) {
 }
 
 const marked = new Marked({ breaks: true })
+marked.use(markdownHighlight())
 marked.use(markedMath())
 marked.use(paddedStrongCompatibility())
 marked.use(answerHtmlExtension())

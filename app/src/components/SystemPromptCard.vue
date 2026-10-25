@@ -41,6 +41,7 @@
 </template>
 
 <script setup lang="ts">
+import { markdownHighlight } from '../markdown-highlight.ts'
 import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import DOMPurify from 'dompurify'
@@ -61,6 +62,7 @@ const marked = new Marked({
 })
 
 marked.use(markedMath())
+marked.use(markdownHighlight())
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
