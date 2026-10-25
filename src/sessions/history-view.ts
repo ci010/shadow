@@ -1,51 +1,16 @@
 import type { ChatMessage } from '../providers/provider.ts'
 
+import { isRuntimeContextEvent } from './runtime-context-contract.ts'
+
 type Call = NonNullable<ChatMessage['tool_calls']>[number]
-const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
-function parse(text: string): unknown {
-  // Bound parsing as well as output; oversized payloads remain available via the call link.
-  if (text.length > 32_000) return undefined
-  try { return JSON.parse(text) } catch { return undefined }
-}
-function compact(value: string): string {
-  return JSON.stringify(value.length > 200 ? `${value.slice(0, 200)}…` : value)
-}
-function metadata(value: unknown): string {
-  if (!object(value)) return '[invalid or oversized metadata object]'
-  const fields = ['title', 'description', 'completed', 'projectDir', 'cwd']
-  const parts = fields.filter(key => key in value).map(key => {
-    const v = value[key]
-    return `${key}=${typeof v === 'string' ? compact(v) : typeof v === 'boolean' || v === null ? String(v) : '[invalid type]'}`
-  })
-  if (Object.keys(value).some(key => !fields.includes(key))) parts.push('[unknown fields omitted]')
-  return parts.join(', ') || '[no supported fields]'
-}
-function special(call: Call): { args: Record<string, unknown>; kind: 'folder' | 'self' } | undefined {
-  const args = parse(call.function.arguments)
-  if (!object(args)) return undefined
-  if (call.function.name === 'use_project') return { args, kind: 'folder' }
-  if (call.function.name === 'write' && args.path === 'v:session/self.json') return { args, kind: 'self' }
-  return undefined
-}
-function attempt(call: Call): string {
-  const state = special(call)
-  if (!state) return call.function.name === 'use_project' ? '[attempt; invalid or oversized arguments]' : '…'
-  const { args, kind } = state
-  if (kind === 'folder') return `attempt folder=${typeof args.folder === 'string' ? compact(args.folder) : '[invalid or missing]'}`
-  if (typeof args.flag === 'string' && args.flag.includes('a')) return 'attempt path="v:session/self.json"; append requested (unsupported); content omitted'
-  if (args.match != null) return 'attempt path="v:session/self.json"; exact edit requested; replacement is not final state; content omitted'
-  return `attempt path="v:session/self.json"; metadata: ${typeof args.content === 'string' ? metadata(parse(args.content)) : '[invalid content]'}`
-}
-function observed(call: Call | undefined, msg: ChatMessage): string {
-  const state = call && special(call)
-  if (!state) return 'omitted'
-  if (typeof msg.content !== 'string') return 'status unknown; non-text result omitted'
-  if (/^Error:/i.test(msg.content)) return `error evidence=${compact(msg.content)}`
-  if (state.kind === 'self') {
-    const value = parse(msg.content)
-    return object(value) ? `observed metadata result (not inferred from request): ${metadata(value)}` : `status unknown; result evidence=${compact(msg.content)}`
-  }
-  return `observed result evidence=${compact(msg.content)}`
+
+/** Only host metadata envelopes are hidden, not event-looking human strings. */
+export function isOverviewHidden(message: ChatMessage): boolean {
+  if (message.role === 'system' || isRuntimeContextEvent(message)) return true
+  if (message.role !== 'user') return false
+  if (message.name === '__work_realignment__') return true
+  const first = Array.isArray(message.content) ? message.content[0] : undefined
+  return first?.type === 'text' && /^<event type="[^"]*" source="[^"]*" event-id="[^"]*"(?: [A-Za-z_][A-Za-z0-9_.-]*="[^"]*")* \/>$/.test(first.text)
 }
 
 export function formatSessionMessage(
@@ -56,18 +21,19 @@ export function formatSessionMessage(
   physicalId?: string,
   priorCall?: Call,
 ): string[] {
+  if (overview && isOverviewHidden(msg)) return []
   const callPath = (id: string) => physicalId ? ` → v:sessions/${physicalId}/calls/${encodeURIComponent(id)}` : ''
   const role = msg.role.toUpperCase()
   let body: string
   if (overview && msg.role === 'tool') {
-    body = `[result for ${msg.tool_call_id ?? '?'}; ${observed(priorCall, msg)}]${msg.tool_call_id ? callPath(msg.tool_call_id) : ''}`
+    body = `[result for ${msg.tool_call_id ?? '?'}] name=${priorCall?.function.name ?? msg.name ?? '?'} status=result-recorded${msg.tool_call_id ? callPath(msg.tool_call_id) : ''}`
   } else if (msg.role === 'assistant' && msg.tool_calls?.length) {
     const calls = msg.tool_calls
       .map((tc: NonNullable<ChatMessage['tool_calls']>[number]) =>
-        `  [call ${tc.id}] ${tc.function.name}(${overview ? attempt(tc) : tc.function.arguments})${overview ? callPath(tc.id) : ''}`
+        `  [call ${tc.id}] ${tc.function.name}${overview ? ` status=requested${callPath(tc.id)}` : `(${tc.function.arguments})`}`
       )
       .join('\n')
-    body = msg.content ? `${msg.content}\n${calls}` : calls
+    body = !overview && msg.content ? `${msg.content}\n${calls}` : calls
   } else if (msg.role === 'tool') {
     body = `[result for ${msg.tool_call_id ?? '?'}] ${msg.content ?? ''}`
   } else {
@@ -104,5 +70,11 @@ export function formatSessionHistory(messages: ChatMessage[], overview = false, 
     const lines = formatSessionMessage(message, index + 1, false, overview, physicalId, calls.get(message.tool_call_id ?? ''))
     for (const call of message.tool_calls ?? []) calls.set(call.id, call)
     return lines.join('\n')
-  }).join('\n\n')
+  }).filter(Boolean).join('\n\n')
+}
+
+/** One-based next-entry line in the physical VFS view (two header lines). */
+export function sessionHistoryLineAt(messages: ChatMessage[], index: number, overview: boolean): number {
+  const prefix = formatSessionHistory(messages.slice(0, index), overview)
+  return prefix ? 3 + prefix.split('\n').length + 1 : 3
 }
