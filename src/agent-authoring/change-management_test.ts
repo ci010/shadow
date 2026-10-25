@@ -512,3 +512,30 @@ test('saved check evidence redacts known credentials and old reviews cannot surv
     } finally { f.stop() }
   })
 })
+
+
+test('creator configures reusable capabilities once in an unbound Agent Change; only exact owner review publishes the profile', async () => {
+  await withTempWorkspace(async workspace => {
+    const f = await fixture(workspace, false)
+    try {
+      const created = await f.invoke({ action: 'create', input: { title: 'Prepare reusable support Agent' } })
+      const id = created.id
+      const edited = await f.invoke({ action: 'edit', changeId: id, expectedRevision: created.revision, input: { files: bundle.files } })
+      // Tool accepts only the profile contract, never conversation identity or an implicit old binding.
+      const { conversationId: _conversation, agent: _agent, enabled: _enabled, ...profile } = bundle.bindings[0]
+      const configured = await f.invoke({ action: 'configure_capabilities', changeId: id, expectedRevision: edited.revision, input: { agent: 'support', profiles: [profile] } })
+      assert.equal(f.resources.snapshot().bundle.files[promptPath], undefined)
+      assert.deepEqual(f.changes.get(id).snapshot.bundle.bindings, [])
+      assert.deepEqual(parseFrontmatter(f.changes.get(id).snapshot.bundle.files[promptPath]).frontmatter.capabilityProfiles, [profile])
+      const checked = await f.invoke({ action: 'check', changeId: id, expectedRevision: configured.revision, input: { kind: 'validate' } })
+      assert.equal(checked.status, 'passed')
+      const proposed = await f.invoke({ action: 'propose', changeId: id, expectedRevision: configured.revision, input: {} })
+      const request = f.publications.list().find(request => request.id === proposed.requestId)!
+      assert.ok(request)
+      assert.equal(f.resources.snapshot().bundle.files[promptPath], undefined)
+      await f.publications.submit(request.id, { revision: request.revision, baseRevision: request.baseRevision })
+      assert.equal(f.resources.snapshot().revision, request.revision)
+      assert.deepEqual(f.resources.snapshot().bundle.bindings, [])
+    } finally { f.probes.stop(); f.publications.stop() }
+  })
+})

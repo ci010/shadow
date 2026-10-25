@@ -556,42 +556,123 @@ QQ platform event approvals, sandbox testers, availability and end-to-end messag
 delivery are not verified by this guide. Only a reported `connected` status marks
 the connection step complete; credentials saved or `running` does not. Personal
 Bots still require the existing private-chat owner challenge and explicit Web
-confirmation. QQ service Bots still require explicit published Agent bindings via
-`authoring_change`; this guide neither grants permissions nor provides Discord's
-service access UI. Refresh/reopening reconstructs progress from Main, not local
+confirmation. QQ service Bots require an explicitly approved Agent setup. Open an observed
+group from the Project sidebar to select a published Agent and review its setup.
+Connection alone grants no permissions; Discord keeps its separate access UI. Refresh/reopening reconstructs progress from Main, not local
 completion flags. Unsaved edits and temporary owner challenges are not durable.
 
-### Pending service groups (QQ / Feishu)
+### Service groups (QQ / Feishu)
 
-Bot settings include **Pending group authorization** for QQ and Feishu service
-Bots. Send a group message (normally @mention the Bot), then refresh that list.
-Platform event delivery and the existing sender allowlist still apply. Shadow
-records only the Bot, platform conversation ID, an available name, and last-seen
-time for unbound service groups. A name may be unavailable, especially for QQ
-guild channels and Feishu; Shadow does not fetch a directory merely to discover
-an unauthorized group. It does not create an Agent session, run tools, download
-attachments, save message text, or send a response for discovery. Direct messages,
-personal Bots and Discord's separate access workflow are not discovery targets.
+Observed groups appear in the existing Bot/channel conversation tree in the Project
+sidebar, not a separate service-group navigation section. This is a display-only
+projection: it does not create an Agent session, authorize a binding or send a
+message. Existing conversations are matched by Project/Bot/platform/group (including
+canonical migrated IDs), keeping their original session IDs and history. Once a
+real channel session exists, the projected row resolves to it rather than creating
+a parallel chat. Missing names use a short platform/group suffix; full IDs are
+kept in details/tooltips, not the sidebar label. Ordinary platform-delivered messages discover a group: no mention or
+command is required. QQ `GROUP_ADD_ROBOT` and Feishu
+`im.chat.member.bot.added_v1` membership events also register groups when the
+platform delivers them (enable the relevant Feishu event subscription). Shadow
+cannot list events the platform has not delivered. Sender allowlists still apply
+to message observations. Names may be unavailable; discovery does not fetch a
+platform directory or backfill history. Personal Bots, DMs and Discord's separate
+access workflow are not discovery targets.
 
-Select/copy the provided authoring request into a **direct owner Web topic in the
-same Project**. The request includes the exact Bot/platform/conversation target,
-not the untrusted group name. Specify the desired Agent, sender scope and grants;
-use `authoring_change` to create/edit an isolated Change, validate it, and propose
-it for explicit owner publication review. Existing bindings must be preserved.
-This copy entry does **not** automatically create a Change, publish an Agent, or
-authorize the group. Connection and discovery alone never bypass service binding.
-Once an enabled binding resolves, the group disappears from the pending list and
-normal authorized message handling remains unchanged. Disabled or removed bindings
-remain denied for Agent execution but can be rediscovered for explicit reauthorization;
-they do not break the pending list. `authoring_change inspect`
-also exposes pending targets in the Project inventory.
+Open the sidebar group to view received text in a chat layout. The compact
+header says **Quietly observing**; received messages are not proof of inference
+or delivery. Sender addresses are shortened when needed, with the full value
+available on hover. Group/Bot IDs, retention limits and authorization guidance
+are in **Settings → Group details**, not repeated alongside each message. QQ defaults to mention-only triggering; receiving and
+triggering are separate. Feishu preserves its mention/reply/topic trigger policy.
+Unenabled groups never reach the Agent receiver, download attachments, react or
+reply. The observation store is not Agent history; enabling a group never replays
+its observed messages. File/audio observations show a type placeholder rather than
+downloading media. Available QQ text is truncated; Feishu observation currently
+extracts plain text messages only.
 
-Discovery is private Project-local metadata in `config/service-discovery.json`:
-at most 200 most-recent targets per Project, deduplicated by Bot/platform/ID, with
-30-day expiry. Disk writes are sampled at most once per minute, plus clean
-shutdown; the UI uses current in-memory times. A crash can lose discoveries since
-the last sample; send another group message to rediscover. Deleted or non-service
-Bots are excluded from settings/inventory; expired metadata is removed on the
-next observation or clean shutdown. The owner-authorized, no-store settings API
-is `GET /api/channels/:id/pending-groups`; it never selects a Project from a
-request body.
+The same conversation workspace displays received-only observations for groups
+without a session, or the existing history when a session exists. Open
+**Settings** in that chat to select a **published Agent**. The group page shows
+**Ready to enable** or **Agent setup incomplete**, and a human-readable summary
+of the actual tool declarations, HTTPS targets and allowed methods/paths,
+read-only folders and private connection use. It does not derive authority from
+the prompt. Group setup never asks for skills, route JSON or credential references.
+
+The creator prepares a reusable capability profile once in the Agent authoring
+layer (see [Agent capability profiles](agent-authoring.md#reusable-agent-capability-profiles)).
+Profiles are explicit per Bot/platform within the runtime-bound Project, stored
+in versioned `AGENT.md` frontmatter, and published through the existing exact
+Authoring Change review. A profile is not a global mutable default. Ordinary
+bindings, including old same-Bot bindings, are never promoted into a profile.
+An old Agent without a profile still resolves its existing bindings unchanged,
+but cannot be enabled in a new group until its creator publishes an explicit
+profile. Even a no-tool Agent requires an explicitly empty capability policy.
+
+Missing profiles or private connections disable **Review group setup**. Links
+open Project coordination for the creator to repair Agent configuration, or to
+request the existing **Private credential entry** card using `project_config
+request_secret`. The connection link is a configuration handoff, not a secret
+input or automatic credential request. Never send secrets in chat. Credentials
+remain in the owning Project credential store; no local `gh` token is imported.
+A profile for one Bot cannot authorize another Bot, even within the same Project.
+Credential use by another Bot requires its own explicitly reviewed profile.
+
+Choose **Review group setup** only when configuration is complete. The server
+copies only the selected published profile into an independent exact candidate.
+The ordinary POST accepts no policy overrides or Agent creation fields. Missing
+profiles, folders, inbox targets or credentials enable nothing; live validation
+runs again before review and publication. There is no implicit group-admin grant.
+
+The sidebar shows a pending-approval icon for affected groups. A compact inline
+**Group setup awaiting review** disclosure opens the original publication review;
+collapsing it does not reopen it on polling. Approve/cancel controls remain inside
+that full review alongside its exact revisions and permission details. The conversation reuses
+Project publication reviews, not an Agent ask or a second approval database:
+**Approve publication** binds the exact candidate and published-base revisions;
+**Cancel publication** leaves it inactive. Approval is Web-owner-authorized only,
+never a group command. Edits, concurrent publication and stale/double submissions
+are rejected by the shared publication contract. Active work may defer an
+explicitly approved publication using the existing waiting-review state. Review
+and sidebar snapshots refresh every three seconds while visible; refresh is not
+approval. A review affecting multiple groups remains a single atomic publication
+and lists its full impact. A foreign Project cannot approve it.
+
+Agent creation and advanced tool/permission editing belong in an authorized
+owner authoring topic, not the group-binding popover. Group setup creates an
+independent published-base Authoring Change and exact-snapshot review. An
+unrelated shared draft (including its source and revision) is never staged,
+discarded or published. Independent reviews coexist; identical candidates reuse
+their review. Conflicting group reviews must be resolved first. Rejection enables
+nothing; changed published bases require refresh and fresh review, not a silent
+merge. Changing an Agent profile affects future proposals only: existing bindings
+retain their previously approved policy until explicitly reviewed and changed.
+
+Observations are private Project-local data in `config/service-discovery.json`:
+at most 200 targets, deduplicated by Bot/platform/ID, with 30-day group expiry.
+Each group retains at most 20 text observations of at most 2,000 characters, for
+seven days. They are untrusted platform text, not instructions; Vue renders them
+as text. Do not post secrets to groups: this is not a general secret scanner.
+Message text is excluded from the model-visible authoring inventory. Persistence
+is sampled at most once per minute plus clean shutdown; a crash can lose the last
+sample. Expired content is filtered on reads and removed on the next flush.
+Deleted/non-service Bots are excluded. Enabled groups remain in the sidebar;
+the legacy Bot-settings pending list hides enabled bindings and links to the
+same group page.
+
+Owner-only, no-store APIs use the runtime-bound Project, never a Project body
+field: `GET /api/service-groups` returns observation metadata, published Agent names
+and per-Bot `agentSetups` readiness/safe capability summaries with published-profile provenance, plus affected-review flags; a `group` query containing JSON `[botId, conversationId]`
+includes only that group's bounded text. `POST /api/service-groups/propose` accepts
+`{botInstanceId, conversationId, agent, revision}` (all other fields are rejected) and prepares, but does not enable,
+the candidate. Decisions use the existing
+`/api/agent-resources/publication-requests/:id` endpoints. The legacy
+`GET /api/channels/:id/pending-groups` remains owner-only.
+
+Group proposal errors retain their specific HTTP status and safe error code:
+invalid input/name or policy overrides are 400, a removed Bot is 404, changed revisions or a
+conflicting group review is 409, live validation is 422, and an
+unavailable publication service is 503. Refresh is local; existing reviews open
+in place. Live validation problems offer Project coordination for configuration repair. Repeating an identical proposal returns its existing exact review;
+it never replaces another pending review or unrelated draft. Live validation
+categories never expose credential values or arbitrary server exception text.

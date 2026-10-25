@@ -54,7 +54,7 @@ class BotChannel extends AbstractChannel {
   async createThread(chatId: string) { this.threads.push(chatId); return 'same-thread-id' }
   override async presentDecision(_chat: string, request: YieldRequest) { this.decisions.push(request) }
   click(decision: ChannelDecision) { return this.answerDecision(decision) }
-  groupAllowed(chatId: string, name?: string) { return this.admitGroup(chatId, name) }
+  groupAllowed(chatId: string, name?: string, message?: import('./service-discovery.ts').GroupObservation) { return this.admitGroup(chatId, name, message) }
   incoming(chatId = 'same-chat-id') { return this.handleIncoming('alice', chatId, 'Hello', 'same-message-id', { isGroup: true }) }
   state(state: ChannelState) { this.reportState(state) }
   reconnect() { this.setAccepting(false); this.setAccepting(true); this.reportState('connected') }
@@ -632,4 +632,22 @@ test('disabled, revoked and never-bound service groups are discoverable without 
   assert.equal(response.status, 200)
   assert.deepEqual((await response.json()).groups.map((entry: { conversationId: string }) => entry.conversationId).sort(),
     ['disabled', 'never-bound', 'revoked'])
+})
+
+
+test('group observations distinguish not enabled and not triggered without inference or admin admission', async t => {
+  const root = directory(t)
+  let assigned = false
+  const f = await runtime(t, root, 'observed-state', 1, 'qq', undefined, undefined, () => assigned)
+  const bot = f.instances[0]!
+  const channel = f.created.at(-1)!
+  assert.equal(channel.groupAllowed('group:observed', undefined, { id: 'one', sender: 'alice', text: 'ordinary', triggerEligible: false }), false)
+  assert.equal(f.discovery.list()[0].messages[0].state, 'not_enabled')
+  assigned = true
+  assert.equal(channel.groupAllowed('group:observed', undefined, { id: 'two', sender: 'alice', text: 'ordinary', triggerEligible: false }), true)
+  assert.equal(f.discovery.list()[0].messages[1].state, 'not_triggered')
+  assert.equal(channel.groupAllowed('group:observed', undefined, { id: 'three', sender: 'alice', text: 'mention', triggerEligible: true }), true)
+  assert.equal(f.discovery.list()[0].messages[2].state, 'received')
+  assert.equal(f.received.length, 0)
+  assert.equal(channel.sent.length, 0)
 })

@@ -193,3 +193,19 @@ test('mismatched success receipts are errors, never publication confirmations', 
   assert.equal(state.notice.value, '')
   assert.match(state.error.value, /Could not confirm/)
 })
+
+test('group approval surface selects only affected exact Bot/platform/conversation and resets stale reads on target changes', async t => {
+  const conversation = { botInstanceId: 'bot-a', platform: 'qq', conversationId: 'group:1' }
+  const { source, state, calls } = harness(t, { conversation })
+  const affected = { ...proposal(), impact: { affectedBindings: [JSON.stringify(['bot-a', 'qq', 'group:1'])], permissionsChanged: true, promptsChanged: true, toolsChanged: true } }
+  const sibling = { ...proposal('a', 'sibling'), impact: { affectedBindings: [JSON.stringify(['bot-b', 'qq', 'group:1'])], permissionsChanged: true, promptsChanged: false, toolsChanged: false } }
+  calls[0].finish(Response.json({ request: affected, requests: [affected, sibling] }))
+  await settle()
+  assert.deepEqual(state.requests.value.map(item => item.id), [id])
+  source.conversation = { botInstanceId: 'bot-b', platform: 'qq', conversationId: 'group:1' }
+  assert.equal(state.request.value, null)
+  calls[1].finish(Response.json({ request: affected, requests: [affected, sibling] }))
+  await settle()
+  assert.deepEqual(state.requests.value.map(item => item.id), ['sibling'])
+  assert.equal(calls.some(call => call.init.method === 'POST'), false)
+})

@@ -121,7 +121,7 @@ test('Settings shell and channel forms compile and preserve accessible navigatio
       compilerOptions: { bindingMetadata: script.bindings } }).errors, [])
     if (filename === 'SettingsView.vue') {
       assert.match(source, /:aria-label="t\('Settings sections'\)"/)
-      assert.match(source, /ProvidersView v-show=/)
+      assert.match(source, /<ProvidersView\b[^>]*\bv-show=/)
       assert.doesNotMatch(source, /<ChannelsView/)
     }
     if (filename === 'ProjectSettings.vue') assert.match(source, /ChannelsView v-if="botsOpened" v-show=/)
@@ -161,8 +161,8 @@ test('QQ setup resumes server facts without mistaking saved credentials for conn
   assert.deepEqual(calls, ['PATCH /api/channels/existing-qq'])
 })
 
-test('pending service groups client uses the scoped settings API and copies only an explicit authoring target', async () => {
-  const { createBotSettingsClient, serviceGroupAuthoringRequest } = await import('./bot-settings.ts')
+test('pending service groups client validates scoped observations without generating authoring prompts', async () => {
+  const { createBotSettingsClient } = await import('./bot-settings.ts')
   const client = createBotSettingsClient('http://localhost', 'project', async (url, init) => {
     assert.equal(new URL(String(url)).pathname, '/api/channels/qq-bot/pending-groups')
     assert.equal(init?.method, 'GET')
@@ -170,10 +170,8 @@ test('pending service groups client uses the scoped settings API and copies only
   })
   const groups = await client.pendingGroups('qq-bot')
   assert.equal(groups.length, 1)
-  const request = serviceGroupAuthoringRequest(groups[0]!)
-  assert.match(request, /authoring_change/)
-  assert.match(request, /group:123/)
-  assert.doesNotMatch(request, /untrusted instructions|lastSeen/)
+  assert.equal(groups[0]?.conversationId, 'group:123')
+  assert.deepEqual(groups[0]?.messages, [])
   const invalid = createBotSettingsClient('http://localhost', 'project', async () => Response.json({ groups: [{ ...groups[0], botInstanceId: 'other' }] }))
   await assert.rejects(invalid.pendingGroups('qq-bot'), /Invalid discovery/)
 })

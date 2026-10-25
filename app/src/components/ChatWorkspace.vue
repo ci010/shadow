@@ -1,7 +1,12 @@
 <template>
   <div ref="workspace" class="conversation-workspace" :class="{ 'has-child': childId, 'is-split': split, 'is-resizing': !!drag }" :style="split ? { gridTemplateColumns: `minmax(0, 1fr) ${SPLIT_HANDLE_WIDTH}px ${childWidth}px` } : undefined">
     <div v-show="!childId || wide || route.name === 'project-settings' || route.name === 'agents'" class="primary-conversation" @pointerdown.capture="activePane = 'primary'" @focusin="activePane = 'primary'">
-      <ChatTab ref="primary" :api-base="apiBase" :embedded="embedded" enable-child-pane :child-session-id="childId"
+      <FileWorkbench v-if="observedGroupKey(sessionId || '')" :api-base="apiBase" session-id="" :project-id="projectId" :context-key="sessionId || ''" :active="visible" :explorer-enabled="false" :project-navigation-enabled="!embedded" :knowledge-enabled="!embedded" :knowledge-request="knowledgeRequest"
+        @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
+        @project-navigation="emit('project-navigation', $event)" :conversation-title="t('Received messages')">
+        <div class="observed-chat"><ChannelGroupContext :api-base="apiBase" :project-id="projectId || ''" :group-key="observedGroupKey(sessionId || '')!" :active="visible" discovery-only /></div>
+      </FileWorkbench>
+      <ChatTab v-else ref="primary" :api-base="apiBase" :embedded="embedded" enable-child-pane :child-session-id="childId"
         :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
         @project-navigation="emit('project-navigation', $event)"
         :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :automation-run="automationRun"
@@ -30,6 +35,9 @@ import { t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ChatTab from './ChatTab.vue'
+import FileWorkbench from './files/FileWorkbench.vue'
+import ChannelGroupContext from './ChannelGroupContext.vue'
+import { observedGroupKey } from '../service-groups.ts'
 import { childConversationTarget, childWidthBounds, clampChildWidth, SPLIT_HANDLE_WIDTH, SPLIT_MIN_WIDTH } from '../conversation-split.ts'
 import type { FolderRecord } from '../folders-client.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
@@ -147,6 +155,7 @@ onUnmounted(deactivate)
 </script>
 
 <style scoped>
+.observed-chat { flex: 1; overflow-y: auto; padding: 12px 24px; min-height: 0; min-width: 0; }
 .conversation-workspace { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1; min-width: 0; min-height: 0; height: 100%; }
 .primary-conversation, .child-conversation { display: flex; min-width: 0; min-height: 0; overflow: hidden; }
 .child-conversation { background: var(--c-bg); }

@@ -39,6 +39,11 @@ export const ConversationBindingSchema = z.object({
 }).strict()
 export type ConversationBinding = z.infer<typeof ConversationBindingSchema>
 
+/** Explicit reusable policy, reviewed with the Agent file; never inferred from conversation grants. */
+export const AgentCapabilityProfileSchema = ConversationBindingSchema.omit({ conversationId: true, enabled: true, agent: true })
+export type AgentCapabilityProfile = z.infer<typeof AgentCapabilityProfileSchema>
+export const AgentCapabilityProfilesSchema = z.array(AgentCapabilityProfileSchema).max(32)
+
 export const ResourceBundleSchema = z.object({
   version: z.literal(1),
   files: z.record(z.string().max(512_000)),

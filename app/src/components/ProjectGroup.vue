@@ -1,8 +1,8 @@
 <template>
-  <FoldersSidebar :api-base="scope" grouped :project-id="project.id" :project-name="project.name" :bots="bots"
+  <FoldersSidebar :api-base="scope" grouped :project-id="project.id" :project-name="project.name" :bots="displayBots"
     :selected-automation-id="selectedProjectId === project.id ? selectedAutomationId : undefined"
     :folder-revision="(folderRevision ?? 0) + liveFolderRevision"
-    :sessions="sessions" :active-session-id="selectedProjectId === project.id ? selectedSessionId : ''"
+    :sessions="displaySessions" :active-session-id="selectedProjectId === project.id ? selectedSessionId : ''"
     :draft-folder-id="selectedProjectId === project.id ? draftFolderId : undefined"
     :collapsed="collapsed" :stages="stages" :sessions-loading="loading" :sessions-error="error"
     :remote-folders="remoteFolders" @select="$emit('select', $event)" @delete="deleteSession"
@@ -32,6 +32,7 @@
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useServiceGroups, projectGroupConversations, observedGroupId } from '../service-groups.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import ProjectCoordinator from './ProjectCoordinator.vue'
 import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
@@ -69,7 +70,22 @@ const loading = ref(true)
 const error = ref('')
 const runtimeState = ref<ProjectRuntimeStatus['state']>()
 const retrying = ref(false)
+const { groups: observedGroups } = useServiceGroups(() => ({ apiBase: scope.value, projectId: props.project.id, active: runtimeState.value === 'ready' }))
+const displayBots = computed(() => {
+  const catalog = [...bots.value]
+  for (const group of observedGroups.value) {
+    if (!catalog.some(bot => bot.id === group.botInstanceId && bot.projectId === props.project.id))
+      catalog.push({ id: group.botInstanceId, projectId: props.project.id, platform: group.platform, displayName: group.botName })
+  }
+  return catalog
+})
+const displaySessions = computed(() => projectGroupConversations(sessions.value, observedGroups.value, props.project.id))
 const deletion = ref<SessionDeletionTarget>()
+watch(() => [displaySessions.value, props.selectedSessionId, props.selectedProjectId], () => {
+  if (props.selectedProjectId !== props.project.id) return
+  const session = displaySessions.value.find(s => s.groupObservation && s.sessionId !== props.selectedSessionId && observedGroupId(s.groupObservation) === props.selectedSessionId)
+  if (session) emit('select', session.sessionId)
+})
 watch(() => [sessions.value, loading.value, props.selectedProjectId, props.selectedSessionId, props.selectedAutomationId] as const, () => {
   if (props.selectedProjectId !== props.project.id || !props.selectedSessionId || loading.value) return
   if (!sessions.value.some(session => session.sessionId === props.selectedSessionId)) return

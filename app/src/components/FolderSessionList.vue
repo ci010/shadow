@@ -30,10 +30,12 @@
         </span>
       </template>
       <template #icon>
-        <SessionActivity :stage="sidebarSessionIconStage(activityStage(session), session.completed)" :has-cron="session.hasCron" :subagents="delegatedActivity(session)" compact icon-only status-icons />
+        <span v-if="session.groupObservation?.pending" class="i-lucide-message-circle-question w-4 h-4" :title="t('Pending setup approval')" />
+        <span v-else-if="session.groupObservation && !session.groupObservation.enabled" class="i-lucide-circle-dashed w-4 h-4" :title="t('Not enabled')" />
+        <SessionActivity v-else :stage="sidebarSessionIconStage(activityStage(session), session.completed)" :has-cron="session.hasCron" :subagents="delegatedActivity(session)" compact icon-only status-icons />
       </template>
       <template #meta><WorkingWave v-if="isAnimating(session)" class="session-working-wave" /></template>
-      <template #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
+      <template v-if="!session.sessionId.startsWith('observed-group:')" #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
       <template v-if="showInfo" #info="{ close }">
         <div class="session-info">
           <strong class="session-info-title">{{ session.label }}</strong>
@@ -50,7 +52,7 @@
           <p v-if="delegatedLabel(session)">{{ delegatedLabel(session) }}</p>
           <div class="session-info-actions">
             <button type="button" class="session-info-open" @click="$emit('select', session.sessionId); close()">{{ t('Open conversation') }}</button>
-            <button type="button" class="session-info-delete" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="close(); $emit('delete', session.sessionId)">{{ t('Delete conversation') }}</button>
+            <button v-if="!session.sessionId.startsWith('observed-group:')" type="button" class="session-info-delete" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="close(); $emit('delete', session.sessionId)">{{ t('Delete conversation') }}</button>
           </div>
           <template v-if="descendants(session).length">
             <h4>{{ t('Related conversations') }}</h4>

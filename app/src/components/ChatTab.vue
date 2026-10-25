@@ -95,6 +95,7 @@
         <!-- Messages -->
         <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
         <div ref="messagesContainer" class="chat-messages" tabindex="-1" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
+          <ChannelGroupContext v-if="/^(qq:|feishu:|bot:)/.test(activeSessionId) && !viewingPhysicalId" :key="activeSessionId" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :group-key="activeSession?.channelAddress ? serviceGroupKey(activeSession.channelAddress) : undefined" :session-id="activeSessionId" :active="visible && route.name === 'chat'" />
           <div class="chat-message-list">
           <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
             :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
@@ -545,6 +546,8 @@ import CredentialRequest from './CredentialRequest.vue'
 import BotChatSetup from './BotChatSetup.vue'
 import ComputerControl from './ComputerControl.vue'
 import PublicationRequest from './PublicationRequest.vue'
+import ChannelGroupContext from './ChannelGroupContext.vue'
+import { serviceGroupKey } from '../service-groups.ts'
 import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
 import ExecutionMessage from './ExecutionMessage.vue'
 import ConversationSkeleton from './ConversationSkeleton.vue'
@@ -2998,6 +3001,7 @@ function resendLastMessage() {
   min-height: 0;
   height: 100%;
 }
+.chat-messages > .channel-group-context { width: calc(100% - 40px); max-width: var(--conversation-max-width); margin: 0 auto; }
 .chat-panel { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 .conversation-heading-row { display: flex; align-items: center; flex-shrink: 0; min-width: 0; }
 .conversation-heading-row > :deep(.session-heading) { flex: 1; }

@@ -12,13 +12,13 @@ import type { AgentAuthoringService } from './service.ts'
 import type { AgentCredentialStore } from './credentials.ts'
 import type { PublicationRequests } from './publication-requests.ts'
 import type { AuthoringProbeRequests } from './probe-requests.ts'
-import { ConversationBindingSchema, ResourceName, conversationBindingKey } from './contracts.ts'
+import { AgentCapabilityProfilesSchema, ConversationBindingSchema, ResourceName, conversationBindingKey } from './contracts.ts'
 import { formatGuide } from './management.ts'
 import { testResourceTool } from './checks.ts'
 import { AuthoringEvidenceError, redactAuthoringEvidence } from './evidence.ts'
 import { runAuthoringScenario } from './scenario-check.ts'
 
-const actions = ['schema', 'inspect', 'create', 'list', 'read', 'configure_inference', 'status', 'edit', 'delegate', 'revoke', 'check', 'request_probe', 'propose', 'rebase', 'runs', 'run', 'close'] as const
+const actions = ['schema', 'inspect', 'create', 'list', 'read', 'configure_inference', 'configure_capabilities', 'status', 'edit', 'delegate', 'revoke', 'check', 'request_probe', 'propose', 'rebase', 'runs', 'run', 'close'] as const
 const inferencePatchSchema = z.object({
   model: agentInferenceSchema.shape.model.nullable(),
   temperature: agentInferenceSchema.shape.temperature.nullable(),
@@ -134,6 +134,7 @@ const guide = {
   workflow: 'inspect -> create -> configure_inference or edit -> check validate -> propose -> status. Pass changeId, not a copied bundle. Published resources and the legacy shared draft are untouched until the owner approves the exact proposal.',
   inputs: {
     inspect: '{botInstanceId?} (direct owner; published bindings, coverage and provider model/effort capabilities, without creating a Change)',
+    configure_capabilities: '{agent, profiles:[{botInstanceId,platform,skills:[],grants:[],readFolders:[],parameters?:{},allowFrom?:[]}]} + expectedRevision. Replaces explicit reusable Agent profiles in AGENT.md (max 32; one per Bot/platform in this Project). Grants use the ConversationBinding grant contract; credential.secretRef names a Project-owned credential, never its value. No legacy binding is promoted automatically. Empty profiles disables new group setup; an explicit empty policy allows a no-tool Agent. Creator chooses actual routes/permissions, requests private credentials through project_config request_secret, checks and proposes exact review once before groups can select this Agent.',
     configure_inference: '{agent, settings:{model?,reasoningEffort?,temperature?,maxTokens?,thinking?}} + expectedRevision. Omitted fields are unchanged; null removes an override. Only enabled, bound Agents; changes affect every binding sharing that Agent, not a Bot-wide default.',
     status: '{} (authoritative current Change revision versus published revision and pending review; missing review is never proof of publication)',
     create: '{title, editors?:[{sessionId,paths}]} (direct owner, base=current published; paths are exact resources or a directory prefix ending /)',
@@ -176,7 +177,7 @@ const guide = {
 export function authoringChangeTool(options: ChangeManagementOptions): Tool {
   return {
     name: 'authoring_change', optIn: true,
-    description: 'Inspect published Agent bindings, uncovered conversations and available models/efforts; configure_inference or edit isolated Changes, check, propose and query authoritative status. Read schema for inputs. Never scrape chat history for publication receipts. Publication and real GET tests require owner review.',
+    description: 'Inspect published Agent bindings, uncovered conversations and available models/efforts; configure_capabilities (reusable per-Bot Agent profiles), configure_inference or edit isolated Changes, check, propose and query authoritative status. Read schema for inputs. Never scrape chat history for publication receipts. Publication and real GET tests require owner review.',
     parameters: {
       type: 'object', properties: {
         action: { type: 'string', enum: [...actions] }, changeId: { type: 'string' },
@@ -277,13 +278,16 @@ export function authoringChangeTool(options: ChangeManagementOptions): Tool {
       }
       if (change.closed) throw new Error('This Change is closed. Its files and saved runs remain readable.')
       if (!args.expectedRevision || args.expectedRevision !== change.snapshot.revision) throw new Error('Read the Change and supply its exact expectedRevision. No fallback to a different source.')
-      if (args.action === 'configure_inference') {
-        const parsed = z.object({ agent: ResourceName, settings: inferencePatchSchema }).strict().parse(input)
+      if (args.action === 'configure_inference' || args.action === 'configure_capabilities') {
+        const capability = args.action === 'configure_capabilities'
+        const parsed = capability
+          ? (() => { const value = z.object({ agent: ResourceName, profiles: AgentCapabilityProfilesSchema }).strict().parse(input); return { agent: value.agent, settings: { capabilityProfiles: value.profiles } } })()
+          : z.object({ agent: ResourceName, settings: inferencePatchSchema }).strict().parse(input)
         if (!Object.keys(parsed.settings).length) throw new Error('Supply at least one inference setting.')
         const path = `agents/${parsed.agent}/AGENT.md`
         assertAccess(options, context, change.id, path)
         const affectedBindings = change.snapshot.bundle.bindings.filter(binding => binding.agent === parsed.agent)
-        if (!affectedBindings.some(binding => binding.enabled)) throw new Error('Choose an Agent with an enabled binding. This action does not create Bot-wide defaults.')
+        if (!capability && !affectedBindings.some(binding => binding.enabled)) throw new Error('Choose an Agent with an enabled binding. This action does not create Bot-wide defaults.')
         const source = change.snapshot.bundle.files[path]
         if (source === undefined) throw new Error('Change Agent does not exist.')
         const match = /^(---\r?\n)([\s\S]*?)(\r?\n---\r?\n)([\s\S]*)$/.exec(source)

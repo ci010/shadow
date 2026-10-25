@@ -827,6 +827,9 @@ export class QQChannel extends AbstractChannel {
     })
 
     switch (event) {
+      case 'GROUP_ADD_ROBOT':
+        if (typeof data.group_openid === 'string') this.admitGroup(`group:${data.group_openid}`, typeof data.group_name === 'string' ? data.group_name : undefined)
+        break
       case 'CHANNEL_CREATE':
       case 'CHANNEL_UPDATE':
         if (typeof data.id === 'string' && typeof data.name === 'string' && data.name.trim()) {
@@ -860,18 +863,18 @@ export class QQChannel extends AbstractChannel {
     if (!msgId || !groupId || !senderId) return
     if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `group:${groupId}`
-    if (!this.admitGroup(chatId, typeof data.group_name === 'string' ? data.group_name : undefined)) return
-    if (!this.isNewIncoming(chatId, msgId, data)) return
-
-    const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, ((data.content as string) ?? '').trim())
-    if (!content && !media) return
-
     const mentionsBot = mentioned || (Array.isArray(data.mentions) && data.mentions.some(
       (mention: unknown) => mention !== null && typeof mention === 'object'
         && (('is_you' in mention && mention.is_you === true)
           || ('id' in mention && typeof mention.id === 'string'
             && (mention.id === this.botUserId || mention.id === this.appId))),
     ))
+    if (!this.admitGroup(chatId, typeof data.group_name === 'string' ? data.group_name : undefined, { id: msgId, sender: senderId, triggerEligible: this.triggerMode === 'all' || mentionsBot, text: typeof data.content === 'string' ? data.content : '[attachment]' })) return
+    if (!this.isNewIncoming(chatId, msgId, data)) return
+
+    const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, ((data.content as string) ?? '').trim())
+    if (!content && !media) return
+
     await this.passiveReplies.admit(chatId, msgId, data.timestamp, () => this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: true,

@@ -568,3 +568,63 @@ a live process's lock or replay an uncertain external mutation.
 Remote deployment/release hardening remains work in progress. Successful local
 fixtures are not evidence that every Child version or installed release supports
 the current filesystem protocol.
+
+
+## Reusable Agent capability profiles
+
+Agent creation/configuration owns capabilities; QQ/Feishu group binding only
+selects an Agent, reads its capabilities and requests owner approval. Creators
+can use `authoring_change schema` to discover `configure_capabilities`:
+
+1. Inspect the runtime-bound Project Bot inventory; create an isolated Change
+   from the published base and create/edit the Agent and skill resources.
+2. Call `configure_capabilities` with `changeId`, exact `expectedRevision`, and
+   `input: {agent, profiles:[...]}`. This replaces `capabilityProfiles` in that
+   Change's `agents/<agent>/AGENT.md`, including for an unbound Agent.
+3. Each profile has `botInstanceId`, `platform`, `skills`, `grants`, `readFolders`,
+   optional `allowFrom` and `parameters`. The strict contract is the existing
+   conversation policy minus `agent`, `conversationId` and `enabled`. There can
+   be at most one profile per Bot/platform per Agent (32 total). Grant fields
+   retain the existing exact HTTPS origin/routes/body-schema and inbox contracts.
+   `credential.secretRef` is only a reference for the authoring layer, never a
+   credential value or a field the group-binding user must supply.
+4. Decide real repository targets, GET versus writes, allowed request bodies,
+   sender limits, readable folders and tool/module ceilings explicitly. Do not
+   invent business permissions or convert historical conversation grants into
+   public defaults. For an intentionally basic Agent, publish a profile with
+   empty skills, grants and folders and an empty Agent tool/module ceiling.
+5. If credentials are needed, the owner uses `project_config request_secret`
+   in Project coordination and enters the value in the existing private card.
+   The group setup link opens that coordination context; it neither requests
+   credentials automatically nor accepts secrets in ordinary chat. Credentials
+   are Project-owned; a separate Bot requires an explicitly scoped profile even
+   when reusing an existing Project connection. No host CLI tokens are imported.
+6. Run `check validate`, synthetic tool tests as appropriate, and `propose`.
+   Only exact owner publication makes the profile selectable for group setup.
+   Validation checks unbound profiles too: skills, tool/module/grant ceilings,
+   safe routes, and live Bot, folder, inbox and credential references.
+
+Profiles are part of content-addressed file resources and existing Change review,
+not a new approval system or mutable runtime default. Existing bindings retain
+exact approved policies; profile edits do not silently migrate them. Old Agent
+resources remain valid with no profile and retain their original revisions on
+reopen; they appear incomplete for new group setup until explicitly configured.
+An explicitly empty profile differs from a missing profile. Summary and readiness
+responses do not expose credential reference names or values. Group requests reject
+skills, grants, folders, parameters, prompts and any other override fields.
+
+### 中文：创建者配置一次，群里只选 Agent
+
+- 能力属于 Agent 创作/配置层：创建者通过 `authoring_change configure_capabilities`
+  在独立 Change 中填写本 Project、指定 Bot/platform 的能力 profile，再检查并提交原有
+  exact-revision 发布审核。可以先创建尚未绑定任何群的 Agent；无需先给某个群授权。
+- 群设置只选 Agent，查看真实工具用途、外部目标及 HTTP 读写方法/路径、只读文件夹和
+  私密连接使用情况，再批准启用。不让群绑定人勾 skills、填路由、JSON 或 secretRef。
+- 缺 profile 或连接时显示“待完善”，禁用提案，并链接 Project 协调入口，由创建者完善。
+  连接需使用原有 `project_config request_secret` 私密输入卡；聊天中不要发送秘密。
+  不自动读取本机 GitHub/gh 令牌，不替真实 XMCL 决定仓库、写权限或凭据。
+- profile 存在 versioned `AGENT.md` 文件中，不是无审核的全局默认值。旧群授权不会自动
+  提升为 Agent 公共模板；旧 Agent/已发布 binding 保持兼容，没有 profile 的 Agent
+  不能新启用群。显式空 profile 可用于无工具 Agent。更改 profile 不自动扩大既有群权限。
+- Project 数据与凭据隔离；另一个 Bot 必须有自己的明确 profile。每个群仍使用独立候选、
+  精确 candidate/base revision 和原发布审批，未批准不执行，不覆盖无关脏 draft。
