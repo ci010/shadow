@@ -8,7 +8,7 @@ import { probeTool } from './read-only-probe.ts'
 const revision = `sha256:${'a'.repeat(64)}`
 const address = { projectId: 'a', botInstanceId: 'bot', platform: 'qq', conversationId: 'group:room' }
 const context = () => ({
-  projectId: 'a', sessionId: 'web:orchestrator', channel: 'web', inputSource: 'user' as const,
+  projectId: 'a', sessionId: 'web:chat-admin', channel: 'web', inputSource: 'user' as const,
   admin: true, isGroup: false, messageId: randomUUID(), signal: new AbortController().signal,
 })
 function fixture() {
@@ -62,16 +62,16 @@ test('explicit published probes record source, authorization and successful HTTP
   assert.equal(result.authorizationRevision, revision)
   assert.deepEqual(result.result, { status: 200, body: [{ number: 42 }] })
   assert.deepEqual(f.calls, [{
-    grant: f.policy.binding.grants[0], input: { method: 'GET', path: '/issues' }, sessionId: 'web:orchestrator',
+    grant: f.policy.binding.grants[0], input: { method: 'GET', path: '/issues' }, sessionId: 'web:chat-admin',
   }])
 })
 
 test('probes reject stale/missing policies and non-owner contexts before any capability is invoked', async () => {
   const f = fixture()
   for (const change of [
-    { admin: false }, { sessionId: 'web:worker' }, { inputSource: 'session' as const },
+    { admin: false }, { sessionId: 'task:worker' }, { inputSource: 'session' as const },
     { inputSource: 'event' as const }, { projectId: 'b' }, { channel: 'qq' },
-  ]) await assert.rejects(probeTool(f.dependencies, f.input, { ...context(), ...change }), /direct owner/)
+  ]) await assert.rejects(probeTool(f.dependencies, f.input, { ...context(), ...change }), /direct administrator Web/)
   await assert.rejects(probeTool(f.dependencies, { ...f.input, revision: 'draft' }, context()), /exact revision/)
   f.policy.binding.enabled = false
   await assert.rejects(probeTool(f.dependencies, f.input, context()), /enabled published/)

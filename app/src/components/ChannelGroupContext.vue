@@ -22,20 +22,20 @@
             </template>
             <template v-if="agent && setup?.status !== 'ready'">
               <p>{{ setup?.problem === 'credential_missing' ? t('The Agent creator must complete its private connection before this group can enable it. Never send secrets in chat.') : t('The Agent creator must finish and publish its capability profile for this Bot. Group members do not need to configure permissions.') }}</p>
-              <RouterLink :to="{ name: 'chat', params: { projectId, sessionId: 'web:orchestrator' } }">{{ setup?.problem === 'credential_missing' ? t('Open private connection setup') : t('Open Agent configuration') }}</RouterLink>
+              <RouterLink :to="{ name: 'chat', params: { projectId, sessionId: '' } }">{{ setup?.problem === 'credential_missing' ? t('Open private connection setup') : t('Open Agent configuration') }}</RouterLink>
             </template>
             <button class="btn btn-sm" :disabled="busy || !agent || setup?.status !== 'ready' || group.pending">{{ t('Review group setup') }}</button>
           </form>
-          <RouterLink v-if="!agents.length" :to="{ name: 'chat', params: { projectId, sessionId: 'web:orchestrator' } }">{{ t('Open Agent configuration') }}</RouterLink>
+          <RouterLink v-if="!agents.length" :to="{ name: 'chat', params: { projectId, sessionId: '' } }">{{ t('Open Agent configuration') }}</RouterLink>
           <p>{{ t('Choose an Agent, review its published capabilities, then approve. No access is enabled before approval.') }}</p>
           <details><summary>{{ t('Group details') }}</summary><small>{{ group.botName }} · {{ group.botInstanceId }}<br />{{ group.conversationId }}</small><p>{{ t('Discovery is not authorization. Received text is shown here without running an Agent. At most 20 messages per group are kept for 7 days; attachments are not downloaded and old messages are not backfilled.') }}</p></details>
         </div></ComposerPopover>
       </header>
-      <div v-if="proposalError" class="proposal-error" role="alert"><span>{{ proposalErrorText }} <small v-if="diagnostic">{{ diagnostic }}</small> <small>({{ proposalStatus || t('Network error') }} · {{ proposalError }})</small></span><button class="btn btn-sm" @click="refresh(); reviewVersion++">{{ t('Refresh') }}</button><button v-if="proposalError === 'existing_publication_review'" class="btn btn-sm" @click="existingReviewOpen = true">{{ t('Open review') }}</button><RouterLink v-if="proposalError.startsWith('group_setup_')" :to="{ name: 'chat', params: { projectId, sessionId: 'web:orchestrator' } }">{{ t('Open Project coordination') }}</RouterLink></div>
+      <div v-if="proposalError" class="proposal-error" role="alert"><span>{{ proposalErrorText }} <small v-if="diagnostic">{{ diagnostic }}</small> <small>({{ proposalStatus || t('Network error') }} · {{ proposalError }})</small></span><button class="btn btn-sm" @click="refresh(); reviewVersion++">{{ t('Refresh') }}</button><button v-if="proposalError === 'existing_publication_review'" class="btn btn-sm" @click="existingReviewOpen = true">{{ t('Open review') }}</button><RouterLink v-if="proposalError.startsWith('group_setup_')" :to="{ name: 'chat', params: { projectId, sessionId: '' } }">{{ t('Open Agent configuration') }}</RouterLink></div>
       <details v-if="group.pending" class="group-review" :open="reviewOpen" @toggle="reviewOpen = ($event.target as HTMLDetailsElement).open"><summary><span class="i-lucide-message-circle-question" aria-hidden="true" />{{ t('Group setup awaiting review') }}<span>{{ t('Review permissions') }}</span></summary>
-      <PublicationRequest :key="reviewVersion" :api-base="apiBase" :project-id="projectId" session-id="web:orchestrator" :active="active" :can-submit="active" :conversation="group" />
+      <PublicationRequest :key="reviewVersion" :api-base="apiBase" :project-id="projectId" session-id="owner:service-groups" :active="active" :can-submit="active" :conversation="group" />
       </details>
-      <details v-if="existingReviewOpen" class="group-review" open><summary>{{ t('Existing publication review') }}</summary><PublicationRequest :api-base="apiBase" :project-id="projectId" session-id="web:orchestrator" :active="active" :can-submit="active" /></details>
+      <details v-if="existingReviewOpen" class="group-review" open><summary>{{ t('Existing publication review') }}</summary><PublicationRequest :api-base="apiBase" :project-id="projectId" session-id="owner:service-groups" :active="active" :can-submit="active" :conversation="group" /></details>
       <section v-if="discoveryOnly" class="observed-messages" :aria-label="t('Received messages')">
         <p v-if="!group.messages.length" class="empty-observation">{{ t('Waiting for new messages') }}</p>
         <template v-for="(message, index) in group.messages" :key="message.id">

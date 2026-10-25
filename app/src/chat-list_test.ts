@@ -11,7 +11,7 @@ const sessions = parseSessionGraph({ sessions: [
   { sessionId: 'web:beta', folderId: 'b', lastActivityAt: '2026-01-02T00:00:00Z' },
   { sessionId: 'web:unknown', folderId: 'removed', lastActivityAt: 'invalid' },
   { sessionId: 'web:task', mode: 'task', parentSessionId: 'web:new' },
-  { sessionId: 'orchestrator', sessionKind: 'orchestrator' },
+  { sessionId: 'chat-admin' },
 ], nodes: [] })
 const names = new Map(folders.map(f => [f.id, f.name]))
 const ids = (items: typeof sessions) => items.map(s => s.sessionId)

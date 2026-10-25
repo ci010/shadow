@@ -44,7 +44,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
   const operation = ref<'saving' | 'cancelling' | null>(null)
   const busy = computed(() => operation.value !== null)
   const enabled = computed(() => source().active && source().canSubmit
-    && source().sessionId === 'web:orchestrator' && !!source().projectId && source().stage === 'tool')
+    && source().sessionId.startsWith('web:') && !!source().projectId && source().stage === 'tool')
   const secure = computed(() => privateCredentialTransport(source().apiBase))
   const valid = computed(() => secret.value.length > 0 && secret.value.length <= 16_384
     && !/[\u0000-\u001f\u007f]/.test(secret.value))
@@ -82,7 +82,8 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
       })
       if (!response.ok) throw new Error(t('Credential request unavailable'))
-      const next = parseCredentialResponse(await response.json(), source().projectId)
+      const pending = parseCredentialResponse(await response.json(), source().projectId)
+      const next = pending?.sessionId === source().sessionId ? pending : null
       if (current !== generation || controller.signal.aborted) return
       if (next?.id !== request.value?.id) {
         secret.value = ''

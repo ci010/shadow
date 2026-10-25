@@ -91,15 +91,15 @@ export function serviceGroupsPlugin(options: {
         if (existing) return c.json({ request: existing })
         const key = JSON.stringify([bot.id, bot.platform, group.conversationId])
         if (options.reviews.list().some(review => review.impact?.affectedBindings.includes(key))) return c.json({ error: 'existing_publication_review' }, 409)
-        const change = options.changes.list().find(change => !change.closed && change.ownerSessionId === 'web:orchestrator' &&
+        const change = options.changes.list().find(change => !change.closed && change.ownerSessionId === 'owner:service-groups' &&
           change.base.revision === snapshot.revision && change.snapshot.revision === candidate.revision)
-          ?? options.changes.create({ title: `Group binding: ${input.agent}`, ownerSessionId: 'web:orchestrator' })
+          ?? options.changes.create({ title: `Group binding: ${input.agent}`, ownerSessionId: 'owner:service-groups' })
         if (change.base.revision !== snapshot.revision) return c.json({ error: 'draft_or_publication_changed' }, 409)
         const edited = options.changes.edit(change.id, { expectedRevision: change.snapshot.revision,
           bindings: bundle.bindings })
         let request
         try { request = await options.reviews.propose({ snapshot: edited.snapshot,
-          change: { id: edited.id, title: edited.title, sourceSessionId: edited.ownerSessionId, accessRevision: edited.accessRevision }, checks: [] }) } catch (error) {
+          change: { id: edited.id, title: edited.title, sourceSessionId: edited.ownerSessionId, accessRevision: edited.accessRevision }, checks: [] }, undefined, edited.ownerSessionId) } catch (error) {
           if (error instanceof PublicationRequestError) throw error
           const message = error instanceof Error ? error.message : ''
           const code = message.startsWith('Credential reference ') ? 'group_setup_credential_missing'

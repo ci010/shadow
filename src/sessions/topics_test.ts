@@ -22,7 +22,7 @@ import type { LLMProvider } from '../providers/provider.ts'
 import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { createSessionsHandler } from '../vfs/mounts.ts'
 
-class CoordinatorContractSession extends BaseSession {
+class WebContractSession extends BaseSession {
   run(context: ExecutionContext) {
     return this.runLlmLoop(context, { model: 'synthetic', contextWindow: 32000, temperature: 0 }, context.signal)
   }
@@ -74,7 +74,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const options: TopicServiceOptions = {
       projectId: 'p', sessions, folders, listStates: async () => [...states.values()],
       firstMessage: async id => id === 'web:legacy' ? 'Legacy release readiness' : null,
-      resolveAgent: name => ['general', 'orchestrator', 'explore', 'encapsulator'].includes(name) ? { defaultMode: 'session' } : undefined,
+      resolveAgent: name => ['general', 'explore', 'encapsulator'].includes(name) ? { defaultMode: 'session' } : undefined,
       changed: id => { changes.push(id) },
     }
     const service = new TopicService(options)
@@ -82,10 +82,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       await store.close?.()
       await rm(home, { recursive: true, force: true })
     })
-    const coordinator = await Promise.all(Array.from({ length: 8 }, () => service.ensureOrchestrator()))
-    assert(coordinator.every(item => item.sessionId === 'web:orchestrator'))
-    assert.equal(builds, 1)
-    assert.equal(states.get('web:orchestrator')?.folderId, undefined)
+    await sessions.buildSession('web:chat-admin', undefined, { mode: 'session', agentType: 'general', parentSessionId: null })
     const { folder } = await service.registerFolder(folderPath)
     const request = {
       requestId: randomUUID(), title: 'MCP configuration',
@@ -93,30 +90,29 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       folderId: folder.id, initiativeId: 'work', initialMessage: 'Read the selected skill and explain how to configure MCP.',
     }
     const [created, retry] = await Promise.all([
-      service.create(request, 'web:orchestrator'), service.create(request, 'web:orchestrator'),
+      service.create(request, 'web:chat-admin'), service.create(request, 'web:chat-admin'),
     ])
     assert.equal(created.sessionId, retry.sessionId)
     assert.equal(created.conversationUrl, `/projects/p/chat/${encodeURIComponent(created.sessionId)}`)
     assert.equal(created.initialMessageStatus, 'accepted')
     assert.equal(retry.initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, 1)
-    assert.deepEqual(deliveries[0].input.source, { kind: 'session', sessionId: 'web:orchestrator' })
+    assert.deepEqual(deliveries[0].input.source, { kind: 'session', sessionId: 'web:chat-admin' })
     const saved = states.get(created.sessionId)
     assert(saved)
     assert.equal(saved.parentSessionId, null)
     assert.equal(saved.parent, undefined)
     assert.equal(saved.workspaceRoot, undefined)
-    assert.equal(saved.createdBySessionId, 'web:orchestrator')
+    assert.equal(saved.createdBySessionId, 'web:chat-admin')
     assert.equal(saved.workdir?.capabilityId, `local-project-v1:${folder.id}`)
     assert.equal(saved.initiativeId, 'work')
     assert.match(saved.topicRequestHash ?? '', /^[a-f0-9]{64}$/)
     assert.equal((await store.getState(created.sessionId))?.topicRequestHash, saved.topicRequestHash)
     assert.equal(changes.filter(id => id === created.sessionId).length, 1)
-    await assert.rejects(service.create({ ...request, description: 'Different description' }, 'web:orchestrator'), /requestId/)
+    await assert.rejects(service.create({ ...request, description: 'Different description' }, 'web:chat-admin'), /requestId/)
     const restartedService = new TopicService(options)
-    assert.equal((await restartedService.create(request, 'web:orchestrator')).initialMessageStatus, 'not_replayed')
+    assert.equal((await restartedService.create(request, 'web:chat-admin')).initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, 1)
-    assert.equal((await restartedService.ensureOrchestrator()).sessionId, 'web:orchestrator')
     assert.equal(builds, 2)
 
     const plain = await service.create({ title: 'Discussion' })
@@ -129,7 +125,6 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.throws(() => service.assertActor('q', plain.sessionId), /owning Project/)
     assert.throws(() => service.assertActor('p', 'foreign:session'), /does not belong/)
     await assert.rejects(service.create(request, worker.sessionId), /Temporary tasks/)
-    await assert.rejects(service.create({ ...request, agentType: 'orchestrator' }), /existing Project coordinator/)
     await assert.rejects(service.create({ ...request, agentType: 'missing' }), /Unknown agent/)
     await assert.rejects(service.create({ ...request, requestId: randomUUID(), folderId: randomUUID() }), /folder/i)
     const matches = await service.search({ query: 'MCP skill' })
@@ -138,7 +133,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const page = await service.search({ limit: 1 })
     assert.equal(page.hasMore, true)
     assert.equal(page.nextOffset, 1)
-    assert.equal((await service.search({ offset: 1 })).sessions.length, 1)
+    assert.equal((await service.search({ offset: 1 })).sessions.length, 2)
     const legacy: SessionState = { sessionId: 'web:legacy', projectId: 'p', segmentIndex: 0, mode: 'session' }
     states.set(legacy.sessionId, legacy)
     const legacyMatches = await service.search({ query: 'release readiness' })
@@ -149,13 +144,13 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     await assert.rejects(service.search({ offset: -1 }))
 
     await assert.rejects(service.update({ sessionId: created.sessionId, title: 'Hijack' }, plain.sessionId), /Only this session/)
-    await service.update({ sessionId: created.sessionId, title: 'MCP session', description: request.description }, 'web:orchestrator')
+    await service.update({ sessionId: created.sessionId, title: 'MCP session', description: request.description }, created.sessionId)
     assert.equal(states.get(created.sessionId)?.name, 'MCP session')
 
     const tools = new SessionTools(new Tools(home), home)
     const context: ExecutionContext = {
-      projectId: 'p', sessionId: 'web:orchestrator', physicalSessionId: 'fixture',
-      channel: 'web', chatId: 'orchestrator', senderId: 'user', messageId: 'm',
+      projectId: 'p', sessionId: 'web:chat-admin', physicalSessionId: 'fixture',
+      channel: 'web', chatId: 'chat-admin', senderId: 'user', messageId: 'm',
       tools, signal: new AbortController().signal,
     }
     const vfs = new VirtualFs()
@@ -181,11 +176,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const app = new Hono()
     topicsPlugin(service, req => req.headers.get('authorization') === 'fixture')(app)
     assert.equal((await app.request('/api/sessions/discover')).status, 401)
-    assert.equal((await app.request('/api/orchestrator', { method: 'POST' })).status, 401)
     const headers = { authorization: 'fixture', 'content-type': 'application/json' }
-    const response = await app.request('/api/orchestrator', { method: 'POST', headers })
-    assert.equal(response.status, 200)
-    assert.equal((await response.json()).sessionId, 'web:orchestrator')
     assert.equal((await app.request('/api/sessions/discover?limit=NaN', { headers })).status, 400)
     assert.equal((await app.request('/api/sessions', { method: 'POST', headers, body: '{"projectId":"other"}' })).status, 400)
     assert.equal((await app.request('/api/sessions', { method: 'POST', headers, body: '{' })).status, 400)
@@ -206,7 +197,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     base.register(new SessionTool(service))
     base.register(new MessageTool(bus, () => true, () => undefined, () => [], sessions.deliver,
       (from, to) => states.has(from) && states.has(to)))
-    const coordinatorTools = new SessionTools(base, home, ['search', 'session', 'message'])
+    const adminTools = new SessionTools(base, home, ['search', 'session', 'message'])
     let turn = 0
     let routedSessionId = ''
     const provider: LLMProvider = {
@@ -246,11 +237,11 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         return { content: `Continue in ${routedSessionId}`, finishReason: 'stop', toolCalls: [] }
       },
     }
-    const coordinatorState = states.get('web:orchestrator')
-    assert(coordinatorState)
-    const loop = new CoordinatorContractSession(home, coordinatorState.sessionId, coordinatorState, [], provider, coordinatorTools, bus, store)
+    const adminState = states.get('web:chat-admin')
+    assert(adminState)
+    const loop = new WebContractSession(home, adminState.sessionId, adminState, [], provider, adminTools, bus, store)
     await store.createSessionLog(loop.physicalSessionId, [])
-    assert.equal(await loop.run({ ...context, tools: coordinatorTools, physicalSessionId: loop.physicalSessionId }), `Continue in ${routedSessionId}`)
+    assert.equal(await loop.run({ ...context, tools: adminTools, physicalSessionId: loop.physicalSessionId }), `Continue in ${routedSessionId}`)
     assert.equal(turn, 4)
     assert.equal(deliveries.filter(delivery => delivery.sessionId === routedSessionId).length, 2)
     const records = []
@@ -259,14 +250,14 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.match(JSON.stringify(records), /create-topic/)
     assert.match(JSON.stringify(records), /context-message/)
     assert.match(JSON.stringify(records), /admission only/)
-    coordinatorTools.resetDynamic()
+    adminTools.resetDynamic()
 
     const deliveryCount = deliveries.length
     failDelivery = true
     const failing = { ...request, requestId: randomUUID() }
-    await assert.rejects(service.create(failing, 'web:orchestrator'), /was created.*not confirmed accepted/)
+    await assert.rejects(service.create(failing, 'web:chat-admin'), /was created.*not confirmed accepted/)
     failDelivery = false
-    assert.equal((await service.create(failing, 'web:orchestrator')).initialMessageStatus, 'not_replayed')
+    assert.equal((await service.create(failing, 'web:chat-admin')).initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, deliveryCount)
   })
 }

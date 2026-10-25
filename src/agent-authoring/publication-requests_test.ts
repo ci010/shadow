@@ -67,8 +67,8 @@ test('proposal is nonblocking, reuses exact review and never publishes implicitl
       headers: { Authorization: 'Bearer owner' },
     })
     assert.deepEqual(await beforeProposal.json(), { request: null, requests: [] })
-    const request = await f.requests.propose()
-    assert.deepEqual(await f.requests.propose(), request)
+    const request = await f.requests.propose(undefined, undefined, 'web:chat-admin')
+    assert.deepEqual(await f.requests.propose(undefined, undefined, 'web:chat-admin'), request)
     assert.deepEqual(parsePublicationRequest(request, 'project-a'), request)
     assert.deepEqual(request.files, [{ path: 'agents/support/AGENT.md', before: null, after: bundle().files['agents/support/AGENT.md'] }])
     assert.deepEqual(request.previousBindings, [])
@@ -93,7 +93,7 @@ test('decisions require both exact revisions and cancellation never publishes', 
   const f = await fixture()
   try {
     await f.stage()
-    const request = await f.requests.propose()
+    const request = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     for (const wrong of [
       { revision: request.baseRevision, baseRevision: request.baseRevision },
       { revision: request.revision, baseRevision: request.revision },
@@ -113,16 +113,16 @@ test('draft edits, published changes and ABA invalidate existing requests', asyn
   const f = await fixture()
   try {
     await f.stage()
-    const first = await f.requests.propose()
+    const first = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     await f.stage(bundle('Second prompt'))
     await f.stage()
     assert.equal(f.requests.pending(), null)
     await assert.rejects(f.requests.submit(first.id, decision(first)), /no longer current/)
-    const second = await f.requests.propose()
+    const second = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     await publishAgentResources(f.options, second.revision, second.baseRevision)
     assert.equal(f.requests.pending(), null)
     await assert.rejects(f.requests.submit(second.id, decision(second)), /no longer current/)
-    const third = await f.requests.propose()
+    const third = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     await publishAgentResources(f.options, third.revision, third.baseRevision)
     assert.equal(f.requests.pending(), null)
   } finally { await f.close() }
@@ -137,7 +137,7 @@ test('review includes exact changed source, deletions and all before/after bindi
     await f.store.publish(f.store.draft().revision)
     const next = bundle('Updated prompt')
     await f.stage(next)
-    const request = await f.requests.propose()
+    const request = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     assert.deepEqual(request.previousBindings, old.bindings)
     assert.deepEqual(request.bindings, next.bindings)
     assert.deepEqual(request.files, [
@@ -152,7 +152,7 @@ test('double submit is rejected; concurrent writes cannot change the approved pu
   const gate = Promise.withResolvers<void>()
   try {
     await f.stage()
-    const request = await f.requests.propose()
+    const request = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     const entered = Promise.withResolvers<void>()
     f.validate(async snapshot => { assert.equal(snapshot.revision, request.revision); entered.resolve(); await gate.promise })
     const submit = f.requests.submit(request.id, decision(request))
@@ -175,7 +175,7 @@ test('edit during retirement or proposal validation rejects stale review', async
   const gate = Promise.withResolvers<void>()
   try {
     await f.stage()
-    const request = await f.requests.propose()
+    const request = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     f.retirement(() => gate.promise)
     const submit = f.requests.submit(request.id, decision(request))
     await f.stage(bundle('Edited before publish'))
@@ -185,7 +185,7 @@ test('edit during retirement or proposal validation rejects stale review', async
     const validating = Promise.withResolvers<void>()
     const entered = Promise.withResolvers<void>()
     f.validate(async () => { entered.resolve(); await validating.promise })
-    const proposal = f.requests.propose()
+    const proposal = f.requests.propose(undefined, undefined, 'web:chat-admin')
     await entered.promise
     await f.stage()
     validating.resolve()
@@ -197,7 +197,7 @@ test('live validation and retirement failures retain an explicit retryable revie
   const f = await fixture()
   try {
     await f.stage()
-    const request = await f.requests.propose()
+    const request = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     f.validate(async () => { throw new Error('Folder revoked') })
     await assert.rejects(f.requests.submit(request.id, decision(request)), /Folder revoked/)
     const { status, error, ...pending } = f.requests.pending()!
@@ -219,7 +219,7 @@ test('shutdown clears review and prevents in-flight publication', async () => {
   const gate = Promise.withResolvers<void>()
   try {
     await f.stage()
-    const request = await f.requests.propose()
+    const request = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     const entered = Promise.withResolvers<void>()
     f.validate(async () => { entered.resolve(); await gate.promise })
     const submit = f.requests.submit(request.id, decision(request))
@@ -229,7 +229,7 @@ test('shutdown clears review and prevents in-flight publication', async () => {
     gate.resolve()
     await assert.rejects(submit, /stopped/)
     assert.equal(f.requests.pending(), null)
-    await assert.rejects(f.requests.propose(), /stopped/)
+    await assert.rejects(f.requests.propose(undefined, undefined, 'web:chat-admin'), /stopped/)
     assert.equal(f.store.snapshot().revision, request.baseRevision)
   } finally { gate.resolve(); await f.close() }
 })
@@ -238,7 +238,7 @@ test('HTTP requires owner authorization and strict decisions; no automatic retry
   const f = await fixture()
   try {
     await f.stage()
-    const request = await f.requests.propose()
+    const request = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     const path = '/api/agent-resources/publication-requests'
     for (const token of [undefined, 'Bearer stranger']) {
       for (const method of ['GET', 'POST', 'DELETE']) {
@@ -280,11 +280,11 @@ test('browser contract rejects foreign project, malformed hashes/date/paths and 
   const f = await fixture()
   try {
     await f.stage()
-    const request = await f.requests.propose()
+    const request = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     assert.throws(() => parsePublicationRequest(request, 'foreign'))
     for (const changed of [
       { projectId: 'foreign' }, { revision: 'sha256:bad' }, { baseRevision: '' },
-      { sessionId: 'web:worker' }, { createdAt: '2026-02-30T00:00:00.000Z' },
+      { sessionId: 'qq:worker' }, { createdAt: '2026-02-30T00:00:00.000Z' },
       { secret: 'unexpected' }, { files: [{ path: '../secret', before: null, after: 'x' }] },
       { files: [request.files[0], request.files[0]] },
       { files: [{ ...request.files[0], after: null }] },
@@ -300,8 +300,8 @@ test('identical revisions in different Projects do not share approval authority'
   try {
     await a.stage()
     await b.stage()
-    const first = await a.requests.propose()
-    const second = await b.requests.propose()
+    const first = await a.requests.propose(undefined, undefined, 'web:chat-admin')
+    const second = await b.requests.propose(undefined, undefined, 'web:chat-admin')
     assert.equal(first.revision, second.revision)
     const response = await b.app.request(`/api/agent-resources/publication-requests/${first.id}`, {
       method: 'POST', headers: { Authorization: 'Bearer owner' }, body: JSON.stringify(decision(first)),
@@ -332,7 +332,7 @@ test('independent candidates survive restart, preserve the dirty draft, and pers
   try {
     const dirty = await f.stage(bundle('Unfinished global draft'))
     const candidate = proposal(f.store)
-    const request = await f.requests.propose(candidate)
+    const request = await f.requests.propose(candidate, undefined, 'web:chat-admin')
     f.requests.stop()
     const reopenedStore = new AgentResourceStore({ projectId: 'project-a', directory: f.store.storageDirectory })
     assert.equal(reopenedStore.snapshot().revision, request.baseRevision)
@@ -344,7 +344,7 @@ test('independent candidates survive restart, preserve the dirty draft, and pers
     assert.equal((await restarted.submit(request.id, decision(request))).status, 'published')
     assert.deepEqual(reopenedStore.snapshot(), candidate.snapshot)
     assert.deepEqual(reopenedStore.draft(), dirty)
-    const cancelled = await restarted.propose(proposal(reopenedStore, 'cancelled', 'Do not publish'))
+    const cancelled = await restarted.propose(proposal(reopenedStore, 'cancelled', 'Do not publish'), undefined, 'web:chat-admin')
     restarted.cancel(cancelled.id, decision(cancelled))
     restarted.stop()
     restarted = new PublicationRequests(options)
@@ -356,12 +356,12 @@ test('different changes coexist, same version reuses review, edits replace only 
   const f = await fixture()
   try {
     await f.stage()
-    const legacy = await f.requests.propose()
+    const legacy = await f.requests.propose(undefined, undefined, 'web:chat-admin')
     const one = proposal(f.store)
-    const first = await f.requests.propose(one)
-    const second = await f.requests.propose(proposal(f.store, 'change-two', 'Second candidate'))
-    assert.deepEqual(await f.requests.propose(one), first)
-    const replacement = await f.requests.propose(proposal(f.store, 'change-one', 'Edited candidate'))
+    const first = await f.requests.propose(one, undefined, 'web:chat-admin')
+    const second = await f.requests.propose(proposal(f.store, 'change-two', 'Second candidate'), undefined, 'web:chat-admin')
+    assert.deepEqual(await f.requests.propose(one, undefined, 'web:chat-admin'), first)
+    const replacement = await f.requests.propose(proposal(f.store, 'change-one', 'Edited candidate'), undefined, 'web:chat-admin')
     assert.deepEqual(f.requests.list().map(item => item.id), [legacy.id, second.id, replacement.id])
     await f.stage(bundle('Draft only edited'))
     assert.deepEqual(f.requests.list().map(item => item.id), [second.id, replacement.id])
@@ -383,7 +383,7 @@ test('candidate inputs are pinned before live validation and stale/current check
     input.checks.push({ id: 'old', kind: 'validation', status: 'passed', revision: f.store.snapshot().revision })
     const entered = Promise.withResolvers<void>()
     f.validate(async () => { entered.resolve(); await gate.promise })
-    const proposed = f.requests.propose(input)
+    const proposed = f.requests.propose(input, undefined, 'web:chat-admin')
     await entered.promise
     input.snapshot = structuredClone(input.snapshot)
     input.snapshot.bundle.files['agents/support/AGENT.md'] = 'Caller mutation'
@@ -409,14 +409,14 @@ test('source validation rejects edited or revoked Changes across restart without
   } }
   let requests = new PublicationRequests(options)
   try {
-    const request = await requests.propose(proposal(f.store))
+    const request = await requests.propose(proposal(f.store), undefined, 'web:chat-admin')
     requests.stop()
     sourceCurrent = false
     requests = new PublicationRequests(options)
     assert.deepEqual(requests.list(), [])
     await assert.rejects(requests.submit(request.id, decision(request)), /no longer current/)
     sourceCurrent = true
-    const next = await requests.propose(proposal(f.store))
+    const next = await requests.propose(proposal(f.store), undefined, 'web:chat-admin')
     unexpected = true
     assert.throws(() => requests.list(), /Source store unavailable/)
     await assert.rejects(requests.submit(next.id, decision(next)), /Source store unavailable/)
@@ -440,13 +440,13 @@ test('persisted access revision prevents approval after revoke and identical reg
   let requests = new PublicationRequests(options)
   try {
     const input = proposal(f.store)
-    const request = await requests.propose({ ...input, change: { ...input.change, accessRevision } })
+    const request = await requests.propose({ ...input, change: { ...input.change, accessRevision } }, undefined, 'web:chat-admin')
     requests.stop()
     accessRevision = 2
     requests = new PublicationRequests(options)
     assert.deepEqual(requests.list(), [])
     await assert.rejects(requests.submit(request.id, decision(request)), /no longer current/)
-    const replacement = await requests.propose({ ...input, change: { ...input.change, accessRevision } })
+    const replacement = await requests.propose({ ...input, change: { ...input.change, accessRevision } }, undefined, 'web:chat-admin')
     assert.notEqual(replacement.id, request.id)
     assert.equal(replacement.revision, request.revision)
     assert.equal(replacement.change?.accessRevision, 2)
@@ -456,7 +456,7 @@ test('persisted access revision prevents approval after revoke and identical reg
 test('persisted candidate/source hashes and exact review content reject modification', async () => {
   const f = await fixture()
   try {
-    const request = await f.requests.propose(proposal(f.store))
+    const request = await f.requests.propose(proposal(f.store), undefined, 'web:chat-admin')
     f.requests.stop()
     const file = join(f.store.storageDirectory, 'publication-requests.json')
     const text = await readFile(file, 'utf8')
@@ -476,7 +476,7 @@ test('a stale publication store cannot resurrect cancellation or approve after e
   const f = await fixture()
   let stale: PublicationRequests | undefined
   try {
-    const request = await f.requests.propose(proposal(f.store))
+    const request = await f.requests.propose(proposal(f.store), undefined, 'web:chat-admin')
     stale = new PublicationRequests(f.options)
     f.requests.cancel(request.id, decision(request))
     await assert.rejects(stale.submit(request.id, decision(request)), /changed externally/)
@@ -492,7 +492,7 @@ test('invalidating a Change during retirement blocks the exact pending commit', 
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   try {
-    const request = await f.requests.propose(proposal(f.store))
+    const request = await f.requests.propose(proposal(f.store), undefined, 'web:chat-admin')
     f.retirement(async () => { entered.resolve(); await release.promise })
     const submitted = f.requests.submit(request.id, decision(request))
     await entered.promise
@@ -510,7 +510,7 @@ test('durable cancellation by another instance during live validation blocks com
   const release = Promise.withResolvers<void>()
   let other: PublicationRequests | undefined
   try {
-    const request = await f.requests.propose(proposal(f.store))
+    const request = await f.requests.propose(proposal(f.store), undefined, 'web:chat-admin')
     f.validate(async () => { entered.resolve(); await release.promise })
     const submitted = f.requests.submit(request.id, decision(request))
     await entered.promise
@@ -527,8 +527,8 @@ test('changed published base removes all candidate approvals, including on resta
   const f = await fixture()
   let requests: PublicationRequests | undefined
   try {
-    const first = await f.requests.propose(proposal(f.store))
-    await f.requests.propose(proposal(f.store, 'other', 'Other'))
+    const first = await f.requests.propose(proposal(f.store), undefined, 'web:chat-admin')
+    await f.requests.propose(proposal(f.store, 'other', 'Other'), undefined, 'web:chat-admin')
     f.requests.stop()
     await f.stage(bundle('Published separately'))
     await f.store.publish(f.store.draft().revision)
@@ -556,7 +556,7 @@ test('impact and retirement select only changed bound resources, not every proje
     const next = structuredClone(base)
     next.files['agents/support/AGENT.md'] += '\nPrompt only'
     const input = { ...proposal(f.store), snapshot: f.store.candidate(next), checks: [] }
-    const request = await requests.propose(input)
+    const request = await requests.propose(input, undefined, 'web:chat-admin')
     assert.deepEqual(request.impact, {
       affectedBindings: ['["bot","qq","group:one"]'], permissionsChanged: false, toolsChanged: false, promptsChanged: true,
     })
@@ -573,7 +573,7 @@ test('typed busy retirement persists explicit approval; restart never publishes 
   const f = await fixture()
   let restarted: PublicationRequests | undefined
   try {
-    const request = await f.requests.propose(proposal(f.store))
+    const request = await f.requests.propose(proposal(f.store), undefined, 'web:chat-admin')
     f.retirement(async () => { throw new PublicationBusyError('Known active conversation') })
     assert.equal((await f.requests.submit(request.id, decision(request))).status, 'waiting')
     assert.equal(f.requests.pending()?.status, 'waiting')
@@ -590,7 +590,7 @@ test('typed busy retirement persists explicit approval; restart never publishes 
 test('waiting permanent errors become structured and never spin; cancellation and stop prevent retries', async () => {
   const f = await fixture()
   try {
-    const request = await f.requests.propose(proposal(f.store))
+    const request = await f.requests.propose(proposal(f.store), undefined, 'web:chat-admin')
     f.retirement(async () => { throw new PublicationBusyError('Busy') })
     await f.requests.submit(request.id, decision(request))
     f.validate(async () => { throw new Error('Private validation failure') })
@@ -609,7 +609,7 @@ test('waiting permanent errors become structured and never spin; cancellation an
 test('new review metadata is validated, TypeScript source paths parse, and legacy requests still parse', async () => {
   const f = await fixture()
   try {
-    const request = await f.requests.propose(proposal(f.store))
+    const request = await f.requests.propose(proposal(f.store), undefined, 'web:chat-admin')
     const legacy = { ...request }
     delete legacy.change
     delete legacy.checks
@@ -631,5 +631,22 @@ test('new review metadata is validated, TypeScript source paths parse, and legac
       [request.checks![0], request.checks![0]],
     ]) assert.throws(() => parsePublicationRequest({ ...request, checks }, 'project-a'))
     assert.throws(() => parsePublicationRequest({ ...request, impact: { ...request.impact, toolsChanged: 'yes' } }, 'project-a'))
+  } finally { await f.close() }
+})
+
+
+test('re-proposal binds review to its requesting ordinary session without transferring an old approval', async () => {
+  const f = await fixture()
+  try {
+    await f.stage()
+    const legacy = await f.requests.propose(undefined, undefined, 'web:chat-admin')
+    assert.equal(legacy.sessionId, 'web:chat-admin')
+    const ordinary = await f.requests.propose(undefined, undefined, 'web:ordinary')
+    assert.equal(ordinary.sessionId, 'web:ordinary')
+    assert.notEqual(ordinary.id, legacy.id)
+    assert.deepEqual(await f.requests.propose(undefined, undefined, 'web:ordinary'), ordinary)
+    await assert.rejects(f.requests.submit(legacy.id, decision(legacy)), /no longer|changed|stale/i)
+    assert.equal(f.requests.pending()?.id, ordinary.id)
+    assert.notEqual(f.store.snapshot().revision, ordinary.revision)
   } finally { await f.close() }
 })

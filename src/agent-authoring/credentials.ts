@@ -7,7 +7,7 @@ const nameSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)
 const valueSchema = z.string().min(1).max(16_384).regex(/^[^\u0000-\u001f\u007f]+$/)
 const documentSchema = z.object({ version: z.literal(1), values: z.record(nameSchema, valueSchema) }).strict()
 
-/** Host-only credentials; resource snapshots and coordinator tools receive names, never values. */
+/** Host-only credentials; resource snapshots and authoring tools receive names, never values. */
 export class AgentCredentialStore {
   private readonly path: string
   private values: Record<string, string>

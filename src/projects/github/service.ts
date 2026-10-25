@@ -389,7 +389,7 @@ export class GitHubService {
   }
   private assertTarget(subscription: GitHubSubscription) {
     const work = this.linked(subscription.resourceId, subscription.workKey)
-    if (!this.deps.durableSession(subscription.sessionId) || ![work.workflow?.assignee, work.workflow?.manager, 'web:orchestrator'].includes(subscription.sessionId)
+    if (!this.deps.durableSession(subscription.sessionId) || ![work.workflow?.assignee, work.workflow?.manager].includes(subscription.sessionId)
       || work.workflow?.assignmentRevision !== subscription.assignmentRevision) {
       throw new GitHubError('Session or assignment changed. Review and save the subscription again.', 409)
     }

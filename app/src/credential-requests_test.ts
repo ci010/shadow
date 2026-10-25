@@ -7,7 +7,7 @@ import { parseCredentialResponse, privateCredentialTransport, useCredentialReque
 
 const requestId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const question = (projectId = 'project-a', id = requestId) => ({
-  id, projectId, sessionId: 'web:orchestrator', secretRef: 'github-issues',
+  id, projectId, sessionId: 'web:chat-admin', secretRef: 'github-issues',
   purpose: 'Read issues for the reviewed repository.', createdAt: '2026-09-17T12:00:00.000Z', replacesExisting: false,
 })
 const settle = () => new Promise(resolve => setImmediate(resolve))
@@ -18,7 +18,7 @@ function harness(t: TestContext, initial: Partial<CredentialRequestSource> = {})
     new Promise<Response>((finish, reject) => requests.push({ url, init, finish, reject })))
   const source = reactive({
     apiBase: 'http://127.0.0.1:3123/projects/project-a', projectId: 'project-a',
-    sessionId: 'web:orchestrator', active: true, stage: 'tool', canSubmit: true, ...initial,
+    sessionId: 'web:chat-admin', active: true, stage: 'tool', canSubmit: true, ...initial,
   })
   let state!: ReturnType<typeof useCredentialRequest>
   const renderer = createRenderer<object, object>({
@@ -41,7 +41,7 @@ test('private entry validates Project identity and rejects unexpected secret-bea
   assert.equal(parseCredentialResponse({ request: null }, 'project-a'), null)
   for (const invalid of [
     {}, { request: undefined }, { request: question('foreign') },
-    { request: { ...question(), sessionId: 'web:other' } },
+    { request: { ...question(), sessionId: 'qq:other' } },
     { request: { ...question(), value: 'NEVER-RENDER-THIS' } },
     { request: { ...question(), secretRef: '../invalid' } },
   ]) assert.throws(() => parseCredentialResponse(invalid, 'project-a'))
@@ -66,11 +66,11 @@ test('only visible owner coordination tool turns fetch requests and deactivation
   assert.equal(state.request.value, null)
   source.sessionId = 'web:ordinary-chat'
   source.active = true
-  assert.equal(requests.length, 1)
-  source.sessionId = 'web:orchestrator'
   assert.equal(requests.length, 2)
+  source.sessionId = 'web:chat-admin'
+  assert.equal(requests.length, 3)
   source.canSubmit = false
-  assert.equal(requests[1].init.signal?.aborted, true)
+  assert.equal(requests[2].init.signal?.aborted, true)
   assert.equal(state.enabled.value, false)
 })
 
@@ -181,4 +181,16 @@ test('private credential UI is a masked local form, not a generic chat answer', 
   assert.match(source, /role="alert"/)
   assert.match(source, /Shadow does not encrypt that file/)
   assert.doesNotMatch(source, /defineEmits|localStorage|sessionStorage|console\./)
+})
+
+test('ordinary admin session shows only its own private credential card', async t => {
+  const { state, requests } = harness(t, { sessionId: 'web:ordinary' })
+  requests[0].finish(Response.json({ request: { ...question(), sessionId: 'web:other' } }))
+  await settle()
+  assert.equal(state.request.value, null)
+  const refreshed = state.refresh()
+  requests[1].finish(Response.json({ request: { ...question(), sessionId: 'web:ordinary' } }))
+  await refreshed
+  await settle()
+  assert.equal(state.request.value?.sessionId, 'web:ordinary')
 })

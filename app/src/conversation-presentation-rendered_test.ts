@@ -25,13 +25,13 @@ const renderedOptions = {
 test('conversation presentation and compacted history render across themes and viewport sizes', renderedOptions, t => renderConversation(t))
 test('event-triggered user answers stay visible in live and restored conversations', renderedOptions, t => renderConversation(t, 'response-audience'))
 test('system events preserve hierarchy, navigation and metadata across themes and viewport sizes', renderedOptions, t => renderConversation(t, 'events'))
-test('coordinator progress and outgoing message links navigate from the embedded primary pane', renderedOptions, t => renderConversation(t, 'coordinator-navigation'))
+test('admin progress and outgoing message links navigate from the embedded primary pane', renderedOptions, t => renderConversation(t, 'admin-navigation'))
 test('received and outgoing session messages have explicit English and Chinese direction at desktop and mobile widths', renderedOptions, t => renderConversation(t, 'message-direction'))
 test('session exchanges use fixed-height preview cards with accessible animated expansion', renderedOptions, t => renderConversation(t, 'session-exchanges'))
 test('call and task responses share five-line faded preview cards and the tool rail width', renderedOptions, t => renderConversation(t, 'response-cards'))
 test('wide asymmetric conversation keeps users right and AI cards full-width across themes and desktop/mobile', renderedOptions, t => renderConversation(t, 'reading-layout'))
 
-async function renderConversation(t: TestContext, scenario: 'presentation' | 'response-audience' | 'events' | 'coordinator-navigation' | 'message-direction' | 'session-exchanges' | 'response-cards' | 'reading-layout' = 'presentation') {
+async function renderConversation(t: TestContext, scenario: 'presentation' | 'response-audience' | 'events' | 'admin-navigation' | 'message-direction' | 'session-exchanges' | 'response-cards' | 'reading-layout' = 'presentation') {
   const directory = resolve(root, '.test-artifacts', `conversation-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
@@ -335,7 +335,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
   const env: NodeJS.ProcessEnv = { CONVERSATION_SMOKE_URL: server.resolvedUrls.local[0] }
   if (scenario === 'response-audience') env.CONVERSATION_RESPONSE_AUDIENCE_ONLY = '1'
   if (scenario === 'events') env.CONVERSATION_EVENTS_ONLY = '1'
-  if (scenario === 'coordinator-navigation') env.CONVERSATION_NAVIGATION_ONLY = '1'
+  if (scenario === 'admin-navigation') env.CONVERSATION_NAVIGATION_ONLY = '1'
   if (scenario === 'message-direction') env.CONVERSATION_DIRECTION_ONLY = '1'
   if (scenario === 'session-exchanges') env.CONVERSATION_EXCHANGES_ONLY = '1'
   if (scenario === 'response-cards') env.CONVERSATION_RESPONSE_CARDS_ONLY = '1'

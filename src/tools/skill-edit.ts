@@ -34,7 +34,7 @@ export class SkillEditing {
     context.signal.throwIfAborted()
     if (context.projectId !== this.options.projectId || !this.options.canEdit(context.sessionId) ||
       context.remoteWorkdir || (context.tools.executionMode !== undefined && context.tools.executionMode !== 'session')) {
-      throw new Error('Shared Skill editing requires a durable local Project topic or coordinator, not a managed Bot or temporary execution.')
+      throw new Error('Shared Skill editing requires a durable local Project session, not a managed Bot or temporary execution.')
     }
   }
 

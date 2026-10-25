@@ -47,10 +47,11 @@ test('project_config tests latest draft/candidate code with approved GET access 
       ...publication, publicationRequests,
     })
     const owner: ExecutionContext = {
-      projectId: 'a', sessionId: 'web:orchestrator', physicalSessionId: 'test-owner',
-      channel: 'web', chatId: 'orchestrator', senderId: 'owner', inputSource: 'user', admin: true,
+      projectId: 'a', sessionId: 'web:chat-admin', physicalSessionId: 'test-owner',
+      channel: 'web', chatId: 'chat-admin', senderId: 'owner', inputSource: 'user', admin: true,
       messageId: randomUUID(), signal: new AbortController().signal, tools: new SessionTools(new Tools(workspace), workspace),
     }
+    owner.tools.setExecutionScope('session', ['task', 'call'])
     const identity = { botInstanceId: 'bot', platform: 'qq' as const, conversationId: 'group:room' }
     const draft = await store.stage({
       expectedRevision: store.draft().revision,
@@ -108,13 +109,9 @@ test('project_config tests latest draft/candidate code with approved GET access 
       assert.equal(publicationRequests.pending(), null)
       for (const inputSource of ['session', 'event'] as const) {
         const peer = { ...owner, inputSource, admin: false }
-        const synthetic = JSON.parse(await management.execute({
-          ...candidateArgs, action: 'test', assertion: { expected: { version: 'candidate', count: 1 } },
-          capabilityResults: { issues: { status: 200, body: [{}] } },
-        }, peer))
-        assert.equal(synthetic.evaluation.passed, true)
-        assert.equal(synthetic.sourceHash, tested.sourceHash)
-        assert.equal(JSON.parse(await management.execute({ ...candidateArgs, action: 'preview' }, peer)).revision, tested.revision)
+        for (const action of ['test', 'preview']) await assert.rejects(management.execute({
+          ...candidateArgs, action, capabilityResults: { issues: { status: 200, body: [{}] } },
+        }, peer), /direct owner turn/)
       }
       const sequenceCandidate = structuredClone(candidate)
       sequenceCandidate.files['skills/issues/issues.js'] = `
@@ -133,7 +130,7 @@ test('project_config tests latest draft/candidate code with approved GET access 
         ...candidateArgs, bundle: sequenceCandidate, action: 'test',
         assertion: { expected: [{ status: 200 }, { code: 'http_status', status: 401 }, { code: 'network_error' }] },
         capabilityResults: { issues: { sequence: [{ status: 200, body: [] }, { status: 401, body: {} }, { throws: { code: 'network_error' } }] } },
-      }, { ...owner, inputSource: 'session', admin: false }))
+      }, owner))
       assert.equal(sequenced.evaluation.passed, true)
       assert.equal(requests.length, beforeMock)
       assert.equal(store.draft().revision, staged.revision)

@@ -1,7 +1,7 @@
 # Project Micro Apps
 
 Micro Apps are reusable Web tools owned by a Project, not temporary conversation
-cards or another agent loop. Open the Project coordinator's **Apps** workspace.
+cards or another agent loop. Open the Project workbench's **Apps** workspace.
 Ask the agent to build a tool, then **Refresh** Apps to see its publication.
 Review the exact source, local backend behavior and model allowance before
 approving. Approval does not immediately start the app. The runtime asks whether

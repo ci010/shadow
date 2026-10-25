@@ -71,7 +71,7 @@ Search still covers the full catalog; omission is not deletion or loss of access
 
 **Edit shared Skills:** Ordinary Project learning does not need a Change or
 publication. Discover `skill_read` / `skill_save` under `v:tools` and call through
-`invoke_tool` (the coordinator has these two scoped tools directly).
+`invoke_tool`. No special coordination session is required.
 `skill_read({name, path?})` reads raw text without activating scripts and remembers
 the edit baseline. Use `offset`/`limit` for long resources.
 `skill_save({name, files: {"SKILL.md": "...", "tools/example.ts": "..."}})`
@@ -79,7 +79,7 @@ saves related files together; null deletes a resource. Read existing Skills firs
 new Skills can be created directly. Conflicts require rereading and merging.
 Built-ins are read-only; adapt them with a new name. No backup history is kept,
 and saving grants no execution permission or managed Bot deployment.
-These tools require a durable local session/coordinator, not managed or temporary
+These tools require a durable local session, not managed or temporary
 execution. Existing Bot resource publication remains under `authoring_change`.
 
 **Activate skill tools:** Only an exact `read("v:skills/csv-utils")` registers
@@ -202,7 +202,7 @@ and required Shadow owner-review steps explicitly.
 
 The workflows below configure service Bots, not personal Project entry points.
 
-Discord uses `channel_config`, not `authoring_change`. In owner coordination,
+Read `v:skills/project-administration` for owner configuration and private credential entry. Skill reading does not authorize any operation. Discord uses `channel_config`, not `authoring_change`. In an ordinary direct administrator Web session,
 read `action: schema`, then `list` for named Bot connections and the current
 configuration revision. `directory` resolves servers/channels/roles; `members`
 resolves people in a mutual server. Disambiguate repeated names with the human.
@@ -243,7 +243,7 @@ or reconstruct receipts from chat history. Worker reports are not approval.
 Validate references, preview prompts, use mocks for changed tools and scenario
 checks for model behavior. A preview is not a behavior test.
 
-`request_probe` opens an expiring one-use GET approval card in the coordinator
+`request_probe` opens an expiring one-use GET approval card in the requesting Web session
 and requesting session. Do not repeat the request in another chat or publish
 first. It authorizes no writes, inbox delivery or deployment; inspect the saved
 run. Use `request_secret` with secretRef and purpose for private owner entry.

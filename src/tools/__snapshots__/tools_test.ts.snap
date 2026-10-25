@@ -379,7 +379,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "agentType": {
             "type": "string",
-            "description": "Create only: agent template name, default general. Never orchestrator."
+            "description": "Create only: agent template name, default general."
           },
           "initiativeId": {
             "type": "string",
@@ -739,16 +739,6 @@ subagent
 sql
 `;
 
-exports[`tools — tool surface per agent type > orchestrator 1`] = `
-read
-work
-search
-session
-message
-ask
-reply
-sql
-`;
 
 exports[`tools — tool surface per agent type > plan 1`] = `
 read

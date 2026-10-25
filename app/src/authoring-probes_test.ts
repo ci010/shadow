@@ -60,7 +60,7 @@ test('probe parser uses the shared schema, rejects duplicate IDs and validates n
   ]) assert.throws(() => parseProbeResponse(value, 'a'))
   const requests = parseProbeResponse({ requests: [probe(), { ...probe('a', 'other'), sourceSessionId: 'web:other' }] }, 'a')
   assert.equal(visibleProbeRequests(requests, 'web:topic').length, 1)
-  assert.equal(visibleProbeRequests(requests, 'web:orchestrator').length, 2)
+  assert.equal(visibleProbeRequests(requests, 'web:chat-admin').length, 0)
   assert.equal(visibleProbeRequests(requests, 'web:unrelated').length, 0)
 })
 
@@ -186,8 +186,8 @@ test('navigation, Project change and permission loss abort writes and discard la
 
 test('late polling and old navigation responses cannot replace current state', async t => {
   const { source, state, calls } = harness(t)
-  source.sessionId = 'web:orchestrator'
-  calls[1]!.finish(Response.json({ requests: [probe()] }))
+  source.sessionId = 'web:chat-admin'
+  calls[1]!.finish(Response.json({ requests: [{ ...probe(), sourceSessionId: source.sessionId }] }))
   await settle()
   calls[0]!.finish(Response.json({ requests: [] }))
   await settle()
@@ -226,7 +226,7 @@ test('isolated approval cards render at desktop and narrow widths with explicit 
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const publication = {
-    id: 'publication-a', projectId: 'a', sessionId: 'web:orchestrator', revision,
+    id: 'publication-a', projectId: 'a', sessionId: 'web:chat-admin', revision,
     baseRevision: `sha256:${'b'.repeat(64)}`, createdAt: '2026-09-19T01:00:00.000Z',
     files: [{ path: 'agents/support/AGENT.md', before: null, after: 'Synthetic fixture prompt.' }],
     previousBindings: [], bindings: [],

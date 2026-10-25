@@ -6,8 +6,7 @@ import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from '../../tools/ask-poli
 export function toolsGuideline(ctx: SessionPromptContext): string {
   const mode = ctx.mode ?? ctx.agent.defaultMode
   const allows = (name: string) => executionModeAllowsTool(mode, name) && isToolAllowed(ctx.agent, name)
-  const coordinator = ctx.agent.name === 'orchestrator'
-  const modes = !coordinator && allows('subagent')
+  const modes = allows('subagent')
     ? allowedSubagentModes(mode, !!ctx.parentSessionId) : []
   const sections: string[] = []
   if (mode !== 'call' && allows('work')) {
@@ -30,7 +29,7 @@ Ordinary requests execute directly. Work is an optional notebook, never a gate o
 User preferences: profiles. Reply style: conversation. Task limits: Work. Old conventions: history.`)
   }
 
-  if (!coordinator && allows('exec')) {
+  if (allows('exec')) {
     sections.push(`### Shell
 
 ${ctx.execNodeOnly
@@ -108,21 +107,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
 - Retry with the same \`requestId\`; kickoff is not replayed. \`initialMessageStatus\`: \`accepted\`, \`not_requested\`, \`not_replayed\`. Admission is not completion.
 - \`work assign\` sets responsibility; directories and creator provenance are not ownership. Metadata never revises work. Work create associates this session; work link key associates existing Work without changing select focus.
 - Read \`v:project/folders\` for registered resources; never resolve remote display paths on Main.
-- The coordinator routes work, not the structural parent of peer conversations.`)
-  }
-  if (coordinator && mode === 'session') {
-    sections.push(`### Coordinator Capability Boundary
-
-The single Project coordinator is web:orchestrator. Its hard runtime
-cap permits only read/search/session/message/work/sql/project_config/authoring_change/skill_read/skill_save/ask/reply; never invoke_tool, exec, write,
-or subagent. Manage shared work directly with work.
-Implementation, builds, MCP configuration and tool installation belong in a peer session.
-Do not bypass this boundary through skills, discovery, events, URLs or other tools.
-Use \`skill_read\` and \`skill_save\` for ordinary shared Skill edits, including
-bundled tool sources, without activation or publication. Use \`authoring_change\`
-only for managed Bot prompt/resources, saved check runs and owner review.
-Read its schema on demand; legacy shared drafts remain under \`project_config\`.
-Read \`v:skills/tool-operations\` for maintenance details; it never widens this cap.`)
+- Peers are independent conversations; creator metadata is not structural parenthood.`)
   }
 
   if (mode !== 'call' && allows('message')) {

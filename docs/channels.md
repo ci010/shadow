@@ -165,7 +165,7 @@ same backend revision and approval service.
    fifteen minutes; a changed revision or changed live permissions requires
    fresh review.
 
-The Project **Coordinator** exposes `channel_config`: `schema` documents inputs,
+The administrator Web conversation exposes `channel_config`: `schema` documents inputs,
 `list` returns named Bot connections (including unassigned ones), and
 `directory`/`members` discover resources before a message has been sent there.
 It can inspect current Agent files and catalog resources and propose changes,
@@ -610,7 +610,7 @@ but cannot be enabled in a new group until its creator publishes an explicit
 profile. Even a no-tool Agent requires an explicitly empty capability policy.
 
 Missing profiles or private connections disable **Review group setup**. Links
-open Project coordination for the creator to repair Agent configuration, or to
+open an ordinary administrator Web draft for the creator to repair Agent configuration, or to
 request the existing **Private credential entry** card using `project_config
 request_secret`. The connection link is a configuration handoff, not a secret
 input or automatic credential request. Never send secrets in chat. Credentials
@@ -673,6 +673,6 @@ Group proposal errors retain their specific HTTP status and safe error code:
 invalid input/name or policy overrides are 400, a removed Bot is 404, changed revisions or a
 conflicting group review is 409, live validation is 422, and an
 unavailable publication service is 503. Refresh is local; existing reviews open
-in place. Live validation problems offer Project coordination for configuration repair. Repeating an identical proposal returns its existing exact review;
+in place. Live validation problems offer an ordinary administrator Web conversation for configuration repair. Repeating an identical proposal returns its existing exact review;
 it never replaces another pending review or unrelated draft. Live validation
 categories never expose credential values or arbitrary server exception text.

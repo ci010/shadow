@@ -30,7 +30,7 @@ export class CredentialRequests {
     this.credentials = options.credentials
   }
 
-  async request(input: { name: string; purpose: string }, signal: AbortSignal): Promise<CredentialRequestResult> {
+  async request(input: { name: string; purpose: string }, signal: AbortSignal, sessionId: string): Promise<CredentialRequestResult> {
     if (this.stopped) throw new CredentialRequestError('stopped', 503, 'Credential requests are stopped.')
     if (signal.aborted) throw new CredentialRequestError('aborted', 409, 'Credential request was aborted.')
     if (pendingProjects.has(this.projectId)) throw new CredentialRequestError('request_pending', 409, 'A credential request is already pending for this project.')
@@ -53,7 +53,7 @@ export class CredentialRequests {
     }
     if (signal.aborted) throw new CredentialRequestError('aborted', 409, 'Credential request was aborted.')
     const metadata = parseCredentialRequest({
-      id: randomUUID(), projectId: this.projectId, sessionId: 'web:orchestrator',
+      id: randomUUID(), projectId: this.projectId, sessionId,
       secretRef: name, purpose, createdAt: new Date().toISOString(), replacesExisting,
     }, this.projectId)
     return new Promise<CredentialRequestResult>((resolve, reject) => {

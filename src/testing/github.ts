@@ -12,7 +12,7 @@ import { z } from 'zod'
 
 export const githubDefinition = { objective: 'Deliver the requested correction', acceptance: ['Focused regression passes'], boundaries: ['No deployment'], evidence: [] }
 export async function createGitHubFixture(home: string) {
-  const states = new Map<string, SessionState>(['worker', 'manager', 'web:orchestrator'].map(id => [id, { sessionId: id, segmentIndex: 0, mode: 'session' }]))
+  const states = new Map<string, SessionState>(['worker', 'manager', 'web:chat-admin'].map(id => [id, { sessionId: id, segmentIndex: 0, mode: 'session' }]))
   const works = new InitiativeStore(home, { isSessionKnown: id => states.has(id) })
   const alignment = new WorkAlignment(works, { state: id => states.get(id), evidence: async () => {},
     changed: async () => {}, fresh: async () => {}, successor: async () => 'worker' })

@@ -296,9 +296,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const f = fixture(workspace, store)
       try {
         await f.sessions.start()
-        await assert.rejects(f.sessions.deliver('web:orchestrator', input('Implicit coordinator')), /canonical configuration/)
-        assert.equal(await store.countSessionLog('web_orchestrator-0'), 0)
-        for (const id of ['web:race', 'web:orchestrator']) {
+        for (const id of ['web:race', 'web:chat-admin']) {
           const entered = Promise.withResolvers<void>()
           const release = Promise.withResolvers<void>()
           const originalCreate = store.createSessionLog.bind(store)
@@ -311,8 +309,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           }
           const fields = {
             mode: 'session' as const,
-            sessionKind: id === 'web:orchestrator' ? 'orchestrator' as const : 'topic' as const,
-            agentType: id === 'web:orchestrator' ? 'orchestrator' : 'general',
+            sessionKind: 'topic' as const,
+            agentType: 'general',
             topic: { title: 'Original brief', goal: 'Original goal', scope: '' },
           }
           const creation = f.sessions.buildSession(id, undefined, fields)
@@ -351,42 +349,6 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: coordinator capabilities remain pinned despite custom role overrides`, async () => {
-    await withTempWorkspace(async workspace => {
-      const store: SessionStore = new Store(join(workspace, 'sessions'))
-      await store.init()
-      const f = fixture(workspace, store)
-      const deps = (f.sessions as any).deps as SessionManagerDeps
-      const resolve = deps.agentTypes.resolve.bind(deps.agentTypes)
-      deps.agentTypes.resolve = name => {
-        const role = resolve(name)
-        return name === 'orchestrator' && role ? { ...role, allowedTools: ['exec', 'invoke_tool', 'subagent'] } : role
-      }
-      for (const name of ['search', 'session', 'work', 'initiative', 'project_config', 'channel_config', 'skill_read', 'skill_save']) {
-        f.tools.register({ name, description: name, optIn: name === 'initiative' || name === 'channel_config',
-          parameters: { type: 'object', properties: {} }, execute: async () => name })
-      }
-      const allowed = ['ask', 'channel_config', 'message', 'project_config', 'read', 'reply', 'search', 'session', 'skill_read', 'skill_save', 'work']
-      try {
-        await f.sessions.start()
-        await f.sessions.buildSession('web:orchestrator', undefined, { mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator' })
-        assert.deepEqual(f.sessions.getToolDefinitions('web:orchestrator').map(tool => tool.name).sort(), allowed)
-        assert.deepEqual(f.sessions.getToolDefinitions('web:orchestrator', { allowedTools: ['exec'] }).map(tool => tool.name).sort(), allowed)
-        assert.throws(() => f.sessions.assertCanCreateChild('web:orchestrator', 'task'), /role does not permit/)
-        await f.sessions.deliver('web:orchestrator', input('Coordinate this Project'))
-        const request = await f.next('web:orchestrator')
-        assert.deepEqual(request.names.sort(), allowed)
-        request.resolve(invoke('exec', { command: 'not actually executed' }, 'denied'))
-        const resumed = await f.next('web:orchestrator')
-        assert.match(String(resumed.messages.find(message => message.tool_call_id === 'denied')?.content), /not available|not found|not allowed|Unknown tool/i)
-        resumed.resolve(done('Coordinated'))
-        await waitFor(() => f.facts.some(fact => fact.sessionId === 'web:orchestrator'))
-        await f.sessions.stop()
-        await f.sessions.start()
-        assert.deepEqual(f.sessions.getToolDefinitions('web:orchestrator').map(tool => tool.name).sort(), allowed)
-      } finally { await f.sessions.stop(); store.close?.() }
-    })
-  })
 
   test(`${Store.name}: fresh task identity is parent-owned; reviewable self completion denied and legacy completion persists`, async () => {
     await withTempWorkspace(async workspace => {
@@ -449,7 +411,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: topic metadata validates, replaces, persists and canonical coordinator cannot be aliased`, async () => {
+  test(`${Store.name}: topic metadata validates, replaces and persists`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -457,12 +419,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const topic = { title: 'Topic', goal: 'Finish a goal', scope: '', nonGoals: 'Unrelated work' }
       try {
         await f.sessions.start()
-        await f.sessions.buildSession('web:orchestrator', undefined, { mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator' })
-        for (const fields of [{ agentType: 'orchestrator' }, { sessionKind: 'orchestrator' as const }]) {
-          await assert.rejects(f.sessions.buildSession('web:alias', undefined, fields), /orchestrator/)
-        }
+        await f.sessions.buildSession('web:chat-admin', undefined, { mode: 'session', agentType: 'general', sessionKind: 'topic' })
         await f.sessions.buildSession('web:topic', undefined, {
-          mode: 'session', parentSessionId: null, sessionKind: 'topic', topic, createdBySessionId: 'web:orchestrator',
+          mode: 'session', parentSessionId: null, sessionKind: 'topic', topic, createdBySessionId: 'web:chat-admin',
           topicRequestHash: 'a'.repeat(64),
         })
         for (const invalid of [null, [], {}, { ...topic, title: ' ' }, { ...topic, goal: '' },
@@ -472,9 +431,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         }
         await assert.rejects(f.sessions.updateConversationMetadata('web:topic', { title: '' }))
         await assert.rejects(f.sessions.updateConversationMetadata('web:topic', { title: 'Valid', description: 'x'.repeat(4001) }))
-        await assert.rejects(f.sessions.updateConversationMetadata('web:orchestrator', { title: 'Forbidden' }), /ordinary/)
         await assert.rejects(f.sessions.buildSession('web:foreign', undefined, { topic, createdBySessionId: 'web:missing' }), /project/)
         await assert.rejects(store.saveState('web:invalid', { sessionId: 'web:invalid', segmentIndex: 0, topic: { ...topic, goal: '' } }))
+        await assert.rejects(store.saveState('web:invalid-kind', { sessionId: 'web:invalid-kind', segmentIndex: 0, sessionKind: 'unsupported' as never }), /session kind/)
+        assert(!(await store.listSessions()).some(state => state.sessionId === 'web:invalid-kind'))
         const replacement = { title: 'Replacement', description: 'Discovery metadata, not a new goal' }
         await Promise.all([
           f.sessions.updateConversationMetadata('web:topic', { ...replacement, title: 'Previous replacement' }),
@@ -488,10 +448,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.start()
         assert.deepEqual(f.sessions.getSessionState('web:topic')?.topic, topic)
         assert.equal(f.sessions.getSessionState('web:topic')?.name, replacement.title)
-        assert.equal(f.sessions.getSessionState('web:topic')?.createdBySessionId, 'web:orchestrator')
+        assert.equal(f.sessions.getSessionState('web:topic')?.createdBySessionId, 'web:chat-admin')
         assert.equal(f.sessions.getSessionState('web:topic')?.topicRequestHash, 'a'.repeat(64))
         assert.equal(f.sessions.getDelegationOwner('web:topic'), undefined)
-        await f.sessions.deleteSession('web:orchestrator')
+        await f.sessions.deleteSession('web:chat-admin')
         assert.equal(f.sessions.getSessionState('web:topic')?.sessionKind, 'topic')
         const entered = Promise.withResolvers<void>()
         const release = Promise.withResolvers<void>()

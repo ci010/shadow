@@ -33,7 +33,6 @@
     <p v-else-if="decision.status === 'superseded'" class="decision-note">{{ t('This version was replaced without selecting an answer.') }} {{ decision.result }}</p>
     <p v-else-if="!decision.answer && ['investigation', 'deferred', 'invalidated'].includes(decision.status)" class="decision-note">{{ decision.result }} {{ t('No option was selected. Only investigation or already-authorized unaffected work may continue.') }}</p>
     <template v-if="apiBase !== undefined">
-      <RouterLink v-if="route?.params.projectId" class="decision-dashboard" :to="{ name: 'chat', params: { projectId: route.params.projectId, sessionId: ORCHESTRATOR_SESSION_ID } }" @click="openDashboard">{{ t('Dashboard') }} <span aria-hidden="true">↗</span></RouterLink>
       <YieldSource v-for="source in decision.sources" :key="JSON.stringify(source)" :source="source" :api-base="apiBase"
         :answered="decision.action === 'answer'"
         @inspect="emit('inspect', $event)" @click="emit('interact')" />
@@ -51,13 +50,10 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { inject } from 'vue'
 import { decisionStatusLabel, type YieldDecision } from '../yield-history.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import ToolPayload from './ToolPayload.vue'
 import YieldSource from './YieldSource.vue'
-import { RouterLink, useRoute } from 'vue-router'
-import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import DecisionBrief from './DecisionBrief.vue'
 import WorkContextPath from './WorkContextPath.vue'
 import MessageAttachments from './MessageAttachments.vue'
@@ -65,9 +61,6 @@ import type { SessionDetails } from '../session-details.ts'
 import type { ImagePreview } from '../image-viewer.ts'
 import type { OpenFile } from '../file-workbench.ts'
 defineProps<{ decision: YieldDecision; apiBase?: string; canManage?: boolean; sessionId?: string; workdir?: SessionDetails['workdir'] }>()
-const route = useRoute()
-const showProjectDashboard = inject<(() => void) | undefined>('shadow:show-project-dashboard', undefined)
-function openDashboard() { emit('interact'); showProjectDashboard?.() }
 const emit = defineEmits<{ interact: []; inspect: [sessionId: string]; updated: []; preview: [image: ImagePreview]; open: [file: OpenFile] }>()
 </script>
 

@@ -172,11 +172,8 @@ relations and dependencies (including cross-topic links). Missing roles or causa
 relations are shown honestly, not inferred from model topic categories. The causal
 map and relation graph are expandable local sections within the Dashboard, not
 separate view entries. Native questions and decision history retain their navigation.
-**Coordinator**
-opens a separate, resizable right-hand panel; switching document tabs keeps its
-conversation and unsent draft. On narrow screens, the panel uses the available
-space until you close it to return to the selected tab. Folder and conversation
-rows open their own views. **Automations** lists scheduled tasks
+Folder and conversation rows open their own views. Discuss opens an ordinary
+conversation with an editable draft; there is no separate management session. **Automations** lists scheduled tasks
 that start fresh conversations, with their run histories. Selecting an automation
 opens its latest run directly in the ordinary conversation workbench, with the
 same Conversation and document tabs and file-explorer behavior as other chats.
@@ -319,7 +316,7 @@ Agents per channel. Unassigned channels/DMs are closed, including previously
 configured legacy admin chats. Participant restrictions select callers, not
 who can read the channel's replies.
 
-Alternatively, ask the Project **Coordinator** to configure a named Discord
+Alternatively, ask the administrator Web conversation to configure a named Discord
 channel. Its `channel_config` tool discovers Bot connections and platform
 resources, reads exact revisions and drafts changes. You still approve the
 exact change in Discord access; the model cannot approve. Authorized Discord
@@ -367,7 +364,7 @@ Wiki Markdown at paths such as `v:memory/topics/xmcl-ops.md`; the Knowledge UI
 classifies those files as **Wiki**. Session memory, events, conventions and
 internal state are different categories, not destinations for a Wiki import.
 Saying "Wiki, not Memory" selects the shared knowledge category without changing
-its canonical storage path. The coordinator can read/search it and delegate
+its canonical storage path. The authoring session can read/search it and delegate
 edits; the alias does not grant new tool or workdir permissions.
 
 **Link health** scans Project knowledge for broken references; missing,
@@ -385,7 +382,7 @@ belongs to a registered folder, the draft uses that same folder; otherwise it
 starts **From scratch**. Opening a draft does not send a message or allocate a
 session until the first send.
 
-In the coordinator conversation, click the source session in a **Session
+In an ordinary Web conversation, click the source session in a **Session
 progress** message or the recipient in a **Message to** card to open that
 conversation. Owned task/call executions open in the child pane; independent
 sessions open as the selected conversation. Expanding message or tool details

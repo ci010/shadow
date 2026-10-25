@@ -23,7 +23,7 @@ test('native group navigation, received-only text, exact approve box and rejecti
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const revision = `sha256:${'a'.repeat(64)}`, baseRevision = `sha256:${'b'.repeat(64)}`
   const binding = ConversationBindingSchema.parse({ botInstanceId: 'bot', platform: 'qq', conversationId: 'group:00112233445566778899', agent: 'xmcl-issue-assistant' })
-  const candidate = { id: randomUUID(), projectId: 'fixture', sessionId: 'web:orchestrator', revision, baseRevision, createdAt: new Date().toISOString(), files: [], previousBindings: [], bindings: [binding], impact: { affectedBindings: [JSON.stringify(['bot', 'qq', 'group:00112233445566778899'])], permissionsChanged: true, promptsChanged: true, toolsChanged: false } }
+  const candidate = { id: randomUUID(), projectId: 'fixture', sessionId: 'web:chat-admin', revision, baseRevision, createdAt: new Date().toISOString(), files: [], previousBindings: [], bindings: [binding], impact: { affectedBindings: [JSON.stringify(['bot', 'qq', 'group:00112233445566778899'])], permissionsChanged: true, promptsChanged: true, toolsChanged: false } }
   let request: typeof candidate | null = null, enabled = false, decisions = 0, executableMutations = 0, proposals = 0
   const server = await createServer({ configFile: false, envDir: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'cache'), optimizeDeps: { entries: [] }, plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app/unocss.config.ts') }), {
     name: 'service-groups-fixture', resolveId: id => id === '/group-fixture.ts' ? '\0group-fixture' : undefined,

@@ -25,7 +25,7 @@ test('Project knowledge Skill describes memory/Wiki aliases and retains persiste
     /empty listing or no matches.*not that Wiki access is/s,
     /Remote workdir sessions cannot write Project memory/,
     /Reading this Skill grants no permissions/,
-    /coordinator may read\/search Wiki but cannot write/,
+    /active tool contract to determine Wiki read\/write capabilities/,
     /active `session` tool can create durable peer conversations/,
     /empty subagent delegation-mode list forbids temporary task\/call spawning/,
     /Tell the worker to read this Skill/,
@@ -41,7 +41,7 @@ test('Project knowledge Skill describes memory/Wiki aliases and retains persiste
   ]) assert.match(skill.body, rule)
 })
 
-test('coordinator can discover and read the instruction-only knowledge Skill without gaining worker tools', async () => {
+test('administrator can discover and read the instruction-only knowledge Skill without gaining worker tools', async () => {
   await withTempWorkspace(async home => {
     const skills = new SkillsManager(home)
     await skills.load()
@@ -51,12 +51,12 @@ test('coordinator can discover and read the instruction-only knowledge Skill wit
     const base = new Tools(home)
     base.register(new ReadTool(home, vfs))
     base.register(new SearchTool(home, undefined, vfs))
-    const coordinator = (await getBuiltinAgentTypes()).find(agent => agent.name === 'orchestrator')
-    assert(coordinator)
-    const tools = new SessionTools(base, home, coordinator.allowedTools, coordinator.blockedTools)
+    const administrator = (await getBuiltinAgentTypes()).find(agent => agent.name === 'general')
+    assert(administrator)
+    const tools = new SessionTools(base, home, administrator.allowedTools, administrator.blockedTools)
     const context: ExecutionContext = {
-      projectId: 'fixture', sessionId: 'web:orchestrator', physicalSessionId: 'fixture-0',
-      channel: 'web', chatId: 'orchestrator', senderId: 'owner', messageId: 'request',
+      projectId: 'fixture', sessionId: 'web:chat-admin', physicalSessionId: 'fixture-0',
+      channel: 'web', chatId: 'chat-admin', senderId: 'owner', messageId: 'request',
       signal: new AbortController().signal, tools,
     }
     for (const query of ['memory', 'Wiki', 'knowledge']) {

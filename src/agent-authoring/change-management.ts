@@ -75,7 +75,7 @@ function isDirectOwner(context: ExecutionContext): boolean {
 function assertSession(options: ChangeManagementOptions, context: ExecutionContext): void {
   context.signal.throwIfAborted()
   if (context.projectId !== options.service.options.projectId || !options.canAuthor(context.sessionId) ||
-    context.remoteWorkdir || context.tools.executionMode === 'call') throw new Error('Authoring requires a durable local Project authoring topic or coordinator.')
+    context.remoteWorkdir || context.tools.executionMode === 'call') throw new Error('Authoring requires a durable local Project authoring session.')
 }
 
 function assertAccess(options: ChangeManagementOptions, context: ExecutionContext, id: string, path?: string): AuthoringChange {
@@ -327,6 +327,7 @@ export function authoringChangeTool(options: ChangeManagementOptions): Tool {
         return JSON.stringify(summary(next))
       }
       if (args.action === 'propose') {
+        assertOwner(context)
         z.object({}).strict().parse(input)
         if (change.base.revision !== options.service.options.store.snapshot().revision) throw new Error('Published base changed. Explicitly rebase this Change and rerun its checks before requesting review.')
         const request = await options.publications.propose({
@@ -334,7 +335,7 @@ export function authoringChangeTool(options: ChangeManagementOptions): Tool {
           change: { id: change.id, title: change.title, sourceSessionId: context.sessionId, accessRevision: change.accessRevision },
           checks: changes.runs(change.id).filter(run => run.revision === change.snapshot.revision)
             .map(({ id, kind, status, revision }) => ({ id, kind, status, revision })),
-        })
+        }, undefined, context.sessionId)
         return JSON.stringify({ requestId: request.id, changeId: change.id, revision: request.revision,
           status: 'awaiting_owner_review', message: 'Review and approve this exact Change in the publication card. No shared draft was staged.' })
       }

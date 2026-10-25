@@ -128,7 +128,7 @@ export interface SessionState {
   generatedTitle?: string
   /** Last known platform conversation name; never overrides a user-selected name. */
   chatName?: string
-  sessionKind?: 'topic' | 'orchestrator'
+  sessionKind?: 'topic'
   topic?: TopicMetadata
   /** Creation provenance only; never lifecycle or directory ownership. */
   createdBySessionId?: string

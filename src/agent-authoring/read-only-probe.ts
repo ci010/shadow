@@ -5,7 +5,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import { CapabilityError, type CapabilityBroker, type HttpFailureDiagnostics } from './capabilities.ts'
 import { conversationBindingKey, type CapabilityGrant, type ResolvedConversationPolicy } from './contracts.ts'
 import { executeAuthoredTool } from './tool-runtime.ts'
-import { isOwnerCoordinator, validateToolArguments } from './service.ts'
+import { isOwnerAuthoring, validateToolArguments } from './service.ts'
 
 export type ProbeTarget = 'draft' | 'candidate' | 'published'
 
@@ -32,10 +32,10 @@ interface ProbeCall {
 export async function probeTool(
   dependencies: ProbeDependencies,
   input: { address: ChannelAddress; target: ProbeTarget; revision?: string; toolName: string; args: Record<string, unknown> },
-  context: Parameters<typeof isOwnerCoordinator>[0] & Pick<ExecutionContext, 'projectId' | 'signal' | 'messageId' | 'toolCallId'>,
+  context: Parameters<typeof isOwnerAuthoring>[0] & Pick<ExecutionContext, 'projectId' | 'signal' | 'messageId' | 'toolCallId'>,
 ) {
-  if (!isOwnerCoordinator(context) || context.projectId !== dependencies.projectId || input.address.projectId !== dependencies.projectId) {
-    throw new Error('A live read-only probe requires a direct owner turn in this Project coordinator.')
+  if (!isOwnerAuthoring(context) || context.projectId !== dependencies.projectId || input.address.projectId !== dependencies.projectId) {
+    throw new Error('A live read-only probe requires a direct administrator Web turn in this Project.')
   }
   context.signal.throwIfAborted()
   const sessionId = channelSessionId(input.address)

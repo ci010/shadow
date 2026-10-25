@@ -29,7 +29,6 @@
         <ProjectGroup v-for="project in projects" :key="project.id" :api-base="apiBase" :project="project"
           :data-project-id="project.id" :folder-revision="folderRevision"
           :navigation-key="`${route.fullPath}:${visible}`"
-          :pending-coordinator-project-id="pendingCoordinatorProjectId" @coordinator-opening="pendingCoordinatorProjectId = project.id"
           :selected-project-id="selectedProjectId" :selected-session-id="selected?.sessionId ?? ''" :selected-automation-id="automation?.id"
           :dashboard-selected="selected ? dashboardVisibility.get(selected.key) !== false : false"
           :draft-folder-id="selected?.folder?.id" :remote-folders="(installation.mode === 'main' || installation.mainWorkspace === true)"
@@ -119,7 +118,6 @@ const registry = createConversationResources()
 const resources = shallowRef<ConversationResource[]>([])
 const selected = shallowRef<ConversationResource>()
 const dashboardVisibility = reactive(new Map<string, boolean>())
-const pendingCoordinatorProjectId = ref('')
 const { automation, syncAutomationRoute, showAutomation, openAutomationRun, identifyAutomation } = useAutomationNavigation({
   route, router, selected,
   openSession: session => publish(registry.session(session)),
@@ -399,7 +397,6 @@ function forgetProject(projectId: string) {
   if (folderOperation.value?.project.id === projectId) folderOperation.value = undefined
   if (selected.value?.projectId === projectId) selected.value = undefined
   if (automation.value?.projectId === projectId) automation.value = undefined
-  if (pendingCoordinatorProjectId.value === projectId) pendingCoordinatorProjectId.value = ''
   if (route.params.projectId === projectId) void router.replace({ name: 'projects' })
 }
 function projectDeleted(projectId: string) {

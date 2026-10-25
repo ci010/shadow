@@ -46,7 +46,7 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
         import { createProjectLiveState } from '/src/project-live-state.ts';
         import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
         import { createLocalMainAdminContext } from '/src/installation-context.ts';
-        const state = reactive({ visible: true, draft: 'Retained coordinator draft' });
+        const state = reactive({ visible: true, draft: 'Retained admin draft' });
         const installation = reactive(createLocalMainAdminContext(location.origin));
         window.setAdmin = value => { installation.uiScopes = value ? createLocalMainAdminContext(location.origin).uiScopes : ['chat:read']; };
         let observer;

@@ -60,14 +60,13 @@ test('subagent only creates temporary work, preserving explicit workdir and igno
   assert.equal(fields?.folderId, 'folder-a')
   assert.equal(fields?.parentSessionId, parent.sessionId)
   assert.equal(starts, 2)
-  parent.agentType = 'orchestrator'
+  parent.agentType = 'general'
   assert.equal(await tool.execute({ mode: 'call', title: 'Ignored call title', description: 'Leaf', task: 'Inspect' }, context), 'Call result')
   assert.equal(calls, 1)
   assert.equal(fields?.name, undefined)
   assert.equal(fields?.description, 'Leaf')
   assert.equal(fields?.agentType, 'general')
   assert.equal(fields?.reportTo, undefined)
-  assert.match(await tool.execute({ mode: 'task', agent_type: 'orchestrator', description: 'Alias', task: 'Work' }, context), /cannot be used/)
 })
 
 test('subagent permits task inference overrides but calls reject explicit fields and inherit caller settings', async () => {

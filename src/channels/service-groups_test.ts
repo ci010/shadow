@@ -57,6 +57,8 @@ test('native group setup is owner-only, uses only reviewed scoped Agent profiles
   assert.equal(response.status, 200)
   const { request } = await response.json()
   assert.equal(f.resources.snapshot().revision, before)
+  assert.equal(request.sessionId, 'owner:service-groups')
+  assert.equal(request.change.sourceSessionId, 'owner:service-groups')
   assert.equal(request.bindings.find((binding: { conversationId: string }) => binding.conversationId === 'group:new').grants[0].id, 'github')
   assert.deepEqual(request.impact.affectedBindings, [JSON.stringify([f.bot.id, 'qq', 'group:new'])])
   const pending = await (await f.app.request('/api/service-groups', { headers: f.headers })).json()
@@ -143,7 +145,7 @@ test('independent group review publishes only its candidate and preserves unrela
   bundle.bindings.push(ConversationBindingSchema.parse({ botInstanceId: f.bot.id, platform: 'qq', conversationId: 'draft-only', agent: 'draft-only' }))
   const draft = await f.resources.stage({ expectedRevision: f.resources.draft().revision, bundle })
   // An unrelated shared-draft review must coexist, not be replaced.
-  const unrelated = await f.reviews.propose()
+  const unrelated = await f.reviews.propose(undefined, undefined, 'web:chat-admin')
   const { request } = await (await f.propose()).json()
   assert.ok(request.change)
   assert.equal(f.reviews.list().length, 2)

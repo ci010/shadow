@@ -68,7 +68,7 @@ test('knowledge requests direct every role to the Skill without inlining its man
   const fs = new VirtualFs()
   fs.mount('v:memory', 'Project memory', () => '')
   const provider = workspaceProvider(resolve('.test-data', 'wiki-alias'), fs)
-  for (const name of ['orchestrator', 'general', 'sub']) {
+  for (const name of ['general', 'sub']) {
     for (const allowedTools of [['read', 'search'], ['read', 'search', 'write']]) {
       const builder = new ContextBuilder(resolve('.test-data', 'wiki-alias'))
       builder.register(provider)
@@ -79,25 +79,24 @@ test('knowledge requests direct every role to the Skill without inlining its man
       assert.match(prompt, /without granting permissions/)
       assert.equal(prompt.match(/v:skills\/project-knowledge/g)?.length, 1)
       assert.doesNotMatch(prompt, /canonical tool path|v:wiki|Session memory under|Files survive restarts|Write Wiki Markdown|Record mistakes|write-validation/)
-      if (name === 'orchestrator') assert.match(prompt, /read Project Wiki and memory/)
     }
   }
 })
 
-test('coordinator workspace retains read context without worker resources or write instructions', async () => {
+test('ordinary workspace exposes discoverable Project resources', async () => {
   const fs = new VirtualFs()
   for (const prefix of ['v:project', 'v:sessions', 'v:memory', 'v:tools', 'v:bg', 'v:skills', 'v:config', 'v:events']) {
     fs.mount(prefix, prefix === 'v:memory' ? 'read, search, and write memory' : `${prefix} resources`, () => '')
   }
-  const provider = workspaceProvider(resolve('.test-data', 'coordinator-prompt'), fs)
+  const provider = workspaceProvider(resolve('.test-data', 'ordinary-prompt'), fs)
   const prompt = (await provider.getPromptSection(context({
-    agent: { ...agent, name: 'orchestrator' },
+    agent: { ...agent, name: 'general' },
   })))!
   assertAttachmentContext(prompt)
   assert.match(prompt, /Virtual resources:/)
   assert.doesNotMatch(prompt, /read\/search relevant Project memory|use `read`\/`search`/)
   for (const path of ['v:project', 'v:sessions', 'v:memory']) assert(prompt.includes(path))
-  assert.doesNotMatch(prompt, /v:tools|v:bg|v:skills\/(?!project-knowledge)|v:config|v:events|write\(|read, search, and write|Write what you need|scratch\/ephemeral/)
+  assert.match(prompt, /v:tools|v:config/)
   const ordinary = (await provider.getPromptSection(context()))!
   assert.match(ordinary, /v:tools|v:config/)
   assert.doesNotMatch(ordinary, /write\("notes.md"\)/)
@@ -117,16 +116,11 @@ test('current session metadata mount is discoverable in the injected workspace p
 
 test('Git workflow is session-default without granting coordinator execution', async () => {
   const provider = workspaceProvider(resolve('.test-data', 'git-guidance'), new VirtualFs())
-  for (const name of ['general', 'sub', 'explore', 'orchestrator']) {
+  for (const name of ['general', 'sub', 'explore']) {
     const prompt = (await provider.getPromptSection(context({ agent: { ...agent, name } })))!
     assert.match(prompt, /stricttools\/safegit/)
     assert.match(prompt, /Other Git commands use ordinary Git; safegit coverage alone does not require extra approval/)
-    if (name === 'orchestrator') {
-      assert.match(prompt, /Coordination grants no execution or publication permissions/)
-      assert.doesNotMatch(prompt, /v:skills\/git-github/)
-    } else {
-      assert.match(prompt, /read `v:skills\/git-github`/)
-      assert.match(prompt, /The skill covers commit\/push failure handling/)
-    }
+    assert.match(prompt, /read `v:skills\/git-github`/)
+    assert.match(prompt, /The skill covers commit\/push failure handling/)
   }
 })

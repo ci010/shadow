@@ -28,7 +28,7 @@ function stylesheet(source: string, filename: string): Sheet {
 
 const globalStyles = stylesheet(await readFile(new URL('./styles.css', import.meta.url), 'utf8'), 'styles.css')
 const components = new Map(await Promise.all([
-  'ChatTab', 'MessageAction', 'MessagePreviewCard', 'SessionMessageDisclosure', 'ExecutionMessage', 'SessionActivity', 'ProjectCoordinator', 'ToolActivityGroup', 'ReasoningItem',
+  'ChatTab', 'MessageAction', 'MessagePreviewCard', 'SessionMessageDisclosure', 'ExecutionMessage', 'SessionActivity', 'ToolActivityGroup', 'ReasoningItem',
 ].map(async name => {
   const filename = `${name}.vue`
   const { descriptor, errors } = parse(await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8'))
@@ -266,10 +266,10 @@ test('session activity reserves success and error for completed and failed work'
 })
 
 test('selected project coordination accents the title without a filled selection block', () => {
-  assert.equal(property('ProjectCoordinator', '.coordinator-entry.selected', 'background', '.coordinator-entry'), 'transparent')
-  assert.equal(property('ProjectCoordinator', '.coordinator-entry.selected', 'color'), 'var(--c-primary)')
-  assert.equal(property('ProjectCoordinator', '.coordinator-entry.selected > span', 'text-decoration'), 'underline')
-  assert.equal(property('ProjectCoordinator', '.coordinator-entry:focus-visible', 'outline'), '2px solid var(--c-blue)')
+  assert.equal(property('.admin-entry.selected', 'background', '.admin-entry'), 'transparent')
+  assert.equal(property('.admin-entry.selected', 'color'), 'var(--c-primary)')
+  assert.equal(property('.admin-entry.selected > span', 'text-decoration'), 'underline')
+  assert.equal(property('.admin-entry:focus-visible', 'outline'), '2px solid var(--c-blue)')
 })
 
 test('composer keeps a quiet resting edge and a visible interactive focus boundary', () => {

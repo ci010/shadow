@@ -322,28 +322,28 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   assert.ok(f.subscriptions.every(subscription => subscription.closed))
 })
 
-test('coordinator uses the ordinary writable chat and SSE-discovered topics navigate independently', async t => {
+test('admin uses the ordinary writable chat and SSE-discovered topics navigate independently', async t => {
   const f = fixture(t)
-  const a = f.mount('a', 'web:orchestrator')
-  const b = f.mount('b', 'web:orchestrator')
-  assert.equal(f.requests.length, 0, 'Mounting a coordinator does not ensure or send a turn')
+  const a = f.mount('a', 'web:chat-admin')
+  const b = f.mount('b', 'web:chat-admin')
+  assert.equal(f.requests.length, 0, 'Mounting a admin does not ensure or send a turn')
   assert.equal(a.state().isDirectChat, true)
   f.invalidate('a')
   await settle()
   f.requests[0]!.finish({ nodes: [], sessions: [
-    { sessionId: 'web:orchestrator', sessionKind: 'orchestrator', mode: 'session', parentSessionId: null },
+    { sessionId: 'web:chat-admin', mode: 'session', parentSessionId: null },
     { sessionId: 'web:chat-topic', sessionKind: 'topic', mode: 'session', parentSessionId: null,
-      createdBySessionId: 'web:orchestrator', topic: { title: 'Installer', goal: 'Ship', scope: 'Windows' } },
+      createdBySessionId: 'web:chat-admin', topic: { title: 'Installer', goal: 'Ship', scope: 'Windows' } },
   ] })
   await settle()
   f.requests[1]!.finish({ stages: {} })
   await settle()
   assert.equal(a.state().allSessions[1].label, 'Installer')
-  assert.equal(b.state().allSessions.length, 0, 'Same coordinator ID never shares Project graph state')
+  assert.equal(b.state().allSessions.length, 0, 'Same admin ID never shares Project graph state')
   a.state().requestSession('web:chat-topic')
   assert.deepEqual(a.navigation, ['web:chat-topic'])
   assert.equal(a.state().inputText, 'Keep this exact unsent draft')
-  assert.equal(f.requests.some(request => /orchestrator$/.test(request.path)), false)
+  assert.equal(f.requests.some(request => /chat-admin$/.test(request.path)), false)
 })
 
 test('live peer messages render like persisted history without becoming human prompts or assistant output', async t => {

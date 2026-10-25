@@ -96,7 +96,7 @@ async function fixture(workspace: string, store: SessionStore) {
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  for (const role of ['general', 'orchestrator']) {
+  for (const role of ['general']) {
     test(`${Store.name}: /clear refreshes ${role} context without changing identity or deleting history`, { timeout: 15000 }, async () => {
       await withTempWorkspace(async workspace => {
         await definition(workspace, role, 'OLD_ROLE_PROMPT')
@@ -104,10 +104,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         let store: SessionStore = new Store(directory)
         await store.init()
         let f = await fixture(workspace, store)
-        const id = role === 'orchestrator' ? 'web:orchestrator' : 'web:topic'
+        const id = 'web:chat-admin'
         try {
           await f.sessions.buildSession(id, undefined, {
-            agentType: role, sessionKind: role === 'orchestrator' ? 'orchestrator' : 'topic',
+            agentType: role, sessionKind: 'topic',
             folderId: 'fixture-folder',
           })
           await f.send(id, 'OLD_CONVERSATION')
@@ -240,10 +240,10 @@ test('refresh rereads builtin definitions and rejects invalid updated files with
   await withTempWorkspace(async workspace => {
     const manager = new AgentTypesManager(workspace)
     await manager.load()
-    const original = manager.resolve('orchestrator')!.prompt
-    manager.resolve('orchestrator')!.prompt = 'STALE_BUILTIN'
-    await manager.refresh('orchestrator')
-    assert.equal(manager.resolve('orchestrator')!.prompt, original)
+    const original = manager.resolve('general')!.prompt
+    manager.resolve('general')!.prompt = 'STALE_BUILTIN'
+    await manager.refresh('general')
+    assert.equal(manager.resolve('general')!.prompt, original)
     await definition(workspace, 'general', 'VALID_ROLE')
     await manager.load()
     const before = manager.resolve('general')

@@ -6,19 +6,7 @@
       <RouterLink :to="{ name: 'project-settings', params: { projectId, section: 'models' } }">{{ t('Project models') }}</RouterLink>
       <RouterLink :to="{ name: 'settings', params: { section: 'providers' } }">{{ t('App providers') }}</RouterLink>
     </div>
-    <ProjectDashboard v-if="sessionId === ORCHESTRATOR_SESSION_ID" ref="dashboard" :api-base="apiBase" :project-id="projectId"
-      :project-name="projectName" :visible="visible" :knowledge-request="knowledgeRequest" :child-session-id="childSessionId"
-      @navigate="$emit('navigate', $event)" @compose="workspace?.appendDraft($event)" @quote="workspace?.quoteSelection($event)"
-      @image-context="workspace?.handleImageContext($event)" @image-busy="workspace?.handleImageBusy($event)"
-      @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
-      @project-navigation="$emit('project-navigation', $event)" @dashboard-visible="$emit('dashboard-visible', $event)">
-      <template #default="{ active, keyboardActive }">
-        <ChatWorkspace ref="workspace" :api-base="apiBase" managed embedded :project-id="projectId" :project-name="projectName"
-          :session-id="sessionId" :visible="active" :keyboard-active="keyboardActive" :child-session-id="childSessionId"
-          @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" @deleted="$emit('deleted', $event)" />
-      </template>
-    </ProjectDashboard>
-    <ChatWorkspace v-else ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
+    <ChatWorkspace ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
       :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
       @project-navigation="$emit('project-navigation', $event)"
       :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
@@ -30,8 +18,6 @@
 import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import ChatWorkspace from './ChatWorkspace.vue'
-import ProjectDashboard from './ProjectDashboard.vue'
-import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import { createProjectSettingsClient, configReasoning } from '../project-settings.ts'
 import type { ReasoningSettings } from '../session-settings.ts'
 import { provideModelSelection, type ProviderInstanceLabel } from '../model-selection.ts'
@@ -46,7 +32,6 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; deleted: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab]; 'dashboard-visible': [visible: boolean] }>()
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()
-const dashboard = ref<InstanceType<typeof ProjectDashboard>>()
 const current = ref('')
 const defaultReasoning = ref<ReasoningSettings>({})
 const options = ref<string[]>([])
@@ -92,11 +77,7 @@ onUnmounted(() => {
   request?.abort()
   window.removeEventListener('shadow:config-changed', defaultsChanged)
 })
-defineExpose({ requestSession: (id: string) => {
-  if (props.sessionId !== ORCHESTRATOR_SESSION_ID) workspace.value?.requestSession(id)
-  else if (id !== ORCHESTRATOR_SESSION_ID) emit('navigate', id)
-  else dashboard.value?.showDashboard()
-} })
+defineExpose({ requestSession: (id: string) => workspace.value?.requestSession(id) })
 </script>
 
 <style scoped>

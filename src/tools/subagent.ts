@@ -111,9 +111,8 @@ export class SubagentTool implements Tool {
       projectName: args.project_name,
     }) ?? parentState?.initiativeId
     if (initiativeId) this.sessions.assertInitiativeAccess(initiativeId)
-    const inheritedRole = parentState?.agentType === 'orchestrator' ? 'general' : parentState?.agentType ?? 'general'
+    const inheritedRole = parentState?.agentType ?? 'general'
     const typeName = args.agent_type != null ? String(args.agent_type) : args.mode === 'call' ? inheritedRole : 'general'
-    if (typeName === 'orchestrator') return 'Error: the Project orchestrator cannot be used as a subagent role.'
     const reportTo = args.report_to != null ? String(args.report_to) : undefined
     const preloadTools = args.preload_tools && typeof args.preload_tools === 'object' && !Array.isArray(args.preload_tools)
       ? Object.fromEntries(
@@ -143,7 +142,7 @@ export class SubagentTool implements Tool {
     if (mode === 'call' && args.review !== undefined) return 'Error: calls do not support review policies.'
     const review = mode === 'task' ? z.object({ mode: z.enum(['parent', 'agent']).default('parent'), agent_type: z.string().min(1).optional(), max_rounds: z.number().int().min(1).max(10).default(3), criteria: z.string().max(16000).default('') }).strict().parse(args.review ?? {}) : undefined
     if (review?.mode === 'parent' && review.agent_type !== undefined) return 'Error: parent review does not accept agent_type.'
-    if (review?.mode === 'agent' && (!this.agentTypes.resolve(review.agent_type ?? 'verify') || (review.agent_type ?? 'verify') === 'orchestrator')) return 'Error: reviewer must be a configured local non-orchestrator agent.'
+    if (review?.mode === 'agent' && (!this.agentTypes.resolve(review.agent_type ?? 'verify'))) return 'Error: reviewer must be a configured local agent.'
     if (review?.mode === 'agent') {
       const reviewer = this.agentTypes.resolve(review.agent_type ?? 'verify')!
       if (reviewer.name.startsWith('a2a:') || !isToolAllowed(reviewer, 'task')) return 'Error: reviewer must be local and permitted to use the structured task review tool.'

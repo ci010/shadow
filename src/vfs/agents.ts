@@ -9,7 +9,7 @@ export function createAgentsHandler(
 ): { read: VirtualFsHandler; list: VirtualFsListHandler } {
   const entries = (context: ExecutionContext) => {
     context.signal.throwIfAborted()
-    const local = types.all().filter(type => type.name !== 'orchestrator').map(type => ({
+    const local = types.all().map(type => ({
       name: type.name, content: JSON.stringify({
         name: type.name, kind: 'local', description: type.description, defaultMode: type.defaultMode,
       }, null, 2),

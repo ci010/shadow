@@ -632,27 +632,30 @@ from a role that can be edited later.
 
 The delegation capability matrix is enforced at runtime as well as described in
 the prompt: durable root/topic → task/call; task → explicit call; call → none.
-Role tool restrictions can narrow this further. The Project coordinator cannot
-delegate. Structural delegation ownership applies to temporary executions, not
+Role tool restrictions can narrow this further. Structural delegation ownership applies to temporary executions, not
 topic provenance; neither the agent type's visibility flag nor context-only fork
 ancestry establishes coordination authority.
 
 ### Project coordination and peer sessions
 
-Each Project has exactly one `web:orchestrator`, pinned as the default UI routing
-entry. Its built-in role and canonical runtime guard permit only
-read/search/session/message/work/sql, Project configuration and skill-authoring
-controls, owner-only Discord `channel_config`, and ask/reply, excluding invoke_tool/exec/write/subagent.
-It routes to reusable sessions and lets users continue there, rather than owning
-their session hierarchy. Ensuring its existence never automatically runs an LLM.
+No main coordination session is required. Ordinary durable administrator Web
+sessions discover `project-administration` on demand and invoke the existing
+dynamic catalog for Project resources, private credentials and review proposals.
+The backend checks exact Project identity, durable local session, administrator
+and direct user input; Skill reading/importing grants no rights. Credential cards
+and publication metadata follow the initiating logical session. Managed Bots,
+group chats, temporary executions and background events cannot exercise those
+owner rights. Publication still requires explicit exact-version human review.
 
-Opening Coord shows a **Project workbench**, not a second kind of session.
+There is no dedicated management-session identity, role or creation API.
+The **Project workbench** is a Project view, not a session.
 Its default canvas is an expandable causal outline of goals, approaches, tasks
 and findings, with current notes, optional read-only HTML exhibits and native
 questions anchored at the affected goal. The lower technical origin stays
 available on demand. An Initiative-grouped board and parent/dependency graph
-remain alternate views. The existing coordinator conversation is a collapsible
-side panel; discussing a premise appends a draft, not an automatic message.
+remain alternate views. Discussing a premise opens an ordinary Web conversation
+with an editable draft, not an automatic message. Work details and GitHub use a
+resizable side panel.
 On wide containers the side panel's left separator supports
 dragging and keyboard resizing (arrows, Home/End), retaining the preferred width
 across panel switches and temporary container shrinkage. It reserves at least
@@ -670,7 +673,7 @@ unresolved operation effects. `GET /api/work/:key` loads current notes;
 history is opt-in with `?history=1`. `POST /api/work/:key` uses the human note
 update/assignment/impact-review operations and exact current note version.
 Viewing or selecting work does not create a session or confer authority. Discuss/New work
-append an editable coordinator draft; they do not send it automatically.
+open an editable ordinary conversation draft; they do not send it automatically.
 Request links reveal the native question in its goal context. Credential and
 publication controls retain their separate scope.
 
@@ -713,7 +716,7 @@ retries do not replay kickoff; initialMessageStatus distinguishes accepted,
 not_requested, and not_replayed.
 
 Session update takes sessionId, title and optional description; only
-self/coordinator or authorized UI may update it. Metadata does not revise work
+self or authorized UI may update it. Metadata does not revise work
 goals or acceptance. `register_folder` with path
 uses the existing Project registry for an existing Main-local folder. List with
 `read("v:project/folders")`; never translate a remote session's display path into
@@ -722,8 +725,7 @@ or register folders.
 
 Authorized routes expose GET `/projects/:projectId/api/sessions/discover`, POST
 `/projects/:projectId/api/sessions`, PATCH
-`/projects/:projectId/api/sessions/:key/metadata`, and POST
-`/projects/:projectId/api/orchestrator`. Historical Topic metadata remains in
+`/projects/:projectId/api/sessions/:key/metadata`. Historical Topic metadata remains in
 stored records; current details and graph use session names/descriptions.
 Discovery returns a paginated `sessions` array and `metadataSource`; neither
 session creation nor renaming creates or revises a Work definition.
@@ -880,7 +882,7 @@ rules do not constitute an OS sandbox or roll back external side effects.
 The session graph exposes mode, role, structural parent, execution status, and the
 optional native `parentToolCallId`. Both JSONL and SQLite preserve this correlation
 field; older records can still be matched through their tool admission receipts.
-The UI pins the coordinator and lists durable topic peers, while displaying delegated one-shot
+The UI lists legacy and ordinary durable conversations, while displaying delegated one-shot
 tasks/calls as inspectable execution cards at their originating native tool calls,
 not in a separate footer. Outbound tool events retain their IDs so parallel
 results cannot overwrite or cross-pair. Executions without a matching native call
@@ -943,8 +945,8 @@ For ordinary local Project sessions, `ContextBuilder` concatenates providers in 
    compact tool protocols cover work revisions, decisions and coordination.
    Session/task/call and role gating still suppress unavailable tool instructions.
 5. **Capability discovery:** bounded Skill metadata, selectable role templates,
-   and active temporary executions only for their delegation owner. Session-only
-   coordinators see templates without acquiring subagent capabilities.
+   and active temporary executions only for their delegation owner. Template
+   discovery never grants subagent capabilities.
 6. **Historical reference:** keyword index, dated events,
    and previously touched files. Compaction summaries appear only in the
    continuation message, not again in this system-prompt section. A summary's
@@ -1625,9 +1627,7 @@ bounded per Project/session, and never removes files or active tools. Search
 continues to expose the complete permitted catalog.
 
 `SkillEditStore` and `skill_read`/`skill_save` provide ordinary shared Skill
-editing, including bundled tool sources, to durable local web topics and the
-coordinator. The coordinator receives only scoped Skill access, not generic
-write/exec. Raw editing reads do not register tools. Session-local read
+editing, including bundled tool sources, to durable local Web sessions. These tools do not grant extra filesystem or execution rights. Raw editing reads do not register tools. Session-local read
 baselines detect stale saves without model-provided revisions. The save path
 validates the complete candidate, rejects unsafe paths/symlinks and invalid
 declarations, stages files, and swaps directories with rollback on ordinary
@@ -1688,7 +1688,7 @@ Tests/live use the shared runner but explicit test/probe policy permits only
 tests use synthetic @shadow receipts (including sequences and safe thrown
 errors). `authoring_change` maintains independent published-base Changes with
 scoped, revocable editor assignments and immutable-version check evidence.
-Virtual authoring files never become live loader files. The coordinator can
+Virtual authoring files never become live loader files. The authoring session can
 edit a small prompt directly or delegate explicit paths without relaying source
 bundles. Rebase is explicit and conflicts on divergent file/binding changes.
 
@@ -1709,15 +1709,13 @@ identity instead of recovered from chat logs or manually maintained reports.
 
 Publication remains owner-reviewed. Durable review stores pin exact snapshots,
 base revisions and affected bindings; Change publication does not overwrite a
-legacy shared draft. The coordinator still has no shell/write/dynamic invocation
-authority. Delegated Change operations do not confer live or deployment rights.
-Nonmutating `project_config` actions `schema`, `inspect`, `read`, `preview`, and
-synthetic `test` are available in
-session/event-triggered turns of that same Project's coordinator. All other
-actions of that legacy tool retain the direct-owner-turn requirement. The
-separate Change tool validates Project, durable authoring session and assigned
-resource paths on every operation; bot/group conversations and other Projects
-are not authoring principals. Reads never return stored credential values.
+legacy shared draft. Delegated Change operations do not confer live or deployment
+rights. `project_config` requires a direct administrator user turn in an ordinary
+durable local Web session in the bound Project. The Change tool validates Project,
+durable authoring session and assigned paths on every operation; proposal changes
+require direct owner input. Credentials and proposals never gain authority from
+a session name, background event, tool registration or Skill read. Reads never
+return stored credential values.
 See [Conversation agent authoring](agent-authoring.md) for formats, test inputs,
 source hashes, approval and credential boundaries.
 
@@ -2114,8 +2112,8 @@ enumeration and forum/media parent bindings are not implemented.
 
 The authenticated `/api/integrations/discord` routes and owner/authorized-manager
 `channel_config` tools use that one configuration service. Models can propose,
-not approve. The coordinator's canonical cap explicitly exposes this opt-in
-tool, while manager chat gets a same-Bot ceiling. Agent file recovery preserves
+not approve. Ordinary administrator Web sessions discover this opt-in tool
+through `project-administration` and the dynamic catalog; manager chat retains a same-Bot ceiling. Agent file recovery preserves
 later manual edits. Vue's **Discord access** manages Agents, assignments,
 knowledge publication, learning status and reviews; Project-scoped
 `integrations` SSE carries invalidation only, never private content. Main blocks
@@ -2706,7 +2704,7 @@ frontend code.
 `src/microapps/` supplies a separate Project-owned app registry, immutable source
 revisions, owner approval, start/stop/reopen lifecycle and an app-scoped model
 bridge. `micro_app` is a discoverable agent tool, not an approval API. The
-coordinator's Apps workspace reviews source. Web opens an isolated loopback
+Project workbench's Apps workspace reviews source. Web opens an isolated loopback
 iframe; Electron opens a separate sandboxed BrowserWindow with no host preload
 or credentials. Approved apps have Windows task-menu launch entries that retain
 only stable Project/app identities and request fresh authorization on open.

@@ -190,7 +190,7 @@ review as code changes. Without an icon, Shadow supplies its default.
 `publish/check` return compact receipts; their `detail` points to `get` for the
 full manifest, requirements and acceptance evidence. `workRefs` and
 `acceptanceSummary` are indexes, not complete criteria or a passing test report.
-Tell the user to open Project coordinator -> Apps to review its source,
+Tell the user to open Project workbench -> Apps to review its source,
 requested model-call allowance and local process behavior. They approve the
 exact version, then open it. A2A text is not a substitute for owner approval.
 If review is pending, report that state accurately; do not invent an alternate

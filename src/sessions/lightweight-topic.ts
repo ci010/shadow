@@ -4,7 +4,6 @@ import type { SessionState } from './session-store.ts'
 /** Ordinary conversations are topics by identity, never inferred from similar titles. */
 export function isLightweightTopic(state: SessionState): boolean {
   return (state.mode ?? 'session') === 'session' && !state.automation &&
-    state.sessionKind !== 'orchestrator' && state.sessionId !== 'web:orchestrator' &&
     !['work-organizer', 'work-observer', 'reflector', 'soul-reflector', 'encapsulator'].includes(state.agentType ?? '')
 }
 export const sessionTopicKey = (id: string) => `session:${id}`

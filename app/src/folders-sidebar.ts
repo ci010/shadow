@@ -4,7 +4,7 @@ import type { FolderRecord } from '../../src/folders/contracts.ts'
 import { isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 import { parseAutomationSessionRef, type AutomationSessionRef } from '../../src/cron/contracts.ts'
 import { isExecutionStatus, persistentConversations, type ExecutionStatus } from './subagent-executions.ts'
-import { isDirectConversation, ORCHESTRATOR_SESSION_ID, parseTopicMetadata, type TopicMetadata } from './project-coordination.ts'
+import { isDirectConversation, parseTopicMetadata, type TopicMetadata } from './project-coordination.ts'
 import { channelAddressFromSessionId, type ChannelAddress } from '../../src/bus/events.ts'
 
 export const FOLDER_ACTIONS = [
@@ -19,7 +19,7 @@ export interface SidebarSession {
   sessionId: string
   projectId?: string
   channelAddress?: ChannelAddress
-  sessionKind?: 'topic' | 'orchestrator'
+  sessionKind?: 'topic'
   topic?: TopicMetadata
   createdBySessionId?: string
   label: string
@@ -94,7 +94,6 @@ function flattenSessions(sessions: SidebarSession[]): SidebarSession[] {
 /** Graph name, coordination and topic titles have the same priority everywhere. */
 export function sessionDisplayTitle(session: { name?: unknown; sessionId?: unknown; title?: unknown }, topic?: TopicMetadata): string {
   if (typeof session.name === 'string' && session.name.trim()) return session.name
-  if (session.sessionId === ORCHESTRATOR_SESSION_ID) return t('Project coordination')
   if (topic?.title?.trim()) return topic.title
   if (typeof session.title === 'string' && session.title.trim()) return session.title
   return t('New conversation')
@@ -123,7 +122,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       || (session.folderId !== undefined && typeof session.folderId !== 'string')
       || (session.title !== undefined && typeof session.title !== 'string')
       || (session.name !== undefined && (typeof session.name !== 'string' || !session.name.trim()))
-      || (session.sessionKind !== undefined && session.sessionKind !== 'topic' && session.sessionKind !== 'orchestrator')
+      || (session.sessionKind !== undefined && session.sessionKind !== 'topic')
       || (session.createdBySessionId !== undefined && typeof session.createdBySessionId !== 'string')
       || (session.mode !== undefined && session.mode !== 'session' && session.mode !== 'task' && session.mode !== 'call')
       || (session.agentType !== undefined && (typeof session.agentType !== 'string' || !session.agentType))
@@ -226,8 +225,7 @@ export function automationSessionOwners(sessions: SidebarSession[]): Map<string,
 
 export function groupFolderSessions(folders: FolderRecord[], sessions: SidebarSession[]) {
   const owners = automationSessionOwners(sessions)
-  const regular = persistentConversations(sessions).filter(session => !owners.has(session.sessionId)
-    && session.sessionKind !== 'orchestrator' && session.sessionId !== ORCHESTRATOR_SESSION_ID)
+  const regular = persistentConversations(sessions).filter(session => !owners.has(session.sessionId))
   const folderIds = new Set(folders.map(folder => folder.id))
   const automations = new Map<string, { id: string; name: string; sessions: SidebarSession[] }>()
   for (const session of sessions) {

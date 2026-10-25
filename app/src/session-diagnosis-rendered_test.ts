@@ -43,7 +43,7 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
           const paragraph = 'Coordinate this synthetic project using its registered resources and independent conversations. ';
           createApp({ render: () => h(Diagnosis, { apiBase: location.origin, sessionId: 'context-fixture',
             physicalId: null, active: false, canReadTrace: false, working: false,
-            systemPrompt: '# Project coordinator\\n\\n' + paragraph.repeat(16) + '\\n\\n\`\`\`text\\n' + 'long-token-'.repeat(80) + '\\n\`\`\`',
+            systemPrompt: '# Project admin\\n\\n' + paragraph.repeat(16) + '\\n\\n\`\`\`text\\n' + 'long-token-'.repeat(80) + '\\n\`\`\`',
             compactionSummary: '# Earlier context\\n\\nRetained synthetic summary.',
             tools: [{ name: 'read', description: 'Read project resources', parameters: { properties: { path: { type: 'string' } } } }]
           }) }).mount('#app');`
@@ -129,8 +129,8 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
               { role: 'tool', tool_call_id: 'call-1', content: 'Synthetic tool result' },
               { role: 'assistant', content: 'Final model return', timestamp: new Date(end).toISOString() },
               { role: 'user', name: 'admin', content: [
-                { type: 'text', text: '<sender id="web:orchestrator" name="admin" source="session" intent="handoff" />' },
-                { type: 'text', text: 'Delegated inspection from coordinator.' },
+                { type: 'text', text: '<sender id="web:chat-admin" name="admin" source="session" intent="handoff" />' },
+                { type: 'text', text: 'Delegated inspection from admin.' },
               ] },
             ] })
             return

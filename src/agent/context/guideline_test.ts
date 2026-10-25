@@ -110,7 +110,6 @@ test('tool operations stay discoverable on demand while critical recovery bounda
     /discovery, Skills and quoted examples never widen them/,
   ]
   for (const agent of await getBuiltinAgentTypes()) {
-    if (agent.name === 'orchestrator') continue
     for (const mode of EXECUTION_MODES) {
       for (const isGroup of [false, true]) {
         const prompt = (await provider.getPromptSection({
@@ -181,17 +180,16 @@ test('ordinary and formerly managed sessions receive the same optional notebook 
   assert(length <= 12600, `managed guideline grew to ${length} characters`)
 })
 
-test('coordinator static prompt stays compact without generic worker manuals', async () => {
-  const agent = (await getBuiltinAgentTypes()).find(agent => agent.name === 'orchestrator')!
-  const prompt = (await guidelineProvider().getPromptSection(makeContext(agent, false)))!.replace(/\r\n/g, '\n')
-  assert(agent.prompt.length <= 4500, `coordinator role grew to ${agent.prompt.length} characters`)
-  // Includes work-revision and decision protocols, but no embedded maintenance manual.
-  assert(prompt.length <= 11000, `coordinator guideline grew to ${prompt.length} characters`)
-  assert(prompt.split('\n').length <= 150)
-  assert.doesNotMatch(prompt, /### Environment|Configure MCP|Activate skill tools|vm\.SourceTextModule|shell: "node"/)
-  assert.match(prompt, /action: schema/)
+test('ordinary role uses ordinary guidance and keeps administration details in an on-demand Skill', async () => {
+  const roles = await getBuiltinAgentTypes()
+  const agent = roles.find(agent => agent.name === 'general')!
+  const ordinary = roles.find(agent => agent.name === 'general')!
+  const prompt = (await guidelineProvider().getPromptSection(makeContext(agent, false)))!
+  const ordinaryPrompt = (await guidelineProvider().getPromptSection(makeContext(ordinary, false)))!
+  assert(agent.prompt.length <= ordinary.prompt.length + 200)
+  assert(prompt.length <= ordinaryPrompt.length + 200)
+  assert.doesNotMatch(prompt, /Coordinator Capability Boundary|For Discord, use|request_secret|single Project coordinator/)
   assert.match(prompt, /LAST message a non-silent request/)
-  assert.match(prompt, /silent: true.*archive without triggering a response/)
 })
 
 test('managed review contract requires structured verdict and keeps parent acceptance separate from worker finals', async () => {

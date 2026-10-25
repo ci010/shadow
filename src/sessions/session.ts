@@ -141,8 +141,7 @@ export class Session extends BaseSession {
     // Silent / non-urgent events never interrupt an active turn: enqueue them
     // so they are handled (or, for silent, merely recorded) after this turn.
     if (
-      msg.policy === 'silent' || msg.policy === 'queue' ||
-      (this.id === 'web:orchestrator' && msg.source.kind !== 'user')
+      msg.policy === 'silent' || msg.policy === 'queue'
     ) {
       this.pushEvent({ type: 'message', msg, llm })
       return

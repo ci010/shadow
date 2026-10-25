@@ -16,7 +16,6 @@ export function workspaceProvider(
   return {
     name: 'workspace-intro',
     async getPromptSection(ctx) {
-      const coordinator = ctx.agent.name === 'orchestrator'
       const lines = [
         '# Working context',
         '',
@@ -37,20 +36,16 @@ export function workspaceProvider(
         'Discover the actual system user-folder paths on the execution device using supported platform facilities; account for localization and redirected or cloud-backed folders. Do not guess paths from a username, assume English directory names, or use Main user-folder paths for a remote device. If the destination cannot be resolved or permitted tools cannot access it, explain the limitation and ask for an accessible destination; do not silently use session storage as final delivery.',
         'Keep drafts and intermediate files separate from final outputs. Never remove user files or overwrite an existing destination without permission; choose a distinct filename for new output. Existing file-access permissions and tool restrictions still apply.',
         'Verify the final file was saved at its durable destination before claiming delivery. Report its actual location and an accessible reference when supported; do not invent links, imply a local file was uploaded, or present draft-only storage as delivered or surviving chat deletion. Never remove files outside session storage during session cleanup.',
-        ...(coordinator ? [
-          'When delegating file-producing work, carry these destination rules into the task and require the actual saved location in the result. Coordination does not grant file-operation capabilities.',
-        ] : []),
+
       )
 
-      const prefixes = virtualFs.prefixes().filter(p => !coordinator ||
-        ['v:project', 'v:sessions', 'v:memory'].includes(p.prefix.replace(/\/$/, '')))
+      const prefixes = virtualFs.prefixes()
       if (prefixes.length > 0) {
         lines.push(
           '',
           'Virtual resources:',
           '',
-          ...prefixes.map((p) => `- \`${p.prefix}/\` — ${coordinator && p.prefix.replace(/\/$/, '') === 'v:memory'
-            ? 'read Project Wiki and memory' : p.description}`),
+          ...prefixes.map((p) => `- \`${p.prefix}/\` — ${p.description}`),
         )
       }
 
@@ -65,9 +60,7 @@ export function workspaceProvider(
         '',
         '## Git and GitHub',
         '',
-        coordinator
-          ? 'Route commits and pushes through bundled stricttools/safegit; have workers follow the Git skill for usage and commit/push failure handling. Other Git commands use ordinary Git; safegit coverage alone does not require extra approval. Existing destructive-operation and publication permissions still apply. Prefer gh for GitHub research. Coordination grants no execution or publication permissions.'
-          : 'Before commits, pushes or GitHub research, read `v:skills/git-github`. Use bundled stricttools/safegit via exec for concurrent-safe commits and pushes. Other Git commands use ordinary Git; safegit coverage alone does not require extra approval. Existing destructive-operation and publication permissions still apply. The skill covers commit/push failure handling and gh usage.',
+        'Before commits, pushes or GitHub research, read `v:skills/git-github`. Use bundled stricttools/safegit via exec for concurrent-safe commits and pushes. Other Git commands use ordinary Git; safegit coverage alone does not require extra approval. Existing destructive-operation and publication permissions still apply. The skill covers commit/push failure handling and gh usage.',
         '',
         '## Project knowledge',
         '',

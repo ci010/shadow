@@ -111,7 +111,7 @@ export function discordIntegrationPlugin(options: {
 }
 
 /** Owner chat can draft but cannot submit its own review, even from a tool call. */
-export function ownerChannelConfigurationTool(store: IntegrationStore, memory: MemoryDomains, transport: DiscordIntegrationTransport): Tool {
+export function ownerChannelConfigurationTool(store: IntegrationStore, memory: MemoryDomains, transport: DiscordIntegrationTransport, canAuthor?: (sessionId: string) => boolean): Tool {
   return {
     name: 'channel_config', optIn: true,
     description: 'Owner-only Bot configuration discovery and Discord draft creation. list includes QQ/Feishu authoring routes; use authoring_change for their Agent Markdown, tools and bindings, not Discord proposals. Read schema for formats. Discord directory/members resolve names; propose with botId returns a reviewUrl to show the user. Never approves changes.',
@@ -124,8 +124,8 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
     execute: async (raw, context) => {
       context.signal.throwIfAborted()
       if (context.channel !== 'web' || context.inputSource !== 'user' || context.admin !== true || context.isGroup ||
-        context.channelAddress || context.remoteWorkdir || context.tools.executionMode === 'call' ||
-        context.projectId !== store.options.projectId || context.memoryAccess) throw new IntegrationError('owner_required', 'Use an authenticated owner conversation.', 403)
+        context.channelAddress || context.remoteWorkdir || context.tools.executionMode !== 'session' ||
+        context.projectId !== store.options.projectId || context.memoryAccess || (canAuthor && !canAuthor(context.sessionId))) throw new IntegrationError('owner_required', 'Use an authenticated owner conversation.', 403)
       const input = z.discriminatedUnion('action', [
         z.object({ action: z.literal('schema') }).strict(),
         z.object({ action: z.literal('processor_resource'), resourceName: z.enum(['documentation','types','example','fixtures','observation/processor.ts','observation/signature.ts','observation/fixtures.json','classifier/processor.ts','classifier/policy.json','classifier/fixtures.json']) }).strict(),

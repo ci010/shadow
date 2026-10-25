@@ -19,11 +19,11 @@ test('clear is discoverable in ordinary/coordinator chats and enforces admin, ar
     isManagedConversation: () => false,
   }, () => true)(app)
   const context: SlashCommandContext = {
-    sessionId: 'web:orchestrator', admin: true,
+    sessionId: 'web:chat-admin', admin: true,
     llm: { model: 'fixture', contextWindow: 1000, temperature: 0 },
-    msg: { channel: 'web', chatId: 'orchestrator', senderId: 'owner', messageId: 'fixture', content: '/clear', timestamp: new Date().toISOString() },
+    msg: { channel: 'web', chatId: 'chat-admin', senderId: 'owner', messageId: 'fixture', content: '/clear', timestamp: new Date().toISOString() },
   }
-  for (const id of ['web:orchestrator', 'web:topic']) {
+  for (const id of ['web:chat-admin', 'web:topic']) {
     const response = await app.request(`/api/chat/commands?sessionId=${encodeURIComponent(id)}`)
     assert.equal((await response.json()).commands[0].name, 'clear')
     assert.match(await createHelpCommand(dispatcher).execute({ ...context, sessionId: id }, ''), /\/clear/)
