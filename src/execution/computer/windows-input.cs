@@ -62,8 +62,7 @@ namespace Shadow {
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] private static extern bool GetCursorPos(out InputPoint point);
         [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr handle, out InputRect rect);
-        [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr handle, out InputRect rect);
-        [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr handle, ref InputPoint point);
+        [DllImport("user32.dll")] private static extern IntPtr SendMessageTimeout(IntPtr handle, uint message, UIntPtr wparam, IntPtr lparam, uint flags, uint timeout, out UIntPtr result);
         [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(InputPoint point);
         [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr handle, uint kind);
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr handle);
@@ -140,14 +139,25 @@ namespace Shadow {
                     throw new InputFailure("window_unavailable");
             }
         }
-        internal virtual void CheckPoint(InputWindow window, InputPoint point) {
-            InputRect client;
-            var origin = new InputPoint(0, 0);
-            if (!GetClientRect(window.Handle, out client) || !ClientToScreen(window.Handle, ref origin))
+        internal virtual IntPtr PointRoot(InputPoint point) { return GetAncestor(WindowFromPoint(point), 2); }
+        internal virtual int HitTest(IntPtr handle, InputPoint point) {
+            // WM_NCHITTEST packs signed 16-bit screen coordinates. Never truncate.
+            if (point.X < Int16.MinValue || point.X > Int16.MaxValue || point.Y < Int16.MinValue || point.Y > Int16.MaxValue)
+                throw new InputFailure("input_outside_window");
+            UIntPtr result;
+            int packed = unchecked((point.Y & 0xffff) << 16 | (point.X & 0xffff));
+            if (SendMessageTimeout(handle, 0x84, UIntPtr.Zero, new IntPtr(packed), 0x22, 200, out result) == IntPtr.Zero)
                 throw new InputFailure("window_unavailable");
-            client.Left += origin.X; client.Right += origin.X;
-            client.Top += origin.Y; client.Bottom += origin.Y;
-            if (!client.Contains(point) || GetAncestor(WindowFromPoint(point), 2) != window.Handle)
+            return unchecked((int)result.ToUInt64());
+        }
+        internal static bool AllowedHit(int hit) {
+            // Client, caption, sizing grip, scrollbars, min/max, sizing edges, close.
+            // Refuse transparent/error/nowhere, system menu, menu, help and unknown codes.
+            return hit == 1 || hit == 2 || hit == 4 || hit >= 6 && hit <= 18 || hit == 20;
+        }
+        internal virtual void CheckPoint(InputWindow window, InputPoint point) {
+            if (!window.Bounds.Contains(point) || PointRoot(point) != window.Handle
+                || !AllowedHit(HitTest(window.Handle, point)) || PointRoot(point) != window.Handle)
                 throw new InputFailure("input_outside_window");
         }
     }
@@ -464,7 +474,13 @@ namespace Shadow {
                 if (start.Equals(end)) throw new InputFailure("invalid_request");
             }
             Point(start);
-            if (kind == "drag") Point(end);
+            if (kind == "drag") {
+                // Check the entire rasterized segment before pressing, not only endpoints.
+                int length = Math.Max(Math.Abs(end.X - start.X), Math.Abs(end.Y - start.Y));
+                for (int i = 1; i <= length; i++) Point(new InputPoint(
+                    start.X + (int)Math.Round((end.X - start.X) * i / (double)length),
+                    start.Y + (int)Math.Round((end.Y - start.Y) * i / (double)length)));
+            }
             moved = true;
             Emit(Move(start));
             environment.Sleep(20);

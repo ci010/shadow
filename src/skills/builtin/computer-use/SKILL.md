@@ -62,7 +62,14 @@ with shell input injection, another MCP server, elevation or an alternate tool.
    - `{"kind":"wheel","x":120,"y":80,"axis":"vertical","steps":2}`
    Coordinates are integer pixels from the screenshot's top-left, not desktop
    coordinates or UIA's screen bounds. All points and the drag path must stay
-   in the shared window's client area. No titlebar, other-window or popup escape.
+   within the complete selected-window bounds, including its titlebar and borders.
+   The right/bottom edges are exclusive. No other-window, separate popup or desktop
+   escape; transparent/unknown hit regions and system-menu/menu/help regions are
+   refused. Normal caption, sizing borders and min/max/close controls are eligible,
+   subject to the same protection, occlusion and exact-action review checks.
+   Geometry changes still invalidate observations; a titlebar/border drag that
+   moves/resizes the window may stop with an unknown outcome. Inspect and acquire
+   a fresh observation rather than replaying it.
    Click supports left/right/middle and one/two clicks. Drag uses the left button
    for 100-800 ms. Wheel accepts nonzero -10..10 steps: positive is down
    (vertical) or right (horizontal). Windows/application wheel routing still
