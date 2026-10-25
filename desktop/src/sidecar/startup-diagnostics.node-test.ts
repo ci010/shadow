@@ -62,6 +62,27 @@ test('failure contract rejects unknown codes and strips raw messages and invalid
   assert.deepEqual(startupFailure({ role: 'child', kind: 'early-exit', elapsedMs: -1 }), { role: 'child', kind: 'early-exit' })
 })
 
+test('renderer diagnostics persist only bounded HTTP, network and resource metadata', t => {
+  const directory = join(process.cwd(), '.startup-log-fixture-' + randomUUID())
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const path = startupLogPath(directory)
+  const logger = new StartupDiagnosticsLog(path, 4096, () => {})
+  logger.write({
+    ...entry, event: 'renderer-resource-failed', httpStatus: 403, netError: -3, resourceType: 'script',
+    url: 'https://private.invalid/?token=secret', message: 'private',
+  } as StartupDiagnosticEntry)
+  logger.write({ ...entry, event: 'renderer-ready', httpStatus: 999, netError: 1, resourceType: 'private' })
+  const text = readFileSync(path, 'utf8')
+  const [failed, ready] = text.trim().split('\n').map(line => JSON.parse(line))
+  assert.equal(failed.httpStatus, 403)
+  assert.equal(failed.netError, -3)
+  assert.equal(failed.resourceType, 'script')
+  assert.equal(ready.httpStatus, undefined)
+  assert.equal(ready.netError, undefined)
+  assert.equal(ready.resourceType, undefined)
+  assert.doesNotMatch(text, /private|secret|url|message/)
+})
+
 test('persistent log projects backend phase fields through a second allowlist', t => {
   const directory = join(process.cwd(), '.startup-log-fixture-' + randomUUID())
   t.after(() => rmSync(directory, { recursive: true, force: true }))

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
-import { resolveRendererTarget } from './renderer-target.js'
+import { resolveChildRendererTarget, resolveRendererTarget } from './renderer-target.js'
 
 const rendererDistPath = resolve('fixtures', 'Shadow Desktop', 'app', 'dist')
 
@@ -24,6 +24,23 @@ test('renderer target resolves the existing app/dist production build', () => {
   })
 })
 
+test('development Child keeps local Vite independently of the Main UI endpoint', () => {
+  const local = resolveRendererTarget({ rendererDistPath, developmentUrl: 'http://127.0.0.1:5273/' })
+  assert.equal(resolveChildRendererTarget(local, 'http://127.0.0.1:43124', false), local)
+  // Main's UI need not even be resolved to render development setup/workspace.
+  assert.equal(resolveChildRendererTarget(local, 'unavailable', false), local)
+})
+
+test('packaged Child and development without Vite retain the gateway renderer', () => {
+  const apiBase = 'http://127.0.0.1:43124'
+  const remote = resolveRendererTarget({ rendererDistPath: '', developmentUrl: apiBase })
+  const file = resolveRendererTarget({ rendererDistPath })
+  const vite = resolveRendererTarget({ rendererDistPath, developmentUrl: 'http://127.0.0.1:5273/' })
+  assert.deepEqual(resolveChildRendererTarget(file, apiBase, true), remote)
+  assert.deepEqual(resolveChildRendererTarget(vite, apiBase, true), remote)
+  assert.deepEqual(resolveChildRendererTarget(file, apiBase, false), remote)
+})
+
 test('renderer target rejects remote and HTTPS development pages', () => {
   assert.throws(
     () => resolveRendererTarget({ rendererDistPath: '.', developmentUrl: 'https://localhost:5273' }),
@@ -42,12 +59,16 @@ test('Child renderer policies follow only the selected loopback target and resto
   const policy = createNavigationPolicy(controller.target)
   const child = resolveRendererTarget({ rendererDistPath: '', developmentUrl: 'http://127.0.0.1:43123/' })
   controller.select(child)
-  assert.equal(controller.target.kind, 'url')
+  const selectedChild = controller.target
+  assert.equal(selectedChild.kind, 'url')
+  assert.equal(selectedChild.origin, child.origin)
   assert.equal(policy.isAllowed('http://127.0.0.1:43123/projects/default/chat'), true)
   assert.equal(policy.isAllowed('http://192.168.1.10:3123/'), false)
   assert.equal(policy.isAllowed('http://127.0.0.1:43124/'), false)
   controller.select(local)
-  assert.equal(controller.target.kind, 'file')
+  const selectedLocal = controller.target
+  assert.equal(selectedLocal.kind, 'file')
+  assert.equal(selectedLocal.origin, local.origin)
   assert.equal(policy.isAllowed('http://127.0.0.1:43123/'), false)
   assert.equal(policy.isAllowed(local.kind === 'file' ? local.entryUrl : ''), true)
 })

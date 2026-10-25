@@ -21,6 +21,15 @@ export function resolveRendererTarget(options: {
   return { kind: 'file', filePath, entryUrl: pathToFileURL(filePath).toString(), origin: 'null' }
 }
 
+export function resolveChildRendererTarget(
+  localTarget: RendererTarget,
+  apiBase: string,
+  packaged: boolean,
+): RendererTarget {
+  if (!packaged && localTarget.kind === 'url') return localTarget
+  return resolveRendererTarget({ rendererDistPath: '', developmentUrl: apiBase })
+}
+
 function isLoopbackHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
 }

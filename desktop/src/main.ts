@@ -54,6 +54,7 @@ import {
 import {
   type RendererTarget,
   resolveRendererTarget,
+  resolveChildRendererTarget,
   rendererTargetController,
 } from './renderer-target.js'
 import { RendererReadiness } from './renderer-readiness.js'
@@ -76,7 +77,7 @@ import { installChatContextPickers } from './chat-context.js'
 import { installDocumentTabShortcuts } from './document-tabs.js'
 import { installMediaPermissions } from './media-permissions.js'
 import { installStartupDiagnostics } from './startup-diagnostics-ipc.js'
-import { startupLogPath } from './sidecar/startup-diagnostics.js'
+import { StartupDiagnosticsLog, startupLogPath, type StartupDiagnosticEntry } from './sidecar/startup-diagnostics.js'
 import { TaskbarActivity } from './taskbar-activity.js'
 import { DesktopConnectionStore, RuntimeConnectionPublication } from './control/publication.js'
 import type { RuntimeEndpointMessage } from './control/runtime-endpoint.js'
@@ -97,6 +98,13 @@ let mainTray: Tray | null = null
 let managedDeployment: ManagedDeploymentProfile | undefined
 let openTaskApp: ((identity: MicroAppIdentity) => Promise<void>) | undefined
 const pendingTaskApps: MicroAppIdentity[] = []
+
+function rendererLoadErrorCode(error: unknown): number | undefined {
+  if (error && typeof error === 'object' && 'errno' in error && typeof error.errno === 'number') return error.errno
+  if (!(error instanceof Error)) return undefined
+  const match = /\((-?\d+)\) loading /u.exec(error.message)
+  return match ? Number(match[1]) : undefined
+}
 
 function showMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
@@ -407,14 +415,35 @@ async function start(): Promise<void> {
   })
   const renderer = rendererTargetController(localTarget)
   const target = renderer.target
-  const childRendererReadiness = new RendererReadiness(() => restoreLocalRenderer())
+  const rendererLog = new StartupDiagnosticsLog(startupLogPath(roleUserDataPath))
+  const rendererStartedAt = Date.now()
+  const reportRenderer = (
+    event: StartupDiagnosticEntry['event'],
+    detail: Pick<StartupDiagnosticEntry, 'httpStatus' | 'netError' | 'resourceType'> = {},
+  ): void => rendererLog.write({
+    timestamp: new Date().toISOString(), role: 'child', event,
+    elapsedMs: Math.max(0, Date.now() - rendererStartedAt), ...detail,
+  })
+  const childRendererReadiness = new RendererReadiness(
+    () => { reportRenderer('renderer-timeout'); restoreLocalRenderer() },
+  )
   registerIpcHandlers(coordinator, startup, async (result, retry) => {
     if (!result.ok || result.context.mode !== 'child' || !mainWindow) return result
+    const remoteTarget = resolveChildRendererTarget(localTarget, result.context.apiBase, app.isPackaged)
+    if (remoteTarget === localTarget) {
+      reportRenderer('renderer-ready')
+      return result
+    }
     if (retry) childRendererReadiness.retry()
     if (childRendererReadiness.failed) return { ok: false, code: 'runtime-unavailable' }
-    const remoteTarget = resolveRendererTarget({ rendererDistPath: '', developmentUrl: result.context.apiBase })
     if (remoteTarget.kind !== 'url') return result
-    if (mainWindow.webContents.getURL().startsWith(`${remoteTarget.origin}/`)) { childRendererReadiness.ready(); return result }
+    if (mainWindow.webContents.getURL().startsWith(`${remoteTarget.origin}/`)) {
+      childRendererReadiness.ready()
+      reportRenderer('renderer-ready')
+      return result
+    }
+    // A retry can call bootstrap again before the first navigation commits.
+    if (target.origin === remoteTarget.origin) return result
     // Probe before leaving local recovery. The token never enters URLs or renderer JavaScript.
     if (!rendererAuthorization || rendererAuthorization.apiBase !== result.context.apiBase) return { ok: false, code: 'runtime-unavailable' }
     try {
@@ -423,11 +452,20 @@ async function start(): Promise<void> {
         signal: AbortSignal.timeout(15000), redirect: 'error',
       })
       await response.body?.cancel()
+      reportRenderer('renderer-probe', { httpStatus: response.status })
       if (!response.ok || !response.headers.get('content-type')?.includes('text/html')) return { ok: false, code: 'runtime-unavailable' }
-    } catch { return { ok: false, code: 'runtime-unavailable' } }
+    } catch {
+      reportRenderer('renderer-probe')
+      return { ok: false, code: 'runtime-unavailable' }
+    }
     renderer.select(remoteTarget)
     setTimeout(() => {
-      void mainWindow?.loadURL(remoteTarget.url).catch(() => restoreLocalRenderer())
+      void mainWindow?.loadURL(remoteTarget.url).catch(error => {
+        const netError = rendererLoadErrorCode(error)
+        if (netError === -3) return
+        reportRenderer('renderer-load-failed', netError === undefined ? {} : { netError })
+        restoreLocalRenderer()
+      })
     }, 0)
     return result
   })
@@ -437,21 +475,50 @@ async function start(): Promise<void> {
     childRendererReadiness.fail()
     renderer.select(localTarget)
     void (localTarget.kind === 'url' ? mainWindow.loadURL(localTarget.url) : mainWindow.loadFile(localTarget.filePath))
-      .catch(() => console.error('[desktop] Local recovery renderer could not be loaded.'))
+      .catch(error => {
+        const netError = rendererLoadErrorCode(error)
+        if (netError === -3) return
+        reportRenderer('renderer-load-failed', netError === undefined ? {} : { netError })
+      })
   }
   // A document 200 is not readiness: entry scripts may still fail. The remote
   // renderer must reach bootstrap.ensureRuntime, otherwise restore local recovery.
   mainWindow.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => {
     if (isMainFrame && !inPlace && target.origin !== localTarget.origin) {
+      reportRenderer('renderer-navigation')
       childRendererReadiness.wait()
     }
   })
   mainWindow.once('closed', () => childRendererReadiness.ready())
   mainWindow.webContents.on('did-navigate', (_event, _url, status) => {
-    if (status >= 400) restoreLocalRenderer()
+    if (status >= 400 && target.origin !== localTarget.origin) {
+      reportRenderer('renderer-load-failed', { httpStatus: status })
+      restoreLocalRenderer()
+    }
   })
   mainWindow.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
-    if (isMainFrame && code !== -3) restoreLocalRenderer() // ERR_ABORTED is an intentional replacement.
+    if (isMainFrame && code !== -3 && target.origin !== localTarget.origin) {
+      reportRenderer('renderer-load-failed', { netError: code })
+      restoreLocalRenderer()
+    } // ERR_ABORTED is an intentional replacement.
+  })
+  const isChildRendererRequest = (details: Electron.OnCompletedListenerDetails | Electron.OnErrorOccurredListenerDetails) =>
+    details.webContentsId === mainWindow?.webContents.id
+    && target.origin !== localTarget.origin
+    && new URL(details.url).origin === target.origin
+  session.defaultSession.webRequest.onCompleted({ urls: ['http://127.0.0.1/*'] }, details => {
+    if (isChildRendererRequest(details) && details.statusCode >= 400) {
+      reportRenderer('renderer-resource-failed', { httpStatus: details.statusCode, resourceType: details.resourceType })
+    }
+  })
+  session.defaultSession.webRequest.onErrorOccurred({ urls: ['http://127.0.0.1/*'] }, details => {
+    if (isChildRendererRequest(details) && details.error !== 'net::ERR_ABORTED') {
+      reportRenderer('renderer-resource-failed', { resourceType: details.resourceType })
+    }
+  })
+  mainWindow.once('closed', () => {
+    session.defaultSession.webRequest.onCompleted(null)
+    session.defaultSession.webRequest.onErrorOccurred(null)
   })
 
   installTaskNotifications(ipcMain, mainWindow, target, {

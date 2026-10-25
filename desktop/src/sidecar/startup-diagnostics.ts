@@ -36,6 +36,8 @@ const EVENTS = [
   'starting', 'spawned', 'ready', 'failed', 'probe-error',
   'shutdown-fallback', 'shutdown-forced', 'stopped',
   'backend-phase',
+  'renderer-probe', 'renderer-navigation', 'renderer-ready', 'renderer-timeout',
+  'renderer-load-failed', 'renderer-resource-failed',
 ] as const
 
 export interface StartupDiagnosticEntry {
@@ -47,6 +49,9 @@ export interface StartupDiagnosticEntry {
   readonly exitCode?: number
   readonly backend?: BackendStartupTiming
   readonly backendError?: BackendStartupError
+  readonly httpStatus?: number
+  readonly netError?: number
+  readonly resourceType?: string
 }
 
 export function startupLogPath(userDataPath: string): string {
@@ -73,6 +78,12 @@ function safeEntry(entry: StartupDiagnosticEntry): StartupDiagnosticEntry | unde
     ...(Number.isSafeInteger(entry.exitCode) ? { exitCode: entry.exitCode } : {}),
     ...(backend ? { backend } : {}),
     ...(backendError ? { backendError } : {}),
+    ...(Number.isInteger(entry.httpStatus) && entry.httpStatus! >= 100 && entry.httpStatus! <= 599
+      ? { httpStatus: entry.httpStatus } : {}),
+    ...(Number.isInteger(entry.netError) && entry.netError! < 0 && entry.netError! >= -10000
+      ? { netError: entry.netError } : {}),
+    ...(['mainFrame', 'subFrame', 'stylesheet', 'script', 'image', 'font', 'xhr', 'other'].includes(entry.resourceType!)
+      ? { resourceType: entry.resourceType } : {}),
   }
 }
 

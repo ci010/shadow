@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { app, BrowserWindow, session, utilityProcess } from 'electron'
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { createUtilityProcessSpawn } from '../../src/sidecar/utility-process.js'
 import { installBackgroundWindow } from '../../src/background-window.js'
@@ -82,10 +82,35 @@ async function main() {
     assert.match(offline, /main_workspace_econnrefused/)
     assert.ok(!offline.includes('This Child'))
     assert.equal(await run(`document.querySelector('.child-status') === null && document.querySelector('.child-shell') === null`), true)
+    assert.match(await run(`document.querySelector('.workspace-recovery .desktop-role-settings button').textContent`), /Switch to Main/)
+    assert.equal(await run(`document.querySelectorAll('.desktop-title-bar').length`), 1)
+    assert.equal(await run('fixture.switches.length'), 0, 'Connection failure must never switch roles automatically')
     for (const width of [1100, 400]) {
       window.setSize(width, 900)
-      assert.equal(await run(`new Promise(r=>setTimeout(()=>r(document.documentElement.scrollWidth<=innerWidth+1),60))`), true)
+      for (const theme of ['light', 'dark']) {
+        assert.equal(await run(`(async()=>{document.documentElement.classList.toggle('dark',${theme === 'dark'});await new Promise(r=>setTimeout(r,60));return document.documentElement.scrollWidth<=innerWidth+1})()`), true, `Workspace recovery overflow at ${width}/${theme}`)
+        if (process.env.CHILD_RECOVERY_SCREENSHOTS) {
+          await mkdir(process.env.CHILD_RECOVERY_SCREENSHOTS, { recursive: true })
+          await writeFile(join(process.env.CHILD_RECOVERY_SCREENSHOTS, `child-recovery-${width}-${theme}.png`), (await window.webContents.capturePage()).toPNG())
+        }
+      }
     }
+    await run(`fixture.holdWorkspace=true;document.querySelector('.workspace-retry').click();new Promise(r=>setTimeout(r,50))`)
+    assert.equal(await run(`document.querySelector('.workspace-retry').disabled`), true)
+    assert.equal(await run(`document.querySelector('.workspace-recovery .desktop-role-settings button').disabled`), false, 'Role switching must not wait for Main')
+    await run(`document.querySelector('.workspace-recovery .desktop-role-settings button').click();new Promise(r=>setTimeout(r,30))`)
+    assert.match(await run(`document.querySelector('.desktop-role-settings').textContent`), /First-time setup opens automatically/)
+    assert.equal(await run('fixture.switches.length'), 0, 'Switching requires explicit confirmation')
+    await run(`document.querySelectorAll('.desktop-role-settings button')[1].click();new Promise(r=>setTimeout(r,30))`)
+    assert.match(await run(`document.querySelector('.desktop-role-settings button').textContent`), /Switch to Main/)
+    await run(`document.querySelector('.desktop-role-settings button').click();new Promise(r=>setTimeout(r,30))`)
+    await run(`fixture.completeWorkspaceCheck(Response.json({projects:[]}));new Promise(r=>setTimeout(r,50))`)
+    assert.match(await run(`document.querySelector('.workspace-recovery [role=status]').textContent`), /Connected to Main/)
+    assert.ok(await run(`!!document.querySelector('.desktop-role-settings')`), 'Reconnection must not remove an active role confirmation')
+    await run(`fixture.switchFails=true;document.querySelector('.desktop-role-settings button').click();new Promise(r=>setTimeout(r,30))`)
+    assert.deepEqual(await run('fixture.switches'), [{ role: 'main', executionConsent: false }])
+    assert.match(await run(`document.querySelector('.desktop-role-settings [role=alert]').textContent`), /saved profiles are retained/)
+    await run(`fixture.switches=[];fixture.switchFails=false;fixture.holdWorkspace=false`)
     const disposeBackground = installBackgroundWindow(app, window)
     window.show(); window.close()
     assert.equal(window.isDestroyed(), false)

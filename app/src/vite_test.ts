@@ -124,6 +124,10 @@ test('Vite never serves a local PIN file through filesystem or raw module URLs',
     server: { host: '127.0.0.1', port: 0, strictPort: false, watch: null, fs: config.server!.fs },
   })
   t.after(() => vite.close())
+  const appEntry = fileURLToPath(new URL('../index.html', import.meta.url)).replaceAll('\\', '/')
+  const workspaceFile = fileURLToPath(new URL('../../workspace/private.txt', import.meta.url)).replaceAll('\\', '/')
+  assert.equal(vite.config.fsDenyGlob(appEntry), false, 'A parent directory named Workspace must not deny the app entry')
+  assert.equal(vite.config.fsDenyGlob(workspaceFile), true, 'Repository-local workspace data remains denied')
   await vite.listen()
   const base = vite.resolvedUrls?.local[0]
   assert(base)

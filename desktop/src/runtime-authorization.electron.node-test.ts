@@ -23,14 +23,24 @@ test('real Electron file and Vite-like main-frame fetch receives Child admission
     import {createServer} from 'node:http';
     import {ChildLocalControlService} from './src/runtime/child-local-control.ts';
     import {installRuntimeRequestAuthorization} from './desktop/src/runtime-authorization.ts';
+    import {resolveChildRendererTarget,resolveRendererTarget} from './desktop/src/renderer-target.ts';
     app.setPath('userData',${JSON.stringify(join(directory, 'profile'))});
-    const page=createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Vite-like fixture</title>')});
+    const pageRequests=[];let remoteUiRequests=0;let apiAvailable=true;
+    const page=createServer((req,res)=>{
+      assert.equal(req.headers.authorization,undefined,'Child launch authorization must not leak to Vite');
+      pageRequests.push(req.url);
+      if(req.url==='/entry.js'){res.setHeader('Content-Type','text/javascript');res.end('window.localEntryReady=true');return;}
+      res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Vite-like fixture</title><script src="/entry.js"></script>');
+    });
     let child; let win;
     (async()=>{try {
       await new Promise(resolve=>page.listen(0,'127.0.0.1',resolve));
       const pageBase='http://127.0.0.1:'+page.address().port;
       process.env.VITE_DEV_URL=pageBase;
-      child=new ChildLocalControlService({port:0,launchCredential:'synthetic-isolated-token',requestShutdown(){},workspace:app=>app.get('/api/projects',c=>c.json({projects:[]}))});
+      child=new ChildLocalControlService({port:0,launchCredential:'synthetic-isolated-token',requestShutdown(){},workspace:app=>{
+        app.get('/',c=>{remoteUiRequests++;return c.json({error:'main_ui_unavailable'},503)});
+        app.get('/api/projects',c=>apiAvailable?c.json({projects:[]}):c.json({error:'main_workspace_unavailable'},503));
+      }});
       await child.start(new AbortController().signal);
       const apiBase='http://127.0.0.1:'+child.address.port;
       await app.whenReady();
@@ -46,6 +56,20 @@ test('real Electron file and Vite-like main-frame fetch receives Child admission
         assert.ok(denied===401||denied==='blocked',source+' iframe must not inherit launch credential: '+denied);
         console.log('Child admission verified: '+source+' main-frame=200 iframe='+denied);
       }
+      // Exercise top-level navigation, not only fetch from the local recovery page.
+      await win.loadURL(apiBase+'/api/projects');
+      assert.equal(await win.webContents.executeJavaScript('document.body.textContent'), '{"projects":[]}');
+      const local=resolveRendererTarget({rendererDistPath:'unused',developmentUrl:pageBase});
+      const selected=resolveChildRendererTarget(local,apiBase,false);
+      assert.equal(selected,local);
+      await win.loadURL(selected.url);
+      assert.equal(await win.webContents.executeJavaScript('window.localEntryReady'),true);
+      assert.ok(pageRequests.includes('/entry.js'));
+      assert.equal(remoteUiRequests,0,'Development must not load or probe Main UI');
+      apiAvailable=false;
+      const unavailable=await win.webContents.executeJavaScript('fetch('+JSON.stringify(apiBase+'/api/projects')+').then(async r=>({status:r.status,body:await r.json()}))');
+      assert.deepEqual(unavailable,{status:503,body:{error:'main_workspace_unavailable'}});
+      assert.equal(win.webContents.getURL(),selected.url,'Main API failure must leave the local renderer loaded');
       win.destroy();await child.shutdown();page.close();app.exit(0);
     }catch(error){console.error(error);win?.destroy();await child?.shutdown();page.close();app.exit(1)}})();
   ` }, outfile: join(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs', external: ['electron'], logLevel: 'silent' })

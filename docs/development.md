@@ -58,7 +58,21 @@ does not replace esbuild's native executable.
 
 ### Child UI, loopback secure context, and hot reload
 
-After a paired desktop Child starts, Electron keeps the bundled/local renderer for
+In `pnpm dev`, a paired desktop Child keeps its **local Vite renderer** for setup,
+recovery, and the workspace. HTML, CSS, JavaScript, and HMR come from that local
+Vite server; no Main UI probe or gateway-page navigation gates development startup.
+Business API requests still use the Child gateway's `apiBase`, with Electron's
+main-frame launch authorization and the approved device connection to Main.
+An unavailable Main shows the workspace connection error/retry state in the local
+UI; it does not prevent the development renderer from loading. This recovery view
+retains the desktop window controls and local role switcher even while a Main
+request is pending. Switching to Main does not require Main connectivity; it uses
+the existing confirmation/restart flow and preserves both role profiles. Switching
+to Child still requires execution consent. A reconnect does not dismiss an active
+role-switch confirmation. Main need not run
+Vite for Child frontend development, but its business APIs must remain compatible.
+
+In packaged builds (or without a local Vite renderer), Electron keeps the bundled renderer for
 setup and recovery, probes Main's UI through the authenticated Child gateway,
 and then loads that UI at **`http://127.0.0.1:<child-port>/`**. HTML, CSS, JavaScript,
 API traffic, and Vite HMR all traverse the Child's local gateway and its approved
@@ -72,14 +86,19 @@ HTML-200 page with broken entry scripts returns to local recovery too. Retry is
 explicit after such a failure, rather than looping between renderers.
 Revoking the device also terminates its active HMR connection.
 
-For hot reload, run Main with `pnpm dev`; Main uses its local Vite instance, and
-the Child's Vite instance is used only for local setup/recovery. Vite binds to
+For local development hot reload, run `pnpm dev` on the Child. Packaged Child instances
+can instead follow Main's Vite resources when Main runs `pnpm dev`. Vite binds to
 `127.0.0.1` by default, including the development launcher. Do not expose its
 unauthenticated port on the LAN: use the approved Main device endpoint instead.
 An explicit `VITE_DEV_HOST` override is still possible but is not needed for
 Child access. Proxied `/@vite/client` uses the renderer's own loopback port and
 does not fall back to a direct Vite-server socket. Vite's filesystem deny list
 also excludes local bot configuration and runtime `workspace/` trees.
+
+The role's `logs/startup.jsonl` distinguishes local runtime `ready` from
+`renderer-ready`. Packaged renderer diagnostics also record probe HTTP status,
+navigation, handshake timeouts, and failed resource types/statuses. These records
+contain no request URLs, response bodies, credentials, or arbitrary error messages.
 
 HTTP loopback is a potentially trustworthy origin in Chromium, so the Child
 retains a secure context without deploying a LAN HTTPS certificate for its

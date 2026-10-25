@@ -16,8 +16,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { t } from '../i18n.ts'
+const emit = defineEmits<{ active: [value: boolean] }>()
 const switchRole = window.shadowDesktop?.bootstrap.switchRole
 const current = ref<'main' | 'child' | null>(null)
 const target = computed(() => current.value === 'main' ? 'child' : 'main')
@@ -25,6 +26,7 @@ const confirming = ref(false)
 const executionConsent = ref(false)
 const busy = ref(false)
 const error = ref('')
+watch(() => confirming.value || busy.value, active => emit('active', active), { flush: 'sync' })
 onMounted(async () => {
   try { current.value = (await window.shadowDesktop?.bootstrap.load())?.mode ?? null } catch { /* Existing recovery UI owns setup load errors. */ }
 })
