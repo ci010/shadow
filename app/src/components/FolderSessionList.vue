@@ -25,7 +25,7 @@
     >
       <template v-if="sessionMetadata" #subtitle>
         <span class="session-metadata">
-          <span class="session-folder-chip" :class="{ 'is-scratch': !session.folderId }" :title="sessionMetadata(session).folder">{{ sessionMetadata(session).folder }}</span>
+          <span class="session-folder-chip" :class="{ 'is-scratch': !session.folderId }" :data-folder-tone="sessionMetadata(session).folderTone" :title="sessionMetadata(session).folderTitle ?? sessionMetadata(session).folder">{{ sessionMetadata(session).folder }}</span>
           <time v-if="sessionMetadata(session).time" :datetime="session.lastActivityAt" :title="sessionMetadata(session).absoluteTime">{{ sessionMetadata(session).time }}</time>
         </span>
       </template>
@@ -78,7 +78,7 @@ import { rootSessionFamilies } from '../folder-rail.ts'
 import { isAnimatingStage, isWorkingStage, prominentWorkingStage } from '../session-activity.ts'
 import { subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 const props = withDefaults(defineProps<{
-  sessionMetadata?: (session: SidebarSession) => { folder: string; time: string; absoluteTime: string }
+  sessionMetadata?: (session: SidebarSession) => { folder: string; folderTitle?: string; folderTone?: number; time: string; absoluteTime: string }
   sessionSubtitle?: (session: SidebarSession) => string
   sessions: SidebarSession[]
   activeSessionId: string
@@ -118,6 +118,15 @@ function isWorking(session: SidebarSession) { return isWorkingStage(activityStag
 <style scoped>
 .session-metadata { display: flex; align-items: center; gap: 6px; height: 16px; min-width: 0; }
 .session-folder-chip { display: block; min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; padding-inline: 6px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--c-bg-muted) 88%, var(--c-text-secondary) 12%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-border) 80%, var(--c-text-secondary) 20%); color: var(--c-text-secondary); font-weight: 500; line-height: 16px; }
+.session-folder-chip[data-folder-tone] { background: color-mix(in srgb, var(--folder-chip-color) 18%, var(--c-bg-card)); color: color-mix(in srgb, var(--folder-chip-color) 65%, var(--c-text)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--folder-chip-color) 50%, var(--c-border)); }
+.session-folder-chip[data-folder-tone="0"] { --folder-chip-color: #579dff; }
+.session-folder-chip[data-folder-tone="1"] { --folder-chip-color: #df8cde; }
+.session-folder-chip[data-folder-tone="2"] { --folder-chip-color: #45c5ac; }
+.session-folder-chip[data-folder-tone="3"] { --folder-chip-color: #edb455; }
+.session-folder-chip[data-folder-tone="4"] { --folder-chip-color: #b196ff; }
+.session-folder-chip[data-folder-tone="5"] { --folder-chip-color: #f08e76; }
+.session-folder-chip[data-folder-tone="6"] { --folder-chip-color: #64c5e4; }
+.session-folder-chip[data-folder-tone="7"] { --folder-chip-color: #c3c65b; }
 .session-folder-chip.is-scratch { background: transparent; box-shadow: none; padding-inline: 0; color: var(--c-text-secondary); font-weight: 400; }
 .session-metadata time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .session-working-wave { color: var(--c-text-secondary); }

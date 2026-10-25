@@ -33,7 +33,7 @@
       <section v-for="group in sortedFolders" :key="group.folder.id" class="folder-group">
         <TreeRow class="folder-folder-row" :selected="selectedFolderId === group.folder.id"
           :icon-only="isRail"
-          :label="group.folder.name" :title="group.folder.kind === 'remote' ? `${group.folder.workdir.nodeId}: ${group.folder.path}` : group.folder.path" :expanded="expandedFolders.has(group.folder.id)" separate-toggle
+          :label="folderNames.get(group.folder.id) ?? group.folder.name" :title="group.folder.kind === 'remote' ? `${group.folder.workdir.nodeId}: ${group.folder.path}` : group.folder.path" :expanded="expandedFolders.has(group.folder.id)" separate-toggle
           button-class="folder-folder" toggle-class="folder-toggle"
           :toggle-label="`${expandedFolders.has(group.folder.id) ? 'Collapse' : 'Expand'} folder ${group.folder.name}`"
           @toggle="toggleFolder(group.folder.id)" @select="selectFolder(group.folder.id)"
@@ -148,6 +148,8 @@ import SessionActivity from './SessionActivity.vue'
 import WorkingWave from './WorkingWave.vue'
 import CopyableId from './CopyableId.vue'
 import AutomationSidebar from './AutomationSidebar.vue'
+import { sidebarFolderLabels, sidebarFolderTones } from '../sidebar-folder-labels.ts'
+import { fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
 import { railInitial } from '../folder-rail.ts'
 import { prominentWorkingStage } from '../session-activity.ts'
 import { activeSubagentsByOwner, summarizeSubagents } from '../subagent-executions.ts'
@@ -190,6 +192,7 @@ const componentId = useId()
 const domId = (id: string) => props.grouped ? `${componentId}-${id}` : id
 const folderActions = computed(() => FOLDER_ACTIONS)
 const folders = ref<FolderRecord[]>([])
+const nodes = ref<readonly NodeInventoryEntry[]>([])
 const groups = computed(() => groupFolderSessions(folders.value, props.sessions))
 const executionsByOwner = computed(() => activeSubagentsByOwner(props.sessions, props.stages))
 // Independent of grouped: that prop controls project disclosure, not folder presentation.
@@ -203,7 +206,8 @@ watch(() => [props.apiBase, props.projectId], () => {
 watch(folderGrouped, () => {
   try { saveChatListPreferences(window.localStorage, props.apiBase, props.projectId, { folderGrouped: folderGrouped.value, sort: chatSort }) } catch { /* Browser storage may be denied. */ }
 })
-const folderNames = computed(() => new Map(folders.value.map(folder => [folder.id, folder.name])))
+const folderNames = computed(() => sidebarFolderLabels(folders.value, nodes.value, t('This computer')))
+const folderTones = computed(() => sidebarFolderTones(folders.value))
 const chatGroups = computed(() => groupBotConversations(folderGrouped.value ? groups.value.chats : groups.value.unified, props.projectId, props.bots))
 const sortedFolders = computed(() => [...groups.value.folders].sort((a, b) =>
   Math.max(0, ...b.sessions.map(session => Date.parse(session.lastActivityAt ?? '') || 0)) - Math.max(0, ...a.sessions.map(session => Date.parse(session.lastActivityAt ?? '') || 0))))
@@ -221,7 +225,9 @@ function stopActivityClock() {
 }
 function sessionMetadata(session: SidebarSession) {
   return {
-    folder: session.folderId ? folderNames.value.get(session.folderId) ?? session.folderId : t('from scratch'),
+    folder: session.folderId ? folders.value.find(folder => folder.id === session.folderId)?.name ?? session.folderId : t('from scratch'),
+    folderTitle: session.folderId ? folderNames.value.get(session.folderId) ?? session.folderId : t('from scratch'),
+    folderTone: session.folderId ? folderTones.value.get(session.folderId) : undefined,
     time: formatSidebarActivity(session.lastActivityAt, activityNow.value, i18n.global.locale.value),
     absoluteTime: session.lastActivityAt ? formatDateTime(session.lastActivityAt) : '',
   }
@@ -303,6 +309,10 @@ async function loadFolders() {
   loading.value = true
   error.value = ''
   try {
+    // Device metadata must not delay the conversation list or make folders unavailable.
+    void fetchNodeInventory(props.apiBase, 'main', AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]))
+      .then(inventory => { if (!controller.signal.aborted && active) nodes.value = inventory.nodes })
+      .catch(() => { /* Remote node IDs remain a usable fallback. */ })
     const result = await client.list(controller.signal)
     if (!controller.signal.aborted) folders.value = result
   } catch (cause) {
