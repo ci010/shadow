@@ -1,3 +1,4 @@
+import { markdownHighlight } from './markdown-highlight.ts'
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import type { KnowledgeLink } from './knowledge.ts'
@@ -18,9 +19,10 @@ export function renderKnowledgeMarkdown(
       },
     },
   })
+  markdown.use(markdownHighlight())
   const fragment = DOMPurify.sanitize(markdown.parse(content, { async: false }), {
-    ALLOWED_TAGS: ['p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a'],
-    ALLOWED_ATTR: ['href', 'title', 'id', 'data-knowledge-href'],
+    ALLOWED_TAGS: ['p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'span', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a'],
+    ALLOWED_ATTR: ['class', 'href', 'title', 'id', 'data-knowledge-href'],
     ALLOW_DATA_ATTR: false,
     ADD_URI_SAFE_ATTR: ['data-knowledge-href'],
     RETURN_DOM_FRAGMENT: true,

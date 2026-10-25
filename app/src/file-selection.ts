@@ -1,3 +1,4 @@
+import { markdownHighlight } from './markdown-highlight.ts'
 import { Marked } from 'marked'
 
 export interface SourceLines {
@@ -40,6 +41,7 @@ export interface MarkdownSourceBlock extends SourceLines {
 export function markdownSourceBlocks(source: string): MarkdownSourceBlock[] {
   const normalized = source.replace(/\r\n?/g, '\n')
   const markdown = new Marked({ gfm: true })
+  markdown.use(markdownHighlight())
   const tokens = markdown.lexer(normalized)
   // Fail conservatively if a future lexer changes its raw-token coverage.
   const exact = tokens.map(token => token.raw).join('') === normalized

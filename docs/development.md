@@ -250,3 +250,21 @@ network-panel status lines are not console events and are not intercepted.
 Focused regression (real Vite transforms, Electron browser dynamic imports, JSON,
 TypeScript and Markdown fenced languages, followed by a fresh page load):
 `pnpm exec node --import tsx --test app/src/highlighting-vite_test.ts`.
+
+### Markdown fenced-code highlighting
+
+Chat answers, system prompts, knowledge entries, outcome details and Markdown file
+previews share `markdown-highlight.ts` (a synchronous marked extension). It lazily
+uses the same Shiki core, GitHub themes and supported grammar loaders as file/diff
+highlighting in `file-highlighting.ts`. Grammar completion invalidates reactive
+Markdown consumers; streaming does not initialize a highlighter per token. Explicit
+language aliases are supported; unlabelled, text/ASCII, unsupported, failed-load and
+oversized (over 20,000 characters) fences remain escaped plain code. Tokenization
+has the same per-line/time limits as file highlighting and caches at most 64 blocks.
+
+Generated spans use the static GitHub palette in `markdown-highlight.css`, with
+`.dark` overrides, rather than inline styles. Existing DOMPurify passes remain in
+place (including the file preview's style prohibition), and code text remains
+available for selection and copying. If updating Shiki themes, regenerate/review
+the palette against both themes' foreground colors. Focused regression:
+`pnpm exec node --import tsx --test app/src/markdown-highlight_test.ts app/src/file-highlighting_test.ts app/src/file-selection_test.ts`.
