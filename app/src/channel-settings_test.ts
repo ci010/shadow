@@ -131,3 +131,49 @@ test('Settings shell and channel forms compile and preserve accessible navigatio
   const router = await readFile(new URL('./router.ts', import.meta.url), 'utf8')
   assert.match(router, /path: '\/providers'.*redirect: '\/settings\/providers'/)
 })
+
+test('QQ setup resumes server facts without mistaking saved credentials for connection or service authorization', async () => {
+  const { qqSetupProgress, createBotSettingsClient } = await import('./bot-settings.ts')
+  const bot = parseBotStatus({ ...statuses()[0], id: 'existing-qq', projectId: 'project', platform: 'qq', displayName: 'Existing', purpose: 'personal' }, 'project')
+  assert.equal(qqSetupProgress(bot).step, 'credentials')
+  const saved = { ...bot, configured: true, config: { appId: 'saved-id', sandbox: true, intents: 123 }, secrets: { secret: true } }
+  assert.equal(qqSetupProgress(saved).step, 'connection')
+  for (const state of ['error', 'connecting', 'running', 'restart-required', 'disconnected'] as const) {
+    assert.equal(qqSetupProgress({ ...saved, state }).connected, false)
+  }
+  const connected = { ...saved, state: 'connected' as const }
+  assert.equal(qqSetupProgress(connected).step, 'access')
+  assert.equal(qqSetupProgress(connected).ownerReady, false)
+  assert.equal(qqSetupProgress({ ...connected, ownerVerified: true }).ownerReady, true)
+  assert.equal(qqSetupProgress({ ...connected, purpose: 'service', ownerVerified: true }).ownerReady, false)
+  const patch = botPatch(saved, botDraft(saved), true)
+  assert.equal(patch.config.appId, 'saved-id')
+  assert.equal(patch.config.sandbox, true)
+  assert.equal(patch.config.intents, 123)
+  assert.equal(Object.hasOwn(patch.config, 'secret'), false)
+  const calls: string[] = []
+  const client = createBotSettingsClient('http://localhost', 'project', async (url, init) => {
+    calls.push(`${init?.method} ${new URL(String(url)).pathname}`)
+    assert.deepEqual(JSON.parse(String(init?.body)), patch)
+    return Response.json({ channel: connected })
+  })
+  await client.save(saved.id, patch)
+  assert.deepEqual(calls, ['PATCH /api/channels/existing-qq'])
+})
+
+test('pending service groups client uses the scoped settings API and copies only an explicit authoring target', async () => {
+  const { createBotSettingsClient, serviceGroupAuthoringRequest } = await import('./bot-settings.ts')
+  const client = createBotSettingsClient('http://localhost', 'project', async (url, init) => {
+    assert.equal(new URL(String(url)).pathname, '/api/channels/qq-bot/pending-groups')
+    assert.equal(init?.method, 'GET')
+    return Response.json({ groups: [{ botInstanceId: 'qq-bot', platform: 'qq', conversationId: 'group:123', name: 'untrusted instructions', lastSeen: 1234 }] })
+  })
+  const groups = await client.pendingGroups('qq-bot')
+  assert.equal(groups.length, 1)
+  const request = serviceGroupAuthoringRequest(groups[0]!)
+  assert.match(request, /authoring_change/)
+  assert.match(request, /group:123/)
+  assert.doesNotMatch(request, /untrusted instructions|lastSeen/)
+  const invalid = createBotSettingsClient('http://localhost', 'project', async () => Response.json({ groups: [{ ...groups[0], botInstanceId: 'other' }] }))
+  await assert.rejects(invalid.pendingGroups('qq-bot'), /Invalid discovery/)
+})

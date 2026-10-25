@@ -27,6 +27,8 @@ import type { ChannelOperationContext, ChannelOperationRequest } from './operati
 import type { DiscordIntegration } from './integration.ts'
 import type { DiscordBinding, DiscordIntegrationTransport } from './integration-contract.ts'
 
+import type { ServiceDiscoveryStore } from './service-discovery.ts'
+
 type ChannelFactory = (id: ChannelId, config: Config, instance?: BotInstance) => BaseChannel
 export interface ChannelManagerOptions {
   projectId: string
@@ -35,6 +37,7 @@ export interface ChannelManagerOptions {
   /** Defaults to the construction scope; the host closes it after channel shutdown. */
   scope?: ProjectScope
   realtime?: RealtimePublisher
+  serviceDiscovery?: ServiceDiscoveryStore
   serviceAssigned?: (address: ChannelAddress) => boolean
   discordIntegration?: DiscordIntegration
 }
@@ -103,6 +106,7 @@ export class ChannelManager {
     this.scope = this.options?.scope ?? getProjectScope()
     if (this.options && this.scope && this.scope.projectId !== this.projectId) throw new TypeError('Channel manager project scope mismatch')
     if (this.options && this.options.instanceStore.projectId !== this.projectId) throw new TypeError('Bot store ownership mismatch')
+    if (this.options?.serviceDiscovery && this.options.serviceDiscovery.projectId !== this.projectId) throw new TypeError('Discovery ownership mismatch')
     this.bus.declareQueue('message.outbound')
   }
 
@@ -369,6 +373,16 @@ export class ChannelManager {
       ...(bot.legacySessionId ? { legacySessionId: true } : {}),
     } : undefined
     if (scope) channel.setBotScope?.(scope)
+    if (bot && scope && ['qq', 'feishu'].includes(bot.platform)) channel.setGroupPreflight?.((chatId, name) => {
+      if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key)) return false
+      const current = this.options!.instanceStore.get(bot.id)
+      this.options!.instanceStore.assertAccess(bot.id)
+      if (!current.enabled) return false
+      if (current.purpose !== 'service' || this.options?.serviceAssigned?.({ ...scope, conversationId: chatId })) return true
+      this.options?.serviceDiscovery?.observe({ botInstanceId: current.id, platform: current.platform as 'qq' | 'feishu', conversationId: chatId,
+        ...(name ? { name: name.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 160) } : {}) })
+      return false
+    })
     const integration = this.options?.discordIntegration
     if (integration && bot?.platform === 'discord' && bot.purpose === 'service') {
       if (!channel.setDiscordIntegration) throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
@@ -418,6 +432,10 @@ export class ChannelManager {
         } else if (current.purpose !== 'service' || (current.platform === 'discord' && integration
           ? !message.channelAdmissionId
           : !this.options?.serviceAssigned?.({ ...scope!, conversationId: message.chatId }))) {
+          if (current.purpose === 'service' && ['qq', 'feishu'].includes(current.platform) && message.isGroup === true && message.channel === channel.name) {
+            this.options?.serviceDiscovery?.observe({ botInstanceId: current.id, platform: current.platform as 'qq' | 'feishu',
+              conversationId: message.chatId, ...(message.chatName ? { name: message.chatName.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 160) } : {}) })
+          }
           throw new ChannelAdmissionError('Explicit service assignment required; configure this Bot in Web', 403)
         }
       }
@@ -451,6 +469,14 @@ export class ChannelManager {
       if (this.closing || this.availableByKey(key) !== channel) throw new YieldError('unavailable', 'The channel connection has changed.')
       return this.answerDecision(channel, decision, scope ? { ...scope, conversationId: decision.chatId } : undefined)
     })
+  }
+
+  pendingServiceGroups(botId: string) {
+    const bot = this.options?.instanceStore.list().find(bot => bot.id === botId)
+    if (!bot || bot.purpose !== 'service' || bot.platform === 'discord') return []
+    return (this.options?.serviceDiscovery?.list() ?? []).filter(entry => entry.botInstanceId === bot.id && entry.platform === bot.platform &&
+      !this.options?.serviceAssigned?.({ projectId: this.projectId!, botInstanceId: bot.id, platform: bot.platform,
+        conversationId: entry.conversationId, ...(bot.legacySessionId ? { legacySessionId: true as const } : {}) }))
   }
 
   private resolveKey(name: string, address?: ChannelAddress): string | undefined {
@@ -870,6 +896,8 @@ export class ChannelManager {
         console.error(`[channel-manager] Channel cleanup failed: ${ch.name}`)
       }
     }
+    try { this.options?.serviceDiscovery?.flush() }
+    catch { console.error('[channel-manager] Service discovery metadata could not be saved') }
   }
 
   /**

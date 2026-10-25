@@ -132,6 +132,7 @@ import { createModelsHandler } from '../../vfs/models.ts'
 import { createAgentsHandler } from '../../vfs/agents.ts'
 
 import { Bus } from '../../bus/bus.ts'
+import { ServiceDiscoveryStore } from '../../channels/service-discovery.ts'
 import { ChannelManager } from '../../channels/manager.ts'
 import { botSetupPlugin } from '../../channels/bot-setup.ts'
 import { BotChatSetup, botChatSetupPlugin } from '../../channels/chat-setup.ts'
@@ -495,6 +496,7 @@ export async function createProjectRuntime(
     path: resolve(workspace, 'config', 'bots.v1.json'),
     ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
   })
+  const serviceDiscovery = new ServiceDiscoveryStore(project.id, resolve(workspace, 'config', 'service-discovery.json'))
   const authoringDirectory = resolve(workspace, 'config', 'agent-resources')
   const integrationDirectory = resolve(workspace, 'config', 'channel-integrations')
   const memoryDomains = new MemoryDomains(project.id, resolve(integrationDirectory, 'memory'))
@@ -1042,6 +1044,7 @@ export async function createProjectRuntime(
         sessionId: session.sessionId, address: authoring.address(session.sessionId),
         inferenceOverrides: inferenceSettings(sessions.getSessionState(session.sessionId)?.config),
       })),
+      pendingServiceGroups: botStore.list().flatMap(bot => channels.pendingServiceGroups(bot.id)),
       folders: folderRegistry.list(),
     }),
     retire: async matches => {
@@ -1329,8 +1332,9 @@ export async function createProjectRuntime(
       channels.updateConfig(newConfig)
   }
   const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
-    projectId: project.id, instanceStore: botStore, realtime, discordIntegration,
-    serviceAssigned: address => !!authoring.resolve(channelSessionId(address))?.binding.enabled,
+    projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery,
+    // Admission checks must not invoke the throwing managed-conversation policy resolver.
+    serviceAssigned: address => !!agentResources.resolve(address)?.binding.enabled,
   })
   const botChatSetup = new BotChatSetup(project.id)
   cleanup.push(() => botChatSetup.stop())

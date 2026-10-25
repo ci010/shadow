@@ -63,6 +63,8 @@ export interface BaseChannel {
   setDiscordIntegration?(integration: DiscordAdapterIntegration): void
   connectionGuard?(): () => void
 
+  /** Metadata-only service discovery before parsing content or downloading attachments; false silently stops ingress. */
+  setGroupPreflight?(handler: (chatId: string, name?: string) => boolean): void
   /** Configure explicit message admission before starting the channel. */
   setReceiver(receiver: ReceiveChannelMessage): void
 
@@ -97,6 +99,12 @@ export interface BaseChannel {
  */
 export abstract class AbstractChannel implements BaseChannel {
   abstract readonly name: string
+  private groupPreflight?: (chatId: string, name?: string) => boolean
+  setGroupPreflight(handler: (chatId: string, name?: string) => boolean): void { this.groupPreflight = handler }
+  protected admitGroup(chatId: string, name?: string): boolean {
+    this.assertConnection()
+    return this.groupPreflight?.(chatId, name) ?? true
+  }
   private receiver?: ReceiveChannelMessage
   private botScope?: Omit<ChannelAddress, 'conversationId'>
   private identityHandler?: (identity: string) => void

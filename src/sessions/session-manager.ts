@@ -7,6 +7,7 @@ import { trace } from '@opentelemetry/api'
 import { StartupTimings } from '../runtime/startup-timings.ts'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from './session-name.ts'
 import { parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
+import { isRuntimeContextEvent } from './runtime-context-contract.ts'
 import { readSessionFileChanges } from './file-changes.ts'
 import { readAutomationUsage } from './automation-usage.ts'
 import { readProjectUsage, readProjectUsagePage } from './project-usage.ts'
@@ -3019,7 +3020,11 @@ ${JSON.stringify(request)}`,
     if (!state) return null
     const physicalId = physicalSessionId(state, 0)
     for await (const parsed of this.store.readSessionLog(physicalId)) {
-      if (parsed.role === 'user' && parsed.name !== '__compaction_summary__') {
+      if (parsed.role === 'user' && parsed.name !== '__compaction_summary__' && !isRuntimeContextEvent({
+        role: 'user',
+        name: typeof parsed.name === 'string' ? parsed.name : undefined,
+        content: Array.isArray(parsed.content) ? parsed.content : [],
+      })) {
         const content = parsed.content
         if (typeof content === 'string') {
           const text = stripMetaTag(content)

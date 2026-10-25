@@ -860,6 +860,7 @@ export class QQChannel extends AbstractChannel {
     if (!msgId || !groupId || !senderId) return
     if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `group:${groupId}`
+    if (!this.admitGroup(chatId, typeof data.group_name === 'string' ? data.group_name : undefined)) return
     if (!this.isNewIncoming(chatId, msgId, data)) return
 
     const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, ((data.content as string) ?? '').trim())
@@ -915,6 +916,7 @@ export class QQChannel extends AbstractChannel {
     const chatId = isDirect
       ? `dms:${data.guild_id as string}`
       : `channel:${data.channel_id as string}`
+    if (!isDirect && !this.admitGroup(chatId)) return
     if (!this.isNewIncoming(chatId, msgId, data)) return
     this._lastMsgId.set(chatId, msgId)
 
