@@ -1,4 +1,4 @@
-import { formatSessionHistory } from '../../sessions/history-view.ts'
+import { sessionHistoryLineAt } from '../../sessions/history-view.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, relative } from 'node:path'
@@ -42,7 +42,9 @@ export function learningTask(batch: LearningBatch, ranges: Map<string, { offset:
   for (const source of batch.sources) {
     const range = ranges.get(source.physicalId)
     lines.push(`- Source ${source.sessionId}, segment ${source.segmentIndex}, messages [${source.offset}, ${source.end}): ` +
-      (range ? `First read overview: read({path: "v:sessions/${source.physicalId}/overview", offset: ${range.offset}, limit: ${Math.min(100, range.end - range.offset)}}). ` +
+      (range && range.offset === range.end
+        ? `This source range has no overview entries. Do not read adjacent messages. If essential, inspect /full within lines [${range.fullOffset}, ${range.fullEnd}) using read.offset/read.limit.`
+        : range ? `First read overview: read({path: "v:sessions/${source.physicalId}/overview", offset: ${range.offset}, limit: ${Math.max(1, Math.min(100, range.end - range.offset))}}). ` +
         `Continue with read.offset/read.limit, at most 100 lines per page, stopping before line ${range.end}. ` +
         `Use the exact physical /calls/<encoded-id> references in overview for needed arguments/results (page that resource with read.offset/read.limit). Only if broader context is essential, read /full within lines [${range.fullOffset}, ${range.fullEnd}); these are separate line coordinates.`
         : `Read v:sessions/${source.physicalId}/overview with read.offset/read.limit in small line pages; only evaluate message numbers ${source.offset + 1}–${source.end}. ` +
@@ -249,8 +251,7 @@ export class LearningRuntime {
       for (const source of batch.sources) {
         signal.throwIfAborted()
         const { messages } = await this.sessions.getHistory(source.sessionId, { physicalId: source.physicalId, maxMessages: Number.MAX_SAFE_INTEGER })
-        const lineAt = (index: number, overview: boolean) => index === 0 ? 3
-          : 3 + formatSessionHistory(messages.slice(0, index), overview).split('\n').length + 1
+        const lineAt = (index: number, overview: boolean) => sessionHistoryLineAt(messages, index, overview)
         ranges.set(source.physicalId, { offset: lineAt(source.offset, true), end: lineAt(source.end, true),
           fullOffset: lineAt(source.offset, false), fullEnd: lineAt(source.end, false) })
       }

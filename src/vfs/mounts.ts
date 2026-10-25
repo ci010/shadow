@@ -70,83 +70,9 @@ export function createSessionsHandler(
       return lines.join('\n')
     }
 
-    if (subpath.includes('?')) throw new Error('Session query parameters are not supported. Use /overview or /full and read.offset (1-based line)/read.limit, not index/page_size.')
-    if (subpath.includes('/calls/')) {
-      const entries = await list(context, { subpath })
-      return entries.find(entry => entry.name === subpath)!.content
-    }
-    const overview = subpath.endsWith('/overview')
-    const sessionKey = subpath.replace(/\/(overview|full)$/, '')
-
-    const isPhysicalId = !sessionKey.includes(':')
-
-    let sessionLabel = isPhysicalId
-      ? `Physical Session ID: ${sessionKey}`
-      : `Session: ${sessionKey}`
-
-    const state = isPhysicalId
-      ? undefined
-      : (await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(sessionKey))
-    const physicalId = isPhysicalId
-      ? sessionKey
-      : state
-      ? physicalSessionId(state)
-      : undefined
-    if (state?.mode && state.mode !== 'session') {
-      sessionLabel += `\nExecution: ${state.executionId ?? state.sessionId}; mode=${state.mode}; status=${state.executionStatus ?? 'unknown'}`
-    }
-
-    if (!physicalId && !isPhysicalId) {
-      return `Session "${sessionKey}" not found. It may have been lost during a restart.`
-    }
-
-    if (physicalId) {
-      const sessionState = await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(sessionKey)
-      const originUser = sessionState?.originUser
-      const parentId = sessionState?.parent?.id
-      if (originUser || parentId) {
-        const meta: string[] = []
-        if (originUser) meta.push(`triggered by: ${originUser}`)
-        if (parentId) meta.push(`parent: ${parentId}`)
-        sessionLabel += ` (${meta.join(', ')})`
-      }
-    }
-
-    const { total } = await sessions.getHistory(sessionKey, {
-      physicalId: isPhysicalId ? sessionKey : undefined,
-      offset: 0,
-      pageSize: 0,
-    })
-
-    if (total === 0) return `${sessionLabel}\nNo history yet.`
-
-    const offset = Math.max(0, total - 20)
-
-    const { messages } = await sessions.getHistory(sessionKey, {
-      physicalId: isPhysicalId ? sessionKey : undefined,
-      offset,
-      pageSize: 20,
-    })
-
-    const start = offset + 1
-    const end = offset + messages.length
-    const lines: string[] = [
-      sessionLabel,
-      `Messages ${start}–${end} of ${total}`,
-      '',
-    ]
-
-    for (const [idx, msg] of messages.entries()) {
-      lines.push('')
-      const priorCall = messages.slice(0, idx)
-        .flatMap(message => message.tool_calls ?? [])
-        .findLast(call => call.id === msg.tool_call_id)
-      lines.push(...formatSessionMessage(msg, offset + idx + 1, false, overview, physicalId, priorCall))
-    }
-
-    if (offset > 0) lines.push('Earlier history: use read.offset=1 and read.limit for line paging. /overview omits tool payloads.')
-
-    return lines.join('\n')
+    const entries = await list(context, { subpath })
+    const entry = entries.find(entry => entry.name === subpath)
+    return entry?.content ?? `Session "${subpath}" not found or has no history.`
   }
 
   const list: VirtualFsListHandler = async (context, options) => {
@@ -171,7 +97,7 @@ export function createSessionsHandler(
       if (!selected.length || !messages.some(message => message.role === 'assistant' && message.tool_calls?.some(call => call.id === callId))) throw new Error(`Unknown tool call ${JSON.stringify(callId)} in physical session ${match[1]}.`)
       return [{ name: requested, content: options?.content === false ? '' : `Physical Session ID: ${match[1]}; tool call: ${callId}\n\n${selected.join('\n\n')}` }]
     }
-    const overview = requested?.endsWith('/overview') ?? false
+    const overview = !requested?.endsWith('/full')
     const subpath = requested?.startsWith('remote:') ? requested : requested?.replace(/\/(overview|full)$/, '')
     const viewSuffix = requested?.match(/\/(overview|full)$/)?.[0] ?? ''
     const selected = (name: string) => !subpath || name === subpath || name.startsWith(`${subpath}/`)

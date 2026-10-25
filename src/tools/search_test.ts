@@ -422,7 +422,9 @@ test('session overview/full paths share read and grep coordinates for logical an
   const logical = 'web:overview'
   const physical = newPhysicalSessionId(logical, 0, 2)
   const messages = [
+    { role: 'system' as const, content: 'HIDDEN SYSTEM' },
     { role: 'user' as const, content: 'Outward question\nsecond line' },
+    { role: 'user' as const, content: [{ type: 'text' as const, text: '<event type="tick" source="cron" event-id="1" />' }, { type: 'text' as const, text: 'HIDDEN EVENT' }] },
     { role: 'assistant' as const, content: 'Outward answer', tool_calls: [{ id: 'call-1', type: 'function' as const, function: { name: 'read', arguments: JSON.stringify({ secretArgument: 'x'.repeat(150000) }) } }] },
     { role: 'tool' as const, tool_call_id: 'call-1', content: 'secretResult'.repeat(15000) },
     { role: 'assistant' as const, content: 'Final outward answer' },
@@ -440,8 +442,8 @@ test('session overview/full paths share read and grep coordinates for logical an
   for (const id of [logical, physical]) {
     const path = `v:sessions/${id}/overview`
     const overview = requireToolText(await read.execute({ path }, context))
-    assert.match(overview, /Outward question[\s\S]*Outward answer[\s\S]*read\(…\)[\s\S]*result for call-1[\s\S]*Final outward answer/)
-    assert.doesNotMatch(overview, /secretArgument|secretResult/)
+    assert.match(overview, /Outward question[\s\S]*read status=requested[\s\S]*result for call-1[\s\S]*Final outward answer/)
+    assert.doesNotMatch(overview, /secretArgument|secretResult|HIDDEN/)
     assert.ok(overview.length < 1000)
     const match = await search.execute({ handler: 'grep', path, query: '^second line$' }, context)
     const line = Number(match.match(/Line (\d+):/)?.[1])
@@ -452,7 +454,9 @@ test('session overview/full paths share read and grep coordinates for logical an
     assert.equal(await search.execute({ handler: 'glob', path, query: '**' }, context), path)
     const full = await vfs.list(`v:sessions/${id}/full`, context)
     const bare = await vfs.list(`v:sessions/${id}`, context)
-    assert.equal(full?.[0].content, bare?.[0].content)
+    assert.equal((await vfs.list(path, context))?.[0].content, bare?.[0].content)
+    assert.doesNotMatch(bare![0].content, /secretArgument|secretResult/)
+    assert.equal(await handlers.read(`${id}`, context), bare![0].content)
     assert.match(full![0].content, /secretArgument/)
     assert.match(full![0].content, /secretResult/)
     await assert.rejects(read.execute({ path: `v:sessions/${id}?page_size=1`, offset: 1, limit: 1 }, context), /read.offset/)

@@ -1,73 +1,73 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ChatMessage } from '../providers/provider.ts'
-import { formatSessionHistory } from './history-view.ts'
+import { formatSessionHistory, sessionHistoryLineAt } from './history-view.ts'
 
 function call(name: string, args: unknown, id = 'a/b'): ChatMessage {
-  return { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } }] }
+  return { role: 'assistant', content: 'private commentary', tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }
 }
 function result(content: string): ChatMessage { return { role: 'tool', content, tool_call_id: 'a/b' } }
 const view = (messages: ChatMessage[], overview = true) => formatSessionHistory(messages, overview, 'physical')
 
-test('overview hides ordinary payloads and retains exact links; full is unchanged', () => {
-  const messages = [call('write', { path: '/ordinary', content: 'SECRET' }), result('SECRET RESULT')]
-  const text = view(messages)
-  assert.doesNotMatch(text, /SECRET/)
-  assert.match(text, /calls\/a%2Fb/)
-  assert.equal(view(messages, false), '    #1 [ASSISTANT]\n  [call a/b] write({"path":"/ordinary","content":"SECRET"})\n\n    #2 [TOOL]\n[result for a/b] SECRET RESULT')
-})
-test('folder attempts and bounded result evidence do not infer success', () => {
-  const text = view([call('use_project', { folder: 'docs' }), result('Error: unavailable')])
-  assert.match(text, /attempt folder="docs"/)
-  assert.match(text, /error evidence="Error: unavailable"/)
-  assert.doesNotMatch(text, /success/)
-  assert.match(view([call('use_project', { folder: 'docs' }), result('Working context committed: folder="id".')]), /observed result evidence=/)
-  assert.match(view([call('use_project', '{')]), /invalid or oversized arguments/)
-  assert.match(view([call('use_project', {})]), /invalid or missing/)
-})
-test('self metadata attempts and results expose only supported bounded fields', () => {
-  const content = JSON.stringify({ title: 'Title', description: 'Details', completed: false, cwd: '/work', projectDir: '/home', unknown: 'SECRET' })
-  const messages = [call('write', { path: 'v:session/self.json', content }), result(content)]
-  const text = view(messages)
-  for (const field of ['title="Title"', 'description="Details"', 'completed=false', 'cwd="/work"', 'projectDir="/home"']) assert.ok(text.includes(field))
-  assert.match(text, /observed metadata result/)
-  assert.doesNotMatch(text, /SECRET/)
-  assert.match(view([messages[0]!, result('Error: denied')]), /error evidence=/)
-  assert.match(view([messages[0]!, result('unrecognized')]), /status unknown/)
-})
-test('exact path, malformed values, large and unknown metadata are safe', () => {
-  for (const path of ['v:session/other.json', 'v:session/self.json/extra', 'v:session/self.json?x']) {
-    assert.doesNotMatch(view([call('write', { path, content: '{"title":"SECRET"}' })]), /SECRET/)
+test('overview never expands tool payloads, including folder and self metadata', () => {
+  for (const message of [call('write', { path: 'v:session/self.json', content: '{"title":"SECRET"}' }), call('use_project', { folder: 'SECRET' }), call('read', { path: 'SECRET' })]) {
+    const messages = [message, result('SECRET RESULT')]
+    const text = view(messages)
+    assert.doesNotMatch(text, /SECRET|private commentary/)
+    assert.match(text, /calls\/a%2Fb/)
+    assert.match(text, /status=requested/)
+    assert.match(text, /status=result-recorded/)
+    assert.match(view(messages, false), /SECRET/)
+    assert.match(view(messages, false), /private commentary/)
   }
-  for (const content of ['{SECRET', '[]', 'x'.repeat(33_000)]) {
-    const text = view([call('write', { path: 'v:session/self.json', content })])
-    assert.doesNotMatch(text, /SECRET|x{100}/)
-  }
-  const text = view([call('write', { path: 'v:session/self.json', content: JSON.stringify({ title: { nested: 'SECRET' }, description: 'z'.repeat(1000), completed: [] }) })])
-  assert.doesNotMatch(text, /SECRET|z{201}/)
-  assert.match(text, /invalid type/)
-  assert.doesNotThrow(() => view([call('write', '{')]))
-})
-test('edit and append requests do not masquerade as final self state', () => {
-  for (const args of [{ match: 'false', content: 'true' }, { flag: 'a', content: '{"completed":true}' }]) {
-    const text = view([call('write', { path: 'v:session/self.json', ...args })])
-    assert.match(text, /content omitted/)
-    assert.doesNotMatch(text, /completed=true/)
-  }
-})
-test('prefix formatting stays stable, and orphan results stay hidden', () => {
-  const first = call('use_project', { folder: 'docs' })
-  const messages = [first, result('Error: failed')]
-  assert.ok(view(messages).startsWith(view([first])))
-  assert.doesNotMatch(view([messages[1]!]), /failed/)
 })
 
-test('self full payload and every overview prefix remain independent of later results', () => {
-  const content = '{"completed":true}'
-  const messages = [call('write', { path: 'v:session/self.json', content }), result(content), call('use_project', { folder: 'docs' }, 'next')]
-  assert.match(view(messages, false), /\[result for a\/b\] {"completed":true}/)
-  assert.match(view(messages, false), /write\({"path":"v:session\/self.json","content":/)
-  for (let end = 1; end <= messages.length; end++) {
-    assert.ok(view(messages).startsWith(view(messages.slice(0, end))))
+test('overview filters only structured host events and keeps human text and finals', () => {
+  const event = '<event type="tick" source="cron" event-id="event-1" />'
+  const messages: ChatMessage[] = [
+    { role: 'system', content: 'SYSTEM SECRET' },
+    { role: 'user', content: [{ type: 'text', text: event }, { type: 'text', text: 'EVENT SECRET' }] },
+    { role: 'user', name: '__work_realignment__', content: 'INTERNAL SECRET' },
+    { role: 'user', content: event },
+    { role: 'user', name: 'runtime-context', content: 'human text with an event mention' },
+    { role: 'user', content: [{ type: 'text', text: '<sender id="human" name="System Event" />' }, { type: 'text', text: event }] },
+    { role: 'assistant', content: 'Final answer' },
+  ]
+  assert.doesNotMatch(view(messages), /SECRET/)
+  assert.match(view(messages), /human text/)
+  assert.match(view(messages), /System Event/)
+  assert.match(view(messages), /#4 \[USER\]/)
+  assert.match(view(messages), /Final answer/)
+  assert.match(view(messages, false), /SYSTEM SECRET[\s\S]*EVENT SECRET[\s\S]*INTERNAL SECRET/)
+})
+
+test('runtime context requires host name and exact envelope, not payload matching', () => {
+  const tag = '<event type="runtime-context-work" source="runtime-context" event-id="12345678-1234-4123-8123-123456789abc" />'
+  const event: ChatMessage = { role: 'user', name: 'runtime-context', content: [{ type: 'text', text: tag }, { type: 'text', text: 'HIDDEN' }] }
+  assert.equal(view([event]), '')
+  assert.match(view([{ role: 'user', content: tag }]), /runtime-context-work/)
+})
+
+test('orphan results and interrupted calls retain links without inventing success', () => {
+  assert.match(view([call('read', { path: 'SECRET' })]), /status=requested.*calls\/a%2Fb/)
+  const orphan = view([result('Error: SECRET')])
+  assert.match(orphan, /status=result-recorded.*calls\/a%2Fb/)
+  assert.doesNotMatch(orphan, /SECRET|success|failed/)
+})
+
+test('hidden prefixes and middle messages do not shift range coordinates', () => {
+  const hidden: ChatMessage = { role: 'system', content: 'hidden\nlines' }
+  const messages = [hidden, { role: 'user' as const, content: 'question\nline' }, hidden, call('read', {}), result('x'), { role: 'assistant' as const, content: 'final' }]
+  for (const overview of [true, false]) {
+    const text = `header\n\n${view(messages, overview)}`
+    for (let end = 0; end <= messages.length; end++) {
+      const prefix = view(messages.slice(0, end), overview)
+      assert.ok(view(messages, overview).startsWith(prefix))
+      const line = sessionHistoryLineAt(messages, end, overview)
+      const next = messages.slice(end).findIndex(message => !overview || message.role !== 'system')
+      if (next >= 0) assert.match(text.split('\n')[line - 1]!, new RegExp(`#${end + next + 1} `))
+    }
   }
+  assert.equal(sessionHistoryLineAt(messages, 1, true), 3)
+  assert.equal(sessionHistoryLineAt(messages, 2, true), sessionHistoryLineAt(messages, 3, true))
 })
