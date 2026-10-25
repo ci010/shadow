@@ -1,3 +1,7 @@
+import { discordReadMessage } from '../../channels/discord-operations.ts'
+import { collectDiscordHistory } from '../../channels/discord-stream.ts'
+import { ChannelMessageStream } from '../../channels/message-stream.ts'
+import { ChannelStreamTool } from '../../tools/channel-stream.ts'
 import { DiscordPatrolTool } from '../../tools/discord-patrol.ts'
 import { WatermarkTool } from '../../tools/watermark.ts'
 import { profileBindings } from '../../agent-authoring/capability-profiles.ts'
@@ -1340,7 +1344,7 @@ export async function createProjectRuntime(
       channels.updateConfig(newConfig)
   }
   const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
-    projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery,
+    projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery, messageStream: new ChannelMessageStream(workspace,project.id),
     // Admission checks must not invoke the throwing managed-conversation policy resolver.
     serviceAssigned: address => !!agentResources.resolve(address)?.binding.enabled,
   })
@@ -1353,10 +1357,43 @@ export async function createProjectRuntime(
       || state.parentSessionId || state.automation) throw new Error('Bot setup requires a user-owned Web conversation.')
     sessions.assertFolderAccess(sessionId)
   }))
+  const channelStreamDeps: ConstructorParameters<typeof ChannelStreamTool>[3] = {
+    authorized: id => canAuthor(id) && !sessions.getSessionState(id)?.parentSessionId,
+    assertConnection: (bot, conversation) => channels.assertStreamAccess(bot, conversation),
+    collect: async (bot, conversations, children, signal) => {
+      const selected=botStore.list().find(value=>value.id===bot)
+      if(selected?.platform!=='discord') return {notice:'No history adapter; only actually received content is available. Offline gaps cannot be repaired.'}
+      const stream=new ChannelMessageStream(workspace,project.id)
+      const targets=new Set(conversations)
+      if(children) for(const e of stream.directory()) if(e.connection===bot&&e.parent&&targets.has(e.parent)) targets.add(e.conversation)
+      if(targets.size>100)throw new Error('History catch-up scope exceeds 100 conversations; narrow conversations/includeChildren explicitly')
+      const pages=[]
+      for(const conversation of targets){
+        channels.assertStreamAccess(bot,conversation)
+        const parent=stream.directory().find(e=>e.connection===bot&&e.conversation===conversation)?.parent
+        pages.push(await collectDiscordHistory(workspace,project.id,bot,conversation,(path,init)=>channels.trustedDiscordRequest(bot,path,init??{}),signal,parent,(sender,message)=>channels.admitStreamHistory(bot,conversation,sender,message,signal)))
+      }
+      return pages
+    },
+    send: async (bot, conversation, content, nonce, replyTo, signal) => {
+      if (!/^[0-9]{1,20}$/.test(conversation)) throw new Error('Discord conversation ID required')
+      const selected = botStore.list().find(value=>value.id===bot)
+      if (selected?.platform!=='discord') throw new Error('Sending through this tool is currently Discord-only')
+      return discordReadMessage(await channels.trustedDiscordRequest(bot, `/channels/${conversation}/messages`, {method:'POST',signal,body:JSON.stringify({content,nonce,enforce_nonce:true,allowed_mentions:{parse:[],replied_user:false},...(replyTo?{message_reference:{message_id:replyTo,fail_if_not_exists:true}}:{})})}),conversation)
+    },
+  }
+  const channelStreamRead = new ChannelStreamTool('channel_read', workspace, project.id, channelStreamDeps)
+  const channelStreamSend = new ChannelStreamTool('channel_send', workspace, project.id, channelStreamDeps)
+  for (const tool of [new ChannelStreamTool('channel_directory', workspace, project.id, channelStreamDeps),channelStreamRead,channelStreamSend]) importTool.registerBuiltin(tool.name,tool)
   importTool.registerBuiltin('discord_patrol', new DiscordPatrolTool(workspace, project.id, {
     authorized: id => canAuthor(id) && !sessions.getSessionState(id)?.parentSessionId,
     bots: () => botStore.list().filter(bot => bot.platform === 'discord').map(bot => ({ id: bot.id, platform: bot.platform, purpose: bot.purpose })),
-    api: bot => (path, init) => channels.trustedDiscordRequest(bot, path, init ?? {}),
+    api: bot => (path, init) => { const conversation=/^\/channels\/(\d+)/.exec(path)?.[1]; channels.assertStreamAccess(bot,conversation); return channels.trustedDiscordRequest(bot, path, init ?? {}) },
+    discover: (bot,parent,threads) => {
+      const stream=new ChannelMessageStream(workspace,project.id)
+      for(const conversation of threads)if(discordIntegration.streamAssigned(bot,conversation,parent))stream.append({connection:bot,platform:'discord',conversation,parent,kind:'discovered'})
+    },
+    stream: (action,args,context) => (action==='send'?channelStreamSend:channelStreamRead).execute(args,context),
   }))
   discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
   const channelConfigurationTool = ownerChannelConfigurationTool(channelIntegrations, memoryDomains, channels.discordTransport(), canAuthor)

@@ -1,3 +1,4 @@
+import type { StreamInput } from './message-stream.ts'
 import type { GroupObservation } from './service-discovery.ts'
 import type { InboundMessage, OutboundMessage } from '../bus/events.ts'
 import { channelSessionId, type ChannelAddress } from '../bus/events.ts'
@@ -67,6 +68,7 @@ export interface BaseChannel {
   /** Display-only service observation before downloading attachments; false silently stops ingress. */
   setGroupPreflight?(handler: (chatId: string, name?: string, message?: GroupObservation) => boolean): void
   /** Configure explicit message admission before starting the channel. */
+  setStreamCollector?(collector: (event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean) => Promise<void>): void
   setReceiver(receiver: ReceiveChannelMessage): void
 
   setStatusListener?(listener: (state: ChannelState) => void): void
@@ -106,6 +108,10 @@ export abstract class AbstractChannel implements BaseChannel {
     this.assertConnection()
     return this.groupPreflight?.(chatId, name, message) ?? true
   }
+  private streamCollector?: (event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean) => Promise<void>
+  setStreamCollector(collector: NonNullable<AbstractChannel['streamCollector']>): void { this.streamCollector = collector }
+  protected get hasStreamCollector(): boolean { return !!this.streamCollector }
+  protected async collectStream(event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean): Promise<void> { this.assertConnection(); await this.streamCollector?.(event, isGroup) }
   private receiver?: ReceiveChannelMessage
   private botScope?: Omit<ChannelAddress, 'conversationId'>
   private identityHandler?: (identity: string) => void

@@ -12,6 +12,20 @@ Service Bots do not deliver host-generated LLM request errors to external chats
 WebChat for diagnosis; ordinary responses are unaffected. Personal Bots retain
 their existing error delivery behavior.
 
+## Passive collection and independent consumers
+
+Production Project runtimes persist an admitted, bounded channel event stream,
+separate from Agent trigger policy. Discord Gateway ordinary messages can be
+stored without inference; mentions/replies and reviewed processors retain their
+trigger behavior. Edits/deletes and admitted thread discovery append local events.
+Other platforms currently contribute only through their existing admitted receive
+boundary, not a new universal history/edit feed. Unbound service chats and
+non-owner personal DMs remain denied. Trusted Web tools use explicit stable
+consumers and local positions, not platform timestamps; sending has an independent
+idempotency journal and authorization gate. See [channel message stream](channel-stream.md)
+for exact platform capabilities, bounded Discord catch-up, retention gaps and
+migration from `discord_patrol`.
+
 ## WeChat personal entry (iLink)
 
 WeChat is available only for **personal** Bots, never service Bots. Both creation

@@ -1,3 +1,5 @@
+import { IntegrationError } from './integration-store.ts'
+import { ChannelMessageStream } from './message-stream.ts'
 import { onBackendNetworkChanged } from '../execution/network/backend.ts'
 import { ownerQuestionCommand } from './owner-questions.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
@@ -39,6 +41,7 @@ export interface ChannelManagerOptions {
   realtime?: RealtimePublisher
   serviceDiscovery?: ServiceDiscoveryStore
   serviceAssigned?: (address: ChannelAddress) => boolean
+  messageStream?: ChannelMessageStream
   discordIntegration?: DiscordIntegration
 }
 
@@ -106,6 +109,7 @@ export class ChannelManager {
     this.scope = this.options?.scope ?? getProjectScope()
     if (this.options && this.scope && this.scope.projectId !== this.projectId) throw new TypeError('Channel manager project scope mismatch')
     if (this.options && this.options.instanceStore.projectId !== this.projectId) throw new TypeError('Bot store ownership mismatch')
+    if (this.options?.messageStream && this.options.messageStream.project !== this.projectId) throw new TypeError('Stream ownership mismatch')
     if (this.options?.serviceDiscovery && this.options.serviceDiscovery.projectId !== this.projectId) throw new TypeError('Discovery ownership mismatch')
     this.bus.declareQueue('message.outbound')
   }
@@ -193,6 +197,10 @@ export class ChannelManager {
       }
     })
     channel.setStatusListener?.(state => {
+      if (this.options?.messageStream && this.channels.get(bot.id) === channel && ['connecting','disconnected','error'].includes(state)) {
+        const stream = this.options.messageStream
+        for (const entry of stream.directory().filter(e=>e.connection===bot.id)) stream.append({connection:bot.id,conversation:entry.conversation,platform:bot.platform,kind:'gap',detail:`Transport ${state}; messages may be missing. Offline edits/deletes are not recoverable.`,...(entry.parent?{parent:entry.parent}:{})})
+      }
       if (this.channels.get(bot.id) === channel && state !== 'connected' && state !== 'running') this.ownerChallenges.delete(bot.id)
       if (this.channels.get(bot.id) === channel && !this.cleanupFailed.has(bot.id)) this.health.set(bot.id, {
         state: identityFailure ? 'error' : state,
@@ -398,6 +406,33 @@ export class ChannelManager {
         invalidate: () => integration.invalidateBot(bot.id),
       })
     }
+    if (bot && scope && this.options?.messageStream) channel.setStreamCollector?.(async (event, isGroup) => {
+      if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key)) throw new ChannelAdmissionError('Connection changed', 503)
+      this.options!.instanceStore.assertAccess(bot.id)
+      const current = this.options!.instanceStore.get(bot.id)
+      if (!current.enabled) throw new ChannelAdmissionError('Bot disabled', 403)
+      const stream = this.options!.messageStream!
+      if(event.kind==='discovered') {
+        if(current.purpose!=='service' || !event.parent || !(current.platform==='discord'?integration?.streamAssigned(bot.id,event.conversation,event.parent):this.options?.serviceAssigned?.({...scope,conversationId:event.parent}))) return
+        stream.append({...event,connection:bot.id,platform:bot.platform});return
+      }
+      const prior = event.message ? stream.latest(bot.id, event.conversation, event.message) : undefined
+      const sender = event.sender ?? prior?.sender
+      let parent = event.parent ?? prior?.parent
+      if (!sender || !channel.isAllowed(sender)) return
+      if (current.purpose === 'personal') {
+        if (isGroup || sender !== current.verifiedOwner?.senderId || event.conversation !== current.verifiedOwner?.chatId) return
+      } else if (current.purpose === 'service') {
+        if (current.platform === 'discord' && integration) {
+          const proof = await integration.prepareIngress(bot.id, {chatId:event.conversation,senderId:sender,messageId:event.message ?? 'stream'}, new AbortController().signal)
+          integration.discardAdmission(proof.admissionId)
+          parent ??= proof.location.parentId ?? undefined
+        } else if (!this.options?.serviceAssigned?.({...scope,conversationId:event.conversation})) return
+      } else return
+      this.options!.instanceStore.assertAccess(bot.id)
+      if (this.closing || this.channels.get(key) !== channel) return
+      stream.append({...event,parent,sender,connection:bot.id,platform:bot.platform})
+    })
     channel.setReceiver(async message => {
       if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key)) {
         throw new ChannelAdmissionError('The source bot connection is unavailable', 503)
@@ -456,6 +491,7 @@ export class ChannelManager {
           return { status: 'accepted', sessionId: channelSessionId({ ...scope, conversationId: message.chatId }), inputId: message.messageId }
         }
       }
+      if (bot && bot.platform !== 'discord' && message.channel === channel.name) this.options?.messageStream?.append({connection:bot.id,platform:bot.platform,conversation:message.chatId,kind:'created',message:message.platformMessageId ?? message.messageId,sender:message.senderId,content:message.content.slice(0,32000)})
       return this.receive({
         ...message, ...(scope ? { channelAddress: { ...scope, conversationId: message.chatId } } : {}),
         ...(bot ? { admin: bot.purpose === 'personal' } : {}),
@@ -510,6 +546,42 @@ export class ChannelManager {
       inspect: (botId, chatId, senderId, signal) => run(botId, value => value.inspectConversation(chatId, senderId, signal)),
       inspectTarget: (botId, target, signal) => run(botId, value => value.inspectTarget(target, signal)),
       members: (botId, guildId, query, signal) => run(botId, value => value.members(guildId, query, signal)),
+    }
+  }
+
+  async admitStreamHistory(botId:string,conversation:string,sender:string,message:string,signal:AbortSignal):Promise<boolean> {
+    this.assertStreamAccess(botId,conversation)
+    const bot=this.options!.instanceStore.get(botId),channel=this.availableByKey(botId)
+    if(!channel || !channel.isAllowed(sender)) return false
+    if(bot.purpose==='personal') return sender===bot.verifiedOwner?.senderId && conversation===bot.verifiedOwner?.chatId
+    if(bot.platform==='discord') {
+      if(!this.options?.discordIntegration) return false
+      try {
+        const proof=await this.options.discordIntegration.prepareIngress(botId,{chatId:conversation,senderId:sender,messageId:message},signal)
+        this.options.discordIntegration.discardAdmission(proof.admissionId)
+        this.assertStreamAccess(botId,conversation)
+        return true
+      } catch(error) {signal.throwIfAborted();if(error instanceof IntegrationError && error.status===403)return false;throw error}
+    }
+    return true
+  }
+
+  assertStreamAccess(botId: string, conversation?: string): void {
+    const bot = this.options?.instanceStore.get(botId)
+    if (!bot || !bot.enabled || bot.projectId !== this.projectId || bot.purpose === 'legacy') throw new Error('Channel connection is not available in this Project')
+    this.options!.instanceStore.assertAccess(botId)
+    if (!conversation) return
+    if (bot.purpose === 'personal') {
+      if (bot.verifiedOwner?.chatId !== conversation) throw new Error('Verified owner DM required')
+    } else {
+      const stream = this.options?.messageStream
+      const parent = stream?.directory().find(e=>e.connection===botId&&e.conversation===conversation)?.parent
+      if(bot.platform==='discord') {
+        if(!this.options?.discordIntegration?.streamAssigned(botId,conversation,parent)) throw new Error('Explicit Discord service assignment required')
+        return
+      }
+      if (!this.options?.serviceAssigned?.({projectId:bot.projectId,botInstanceId:botId,platform:bot.platform,conversationId:conversation}) &&
+        !(parent && this.options?.serviceAssigned?.({projectId:bot.projectId,botInstanceId:botId,platform:bot.platform,conversationId:parent}))) throw new Error('Explicit service assignment required')
     }
   }
 
