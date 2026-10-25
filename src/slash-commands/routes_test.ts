@@ -10,7 +10,6 @@ function fixture() {
   const dispatcher = new CommandDispatcher()
   for (const name of ['status', 'yield', 'agent-publish']) dispatcher.register({
     name, description: `Description of ${name}`, adminOnly: name !== 'yield',
-    coordinatorOnly: name === 'agent-publish',
     execute: async () => assert.fail('Catalog reads must never execute a command'),
   })
   const checked: string[] = []
@@ -28,7 +27,7 @@ function fixture() {
   return { app, dispatcher, checked, request }
 }
 
-test('authenticated catalogs reuse registered handlers and filter coordinator-only commands', async () => {
+test('authenticated catalogs reuse registered handlers and advertise administration to ordinary Web sessions', async () => {
   const f = fixture()
   assert.equal((await f.app.request('/api/chat/commands')).status, 401)
   for (const id of ['', 'web:conversation']) {
@@ -36,15 +35,16 @@ test('authenticated catalogs reuse registered handlers and filter coordinator-on
     assert.equal(response.status, 200)
     assert.equal(response.headers.get('cache-control'), 'no-store')
     assert.deepEqual((await response.json()).commands, [
+      { name: 'agent-publish', description: 'Description of agent-publish' },
       { name: 'status', description: 'Description of status' },
       { name: 'yield', description: 'Description of yield' },
     ])
   }
   assert.deepEqual(f.checked, ['web:conversation'])
-  assert.deepEqual((await (await f.request('web:orchestrator')).json()).commands.map((item: { name: string }) => item.name),
+  assert.deepEqual((await (await f.request('web:chat-admin')).json()).commands.map((item: { name: string }) => item.name),
     ['agent-publish', 'status', 'yield'])
   f.dispatcher.register({ name: 'new-command', description: 'Registered later', adminOnly: true, execute: async () => '' })
-  assert.equal((await (await f.request()).json()).commands[0].name, 'new-command')
+  assert.equal((await (await f.request()).json()).commands.some((item: { name: string }) => item.name === 'new-command'), true)
 })
 
 test('managed conversations and non-web execution contexts cannot advertise slash execution', async () => {
@@ -63,6 +63,6 @@ test('help and discovery use the same permission and conversation filtering', as
     sessionId: 'web:ordinary', admin: true, llm: { model: 'test', contextWindow: 4096, temperature: 0 },
     msg: { channel: 'web', chatId: 'ordinary', senderId: 'owner', messageId: 'synthetic', content: '/help', timestamp: new Date().toISOString() },
   }
-  assert.doesNotMatch(await createHelpCommand(dispatcher).execute(context, ''), /agent-publish/)
-  assert.match(await createHelpCommand(dispatcher).execute({ ...context, sessionId: 'web:orchestrator' }, ''), /agent-publish/)
+  assert.match(await createHelpCommand(dispatcher).execute(context, ''), /agent-publish/)
+  assert.match(await createHelpCommand(dispatcher).execute({ ...context, sessionId: 'web:chat-admin' }, ''), /agent-publish/)
 })

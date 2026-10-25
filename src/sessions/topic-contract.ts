@@ -32,8 +32,8 @@ export function parseTopicMetadata(value: unknown): TopicMetadata {
 
 export function parseTopicSessionFields(value: {
   sessionKind?: unknown; topic?: unknown; createdBySessionId?: unknown; topicRequestHash?: unknown
-}): { sessionKind?: 'topic' | 'orchestrator'; topic?: TopicMetadata; createdBySessionId?: string; topicRequestHash?: string } {
-  if (value.sessionKind !== undefined && value.sessionKind !== 'topic' && value.sessionKind !== 'orchestrator') {
+}): { sessionKind?: 'topic'; topic?: TopicMetadata; createdBySessionId?: string; topicRequestHash?: string } {
+  if (value.sessionKind !== undefined && value.sessionKind !== 'topic') {
     throw new TopicMetadataError('Invalid session kind')
   }
   if (value.createdBySessionId !== undefined && (typeof value.createdBySessionId !== 'string'

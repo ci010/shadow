@@ -1,7 +1,7 @@
 export interface CredentialRequest {
   id: string
   projectId: string
-  sessionId: 'web:orchestrator'
+  sessionId: string
   secretRef: string
   purpose: string
   createdAt: string
@@ -43,7 +43,7 @@ export function parseCredentialRequest(value: unknown, expectedProjectId?: strin
     if (typeof id !== 'string' || !uuid.test(id) ||
       typeof projectId !== 'string' || projectId.length === 0 || projectId.length > 200 ||
       (expectedProjectId !== undefined && projectId !== expectedProjectId) ||
-      sessionId !== 'web:orchestrator' || typeof ref !== 'string' || !secretRef.test(ref) ||
+      typeof sessionId !== 'string' || !/^web:[^\x00-\x20\x7f]{1,500}$/.test(sessionId) || typeof ref !== 'string' || !secretRef.test(ref) ||
       typeof purpose !== 'string' || purpose.length === 0 || purpose.length > 500 || purpose.trim() !== purpose ||
       typeof createdAt !== 'string' || createdAt.length > 40 || !iso.test(createdAt) || !Number.isFinite(Date.parse(createdAt)) ||
       typeof replacesExisting !== 'boolean') throw new Error()

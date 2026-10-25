@@ -414,7 +414,7 @@ export class SessionManager {
     }
     if (this.deleting.has(sessionId)) throw new Error('Delegation owner is being deleted.')
     if (!this.getAllowedSubagentModes(sessionId).includes(mode)) throw new Error(`Execution mode "${mode}" is not allowed from this session.`)
-    const role = this.resolveAgentTypeTools(state.agentType, state.sessionKind)
+    const role = this.resolveAgentTypeTools(state.agentType)
     if (role.allowedTools !== undefined ? !role.allowedTools.includes('subagent') : role.blockedTools?.includes('subagent')) {
       throw new Error('The owner role does not permit subagent creation.')
     }
@@ -458,7 +458,7 @@ export class SessionManager {
       await this.saveState(sessionId, state)
       throw error
     }
-    const role = this.resolveAgentTypeTools(state.agentType, state.sessionKind)
+    const role = this.resolveAgentTypeTools(state.agentType)
     const policy = state.channelBoundary ? this.deps.conversationPolicies?.resolve(sessionId) : undefined
     const tools = policy ? this.deps.conversationPolicies!.tools(policy, sessionId, state)
       : new CallTools(context.tools, this.workspace, role.allowedTools, role.blockedTools, role.agentType.allowedModules)
@@ -610,7 +610,7 @@ export class SessionManager {
     if (!this.canSendSessionMessage(sourceId, targetId)) throw new Error('Cron target does not accept messages from this session.')
     const policy = this.deps.conversationPolicies?.resolve(sourceId)
     const agent = policy ? { ...policy.agent, allowedTools: policy.agent.allowedTools ?? [] }
-      : this.resolveAgentTypeTools(source.agentType, source.sessionKind).agentType
+      : this.resolveAgentTypeTools(source.agentType).agentType
     if (sourceId !== targetId && !isToolAllowed(agent, 'message')) {
       throw new Error('Scheduling another session requires permission to message it.')
     }
@@ -930,7 +930,7 @@ ${JSON.stringify(request)}`,
     const parent = this.getSessionState(parentId)
     if (!parent) throw new YieldError('unavailable', 'The parent session no longer exists.')
     const definitions = this.getToolDefinitions(parentId,
-      this.getActiveSession(parentId) ? undefined : this.resolveAgentTypeTools(parent.agentType, parent.sessionKind))
+      this.getActiveSession(parentId) ? undefined : this.resolveAgentTypeTools(parent.agentType))
     if (!definitions.some(tool => tool.name === 'reply')) {
       throw new YieldError('unavailable', 'The parent must have the reply tool enabled to answer.')
     }
@@ -952,7 +952,7 @@ ${JSON.stringify(request)}`,
     if (request.recipient.kind === 'parent') {
       const parent = this.getSessionState(request.recipient.sessionId)
       if (!parent || !this.getToolDefinitions(parent.sessionId, this.getActiveSession(parent.sessionId)
-        ? undefined : this.resolveAgentTypeTools(parent.agentType, parent.sessionKind)).some(tool => tool.name === 'reply')) {
+        ? undefined : this.resolveAgentTypeTools(parent.agentType)).some(tool => tool.name === 'reply')) {
         throw new YieldError('unavailable', 'The parent must have reply enabled to answer.')
       }
       await this.deliver(parent.sessionId, {
@@ -1078,8 +1078,6 @@ ${JSON.stringify(request)}`,
           if (formerOwner && formerOwner !== state.sessionId) state.createdBySessionId ??= formerOwner
           state.parentSessionId = null
           delete state.reportTo
-          state.sessionKind ??= state.sessionId === 'web:orchestrator' && state.agentType === 'orchestrator'
-            ? 'orchestrator' : undefined
         }
         if (state.mode !== 'session' && ['running', 'waiting', 'pending'].includes(state.executionStatus ?? '')) {
           state.executionStatus = 'cancelled'
@@ -1816,7 +1814,7 @@ ${JSON.stringify(request)}`,
       config?: SessionConfig
       statePersistence?: SessionState['statePersistence']
       automation?: AutomationSessionRef
-      sessionKind?: 'topic' | 'orchestrator'
+      sessionKind?: 'topic'
       topic?: TopicMetadata
       createdBySessionId?: string
       topicRequestHash?: string
@@ -1831,12 +1829,6 @@ ${JSON.stringify(request)}`,
   private async buildSessionWithAccess(...[sessionId, parent, stateFields]: Parameters<SessionManager['buildSession']>): Promise<void> {
     if (parent?.index !== undefined) this.assertHistoryWritable(parent.id)
     const topicFields = parseTopicSessionFields(stateFields ?? {})
-    const coordinator = sessionId === 'web:orchestrator' || stateFields?.agentType === 'orchestrator'
-      || topicFields.sessionKind === 'orchestrator'
-    if (coordinator && (sessionId !== 'web:orchestrator' || stateFields?.agentType !== 'orchestrator'
-      || topicFields.sessionKind !== 'orchestrator' || (stateFields?.mode !== undefined && stateFields.mode !== 'session'))) {
-      throw new Error('The Project orchestrator must use web:orchestrator, agentType orchestrator, and sessionKind orchestrator.')
-    }
     if (topicFields.createdBySessionId) {
       const creator = this.sessionStates[topicFields.createdBySessionId]
       if (!creator || (this.deps.projectId && creator.projectId !== this.deps.projectId)) {
@@ -2213,7 +2205,7 @@ ${JSON.stringify(request)}`,
     }
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
-      if (!state || this.stopped || this.deleting.has(sessionId) || state.mode === 'call' || state.automation || state.sessionKind === 'orchestrator') throw new Error('Self metadata requires an available ordinary durable session or task')
+      if (!state || this.stopped || this.deleting.has(sessionId) || state.mode === 'call' || state.automation) throw new Error('Self metadata requires an available ordinary durable session or task')
       const paths = this.getSelfWorkingPaths(sessionId)
       for (const key of ['projectDir', 'cwd'] as const) {
         if (key in patch && patch[key] !== paths[key]) throw new Error('Execution paths are read-only. Use use_project to select a registered folder.')
@@ -2247,7 +2239,7 @@ ${JSON.stringify(request)}`,
     await this.withStateCreation(sessionId, async () => {
       if (this.stopped || this.deleting.has(sessionId)) throw new Error('Session is unavailable')
       const state = this.sessionStates[sessionId]
-      if (!state || state.mode !== 'session' || state.sessionKind === 'orchestrator' || this.isManagedConversation(sessionId)) throw new Error('Only ordinary durable session metadata can be edited')
+      if (!state || state.mode !== 'session' || this.isManagedConversation(sessionId)) throw new Error('Only ordinary durable session metadata can be edited')
       const release = this.acquireFolderAccess()
       try {
         this.assertFolderAccess(sessionId)
@@ -2353,7 +2345,7 @@ ${JSON.stringify(request)}`,
   private retirementProtected(state: SessionState): boolean {
     const id = state.sessionId
     return !!(state.retirement || !/^web:chat-/.test(id) || state.channelBoundary
-      || state.sessionKind === 'orchestrator' || state.agentType === 'orchestrator' || state.automation || state.statePersistence || state.initiativeId
+      || state.automation || state.statePersistence || state.initiativeId
       || state.mode && state.mode !== 'session' || state.recovery
       || ['pending', 'running', 'waiting'].includes(state.executionStatus ?? '')
       || this.sessions[id] || this.calls.has(id) || this.reporting.has(id)
@@ -2625,7 +2617,6 @@ ${JSON.stringify(request)}`,
       segmentIndex: state.segmentIndex, lastActivityAt: state.lastActivityAt,
       folderId: state.folderId, initiativeId: state.initiativeId, automation: state.automation,
       agentType: state.agentType, mode: state.mode, completed: state.completed, executionStatus: state.executionStatus,
-      sessionKind: state.sessionKind === 'orchestrator' ? 'orchestrator' : undefined,
       createdBySessionId: state.createdBySessionId,
     }))
   }
@@ -2713,7 +2704,7 @@ ${JSON.stringify(request)}`,
     }
     const own = await readTokenUsage(this.store, state)
     const hasDelegates = queue.length > 1
-    const role = this.resolveAgentTypeTools(state.agentType, state.sessionKind)
+    const role = this.resolveAgentTypeTools(state.agentType)
     const canDelegate = this.getAllowedSubagentModes(sessionId).length > 0 &&
       (role.allowedTools !== undefined ? role.allowedTools.includes('subagent') : !role.blockedTools?.includes('subagent'))
     let subagentUsage: LLMResponseUsage | null = hasDelegates ? null : { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
@@ -2746,7 +2737,7 @@ ${JSON.stringify(request)}`,
       ...parseTopicSessionFields(state),
       description: state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
       sessionId,
-      name: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? (state.sessionKind === 'orchestrator' ? 'Project coordination' : await this.getFirstUserMessage(sessionId)),
+      name: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? await this.getFirstUserMessage(sessionId),
       workdir: {
         kind: remote ? 'remote' as const : 'local' as const,
         displayPath: remote
@@ -2972,7 +2963,6 @@ ${JSON.stringify(request)}`,
       mode: s.mode,
       completed: s.completed,
       executionStatus: s.executionStatus,
-      sessionKind: s.sessionKind === 'orchestrator' ? 'orchestrator' : undefined,
       createdBySessionId: s.createdBySessionId,
     }))
   }
@@ -3160,10 +3150,7 @@ ${JSON.stringify(request)}`,
 
     // For inactive / historical sessions, filter using behavior
     const state = sessionId ? this.sessionStates[sessionId] : undefined
-    const coordinator = state?.sessionKind === 'orchestrator' || state?.agentType === 'orchestrator'
-    const policy = coordinator
-      ? this.resolveAgentTypeTools(state?.agentType, state?.sessionKind)
-      : behaviorOverride ?? (state ? this.resolveAgentTypeTools(state.agentType, state.sessionKind) : {})
+    const policy = behaviorOverride ?? (state ? this.resolveAgentTypeTools(state.agentType) : {})
     const scoped = new SessionTools(this.deps.tools, this.workspace, policy.allowedTools, policy.blockedTools)
     scoped.restrictChannelTools(channel, sessionId)
     const mode = modeOverride ?? state?.mode ?? 'session'
@@ -3237,7 +3224,7 @@ ${JSON.stringify(request)}`,
       )
     }
 
-    const { agentType, allowedTools, blockedTools } = this.resolveAgentTypeTools(agentTypeName, state?.sessionKind)
+    const { agentType, allowedTools, blockedTools } = this.resolveAgentTypeTools(agentTypeName)
     const promptCtx: SessionPromptContext = {
       projectId: this.deps.projectId,
       behavior,
@@ -3270,7 +3257,7 @@ ${JSON.stringify(request)}`,
 
   // ── Private helpers ────────────────────────────────────────────────
 
-  private resolveAgentTypeTools(agentTypeName?: string, sessionKind?: SessionState['sessionKind']): {
+  private resolveAgentTypeTools(agentTypeName?: string): {
     agentType: AgentTypeDefinition
     allowedTools?: string[]
     blockedTools?: string[]
@@ -3285,13 +3272,6 @@ ${JSON.stringify(request)}`,
     if (name === 'work-organizer') {
       const allowedTools = ['organization_read', 'organization_patch', 'organization_finish']
       return { agentType: { ...resolved, allowedTools, blockedTools: undefined, soul: false, skills: false }, allowedTools }
-    }
-    if (name === 'orchestrator' || sessionKind === 'orchestrator') {
-      const allowedTools = ['read', 'search', 'session', 'message', 'work', 'sql', 'project_config', 'authoring_change', 'channel_config', 'skill_read', 'skill_save', 'ask', 'reply']
-      return {
-        agentType: { ...resolved, allowedTools, blockedTools: undefined },
-        allowedTools,
-      }
     }
 
     if (resolved.allowedTools !== undefined) {
@@ -3407,7 +3387,6 @@ ${JSON.stringify(request)}`,
     const existing = this.sessionStates[sessionId]
     if (existing) return existing
     if (await this.store.readArchivedState?.(sessionId)) throw new Error('Archived execution cannot be resumed')
-    if (sessionId === 'web:orchestrator') throw new Error('The Project orchestrator must be created through its canonical configuration')
 
     const ts = new Date().toISOString()
     const physicalSessionId = newPhysicalSessionId(sessionId, 0, 2)
@@ -3450,7 +3429,7 @@ ${JSON.stringify(request)}`,
     const conversationPolicy = this.deps.conversationPolicies?.resolve(sessionId)
     const { agentType: resolvedAgentType, allowedTools, blockedTools } = conversationPolicy
       ? { agentType: conversationPolicy.agent, allowedTools: conversationPolicy.agent.allowedTools ?? [], blockedTools: undefined }
-      : this.resolveAgentTypeTools(state.agentType, state.sessionKind)
+      : this.resolveAgentTypeTools(state.agentType)
 
     const promptCtx: SessionPromptContext = {
       projectId: this.deps.projectId,
@@ -3474,7 +3453,7 @@ ${JSON.stringify(request)}`,
       parentSessionId: delegationOwner(state),
       initiativeId: state.initiativeId,
       contextResetAt: state.contextResetAt,
-      ...((state.mode ?? 'session') === 'session' && !state.automation && state.sessionKind !== 'orchestrator' ? {
+      ...((state.mode ?? 'session') === 'session' && !state.automation ? {
         sessionMetadata: { title: state.name ?? state.topic?.title ?? state.generatedTitle, description: state.description, topic: state.topic, completed: state.completed ?? false },
       } : {}),
       ...sessionPromptLocality(state),

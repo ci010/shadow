@@ -146,6 +146,7 @@ test('subscriptions deliver changed snapshots only to their bound session and st
   try {
     await f.service.configureRepository('octo/demo', true, true)
     await f.service.link(f.remote.pull.html_url, f.work.key)
+    await assert.rejects(f.service.subscribe({ resourceId: 'PR_2', workKey: f.work.key, sessionId: 'web:chat-admin', enabled: true, mode: 'queue', events: ['ci'] }), /Session or assignment changed/)
     await f.service.subscribe({ resourceId: 'PR_2', workKey: f.work.key, sessionId: 'worker', enabled: true, mode: 'queue', events: ['ci', 'review', 'comments', 'source'] })
     await f.service.refresh('PR_2')
     assert.equal(f.delivered.length, 0, 'Initial snapshot is not replayed as an event')

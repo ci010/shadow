@@ -36,12 +36,12 @@ async function render(component: Component, props: Record<string, unknown>) {
   return renderToString(createSSRApp(component, props).use(router))
 }
 
-test('decision history keeps safety/history and navigates to existing Project dashboard instead of inline graph/discussion', async () => {
+test('decision history keeps safety/history without a mandatory admin destination', async () => {
   const component = load('YieldDecision')
   const decision = { question: 'Change scope?', status: 'user', options: ['Proceed', 'Keep scope'], defaultOption: 'Keep scope', sources: [], reference: { sessionId: 'example', physicalId: 'p', requestId: 'r' }, invalidated: { reason: 'Scope changed' }, answer: { option: 'Need more evidence', custom: true, answeredAt: '2026-10-12T00:00:00Z' } }
   const html = await render(component, { decision, apiBase: '/fixture', canManage: true })
-  assert.match(html, /href="\/projects\/fixture\/chat\/web:orchestrator"/)
-  assert.match(html, /Dashboard/)
+  assert.doesNotMatch(html, /href="\/projects\/fixture\/chat\/web:chat-admin"/)
+  assert.doesNotMatch(html, /decision-dashboard/)
   assert.match(html, /Scope changed/)
   assert.match(html, /historical, not approval/)
   assert.match(html, /Need more evidence/)
@@ -66,7 +66,7 @@ test('pending decision retains options, custom answer and cancel without discuss
 })
 
 
-test('dashboard entry invokes existing primary-dashboard selection when already inside coordinator', async () => {
+test('decision history does not invoke admin dashboard navigation even in legacy history', async () => {
   let clicked: (() => void) | undefined
   let selected = 0
   const probe = defineComponent({ inheritAttrs: false, setup(_props, { attrs, slots }) {
@@ -75,39 +75,9 @@ test('dashboard entry invokes existing primary-dashboard selection when already 
   } })
   const component = load('YieldDecision', { 'vue-router': { ...vueRouter, RouterLink: probe } })
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/projects/:projectId/chat/:sessionId?', name: 'chat', component: empty }] })
-  await router.push('/projects/fixture/chat/web:orchestrator')
+  await router.push('/projects/fixture/chat/web:chat-admin')
   const app = createSSRApp(component, { decision: { question: 'Choose?', status: 'waiting-user', options: ['A', 'B'], sources: [] }, apiBase: '/fixture' }).use(router)
   app.provide('shadow:show-project-dashboard', () => { selected++ })
   await renderToString(app)
-  assert.ok(clicked)
-  clicked()
-  assert.equal(selected, 1)
-  const dashboard = readFileSync(new URL('./components/ProjectDashboard.vue', import.meta.url), 'utf8')
-  assert.ok(dashboard.includes("provide('shadow:show-project-dashboard', showDashboard)"))
-  assert.match(dashboard, /function showDashboard\(\) \{\s*if \(!wide.value\) coordinatorOpen.value = false\s*activePane.value = 'dashboard'\s*workbench.value\?\.showConversation\(\)/)
-})
-
-
-test('input question uses composer placeholder without duplicate card hints and retains real expiry', async () => {
-  const actual = createRequire(import.meta.url)('./yield-requests.ts') as typeof import('./yield-requests.ts')
-  for (const deadline of [undefined, '2099-01-01T12:00:00Z']) {
-    const request = { id: 'input-r', kind: 'input', sessionId: 'example', question: 'Which executable?', recipient: { kind: 'user' }, deadline }
-    const component = load('YieldQuestion', { '../yield-requests.ts': { ...actual, useYieldRequest: () => ({
-      request: ref(request), selected: ref(''), customMode: ref(false), customText: ref(''), error: ref(''), submitting: ref(false), cancelling: ref(false), busy: ref(false), loading: ref(false), now: ref(Date.now()), answerable: ref(true), refresh: () => {}, submit: () => {}, submitCustom: () => {}, cancelQuestion: () => {},
-    }) } })
-    const html = await render(component, { apiBase: '/fixture', sessionId: 'example', active: true, canAnswer: true, useComposer: true })
-    assert.match(html, /Which executable\?/)
-    assert.match(html, /Cancel task/)
-    assert.doesNotMatch(html, /yield-composer-note|Type your answer|Waiting for input|No answer is chosen automatically/)
-    if (deadline) assert.match(html, /Input expires at/)
-    else {
-      assert.doesNotMatch(html, /id="[^"]*-deadline"/)
-      assert.equal(actual.yieldDeadlineText(request as never, Date.now()), '')
-    }
-  }
-  for (const locale of ['en', 'zh-CN']) {
-    const messages = JSON.parse(readFileSync(new URL(`./locales/${locale}.json`, import.meta.url), 'utf8'))
-    assert.equal('Waiting for input. No answer is chosen automatically.' in messages, false)
-    assert.ok(messages['Type your answer...'], 'placeholder key is still used by both composers')
-  }
-})
+  assert.equal(clicked, undefined)
+  assert.equal(selected, 0)

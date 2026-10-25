@@ -32,7 +32,7 @@ export function parsePublicationRequests(value: unknown, projectId: string): Pub
 }
 
 export function visiblePublicationRequests(requests: PublicationRequest[], sessionId: string): PublicationRequest[] {
-  return requests.filter(request => sessionId === 'web:orchestrator' || request.change?.sourceSessionId === sessionId)
+  return requests.filter(request => request.sessionId === sessionId || request.change?.sourceSessionId === sessionId)
 }
 
 export function usePublicationRequest(source: () => PublicationSource) {
@@ -84,7 +84,8 @@ export function usePublicationRequest(source: () => PublicationSource) {
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
       })
       if (!response.ok) throw new Error(t('Publication review unavailable'))
-      const next = visiblePublicationRequests(parsePublicationRequests(await response.json(), source().projectId), source().sessionId)
+      const parsed = parsePublicationRequests(await response.json(), source().projectId)
+      const next = (source().conversation ? parsed : visiblePublicationRequests(parsed, source().sessionId))
         .filter(item => {
           const target = source().conversation
           return !target || (item.impact ? item.impact.affectedBindings.includes(JSON.stringify([target.botInstanceId, target.platform, target.conversationId])) : [...item.bindings, ...item.previousBindings].some(binding => binding.botInstanceId === target.botInstanceId && binding.platform === target.platform && binding.conversationId === target.conversationId))

@@ -141,7 +141,8 @@ test('inference discovery, scoped edits and authoritative publication status nee
         input: { agent: 'support', settings: { reasoningEffort: 'invalid' } } }), /Invalid enum/)
       await assert.rejects(f.invoke({ action: 'configure_inference', changeId: change.id, expectedRevision: updated.revision,
         input: { agent: 'unbound', settings: { model: 'astra' } } }), /enabled binding/)
-      await f.invoke({ action: 'propose', changeId: change.id, expectedRevision: updated.revision }, f.worker)
+      await assert.rejects(f.invoke({ action: 'propose', changeId: change.id, expectedRevision: updated.revision }, f.worker), /direct Project owner/)
+      await f.invoke({ action: 'propose', changeId: change.id, expectedRevision: updated.revision })
       let status = await f.invoke({ action: 'status', changeId: change.id }, f.worker)
       assert.equal(status.active, false)
       assert.equal(status.status, 'awaiting_owner_review')
@@ -238,7 +239,7 @@ test('a delegated author edits and checks one Change then requests exact publica
       assert.match(full.content, /Accept clear reports/)
       const checked = await f.invoke({ action: 'check', changeId: change.id, expectedRevision: edit.revision, input: { kind: 'validate' } }, f.worker)
       assert.equal(checked.status, 'passed')
-      const proposed = await f.invoke({ action: 'propose', changeId: change.id, expectedRevision: edit.revision }, f.worker)
+      const proposed = await f.invoke({ action: 'propose', changeId: change.id, expectedRevision: edit.revision }, { ...f.worker, inputSource: 'user', admin: true })
       assert.equal(proposed.status, 'awaiting_owner_review')
       assert.equal(f.resources.draft().revision, draftRevision)
       const request = f.publications.pending()!

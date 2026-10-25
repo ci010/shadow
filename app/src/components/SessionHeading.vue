@@ -9,10 +9,9 @@
       </template>
       <template #default>
         <div class="session-details">
-          <section v-if="coordinator || details?.description" class="details-topic" :aria-label="t('Session description')">
-            <h3>{{ coordinator ? t('Project coordination') : t('Description') }}</h3>
-            <p v-if="coordinator" class="details-note">{{ t('Coordinate Project work here. Peer sessions are independent conversations, not tasks or child chats.') }}</p>
-            <p v-else class="details-topic-title">{{ details?.description }}</p>
+          <section v-if="details?.description" class="details-topic" :aria-label="t('Session description')">
+            <h3>{{ t('Description') }}</h3>
+            <p class="details-topic-title">{{ details?.description }}</p>
           </section>
           <p v-if="loading" class="details-note" role="status">{{ t('Loading session details...') }}</p>
           <p v-if="error" class="details-error" role="alert">{{ error }}</p>
@@ -100,7 +99,7 @@ import CopyableId from './CopyableId.vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { chatContextName } from '../chat-draft.ts'
 import { cacheRate, contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
-import { ORCHESTRATOR_SESSION_ID, type TopicMetadata } from '../project-coordination.ts'
+import { type TopicMetadata } from '../project-coordination.ts'
 
 const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; topic?: TopicMetadata; physicalId: string | null; revision: number; active: boolean; canRename?: boolean }>()
 const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']]; renamed: [name: string] }>()
@@ -111,9 +110,8 @@ defineExpose({ showDetails: () => detailsPopover.value?.show(), startRename })
 const details = ref<SessionDetails | null>(null)
 const loading = ref(false)
 const error = ref('')
-const coordinator = computed(() => props.sessionId === ORCHESTRATOR_SESSION_ID || details.value?.sessionKind === 'orchestrator')
 const topic = computed(() => details.value?.topic ?? props.topic)
-const sessionName = computed(() => details.value?.name?.trim() || (coordinator.value ? t('Project coordination') : props.name || topic.value?.title || t('Conversation')))
+const sessionName = computed(() => details.value?.name?.trim() || (props.name || topic.value?.title || t('Conversation')))
 const name = computed(() => [props.projectName, sessionName.value].filter(Boolean).join(' / '))
 const editing = ref(false)
 const saving = ref(false)
@@ -178,7 +176,7 @@ async function saveName() {
     if (renameRequest === controller) { renameRequest = undefined; saving.value = false }
   }
 }
-const folder = computed(() => coordinator.value ? t('Project-wide · No folder') : details.value?.workdir.kind === 'remote'
+const folder = computed(() => details.value?.workdir.kind === 'remote'
   ? `${details.value.workdir.nodeName || details.value.workdir.nodeId || t('Remote device')} · ${details.value.workdir.displayName || (details.value.workdir.displayPath ? chatContextName(details.value.workdir.displayPath) : t('Remote folder'))}${details.value.workdir.available === false ? ' (unavailable)' : ''}`
   : details.value?.workdir.displayPath
   ? chatContextName(details.value.workdir.displayPath)

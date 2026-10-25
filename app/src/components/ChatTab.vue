@@ -252,7 +252,7 @@
     <template #composer>
       <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible }">
         <div class="session-status-row">
-          <SessionWorkStatus v-if="activeSessionId && activeSessionId !== 'web:orchestrator' && !isExecution && !viewingPhysicalId"
+          <SessionWorkStatus v-if="activeSessionId && !isExecution && !viewingPhysicalId"
             :key="`work-status:${activeSessionId}`" :api-base="apiBase" :session-id="activeSessionId" :revision="workRevision"
             :active="paneActive && composerVisible && route.name === 'chat'" @open="openProjectWork" />
           <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="`work-controls:${activeSessionId}`"
@@ -283,7 +283,7 @@
         <BotChatSetup :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :can-submit="true" />
-        <CredentialRequest v-if="activeSessionId === 'web:orchestrator'" :api-base="apiBase"
+        <CredentialRequest v-if="isDirectChat && !isExecution" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="true" />
@@ -535,7 +535,7 @@ import { inlineInputQuestions } from '../input-history.ts'
 import { composerSubmitIntent } from '../composer-submit.ts'
 import SessionWorkControls from './SessionWorkControls.vue'
 import SessionWorkStatus from './SessionWorkStatus.vue'
-import { ensureProjectOrchestrator } from '../projects.ts'
+
 import SessionMessageDisclosure from './SessionMessageDisclosure.vue'
 import YieldDecision from './YieldDecision.vue'
 import { inlineYieldDecisions, parseDecisionRecords } from '../yield-history.ts'
@@ -1950,9 +1950,9 @@ async function openProjectWork(key: string) {
   const id = props.projectId || liveProjectId(props.apiBase)
   const source = route.fullPath
   try {
-    const coordinator = await ensureProjectOrchestrator(hostBase(props.apiBase), id, AbortSignal.timeout(15000))
+    const target = activeSessionId.value
     if (source !== route.fullPath || !paneActive.value) return
-    await router.push({ name: 'chat', params: { projectId: id, sessionId: coordinator }, query: { work: key } })
+    await router.push({ name: 'chat', params: { projectId: id, sessionId: target }, query: { work: key } })
   } catch (cause) {
     if (source !== route.fullPath || !paneActive.value) return
     composerError.value = cause instanceof Error ? cause.message : t('Could not open Project work. Retry from the Project entry.')

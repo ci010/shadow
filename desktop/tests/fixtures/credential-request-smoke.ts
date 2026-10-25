@@ -27,7 +27,7 @@ app.on('window-all-closed', () => {})
 const ui = new Hono()
 uiPlugin(argument('layout-assets'))(ui)
 const live = new LiveFixture()
-const sessionId = 'web:orchestrator'
+const sessionId = 'web:chat-admin'
 const errors: string[] = []
 const writes: Array<{ method: string; body: unknown }> = []
 let reads = 0
@@ -38,7 +38,7 @@ let rejectPublication = false
 const decisions: Array<{ method: string; revision: string; baseRevision: string }> = []
 function createPublication(): PublicationRequest {
   return {
-    id: randomUUID(), projectId: 'default', sessionId: 'web:orchestrator',
+    id: randomUUID(), projectId: 'default', sessionId: 'web:chat-admin',
     revision: `sha256:${'a'.repeat(64)}`, baseRevision: `sha256:${'b'.repeat(64)}`, createdAt: new Date().toISOString(),
     files: [{ path: 'agents/support/AGENT.md', before: 'Read documentation.', after: 'Collect issues.\n<img src=x onerror="window.approvalHtmlExecuted=true">' }],
     previousBindings: [], bindings: [{
@@ -72,8 +72,8 @@ const server = createServer(async (request, response) => {
     if (path === '/api/config') return json({ agent: { model: 'synthetic', temperature: .7, workspace: directory } })
     if (path === '/api/folders') return json({ folders: [] })
     if (path === '/api/sessions/graph') return json({
-      sessions: [{ sessionId, sessionKind: 'orchestrator', title: 'Project coordination', current: 'physical-coordinator' }],
-      nodes: [{ logicalId: sessionId, physicalId: 'physical-coordinator', isCurrent: true }],
+      sessions: [{ sessionId, sessionKind: 'topic', title: 'Administrator session', current: 'physical-admin' }],
+      nodes: [{ logicalId: sessionId, physicalId: 'physical-admin', isCurrent: true }],
     })
     if (path === '/api/sessions/stages') return json({ stages: { [sessionId]: pending ? 'tool' : 'idle' } })
     if (path === '/api/chat/session') return json({ history: [{ role: 'user', content: 'Configure issue collection.' }, ...live.history(sessionId)], tools: [], systemPrompt: '' })
@@ -112,12 +112,12 @@ const server = createServer(async (request, response) => {
     if (route) {
       if (route[2] === 'background-tasks') return json({ sessionId, total: 0, tasks: [] })
       if (route[2] === 'details') return json({
-        sessionId, name: 'Project coordination', sessionKind: 'orchestrator',
+        sessionId, name: 'Administrator session', sessionKind: 'topic',
         workdir: { kind: 'local', displayPath: directory }, usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null },
       })
       if (route[2] === 'files') return json({ path: '', entries: [], workdir: { kind: 'local', displayPath: directory } })
       if (route[2] === 'git/status') return json({ available: false, entries: [], reason: 'not_repository' })
-      if (!route[2]) return json({ messages: [{ role: 'user', content: 'Configure issue collection.' }], currentPhysicalId: 'physical-coordinator', previousPhysicalId: null })
+      if (!route[2]) return json({ messages: [{ role: 'user', content: 'Configure issue collection.' }], currentPhysicalId: 'physical-admin', previousPhysicalId: null })
     }
     if (/^\/(?:api|local|debug|nodes)\//.test(path)) {
       errors.push(`Unexpected ${request.method} ${path}`)

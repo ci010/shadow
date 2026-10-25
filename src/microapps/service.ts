@@ -103,7 +103,7 @@ export class MicroApps {
     return { ...record, status: !record.approval ? 'awaiting_approval' : record.lastRun?.status ?? 'stopped',
       acceptanceAvailable: this.acceptance.available,
       cleanupPending: this.runs.get(record.id)?.controller.signal.aborted ?? false,
-      uiPath: `/projects/${encodeURIComponent(this.projectId)}/chat/web%3Aorchestrator?microApp=${record.id}` }
+      uiPath: `/projects/${encodeURIComponent(this.projectId)}/chat/${record.createdBy.startsWith('web:') ? encodeURIComponent(record.createdBy) : ''}?microApp=${record.id}` }
   }
   private assertAvailable() {
     if (this.stopped) throw new MicroAppError('runtime_stopped', 'The Project app runtime is stopping', 409)

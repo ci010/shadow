@@ -15,7 +15,7 @@ const binding = ConversationBindingSchema.extend({
 const requestSchema = z.object({
   id: identifier,
   projectId: identifier,
-  sessionId: z.literal('web:orchestrator'),
+  sessionId: z.union([z.string().regex(/^web:[^\x00-\x20\x7f]{1,500}$/), z.literal('owner:service-groups')]),
   revision,
   baseRevision: revision,
   createdAt: z.string().datetime().refine(value => {

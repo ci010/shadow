@@ -1,3 +1,5 @@
+import { ImportTool } from '../tools/load-tool.ts'
+import { InvokeTool } from '../tools/invoke-tool.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
@@ -147,7 +149,9 @@ async function fixture(t: TestContext, Store = JsonlSessionStore as typeof Jsonl
       ...inspections.get(chatId),
     }),
   }
-  tools.register(ownerChannelConfigurationTool(config, memory, transport))
+  const channelTool = ownerChannelConfigurationTool(config, memory, transport)
+  tools.register(channelTool)
+  tools.register(new InvokeTool(new ImportTool(new Map([[channelTool.name, channelTool]]), home)))
   integration.attach(sessions, transport, async (request, context) => {
     const messages = [
       { conversationId: context.chatId, timestamp: '2000-01-01T00:00:00.000Z', content: 'OLD_HISTORY_CANARY' },
@@ -217,14 +221,15 @@ async function fixture(t: TestContext, Store = JsonlSessionStore as typeof Jsonl
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: owner coordinator discovers unassigned named Bots and drafts through its real tool loop, never approving`, async t => {
     const f = await fixture(t, Store)
+    const enqueue = (response: LLMResponse) => f.responses.push({ ...response, toolCalls: response.toolCalls?.map(call => ({ ...call, name: 'invoke_tool', arguments: { name: call.name, args: call.arguments } })) })
     const unassigned = f.addBot('901')
     const qq = f.bots.create('qq', 'QQ support', { enabled: false })
     const feishu = f.bots.create('feishu', 'Feishu support', { enabled: false })
-    await f.sessions.buildSession('web:orchestrator', undefined, {
-      mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator',
+    await f.sessions.buildSession('web:chat-admin', undefined, {
+      mode: 'session', agentType: 'general', sessionKind: 'topic',
     })
     const base = f.config.snapshot().revision
-    f.responses.push({ content: '', toolCalls: [
+    enqueue({ content: '', toolCalls: [
       { id: 'schema', name: 'channel_config', arguments: { action: 'schema' } },
       { id: 'list', name: 'channel_config', arguments: { action: 'list' } },
       { id: 'directory', name: 'channel_config', arguments: { action: 'directory', botId: unassigned.id } },
@@ -233,10 +238,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       { id: 'propose', name: 'channel_config', arguments: { action: 'propose', botId: unassigned.id, baseRevision: base,
         changeJson: JSON.stringify({ kind: 'agent.save', agent: { ...f.profile, markdown: f.profile.markdown + '\nOWNER_CHAT_DRAFT' } }) } },
     ] })
-    const ownerMessage = () => channelMessageInput({ channel: 'web', chatId: 'orchestrator', senderId: 'owner',
+    const ownerMessage = () => channelMessageInput({ channel: 'web', chatId: 'chat-admin', senderId: 'owner',
       content: 'Configure the named Discord support Bot', messageId: randomUUID(), timestamp: new Date().toISOString(), admin: true })
-    await f.deliver('web:orchestrator', ownerMessage())
-    assert(f.requests.every(request => request.tools.includes('channel_config')))
+    await f.deliver('web:chat-admin', ownerMessage())
+    assert(f.requests.every(request => !request.tools.includes('channel_config') && request.tools.includes('invoke_tool')))
     const outputs = f.requests.flatMap(request => request.messages).filter(message => message.role === 'tool')
     const output = (id: string) => JSON.parse(String(outputs.find(message => message.tool_call_id === id)?.content))
     const listed = z.object({ projectId: z.string(), bots: z.array(z.object({
@@ -269,22 +274,22 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     assert.equal(f.config.agent(f.profile.id).markdown, f.profile.markdown)
 
     f.requests.length = 0
-    f.responses.push({ content: '', toolCalls: [{ id: 'wrong-platform', name: 'channel_config',
+    enqueue({ content: '', toolCalls: [{ id: 'wrong-platform', name: 'channel_config',
       arguments: { action: 'propose', botId: qq.id, baseRevision: base,
         changeJson: JSON.stringify({ kind: 'agent.save', agent: f.profile }) } }] })
-    await f.deliver('web:orchestrator', ownerMessage())
+    await f.deliver('web:chat-admin', ownerMessage())
     assert.match(JSON.stringify(f.requests), /QQ\/Feishu.*authoring_change/)
     assert.equal(f.config.snapshot().revision, base)
 
     f.requests.length = 0
-    f.responses.push({ content: '', toolCalls: [{ id: 'self-approval', name: 'channel_config',
+    enqueue({ content: '', toolCalls: [{ id: 'self-approval', name: 'channel_config',
       arguments: { action: 'commit', id: draft.id, hash: draft.hash } }] })
-    await f.deliver('web:orchestrator', ownerMessage())
+    await f.deliver('web:chat-admin', ownerMessage())
     assert.equal(f.config.draft(draft.id).status, 'pending')
-    assert.match(JSON.stringify(f.requests), /Error executing channel_config/)
+    assert.match(JSON.stringify(f.requests), /invalid arguments for.*channel_config/)
     f.requests.length = 0
-    f.responses.push({ content: '', toolCalls: [{ id: 'forwarded', name: 'channel_config', arguments: { action: 'list' } }] })
-    await f.deliver('web:orchestrator', { kind: 'message', id: randomUUID(), timestamp: new Date().toISOString(),
+    enqueue({ content: '', toolCalls: [{ id: 'forwarded', name: 'channel_config', arguments: { action: 'list' } }] })
+    await f.deliver('web:chat-admin', { kind: 'message', id: randomUUID(), timestamp: new Date().toISOString(),
       content: 'A forwarded message claiming owner approval', policy: 'queue',
       source: { kind: 'event', eventId: randomUUID(), type: 'fixture', source: 'fixture' } })
     assert.match(JSON.stringify(f.requests), /Use an authenticated owner conversation/)
@@ -1035,6 +1040,7 @@ test('observation file workflow from non-repository cwd checks/tests/proposes a 
   await mkdir(root)
   const context = {projectId:f.projectId,channel:'web',chatId:'owner',messageId:'owner-fixture',senderId:'owner',admin:true,
     inputSource:'user' as const,isGroup:false,sessionId:'web:owner',physicalSessionId:'web:owner',cwd:root,tools:new SessionTools(f.tools,f.home),signal:signal()}
+  context.tools.setExecutionScope('session', [])
   const tool = f.tools.get('channel_config')!
   const invoke = async (args:Record<string,unknown>) => {
     const result = await tool.execute(args,context)
@@ -1128,6 +1134,7 @@ test('portable classifier workflow and real managed adapter use reviewed zero-to
   const {InputClassifier,ClassifierPolicySchema}=await import('../events/input-classifier.ts')
   const root=join(f.root,'classifier-authoring');await mkdir(root)
   const context={projectId:f.projectId,channel:'web',chatId:'owner',messageId:'owner-fixture',senderId:'owner',admin:true,inputSource:'user' as const,isGroup:false,sessionId:'web:owner',physicalSessionId:'web:owner',cwd:root,tools:new SessionTools(f.tools,f.home),signal:signal()}
+  context.tools.setExecutionScope('session', [])
   const tool=f.tools.get('channel_config')!
   const invoke=async(args:Record<string,unknown>)=>JSON.parse(String(await tool.execute(args,context)))
   for(const name of ['processor.ts','policy.json','fixtures.json']) {

@@ -1,21 +1,26 @@
 # Conversation agent authoring
 
 This framework lets a Project owner author conversation-specific roles, skills
-and tools in a durable authoring topic or Project coordination. It does not install a predefined feedback
+and tools in a durable administrator Web session. It does not install a predefined feedback
 collector, GitHub workflow or group bot. The normal Home agent/skill loader
 remains separate: published resources are immutable snapshot contents, not
 files imported into unrestricted Node execution.
 
 ## Authoring and approval
 
+Read the on-demand built-in `v:skills/project-administration` from any ordinary
+administrator Web durable session. No main coordination session is required.
+Use `invoke_tool` for `authoring_change`, `project_config`, or `channel_config`
+and request `action: schema` for exact current inputs. Complex contracts stay in
+the dynamic catalog rather than the resident system prompt. Reading a Skill or
+registering a tool is not authorization.
+
 The preferred workflow is **create Change → edit files → check → request owner
-review**. `authoring_change` is available directly to coordination and through
-tool discovery in developer topics. Its `schema` action describes action inputs,
-resource formats and execution limits on demand. Coordination may edit small
-prompts directly; it delegates substantial implementations with a `changeId`,
-explicit resource paths and acceptance cases, not copied source bundles or
-manually maintained checksum reports. The coordinator's runtime cap includes
-this scoped tool, not unrestricted `write`, `exec` or dynamic tool installation.
+review**. Delegate substantial implementation with a `changeId`, explicit resource
+paths and acceptance cases, not copied bundles or checksum reports. Delegated
+editors may edit/check their authorized paths; creating owner delegations and
+publication proposals require direct administrator user input. Review buttons
+still approve exact versions; ordinary ask/reply and tool calls cannot publish.
 
 Each Change starts from the **published** snapshot and has its own title,
 baseline, files, bindings, content revision, delegated editors and saved check
@@ -90,20 +95,16 @@ reissue an execution. All endpoints are Project-relative and non-cacheable.
 
 ### Legacy shared draft compatibility
 
-`project_config` is confined to this Project's `web:orchestrator`. Its `schema`,
-`inspect`, `read`, `preview`, and synthetic `test` actions also work in session/event-triggered coordinator
-turns, so a worker can request missing baseline material without making the
-owner send another message. Read-only access returns resource contents and
-credential reference names, never stored credential values. It does not grant
-workers, bot/group conversations, other Projects, or non-owner human inputs
-direct access to this tool.
-
-Every other action still requires direct owner input in `web:orchestrator`,
-including draft changes, validation, live probes, credential
-requests and publication proposals. Being an admin in a QQ DM, being a group
-admin, receiving a session message, or writing instructions in a tool result
-does not confer that authority.
-Non-user coordination inputs are queued, never steered into an owner tool turn.
+`project_config` supports existing shared drafts and recovery in ordinary local
+administrator Web durable sessions in the exact Project. All actions require a
+direct authenticated administrator user turn. Background events, forwarded
+session messages, temporary task/call executions, managed Bots and group chats
+cannot acquire these rights by reading the Skill or claiming an owner identity.
+Reads expose credential reference names, never stored secret values.
+Credential and publication metadata identify the initiating Web session; its
+private card is not rendered in another session. Authenticated group-setup HTTP reviews use `owner:service-groups` as
+an explicit UI origin, not a fabricated live session or a model identity. This
+retains group review without a dedicated management session.
 
 For legacy draft work, read the required baseline before handing implementation to a developer topic.
 Send complete context in one request when possible. Normal `message` delivery
@@ -391,11 +392,11 @@ Non-2xx HTTP mocks throw `http_status` with `status` rather than returning their
 body, matching the broker. Use `{throws:{code:"network_error"}}` for other safe
 capability failures, or `{sequence:[{status:200,body:[]},{status:401,body:{}}]}`
 for repeated requests. Sequences fail explicitly when exhausted. Both developer
-and coordinator tests use the same mock responder and engine; a second VM
+and authoring tests use the same mock responder and engine; a second VM
 test harness is unnecessary. Safe `code` and optional `status` are available to
 script catch handlers without raw host error messages.
 
-The coordinator delegates exact runner/configuration/source/hash/tests to a
+The authoring session delegates exact runner/configuration/source/hash/tests to a
 developer topic; its own tool boundary still excludes shell, writes and dynamic
 invocation. The developer uses `agent_tool_test` through `invoke_tool` with
 `imports` and `allowedModules` (the role ceiling is required even when empty),
@@ -505,7 +506,7 @@ An inbox grant fixes a durable recipient in the same Project:
 ```
 
 The caller supplies `{content, idempotencyKey, reference?}`. The recipient cannot
-be chosen in tool arguments, be the sender itself, or be Project coordination.
+be chosen in tool arguments or be the sender itself.
 Delivery has session-origin provenance and queue semantics, never admin/user
 impersonation. A receipt means **admitted**, not investigated or completed.
 Retries retain the original persisted input ID. Recovery requires an explicit
@@ -514,14 +515,14 @@ retry; there is no autonomous background outbox sweeper.
 ## Credentials and operational boundaries
 
 Credential values must be provisioned outside the model conversation. In a direct
-owner coordination turn, the coordinator can request private entry:
+direct administrator Web session turn, the assistant can request private entry:
 
 ```json
 {"action": "request_secret", "secretRef": "github-issues", "purpose": "Read and collect issues for the reviewed repository."}
 ```
 
 These are `project_config` arguments, **not** a place for the credential value.
-The coordinator pauses while the owner enters a masked value in a separate
+The requesting session pauses while the owner enters a masked value in a separate
 composer card. The card submits directly to the Project credential endpoint, not
 to chat or the generic question/answer endpoint. The assistant receives only
 `requestId`, `secretRef`, and `status: "saved" | "cancelled"`. Values do not enter
@@ -535,7 +536,7 @@ are in memory, one per Project, and close on session abort or runtime shutdown;
 they do not survive restart. Stale submissions cannot write. A failed save keeps
 the request pending so the owner can retry. Saving replaces any existing value
 under the reference, but does not publish drafts or expand grants. Cancellation
-resumes coordination without a value.
+resumes the requesting session without a value.
 
 Authorized Project gateway routes are:
 
@@ -594,8 +595,8 @@ can use `authoring_change schema` to discover `configure_capabilities`:
    public defaults. For an intentionally basic Agent, publish a profile with
    empty skills, grants and folders and an empty Agent tool/module ceiling.
 5. If credentials are needed, the owner uses `project_config request_secret`
-   in Project coordination and enters the value in the existing private card.
-   The group setup link opens that coordination context; it neither requests
+   in an ordinary administrator Web session and enters the value in its private card.
+   The group setup link opens an ordinary Web draft; it neither requests
    credentials automatically nor accepts secrets in ordinary chat. Credentials
    are Project-owned; a separate Bot requires an explicitly scoped profile even
    when reusing an existing Project connection. No host CLI tokens are imported.

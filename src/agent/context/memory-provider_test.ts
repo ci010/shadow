@@ -101,7 +101,7 @@ test('legacy convention files remain unchanged and are not promoted for any role
       await writeFile(target, '- LEGACY_RULE_UNKNOWN_AUTHORITY\n')
     }
     const provider = memoryProvider(memory, () => undefined)
-    for (const name of ['general', 'sub', 'orchestrator', 'reflector']) {
+    for (const name of ['general', 'sub', 'reflector']) {
       for (const initiative of ['old', 'work:123', 'initiative:old', undefined]) {
         assert.doesNotMatch(await provider.getPromptSection(ctx('discord:1', agent(name), initiative)) ?? '', /LEGACY_RULE_UNKNOWN_AUTHORITY/)
       }

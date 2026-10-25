@@ -98,7 +98,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const f = await fixture(workspace, store)
       try {
         for (const channel of ['heartbeat', 'web', 'discord', 'wechat', 'feishu']) {
-          for (const role of ['a2a-text', 'general', 'reflector', 'orchestrator']) {
+          for (const role of ['a2a-text', 'general', 'reflector']) {
             const response = await f.app.request(`/debug/agent-types/${role}/context?channel=${channel}`)
             assert.equal(response.status, 200, `${role}/${channel}: ${f.errors.at(-1)?.message}`)
             const body = await response.json()

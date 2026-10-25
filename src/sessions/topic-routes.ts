@@ -26,7 +26,6 @@ export function topicsPlugin(
         return c.json({ error: 'session_operation_failed' }, 500)
       }
     }
-    app.post('/api/orchestrator', protect, handle(() => topics.ensureOrchestrator()))
     app.get('/api/sessions/discover', protect, handle(c => topics.search({
       query: c.req.query('query'),
       limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')),

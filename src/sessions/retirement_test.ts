@@ -122,7 +122,7 @@ test('active/waiting/recovery/lineage/system/remote sessions and unknown legacy 
       for (const patch of [
         { executionStatus: 'running' }, { executionStatus: 'waiting' }, { executionStatus: 'pending' },
         { recovery: { id: 'pending', reason: 'interrupted' } }, { initiativeId: 'work' },
-        { parentSessionId: 'web:other' }, { sessionKind: 'orchestrator' }, { lastUserMessageAt: undefined },
+        { parentSessionId: 'web:other' }, { sessionKind: 'topic' }, { lastUserMessageAt: undefined },
         { sessionId: 'system:fixture' },
         { workdir: { version: 1, nodeId: 'remote', capabilityId: 'opaque' } },
       ]) {

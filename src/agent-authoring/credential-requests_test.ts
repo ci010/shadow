@@ -35,10 +35,10 @@ function error(code: string, status: number) {
 
 test('request immediately exposes only strict metadata; submit returns only a ref and saved status', async () => {
   const { requests, credentials, controller } = fixture()
-  const waiting = requests.request(input, controller.signal)
+  const waiting = requests.request(input, controller.signal, 'web:chat-admin')
   const metadata = requests.pending()!
   assert.deepEqual(parseCredentialRequest(metadata, 'project-a'), metadata)
-  assert.equal(metadata.sessionId, 'web:orchestrator')
+  assert.equal(metadata.sessionId, 'web:chat-admin')
   assert.equal(metadata.secretRef, 'api-key')
   assert.equal(metadata.purpose, input.purpose.trim())
   assert.equal(metadata.replacesExisting, false)
@@ -59,10 +59,10 @@ test('request immediately exposes only strict metadata; submit returns only a re
 
 test('duplicate requests, stale IDs, and repeated submission never write', async () => {
   const { requests, credentials, controller } = fixture()
-  const waiting = requests.request(input, controller.signal)
+  const waiting = requests.request(input, controller.signal, 'web:chat-admin')
   const id = requests.pending()!.id
   const duplicate = new AbortController()
-  await assert.rejects(requests.request(input, duplicate.signal), error('request_pending', 409))
+  await assert.rejects(requests.request(input, duplicate.signal, 'web:chat-admin'), error('request_pending', 409))
   assert.equal(getEventListeners(duplicate.signal, 'abort').length, 0)
   assert.throws(() => requests.submit('stale', SECRET), error('stale_request', 409))
   assert.throws(() => requests.cancel('stale'), error('stale_request', 409))
@@ -72,7 +72,7 @@ test('duplicate requests, stale IDs, and repeated submission never write', async
   assert.throws(() => requests.submit(id, 'replacement'), error('stale_request', 409))
   assert.throws(() => requests.cancel(id), error('stale_request', 409))
   assert.equal(credentials.writes.length, 1)
-  const next = requests.request(input, controller.signal)
+  const next = requests.request(input, controller.signal, 'web:chat-admin')
   assert.notEqual(requests.pending()!.id, id)
   assert.throws(() => requests.submit(id, 'replacement'), error('stale_request', 409))
   requests.cancel(requests.pending()!.id)
@@ -82,7 +82,7 @@ test('duplicate requests, stale IDs, and repeated submission never write', async
 
 test('explicit cancellation resolves cancelled and removes its abort listener', async () => {
   const { requests, credentials, controller } = fixture()
-  const waiting = requests.request(input, controller.signal)
+  const waiting = requests.request(input, controller.signal, 'web:chat-admin')
   const id = requests.pending()!.id
   const result = requests.cancel(id)
   assert.deepEqual(await waiting, result)
@@ -97,11 +97,11 @@ test('explicit cancellation resolves cancelled and removes its abort listener', 
 test('already-aborted and later-aborted signals reject safely with no writes', async () => {
   const { requests, credentials, controller } = fixture()
   controller.abort(new Error(SECRET))
-  await assert.rejects(requests.request(input, controller.signal), error('aborted', 409))
+  await assert.rejects(requests.request(input, controller.signal, 'web:chat-admin'), error('aborted', 409))
   assert.equal(requests.pending(), null)
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0)
   const active = new AbortController()
-  const waiting = requests.request(input, active.signal)
+  const waiting = requests.request(input, active.signal, 'web:chat-admin')
   const id = requests.pending()!.id
   const rejected = assert.rejects(waiting, error('aborted', 409))
   active.abort(new Error(SECRET))
@@ -110,14 +110,14 @@ test('already-aborted and later-aborted signals reject safely with no writes', a
   assert.equal(getEventListeners(active.signal, 'abort').length, 0)
   assert.throws(() => requests.submit(id, SECRET), error('stale_request', 409))
   assert.equal(credentials.writes.length, 0)
-  const retry = requests.request(input, new AbortController().signal)
+  const retry = requests.request(input, new AbortController().signal, 'web:chat-admin')
   requests.cancel(requests.pending()!.id)
   await retry
 })
 
 test('stop rejects pending, removes listeners, is idempotent and permanently blocks new requests', async () => {
   const { requests, credentials, controller } = fixture()
-  const waiting = requests.request(input, controller.signal)
+  const waiting = requests.request(input, controller.signal, 'web:chat-admin')
   const id = requests.pending()!.id
   const rejected = assert.rejects(waiting, error('stopped', 503))
   requests.stop()
@@ -125,7 +125,7 @@ test('stop rejects pending, removes listeners, is idempotent and permanently blo
   await rejected
   assert.equal(requests.pending(), null)
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0)
-  await assert.rejects(requests.request(input, controller.signal), error('stopped', 503))
+  await assert.rejects(requests.request(input, controller.signal, 'web:chat-admin'), error('stopped', 503))
   assert.throws(() => requests.submit(id, SECRET), error('stale_request', 409))
   assert.throws(() => requests.cancel(id), error('stale_request', 409))
   assert.equal(credentials.writes.length, 0)
@@ -133,7 +133,7 @@ test('stop rejects pending, removes listeners, is idempotent and permanently blo
 
 test('invalid submissions do not reach storage, never echo values and retain the pending request', async () => {
   const { requests, credentials, controller } = fixture()
-  const waiting = requests.request(input, controller.signal)
+  const waiting = requests.request(input, controller.signal, 'web:chat-admin')
   const metadata = requests.pending()
   for (const value of [null, undefined, 5, true, { value: SECRET }, '', `${SECRET}\n`, `${SECRET}\r`,
     `${SECRET}\t`, `${SECRET}\u0000`, `${SECRET}\u007f`, SECRET.repeat(1000)]) {
@@ -158,7 +158,7 @@ test('failed storage preserves pending request for retry and sanitizes persisten
       credentials.put(name, value)
     },
   })
-  const waiting = requests.request(input, controller.signal)
+  const waiting = requests.request(input, controller.signal, 'web:chat-admin')
   const metadata = requests.pending()!
   assert.throws(() => requests.submit(metadata.id, SECRET), error('storage_error', 500))
   assert.deepEqual(requests.pending(), metadata)
@@ -181,7 +181,7 @@ test('real store write failure preserves the previous in-memory and persisted cr
   credentials.put('api-key', 'old-synthetic-value')
   const requests = new CredentialRequests({ projectId: randomUUID(), credentials })
   t.after(() => requests.stop())
-  const waiting = requests.request(input, new AbortController().signal)
+  const waiting = requests.request(input, new AbortController().signal, 'web:chat-admin')
   void waiting.catch(() => undefined)
   const metadata = requests.pending()!
   assert.equal(metadata.replacesExisting, true)
@@ -205,8 +205,8 @@ test('real store write failure preserves the previous in-memory and persisted cr
 test('pending requests and stored values remain isolated between projects', async () => {
   const a = fixture('project-a')
   const b = fixture('project-b')
-  const waitA = a.requests.request(input, a.controller.signal)
-  const waitB = b.requests.request(input, b.controller.signal)
+  const waitA = a.requests.request(input, a.controller.signal, 'web:chat-admin')
+  const waitB = b.requests.request(input, b.controller.signal, 'web:chat-admin')
   const metaA = a.requests.pending()!
   const metaB = b.requests.pending()!
   assert.notEqual(metaA.id, metaB.id)
@@ -225,12 +225,12 @@ test('pending requests and stored values remain isolated between projects', asyn
 test('separate service instances cannot open concurrent requests for the same project', async () => {
   const a = fixture('shared-project')
   const b = fixture('shared-project')
-  const first = a.requests.request(input, a.controller.signal)
-  await assert.rejects(b.requests.request(input, b.controller.signal), error('request_pending', 409))
+  const first = a.requests.request(input, a.controller.signal, 'web:chat-admin')
+  await assert.rejects(b.requests.request(input, b.controller.signal, 'web:chat-admin'), error('request_pending', 409))
   assert.equal(b.requests.pending(), null)
   a.requests.cancel(a.requests.pending()!.id)
   await first
-  const second = b.requests.request(input, b.controller.signal)
+  const second = b.requests.request(input, b.controller.signal, 'web:chat-admin')
   a.requests.stop()
   assert.notEqual(b.requests.pending(), null)
   b.requests.submit(b.requests.pending()!.id, SECRET)
@@ -242,7 +242,7 @@ test('separate service instances cannot open concurrent requests for the same pr
 test('replacement metadata is a names-only snapshot and save explicitly replaces the stored value', async () => {
   const credentials = store({ 'api-key': 'old-synthetic-secret' })
   const { requests, controller } = fixture('project-a', credentials)
-  const waiting = requests.request(input, controller.signal)
+  const waiting = requests.request(input, controller.signal, 'web:chat-admin')
   const metadata = requests.pending()!
   assert.equal(metadata.replacesExisting, true)
   delete credentials.values['api-key']
@@ -259,13 +259,13 @@ test('invalid request metadata and failed names lookup never expose untrusted er
   for (const invalid of [{ name: SECRET.toUpperCase(), purpose: 'request' }, { name: 'ok', purpose: ' ' },
     { name: 'ok', purpose: SECRET.repeat(100) }, { ...input, extra: SECRET },
     { name: 'ok', purpose: 1 }]) {
-    await assert.rejects(requests.request(invalid as typeof input, controller.signal), error('invalid_request', 400))
+    await assert.rejects(requests.request(invalid as typeof input, controller.signal, 'web:chat-admin'), error('invalid_request', 400))
     assert.equal(requests.pending(), null)
   }
   const broken = new CredentialRequests({ projectId: 'project-a', credentials: {
     names() { throw new Error(SECRET) }, put() { assert.fail('must not write') },
   } })
-  await assert.rejects(broken.request(input, controller.signal), error('storage_error', 500))
+  await assert.rejects(broken.request(input, controller.signal, 'web:chat-admin'), error('storage_error', 500))
   assert.equal(broken.pending(), null)
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0)
   for (const projectId of ['', 'x'.repeat(201)]) {
@@ -275,7 +275,7 @@ test('invalid request metadata and failed names lookup never expose untrusted er
 
 test('browser-safe contract parsers strictly reject unknown fields, wrong scope and malformed metadata/results', () => {
   const metadata = {
-    id: 'cc425467-2a74-4d43-b726-c14a380b9faf', projectId: 'project-a', sessionId: 'web:orchestrator',
+    id: 'cc425467-2a74-4d43-b726-c14a380b9faf', projectId: 'project-a', sessionId: 'web:chat-admin',
     secretRef: 'api-key', purpose: 'Authenticate request.', createdAt: '2026-09-18T00:00:00.000Z', replacesExisting: false,
   }
   assert.deepEqual(parseCredentialRequest(metadata), metadata)

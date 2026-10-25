@@ -15,7 +15,7 @@ export class SessionTool implements Tool {
       sessionId: { type: 'string', description: 'Update only: this session.' },
       requestId: { type: 'string', description: 'Create only: optional UUID; reuse exactly the same request on retry. Initial messages are never replayed.' },
       folderId: { type: 'string', description: 'Create only: registered Project folder ID. Omit for a discussion-only session; never a path.' },
-      agentType: { type: 'string', description: 'Create only: agent template name, default general. Never orchestrator.' },
+      agentType: { type: 'string', description: 'Create only: agent template name, default general.' },
       initiativeId: { type: 'string', description: 'Create only: root Work key for an Initiative view (or a legacy Initiative ID), optional; not an assignment.' },
       initialMessage: { type: 'string', description: 'Create only: optional kickoff request, with the necessary context and source references.' },
       work: { type: 'object', description: 'Create only: {key:string}, an unassigned note coordinated by this session. Link responsibility and contextual questions before kickoff; no adoption protocol.' },
@@ -34,7 +34,7 @@ export class SessionTool implements Tool {
     if (action === 'create') return JSON.stringify(await this.topics.create(request, context.sessionId, context.signal))
     if (action === 'update') return JSON.stringify(await this.topics.update(request, context.sessionId))
     if (action === 'register_folder') {
-      if (context.remoteWorkdir) throw new Error('A remote session cannot register its display path on Main. Ask the Project coordinator to register a Main-local folder or select an existing remote capability.')
+      if (context.remoteWorkdir) throw new Error('A remote session cannot register its display path on Main. Use a Main-local Project session to register a Main-local folder or select an existing remote capability.')
       if (Object.keys(request).some(key => key !== 'path')) throw new TypeError('register_folder accepts only path.')
       return JSON.stringify(await this.topics.registerFolder(request.path, context.signal))
     }

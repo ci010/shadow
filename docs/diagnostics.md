@@ -77,7 +77,7 @@ in development. Reads never turn capture on.
 ## Wiki alias regression
 
 `src/sessions/wiki-alias_test.ts` reproduces memory, Wiki (including "Wiki, not
-Memory") and knowledge-base requests through the real coordinator,
+Memory") and knowledge-base requests through ordinary Web conversations,
 `v:skills/project-knowledge` loading, peer-session creation, canonical
 `v:memory` tools and Knowledge catalog. Default tests use a scripted provider
 with both JSONL and SQLite; they do not claim to validate model interpretation.

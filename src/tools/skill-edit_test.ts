@@ -73,21 +73,21 @@ test('ordinary Skills save directly; hidden baselines detect other sessions and 
   })
 })
 
-test('coordinator can edit tool-bearing Skills without activating or executing their tools', async () => {
+test('administrator can edit tool-bearing Skills without activating or executing their tools', async () => {
   await withTempWorkspace(async home => {
     const f = setup(home)
-    const role = (await getBuiltinAgentTypes()).find(role => role.name === 'orchestrator')!
-    const coordinator = f.context('web:orchestrator', new SessionTools(f.base, home, role.allowedTools))
+    const role = (await getBuiltinAgentTypes()).find(role => role.name === 'general')!
+    const administrator = f.context('web:chat-admin', new SessionTools(f.base, home, role.allowedTools))
     const text = `---\nname: learned\ntools:\n  learned_tool:\n    source: tools/run.ts\n    description: Synthetic tool\n    parameters: {type: object, properties: {}}\n---\nUse learned_tool.`
-    assert.match(requireToolText(await coordinator.tools.execute('skill_save', {
+    assert.match(requireToolText(await f.invoke(administrator, 'skill_save', {
       name: 'learned', files: { 'SKILL.md': text, 'tools/run.ts': 'export function run() { return "fixture" }' },
-    }, coordinator)), /"saved"/)
-    const raw = JSON.parse(requireToolText(await coordinator.tools.execute('skill_read', { name: 'learned' }, coordinator)))
+    })), /"saved"/)
+    const raw = JSON.parse(requireToolText(await f.invoke(administrator, 'skill_read', { name: 'learned' })))
     assert.equal(raw.content, text)
     assert.deepEqual(raw.files, ['SKILL.md', 'tools/run.ts'])
-    assert.equal(coordinator.tools.has('invoke_tool'), false)
-    assert.equal(coordinator.tools.has('write'), false)
-    assert.deepEqual(coordinator.tools.activeDynamicTools(), [])
+    assert.equal(administrator.tools.has('invoke_tool'), true)
+    assert.equal(administrator.tools.has('write'), false)
+    assert(!administrator.tools.activeDynamicTools().some(tool => tool.name === 'learned_tool'))
     const user = f.context('web:user')
     assert.match(requireToolText(await f.invoke(user, 'learned_tool', {})), /could not be imported/)
     await user.tools.execute('read', { path: 'v:skills/learned' }, user)

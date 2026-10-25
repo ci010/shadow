@@ -26,8 +26,8 @@ app.commandLine.appendSwitch('force-device-scale-factor', '1')
 app.on('window-all-closed', () => {})
 
 const root = 'web:chat-slash-fixture'
-const coordinator = 'web:orchestrator'
-const sessions = [root, coordinator].map((sessionId, index) => ({
+const administrator = 'web:chat-admin'
+const sessions = [root, administrator].map((sessionId, index) => ({
   sessionId, title: index ? 'Project coordination' : 'Slash command fixture', current: `slash-physical-${index}`,
 }))
 const commands = [
@@ -79,12 +79,11 @@ const server = createServer(async (request, response) => {
       assert.equal(request.method, 'GET')
       assert.equal(url.pathname, '/projects/default/api/chat/commands')
       const id = url.searchParams.get('sessionId')!
-      assert.ok(id === root || id === coordinator, 'Catalog must use the active logical session')
+      assert.ok(id === root || id === administrator, 'Catalog must use the active logical session')
       reads.push(id)
       if (catalogGate) await catalogGate
       if (rejectCatalog) return json({ error: 'Synthetic unavailable catalog' }, 503)
-      return json({ commands: id === coordinator
-        ? [...commands, { name: 'agent-publish', description: 'Publish a reviewed reusable agent.' }] : commands })
+      return json({ commands: [...commands, { name: 'agent-publish', description: 'Publish a reviewed reusable agent.' }] })
     }
     if (path === '/api/chat/send') {
       let body = ''
@@ -97,13 +96,12 @@ const server = createServer(async (request, response) => {
       setTimeout(() => live.finish(`web:${input.chatId}`), 50)
       return
     }
-    if (path === '/api/orchestrator') return json({ projectId: 'default', sessionId: coordinator, chatId: 'orchestrator' })
     const match = path.match(/^\/api\/sessions\/([^/]+)(?:\/(.*))?$/)
     if (match) {
       const id = match[1]!
       if (match[2] === 'background-tasks') return json({ sessionId: id, total: 0, tasks: [] })
       if (match[2] === 'details') return json({
-        sessionId: id, name: null, sessionKind: id === coordinator ? 'orchestrator' : 'chat',
+        sessionId: id, name: null, sessionKind: 'topic',
         workdir: { kind: 'local', displayPath: directory }, usage: null, usageScope: 'session',
         context: { usedTokens: null, windowTokens: null },
       })
@@ -359,15 +357,15 @@ async function runViewport(origin: string, width: number, height: number) {
       assert.equal(sends.at(-1)?.chatId, root.slice(4))
       assert.equal(sends.at(-1)?.content, '/help')
     })
-    await check(window, `embedded-coordinator-${width}`, async () => {
-      await window.loadURL(`${origin}/projects/default/chat/${encodeURIComponent(root)}?child=${encodeURIComponent(coordinator)}`)
+    await check(window, `embedded-administrator-${width}`, async () => {
+      await window.loadURL(`${origin}/projects/default/chat/${encodeURIComponent(root)}?child=${encodeURIComponent(administrator)}`)
       const childInput = '.child-conversation .composer-input textarea'
       await waitFor(window, `!!document.querySelector(${JSON.stringify(childInput)}) && !!document.querySelector('.child-conversation .is-embedded')`)
       const before = sends.length
       await ready(childInput, '/agent', 1)
-      assert.equal(reads.at(-1), coordinator)
+      assert.equal(reads.at(-1), administrator)
       assert.deepEqual(await evaluate(window, names), ['/agent-publish'])
-      await inspect(window, childInput, `slash-coordinator-${width}`, width)
+      await inspect(window, childInput, `slash-administrator-${width}`, width)
       await key(window, 'Tab')
       await assertCompleted(window, childInput, '/agent-publish ', before)
     })

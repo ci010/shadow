@@ -62,8 +62,8 @@
           </div>
           <div v-else-if="!data.items.length" class="workbench-empty">
             <span class="i-lucide-workflow empty-work-icon" aria-hidden="true" />
-            <h2>{{ t('No work items yet') }}</h2><p>{{ t('Conversations can stay conversations. Ask the coordinator to organize work when there is an outcome to track.') }}</p>
-            <button @click="newWork()">{{ t('Talk to coordinator') }}</button>
+            <h2>{{ t('No work items yet') }}</h2><p>{{ t('Conversations can stay conversations. Ask in any conversation to organize work when there is an outcome to track.') }}</p>
+            <button @click="newWork()">{{ t('Start a conversation') }}</button>
           </div>
           <div v-else-if="!filtered.length" class="workbench-empty"><h2>{{ t('No matching work') }}</h2><p>{{ t('Try another Initiative, session or search.') }}</p><button @click="clearFilters">{{ t('Clear filters') }}</button></div>
           <div v-else-if="view === 'board'" class="work-board" tabindex="0" :aria-label="t('Work board')">
@@ -104,7 +104,7 @@
             <p v-if="selectedItem?.dependencies.length" class="detail-links">{{ t('Depends on:') }}
               <button v-for="key in selectedItem.dependencies" :key="key" @click="selectWork(key)">{{ data?.items.find(item => item.key === key)?.title ?? key }}</button>
             </p>
-            <WorkAlignment :key="selected" :api-base="apiBase" :session-id="coordinatorId" project :work-key="selected"
+            <WorkAlignment :key="selected" :api-base="apiBase" :session-id="''" project :work-key="selected"
               embedded :expanded="visible && panel === 'work'" :can-write="true" :revision="lease?.work.state.revision"
               :sessions="data?.sessions.filter(session => session.assignable)" @updated="refresh" @editing="editing = $event" />
             <details v-if="selectedItem?.assignee && sessionExists(selectedItem.assignee)" class="reporting-settings">
@@ -128,7 +128,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { automationChatLocation } from '../automations.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
-import { ORCHESTRATOR_SESSION_ID as coordinatorId } from '../project-coordination.ts'
 import { filterWork, groupWork, workAttention, workColumns, workRoots } from '../project-work.ts'
 import WorkItemCard from './WorkItemCard.vue'
 import ProjectOverviewGraph from './ProjectOverviewGraph.vue'
@@ -144,7 +143,7 @@ import SidebarResizer from './SidebarResizer.vue'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 
 const props = defineProps<{ apiBase: string; projectId: string; projectName: string; visible: boolean }>()
-const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string]; coordinator: [] }>()
+const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string] }>()
 const live = useProjectLiveState(), route = useRoute(), router = useRouter()
 const lease = shallowRef<ProjectLiveLease>()
 const lastSnapshot = shallowRef<ProjectWorkOverview>()
@@ -252,8 +251,7 @@ async function discussGitHub(text: string) {
   emit('compose', text)
 }
 function openSession(id: string) {
-  if (id === coordinatorId) emit('coordinator')
-  else emit('navigate', id)
+  emit('navigate', id)
 }
 async function closePanel() {
   panel.value = ''

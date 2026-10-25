@@ -765,7 +765,7 @@ for (const staged of [false, true]) {
       return { status: 'accepted', sessionId, inputId: message.id }
     })
     const context: ExecutionContext = {
-      sessionId: 'web:orchestrator', physicalSessionId: 'coordinator.0', channel: 'web', chatId: 'orchestrator',
+      sessionId: 'web:chat-admin', physicalSessionId: 'admin.0', channel: 'web', chatId: 'chat-admin',
       senderId: 'owner', messageId: 'handoff', signal: new AbortController().signal,
       tools: new SessionTools(f.tools, '.'),
     }
@@ -1244,8 +1244,8 @@ test('task interactive follow-up is rejected without aborting the initial execut
   } finally { await f.close() }
 })
 
-test('coordinator queues session-origin input instead of steering an authorized owner tool turn', async () => {
-  const f = await fixture({ state: { sessionId: 'web:orchestrator' } })
+test('ordinary session queues explicitly queued session-origin input during an owner tool turn', async () => {
+  const f = await fixture({ state: { sessionId: 'web:chat-admin' } })
   const gate = Promise.withResolvers<string>()
   const started = Promise.withResolvers<void>()
   const sources: Array<string | undefined> = []
@@ -1260,7 +1260,7 @@ test('coordinator queues session-origin input instead of steering an authorized 
   try {
     f.session.dispatch({
       ...input('owner', 'interactive'),
-      source: { kind: 'user', sender: { channel: 'web', chatId: 'orchestrator', senderId: 'owner', messageId: 'owner', admin: true } },
+      source: { kind: 'user', sender: { channel: 'web', chatId: 'chat-admin', senderId: 'owner', messageId: 'owner', admin: true } },
     }, llm)
     await waitFor(() => f.calls.length === 1)
     f.calls[0].resolve({ content: null, toolCalls: [{ id: 'owner-tool', name: 'fixture_wait', arguments: {} }] })

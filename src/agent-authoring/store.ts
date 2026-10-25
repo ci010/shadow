@@ -22,7 +22,7 @@ const MAX_HISTORY = 20
 const MAX_MANAGED = 10_000
 const reservedAgents = new Set([
   'general', 'general-legacy', 'sub', 'explore', 'eval', 'plan', 'verify',
-  'orchestrator', 'coord', 'reflector', 'soul-reflector', 'encapsulator',
+  'reflector', 'soul-reflector', 'encapsulator',
 ])
 const reservedTools = new Set([
   'read', 'search', 'glob', 'grep', 'exec', 'write', 'invoke_tool', 'import_tool',

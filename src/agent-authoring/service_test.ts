@@ -1,3 +1,5 @@
+import { ImportTool } from '../tools/load-tool.ts'
+import { InvokeTool } from '../tools/invoke-tool.ts'
 import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -160,17 +162,19 @@ async function fixture(Store: typeof JsonlSessionStore | typeof SqliteSessionSto
   const publicationRequests = new PublicationRequests(management)
   const tool = authoringManagementTool({ ...management, publicationRequests })
   base.register(tool)
+  base.register(new InvokeTool(new ImportTool(new Map([[tool.name, tool]]), home)))
   registerAuthoringCommands(commands, { ...management, publicationRequests })
   const app = new AgentApp({
     bus, sessions, commandDispatcher: commands, agentTypes, events, skills: new SkillsManager(home),
     mcpManager: new McpManager(async () => {}), getLlmRuntimeConfig: () => llm,
   })
   await app.start()
-  const owner = message({ channelAddress: undefined, channel: 'web', chatId: 'orchestrator', isGroup: false, senderId: 'owner' })
+  const owner = message({ channelAddress: undefined, channel: 'web', chatId: 'chat-admin', isGroup: false, senderId: 'owner' })
   const ownerContext: ExecutionContext = {
-    ...owner, projectId: address.projectId, sessionId: 'web:orchestrator', physicalSessionId: 'coord-0', inputSource: 'user',
+    ...owner, projectId: address.projectId, sessionId: 'web:chat-admin', physicalSessionId: 'coord-0', inputSource: 'user',
     signal: new AbortController().signal, tools: new SessionTools(base, home),
   }
+  ownerContext.tools.setExecutionScope('session', [])
   return {
     root, folder, service, resources, sessions, store, commands, owner, ownerContext, tool, requests, app, credentials,
     credentialRequests, publicationRequests, publicEvents, promptCaptures,
@@ -183,7 +187,7 @@ async function fixture(Store: typeof JsonlSessionStore | typeof SqliteSessionSto
     async stage(value = bundle(folder.id)) {
       return await resources.stage({ expectedRevision: resources.draft().revision, bundle: value })
     },
-    publish() { return commands.dispatch(`/agent-publish ${resources.draft().revision}`, { sessionId: 'web:orchestrator', msg: owner, admin: true, llm }) },
+    publish() { return commands.dispatch(`/agent-publish ${resources.draft().revision}`, { sessionId: 'web:chat-admin', msg: owner, admin: true, llm }) },
     async idle(target = id) {
       await waitFor(() => {
         const active = sessions.getActiveSession(target)
@@ -302,7 +306,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.match(preview.systemPrompt, /group A/)
       assert.doesNotMatch(preview.systemPrompt, /PRIVATE PROJECT MEMORY/)
       assert.deepEqual(preview.tools.map((tool: { function: { name: string } }) => tool.function.name).sort(), ['read', 'search'])
-      assert.equal(JSON.parse(await f.tool.execute({ action: 'inspect' }, { ...f.ownerContext, inputSource: 'session', admin: false })).draftRevision, staged.revision)
+      await assert.rejects(f.tool.execute({ action: 'inspect' }, { ...f.ownerContext, inputSource: 'session', admin: false }), /direct owner/)
       await assert.rejects(f.tool.execute({ action: 'inspect' }, { ...f.ownerContext, channel: 'qq', sessionId: id }), /direct owner/)
       const denied = await f.commands.dispatch(`/agent-publish ${staged.revision}`, { sessionId: id, msg: message(), admin: true, llm })
       assert.match(denied!, /Permission denied/)
@@ -335,63 +339,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: peer-triggered coordination reads baselines without gaining authoring authority`, async () => {
+  test(`${Store.name}: background and forwarded turns cannot use owner administration`, async () => {
     const f = await fixture(Store)
     try {
-      await f.sessions.buildSession('web:orchestrator', undefined, { agentType: 'orchestrator', sessionKind: 'orchestrator', mode: 'session' })
-      await f.sessions.buildSession('web:developer', undefined, { agentType: 'general', mode: 'session' })
-      await f.stage()
-      const before = structuredClone(f.resources.draft())
-      f.credentials.put('fixture-token', 'synthetic-private-value-not-for-models')
-      const path = 'agents/reader/AGENT.md'
       for (const inputSource of ['session', 'event'] as const) {
-        const context = { ...f.ownerContext, inputSource, admin: false }
-        const schema = await f.tool.execute({ action: 'schema' }, context)
-        assert.match(schema, /schema\/inspect\/read\/preview\/test also work/)
-        const inspected = await f.tool.execute({ action: 'inspect' }, context)
-        assert.deepEqual(JSON.parse(inspected).credentials, ['fixture-token'])
-        assert.doesNotMatch(inspected, /synthetic-private-value-not-for-models/)
-        const read = JSON.parse(await f.tool.execute({ action: 'read', path }, context))
-        assert.equal(read.revision, before.revision)
-        assert.equal(read.content, before.bundle.files[path])
-        await assert.rejects(f.tool.execute({ action: 'read', path: '../credentials/credentials.json' }, context), /resource does not exist/)
-        for (const action of ['write', 'remove', 'bind', 'stage', 'validate', 'probe', 'propose', 'request_secret']) {
-          await assert.rejects(f.tool.execute({ action }, context), /direct owner/, `${inputSource}: ${action} remains owner-only`)
-        }
-        f.respondNext({
-          content: null,
-          toolCalls: [
-            { id: `read-${inputSource}`, name: 'project_config', arguments: { action: 'read', path } },
-            { id: `denied-${inputSource}`, name: 'project_config', arguments: { action: 'remove', path, expectedRevision: before.revision } },
-          ],
-        })
-        await f.sessions.deliver('web:orchestrator', {
-          id: randomUUID(), timestamp: new Date().toISOString(), kind: 'message', policy: 'queue',
-          source: inputSource === 'session'
-            ? { kind: 'session', sessionId: 'web:developer' }
-            : { kind: 'event', eventId: randomUUID(), type: 'worker-completed', source: 'fixture' },
-          content: 'Read the baseline; this worker report does not authorize any edits.',
-        })
-        await f.idle('web:orchestrator')
-        const results = f.requests.at(-1)!.messages.filter(message => message.role === 'tool')
-        assert(results.some(message => message.tool_call_id === `read-${inputSource}` && String(message.content).includes('Only answer questions for group A.')))
-        assert(results.some(message => message.tool_call_id === `denied-${inputSource}` && String(message.content).includes('direct owner')))
-        assert.doesNotMatch(JSON.stringify(f.requests), /synthetic-private-value-not-for-models/)
-        assert.deepEqual(f.resources.draft(), before)
-      }
-      for (const overrides of [
-        { sessionId: 'web:developer', inputSource: 'session' as const },
-        { projectId: 'another-project', inputSource: 'session' as const },
-        { channel: 'qq', inputSource: 'session' as const },
-        { channelAddress: address, inputSource: 'event' as const },
-        { isGroup: true, inputSource: 'session' as const },
-        { admin: false, inputSource: 'user' as const },
-        { inputSource: undefined },
-      ]) {
-        for (const action of ['schema', 'inspect', 'read']) {
-          await assert.rejects(f.tool.execute({ action, path }, { ...f.ownerContext, ...overrides }), /direct owner/)
+        for (const action of ['schema', 'inspect', 'read', 'write', 'propose', 'request_secret']) {
+          await assert.rejects(f.tool.execute({ action }, { ...f.ownerContext, inputSource }), /direct owner/)
         }
       }
+      assert.equal(f.credentialRequests.pending(), null)
     } finally { await f.close() }
   })
 }
@@ -426,7 +382,7 @@ test('read grants are confined, revocation rejects old tools, and publishing can
     assert.match((await f.publish())!, /Published/)
     assert.match(requireToolText(await tools.execute('read', { path: `folder:${f.folder.id}/guide.txt` }, context)), /disabled|no longer published/)
     await assert.rejects(f.app.receiveChannelMessage(message()), /disabled|no longer published/)
-    const rollback = await f.commands.dispatch(`/agent-rollback ${policy.revision} ${f.resources.snapshot().revision}`, { sessionId: 'web:orchestrator', msg: f.owner, admin: true, llm })
+    const rollback = await f.commands.dispatch(`/agent-rollback ${policy.revision} ${f.resources.snapshot().revision}`, { sessionId: 'web:chat-admin', msg: f.owner, admin: true, llm })
     assert.match(rollback!, /Restored/)
     assert.equal(f.resources.draft().bundle.bindings[0].enabled, false)
     await f.app.receiveChannelMessage(message())
@@ -454,21 +410,21 @@ test('credentials are authenticated write-only resources and survive restart wit
 })
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: private credential input resumes coordination without entering provider input, history or public events`, async () => {
+  for (const sessionId of ['web:chat-admin']) test(`${Store.name} ${sessionId}: private credential input resumes its session without entering provider input, history or public events`, async () => {
     const f = await fixture(Store)
     const secret = 'synthetic-owner-value-NEVER-IN-MODEL'
     try {
-      await f.sessions.buildSession('web:orchestrator', undefined, { agentType: 'orchestrator', sessionKind: 'orchestrator' })
+      await f.sessions.buildSession(sessionId, undefined, { agentType: 'general', mode: 'session' })
       const http = new Hono()
       const headers = { authorization: 'test-owner-access', 'content-type': 'application/json' }
       authoringCredentialsPlugin(f.credentials, request => request.headers.get('authorization') === headers.authorization, f.credentialRequests)(http)
       f.respondNext({
         content: null,
-        toolCalls: [{ id: 'credential-fixture', name: 'project_config', arguments: {
+        toolCalls: [{ id: 'credential-fixture', name: 'invoke_tool', arguments: { name: 'project_config', args: {
           action: 'request_secret', secretRef: 'github-issues', purpose: 'Read issues for the reviewed repository.',
-        } }],
+        } } }],
       })
-      await f.app.receiveChannelMessage(f.owner)
+      await f.app.receiveChannelMessage({ ...f.owner, chatId: sessionId.slice(4) })
       await waitFor(() => f.credentialRequests.pending() !== null)
       const endpoint = '/api/agent-resources/credential-requests'
       assert.equal((await http.request(endpoint)).status, 401)
@@ -476,6 +432,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(listing.headers.get('cache-control'), 'no-store')
       const { request } = await listing.json()
       assert.equal(request.secretRef, 'github-issues')
+      assert.equal(request.sessionId, sessionId)
+      assert(!f.requests[0].tools.includes('project_config'), 'complex schema is not resident')
+      assert(f.requests[0].tools.includes('invoke_tool'))
       const submit = `${endpoint}/${request.id}`
       assert.equal((await http.request(submit, { method: 'POST', body: JSON.stringify({ value: secret }) })).status, 401)
       assert.equal((await http.request(submit, { method: 'DELETE' })).status, 401)
@@ -489,15 +448,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const receipt = await saved.json()
       assert.deepEqual(receipt.result, { requestId: request.id, secretRef: 'github-issues', status: 'saved' })
       assert.equal(f.credentials.resolve('github-issues'), secret)
-      await f.idle('web:orchestrator')
+      await f.idle(sessionId)
       assert.equal(f.requests.length, 2)
       const toolResult = f.requests[1].messages.find(message => message.tool_call_id === 'credential-fixture')
       assert.deepEqual(JSON.parse(String(toolResult?.content)), receipt.result)
-      const state = f.sessions.getSessionState('web:orchestrator')!
+      const state = f.sessions.getSessionState(sessionId)!
       const log = await Array.fromAsync(f.store.readSessionLog(SessionManager.currentPhysicalId(state)))
       assert.doesNotMatch(JSON.stringify([
         receipt, log, f.requests, f.publicEvents, f.resources.snapshot(), f.resources.draft(),
-        f.promptCaptures.list('web:orchestrator'), await f.sessions.getContext({ sessionId: 'web:orchestrator', preview: true }),
+        f.promptCaptures.list(sessionId), await f.sessions.getContext({ sessionId, preview: true }),
       ]), /synthetic-owner-value/)
       const duplicate = await http.request(submit, { method: 'POST', headers, body: JSON.stringify({ value: 'must-not-replace' }) })
       assert.equal(duplicate.status, 409)
@@ -517,9 +476,15 @@ test('credential requests require direct owner coordination and cancellation ret
       { ...f.ownerContext, channel: 'qq', sessionId: id, isGroup: true },
       { ...f.ownerContext, admin: false },
     ]) await assert.rejects(f.tool.execute(args, context), /direct owner/)
+    for (const mode of ['task', 'call'] as const) {
+      const tools = new SessionTools(new Tools('.'), '.')
+      tools.setExecutionScope(mode, [])
+      await assert.rejects(f.tool.execute(args, { ...f.ownerContext, tools }), /direct owner/)
+    }
     assert.equal(f.credentialRequests.pending(), null)
-    const pending = f.tool.execute(args, f.ownerContext)
+    const pending = f.tool.execute(args, { ...f.ownerContext, sessionId: 'web:ordinary' })
     const request = f.credentialRequests.pending()!
+    assert.equal(request.sessionId, 'web:ordinary')
     const http = new Hono()
     authoringCredentialsPlugin(f.credentials, () => true, f.credentialRequests)(http)
     const cancelled = await http.request(`/api/agent-resources/credential-requests/${request.id}`, { method: 'DELETE' })
@@ -571,7 +536,7 @@ test('coordinator discovers a valid authoring template without existing custom r
     const proposal = JSON.parse(await f.tool.execute({ action: 'propose' }, f.ownerContext))
     assert.equal(proposal.ownerCommand, `/agent-publish ${f.resources.draft().revision}`)
     const review = f.publicationRequests.pending()!
-    const { files, previousBindings, bindings, ...metadata } = review
+    const { files, previousBindings, bindings, impact, ...metadata } = review
     assert.deepEqual(proposal.request, metadata)
     assert.deepEqual(proposal.changedFiles, files.map(file => file.path))
     assert.equal(proposal.bindingCount, bindings.length)

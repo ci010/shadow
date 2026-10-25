@@ -108,10 +108,6 @@ for (const localExecutor of [undefined, false]) test(`production project composi
     const freshFiles = await request(`/api/sessions/${encodeURIComponent(fresh.sessionId)}/preview?path=child.txt`)
     assert.equal(freshFiles.status, 200, await freshFiles.clone().text())
     assert.equal((await freshFiles.json()).content, 'Child runtime fixture')
-    const coordinators = await Promise.all(Array.from({ length: 4 }, () => request('/api/orchestrator', {})))
-    assert(coordinators.every(response => response.status === 200))
-    const coordinatorIds = await Promise.all(coordinators.map(response => response.json()))
-    assert(coordinatorIds.every(value => value.sessionId === 'web:orchestrator'))
     const topicRequest = {
       requestId: randomUUID(), title: 'Remote session', description: 'Registered remote folder only',
       folderId: returned.id,
@@ -128,10 +124,6 @@ for (const localExecutor of [undefined, false]) test(`production project composi
     assert.equal(topics.totalMatches, 1)
     assert.equal(topics.sessions[0].sessionId, topic.sessionId)
     const topicGraph = await (await request('/api/sessions/graph')).json()
-    const coordinatorState = topicGraph.sessions.find((state: { sessionId: string }) => state.sessionId === 'web:orchestrator')
-    assert.equal(coordinatorState.sessionKind, 'orchestrator')
-    assert.equal(coordinatorState.folderId, undefined)
-    assert.equal(coordinatorState.parentSessionId, null)
     const topicState = topicGraph.sessions.find((state: { sessionId: string }) => state.sessionId === topic.sessionId)
     assert.equal(topicState.title, 'Remote session')
     assert.equal(topicState.parentSessionId, null)
@@ -142,7 +134,6 @@ for (const localExecutor of [undefined, false]) test(`production project composi
     })
     assert.equal(localTopic.status, 200, await localTopic.clone().text())
     assert.equal((await localTopic.json()).folderId, local.folder.id)
-    assert.equal((await request('/api/sessions', { ...topicRequest, agentType: 'orchestrator' })).status, 400)
     const folderCount = catalog.folders().length
     const scratchBody = { nodeId: 'child', requestId: randomUUID() }
     const scratchResponse = await request('/api/sessions/remote', scratchBody)

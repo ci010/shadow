@@ -1,5 +1,4 @@
 import { t } from './i18n.ts'
-export const ORCHESTRATOR_SESSION_ID = 'web:orchestrator'
 
 export interface TopicMetadata {
   title: string
@@ -22,7 +21,7 @@ export function parseTopicMetadata(value: unknown): TopicMetadata | undefined {
 }
 
 export function isDirectConversation(sessionId: string, mode?: string): boolean {
-  return (sessionId.startsWith('web:chat-') || sessionId === ORCHESTRATOR_SESSION_ID)
+  return sessionId.startsWith('web:chat-')
     && mode !== 'task' && mode !== 'call'
 }
 

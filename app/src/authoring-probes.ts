@@ -14,7 +14,7 @@ export function parseProbeResponse(value: unknown, projectId: string): ProbeRequ
 }
 
 export function visibleProbeRequests(requests: ProbeRequest[], sessionId: string): ProbeRequest[] {
-  return requests.filter(request => sessionId === 'web:orchestrator' || request.sourceSessionId === sessionId)
+  return requests.filter(request => request.sourceSessionId === sessionId)
     .sort((a, b) => {
       const priority = (request: ProbeRequest) => ['pending', 'running'].includes(request.status) ? 0 : 1
       return priority(a) - priority(b) || b.createdAt.localeCompare(a.createdAt)

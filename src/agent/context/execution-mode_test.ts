@@ -158,34 +158,13 @@ test('prompt guides expose only current delegation modes and permitted coordinat
   assert.doesNotMatch(restricted, /### Questions and decisions|### Shell|### Delegation|You may create/)
 })
 
-test('coordinator guidance cannot advertise worker tools even with broad role metadata', async () => {
-  const context: SessionPromptContext = {
-    behavior: {}, sessionId: 'web:orchestrator', channel: 'web', chatId: 'orchestrator',
-    agent: {
-      name: 'orchestrator', description: '', prompt: '', defaultMode: 'session', source: 'builtin',
-    },
-  }
+test('ordinary sessions retain standard guidance without a management-only boundary', async () => {
+  const context: SessionPromptContext = { behavior: {}, sessionId: 'web:chat-admin', channel: 'web', chatId: 'chat-admin',
+    agent: { name: 'general', description: '', prompt: '', defaultMode: 'session', source: 'builtin' } }
   const prompt = (await guidelineProvider().getPromptSection(context))!
-  assert.match(prompt, /### Peer conversations/)
-  assert.match(prompt, /### Coordinator Capability Boundary/)
-  const normalized = prompt.replace(/\s+/g, ' ')
-  assert.match(normalized, /hard runtime cap permits only read\/search\/session\/message\/work\/sql\/project_config\/authoring_change\/skill_read\/skill_save\/ask\/reply; never invoke_tool, exec, write, or subagent/)
-  assert.match(normalized, /Use `skill_read` and `skill_save` for ordinary shared Skill edits/)
-  assert.match(normalized, /Use `authoring_change` only for managed Bot prompt\/resources, saved check runs and owner review/)
-  assert.match(normalized, /Do not bypass this boundary through skills, discovery, events, URLs or other tools/)
-  assert.match(prompt, /Allowed delegation modes:\nnone/)
-  assert.match(prompt, /### Questions and decisions/)
-  assert.match(prompt, /Verify the premise, explain the user-facing consequence/)
-  assert.doesNotMatch(prompt, /### Shell|### Delegation|### Environment|Configure MCP|Activate skill tools|Skill Tools and External MCP Tools/)
-  assert.doesNotMatch(prompt, /invoke_tool\(\{|shell: "node"|vm\.SourceTextModule/)
-  assert.match(prompt, /initialMessageStatus.*accepted.*not_requested.*not_replayed/)
-  assert.match(prompt, /receipt confirms admission, not application, acceptance, completion, or ownership transfer/)
-  assert.doesNotMatch(normalized, /coordinator does not start an LLM turn automatically/)
-  for (const mode of ['task', 'call'] as const) {
-    const oneShot = (await guidelineProvider().getPromptSection({ ...context, mode }))!
-    assert.doesNotMatch(oneShot, /### Peer conversations/)
-    assert.match(oneShot, /Do not create\/manage durable sessions or register folders/)
-  }
+  assert.doesNotMatch(prompt, /Coordinator Capability Boundary|single Project coordinator|hard runtime cap/)
+  assert.match(prompt, /### Shell/)
+  assert.match(prompt, /### Delegation/)
 })
 
 test('compact coordination guidance retains decision and completion routing protocols', async () => {

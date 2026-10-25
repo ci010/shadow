@@ -20,7 +20,7 @@ test('I/O and background notifications never become resend prompts or fallback c
     { role: 'user', content: 'Compacted history', isSummary: true },
     { role: 'user', content: 'Tool result', event: 'tool_result' },
     { role: 'tool', content: 'Output' },
-    { role: 'user', content: 'Delegated handoff', sessionSource: { id: 'web:orchestrator' } },
+    { role: 'user', content: 'Delegated handoff', sessionSource: { id: 'web:chat-admin' } },
   ]) {
     assert.equal(resendableUserMessage([...answered, message]), undefined)
     assert.equal(resendableUserMessage([message]), undefined)
@@ -35,11 +35,11 @@ test('I/O and background notifications never become resend prompts or fallback c
 test('session messages appear alongside human turns with distinct attribution', () => {
   assert.deepEqual(messageHistoryMarkers([
     { role: 'user', content: 'Human request' },
-    { role: 'user', content: 'Delegated task', sessionSource: { id: 'web:orchestrator', intent: 'handoff' } },
+    { role: 'user', content: 'Delegated task', sessionSource: { id: 'web:chat-admin', intent: 'handoff' } },
     { role: 'user', content: 'Human follow-up', senderName: 'Alice' },
-  ], [{ sessionId: 'web:orchestrator', label: 'Coordinator' }]).map(({ index, kind, source, sourceId, label }) => ({ index, kind, source, sourceId, label })), [
+  ], [{ sessionId: 'web:chat-admin', label: 'Admin' }]).map(({ index, kind, source, sourceId, label }) => ({ index, kind, source, sourceId, label })), [
     { index: 0, kind: 'user', source: 'User', sourceId: undefined, label: 'User message' },
-    { index: 1, kind: 'session', source: 'Coordinator', sourceId: 'web:orchestrator', label: 'Received handoff' },
+    { index: 1, kind: 'session', source: 'Admin', sourceId: 'web:chat-admin', label: 'Received handoff' },
     { index: 2, kind: 'user', source: 'Alice', sourceId: undefined, label: 'User message' },
   ])
 })

@@ -181,7 +181,7 @@ const links = computed(() => state.value?.links.filter(item => item.resourceId =
 const linkedWork = computed(() => links.value.some(link => link.workKey === workKey.value) ? props.works.find(work => work.key === workKey.value) : undefined)
 const subscription = computed(() => state.value?.subscriptions.find(item => item.resourceId === resourceId.value && item.workKey === workKey.value))
 const targets = computed(() => props.sessions.filter(session => session.assignable
-  && [linkedWork.value?.assignee, linkedWork.value?.manager, 'web:orchestrator'].includes(session.sessionId)))
+  && [linkedWork.value?.assignee, linkedWork.value?.manager].includes(session.sessionId)))
 const repository = ref(''), allowWrites = ref(false), url = ref(''), busy = ref(false), error = ref('')
 const objective = ref(''), acceptance = ref(''), boundaries = ref(''), importSourceHash = ref('')
 const importDrafts = new Map<string, { objective: string; acceptance: string; boundaries: string; sourceHash: string }>()

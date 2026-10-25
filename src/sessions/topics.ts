@@ -9,7 +9,6 @@ import type { InputSource } from './input.ts'
 import { parseSessionName } from './session-name.ts'
 import { workBindingSchema } from './work-policy.ts'
 
-export const ORCHESTRATOR_SESSION_ID = 'web:orchestrator'
 const briefFields = {
   title: z.string().transform(parseSessionName),
   description: z.string().trim().max(4000).optional(),
@@ -81,7 +80,6 @@ function topicSummary(projectId: string, state: SessionState, firstMessage?: str
 }
 
 export class TopicService {
-  private coordinator?: Promise<{ projectId: string; sessionId: string; chatId: string }>
   private requests = new Map<string, Promise<TopicSummary & {
     initialMessageStatus: 'not_requested' | 'accepted' | 'not_replayed'
   }>>()
@@ -97,26 +95,6 @@ export class TopicService {
       throw new TopicError('Temporary tasks/calls cannot create or manage durable sessions or register folders.', 403)
     }
     return state
-  }
-
-  async ensureOrchestrator() {
-    if (this.coordinator) return this.coordinator
-    this.coordinator = (async () => {
-      const existing = this.options.sessions.getSessionState(ORCHESTRATOR_SESSION_ID)
-      if (existing && (existing.sessionKind !== 'orchestrator' || existing.agentType !== 'orchestrator')) {
-        throw new TopicError('The coordinator session ID is already occupied by another conversation.', 409)
-      }
-      if (!existing) {
-        await this.options.sessions.buildSession(ORCHESTRATOR_SESSION_ID, undefined, {
-          sessionKind: 'orchestrator', agentType: 'orchestrator', mode: 'session', parentSessionId: null,
-          name: 'Project coordination',
-        })
-        this.options.changed(ORCHESTRATOR_SESSION_ID)
-      }
-      return { projectId: this.options.projectId, sessionId: ORCHESTRATOR_SESSION_ID, chatId: 'orchestrator' }
-    })()
-    try { return await this.coordinator }
-    finally { this.coordinator = undefined }
   }
 
   async search(request: unknown = {}) {
@@ -148,7 +126,6 @@ export class TopicService {
   async create(request: unknown, createdBySessionId?: string, signal?: AbortSignal) {
     const parsed = createRequest.parse(request)
     if (createdBySessionId) this.assertActor(this.options.projectId, createdBySessionId, true)
-    if (parsed.agentType === 'orchestrator') throw new TopicError('Use the existing Project coordinator; a peer session cannot be another orchestrator.')
     const agent = this.options.resolveAgent(parsed.agentType)
     if (!agent) throw new TopicError(`Unknown agent type "${parsed.agentType}".`)
     const requestId = parsed.requestId ?? randomUUID()
@@ -213,12 +190,12 @@ export class TopicService {
     const state = this.options.sessions.getSessionState(sessionId)
     if (!state) throw new TopicError('Session not found in this Project.', 404)
     if (actorSessionId) {
-      const actor = this.assertActor(this.options.projectId, actorSessionId, true)
-      if (actorSessionId !== sessionId && actor.sessionKind !== 'orchestrator') {
-        throw new TopicError('Only this session or the Project coordinator can change its metadata.', 403)
+      this.assertActor(this.options.projectId, actorSessionId, true)
+      if (actorSessionId !== sessionId) {
+        throw new TopicError('Only this session can change its metadata.', 403)
       }
     }
-    if (state.sessionKind === 'orchestrator' || state.automation || (state.mode ?? 'session') !== 'session') {
+    if (state.automation || (state.mode ?? 'session') !== 'session') {
       throw new TopicError('Only ordinary durable session metadata can be updated.')
     }
     await this.options.sessions.updateConversationMetadata(sessionId, topic)

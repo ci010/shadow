@@ -5,7 +5,7 @@ import { parseTopicMetadata, type TopicMetadata } from './project-coordination.t
 
 export interface SessionDetails {
   sessionId: string
-  sessionKind?: 'topic' | 'orchestrator'
+  sessionKind?: 'topic'
   topic?: TopicMetadata
   createdBySessionId?: string
   name: string | null
@@ -61,7 +61,7 @@ export function parseSessionDetails(value: unknown, sessionId: string): SessionD
   }
   if (value.workdir.available !== undefined && typeof value.workdir.available !== 'boolean') throw invalid()
   if (windowTokens === 0) throw invalid()
-  if (value.sessionKind !== undefined && value.sessionKind !== 'topic' && value.sessionKind !== 'orchestrator') throw invalid()
+  if (value.sessionKind !== undefined && value.sessionKind !== 'topic') throw invalid()
   if (value.createdBySessionId !== undefined && typeof value.createdBySessionId !== 'string') throw invalid()
   if (value.description !== undefined && typeof value.description !== 'string') throw invalid()
   if (value.usageIncomplete !== undefined && typeof value.usageIncomplete !== 'boolean') throw invalid()

@@ -65,7 +65,7 @@ test('current note search and attention do not turn execution state or reported 
   const at = new Date().toISOString()
   const reviewed = item('reviewed', { status: 'done', notes: workNotesSchema.parse({
     summary: 'Token usage collected', attention: { kind: 'dependency', summary: 'Missing grader', version: 1, by: 'worker', at,
-      reviewed: { by: 'coordinator', at, conclusion: 'Use token metrics' } },
+      reviewed: { by: 'admin', at, conclusion: 'Use token metrics' } },
   }) })
   assert.deepEqual(filterWork([reviewed], { query: 'token usage', root: '', assignee: '', terminal: true }), [reviewed])
   assert.deepEqual(workAttention({ items: [reviewed], sessions: [{ sessionId: 'worker', title: 'Worker', assignable: false, activity: 'running' }], requests: [], effects: [] }), [])

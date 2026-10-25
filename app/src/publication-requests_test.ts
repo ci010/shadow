@@ -7,7 +7,7 @@ const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const revision = `sha256:${'a'.repeat(64)}`
 const baseRevision = `sha256:${'b'.repeat(64)}`
 const proposal = (projectId = 'a', requestId = id) => ({
-  id: requestId, projectId, sessionId: 'web:orchestrator', revision, baseRevision,
+  id: requestId, projectId, sessionId: 'web:chat-admin', revision, baseRevision,
   createdAt: '2026-09-18T05:00:00.000Z',
   files: [{ path: 'agents/support/AGENT.md', before: null, after: 'Read only.' }],
   previousBindings: [], bindings: [],
@@ -18,7 +18,7 @@ function harness(t: TestContext, initial: Partial<PublicationSource> = {}) {
   t.mock.method(globalThis, 'fetch', (url: string, init: RequestInit) =>
     new Promise<Response>(finish => calls.push({ url, init, finish })))
   const source = reactive({
-    apiBase: 'http://127.0.0.1/projects/a', projectId: 'a', sessionId: 'web:orchestrator',
+    apiBase: 'http://127.0.0.1/projects/a', projectId: 'a', sessionId: 'web:chat-admin',
     active: true, canSubmit: true, stage: 'idle', ...initial,
   })
   let state!: ReturnType<typeof usePublicationRequest>
@@ -40,7 +40,7 @@ test('publication reviews enforce Project/session ownership and validate the exa
   assert.equal(parsePublicationResponse({ request: null }, 'a'), null)
   for (const value of [
     {}, { request: undefined }, { request: proposal('b') }, { request: proposal(), extra: true },
-    { request: { ...proposal(), sessionId: 'web:other' } },
+    { request: { ...proposal(), sessionId: 'qq:other' } },
     { request: { ...proposal(), revision: 'different' } },
   ]) assert.throws(() => parsePublicationResponse(value, 'a'))
 })
@@ -61,7 +61,7 @@ test('only active owners fetch, including topics and idle after propose, without
   assert.equal(calls.length, 2)
   calls[1]!.finish(Response.json({ request: proposal() }))
   await settle()
-  assert.equal(state.request.value, null, 'Topics cannot see legacy coordinator-only proposals')
+  assert.equal(state.request.value, null, 'Topics cannot see legacy admin-only proposals')
 })
 
 test('multi-review envelope rejects duplicate IDs and legacy mismatch; topics see only their changes', () => {
@@ -69,7 +69,7 @@ test('multi-review envelope rejects duplicate IDs and legacy mismatch; topics se
   const second = { ...proposal('a', 'second'), change: { id: 'change-b', title: 'Connection access', sourceSessionId: 'web:other' } }
   const requests = parsePublicationRequests({ request: first, requests: [first, second] }, 'a')
   assert.deepEqual(visiblePublicationRequests(requests, 'web:topic'), [first])
-  assert.deepEqual(visiblePublicationRequests(requests, 'web:orchestrator'), requests)
+  assert.deepEqual(visiblePublicationRequests(requests, 'web:chat-admin'), requests)
   for (const value of [
     { request: first, requests: [first, first] }, { request: second, requests: [first, second] },
     { request: null, requests: [first] }, { request: first, requests: [proposal('b')] },

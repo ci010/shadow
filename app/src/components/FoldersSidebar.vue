@@ -154,7 +154,6 @@ import { activeSubagentsByOwner, summarizeSubagents } from '../subagent-executio
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { createFoldersClient, type CloneView, type FolderRecord } from '../folders-client.ts'
 import { automationSessionOwners, groupFolderSessions, sortSidebarChats, restoreChatListPreferences, saveChatListPreferences, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
-import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import { botPlatformLabel, groupBotConversations, restoreCollapsedBots, saveCollapsedBots, type SidebarBot } from '../bot-sidebar.ts'
 
 const props = defineProps<{
@@ -290,7 +289,7 @@ function observeSidebar() {
   measureSidebar()
 }
 
-watch(() => activeAutomation.value || props.activeSessionId === ORCHESTRATOR_SESSION_ID ? undefined : props.activeSessionId
+watch(() => activeAutomation.value ? undefined : props.activeSessionId
   ? props.sessions.find(session => session.sessionId === props.activeSessionId)?.folderId
   : props.draftFolderId, id => {
   selectedFolderId.value = id ?? ''
@@ -334,7 +333,7 @@ function selectFolder(id: string) {
   expandedFolders.add(id)
 }
 function selectConversation(id: string) {
-  selectedFolderId.value = id === ORCHESTRATOR_SESSION_ID || automationSessionOwners(props.sessions).has(id)
+  selectedFolderId.value = automationSessionOwners(props.sessions).has(id)
     ? '' : props.sessions.find(session => session.sessionId === id)?.folderId ?? ''
   emit('select', id)
 }

@@ -164,7 +164,7 @@ Use `/learn <pipeline>` in an owner chat to retry after reconciliation.
 
 ## Discord configuration tools
 
-The Project coordinator explicitly exposes the opt-in `channel_config` tool.
+Ordinary administrator Web sessions discover the opt-in `channel_config` tool through `v:skills/project-administration` and invoke it on demand.
 Read `schema` for formats, `list` for named Bot connections and the current
 revision, and `directory`/`members` for server/channel/role/person discovery.
 `resource` and `agent_file` inspect owner-visible catalog records or current
@@ -592,7 +592,7 @@ brief are both optional.
 The canvas puts native question controls at the affected ancestor, with the
 lower technical origin available on demand. Explain consequences for the user's
 outcome, not just a worker's implementation A/B choice. The user can correct a
-premise through the ancestor editor, discuss it with the coordinator, or answer
+premise through the ancestor editor, discuss it in an ordinary conversation, or answer
 in their own words. Changed goals/assignments invalidate related pending questions,
 including requests still being persisted. An invalidation is not an approval.
 Historical decisions retain their original path and exact ask identity in both
@@ -622,7 +622,7 @@ neither means rollback or permission to replay an external effect.
 
 For a tool the user will use repeatedly, read `v:skills/micro-app` and discover
 `micro_app`. It publishes immutable Project apps; the user reviews source and
-permissions in coordinator **Apps** before opening. A normal button can call
+permissions in Project workbench **Apps** before opening. A normal button can call
 the scoped model bridge without starting another agent turn. This is separate
 from temporary I/O capture cards and A2A delegation. Optional local backends
 have host privileges, not an OS sandbox. See [Micro Apps](microapps.md).

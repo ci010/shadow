@@ -106,7 +106,7 @@ async function main() {
     assert.equal((await stats()).writes, 2, 'Reconciliation never republishes')
     await command('online')
     await expand('Automatic follow-up')
-    await fill('Recipient', 'web:orchestrator'); await fill('Delivery', 'queue'); await fill('source', true)
+    await fill('Recipient', 'manager'); await fill('Delivery', 'queue'); await fill('source', true)
     await click('Enable / update subscription')
     await wait('document.querySelector(".project-github").textContent.includes("Current: queue")')
     await fill('Delivery', 'silent')

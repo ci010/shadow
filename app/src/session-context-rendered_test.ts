@@ -34,7 +34,7 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>)
         if (id === 'vue' && ['ProjectGroup.vue', 'FoldersSidebar.vue'].includes(filename)) {
           return { ...Vue, onMounted() {}, onActivated() {}, onUnmounted() {} }
         }
-        if (id === './FoldersSidebar.vue' || id === './ProjectCoordinator.vue') return { default: load(id.slice(2)) }
+        if (id === './FoldersSidebar.vue') return { default: load(id.slice(2)) }
         return id.endsWith('.vue') ? { default: popover } : require(id)
       }, module, module.exports,
     )

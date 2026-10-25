@@ -48,14 +48,14 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
     key: rootKey, subject: { kind: 'work', id: rootKey.slice(5) }, revision: 1, sequence: 1,
     definition: { objective: 'Understand release impact from available evidence', acceptance: ['A concise comparison'], boundaries: ['No publication'], evidence: [] },
     origin: 'human', changedBy: 'human', changedAt: at, change: 'goal', reason: 'User outcome', paused: false,
-    workflow: { title: 'Release evidence', manager: 'web:orchestrator', assignee: 'web:orchestrator', assignmentRevision: 1, status: 'in_progress', dependencies: [] },
+    workflow: { title: 'Release evidence', manager: 'web:chat-admin', assignee: 'web:chat-admin', assignmentRevision: 1, status: 'in_progress', dependencies: [] },
     notes: { kind: 'goal', summary: 'Token measurements are ready. The scoring approach needs a decision.', next: 'Confirm the evidence needed for the release report', html: exhibit },
   })
   let record = workRecordSchema.parse({
     key: 'topic:web:fixture', subject: { kind: 'topic', sessionId: 'web:fixture' }, revision: 1, sequence: 1,
     definition: { objective: 'Compare release candidates using the available measurements', acceptance: ['Report both candidates'], boundaries: ['No publication'], evidence: [] },
     origin: 'agent_interpretation', changedBy: 'web:fixture', changedAt: at, change: 'understanding', reason: 'Chosen approach', paused: false,
-    workflow: { title: 'Evaluate release candidates', parentKey: rootKey, manager: 'web:orchestrator', assignee: 'web:fixture',
+    workflow: { title: 'Evaluate release candidates', parentKey: rootKey, manager: 'web:chat-admin', assignee: 'web:fixture',
       assignmentRevision: 1, status: 'in_progress', dependencies: ['work:inputs'] },
     notes: { kind: 'approach', relation: { kind: 'supports', reason: 'Compare measurements to explain release impact' },
       basis: [{ key: rootKey, revision: 1 }], summary: 'Input fixtures are available', next: 'Compare token usage', plan: ['Read the usage report', 'Compare candidates'],
@@ -123,15 +123,15 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
         ] });
         window.navigateTab = tab => router.push(tab === 'settings'
           ? {name:'project-settings',params:{projectId:'p',section:'general'}}
-          : {name:'chat',params:{projectId:'p',sessionId:'web:orchestrator'}});
+          : {name:'chat',params:{projectId:'p',sessionId:'web:chat-admin'}});
         window.navigateWork = key => router.replace({query:{work:key}});
-        await router.push({name:'chat',params:{projectId:'p',sessionId:'web:orchestrator'}}); await router.isReady();
+        await router.push({name:'chat',params:{projectId:'p',sessionId:'web:chat-admin'}}); await router.isReady();
         const app = createApp({ render:() => [h(ProjectWorkbench, {
           apiBase:location.origin + '/projects/p', projectId:'p', projectName:'Release evidence', visible:state.visible, style:'height:100vh',
           onNavigate:id => { state.navigated = id; }, onCompose:text => { state.draft += '\\n\\n' + text; },
           onProjectNavigation:tab => window.navigateTab(tab),
         }, { default:({active}) => h('section', {style:'display:flex;flex:1;flex-direction:column;padding:16px;min-width:0;'}, [
-          h('p','Coordinator conversation'), h('p',{style:'flex:1;font-size:14px;'},'Compare the release evidence. A grader is one possible approach, not the original goal.'),
+          h('p','Admin conversation'), h('p',{style:'flex:1;font-size:14px;'},'Compare the release evidence. A grader is one possible approach, not the original goal.'),
           h('textarea',{id:'fixture-composer',value:state.draft,disabled:!active,
             style:'box-sizing:border-box;width:100%;min-height:100px;background:var(--c-bg-input);color:var(--c-text);',
             onInput:event => {state.draft = event.target.value;}}),
@@ -201,7 +201,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
             if (unavailable) { response.statusCode = 503; json({ error: 'unavailable' }); return }
             const summary = (key: string, title: string, status = 'pending', assignee: string | null = null) => ({
               key, title, status, assignee, revision: 1, sequence: 1, parentKey: null, dependencies: [],
-              manager: 'web:orchestrator', blockedReason: status === 'blocked' ? 'Waiting for the release decision' : null,
+              manager: 'web:chat-admin', blockedReason: status === 'blocked' ? 'Waiting for the release decision' : null,
               paused: false, adopted: false, proposals: 0, interpretationReview: false, changedAt: at,
             })
             const note = (item: typeof record) => ({ ...summary(item.key, item.workflow!.title, item.workflow!.status, item.workflow!.assignee),
@@ -218,7 +218,7 @@ test('rendered Project canvas anchors native questions, retains drafts, isolates
               sessions: [
                 { sessionId: 'web:fixture', title: 'Evaluation session', assignable: true, activity: questionOpen ? 'waiting' : 'idle', workKey: record.key },
                 { sessionId: 'web:reviewer', title: 'Review session', assignable: true, activity: 'idle' },
-                { sessionId: 'web:orchestrator', title: 'Coordinator', assignable: true, activity: 'idle' },
+                { sessionId: 'web:chat-admin', title: 'Admin', assignable: true, activity: 'idle' },
                 { sessionId: 'web:untracked', title: 'Untracked conversation', assignable: true, activity: 'waiting' },
                 { sessionId: 'virtual:untracked-child', title: 'Inspect inputs', assignable: false, activity: 'tool', parentSessionId: 'web:untracked' },
               ],

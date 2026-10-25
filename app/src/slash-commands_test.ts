@@ -78,7 +78,7 @@ test('catalog loads only on demand, preserves Project scope, and closes without 
 test('session and Project changes abort reads and reject late catalog results', async t => {
   const { source, catalog, pending } = harness(t)
   source.enabled = true
-  source.sessionId = 'web:orchestrator'
+  source.sessionId = 'web:chat-admin'
   assert.equal(pending[0].signal?.aborted, true)
   source.apiBase = 'http://localhost:3123/projects/b'
   assert.equal(pending[1].signal?.aborted, true)

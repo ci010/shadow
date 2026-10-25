@@ -148,11 +148,12 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal(discordB.projectId, created.project.id)
       assert.deepEqual(discordA.bindings, [])
       assert.deepEqual(discordA.learning, [])
-      const coordinator = await json<{ sessionId: string }>(a + '/api/orchestrator', 'POST', {})
+      const coordinator = await json<{ sessionId: string }>(a + '/api/sessions', 'POST', { title: 'Administrator session' })
       const coordinatorContext = await json<{ tools: Array<{ name: string }>; systemPrompt: string }>(
         a + `/api/sessions/${encodeURIComponent(coordinator.sessionId)}/context`)
-      assert(coordinatorContext.tools.some(tool => tool.name === 'channel_config'))
-      assert.match(coordinatorContext.systemPrompt, /For Discord, use `channel_config`/)
+      assert(!coordinatorContext.tools.some(tool => ['channel_config', 'project_config', 'authoring_change'].includes(tool.name)))
+      assert(coordinatorContext.tools.some(tool => tool.name === 'invoke_tool'))
+      assert.doesNotMatch(coordinatorContext.systemPrompt, /For Discord, use `channel_config`|Coordinator Capability Boundary/)
       const discordAgentId = randomUUID()
       const discordDraft = IntegrationDraftSchema.parse(await json(a + discordPath + '/drafts', 'POST', {
         baseRevision: discordA.revision, change: { kind: 'agent.save', agent: {

@@ -19,7 +19,7 @@ export function guidelineProvider(): SystemPromptProvider {
 
       const sections = [capabilityPrompt(agentType.prompt, ctx)]
 
-      if (agentType.name !== 'orchestrator') sections.push(capabilityPrompt(TOOLS, ctx))
+      sections.push(capabilityPrompt(TOOLS, ctx))
       sections.push(toolsGuideline(ctx))
       return sections.join('\n\n')
     },
@@ -34,7 +34,7 @@ export function executionModeGuideline(ctx: SessionPromptContext): string {
   const mode = ctx.mode ?? ctx.agent.defaultMode
   const allows = (name: string) => executionModeAllowsTool(mode, name) && isToolAllowed(ctx.agent, name)
   const hasDelegationParent = !!ctx.parentSessionId
-  const modes = ctx.agent.name !== 'orchestrator' && allows('subagent')
+  const modes = allows('subagent')
     ? allowedSubagentModes(mode, hasDelegationParent) : []
   const decision = !channelSupportsAsk(ctx.channel, ctx.sessionId) ? CHAT_QUESTION_GUIDANCE : allows('ask')
     ? 'Use ask for missing input or consequential decisions; reply answers a specific pending request.'

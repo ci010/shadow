@@ -42,7 +42,7 @@ refresh errors. CI and approval summaries apply to the observed PR head, not
 branch protection, mergeability or all required checks. Edits to an Issue flag
 source drift but do not overwrite Work. Closing an Issue or merging a PR does
 not finish or cancel local Work. **Discuss source** appends an editable
-coordinator draft; it does not send a message.
+ordinary conversation draft; it does not send a message.
 
 Agents can discover cached resources with `read("v:github")` and inspect a
 resource using the returned `v:github/<encoded-resource-id>` path. Virtual
@@ -81,8 +81,7 @@ not automatically accepted or recreated.
 ## Subscribe to follow-up
 
 Choose a linked resource, Work, eligible durable session and event kinds under
-**Automatic follow-up**. The target must be its executor, manager or Project
-coordinator. Saving captures the current assignment generation.
+**Automatic follow-up**. The target must be its executor or manager. Saving captures the current assignment generation.
 
 - **Record only:** records the external event without starting a model turn.
 - **Queue a follow-up turn:** explicitly permits a queued model turn and its

@@ -36,8 +36,8 @@ function legacyBundle(): ResourceBundle {
       enabled: true, skills: ['support'], readFolders: [], parameters: {},
       grants: [
         { id: 'issues-api', kind: 'http', origin: 'https://synthetic.example', routes: [{ method: 'GET', path: '/issues' }] },
-        { id: 'owner-inbox', kind: 'inbox', sessionId: 'web:orchestrator' },
-        { id: 'unused-grant', kind: 'inbox', sessionId: 'web:orchestrator' },
+        { id: 'owner-inbox', kind: 'inbox', sessionId: 'web:chat-admin' },
+        { id: 'unused-grant', kind: 'inbox', sessionId: 'web:chat-admin' },
       ],
     }],
   }

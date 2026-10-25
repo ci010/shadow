@@ -405,7 +405,7 @@ test('runtime advertises only mode-and-role permitted delegation', async t => {
     ...context, mode: 'task', agent: { ...context.agent, allowedTools: ['read'] },
   })
 
-  await t.test('coordinator runtime cap suppresses worker delegation and decisions', async () => {
+  await t.test('legacy identity discovers ordinary delegation, skills and runtime capabilities', async () => {
     let activeLookups = 0
     let skillLookups = 0
     const provider = runtimeIdentityProvider({
@@ -418,18 +418,18 @@ test('runtime advertises only mode-and-role permitted delegation', async t => {
       },
     })
     const prompt = (await provider.getPromptSection({
-      behavior: {}, sessionId: 'web:orchestrator', channel: 'web', chatId: 'orchestrator',
+      behavior: {}, sessionId: 'web:chat-admin', channel: 'web', chatId: 'chat-admin',
       admin: true,
-      agent: { name: 'orchestrator', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
+      agent: { name: 'general', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
     }))!
-    assert.match(prompt, /Allowed Delegation Modes\*\*: none/)
-    assert.match(prompt, /Coordinator tool limits are enforced by the runtime/)
+    assert.match(prompt, /Allowed Delegation Modes\*\*: task, call/)
+    assert.doesNotMatch(prompt, /Coordinator tool limits are enforced by the runtime/)
     assert.match(prompt, /Worker role catalog/)
-    assert.doesNotMatch(prompt, /Ask decisions with yield|Managed Subagents|fixture:child/)
-    assert.equal(activeLookups, 0)
-    assert.equal(skillLookups, 0)
-    assert.doesNotMatch(prompt, /Available Exec Shells|Default Exec Shell|inline TypeScript|Worker skill activation/)
-    assert.match(prompt, /Resource publication requires owner review/)
+    assert.match(prompt, /Managed Subagents|fixture:child/)
+    assert.equal(activeLookups, 1)
+    assert.equal(skillLookups, 1)
+    assert.match(prompt, /Available Exec Shells|Default Exec Shell/)
+    assert.doesNotMatch(prompt, /Coordinator Capability Boundary/)
     assert.doesNotMatch(prompt, /project_config only/)
   })
   assert(restricted?.includes('**Allowed Delegation Modes**: none'))

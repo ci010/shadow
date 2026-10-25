@@ -519,8 +519,7 @@ export async function createProjectRuntime(
   cleanup.push(() => credentialRequests.stop())
   const canDeliverAuthoredMessage = (id: string): boolean => {
     const state = sessions.getSessionState(id)
-    return !!state && state.mode === 'session' && state.sessionKind !== 'orchestrator' &&
-      id !== 'web:orchestrator' && sessions.canReceiveSessionMessage(id)
+    return !!state && state.mode === 'session' && sessions.canReceiveSessionMessage(id)
   }
   const capabilityBroker = new CapabilityBroker({
     projectId: project.id, directory: authoringDirectory,
@@ -1071,14 +1070,14 @@ export async function createProjectRuntime(
           if (grant.kind === 'http' && grant.credential && !agentCredentials.names().includes(grant.credential.secretRef)) {
             throw new Error(`Credential reference ${grant.credential.secretRef} must be provisioned outside the conversation before publication.`)
           }
-          if (grant.kind === 'inbox' && !canDeliverAuthoredMessage(grant.sessionId)) throw new Error('Inbox target must be a durable, non-coordinator conversation in this Project.')
+          if (grant.kind === 'inbox' && !canDeliverAuthoredMessage(grant.sessionId)) throw new Error('Inbox target must be a durable conversation in this Project.')
         }
       }
     },
   }
   const canAuthor = (id: string): boolean => {
     const state = sessions.getSessionState(id)
-    if (!state || state.projectId !== project.id || state.mode !== 'session' || !id.startsWith('web:') ||
+    if (!state || state.projectId !== project.id || state.mode !== 'session' || state.automation || state.statePersistence || !id.startsWith('web:') ||
       sessions.isManagedConversation(id)) return false
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirCapabilityLookup)
     return locations.workdir.available && locations.workdir.locality === 'local'
@@ -1097,7 +1096,9 @@ export async function createProjectRuntime(
       const change = authoringChanges.get(request.change.id)
       if (change.closed || change.snapshot.revision !== request.revision ||
         change.accessRevision !== request.change.accessRevision ||
-        change.base.revision !== request.baseRevision || !canAuthor(request.change.sourceSessionId)) {
+        change.base.revision !== request.baseRevision ||
+        !(canAuthor(request.change.sourceSessionId) ||
+          request.change.sourceSessionId === 'owner:service-groups' && change.ownerSessionId === 'owner:service-groups')) {
         throw new PublicationRequestError('stale_request', 409, 'The reviewed Change or authoring session is no longer current. Request a new review.')
       }
       authoringChanges.authorize(change.id, request.change.sourceSessionId)
@@ -1160,10 +1161,12 @@ export async function createProjectRuntime(
   importTool.registerBuiltin(changeTool.name, changeTool)
   const authoringVfs = createAuthoringHandler(changeManagement)
   vfs.mount('v:authoring', 'scoped agent/skill Change files; exact-revision edits and saved check runs', authoringVfs.read, undefined, authoringVfs.write)
-  const authoringManagement: AuthoringManagementOptions = { ...authoringOptions, publicationRequests }
+  const authoringManagement: AuthoringManagementOptions = { ...authoringOptions, publicationRequests, canAuthor }
   cleanup.push(stopPublicationReviews)
   cleanup.push(() => probeRequests.stop())
-  tools.register(authoringManagementTool(authoringManagement))
+  const projectConfigTool = authoringManagementTool(authoringManagement)
+  tools.register(projectConfigTool)
+  importTool.registerBuiltin(projectConfigTool.name, projectConfigTool)
   registerAuthoringCommands(commandDispatcher, authoringManagement)
 
   tools.register(
@@ -1348,7 +1351,7 @@ export async function createProjectRuntime(
     sessions.assertFolderAccess(sessionId)
   }))
   discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
-  const channelConfigurationTool = ownerChannelConfigurationTool(channelIntegrations, memoryDomains, channels.discordTransport())
+  const channelConfigurationTool = ownerChannelConfigurationTool(channelIntegrations, memoryDomains, channels.discordTransport(), canAuthor)
   tools.register(channelConfigurationTool)
   importTool.registerBuiltin(channelConfigurationTool.name, channelConfigurationTool)
   cleanup.push(() => channels.stopAll())

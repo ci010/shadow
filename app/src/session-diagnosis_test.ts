@@ -10,7 +10,7 @@ function span(overrides: Partial<SessionTraceSpan> = {}): SessionTraceSpan {
 }
 
 test('trace distinguishes delegated input from humans without losing raw evidence or turn boundaries', () => {
-  const tag = '<sender id="web:orchestrator" name="Admin &amp; coordinator" source="session" intent="handoff" />'
+  const tag = '<sender id="web:chat-admin" name="Admin &amp; admin" source="session" intent="handoff" />'
   const { events } = parseDiagnosisHistory({ messages: [
     { role: 'user', content: 'Human request' },
     { role: 'user', name: 'admin', content: [{ type: 'text', text: tag }, { type: 'text', text: 'Delegated work' }] },
@@ -24,9 +24,9 @@ test('trace distinguishes delegated input from humans without losing raw evidenc
   assert.equal(events[1].title, 'Received handoff')
   assert.equal(events[1].content, 'Delegated work')
   assert.equal(events[1].rawContent, `${tag}\nDelegated work`)
-  assert.equal(events[1].sessionSource?.id, 'web:orchestrator')
-  assert.equal(eventMatches(events[1], 'Admin & coordinator', 'SESSION'), true)
-  assert.equal(eventMatches(events[1], 'web:orchestrator', 'USER'), false)
+  assert.equal(events[1].sessionSource?.id, 'web:chat-admin')
+  assert.equal(eventMatches(events[1], 'Admin & admin', 'SESSION'), true)
+  assert.equal(eventMatches(events[1], 'web:chat-admin', 'USER'), false)
   assert.equal(events[3].content, 'Background check')
   assert.match(events[3].rawContent!, /^<event /)
   assert.match(events[4].content, /^Literal <sender source="session" \/> content/)

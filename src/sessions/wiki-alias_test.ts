@@ -190,7 +190,7 @@ async function scenario(
     const subscription = bus.on('session.turn.finished', fact => {
       facts.push(fact)
       if (fact.status !== 'completed') finished.reject(new Error(`Wiki session ${fact.sessionId}: ${fact.status}`))
-      else if (fact.sessionId === 'web:orchestrator' && !calls.some(call => call.name === 'session')) {
+      else if (fact.sessionId === 'web:chat-admin' && !calls.some(call => call.name === 'session')) {
         finished.reject(new Error(`Coordinator did not delegate the requested Wiki import: ${fact.content}\nCalls: ${
           JSON.stringify(calls.map(call => ({ name: call.name, args: call.args })))
         }`))
@@ -200,13 +200,13 @@ async function scenario(
     deadline.addEventListener('abort', abort, { once: true })
     try {
       await sessions.start()
-      await topics.ensureOrchestrator()
-      await sessions.deliver('web:orchestrator', {
+      await sessions.buildSession('web:chat-admin', undefined, { mode: 'session', agentType: 'general' })
+      await sessions.deliver('web:chat-admin', {
         kind: 'message', id: 'wiki-import-request', timestamp: new Date().toISOString(),
         content: `请让另一个 session 把 ${sourcePath} 的运维知识${REQUESTS[alias]}。请保留来源，执行会话写入后回读验证；不要改变原始文档或会话记忆。`,
         policy: 'queue',
         source: { kind: 'user', sender: {
-          channel: 'web', chatId: 'orchestrator', senderId: 'owner', messageId: 'wiki-import-request',
+          channel: 'web', chatId: 'chat-admin', senderId: 'owner', messageId: 'wiki-import-request',
         } },
       })
       await finished.promise
@@ -232,7 +232,7 @@ async function scenario(
         || /^(?:glob|grep):v:wiki(?:[\\/]|$)/.test(String(call.args.space))
         || /^glob(?::)?$/.test(String(call.args.handler ?? call.args.space)) && /^v:wiki(?:[\\/]|$)/.test(String(call.args.query)))
       assert.deepEqual(invalidMountCalls, [], 'No reads, searches or writes may address the nonexistent Wiki mount')
-      assert(!calls.some(call => call.sessionId === 'web:orchestrator' && call.name === 'write'))
+      assert(!calls.some(call => call.sessionId === 'web:chat-admin' && call.name === 'write'))
       const writes = calls.filter(call => call.name === 'write')
       assert(writes.length > 0, 'Wiki import must persist pages, not just report success')
       assert(writes.every(call => /^v:memory\/(?!sessions\/|events\/).+\.md$/.test(String(call.args.path))))
@@ -243,7 +243,7 @@ async function scenario(
         const path = `v:${entry.path}`
         const written = calls.findIndex(call => call.name === 'write' && call.args.path === path)
         assert(written >= 0 && calls.slice(written + 1).some(call =>
-          call.sessionId !== 'web:orchestrator' && call.name === 'read' && call.args.path === path), `Worker must read back ${path} after writing`)
+          call.sessionId !== 'web:chat-admin' && call.name === 'read' && call.args.path === path), `Worker must read back ${path} after writing`)
       }
       const content = (await Promise.all(wiki.map(entry => readFile(join(home, ...entry.path.split('/')), 'utf8')))).join('\n')
       assert.match(content, /demo/)

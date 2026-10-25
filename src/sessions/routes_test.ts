@@ -186,7 +186,7 @@ test('session route parameters retain encoded bot components without a second de
   assert(seen.every(key => key === id))
 })
 
-test('coordinator and learning automation browsing use Home without changing execution cwd', async t => {
+test('learning automation browsing uses Home while ordinary sessions keep execution cwd', async t => {
   const { workspace, root } = await folderFixture(t)
   execFileSync('git', ['init', '--quiet', workspace])
   await writeFile(join(workspace, 'home.txt'), 'from Home\n')
@@ -199,10 +199,10 @@ test('coordinator and learning automation browsing use Home without changing exe
   await writeFile(join(folder, 'folder.txt'), 'from effective folder\n')
   const folderWorkdir = { version: 1 as const, nodeId: 'local', capabilityId: 'fixture-folder' }
   const states: Record<string, SessionState> = {
-    'web:orchestrator': { sessionId: 'web:orchestrator', segmentIndex: 0, sessionKind: 'orchestrator', mode: 'session', parentSessionId: null },
+    'web:chat-admin': { sessionId: 'web:chat-admin', segmentIndex: 0, sessionKind: 'topic', mode: 'session', parentSessionId: null },
     'web:coordinator-topic': {
       sessionId: 'web:coordinator-topic', segmentIndex: 0, mode: 'session', sessionKind: 'topic',
-      parentSessionId: null, createdBySessionId: 'web:orchestrator', parent: { id: 'web:orchestrator' },
+      parentSessionId: null, createdBySessionId: 'web:chat-admin', parent: { id: 'web:chat-admin' },
     },
     'web:legacy-child': { sessionId: 'web:legacy-child', segmentIndex: 0, parent: { id: 'heartbeat:reflector-1750000000000' } },
     'web:task-child': { sessionId: 'web:task-child', segmentIndex: 0, parentSessionId: 'cron:fresh-encapsulator' },
@@ -220,7 +220,7 @@ test('coordinator and learning automation browsing use Home without changing exe
     },
     'web:generic-child': { sessionId: 'web:generic-child', segmentIndex: 0, parentSessionId: 'cron:generic', workdir: folderWorkdir },
   }
-  const homeIds = ['web:orchestrator', 'web:legacy-child', 'web:task-child', 'web:chat-grandchild']
+  const homeIds = ['web:legacy-child', 'web:task-child', 'web:chat-grandchild']
   for (const job of Object.values(LEARNING_AUTOMATIONS)) {
     const legacyId = `heartbeat:${job.agentType}-1750000000000`
     const freshId = `cron:fresh-${job.agentType}`
@@ -270,7 +270,7 @@ test('coordinator and learning automation browsing use Home without changing exe
     assert(execution.available && execution.locality === 'local')
     assertNotEquals(execution.path, workspace)
   }
-  for (const id of ['web:coordinator-topic', 'web:chat-normal', 'heartbeat:reflector-fixture', 'web:cycle', 'heartbeat:reflector-missing']) {
+  for (const id of ['web:chat-admin', 'web:coordinator-topic', 'web:chat-normal', 'heartbeat:reflector-fixture', 'web:cycle', 'heartbeat:reflector-missing']) {
     assertEquals((await app.request(`/api/sessions/${encodeURIComponent(id)}/preview?path=home.txt`)).status, 404)
   }
   for (const id of ['cron:generic', 'web:generic-child']) {
@@ -447,7 +447,7 @@ test('explicit session storage never aliases Project Home or execution folders, 
   await writeFile(join(storage, 'same.txt'), 'session')
   await writeFile(join(storage, 'index.html'), '<p>session</p>')
   execFileSync('git', ['init', '--quiet', storage])
-  const state: SessionState = { sessionId: key, segmentIndex: 0, sessionKind: 'orchestrator', workdir: { version: 1, nodeId: 'local', capabilityId: 'folder' } }
+  const state: SessionState = { sessionId: key, segmentIndex: 0, sessionKind: 'topic', workdir: { version: 1, nodeId: 'local', capabilityId: 'folder' } }
   let denied = false
   const manager = {
     workspace, projectId: 'fixture', getSessionState: () => state,

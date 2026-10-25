@@ -32,8 +32,8 @@ app.on('window-all-closed', () => {})
 const root = 'web:chat-yield-fixture'
 const reflector = 'reflector:yield-fixture'
 const child = 'sub:yield-fixture'
-const coordinator = 'web:orchestrator'
-const sessions = [root, reflector, child, coordinator].map((sessionId, index) => ({
+const administrator = 'web:chat-admin'
+const sessions = [root, reflector, child, administrator].map((sessionId, index) => ({
   sessionId, title: ['Yield root', 'Yield reflector', 'Yield child', 'Coordinator'][index], current: `physical-${index}`,
 }))
 const question = (sessionId: string, id: string, parent = false): YieldRequest => ({
@@ -554,40 +554,6 @@ async function runViewport(origin: string, width: number, height: number) {
   } finally { window.destroy() }
 }
 
-async function runWorkbench(origin: string, width: number) {
-  pending.clear()
-  const window = new BrowserWindow({ show: false, width, height: 1000,
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
-  try {
-    await window.loadURL(`${origin}/projects/default/chat/${encodeURIComponent(coordinator)}`)
-    await waitFor(window, `document.querySelector('.project-workbench') && document.body.innerText.includes('No work items yet')`)
-    if (!await evaluate(window, `document.querySelector('.coordinator-conversation')?.getClientRects().length`)) {
-      await evaluate(window, `document.querySelector('.workbench-heading button').click()`)
-    }
-    await waitFor(window, `document.querySelector('.coordinator-conversation .composer-input textarea')?.getClientRects().length`)
-    await evaluate(window, `(() => { const input = document.querySelector('.coordinator-conversation .composer-input textarea'); input.value = 'Keep coordinator draft'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`)
-    await evaluate(window, `document.querySelector('[aria-label="Close coordination panel"]').click()`)
-    await waitFor(window, `document.querySelector('.workbench-main').getClientRects().length`)
-    await evaluate(window, `document.querySelector('.new-work').click()`)
-    await waitFor(window, `document.querySelector('.coordinator-conversation .composer-input textarea')?.value.includes('Help me organize a new work item')`)
-    assert.match(await evaluate<string>(window, `document.querySelector('.coordinator-conversation .composer-input textarea').value`), /^Keep coordinator draft/)
-    assert.equal(sends, 0, 'New work only appends a coordinator draft')
-    await evaluate(window, `document.querySelector('[aria-label="Close coordination panel"]').click()`)
-    const request = question(coordinator, `workbench-${width}`)
-    pending.set(coordinator, request)
-    live.publisher.invalidateSessions(coordinator)
-    await waitFor(window, `document.querySelector('.work-attention button')?.textContent.includes('Open request')`)
-    await evaluate(window, `document.querySelector('.work-attention button').click()`)
-    await waitFor(window, `document.querySelector('.coordinator-conversation .yield-continue')?.getClientRects().length`)
-    await evaluate(window, `document.querySelector('.coordinator-conversation .yield-continue').click()`)
-    await waitFor(window, `!document.querySelector('.coordinator-conversation .yield-question')`)
-    assert.deepEqual(answers.at(-1), { requestId: request.id, option: request.defaultOption })
-    assert.match(await evaluate<string>(window, `document.querySelector('.coordinator-conversation .composer-input textarea').value`), /^Keep coordinator draft/)
-    assert.equal(await evaluate(window, 'document.documentElement.scrollWidth <= innerWidth + 1'), true)
-    assert.equal(sends, 0)
-    console.log(`LAYOUT_WORKBENCH ${JSON.stringify({ width, draftPreserved: true, originalAskAnswered: true })}`)
-  } finally { window.destroy() }
-}
 
 async function main() {
   try {
@@ -598,8 +564,6 @@ async function main() {
     const origin = `http://127.0.0.1:${address.port}`
     await runViewport(origin, 1440, 1000)
     await runViewport(origin, 390, 844)
-    await runWorkbench(origin, 1440)
-    await runWorkbench(origin, 390)
     assert.deepEqual(failures, [])
     console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: true, answers: answers.length, cancellations: cancellations.length, sends, reads })}`)
   } catch (cause) {

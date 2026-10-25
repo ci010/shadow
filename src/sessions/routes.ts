@@ -154,8 +154,7 @@ async function sessionFileBase(
     visited.add(ancestor)
     const ancestorState = await sessions.readSessionState(ancestor)
     if (!ancestorState) break
-    if ((ancestor === key && ancestorState.sessionKind === 'orchestrator') ||
-      isLearningAutomationSession(ancestorState)) {
+    if (isLearningAutomationSession(ancestorState)) {
       // This is a browsing root, not a change to the agent's execution workdir.
       return { ...base, path: resolve(sessions.workspace), scope: 'home' }
     }

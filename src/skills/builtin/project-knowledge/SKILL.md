@@ -96,7 +96,7 @@ not just a successful session-creation receipt.
 
 ## Coordinate without losing the alias
 
-The coordinator may read/search Wiki but cannot write it. Search existing
+Use the active tool contract to determine Wiki read/write capabilities. Search existing
 Project sessions before creating an independent worker with `session`; reuse
 a suitable conversation rather than duplicating its work.
 In session mode, an active `session` tool can create durable peer conversations.
