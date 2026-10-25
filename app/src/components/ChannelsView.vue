@@ -39,14 +39,13 @@
         </div>
         <section v-if="channel.purpose === 'service' && ['qq', 'feishu'].includes(channel.platform)" class="owner-setup" :aria-label="t('Pending group authorization')">
           <h4>{{ t('Pending group authorization') }}</h4>
-          <p>{{ t('Discovery is not authorization. No Agent runs and no message text is saved. Copy a target into a direct owner Web topic to prepare an authoring_change; publication still requires explicit review.') }}</p>
+          <p>{{ t('Discovery is not authorization. Received text is shown here without running an Agent. At most 20 messages per group are kept for 7 days; attachments are not downloaded and old messages are not backfilled.') }}</p>
           <button :disabled="!!saving || pendingLoading === channel.id" @click="loadPendingGroups(channel)">{{ t('Refresh pending groups') }}</button>
           <p v-if="pendingErrors[channel.id]" role="alert">{{ pendingErrors[channel.id] }}</p>
-          <p v-if="pendingGroups[channel.id]?.length === 0">{{ t('No pending groups observed. Send a group message mentioning this service Bot, then refresh. Platform delivery and sender allowlists still apply.') }}</p>
+          <p v-if="pendingGroups[channel.id]?.length === 0">{{ t('No groups observed yet. Shadow can only show events delivered by the platform. Ordinary delivered group messages can discover a group; no mention or command is required. Platform permissions and sender allowlists still apply.') }}</p>
           <ul><li v-for="group in pendingGroups[channel.id]" :key="group.conversationId">
             <strong>{{ group.name || t('Unnamed group') }}</strong> · {{ new Date(group.lastSeen).toLocaleString() }}
-            <p>{{ t('Select and copy this request into a direct owner Web topic. This does not publish or grant access.') }}</p>
-            <textarea readonly rows="5" :aria-label="t('Authoring request with discovered target')" :value="serviceGroupAuthoringRequest(group)" @focus="($event.target as HTMLTextAreaElement).select()" />
+            <RouterLink :to="{ name: 'chat', params: { projectId }, query: { serviceGroup: JSON.stringify([channel.id, group.conversationId]) } }">{{ t('Open group') }}</RouterLink>
           </li></ul>
         </section>
         <section v-if="channel.platform === 'qq'" class="owner-setup" :aria-label="t('QQ setup')">
@@ -61,7 +60,7 @@
             <strong>{{ t('QQ platform checklist — not verified by Shadow') }}</strong>
             <ol><li v-for="instruction in definition('qq').instructions" :key="instruction">{{ instruction }}</li></ol>
             <p>{{ t('Check sandbox testers, approved events and bot availability in QQ Open Platform. Saving credentials does not verify these settings or prove message delivery. Save and connect below, then refresh status.') }}</p>
-            <p v-if="channel.purpose === 'service'">{{ t('QQ service access uses explicit published Agent bindings via authoring_change, not the Discord access UI. This wizard only configures the connection; it does not publish an Agent, approve access or enable owner pairing.') }}</p>
+            <p v-if="channel.purpose === 'service'">{{ t('QQ service groups use the Project sidebar group page: select a published Agent and explicitly approve its setup there. This connection wizard does not grant access or enable owner pairing.') }}</p>
             <p v-else-if="channel.purpose !== 'personal'">{{ t('Choose a role explicitly before using this Bot. Connection alone does not authorize requests.') }}</p>
           </div>
         </section>
@@ -197,12 +196,13 @@
 
 <script setup lang="ts">
 import UiSelect from './UiSelect.vue'
+import { RouterLink } from 'vue-router'
 import BotPairingCommand from './BotPairingCommand.vue'
 import { t } from '../i18n.ts'
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChannelId } from '../../../src/channels/setup-contract.ts'
 import { channelDefinitions, channelStateLabel, type ChannelDraft } from '../channel-settings.ts'
-import { botChannel, botDraft, botPatch, createBotSettingsClient, wechatLoginQr, qqSetupProgress, serviceGroupAuthoringRequest, type BotInstanceStatus } from '../bot-settings.ts'
+import { botChannel, botDraft, botPatch, createBotSettingsClient, wechatLoginQr, qqSetupProgress, type BotInstanceStatus } from '../bot-settings.ts'
 import DiscordAccess from './DiscordAccess.vue'
 
 const props = defineProps<{ apiBase: string; projectId: string; available: boolean; active: boolean; reviewBotId?: string; requestedReviewId?: string }>()

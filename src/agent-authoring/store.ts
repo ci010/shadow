@@ -9,7 +9,7 @@ import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 import { channelSessionId, type ChannelAddress } from '../bus/events.ts'
 import { assertSupportedJsonSchema } from './capabilities.ts'
 import {
-  AuthoredToolSchema, ResourceBundleSchema, ResourceName, conversationBindingKey,
+  AgentCapabilityProfilesSchema, AuthoredToolSchema, ResourceBundleSchema, ResourceName, conversationBindingKey,
   type PublishedAgent, type PublishedTool, type ResourceBundle, type ResourceSnapshot, type ResolvedConversationPolicy,
 } from './contracts.ts'
 import { ScriptImportsSchema, assertImportPolicy, importedModules } from '../script-runtime/module-policy.ts'
@@ -39,6 +39,7 @@ export const agentInferenceSchema = z.object({
 }).strict()
 const agentFrontmatter = z.object({
   name: ResourceName.optional(), description: z.string().optional(),
+  capabilityProfiles: AgentCapabilityProfilesSchema.optional(),
   allowedTools: z.array(ResourceName), blockedTools: z.array(ResourceName).optional(),
   allowedModules: ScriptImportsSchema.optional(),
   defaultMode: z.enum(['session', 'task', 'call']).optional(),
@@ -182,12 +183,17 @@ function parseResources(bundle: ResourceBundle, projectId: string, allowLegacy =
   const aliases = new Set<string>()
   const usedSources = new Set<string>()
   const legacyTools = new Set<string>()
+  const profileBindings: ResourceBundle['bindings'] = []
   for (const [path, content] of Object.entries(bundle.files)) {
     const [, name, file] = path.split('/')
     if (file === 'AGENT.md') {
       insist(!reservedAgents.has(name), `Builtin agent name is reserved: ${name}`)
       const fm = agentFrontmatter.parse(markdown(content).frontmatter)
       insist(fm.name === undefined || fm.name === name, `Agent name must match path: ${path}`)
+      unique((fm.capabilityProfiles ?? []).map(profile => JSON.stringify([profile.botInstanceId, profile.platform])), 'Agent capability profile scopes')
+      for (const profile of fm.capabilityProfiles ?? []) {
+        profileBindings.push({ ...profile, agent: name, conversationId: `profile:${name}`, enabled: true })
+      }
       unique(fm.allowedTools, 'agent allowed tools')
       unique(fm.blockedTools ?? [], 'agent blocked tools')
       unique(fm.allowedModules ?? [], 'agent allowed modules')
@@ -239,7 +245,7 @@ function parseResources(bundle: ResourceBundle, projectId: string, allowLegacy =
     }
   }
   unique(bundle.bindings.map(conversationBindingKey), 'conversation bindings')
-  for (const binding of bundle.bindings) {
+  for (const binding of [...bundle.bindings, ...profileBindings]) {
     const agent = agents.get(binding.agent)
     insist(agent, `Missing custom agent: ${binding.agent}`)
     unique(binding.skills, 'selected skills')

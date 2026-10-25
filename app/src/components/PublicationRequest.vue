@@ -26,9 +26,13 @@
         <details>
           <summary>{{ t('Review conversations and permissions') }}</summary>
           <h4>{{ t('Proposed bindings') }}</h4>
-          <pre>{{ JSON.stringify(request.bindings, null, 2) }}</pre>
+          <template v-if="conversation"><div v-for="binding in conversationBindings(request.bindings)" :key="binding.conversationId">
+            <p>{{ t('Agent') }}: {{ binding.agent }} · {{ binding.enabled ? t('Enabled') : t('Not enabled') }}</p>
+            <p v-for="grant in binding.grants" :key="grant.id"><template v-if="grant.kind === 'http'">{{ grant.origin }}<br />{{ grant.routes.map(route => `${route.method} ${route.path}`).join(' · ') }}<br />{{ grant.credential ? t('Uses a private Project connection') : t('No connection credential') }}</template><template v-else>{{ grant.sessionId }} · {{ t('Send message') }}</template></p>
+            <p v-if="binding.readFolders.length">{{ t('Read-only folders') }}: {{ binding.readFolders.join(', ') }}</p>
+          </div></template><pre v-else>{{ JSON.stringify(request.bindings, null, 2) }}</pre>
           <h4>{{ t('Current bindings') }}</h4>
-          <pre>{{ JSON.stringify(request.previousBindings, null, 2) }}</pre>
+          <template v-if="conversation"><div v-for="binding in conversationBindings(request.previousBindings)" :key="binding.conversationId"><p>{{ t('Agent') }}: {{ binding.agent }} · {{ binding.enabled ? t('Enabled') : t('Not enabled') }}</p><p v-for="grant in binding.grants" :key="grant.id"><template v-if="grant.kind === 'http'">{{ grant.origin }}<br />{{ grant.routes.map(route => `${route.method} ${route.path}`).join(' · ') }}<br />{{ grant.credential ? t('Uses a private Project connection') : t('No connection credential') }}</template><template v-else>{{ grant.sessionId }} · {{ t('Send message') }}</template></p><p v-if="binding.readFolders.length">{{ t('Read-only folders') }}: {{ binding.readFolders.join(', ') }}</p></div></template><pre v-else>{{ JSON.stringify(request.previousBindings, null, 2) }}</pre>
         </details>
         <details v-for="file in request.files" :key="file.path">
           <summary>{{ file.before === null ? t('Add') : file.after === null ? t('Remove') : t('Change') }} {{ file.path }}</summary>
@@ -60,8 +64,12 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { usePublicationRequest } from '../publication-requests.ts'
 
 const props = defineProps<{
+  conversation?: { botInstanceId: string; platform: string; conversationId: string };
   apiBase: string; projectId: string; sessionId: string; active: boolean; canSubmit: boolean; stage?: string | null
 }>()
+function conversationBindings<T extends { botInstanceId: string; platform: string; conversationId: string }>(bindings: T[]) {
+  return bindings.filter(binding => binding.botInstanceId === props.conversation?.botInstanceId && binding.platform === props.conversation.platform && binding.conversationId === props.conversation.conversationId)
+}
 const documentVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
 const active = computed(() => props.active && documentVisible.value)
 const { request, requests, selectedId, error, notice, loading, operation, busy, enabled, needsReload, confirm, cancel, reload } =

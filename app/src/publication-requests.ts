@@ -10,6 +10,7 @@ export interface PublicationSource {
   sessionId: string
   active: boolean
   canSubmit: boolean
+  conversation?: { botInstanceId: string; platform: string; conversationId: string }
   stage?: string | null
 }
 
@@ -84,6 +85,10 @@ export function usePublicationRequest(source: () => PublicationSource) {
       })
       if (!response.ok) throw new Error(t('Publication review unavailable'))
       const next = visiblePublicationRequests(parsePublicationRequests(await response.json(), source().projectId), source().sessionId)
+        .filter(item => {
+          const target = source().conversation
+          return !target || (item.impact ? item.impact.affectedBindings.includes(JSON.stringify([target.botInstanceId, target.platform, target.conversationId])) : [...item.bindings, ...item.previousBindings].some(binding => binding.botInstanceId === target.botInstanceId && binding.platform === target.platform && binding.conversationId === target.conversationId))
+        })
         .filter(item => !resolvedIds.has(item.id))
         .map(item => waitingIds.has(item.id) && !item.status ? { ...item, status: 'waiting' as const } : item)
       if (current !== generation || controller.signal.aborted) return
@@ -156,7 +161,7 @@ export function usePublicationRequest(source: () => PublicationSource) {
       if (write === controller) { write = undefined; operation.value = null }
     }
   }
-  watch([() => source().apiBase, () => source().projectId, () => source().sessionId, enabled], () => {
+  watch([() => source().apiBase, () => source().projectId, () => source().sessionId, () => JSON.stringify(source().conversation), enabled], () => {
     stop()
     if (!enabled.value) return
     void refresh()

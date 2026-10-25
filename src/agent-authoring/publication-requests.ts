@@ -28,6 +28,14 @@ export interface PublicationProposal {
   checks: NonNullable<PublicationRequest['checks']>
 }
 
+/** Safe phase attribution without returning provider or configuration error messages. */
+export class PublicationValidationError extends Error {
+  constructor(readonly stage: 'request' | 'live', cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'Publication validation failed', { cause })
+    this.name = 'PublicationValidationError'
+  }
+}
+
 export class PublicationRequestError extends Error {
   constructor(readonly code: string, readonly status: 409 | 503, message: string) {
     super(message)
@@ -182,7 +190,7 @@ export class PublicationRequests {
     })
   }
 
-  async propose(input?: PublicationProposal): Promise<PublicationRequest> {
+  async propose(input?: PublicationProposal, expectedDraftRevision?: string): Promise<PublicationRequest> {
     this.assertRunning()
     if (this.submitting) throw new PublicationRequestError('publication_in_progress', 409, 'Publication is already in progress.')
     const store = this.options.service.options.store
@@ -191,6 +199,7 @@ export class PublicationRequests {
     const proposal = input === undefined ? undefined : structuredClone(input)
     const draft = proposal?.snapshot ?? store.draft()
     const base = store.snapshot()
+    if (expectedDraftRevision !== undefined && draft.revision !== expectedDraftRevision) throw this.stale()
     const validation = store.validate(draft)
     if (!validation.valid) throw new Error(validation.errors.join('\n'))
     const paths = [...new Set([...Object.keys(base.bundle.files), ...Object.keys(draft.bundle.files)])].sort()
@@ -201,10 +210,17 @@ export class PublicationRequests {
       files: paths.filter(path => base.bundle.files[path] !== draft.bundle.files[path])
         .map(path => ({ path, before: base.bundle.files[path] ?? null, after: draft.bundle.files[path] ?? null })),
       previousBindings: base.bundle.bindings, bindings: draft.bundle.bindings,
-      ...(proposal ? { change: proposal.change, checks: proposal.checks, impact: impact(base, draft) } : {}),
+      impact: impact(base, draft),
+      ...(proposal ? { change: proposal.change, checks: proposal.checks } : {}),
     }, this.options.service.options.projectId)
-    this.options.validateRequest?.(structuredClone(request))
-    await this.options.validateLive(structuredClone(draft))
+    try { this.options.validateRequest?.(structuredClone(request)) } catch (error) {
+      if (error instanceof PublicationRequestError) throw error
+      throw new PublicationValidationError('request', error)
+    }
+    try { await this.options.validateLive(structuredClone(draft)) } catch (error) {
+      if (error instanceof PublicationRequestError) throw error
+      throw new PublicationValidationError('live', error)
+    }
     this.assertRunning()
     if (this.submitting || this.publicationGeneration !== publicationGeneration || store.snapshot().revision !== base.revision ||
       (!proposal && generation !== this.generation)) throw this.stale()

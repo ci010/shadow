@@ -335,7 +335,7 @@ function navigate(projectId: string, sessionId: string, child?: string) {
   void router.push({ ...projectChatLocation({ projectId, sessionId }), query: child ? { child } : {} })
 }
 function selectSession(projectId: string, sessionId: string) {
-  if (selected.value?.projectId === projectId) {
+  if (!sessionId.startsWith('observed-group:') && !selected.value?.sessionId.startsWith('observed-group:') && selected.value?.projectId === projectId) {
     const instance = instances.get(selected.value.key)
     if (instance) { instance.requestSession(sessionId); closeSidebar(); return }
   }

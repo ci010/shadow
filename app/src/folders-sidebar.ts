@@ -14,6 +14,7 @@ export const FOLDER_ACTIONS = [
 ] as const
 
 export interface SidebarSession {
+  groupObservation?: import('./service-groups.ts').ServiceGroup
   automation?: AutomationSessionRef
   sessionId: string
   projectId?: string

@@ -31,7 +31,7 @@ test('bot sections use exact decoded instance identity and retain conversation o
   assert.equal(groups.bots[1]!.sessions[0], sessions[1], 'Grouping preserves the existing row data and selection identity')
   assert.equal(groups.bots[1]!.sessions[0]!.waitingForCall, true)
   assert.deepEqual(groups.chats.map(session => session.label), ['Free chat', 'Legacy chat'])
-  assert.equal(groups.bots[2]!.sessions[0]!.label, 'dm:person', 'Untitled bot chats do not display an encoded session ID')
+  assert.equal(groups.bots[2]!.sessions[0]!.label, 'New conversation', 'Untitled bot chats use the shared friendly fallback, not a platform ID')
   assert.deepEqual(sessions, before)
 })
 

@@ -18,6 +18,10 @@ const dispatcher = new EventDispatcher({
   encryptKey: options.encryptKey,
   verificationToken: options.verificationToken,
 }).register({
+  'im.chat.member.bot.added_v1': (event: Record<string, unknown>) => {
+    port.postMessage({ event: { _shadowMembership: true, chat_id: event.chat_id } })
+    return Promise.resolve()
+  },
   'im.message.receive_v1': (event: Record<string, unknown>) => {
     port.postMessage({ event })
     return Promise.resolve()

@@ -373,15 +373,16 @@ export class ChannelManager {
       ...(bot.legacySessionId ? { legacySessionId: true } : {}),
     } : undefined
     if (scope) channel.setBotScope?.(scope)
-    if (bot && scope && ['qq', 'feishu'].includes(bot.platform)) channel.setGroupPreflight?.((chatId, name) => {
+    if (bot && scope && ['qq', 'feishu'].includes(bot.platform)) channel.setGroupPreflight?.((chatId, name, message) => {
       if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key)) return false
       const current = this.options!.instanceStore.get(bot.id)
       this.options!.instanceStore.assertAccess(bot.id)
       if (!current.enabled) return false
-      if (current.purpose !== 'service' || this.options?.serviceAssigned?.({ ...scope, conversationId: chatId })) return true
+      if (current.purpose !== 'service') return true
+      const enabled = !!this.options?.serviceAssigned?.({ ...scope, conversationId: chatId })
       this.options?.serviceDiscovery?.observe({ botInstanceId: current.id, platform: current.platform as 'qq' | 'feishu', conversationId: chatId,
-        ...(name ? { name: name.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 160) } : {}) })
-      return false
+        ...(name ? { name: name.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 160) } : {}) }, message ? { ...message, state: !enabled ? 'not_enabled' : message.triggerEligible === false ? 'not_triggered' : 'received' } : undefined)
+      return enabled
     })
     const integration = this.options?.discordIntegration
     if (integration && bot?.platform === 'discord' && bot.purpose === 'service') {

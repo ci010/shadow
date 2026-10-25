@@ -1,3 +1,4 @@
+import type { GroupObservation } from './service-discovery.ts'
 import type { InboundMessage, OutboundMessage } from '../bus/events.ts'
 import { channelSessionId, type ChannelAddress } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
@@ -63,8 +64,8 @@ export interface BaseChannel {
   setDiscordIntegration?(integration: DiscordAdapterIntegration): void
   connectionGuard?(): () => void
 
-  /** Metadata-only service discovery before parsing content or downloading attachments; false silently stops ingress. */
-  setGroupPreflight?(handler: (chatId: string, name?: string) => boolean): void
+  /** Display-only service observation before downloading attachments; false silently stops ingress. */
+  setGroupPreflight?(handler: (chatId: string, name?: string, message?: GroupObservation) => boolean): void
   /** Configure explicit message admission before starting the channel. */
   setReceiver(receiver: ReceiveChannelMessage): void
 
@@ -99,11 +100,11 @@ export interface BaseChannel {
  */
 export abstract class AbstractChannel implements BaseChannel {
   abstract readonly name: string
-  private groupPreflight?: (chatId: string, name?: string) => boolean
-  setGroupPreflight(handler: (chatId: string, name?: string) => boolean): void { this.groupPreflight = handler }
-  protected admitGroup(chatId: string, name?: string): boolean {
+  private groupPreflight?: (chatId: string, name?: string, message?: GroupObservation) => boolean
+  setGroupPreflight(handler: (chatId: string, name?: string, message?: GroupObservation) => boolean): void { this.groupPreflight = handler }
+  protected admitGroup(chatId: string, name?: string, message?: GroupObservation): boolean {
     this.assertConnection()
-    return this.groupPreflight?.(chatId, name) ?? true
+    return this.groupPreflight?.(chatId, name, message) ?? true
   }
   private receiver?: ReceiveChannelMessage
   private botScope?: Omit<ChannelAddress, 'conversationId'>

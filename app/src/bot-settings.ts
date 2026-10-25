@@ -102,8 +102,13 @@ export function createBotSettingsClient(base: string, projectId: string, request
         if (!isRecord(entry) || entry.botInstanceId !== id || !['qq', 'feishu'].includes(String(entry.platform)) ||
           typeof entry.conversationId !== 'string' || typeof entry.lastSeen !== 'number' ||
           (entry.name !== undefined && typeof entry.name !== 'string')) throw new Error('Invalid discovery entry')
+        const messages = entry.messages ?? []
+        if (!Array.isArray(messages) || messages.length > 20 || messages.some(message => !isRecord(message) ||
+          typeof message.id !== 'string' || typeof message.sender !== 'string' || typeof message.text !== 'string' ||
+          message.text.length > 2000 || typeof message.receivedAt !== 'number')) throw new Error('Invalid discovery messages')
         return { botInstanceId: id, platform: String(entry.platform), conversationId: entry.conversationId,
-          name: entry.name as string | undefined, lastSeen: entry.lastSeen }
+          name: entry.name as string | undefined, lastSeen: entry.lastSeen,
+          messages: messages as Array<{ id: string; sender: string; text: string; receivedAt: number }> }
       })
     },
     async challenge(id: string) {
@@ -121,10 +126,4 @@ export function createBotSettingsClient(base: string, projectId: string, request
       if (!isRecord(result) || result.deleted !== true) throw new Error(t('Main did not confirm bot removal. Refresh before retrying.'))
     },
   }
-}
-
-/** Names are untrusted display data and deliberately excluded from the authoring prompt. */
-export function serviceGroupAuthoringRequest(group: { botInstanceId: string; platform: string; conversationId: string }): string {
-  return t('Prepare an explicit Agent binding for this discovered service group using authoring_change. Ask me which Agent and access scope to use; preserve other bindings. Validate and propose for owner review; do not publish automatically. Target:') + '\n' +
-    JSON.stringify({ botInstanceId: group.botInstanceId, platform: group.platform, conversationId: group.conversationId }, null, 2)
 }

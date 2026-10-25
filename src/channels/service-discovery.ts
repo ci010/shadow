@@ -4,15 +4,18 @@ import { z } from 'zod'
 import { writePrivateFile } from '../config/store.ts'
 
 const identifier = z.string().min(1).max(512).regex(/^[^\x00-\x1f\x7f]+$/)
+const messageSchema = z.object({ id: identifier, sender: identifier, text: z.string().max(2000), state: z.enum(['received', 'not_enabled', 'not_triggered']).default('received'), receivedAt: z.number().int().nonnegative() }).strict()
+export type GroupObservation = { id: string; sender: string; text: string; triggerEligible?: boolean; state?: 'received' | 'not_enabled' | 'not_triggered' }
 const entrySchema = z.object({
   botInstanceId: identifier, platform: z.enum(['qq', 'feishu']), conversationId: identifier,
+  messages: z.array(messageSchema).max(20).default([]),
   name: z.string().max(160).optional(), lastSeen: z.number().int().nonnegative(),
 }).strict()
 export type ServiceDiscovery = z.infer<typeof entrySchema>
 const documentSchema = z.object({ version: z.literal(1), projectId: z.string(), entries: z.array(entrySchema).max(200) }).strict()
 const retention = 30 * 24 * 60 * 60 * 1000
 
-/** Display-only observations. Never an admission policy or a message/history store. */
+/** Bounded display-only observations, never an admission policy or Agent history. */
 export class ServiceDiscoveryStore {
   private entries: ServiceDiscovery[] = []
   private lastWrite = 0
@@ -24,15 +27,22 @@ export class ServiceDiscoveryStore {
     }
   }
   list(): ServiceDiscovery[] {
-    return this.entries.filter(entry => entry.lastSeen > this.now() - retention).map(entry => ({ ...entry }))
+    return this.entries.filter(entry => entry.lastSeen > this.now() - retention).map(entry => ({ ...entry, messages: entry.messages.filter(message => message.receivedAt > this.now() - 7 * 24 * 60 * 60 * 1000).map(message => ({ ...message })) }))
   }
-  observe(input: Omit<ServiceDiscovery, 'lastSeen'>): void {
+  observe(input: Omit<ServiceDiscovery, 'lastSeen' | 'messages'>, message?: GroupObservation): void {
     const parsed = entrySchema.safeParse({ ...input, lastSeen: this.now() })
     if (!parsed.success) return
     const entry = parsed.data
     const entries = this.list()
     const index = entries.findIndex(old => old.botInstanceId === entry.botInstanceId && old.platform === entry.platform && old.conversationId === entry.conversationId)
     const old = entries[index]
+    entry.messages = old?.messages ?? []
+    if (message) {
+      const parsedMessage = messageSchema.safeParse({ id: message.id, sender: message.sender, text: message.text.slice(0, 2000), ...(message.state ? { state: message.state } : {}), receivedAt: this.now() })
+      if (parsedMessage.success && !entry.messages.some(item => item.id === message.id)) {
+        entry.messages = [...entry.messages, parsedMessage.data].slice(-20)
+      }
+    }
     if (old && !entry.name && old.name) entry.name = old.name
     if (index >= 0) entries.splice(index, 1)
     entries.unshift(entry)

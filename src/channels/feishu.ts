@@ -967,6 +967,10 @@ export class FeishuChannel extends AbstractChannel {
   // ── Incoming message handler ──────────────────────────────────────────────
 
   private async _onMessage(data: Record<string, unknown>): Promise<void> {
+    if (data._shadowMembership === true) {
+      if (typeof data.chat_id === 'string' && data.chat_id) this.admitGroup(data.chat_id)
+      return
+    }
     const generation = this.generation
     try {
       const message = data['message'] as Record<string, unknown> | undefined
@@ -1004,7 +1008,11 @@ export class FeishuChannel extends AbstractChannel {
         && this._topicParent(rootId) === outerChatId
       const replyTo = managedTopic ? rootId as string : outerChatId
 
-      if (isGroup && !this.admitGroup(replyTo)) return
+      let observedText = `[${msgType}]`
+      if (msgType === 'text') {
+        try { const parsed = JSON.parse(message['content'] as string); if (typeof parsed.text === 'string') observedText = parsed.text } catch { /* malformed platform content is not displayed */ }
+      }
+      if (isGroup && !this.admitGroup(replyTo, undefined, { id: messageId, sender: senderId, text: observedText, triggerEligible: managedTopic || (Array.isArray(message['mentions']) && message['mentions'].some((mention: Record<string, unknown>) => (mention.id as Record<string, unknown> | undefined)?.open_id === this._botOpenId)) || (!threadId && typeof message['parent_id'] === 'string' && this._botMessageIds.has(message['parent_id'])) })) return
 
       // Hoist mentions early — used for both @bot stripping and mention detection
       const mentions = message['mentions'] as

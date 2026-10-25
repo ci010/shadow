@@ -1,3 +1,4 @@
+import { profileBindings } from '../../agent-authoring/capability-profiles.ts'
 import { FOLDER_PICKER_CAPABILITY, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../../folders/picker.ts'
 import { CHROME_MCP_PACKAGE } from '../../browser/chrome-contract.ts'
 import { SessionProxyTool } from '../../tools/session-proxy.ts'
@@ -132,6 +133,7 @@ import { createModelsHandler } from '../../vfs/models.ts'
 import { createAgentsHandler } from '../../vfs/agents.ts'
 
 import { Bus } from '../../bus/bus.ts'
+import { serviceGroupsPlugin } from '../../channels/service-groups.ts'
 import { ServiceDiscoveryStore } from '../../channels/service-discovery.ts'
 import { ChannelManager } from '../../channels/manager.ts'
 import { botSetupPlugin } from '../../channels/bot-setup.ts'
@@ -1044,7 +1046,7 @@ export async function createProjectRuntime(
         sessionId: session.sessionId, address: authoring.address(session.sessionId),
         inferenceOverrides: inferenceSettings(sessions.getSessionState(session.sessionId)?.config),
       })),
-      pendingServiceGroups: botStore.list().flatMap(bot => channels.pendingServiceGroups(bot.id)),
+      pendingServiceGroups: botStore.list().flatMap(bot => channels.pendingServiceGroups(bot.id)).map(({ messages: _messages, ...metadata }) => metadata),
       folders: folderRegistry.list(),
     }),
     retire: async matches => {
@@ -1055,7 +1057,7 @@ export async function createProjectRuntime(
     },
     validateLive: async snapshot => {
       const catalog = snapshot.bundle.bindings.some(binding => binding.enabled) ? await inferenceCatalog() : undefined
-      for (const binding of snapshot.bundle.bindings.filter(binding => binding.enabled)) {
+      for (const binding of [...snapshot.bundle.bindings.filter(binding => binding.enabled), ...profileBindings(snapshot)]) {
         if (binding.platform === 'discord') throw new Error('Discord assignments are managed in Project Bots > Discord access. Disable legacy bindings before publishing this bundle.')
         const bot = botStore.get(binding.botInstanceId)
         if (bot.platform !== binding.platform) throw new Error('Binding platform does not match its bot instance.')
@@ -1429,6 +1431,16 @@ export async function createProjectRuntime(
       managedSessions: { projectId: project.id, inventory: () => mainCluster.getNodeInventory() },
     }),
     folders.plugin,
+    serviceGroupsPlugin({ bots: botStore, discovery: serviceDiscovery, resources: agentResources, reviews: publicationRequests, changes: authoringChanges, authorize: dependencies.authorize,
+      readiness: binding => {
+        if (binding.readFolders.some(id => !folderRegistry.get(id))) return 'folder_missing'
+        for (const grant of binding.grants) {
+          if (grant.kind === 'http' && grant.credential && !agentCredentials.names().includes(grant.credential.secretRef)) return 'credential_missing'
+          if (grant.kind === 'inbox' && !canDeliverAuthoredMessage(grant.sessionId)) return 'inbox_invalid'
+        }
+        return undefined
+      },
+    }),
     botSetupPlugin({
       store: botStore,
       runtime: channels,
