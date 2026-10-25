@@ -651,3 +651,18 @@ test('group observations distinguish not enabled and not triggered without infer
   assert.equal(f.received.length, 0)
   assert.equal(channel.sent.length, 0)
 })
+
+test('service bot inference failures remain observable but are not delivered to the platform', async t => {
+  const f = await runtime(t, directory(t), 'inference-errors', 1, 'qq')
+  const bot = f.instances[0]
+  await f.manager.updateBot(bot.id, { purpose: 'service' })
+  const observed: OutboundMessage[] = []
+  f.bus.on('message.outbound', msg => { observed.push(msg) })
+  const failure = { ...f.outbound(bot), inferenceError: true, content: '⚠️ Request failed: synthetic provider error' }
+  f.bus.emit('message.outbound', failure)
+  await f.manager.deliver(failure)
+  assert.deepEqual(observed, [failure])
+  assert.equal(f.created.flatMap(channel => channel.sent).length, 0)
+  await f.manager.deliver({ ...failure, inferenceError: undefined, content: 'Normal response' })
+  assert.equal(f.created.flatMap(channel => channel.sent).length, 1)
+})

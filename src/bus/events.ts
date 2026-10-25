@@ -98,6 +98,8 @@ export interface InboundMessage extends MessageContext {
  * Message flowing from the agent out to a channel.
  */
 export interface OutboundMessage {
+  /** Host-generated inference failure; visible in WebChat but not delivered by service bots. */
+  inferenceError?: boolean
   /** Runtime-issued lease; plain JSON copies cannot authorize a platform delivery. */
   boundary?: {
     access: import('../memory/contracts.ts').MemoryAccess
