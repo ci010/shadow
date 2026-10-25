@@ -46,7 +46,7 @@ impl Drop for Owned { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
 #[derive(Clone)]
 struct Window { hwnd: usize, pid: u32, created: FileTime, app: String, expires: Instant, runtime_id: Option<Vec<i32>> }
 #[derive(Clone)]
-struct Snapshot { id: String, created: Instant, signature: String, bindings: HashMap<String, Vec<i32>>, frame: Option<(String,i32,i32)>, bounds: Rect }
+struct Snapshot { id: String, created: Instant, signature: String, action_window: Value, evidence: HashMap<Vec<i32>, String>, bindings: HashMap<String, Vec<i32>>, frame: Option<(String,i32,i32)>, bounds: Rect }
 #[derive(Default)]
 pub(crate) struct State { guard_path: Option<String>, guard: Option<crate::input::Guard>, owner: u32, candidates: HashMap<String, Window>, targets: HashMap<String, Window>, snapshots: HashMap<String, Snapshot>, actions: HashSet<String> }
 type Result<T> = std::result::Result<T, &'static str>;
@@ -237,7 +237,7 @@ fn execute(input: Value, adapter: &agent_desktop_windows::WindowsAdapter, state:
    wait_for_quiet(state.targets.get(id).ok_or("window_unavailable")?.hwnd)?;
    observe(id, false, adapter, state)?;
    let current = state.snapshots.remove(id).ok_or("stale_observation")?;
-   if current.signature != previous.signature || current.bindings.get(element_id) != Some(runtime) { return Err("stale_observation"); }
+   if !pattern_matches(&previous, &current, runtime) { return Err("stale_observation"); }
    let window = state.targets.get(id).cloned().ok_or("window_unavailable")?;
    validate(&window, owner)?;
    let mut started = false;
@@ -273,6 +273,26 @@ fn flatten(node: &agent_desktop_core::AccessibilityNode, parent: Option<String>,
  output.push(value);
  for child in &node.children { flatten(child, Some(id.clone()), output, bindings); }
 }
+// Compare only the selected control, not its descendants or traversal-budget
+// metadata. Full hidden name/value fingerprints and every safety property remain
+// part of the evidence. Runtime lookup survives unrelated sibling insertion.
+fn action_evidence(node: &agent_desktop_core::AccessibilityNode, output: &mut HashMap<Vec<i32>, String>) {
+ if node.presentation.states.iter().any(|s| s == "protected") { return; }
+ if let Some(raw) = &node.identity.retained_object {
+  if let Ok(metadata) = serde_json::from_str::<Value>(raw) {
+   if let Ok(runtime) = serde_json::from_value::<Vec<i32>>(metadata["runtime"].clone()) {
+    let mut own = node.clone();
+    own.children.clear(); own.children_count = None; own.subtree_truncated = false;
+    output.insert(runtime, format!("{:?}", own));
+   }
+  }
+ }
+ for child in &node.children { action_evidence(child, output); }
+}
+fn pattern_matches(previous: &Snapshot, current: &Snapshot, runtime: &[i32]) -> bool {
+ previous.action_window == current.action_window &&
+ previous.evidence.get(runtime).is_some_and(|e| current.evidence.get(runtime) == Some(e))
+}
 fn observe(id: &str, screenshot: bool, adapter: &agent_desktop_windows::WindowsAdapter, state: &mut State) -> Result<Value> {
  state.snapshots.remove(id);
  let window = state.targets.get(id).cloned().ok_or("window_unavailable")?;
@@ -295,11 +315,21 @@ fn observe(id: &str, screenshot: bool, adapter: &agent_desktop_windows::WindowsA
  let bounds=Rect { left,top,right:left.checked_add(b["width"].as_i64().ok_or("capture_failed")? as i32).ok_or("capture_failed")?,bottom:top.checked_add(b["height"].as_i64().ok_or("capture_failed")? as i32).ok_or("capture_failed")? };
  // Debug includes bounded metadata: SHA-256/length fingerprints and runtime IDs, never wire-visible.
  let signature = format!("{}|{:?}", description, tree);
- state.snapshots.insert(id.to_owned(), Snapshot { id: observation_id, created: Instant::now(), signature, bindings,frame,bounds });
+ let mut evidence = HashMap::new(); action_evidence(&tree, &mut evidence);
+ state.snapshots.insert(id.to_owned(), Snapshot { id: observation_id, created: Instant::now(), signature, action_window: description, evidence, bindings,frame,bounds });
  Ok(data)
 }
 fn valid_uuid(value: &str) -> bool {
  value.len() == 36 && value.bytes().enumerate().all(|(i,b)| if [8,13,18,23].contains(&i) { b == b'-' } else { b.is_ascii_hexdigit() })
+}
+#[link(name="dwmapi")]
+unsafe extern "system" { fn DwmGetWindowAttribute(hwnd:Handle,attribute:u32,rect:*mut Rect,size:u32)->i32; }
+fn frame_offset(x:i32,y:i32,width:i32,height:i32,frame:&Rect,image_width:u32,image_height:u32)->Result<(i32,i32)> {
+ let dx=i64::from(frame.left)-i64::from(x); let dy=i64::from(frame.top)-i64::from(y);
+ let w=i64::from(frame.right)-i64::from(frame.left); let h=i64::from(frame.bottom)-i64::from(frame.top);
+ if dx<0 || dy<0 || w<=0 || h<=0 || w!=i64::from(image_width) || h!=i64::from(image_height)
+  || dx+w>i64::from(width) || dy+h>i64::from(height) { return Err("capture_failed"); }
+ Ok((dx as i32,dy as i32))
 }
 fn capture(window: &Window, description: &Value, adapter: &agent_desktop_windows::WindowsAdapter) -> Result<Value> {
  use agent_desktop_core::{SystemOps, ScreenshotTarget, WindowInfo, WindowState};
@@ -314,6 +344,17 @@ fn capture(window: &Window, description: &Value, adapter: &agent_desktop_windows
  let captured = adapter.screenshot(ScreenshotTarget::ExactWindow(info), deadline).map_err(|_| "capture_failed")?;
  if deadline.is_expired() { return Err("capture_failed"); }
  let decoded = image::load_from_memory_with_format(&captured.data, image::ImageFormat::Png).map_err(|_| "capture_failed")?;
+ // WGC can omit invisible resize margins (DWM extended frame); PrintWindow
+ // uses GetWindowRect. Normalize both to the exact outer-bound coordinate space.
+ let outer=Rect { left:description["bounds"]["x"].as_i64().ok_or("capture_failed")? as i32, top:description["bounds"]["y"].as_i64().ok_or("capture_failed")? as i32, right:0,bottom:0 };
+ let decoded=if decoded.width()==width as u32 && decoded.height()==height as u32 { decoded } else {
+  let mut frame=Rect::default();
+  if unsafe { DwmGetWindowAttribute(window.hwnd as Handle,9,&mut frame,std::mem::size_of::<Rect>() as u32) }<0 { return Err("capture_failed"); }
+  let offset=frame_offset(outer.left,outer.top,width as i32,height as i32,&frame,decoded.width(),decoded.height())?;
+  let mut canvas=image::RgbaImage::new(width as u32,height as u32);
+  image::imageops::overlay(&mut canvas,&decoded.to_rgba8(),i64::from(offset.0),i64::from(offset.1));
+  image::DynamicImage::ImageRgba8(canvas)
+ };
  let scaled = decoded.thumbnail(1600,1600);
  let (width,height) = (scaled.width(),scaled.height());
  let mut bytes = std::io::Cursor::new(Vec::new());
@@ -375,7 +416,7 @@ mod effect_tests {
  }
  #[test] fn snapshot_consumption_and_action_replay_guard_are_one_use() {
   let mut state = State::default();
-  state.snapshots.insert("target".into(),Snapshot { id:"observation".into(),created:Instant::now(),signature:"same".into(),bindings:HashMap::new(),frame:None,bounds:Rect::default() });
+  state.snapshots.insert("target".into(),Snapshot { id:"observation".into(),created:Instant::now(),signature:"same".into(),action_window:json!({}),evidence:HashMap::new(),bindings:HashMap::new(),frame:None,bounds:Rect::default() });
   assert!(state.snapshots.remove("target").is_some());
   assert!(state.snapshots.remove("target").is_none());
   assert!(state.actions.insert("action".into()));
@@ -483,15 +524,21 @@ fn dotnet_ticks(time:FileTime)->Result<String> { let ticks=(u64::from(time.high)
 unsafe extern "system" {
  fn GetGUIThreadInfo(thread:u32,info:*mut GuiThread)->i32;
  fn GetAncestor(hwnd:Handle,kind:u32)->Handle;
- fn GetClientRect(hwnd:Handle,rect:*mut Rect)->i32;
- fn ClientToScreen(hwnd:Handle,point:*mut Point)->i32;
+ fn SendMessageTimeoutW(hwnd:Handle,message:u32,wparam:usize,lparam:isize,flags:u32,timeout:u32,result:*mut usize)->isize;
  fn WindowFromPoint(point:Point)->Handle;
 }
+fn allowed_hit(hit:i32)->bool { matches!(hit,1|2|4|6..=18|20) }
 fn input_point(window:&Window,point:(i32,i32))->Result<()> {
- let mut client=Rect::default(); let mut origin=Point{x:0,y:0};
- unsafe { if GetClientRect(window.hwnd as Handle,&mut client)==0 || ClientToScreen(window.hwnd as Handle,&mut origin)==0 { return Err("window_unavailable"); }
-  let x=i64::from(point.0)-i64::from(origin.x); let y=i64::from(point.1)-i64::from(origin.y);
-  if x<i64::from(client.left)||y<i64::from(client.top)||x>=i64::from(client.right)||y>=i64::from(client.bottom)||GetAncestor(WindowFromPoint(Point{x:point.0,y:point.1}),2) as usize!=window.hwnd { return Err("input_outside_window"); }
+ let mut bounds=Rect::default();
+ unsafe {
+  if GetWindowRect(window.hwnd as Handle,&mut bounds)==0 { return Err("window_unavailable"); }
+  if point.0<bounds.left || point.0>=bounds.right || point.1<bounds.top || point.1>=bounds.bottom
+   || i16::try_from(point.0).is_err() || i16::try_from(point.1).is_err()
+   || GetAncestor(WindowFromPoint(Point{x:point.0,y:point.1}),2) as usize!=window.hwnd { return Err("input_outside_window"); }
+  let packed=((point.1 as u32 & 0xffff)<<16)|(point.0 as u32 & 0xffff);
+  let mut hit=0usize;
+  if SendMessageTimeoutW(window.hwnd as Handle,0x84,0,packed as i32 as isize,0x22,200,&mut hit)==0 { return Err("window_unavailable"); }
+  if !allowed_hit(hit as i32) || GetAncestor(WindowFromPoint(Point{x:point.0,y:point.1}),2) as usize!=window.hwnd { return Err("input_outside_window"); }
  } Ok(())
 }
 fn focus(window:&Window)->Result<String> {
@@ -543,7 +590,18 @@ fn ready(guard:&mut crate::input::Guard,method:&str,started:&mut bool)->Result<(
 
 #[cfg(test)] mod foreground_tests {
  use super::*;
- fn snapshot()->Snapshot { Snapshot { id:"one".into(),created:Instant::now(),signature:"signature".into(),bindings:HashMap::new(),frame:Some(("hash".into(),1600,800)),bounds:Rect{left:-200,top:10,right:3000,bottom:1610} } }
+ fn snapshot()->Snapshot { Snapshot { id:"one".into(),created:Instant::now(),signature:"signature".into(),action_window:json!({}),evidence:HashMap::new(),bindings:HashMap::new(),frame:Some(("hash".into(),1600,800)),bounds:Rect{left:-200,top:10,right:3000,bottom:1610} } }
+ #[test] fn nonclient_hit_codes_are_explicit() {
+  for hit in [1,2,4,6,7,8,9,10,11,12,13,14,15,16,17,18,20] { assert!(allowed_hit(hit)); }
+  for hit in [-2,-1,0,3,5,19,21,22] { assert!(!allowed_hit(hit)); }
+ }
+ #[test] fn dwm_capture_is_placed_not_stretched() {
+  let frame=Rect{left:-1592,top:-100,right:-8,bottom:692};
+  assert_eq!(frame_offset(-1600,-100,1600,800,&frame,1584,792),Ok((8,0)));
+  assert!(frame_offset(-1600,-100,1600,800,&frame,1600,800).is_err());
+  assert!(frame_offset(-1590,-100,1600,800,&frame,1584,792).is_err());
+  assert!(frame_offset(-1600,-100,1500,800,&frame,1584,792).is_err());
+ }
  #[test] fn all_six_contract_actions_validate_without_os_calls() {
   let cases=[json!({"kind":"click","x":0,"y":1599,"button":"left","count":2,"modifiers":["CTRL","SHIFT"]}),json!({"kind":"move","x":0,"y":0}),json!({"kind":"drag","x":0,"y":0,"toX":1,"toY":1,"durationMs":300,"modifiers":[]}),json!({"kind":"wheel","x":1,"y":1,"axis":"horizontal","steps":-10,"modifiers":[]}),json!({"kind":"press_key","elementId":"0","key":"F12","modifiers":[]}),json!({"kind":"type_text","elementId":"0","text":"a😀"})];
   for action in cases { assert!(validate_action(&action).is_ok(),"{action}"); let mut extra=action.clone(); extra["fallback"]=json!(true); assert!(validate_action(&extra).is_err()); }
@@ -627,10 +685,49 @@ mod truncated_binding_tests {
   flatten(&tree,None,&mut output,&mut current);
   assert!(truncated(&tree)); assert_eq!(output.len(),2);
   assert!(!current.contains_key("2"));
-  // These are the two independent production action gates. Even if someone
-  // supplies an old ID, neither the binding nor the whole-tree signature passes.
+  // The omitted control cannot be rebound by its old ordinal or runtime ID.
   assert_ne!(current.get("2"),Some(target));
   assert_ne!(format!("{:?}",tree),old_signature);
   assert_eq!(current.get("2").ok_or("stale_observation"),Err("stale_observation"));
+ }
+}
+
+#[cfg(test)] mod pattern_evidence_tests {
+ use super::*;
+ fn node(runtime:i32, name:&str) -> agent_desktop_core::AccessibilityNode {
+  let mut n=agent_desktop_core::AccessibilityNode { ref_id:None,role:"Button".into(),identity:Default::default(),presentation:Default::default(),children_count:None,subtree_truncated:false,children:vec![] };
+  n.identity.name=Some(name.into());
+  n.identity.retained_object=Some(json!({"runtime":[runtime],"rawName":crate::safety_gate::fingerprint(name)}).to_string());
+  n.presentation.states=vec!["enabled".into()]; n.presentation.available_actions=vec!["invoke".into()]; n
+ }
+ fn snapshot(tree:&agent_desktop_core::AccessibilityNode)->Snapshot {
+  let mut evidence=HashMap::new(); action_evidence(tree,&mut evidence);
+  Snapshot { id:"observation".into(),created:Instant::now(),signature:format!("{:?}",tree),action_window:json!({"pid":7,"bounds":{"x":1}}),evidence,bindings:HashMap::new(),frame:None,bounds:Rect::default() }
+ }
+ #[test] fn unrelated_timer_siblings_descendants_and_budget_do_not_expire_invoke() {
+  let mut tree=node(1,"window"); let mut target=node(27,"Pin"); target.children.push(node(28,"00:01"));
+  tree.children=vec![node(2,"00:01"),target]; let before=snapshot(&tree);
+  tree.children[0]=node(3,"00:02"); tree.children.insert(0,node(4,"new unrelated sibling"));
+  tree.children[2].children[0]=node(28,"00:02"); tree.children[2].subtree_truncated=true; tree.subtree_truncated=true;
+  let after=snapshot(&tree); assert_ne!(before.signature,after.signature);
+  assert!(pattern_matches(&before,&after,&[27]));
+ }
+ #[test] fn target_identity_content_geometry_safety_and_window_changes_stay_stale() {
+  let original=node(27,"Pin"); let before=snapshot(&original);
+  let mutations:Vec<Box<dyn Fn(&mut agent_desktop_core::AccessibilityNode)>>=vec![
+   Box::new(|n| n.identity.name=Some("Close".into())),
+   Box::new(|n| n.identity.value=Some("changed".into())),
+   Box::new(|n| n.identity.retained_object=Some(json!({"runtime":[28]}).to_string())),
+   Box::new(|n| n.identity.retained_object=Some(json!({"runtime":[27],"rawName":"changed hidden tail"}).to_string())),
+   Box::new(|n| n.role="Edit".into()),
+   Box::new(|n| n.presentation.bounds=Some(agent_desktop_core::Rect{x:1.,y:2.,width:3.,height:4.})),
+   Box::new(|n| n.presentation.states.clear()),
+   Box::new(|n| n.presentation.states.push("offscreen".into())),
+   Box::new(|n| n.presentation.states.push("protected".into())),
+   Box::new(|n| n.presentation.available_actions.clear())];
+  for mutate in mutations { let mut changed=original.clone(); mutate(&mut changed); assert!(!pattern_matches(&before,&snapshot(&changed),&[27])); }
+  let mut after=snapshot(&original); after.action_window["bounds"]["x"]=json!(2); assert!(!pattern_matches(&before,&after,&[27]));
+  after=snapshot(&original); after.action_window["pid"]=json!(8); assert!(!pattern_matches(&before,&after,&[27]));
+  after=snapshot(&original); after.evidence.clear(); assert!(!pattern_matches(&before,&after,&[27]));
  }
 }

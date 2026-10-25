@@ -58,7 +58,8 @@ test('single-pattern actions have no fallback and every effect sets started firs
  assert.match(host, /state\.actions\.insert\(action_id\.to_owned\(\)\)/);
  assert.match(host, /Duration::from_secs\(120\)/);
  assert.match(host, /_ if started => Err\("outcome_unknown"\)/);
- assert.match(host, /current\.signature != previous\.signature/);
+ assert.match(host, /!pattern_matches\(&previous, &current, runtime\)/);
+ assert.match(host, /previous.signature!=current.signature \|\| pointer/);
 });
 test('capture uses generation-bound ExactWindow and caps encoded wire bytes', () => {
  const host = read('src/windows.rs');
@@ -170,5 +171,22 @@ test('soft admission never recovers a failed or half-verified node', () => {
  assert.match(source,/if tree.subtree_truncated && tree.children.iter\(\).all/);
  const host=read('src/windows.rs');
  assert.match(host,/previous.bindings.get\(element_id\).ok_or\("stale_observation"\)/);
- assert.match(host,/current.bindings.get\(element_id\) != Some\(runtime\)/);
+ assert.match(host,/previous.evidence.get\(runtime\).is_some_and/);
+ assert.match(host,/current.evidence.get\(runtime\) == Some\(e\)/);
+});
+
+test('selected outer-window pointer bounds preserve hit, UIA protection and capture coordinate gates', () => {
+ const windows = read('src/windows.rs');
+ const guard = read('../../src/execution/computer/windows-input.cs');
+ assert.doesNotMatch(windows + guard, /GetClientRect|ClientToScreen/);
+ assert.match(windows, /SendMessageTimeoutW\(window.hwnd as Handle,0x84/);
+ assert.match(guard, /SendMessageTimeout\(handle, 0x84/);
+ assert.match(windows, /helper\(3,start\)/);
+ assert.match(windows, /helper\(3,end\)/);
+ assert.match(guard, /!window.Bounds.Contains\(point\)/);
+ assert.match(guard, /PointRoot\(point\) != window.Handle/);
+ assert.match(guard, /i <= length; i\+\+\) Point/);
+ assert.match(windows, /DwmGetWindowAttribute\(window.hwnd as Handle,9/);
+ assert.match(windows, /image::imageops::overlay/);
+ assert.match(windows, /focused.signature!=previous.signature/);
 });

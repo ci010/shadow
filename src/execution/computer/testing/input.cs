@@ -19,7 +19,7 @@ namespace Shadow {
             internal IntPtr Active = new IntPtr(20), Focused = new IntPtr(11);
             internal uint Clock = 1000, Activity = 1;
             internal bool Held, Cancelled, Stale, Covered, CanActivate = true, Partial;
-            internal bool DelayedActivation;
+            internal bool DelayedActivation, CoveredMiddle;
             private IntPtr pendingActivation;
             private uint activationAt;
             internal Action<InputPacket[]> OnEmit;
@@ -46,7 +46,7 @@ namespace Shadow {
             }
             internal override void Validate(InputWindow window) { if (Stale) throw new InputFailure("stale_observation"); }
             internal override void CheckPoint(InputWindow window, InputPoint point) {
-                if (Covered || !window.Bounds.Contains(point)) throw new InputFailure("input_outside_window");
+                if (Covered || CoveredMiddle && point.X == 0 || !window.Bounds.Contains(point)) throw new InputFailure("input_outside_window");
             }
             internal override uint Emit(InputPacket[] packets) {
                 int count = Partial ? 1 : packets.Length;
@@ -55,6 +55,12 @@ namespace Shadow {
                 if (OnEmit != null) OnEmit(packets.Take(count).ToArray());
                 return (uint)count;
             }
+        }
+        private sealed class GeometryEnvironment : InputEnvironment {
+            internal IntPtr Root = new IntPtr(10);
+            internal int Hit = 1;
+            internal override IntPtr PointRoot(InputPoint point) { return Root; }
+            internal override int HitTest(IntPtr handle, InputPoint point) { return Hit; }
         }
         private static int assertions;
         private static void Assert(bool value, string label) {
@@ -85,9 +91,35 @@ namespace Shadow {
                     Assert(marker > 0 && marker <= Int32.MaxValue, "marker survives narrowing and sign extension");
                 }
             }
+            var geometry = new GeometryEnvironment();
+            var selected = new InputWindow { Handle = new IntPtr(10), Bounds = new InputRect { Left = -500, Top = -100, Right = 500, Bottom = 500 } };
+            foreach (int hit in new[] { 1, 2, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20 }) {
+                geometry.Hit = hit;
+                geometry.CheckPoint(selected, new InputPoint(-500, -100));
+                geometry.CheckPoint(selected, new InputPoint(499, 499));
+                Assert(true, "client/titlebar/border/control hit allowed");
+            }
+            foreach (int hit in new[] { -2, -1, 0, 3, 5, 19, 21, 22 }) {
+                geometry.Hit = hit;
+                Fails("input_outside_window", () => geometry.CheckPoint(selected, new InputPoint(0, 0)));
+            }
+            geometry.Hit = 1;
+            foreach (InputPoint outside in new[] { new InputPoint(-501, 0), new InputPoint(500, 0), new InputPoint(0, -101), new InputPoint(0, 500) })
+                Fails("input_outside_window", () => geometry.CheckPoint(selected, outside));
+            foreach (int foreign in new[] { 0, 11, 20 }) {
+                geometry.Root = new IntPtr(foreign);
+                Fails("input_outside_window", () => geometry.CheckPoint(selected, new InputPoint(0, 0)));
+            }
             InputPoint mapped = InputLease.Map(799, 399, 800, 400, new InputRect { Left = -1600, Top = -200, Right = 0, Bottom = 600 });
             Assert(mapped.X == -1 && mapped.Y == 599, "scaled screenshot and negative monitor origin");
             Fails("invalid_request", () => InputLease.Map(800, 0, 800, 400, new InputRect { Right = 1000, Bottom = 500 }));
+            var obstruction = new Environment { CoveredMiddle = true };
+            using (var lease = Lease(obstruction)) {
+                Assert(lease.Begin(), "drag preflight activated");
+                var drag = Action("drag"); drag["durationMs"] = 100;
+                Fails("input_outside_window", () => lease.Execute(drag, new InputPoint(-100, 10), new InputPoint(100, 10)));
+                Assert(obstruction.Packets.Count == 0, "foreign intermediate path refused before button down");
+            }
             var asynchronous = new Environment { DelayedActivation = true };
             using (var lease = Lease(asynchronous)) {
                 Assert(lease.Begin(), "wait for queued foreground activation");

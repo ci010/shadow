@@ -102,8 +102,15 @@ replay during the worker lifetime (cap 10000). Fresh signatures include title,
 bounds, full tree order/structure, role/name/value, enabled/offscreen/focusable,
 pattern actions, toggle/selection, truncation and hidden SHA-256 fingerprints and UTF-16 lengths of original names/
 values + runtime IDs. Full original strings are not retained in snapshots. Hidden metadata never enters wire observations. Node IDs
-map to the specific snapshot's runtime IDs only; a fresh observation must match
-the entire signature and binding. Reacquisition scans only the authorized
+map to the specific snapshot's runtime IDs only. Ordinary UIA pattern actions
+require an unchanged window description (including title and geometry) and the
+selected runtime ID's own full evidence: role, name/value including hidden full
+fingerprints, bounds, states and available actions. Unrelated dynamic text,
+sibling order and descendant/traversal-budget changes do not expire a stable
+control. The target must still be present in the fresh bounded observation;
+missing/protected targets fail closed. Foreground actions retain whole-tree
+signature checks, and pointer actions also retain screenshot identity checks.
+Reacquisition scans only the authorized
 password-first subtree and rechecks PID/root/element runtime ID. Snapshots retain
 no COM interfaces.
 
@@ -202,7 +209,17 @@ No upstream command is added and no upstream SendInput path is exposed.
 Pointer actions require a previous screenshot. Only its SHA-256, dimensions and
 original bounds remain in the snapshot, not PNG data. A fresh screenshot and tree
 must match. Pixel-center mapping matches InputLease.Map; start/end must be in the
-selected client and unobscured. Keyboard targets require matching runtime IDs,
+complete selected outer window bounds (including caption/borders) and unobscured.
+WGC DWM-sized frames are placed at their checked DWM offset in an outer-sized
+canvas, not stretched over resize margins; PrintWindow outer frames pass through.
+Unrecognized dimensions fail capture. Both native and guard check selected GA_ROOT
+and a timed WM_NCHITTEST allowlist: client/caption/grip/scrollbars/min/max/resize/
+close only. Transparent/unknown/error/nowhere, system-menu/menu/help hits and
+foreign/owned-popup roots are refused. Signed hit-test coordinates cannot truncate.
+The guard preflights every rasterized drag-path pixel before button-down and
+rechecks emitted points. Geometry/whole-tree/screenshot stale rules are unchanged;
+a moving/resizing caption/border drag can therefore stop outcome_unknown after
+its first effect. Reobserve, never automatically replay. Keyboard targets require matching runtime IDs,
 enabled/visible/focusable/nonsecret status; typing requires writable Edit/Document.
 The adapter extension performs password-first raw ancestry checks, root/PID/runtime
 checks and bounded verified SetFocus only. It never uses AttachThreadInput or a
@@ -381,3 +398,39 @@ prefix, actions fail stale_observation; this is intentional fail-closed behavior
 not permission to execute against unseen controls. Target-only action evidence
 reading does not use the observation soft budget. Screenshot capture retains its
 separate existing deadline; UIA deadline errors remain UIA errors.
+
+### Loading a locally rebuilt freshness fix
+
+The native addon is cached in the disposable desktop worker after its first
+request (`src/execution/computer/agent-desktop-worker.js`). Rebuilding the local
+artifact does not hot-patch an already loaded worker. A subsequently created
+worker loads the rebuilt artifact; after worker retirement all window bindings
+and observations must be reacquired. Do not restart a running Shadow session
+without the user's agreement. A packaged installation needs the matching rebuilt
+artifact staged in that installation, not merely a source-checkout rebuild.
+
+### Selected-window nonclient pointer revision
+
+The earlier client-only exclusion in both Rust `input_point` and C#
+`InputEnvironment.CheckPoint` disagreed with the already full-window screenshot.
+It is replaced by half-open outer bounds plus selected-root/occlusion checks and
+an explicit timed nonclient hit-test allowlist; UIA password/ancestry checks and
+immutable per-action owner review are unchanged. No desktop-wide input route or
+popup authorization is introduced. The bundled computer-use skill source is
+updated with the same boundary (not a runtime shared-skill override).
+
+Verified without desktop interaction: offline Windows x64 release build,
+isolated addon ABI/identity/shutdown probe, 35 Rust pure tests, 14 static source
+tests and 27 focused host/guard/tool tests. Fake guard geometry tests exercise
+caption/borders, half-open edges, foreign/popup roots, blocked hit codes and an
+intermediate drag obstruction. They do not prove real provider behavior.
+No UIA observation, capture, hook lease, input injection, QQ interaction, restart,
+commit or push was used. ARM64 and live DPI/multi-monitor/provider acceptance are
+unverified. Existing stale geometry rules intentionally remain strict even when
+caption drag or a min/max/close action changes the target.
+
+The rebuilt source artifacts are not automatically staged into `dist` or a
+packaged installation. Use the normal backend build/staging path and a
+user-controlled backend restart/worker retirement to load matching code and
+native binaries; reacquire all bindings/observations. Existing loaded workers
+cannot hot-reload this change.
