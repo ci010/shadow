@@ -7,6 +7,11 @@ App-wide. A saved bot configuration is not proof of platform delivery or
 verified connectivity; the backend can be locally ready while a bot is
 offline. Legacy global WeChat configuration is not imported or started by Project runtimes.
 
+Service Bots do not deliver host-generated LLM request errors to external chats
+(including groups). The error event and failed-turn state remain available to
+WebChat for diagnosis; ordinary responses are unaffected. Personal Bots retain
+their existing error delivery behavior.
+
 ## WeChat personal entry (iLink)
 
 WeChat is available only for **personal** Bots, never service Bots. Both creation

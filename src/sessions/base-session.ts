@@ -811,6 +811,7 @@ export abstract class BaseSession {
         chatId: msg.chatId,
         channelAddress: msg.channelAddress,
         content: `⚠️ Request failed: ${errMsg(err)}`,
+        inferenceError: true,
         replyTo: msg.platformMessageId,
         done: true,
         event: 'response',

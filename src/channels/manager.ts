@@ -931,6 +931,9 @@ export class ChannelManager {
   async deliver(msg: OutboundMessage): Promise<void> {
     if (msg.channelAddress && msg.channelAddress.conversationId !== msg.chatId) throw new YieldError('invalid_request', 'Invalid bot destination.')
     const key = this.resolveKey(msg.channel, msg.channelAddress)
+    // Keep the bus event available to WebChat observers, but never publish
+    // provider diagnostics to a service bot's external conversation.
+    if (msg.inferenceError && key && this.options?.instanceStore.list().some(bot => bot.id === key && bot.purpose === 'service')) return
     const channel = key ? this.availableByKey(key) : undefined
     if (!channel) throw new YieldError('unavailable', 'The source bot is unavailable.')
     const verify = channel.connectionGuard?.()
