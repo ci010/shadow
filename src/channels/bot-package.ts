@@ -16,6 +16,7 @@ export function compileDiscordPackage(raw: DiscordPackage) {
   const fm = z.object({ name: z.literal(input.id), platform: z.literal('discord'), botInstanceId: z.string().min(1),
     agentId: z.string().uuid().optional(), agentMarkdown: z.string().max(512_000).optional(), description: z.string().optional(), channels: z.array(z.string()).max(64),
     tools: IntegrationAgentInputSchema.shape.tools.default([]), readDomains: IntegrationAgentInputSchema.shape.readDomains.default([]),
+    sourceFolders: IntegrationAgentInputSchema.shape.sourceFolders, discordHistory: IntegrationAgentInputSchema.shape.discordHistory,
   }).strict().parse(parsed.frontmatter)
   if (new Set(fm.channels).size !== fm.channels.length) throw new Error('Duplicate channel reference.')
   const agentId = fm.agentId ?? uuid(`discord-bot-package:${input.id}`)
@@ -32,7 +33,7 @@ export function compileDiscordPackage(raw: DiscordPackage) {
   }
   const agent = IntegrationAgentInputSchema.parse({ id: agentId, name: input.id, displayName: fm.description ?? input.id,
     markdown: fm.agentMarkdown ?? `---\n${stringify({name: input.id, defaultMode: 'session', allowedTools: fm.tools})}---\n${parsed.body}`,
-    execution: 'restricted', tools: fm.tools, readDomains: fm.readDomains, skills })
+    execution: 'restricted', tools: fm.tools, readDomains: fm.readDomains, ...(fm.sourceFolders ? { sourceFolders: fm.sourceFolders } : {}), ...(fm.discordHistory ? { discordHistory: fm.discordHistory } : {}), skills })
   const bindings = fm.channels.flatMap(path => {
     if (!/^channels\/[a-zA-Z0-9_-]+\.json$/.test(path) || !Object.hasOwn(input.source,path)) throw new Error('Missing or unsafe channel reference.')
     return z.array(DiscordBindingSchema.omit({agentId:true, epochRevision:true})).max(200).parse(JSON.parse(input.source[path]!)).map(binding => {

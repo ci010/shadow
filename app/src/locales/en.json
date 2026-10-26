@@ -3990,5 +3990,8 @@
   "Allow LAN HTTP (unencrypted; trusted networks only)": "Allow LAN HTTP (unencrypted; trusted networks only)",
   "HTTP is not encrypted. Pairing codes, credentials and conversations can be read or changed by others on the network. Use a private/loopback numeric IP only. HTTPS will never automatically downgrade.": "HTTP is not encrypted. Pairing codes, credentials and conversations can be read or changed by others on the network. Use a private/loopback numeric IP only. HTTPS will never automatically downgrade.",
   "LAN HTTP: connection is not encrypted. Use only a trusted network.": "LAN HTTP: connection is not encrypted. Use only a trusted network.",
-  "Use an HTTPS origin only, or explicitly enable LAN HTTP with a private/loopback numeric IP; no username, password, path, query, or fragment.": "Use an HTTPS origin only, or explicitly enable LAN HTTP with a private/loopback numeric IP; no username, password, path, query, or fragment."
+  "Use an HTTPS origin only, or explicitly enable LAN HTTP with a private/loopback numeric IP; no username, password, path, query, or fragment.": "Use an HTTPS origin only, or explicitly enable LAN HTTP with a private/loopback numeric IP; no username, password, path, query, or fragment.",
+  "Reviewed source folders and Discord history scope": "Reviewed source folders and Discord history scope",
+  "Bot publication approval": "Bot publication approval",
+  "Review sourceFolders and discordHistory in BOT.md, including Folder IDs, channels, thread/history scope and tools. The candidate is frozen; subsequent directory edits are not included.": "Review sourceFolders and discordHistory in BOT.md, including Folder IDs, channels, thread/history scope and tools. The candidate is frozen; subsequent directory edits are not included."
 }

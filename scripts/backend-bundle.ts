@@ -8,6 +8,7 @@ import { copyAgentDesktopAssets } from './agent-desktop-assets.ts'
 // Keep every out-of-graph process entry: Node cannot discover these from imports.
 export const backendEntries = [
   'index', 'a2a/mcp-cli', 'script-runtime/worker', 'channels/feishu-worker',
+  'channels/source-reader-process',
   'execution/processes/guardian-worker', 'execution/processes/posix-controller',
   'execution/network/proxy-preload', 'utils/image-codec-worker',
   'runtime/startup-profile-preload', 'script-runtime/runtime', 'channels/feishu-transport',

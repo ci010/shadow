@@ -544,6 +544,7 @@ export class ChannelManager {
     return {
       directory: (botId, guildId, after, signal) => run(botId, value => value.directory(guildId, after, signal)),
       inspect: (botId, chatId, senderId, signal) => run(botId, value => value.inspectConversation(chatId, senderId, signal)),
+      assertHistory: (botId, chatId, senderId, audienceId, scope, signal) => run(botId, value => value.assertScopedHistory(chatId, senderId, audienceId, scope, signal)),
       inspectTarget: (botId, target, signal) => run(botId, value => value.inspectTarget(target, signal)),
       members: (botId, guildId, query, signal) => run(botId, value => value.members(guildId, query, signal)),
     }
@@ -649,7 +650,7 @@ export class ChannelManager {
     }
     const verify = channel.connectionGuard?.()
     const run = () => channel.executeOperation!(request, {
-      chatId: context.chatId, senderId: context.senderId, platformMessageId: context.platformMessageId, signal: context.signal,
+      discordReadScope: context.discordReadScope, chatId: context.chatId, senderId: context.senderId, platformMessageId: context.platformMessageId, signal: context.signal,
     })
     const result = await (channel.withConnection ? channel.withConnection(run) : run())
     verify?.()

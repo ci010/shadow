@@ -1,4 +1,4 @@
-import type { DiscordObservationProof } from './integration-contract.ts'
+import type { DiscordHistoryScope, DiscordObservationProof } from './integration-contract.ts'
 import { InputProcessor, awaitInputSignal } from '../events/input-processor.ts'
 import { extname, join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -550,6 +550,44 @@ export class DiscordChannel extends AbstractChannel {
     if ((permissions & required) !== required) throw new Error('Discord sender lacks View Channel or Read Message History permission.')
   }
 
+  /** Conservative audience proof: same guild and identical effective channel overwrites.
+   * We do not equate caller visibility with output confidentiality. Unequal policies are denied,
+   * even if they might be safe; no member enumeration or incomplete audience approximation.
+   */
+  async assertScopedHistory(chatId: string, senderId: string, audienceId: string, scope: DiscordHistoryScope, signal: AbortSignal): Promise<void> {
+    const channel = discordRecord(await this.api(`/channels/${chatId}`, { signal }))
+    const audience = discordRecord(await this.api(`/channels/${audienceId}`, { signal }))
+    if (channel.id !== chatId || audience.id !== audienceId || channel.guild_id !== scope.guildId || audience.guild_id !== scope.guildId ||
+      ![0,5,10,11,15,16].includes(Number(channel.type)) || ![0,5,10,11].includes(Number(audience.type))) throw new Error('History guild/channel scope denied.')
+    const thread = channel.type === 10 || channel.type === 11
+    if (thread ? scope.threads === 'none' || !scope.channelIds.includes(String(channel.parent_id)) : !scope.channelIds.includes(chatId)) throw new Error('History channel is outside the reviewed allowlist.')
+    if (thread && typeof discordRecord(channel.thread_metadata).archived !== 'boolean') throw new Error('Invalid public thread metadata.')
+    if (thread && discordRecord(channel.thread_metadata).archived === true && scope.threads !== 'public-archived') throw new Error('Archived threads are outside the reviewed scope.')
+    // Forum parents have no messages but need the same permission proof for discovery.
+    const readable = [15,16].includes(Number(channel.type)) ? { ...channel, type: 0 } : channel
+    const sourceAccess = await this.guildAccess(readable, signal)
+    const outputAccess = await this.guildAccess(audience, signal)
+    if (Boolean(sourceAccess.permissionChannel.nsfw) && !Boolean(outputAccess.permissionChannel.nsfw)) throw new Error('History age-restricted audience differs.')
+    const canonical = (value: unknown) => {
+      if (!Array.isArray(value)) throw new Error('Missing Discord permission overwrites.')
+      return JSON.stringify(value.map(item => {
+        const row = discordRecord(item)
+        if (!isDiscordId(row.id) || ![0,1].includes(Number(row.type)) || !/^\d+$/.test(String(row.allow)) || !/^\d+$/.test(String(row.deny))) throw new Error('Invalid permission overwrites.')
+        return [row.id, Number(row.type), String(row.allow), String(row.deny)]
+      }).sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
+    }
+    if (canonical(sourceAccess.permissionChannel.permission_overwrites) !== canonical(outputAccess.permissionChannel.permission_overwrites)) throw new Error('History source and output audiences differ.')
+    const required = Permission.view | Permission.readHistory
+    const member = discordRecord(await this.api(`/guilds/${scope.guildId}/members/${senderId}`, { signal }))
+    if (discordRecord(member.user).id !== senderId || discordRecord(member.user).bot === true || !this.isAllowed(senderId)) throw new Error('History sender unavailable.')
+    for (const access of [sourceAccess, outputAccess]) {
+      const actor = discordPermissions(scope.guildId, senderId, access.guild.owner_id, access.roles, member, access.permissionChannel.permission_overwrites)
+      if ((access.permissions & required) !== required || (actor & required) !== required) throw new Error('Caller or Bot history permission revoked.')
+    }
+    // Private threads are never included, even via an explicit ID or a parent allowlist.
+    signal.throwIfAborted()
+  }
+
   async executeOperation(request: ChannelOperationRequest, target: ChannelOperationTarget): Promise<unknown> {
     if (request.name !== 'discord_history' && request.name !== 'discord_message_get') {
       throw new Error('Operation is not implemented for Discord.')
@@ -557,17 +595,58 @@ export class DiscordChannel extends AbstractChannel {
     const operation: ChannelOperationRequest = request.name === 'discord_history'
       ? { name: request.name, args: discordHistoryArguments.parse(request.args) }
       : { name: request.name, args: discordMessageArguments.parse(request.args) }
-    await this.assertReadAccess(target)
-    if (operation.name === 'discord_history') {
-      const input = operation.args
-      const limit = input.limit ?? 20
-      const query = new URLSearchParams({ limit: String(limit), ...(input.before ? { before: input.before } : {}) })
-      const data = await this.api(`/channels/${target.chatId}/messages?${query}`, { signal: target.signal })
-      return discordReadHistory(data, target.chatId, limit, input.before)
+    const chatId = operation.args.channelId ?? target.chatId
+    const scope = target.discordReadScope
+    const authorize = async () => {
+      if (scope) await this.assertScopedHistory(chatId, target.senderId, target.chatId, scope, target.signal)
+      else {
+        if (chatId !== target.chatId || operation.name === 'discord_history' && (operation.args.threads || operation.args.archiveBefore || operation.args.threadAfter || operation.args.query)) throw new Error('Explicit history scope required.')
+        await this.assertReadAccess(target)
+      }
     }
-    const input = operation.args
-    const data = await this.api(`/channels/${target.chatId}/messages/${input.messageId}`, { signal: target.signal })
-    return { platform: 'discord', message: discordReadMessage(data, target.chatId, input.messageId), contentNotice: DISCORD_CONTENT_NOTICE }
+    await authorize()
+    const location = scope ? discordRecord(await this.api(`/channels/${chatId}`, {signal:target.signal})) : undefined
+    const provenance = scope ? {guildId:scope.guildId, channelId:location?.parent_id ?? chatId, threadId:[10,11].includes(Number(location?.type)) ? chatId : null} : {}
+    if (operation.name === 'discord_history') {
+      const input = operation.args, limit = input.limit ?? 20
+      if (input.archiveBefore && input.threads !== 'archived' || input.threadAfter && input.threads !== 'active' || input.threads && (input.before || input.query)) throw new Error('Invalid thread paging arguments.')
+      if (input.threads) {
+        if (!scope || scope.threads === 'none' || input.threads === 'archived' && scope.threads !== 'public-archived' || !scope.channelIds.includes(chatId)) throw new Error('Thread discovery is outside the reviewed scope.')
+        const query = new URLSearchParams({ limit: String(limit), ...(input.archiveBefore ? { before: input.archiveBefore } : {}) })
+        const value = discordRecord(await this.api(input.threads === 'active' ? `/guilds/${scope.guildId}/threads/active` : `/channels/${chatId}/threads/archived/public?${query}`, { signal: target.signal }))
+        if (!Array.isArray(value.threads) || value.threads.length > (input.threads === 'active' ? 1000 : limit)) throw new Error('Invalid thread discovery response.')
+        const threads: Array<{id:string;parentId:string;name:string;archived:boolean;archiveTimestamp:string|null}> = []
+        const candidates = value.threads.map(raw => discordRecord(raw)).filter(thread => {
+          if (input.threads === 'archived' && thread.parent_id !== chatId) throw new Error('Invalid archived thread parent.')
+          return thread.parent_id === chatId && [10,11].includes(Number(thread.type))
+        }).sort((a,b) => BigInt(String(a.id)) < BigInt(String(b.id)) ? -1 : 1)
+        const page = input.threads === 'active' ? candidates.filter(thread => !input.threadAfter || BigInt(String(thread.id)) > BigInt(input.threadAfter)).slice(0,limit) : value.threads
+        for (const raw of page) {
+          const thread = discordRecord(raw), metadata = discordRecord(thread.thread_metadata)
+          if (thread.parent_id !== chatId) continue
+          if (!isDiscordId(thread.id) || ![10,11].includes(Number(thread.type))) continue
+          await this.assertScopedHistory(thread.id, target.senderId, target.chatId, scope, target.signal)
+          threads.push({id:thread.id,parentId:chatId,name:String(thread.name).slice(0,100),archived:metadata.archived === true,archiveTimestamp:typeof metadata.archive_timestamp === 'string' ? metadata.archive_timestamp : null})
+        }
+        await authorize()
+        // Active discovery pages IDs within the current bounded live response, not a frozen snapshot.
+        const activeMore = input.threads === 'active' && candidates.some(thread => BigInt(String(thread.id)) > BigInt(threads.at(-1)?.id ?? input.threadAfter ?? '0'))
+        const archiveCursor = threads.at(-1)?.archiveTimestamp ?? null
+        if (input.threads === 'archived' && value.has_more === true && (!archiveCursor || !Number.isFinite(Date.parse(archiveCursor)) || input.archiveBefore && Date.parse(archiveCursor) >= Date.parse(input.archiveBefore))) throw new Error('Invalid archived thread cursor.')
+        return {platform:'discord',guildId:scope.guildId,conversationId:chatId,threads,hasMore:input.threads === 'active' ? activeMore : value.has_more === true,
+          nextThreadAfter:activeMore ? threads.at(-1)?.id ?? null : null,
+          nextArchiveBefore:input.threads === 'archived' && value.has_more === true ? archiveCursor : null}
+      }
+      const query = new URLSearchParams({ limit: String(limit), ...(input.before ? { before: input.before } : {}) })
+      const data = await this.api(`/channels/${chatId}/messages?${query}`, { signal: target.signal })
+      const result = discordReadHistory(data, chatId, limit, input.before)
+      if (scope) await authorize()
+      return { ...result, ...provenance, messages: input.query ? result.messages.filter(item => item.content?.toLowerCase().includes(input.query!.toLowerCase())) : result.messages,
+        ...(input.query ? {queryScope:'Literal match within this page only; nextBefore advances the scanned page.'} : {}) }
+    }
+    const data = await this.api(`/channels/${chatId}/messages/${operation.args.messageId}`, { signal: target.signal })
+    if (scope) await authorize()
+    return { platform: 'discord', ...provenance, message: discordReadMessage(data, chatId, operation.args.messageId), contentNotice: DISCORD_CONTENT_NOTICE }
   }
 
   override async getCapabilities(chatId: string): Promise<ChannelCapabilities> {

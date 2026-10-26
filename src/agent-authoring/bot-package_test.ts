@@ -10,7 +10,9 @@ import { AgentResourceStore } from './store.ts'
 import { AgentAuthoringService } from './service.ts'
 import { CapabilityBroker } from './capabilities.ts'
 import { PublicationRequests, authoringPublicationPlugin } from './publication-requests.ts'
-import { botPackagePlugin } from './bot-package-management.ts'
+import { botPackagePlugin, botPackageTool } from './bot-package-management.ts'
+import { Tools, SessionTools } from '../tools/registry.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 
 function sources(prompt = 'Frozen instructions') {
   return { 'BOT.md': `---\nname: support\nallowedTools: []\nchannels: [channels/qq.json]\n---\n${prompt}`,
@@ -36,15 +38,23 @@ test('BOT directory API freezes exact source; owner approval activates actual po
   botPackagePlugin({ ...options, publicationRequests: requests, inventory: () => ({}) }, authorize)(app)
   authoringPublicationPlugin(requests, authorize)(app)
   const post = async (path: string, body: unknown, owner = true) => app.request(path, { method: 'POST', headers: { Authorization: owner ? 'owner' : '', 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  const review = async () => {
-    const response = await post('/api/bot-package/review', { folderId: 'folder', expectedRevision: store.draft().revision })
-    assert.equal(response.status, 200, await response.clone().text())
-    return (await response.json()).request
-  }
+  const tools = new SessionTools(new Tools(root), root)
+  tools.setExecutionScope('session', [])
+  const context = {projectId:'p', sessionId:'web:owner', channel:'web', inputSource:'user', admin:true, tools, signal:new AbortController().signal} as ExecutionContext
+  const tool = botPackageTool({...options, publicationRequests:requests, inventory:()=>({}), canAuthor:id=>id==='web:owner'})
+  const review = async () => JSON.parse(await tool.execute({action:'propose', folderId:'folder',expectedRevision:store.draft().revision}, context) as string).request
   const approve = (request: { id: string; revision: string; baseRevision: string }) => post(`/api/agent-resources/publication-requests/${request.id}`, { revision: request.revision, baseRevision: request.baseRevision })
   try {
     assert.equal((await post('/api/bot-package/review', {}, false)).status, 401)
+    for (const patch of [{projectId:'foreign'}, {channel:'discord'}, {admin:false}, {inputSource:'session'}, {sessionId:'virtual:child'}]) {
+      await assert.rejects(() => tool.execute({action:'status'}, {...context,...patch} as ExecutionContext), /authenticated owner/)
+    }
+    tools.setExecutionScope('task',[])
+    await assert.rejects(()=>tool.execute({action:'status'},context),/authenticated owner/)
+    tools.setExecutionScope('session',[])
+    assert.equal(JSON.parse(await tool.execute({action:'status'},context) as string).projectId,'p')
     const first = await review()
+    assert.equal(first.sessionId,'web:owner')
     assert.ok(first.files.some((file: { path: string }) => file.path === 'bot/support/BOT.md'))
     assert.equal(store.resolve({ projectId: 'p', botInstanceId: 'bot', platform: 'qq', conversationId: 'group:one' }), undefined)
     save('Unreviewed disk edit')

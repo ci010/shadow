@@ -8,6 +8,15 @@ export const integrationToolNames = [
   'read', 'search', 'memory_save', 'discord_history', 'discord_message_get',
   'channel_config', 'subagent', 'learned_skill', 'exec',
 ] as const
+/** Owner-reviewed registered local source folders; no path, write or execution grants. */
+export const SourceFoldersSchema = z.array(z.string().uuid()).max(16).refine(ids => new Set(ids).size === ids.length, 'Unique source folders required')
+export const DiscordHistoryScopeSchema = z.object({
+  guildId: snowflake,
+  channelIds: z.array(snowflake).min(1).max(20).refine(ids => new Set(ids).size === ids.length, 'Unique history channels required'),
+  threads: z.enum(['none', 'public-active', 'public-archived']),
+  preEpoch: z.boolean(),
+}).strict()
+export type DiscordHistoryScope = z.infer<typeof DiscordHistoryScopeSchema>
 export const IntegrationAgentInputSchema = z.object({
   id: z.string().uuid(),
   name: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
@@ -16,6 +25,8 @@ export const IntegrationAgentInputSchema = z.object({
   execution: z.enum(['restricted', 'trusted']),
   tools: z.array(z.enum(integrationToolNames)).max(32),
   readDomains: z.array(z.string().uuid()).max(32),
+  sourceFolders: SourceFoldersSchema.optional(),
+  discordHistory: DiscordHistoryScopeSchema.optional(),
   skills: z.array(z.object({ name: z.string().trim().min(1).max(100), content: z.string().min(1).max(64_000) }).strict()).max(16),
 }).strict()
 export type IntegrationAgentInput = z.infer<typeof IntegrationAgentInputSchema>
@@ -53,6 +64,8 @@ export const DiscordBindingSchema = z.object({
   }).strict(),
   tools: z.array(z.enum(integrationToolNames)).max(32),
   readDomains: z.array(z.string().uuid()).max(32),
+  sourceFolders: SourceFoldersSchema.optional(),
+  discordHistory: DiscordHistoryScopeSchema.optional(),
   inheritThreads: z.boolean(),
   manage: z.boolean(),
   epochRevision: z.number().int().nonnegative().optional(),
@@ -67,7 +80,8 @@ export const IntegrationChangeSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('knowledge.publish'), domainId: z.string().uuid(),
     title: z.string().trim().min(1).max(200), content: z.string().min(1).max(256_000),
-    sources: z.array(MemorySourceSchema).max(4096),
+    historyLocations: z.array(snowflake).max(200).optional(),
+  sources: z.array(MemorySourceSchema).max(4096),
     resourceKind: z.enum(['note', 'skill']).optional(),
   }).strict(),
   z.object({ kind: z.literal('knowledge.revoke'), resourceId: z.string().uuid() }).strict(),
@@ -91,6 +105,11 @@ export const integrationConfigurationGuide = {
     'knowledge.publish': '{kind:"knowledge.publish",domainId,title,content,sources:[{domain:{id,revision},resourceId?,version?,sessionId?,epoch?}],resourceKind?:"note"|"skill"}. Reference exact observed sources; resourceId/version and sessionId/epoch are pairs. [] is for genuinely new owner-provided text, never removal of known provenance. Publication copies the reviewed content; it does not expose the original or future edits.',
     'knowledge.revoke': 'Owner only: {kind:"knowledge.revoke",resourceId}. Revokes future access, not content already delivered.',
     'domain.revoke': 'Owner only: {kind:"domain.revoke",domainId}. Revokes future access and dependent executions.',
+  },
+  resources: {
+    ownerReview: 'sourceFolders?:[<registered local Folder UUID>] and discordHistory?:{guildId,channelIds:[<exact channel IDs>],threads:"none"|"public-active"|"public-archived",preEpoch:boolean} on Agent and binding. Bindings may only narrow the Agent ceiling. Omitted means no new source/cross-channel/pre-epoch authority. Owner-only exact review; never arbitrary paths, private threads, writes or terminal access.',
+    source: 'read v:source lists IDs; read v:source/<Folder UUID>/<relative file> with optional offset/limit. search {folderId,query,mode:"names"|"content",path?,limit?}. Source-only bounded literal search excludes hidden/dependency/build/credential paths, binary/oversized files and symlinks/hardlinks. Registered local POSIX folders only.',
+    history: 'discord_history {channelId?,limit?,before?,query?} scans one page (query is literal within that page, not server-wide search). discord_message_get {channelId?,messageId}. Discover public threads: discord_history {channelId,threads:"active",limit?,threadAfter?} or {channelId,threads:"archived",limit?,archiveBefore?}. preEpoch explicitly permits platform history before the current authorization, never older internal memory. Live caller/Bot visibility+history and equivalent output audiences are required on reads and delivery.',
   },
   observation: {
     review:'Owner-only exact bindings.save review. observation.enabled defaults false. Dedicated service binding must have no participants, tools, domains, management, ordinary processor or inherited threads; its published Agent must be restricted and tool/domain-free. Configuration actor is not the observed sender or service execution principal.',
@@ -130,6 +149,10 @@ export const IntegrationDraftSchema = z.object({
   createdAt: z.string().datetime(), expiresAt: z.string().datetime(),
   status: z.enum(['pending', 'applying', 'applied', 'cancelled']), appliedRevision: z.number().int().positive().optional(),
   affectedBindings: z.array(z.string().uuid()),
+  resourceReview: z.object({
+    agent: z.object({sourceFolders:SourceFoldersSchema,discordHistory:DiscordHistoryScopeSchema.nullable()}).strict(),
+    bindings:z.array(z.object({id:z.string().uuid(),target:DiscordTargetSchema,sourceFolders:SourceFoldersSchema,discordHistory:DiscordHistoryScopeSchema.nullable()}).strict()).max(200),
+  }).strict().optional(),
   warning: z.string(),
   validationHash: z.string(),
   agentFileHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
@@ -188,6 +211,7 @@ export const ChannelBoundarySchema = z.object({
   ownerSessionId: z.string().min(1).max(1024).optional(),
   botInstanceId: id, botUserId: snowflake, conversationId: snowflake,
   location: DiscordLocationSchema,
+  historyLocations: z.array(snowflake).max(200).optional(),
   sources: z.array(MemorySourceSchema).max(4096),
   learningActor: snowflake.optional(),
   learningInputId: z.string().min(1).max(1024).optional(),
@@ -216,6 +240,7 @@ export interface DiscordIngress {
   messageId: string
 }
 export interface DiscordIntegrationTransport {
+  assertHistory?(botId: string, chatId: string, senderId: string, audienceId: string, scope: DiscordHistoryScope, signal: AbortSignal): Promise<void>
   directory(botId: string, guildId: string | undefined, after: string | undefined, signal: AbortSignal): Promise<DiscordDirectory>
   inspect(botId: string, chatId: string, senderId: string, signal: AbortSignal): Promise<DiscordInspection>
   inspectTarget(botId: string, target: DiscordBinding['target'], signal: AbortSignal): Promise<{ botUserId: string; roleIds: string[] }>

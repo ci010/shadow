@@ -291,6 +291,7 @@
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="true" />
+        <BotPublicationReview v-if="isDirectChat && !isExecution" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'" />
         <PublicationRequest :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
@@ -547,6 +548,7 @@ import CredentialRequest from './CredentialRequest.vue'
 import BotChatSetup from './BotChatSetup.vue'
 import ComputerControl from './ComputerControl.vue'
 import PublicationRequest from './PublicationRequest.vue'
+import BotPublicationReview from './BotPublicationReview.vue'
 import ChannelGroupContext from './ChannelGroupContext.vue'
 import { serviceGroupKey } from '../service-groups.ts'
 import AuthoringProbeRequest from './AuthoringProbeRequest.vue'

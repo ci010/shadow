@@ -1,3 +1,5 @@
+import { isOwnerAuthoringSession } from '../../agent-authoring/owner-session.ts'
+import { SourceResources } from '../../channels/source-resources.ts'
 import { discordReadMessage } from '../../channels/discord-operations.ts'
 import { collectDiscordHistory } from '../../channels/discord-stream.ts'
 import { ChannelMessageStream } from '../../channels/message-stream.ts'
@@ -30,7 +32,7 @@ import { CapabilityBroker } from '../../agent-authoring/capabilities.ts'
 import { AgentCredentialStore } from '../../agent-authoring/credentials.ts'
 import { CredentialRequests } from '../../agent-authoring/credential-requests.ts'
 import { agentToolTest } from '../../tools/agent-tool-test.ts'
-import { botPackagePlugin } from '../../agent-authoring/bot-package-management.ts'
+import { botPackagePlugin, botPackageTool } from '../../agent-authoring/bot-package-management.ts'
 import { PublicationBusyError, PublicationRequestError, PublicationRequests, authoringPublicationPlugin } from '../../agent-authoring/publication-requests.ts'
 import { authoringManagementTool, registerAuthoringCommands, authoringCredentialsPlugin, type AuthoringManagementOptions } from '../../agent-authoring/management.ts'
 import { AgentApp } from '../../agent/app.ts'
@@ -508,12 +510,14 @@ export async function createProjectRuntime(
   const authoringDirectory = resolve(workspace, 'config', 'agent-resources')
   const integrationDirectory = resolve(workspace, 'config', 'channel-integrations')
   const memoryDomains = new MemoryDomains(project.id, resolve(integrationDirectory, 'memory'))
+  const sourceResources = new SourceResources(folderRegistry)
   const channelIntegrations = new IntegrationStore({
+    sources: sourceResources,
     projectId: project.id, workspace, directory: integrationDirectory, bots: botStore, agents: agentTypes, memory: memoryDomains,
   })
   const classifier = new InputClassifier(() => provider, resolve(integrationDirectory, 'classifier-ledger.json'))
   const discordIntegration = new DiscordIntegration({
-    classifier,
+    classifier, sources: sourceResources,
     store: channelIntegrations, memory: memoryDomains, bots: botStore, workspace, projectId: project.id, baseTools: tools,
   })
   cleanup.push(channelIntegrations.onChange(() => realtime.invalidateIntegrations?.()))
@@ -1085,8 +1089,7 @@ export async function createProjectRuntime(
   }
   const canAuthor = (id: string): boolean => {
     const state = sessions.getSessionState(id)
-    if (!state || state.projectId !== project.id || state.mode !== 'session' || state.automation || state.statePersistence || !id.startsWith('web:') ||
-      sessions.isManagedConversation(id)) return false
+    if (!isOwnerAuthoringSession(state, project.id) || !state || sessions.isManagedConversation(id)) return false
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirCapabilityLookup)
     return locations.workdir.available && locations.workdir.locality === 'local'
   }
@@ -1397,6 +1400,7 @@ export async function createProjectRuntime(
     stream: (action,args,context) => (action==='send'?channelStreamSend:channelStreamRead).execute(args,context),
   }))
   discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
+  importTool.registerBuiltin('bot_package', botPackageTool({ ...authoringManagement, discord: channelIntegrations, canAuthor, registeredFolders: () => folderRegistry.list() }))
   const channelConfigurationTool = ownerChannelConfigurationTool(channelIntegrations, memoryDomains, channels.discordTransport(), canAuthor)
   tools.register(channelConfigurationTool)
   importTool.registerBuiltin(channelConfigurationTool.name, channelConfigurationTool)

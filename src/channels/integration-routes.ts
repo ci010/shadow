@@ -125,7 +125,14 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
       context.signal.throwIfAborted()
       if (context.channel !== 'web' || context.inputSource !== 'user' || context.admin !== true || context.isGroup ||
         context.channelAddress || context.remoteWorkdir || context.tools.executionMode !== 'session' ||
-        context.projectId !== store.options.projectId || context.memoryAccess || (canAuthor && !canAuthor(context.sessionId))) throw new IntegrationError('owner_required', 'Use an authenticated owner conversation.', 403)
+        context.projectId !== store.options.projectId || context.memoryAccess || (canAuthor && !canAuthor(context.sessionId))) {
+        const reason = context.projectId !== store.options.projectId ? 'project_mismatch'
+          : context.channel !== 'web' ? 'not_web' : context.inputSource !== 'user' ? 'not_direct_user'
+          : context.admin !== true ? 'not_admin' : context.isGroup || context.channelAddress ? 'channel_conversation'
+          : context.remoteWorkdir ? 'remote_workdir' : context.tools.executionMode !== 'session' ? 'execution_mode'
+          : context.memoryAccess ? 'managed_memory' : 'session_not_authorable'
+        throw new IntegrationError('owner_required', `Use an authenticated owner conversation. (${reason})`, 403)
+      }
       const input = z.discriminatedUnion('action', [
         z.object({ action: z.literal('schema') }).strict(),
         z.object({ action: z.literal('processor_resource'), resourceName: z.enum(['documentation','types','example','fixtures','observation/processor.ts','observation/signature.ts','observation/fixtures.json','classifier/processor.ts','classifier/policy.json','classifier/fixtures.json']) }).strict(),

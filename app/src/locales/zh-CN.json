@@ -3990,5 +3990,8 @@
   "Allow LAN HTTP (unencrypted; trusted networks only)": "允许局域网 HTTP（不加密；仅限可信网络）",
   "HTTP is not encrypted. Pairing codes, credentials and conversations can be read or changed by others on the network. Use a private/loopback numeric IP only. HTTPS will never automatically downgrade.": "HTTP 不加密。网络中的其他人可以读取或篡改配对码、凭据和对话。仅支持私网或回环数字 IP。HTTPS 绝不会自动降级。",
   "LAN HTTP: connection is not encrypted. Use only a trusted network.": "局域网 HTTP：连接未加密。请仅在可信网络使用。",
-  "Use an HTTPS origin only, or explicitly enable LAN HTTP with a private/loopback numeric IP; no username, password, path, query, or fragment.": "请使用 HTTPS 源地址，或显式开启使用私网/回环数字 IP 的局域网 HTTP；不能包含用户名、密码、路径、查询或片段。"
+  "Use an HTTPS origin only, or explicitly enable LAN HTTP with a private/loopback numeric IP; no username, password, path, query, or fragment.": "请使用 HTTPS 源地址，或显式开启使用私网/回环数字 IP 的局域网 HTTP；不能包含用户名、密码、路径、查询或片段。",
+  "Reviewed source folders and Discord history scope": "已审核的源码文件夹与 Discord 历史范围",
+  "Bot publication approval": "Bot 发布审批",
+  "Review sourceFolders and discordHistory in BOT.md, including Folder IDs, channels, thread/history scope and tools. The candidate is frozen; subsequent directory edits are not included.": "请检查 BOT.md 中的 sourceFolders 和 discordHistory，包括 Folder ID、频道、线程与历史范围以及工具。候选版本已冻结，后续目录编辑不会包含在本次审批中。"
 }
