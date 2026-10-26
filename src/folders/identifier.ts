@@ -16,3 +16,14 @@ export function selectFolder<T extends { id: string; name?: string }>(folders: r
   if (matches.length !== 1) throw new Error('Unknown or ambiguous Project folder identifier. Read v:project/folders; use its name-ID selector or full folder ID, never a path. A plain folder name is accepted only when unique.')
   return matches[0]!
 }
+
+/** Prefer the shortest selector that resolves to this exact folder in this Project. */
+export function projectFolderIdentifier<T extends { id: string; name?: string }>(folders: readonly T[], folder: T): string {
+  const candidates = [folder.name ? folderSlug(folder.name) : folder.id, folderIdentifier(folder.id, folder.name), folder.id]
+  for (const candidate of candidates) {
+    try {
+      if (selectFolder(folders, candidate).id === folder.id) return candidate
+    } catch { /* A collision needs a more specific selector. */ }
+  }
+  throw new Error('Project folder has no unique selector.')
+}
