@@ -14,7 +14,7 @@ export class SessionTool implements Tool {
       description: { type: 'string', description: 'Optional short discovery description, not a goal, acceptance condition or permission.' },
       sessionId: { type: 'string', description: 'Update only: this session.' },
       requestId: { type: 'string', description: 'Create only: optional UUID; reuse exactly the same request on retry. Initial messages are never replayed.' },
-      folderId: { type: 'string', description: 'Create only: registered Project folder ID. Omit for a discussion-only session; never a path.' },
+      folderId: { type: 'string', description: 'Create only: current Project folder shortName, name-ID selector or full UUID. Uses the registered folder and its node. Omit for a discussion-only session; never a path.' },
       agentType: { type: 'string', description: 'Create only: agent template name, default general.' },
       initiativeId: { type: 'string', description: 'Create only: root Work key for an Initiative view (or a legacy Initiative ID), optional; not an assignment.' },
       initialMessage: { type: 'string', description: 'Create only: optional kickoff request, with the necessary context and source references.' },

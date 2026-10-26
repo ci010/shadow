@@ -903,6 +903,7 @@ export async function createProjectRuntime(
     workspace,
     getProject: () => dependencies.catalog.get(project.id),
     registry: folderRegistry,
+    getNodeInventory: () => sessions.getNodeInventory(),
     workdirCapabilityLookup,
   })
   tools.register(new UseProjectTool({

@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { Hono } from 'hono'
 import { FolderRegistry } from '../folders/registry.ts'
+import type { FolderRecord } from '../folders/contracts.ts'
+import { folderIdentifier } from '../folders/identifier.ts'
 import { TopicService, type TopicServiceOptions } from './topics.ts'
 import { topicsPlugin } from './topic-routes.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
@@ -259,5 +261,132 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     failDelivery = false
     assert.equal((await service.create(failing, 'web:chat-admin')).initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, deliveryCount)
+
+    const selectorRequest = { requestId: randomUUID(), title: 'Persisted selector', folderId: 'code', initialMessage: 'One kickoff' }
+    const selected = await service.create(selectorRequest, 'web:chat-admin')
+    const persisted = await store.getState(selected.sessionId)
+    assert(persisted)
+    assert.equal(persisted.folderId, folder.id)
+    states.set(selected.sessionId, persisted)
+    const retryWithoutRegistry = new TopicService({ ...options, folders: {
+      ...options.folders,
+      register: options.folders.register.bind(options.folders),
+      acquireAccess: options.folders.acquireAccess.bind(options.folders),
+      list: () => { throw new Error('Retries must not re-resolve selectors') },
+      requireAvailable: async () => { throw new Error('Retries must not retarget folders') },
+    } })
+    const selectedDeliveryCount = deliveries.length
+    assert.equal((await retryWithoutRegistry.create(selectorRequest, 'web:chat-admin')).initialMessageStatus, 'not_replayed')
+    assert.equal(deliveries.length, selectedDeliveryCount)
   })
 }
+
+test('session tool resolves Project selectors across nodes without fallback and pins exact retries', async () => {
+  const local: FolderRecord = { id: randomUUID(), name: 'Code', path: '/synthetic/local', createdAt: new Date().toISOString() }
+  const remote: FolderRecord = {
+    id: randomUUID(), name: 'Remote App', path: '/opaque/not-on-main', createdAt: local.createdAt, kind: 'remote',
+    workdir: { version: 1, nodeId: 'child-a', capabilityId: 'remote-capability' },
+    identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
+  }
+  const otherRemote: FolderRecord = {
+    ...remote, id: randomUUID(), name: 'Code',
+    workdir: { version: 1 as const, nodeId: 'child-b', capabilityId: 'other-capability' },
+  }
+  let records: FolderRecord[] = [local, remote]
+  const states = new Map<string, SessionState>([['web:actor', {
+    sessionId: 'web:actor', segmentIndex: 0, projectId: 'p', mode: 'session',
+    workdir: { version: 1, nodeId: 'caller-node', capabilityId: 'caller-cap' },
+  }]])
+  let offline = false
+  let builds = 0
+  let deliveries = 0
+  let lookups = 0
+  const options: TopicServiceOptions = {
+    projectId: 'p', listStates: async () => [...states.values()], resolveAgent: () => ({ defaultMode: 'session' }), changed() {},
+    folders: {
+      list: () => records,
+      acquireAccess: () => () => {},
+      register: async () => { throw new Error('Not used') },
+      requireAvailable: async id => {
+        lookups++
+        if (offline) throw new Error('node-offline')
+        const folder = records.find(record => record.id === id)
+        assert(folder)
+        return folder
+      },
+    },
+    sessions: {
+      getSessionState: id => states.get(id) ?? null,
+      assertFolderAccess: id => { assert(states.has(id)) },
+      assertInitiativeAccess() {},
+      updateConversationMetadata: async () => {},
+      buildSession: async (id, _parent, fields) => {
+        builds++
+        states.set(id, { sessionId: id, segmentIndex: 0, projectId: 'p', ...fields })
+      },
+      deliver: async (sessionId, input) => { deliveries++; return { status: 'accepted', sessionId, inputId: input.id } },
+    },
+  }
+  const service = new TopicService(options)
+  const tool = new SessionTool(service)
+  const context = {
+    projectId: 'p', sessionId: 'web:actor', signal: new AbortController().signal,
+    remoteWorkdir: { nodeId: 'caller-node', capabilityId: 'caller-cap' },
+  } as ExecutionContext
+  const create = async (folderId?: string) => {
+    const result = JSON.parse(await tool.execute({ action: 'create', title: 'Selector', ...(folderId ? { folderId } : {}) }, context))
+    return states.get(result.sessionId)!
+  }
+  for (const selector of ['code', folderIdentifier(local.id, local.name), local.id]) {
+    const state = await create(selector)
+    assert.equal(state.folderId, local.id)
+    assert.equal(state.workdir?.nodeId, 'local')
+    assert.equal(state.workdir?.capabilityId, `local-project-v1:${local.id}`)
+  }
+  for (const selector of ['remote-app', folderIdentifier(remote.id, remote.name), remote.id]) {
+    const state = await create(selector)
+    assert.equal(state.folderId, remote.id)
+    assert.deepEqual(state.workdir, remote.workdir)
+  }
+  const discussion = await create()
+  assert.equal(discussion.folderId, undefined)
+  assert.equal(discussion.workdir, undefined)
+
+  records.push(otherRemote)
+  const beforeRejected = builds
+  for (const selector of ['code', 'unknown', '/opaque/not-on-main', randomUUID()]) {
+    await assert.rejects(create(selector), /Unknown or ambiguous/)
+  }
+  offline = true
+  await assert.rejects(create('remote-app'), /node-offline/)
+  assert.equal(builds, beforeRejected)
+  offline = false
+  for (const folder of [local, otherRemote]) {
+    for (const selector of [folderIdentifier(folder.id, folder.name), folder.id]) {
+      const state = await create(selector)
+      assert.equal(state.folderId, folder.id)
+      assert.equal(state.workdir?.nodeId, folder.kind === 'remote' ? folder.workdir.nodeId : 'local')
+    }
+  }
+
+  const request = { requestId: randomUUID(), title: 'Pinned', folderId: 'remote-app', initialMessage: 'Once' }
+  const [first, retry] = await Promise.all([service.create(request, 'web:actor'), service.create(request, 'web:actor')])
+  assert.equal(first.sessionId, retry.sessionId)
+  assert.equal(retry.initialMessageStatus, 'not_replayed')
+  assert.equal(deliveries, 1)
+  const beforeRetry = { builds, lookups }
+  // The selector now names a different node. A restarted service must use the
+  // persisted request hash before resolution and must never replay the kickoff.
+  records = [local, { ...otherRemote, name: 'Remote App' }]
+  offline = true
+  const restarted = new TopicService(options)
+  const persistedRetry = await restarted.create(request, 'web:actor')
+  assert.equal(persistedRetry.sessionId, first.sessionId)
+  assert.equal(persistedRetry.folderId, remote.id)
+  assert.deepEqual(states.get(first.sessionId)?.workdir, remote.workdir)
+  assert.deepEqual({ builds, lookups }, beforeRetry)
+  assert.equal(deliveries, 1)
+  await assert.rejects(restarted.create({ ...request, folderId: otherRemote.id }, 'web:actor'), /requestId/)
+  await assert.rejects(tool.execute({ action: 'create', title: 'No node override', folderId: local.id, nodeId: 'child-b' }, context))
+  assert.equal(builds, beforeRetry.builds)
+})

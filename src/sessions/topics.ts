@@ -8,6 +8,7 @@ import { absoluteDirectoryPath, type FolderRegistry } from '../folders/registry.
 import type { InputSource } from './input.ts'
 import { parseSessionName } from './session-name.ts'
 import { workBindingSchema } from './work-policy.ts'
+import { selectFolder } from '../folders/identifier.ts'
 
 const briefFields = {
   title: z.string().transform(parseSessionName),
@@ -16,7 +17,7 @@ const briefFields = {
 const createRequest = z.object({
   ...briefFields,
   requestId: z.string().uuid().transform(value => value.toLowerCase()).optional(),
-  folderId: z.string().uuid().optional(),
+  folderId: z.string().trim().min(1).max(512).optional(),
   agentType: z.string().trim().min(1).max(100).default('general'),
   initiativeId: z.string().trim().min(1).max(600).optional(),
   initialMessage: z.string().trim().min(1).max(32_000).optional(),
@@ -57,7 +58,7 @@ export interface TopicServiceOptions {
     'assertInitiativeAccess' | 'updateConversationMetadata' | 'deliver' | 'alignment'>
   listStates: () => Promise<SessionState[]>
   firstMessage?: (sessionId: string) => Promise<string | null>
-  folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess'>
+  folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess' | 'list'>
   resolveAgent: (name: string) => { defaultMode: string } | undefined
   changed: (sessionId?: string) => void
 }
@@ -144,7 +145,14 @@ export class TopicService {
           return this.existing(sessionId, topicRequestHash, parsed.initialMessage !== undefined)
         }
         if (parsed.initiativeId) this.options.sessions.assertInitiativeAccess(parsed.initiativeId)
-        const folder = parsed.folderId ? await this.options.folders.requireAvailable(parsed.folderId, signal) : undefined
+        // Hash the submitted selector, not its current resolution. Check persisted retries
+        // first so a rename, collision or reassignment cannot redirect an existing request.
+        let folderId: string | undefined
+        if (parsed.folderId) {
+          try { folderId = selectFolder(this.options.folders.list(), parsed.folderId).id }
+          catch (error) { throw new TopicError(error instanceof Error ? error.message : String(error)) }
+        }
+        const folder = folderId ? await this.options.folders.requireAvailable(folderId, signal) : undefined
         signal?.throwIfAborted()
         const alignment = this.options.sessions.alignment
         if (parsed.work && (!createdBySessionId || !alignment)) throw new TopicError('Managed creation requires a Project session controller and Work service.')

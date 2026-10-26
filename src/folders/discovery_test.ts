@@ -16,6 +16,7 @@ import { VirtualFs } from '../vfs/virtual-fs.ts'
 import type { RemoteFolderRecord } from './contracts.ts'
 import { ProjectFolderDiscovery } from './discovery.ts'
 import { FolderRegistry } from './registry.ts'
+import { selectFolder } from './identifier.ts'
 
 function executionContext(projectId = DEFAULT_PROJECT_ID): ExecutionContext {
   return { projectId, signal: new AbortController().signal } as ExecutionContext
@@ -49,10 +50,10 @@ test('live project-scoped registry provides complete read/search discovery and c
     vfs.mount('v:project', 'current project metadata', handlers.read, handlers.list)
     const context = executionContext()
     const read = new ReadTool(workspace, vfs)
-    const all = JSON.parse(requireToolText(await read.execute({ path: 'v:project/folders' }, context)))
-    assert.equal(all.folders.length, 11)
-    assert.deepEqual(JSON.parse((await handlers.list(context))[0].content), all)
-    assert(all.folders.every((folder: { availability: { available: boolean } }) => folder.availability.available))
+    const all = requireToolText(await read.execute({ path: 'v:project/folders' }, context))
+    assert.equal(all.split('\n').filter(line => line.startsWith('- **')).length, 11)
+    assert.equal((await handlers.list(context))[0].content, all)
+    assert.doesNotMatch(all, /unavailable:/)
     assert(!JSON.stringify(all).includes('hidden-folder'))
     const last = registry.list().at(-1)!
     const glob = await new GlobTool(workspace, vfs).execute({ path: 'v:project', pattern: 'folders/*' }, context)
@@ -68,22 +69,22 @@ test('live project-scoped registry provides complete read/search discovery and c
 
     await catalog.rename(DEFAULT_PROJECT_ID, 'Renamed live project')
     await rm(last.path, { recursive: true })
-    const updated = JSON.parse(requireToolText(await read.execute({ path: 'v:project/folders' }, context)))
-    assert.equal(updated.project.name, 'Renamed live project')
-    assert.deepEqual(updated.folders.at(-1).availability, { available: false, reason: 'capability-offline' })
+    const updated = requireToolText(await read.execute({ path: 'v:project/folders' }, context))
+    assert.match(updated, /^# Renamed live project/)
+    assert.match(updated, /unavailable: capability-offline/)
     const promptContext = { projectId: DEFAULT_PROJECT_ID } as SessionPromptContext
     const prompt = projectProvider(discovery).getPromptSection(promptContext) as string
     assert.match(prompt, /Renamed live project/)
-    assert.match(prompt, /11 registered/)
+    assert.match(prompt, /Project folders: 11/)
     assert.doesNotMatch(prompt, /displayPath=/)
     const addedPath = join(root, 'added-live')
     await mkdir(addedPath)
     await registry.register(addedPath)
-    assert.equal(JSON.parse(requireToolText(await read.execute({ path: 'v:project/folders' }, context))).folders.length, 12)
+    assert.equal(requireToolText(await read.execute({ path: 'v:project/folders' }, context)).split('\n').filter(line => line.startsWith('- **')).length, 12)
     const moved = registry.list()[0]
     await catalog.changeFolderProject(DEFAULT_PROJECT_ID, moved.id, other.id)
     const afterMove = await read.execute({ path: 'v:project/folders' }, context)
-    assert.equal(JSON.parse(requireToolText(afterMove)).folders.length, 11)
+    assert.equal(requireToolText(afterMove).split('\n').filter(line => line.startsWith('- **')).length, 11)
     assert(!requireToolText(afterMove).includes(moved.id))
     await assert.rejects(read.execute({ path: `v:project/folders/${moved.id}` }, context), /Unknown current-project/)
   })
@@ -112,7 +113,7 @@ test('remote discovery uses only capability state, preserves display metadata, a
     },
   })
   const read = discovery.handlers().read
-  const offline = JSON.parse(await read('folders', executionContext())).folders[0]
+  const offline = JSON.parse(await read(`folders/${remote.id}`, executionContext())).folder
   assert.deepEqual(offline.availability, { available: false, reason: 'node-offline' })
   assert.equal(offline.pathUsage, 'remote-display-only')
   assert.equal(offline.path, remote.path)
@@ -120,7 +121,7 @@ test('remote discovery uses only capability state, preserves display metadata, a
   const prompt = projectProvider(discovery).getPromptSection({ projectId: DEFAULT_PROJECT_ID, folderId: remote.id } as SessionPromptContext) as string
   assert.doesNotMatch(prompt, /Selected Project folder|kind=remote/)
   state = { node: 'online', capability: { kind: 'workdir', online: true, path: resolve('.must-not-be-used') } }
-  const online = JSON.parse(await read('folders', executionContext())).folders[0]
+  const online = JSON.parse(await read(`folders/${remote.id}`, executionContext())).folder
   assert.deepEqual(online.availability, { available: true, locality: 'remote' })
   assert(!JSON.stringify(online).includes('.must-not-be-used'))
 })
@@ -153,9 +154,85 @@ test('empty discovery returns current project metadata without creating or selec
     workdirCapabilityLookup: () => { throw new Error('Empty discovery must not probe the filesystem') },
   })
   const handlers = discovery.handlers()
-  const result = JSON.parse(await handlers.read('folders', executionContext()))
-  assert.deepEqual(result.project, project)
-  assert.deepEqual(result.folders, [])
-  assert.match(result.notice, /does not select a folder/)
+  const result = await handlers.read('folders', executionContext())
+  assert.match(result, /^# Empty project/)
+  assert.match(result, /No registered folders/)
+  assert.match(result, /does not select a folder/)
+  assert.equal((await handlers.list(executionContext()))[0].content, result)
   assert.equal((await handlers.list(executionContext())).length, 1)
+})
+
+test('Markdown groups by node identity, renders live names, unique selectors and inert metadata', async () => {
+  const base = { projectId: DEFAULT_PROJECT_ID, createdAt: '' }
+  const remote = (id: string, nodeId: string, name = 'app'): RemoteFolderRecord => ({
+    ...base, id, name, kind: 'remote', path: 'Z:\\remote',
+    workdir: { version: 1, nodeId, capabilityId: id, displayPathSnapshot: 'Z:\\remote' },
+    identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
+  })
+  const folders = [
+    { ...base, id: '12345678-0000-0000-0000-000000000001', name: 'app', path: 'C:\\app' },
+    remote('12345678-0000-0000-0000-000000000002', 'child-a'),
+    remote('bbbbbbbb-0000-0000-0000-000000000003', 'child-b'),
+    remote('cccccccc-0000-0000-0000-000000000004', 'child-a', 'second'),
+    remote('dddddddd-0000-0000-0000-000000000005', 'unknown', '<img>\n**bad**'),
+  ]
+  folders[4]!.path = 'Z:\\[link](https://invalid)\n## injected <script>& `code` | cell'
+  let displayName = 'Worker'
+  const discovery = new ProjectFolderDiscovery({
+    projectId: DEFAULT_PROJECT_ID, workspace: resolve('.test-data'),
+    getProject: () => ({ ...base, id: DEFAULT_PROJECT_ID, name: 'Project\n# <img> [bad](url)' }),
+    registry: { list: () => folders },
+    getNodeInventory: () => ({ version: 1, nodes: [
+      { nodeId: 'main-id', displayName: 'Host', role: 'main', connection: 'connected', capabilities: [] },
+      ...['child-a', 'child-b'].map(nodeId => ({ nodeId, displayName, role: 'child' as const, connection: 'offline' as const, capabilities: [] })),
+    ] }),
+    workdirCapabilityLookup: () => ({ node: 'offline' }),
+  })
+  const handlers = discovery.handlers()
+  const text = await handlers.read('folders', executionContext())
+  assert.equal((await handlers.list(executionContext()))[0].content, text)
+  assert.equal(text.split('\n').filter(line => line.startsWith('## ')).length, 4)
+  assert.match(text, /## Main: Host/)
+  assert(text.includes('Worker \\(child-a\\)'))
+  assert(text.includes('Worker \\(child-b\\)'))
+  assert.match(text, /## unknown/)
+  assert.match(text, /unavailable: node-offline/)
+  assert.doesNotMatch(text, /<img>|<script>|\n## injected|\[link\]\(https:/)
+  assert.match(text, /&lt;script&gt;&amp;/)
+  const selectors: string[] = []
+  for (const folder of folders) {
+    const detail = JSON.parse(await handlers.read(`folders/${folder.id}`, executionContext())).folder
+    selectors.push(detail.identifier)
+    assert.equal(selectFolder(folders, detail.identifier), folder)
+    assert.equal(detail.path, folder.path)
+  }
+  assert.equal(new Set(selectors).size, folders.length)
+  assert.equal(selectors[0], folders[0].id)
+  assert.equal(selectors[1], folders[1].id)
+  assert.equal(selectors[3], 'second')
+  displayName = 'Renamed'
+  assert.match(await handlers.read('folders', executionContext()), /## Renamed/)
+})
+
+test('displayed selectors reject collisions with other slugs and authoritative full IDs', async () => {
+  const folders = [
+    { id: 'aaaaaaaa-0000-0000-0000-000000000001', name: 'app' },
+    { id: 'bbbbbbbb-0000-0000-0000-000000000002', name: 'app' },
+    { id: 'cccccccc-0000-0000-0000-000000000003', name: 'app-aaaaaaaa' },
+    { id: 'dddddddd-0000-0000-0000-000000000004', name: 'aaaaaaaa-0000-0000-0000-000000000001' },
+  ].map(folder => ({ ...folder, projectId: DEFAULT_PROJECT_ID, path: 'C:\\folder', createdAt: '' }))
+  const discovery = new ProjectFolderDiscovery({
+    projectId: DEFAULT_PROJECT_ID, workspace: resolve('.test-data'),
+    getProject: () => ({ id: DEFAULT_PROJECT_ID, name: 'Project', createdAt: '' }),
+    registry: { list: () => folders }, workdirCapabilityLookup: () => ({ node: 'offline' }),
+  })
+  const handlers = discovery.handlers()
+  const text = await handlers.read('folders', executionContext())
+  assert.match(text, /## Main\n/)
+  const selectors = [...text.matchAll(/^- \*\*(.+?)\*\*:/gm)].map(match => match[1]!)
+  assert.equal(selectors.length, folders.length)
+  selectors.forEach((selector, i) => assert.equal(selectFolder(folders, selector), folders[i]))
+  assert.equal(selectors[0], folders[0].id)
+  assert.notEqual(selectors[2], folders[2].name)
+  assert.notEqual(selectors[3], folders[3].name)
 })
