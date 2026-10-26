@@ -162,7 +162,7 @@ export class McpConnection {
           )
         }
         // Merge workspace .env (lowest priority) → process env → config env (highest priority)
-        const dotEnv = this.cwd ? await loadDotEnv(this.cwd) : {}
+        const dotEnv = this.cwd && config.name !== 'chrome-devtools' ? await loadDotEnv(this.cwd) : {}
         signal.throwIfAborted()
         const mergedEnv = {
           ...dotEnv,

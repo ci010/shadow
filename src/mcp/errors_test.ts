@@ -85,16 +85,17 @@ test('JSON syntax excerpts and stderr are sanitized before error construction', 
 
 test('npm package resolution and engine failures are not retriable MCP connection failures', () => {
   for (const prefix of ['npm error', 'npm ERR!']) {
-    for (const code of ['ETARGET', 'E404', 'EBADENGINE']) {
+    for (const code of ['ETARGET', 'E404', 'EBADENGINE', 'E401']) {
       const failure = mcpFailure(Object.assign(new Error('Connection closed'), { code: -32000 }), {
         phase: 'connect', config: { name: 'fixture', transport: 'stdio', command: 'npx' },
         stderr: `${prefix} code ${code}\n${prefix} failed at https://user:secret@example.invalid/pkg?token=secret\n`,
       })
       assert.equal(failure.diagnostic.packageErrorCode, code)
-      assert.equal(failure.diagnostic.category, code === 'EBADENGINE' ? 'runtime_incompatible' : 'package_unavailable')
+      assert.equal(failure.diagnostic.category, code === 'E401' ? 'authentication_required' : code === 'EBADENGINE' ? 'runtime_incompatible' : 'package_unavailable')
       assert.equal(failure.diagnostic.rpcCode, -32000)
       assert.equal(failure.diagnostic.systemCode, undefined)
       assert.equal(failure.diagnostic.retryable, false)
+      assert.equal(failure.diagnostic.needsUserAction, true)
       assert.equal(failure.diagnostic.toolExecution, 'not_started')
       assert.match(failure.diagnostic.nextAction, /before MCP initialized/)
       assert.doesNotMatch(inspect(failure), /secret|user:/)

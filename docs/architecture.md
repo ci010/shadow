@@ -1898,26 +1898,44 @@ initializing browsers. Global VFS search includes already-loaded browser contrac
 under instance-specific paths without reconnecting. Uninitialized browser sources
 remain deferred even when explicitly selected; browser_setup initializes them.
 Installed MCP global search remains offline.
-Use `browser_setup` with `{action: "discover"}` to guide the user's choice of
-running browser/profile. Chrome 144+ offers user-enabled remote debugging at
+Use `browser_setup` with `{action: "connect"}` as the everyday idempotent entry.
+It reuses an unambiguous session binding or binds the approved Project managed choice,
+restoring the same managed copy after a crash. With no binding or approved choice,
+connect returns `needs-selection` candidates without copying or launching. Explicit
+`{action: "discover"}` remains inventory-only. Before initial `{action: "managed"}`,
+obtain approval for copying the selected profile and browser-wide Project access,
+even if there is only one candidate. The Project owns the managed process and copy;
+sessions retain independent adapter bindings and tool permissions.
+Compatibility only with explicit approval: Chrome 144+ offers user-enabled remote debugging at
 `chrome://inspect/#remote-debugging`: after the user enables it and approves access,
 bind `{action: "autoConnect", channel: "stable"}` (or beta/dev/canary).
 An optional user-identified absolute `userDataDir` selects a data root, not a
 security boundary or a single profile. Alternatively `{action: "attach", endpoint}`
 binds an already-enabled loopback HTTP(S)/browser WS(S) CDP endpoint, including
-compatible Edge, Brave or Electron. Shadow never scans ports, launches browsers,
-copies profiles, enables debugging, or stops/restarts user browsers. Chrome 136+
+compatible Edge, Brave or Electron. Shadow never silently falls back to a human
+browser, scans its ports, enables its debugging, or stops/restarts it. Managed launch
+uses only the explicitly authorized separate profile copy, never the original root. Chrome 136+
 restrictions on command-line debugging of the default data directory must be respected.
 
 CDP access is browser-wide and may expose multiple profiles/tabs. Confirm that
 boundary, then use `list_pages` and explicit `pageId` for every page operation.
 `select_page` is hidden and rejected; missing/invalid IDs never fall back to a
-selected page. The built-in adapter is pinned to chrome-devtools-mcp@1.10.1 and
-incompatible schemas fail closed. Slim/disabled page routing and unreviewed CLI
-flags are rejected. Generic MCP servers retain their existing behavior.
+selected page. The built-in adapter is a shipped exact dependency,
+chrome-devtools-mcp@1.10.1, resolved relative to application code and launched
+directly with the application's Node executable (Electron uses Node mode).
+Backend build/staging copies its complete published package, including licenses,
+into dist/node_modules; no runtime npx, package download, registry selection or
+business-folder .npmrc is involved. Its process cwd is the adapter package, not
+the session folder, and Chrome does not load folder .env files. Session workdir
+MCP roots remain separately bound for file security. Incompatible schemas fail
+closed. Slim/disabled page routing and unreviewed CLI flags are rejected. Generic MCP servers retain their existing behavior.
 
-Setup loads live MCP contracts, not browser business RPCs: `ready` means adapter
-ready, not proof of CDP connection or profile identity. It returns an opaque
+Lower-level managed/attach/autoConnect setup loads live MCP contracts only:
+`adapterReady` means MCP initialization. Connect additionally invokes actual
+`list_pages` using the caller's existing permission. Success returns the pages,
+`status: "connected"` and `ready: true`; failed probes clear readiness. `ready`
+records the successful probe, not continuous liveness or verified profile/login identity.
+Use the returned pages without a redundant immediate list_pages call. Setup returns an opaque
 `instance` ID; search `v:tools/chrome-devtools/<instance>` and pass `instance` to
 `invoke_tool` alongside `args: {pageId: ...}`. One binding permits omitted instance;
 multiple bindings require it. Invalid/foreign IDs never fall back. Binding choices

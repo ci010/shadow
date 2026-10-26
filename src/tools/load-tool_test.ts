@@ -1,3 +1,4 @@
+import { bundledChromeAdapter } from '../browser/chrome-adapter.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
@@ -8,9 +9,9 @@ import { McpConnection } from '../mcp/client.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import type { ExecutionContext } from './context.ts'
 import { InvokeTool } from './invoke-tool.ts'
-import { CHROME_MCP_PACKAGE, chromeToolAllowed, validateChromeCall } from '../browser/chrome-contract.ts'
+import { chromeToolAllowed, validateChromeCall } from '../browser/chrome-contract.ts'
 
-const config = { name: 'chrome-devtools', transport: 'stdio' as const, command: 'npx', args: [CHROME_MCP_PACKAGE] }
+const config = { name: 'chrome-devtools', transport: 'stdio' as const, ...bundledChromeAdapter() }
 
 test('all config argument sources reject launch and implicit routing before MCP connect', async t => withTempWorkspace(async home => {
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('must not connect') })
@@ -34,12 +35,12 @@ test('all config argument sources reject launch and implicit routing before MCP 
 
 test('unsupported version, command, and malformed persistent config fail closed', async t => withTempWorkspace(async home => {
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('must not connect') })
-  for (const change of [{ args: ['chrome-devtools-mcp@latest'] }, { args: ['chrome-devtools-mcp@1.9.0'] }, { command: 'other' }]) {
+  for (const change of [{ args: ['chrome-devtools-mcp@latest'] }, { args: ['chrome-devtools-mcp@1.9.0'] }, { command: 'other' }, { env: { NODE_OPTIONS: '--require=unreviewed.cjs' } }]) {
     const importer = new ImportTool(new Map<string, LoadableEntry>([['chrome-devtools', { config: { ...config, ...change } }]]), home, 'p')
     const base = new Tools(home); base.register(new InvokeTool(importer))
     const tools = new SessionTools(base, home)
     const ctx = { tools, projectId: 'p', signal: new AbortController().signal } as ExecutionContext
-    assert.match(String(await tools.execute('invoke_tool', { name: 'browser_setup', args: { action: 'autoConnect', channel: 'stable' } }, ctx)), /reviewed npx/)
+    assert.match(String(await tools.execute('invoke_tool', { name: 'browser_setup', args: { action: 'autoConnect', channel: 'stable' } }, ctx)), /reviewed bundled/)
     await tools.resetDynamicAndWait()
   }
   assert.equal(connect.mock.callCount(), 0)

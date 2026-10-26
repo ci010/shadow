@@ -6,7 +6,7 @@ import { DiscordPatrolTool } from '../../tools/discord-patrol.ts'
 import { WatermarkTool } from '../../tools/watermark.ts'
 import { profileBindings } from '../../agent-authoring/capability-profiles.ts'
 import { FOLDER_PICKER_CAPABILITY, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../../folders/picker.ts'
-import { CHROME_MCP_PACKAGE } from '../../browser/chrome-contract.ts'
+import { bundledChromeAdapter } from '../../browser/chrome-adapter.ts'
 import { SessionProxyTool } from '../../tools/session-proxy.ts'
 import { createSelfSessionHandler } from '../../vfs/session.ts'
 import { registerDevelopmentRestart } from '../../tools/development-restart.ts'
@@ -426,10 +426,9 @@ export async function createProjectRuntime(
   loadable.set('chrome-devtools', {
     config: {
       name: 'chrome-devtools',
-      description: 'Project-shared managed Chromium-family browser (Chrome/Edge/Brave/Chromium) using an explicitly selected copied profile. Start with browser_setup discover for installed browser/profile candidates (agent discovers paths, never asks the user for paths), then managed; unique profiles auto-select, ambiguous profile names require clarification, existing Project choice is reused; compatibility autoConnect/attach only with explicit approval. Page tools require pageId; CDP access is browser-wide. Guidance: v:skills/chrome-devtools.',
+      description: 'Project-shared managed Chromium-family browser (Chrome/Edge/Brave/Chromium) using an explicitly selected copied profile. Start with browser_setup connect: reuse an unambiguous session binding or approved Project managed choice and verify actual list_pages; multiple bindings require instance. No choice returns needs-selection candidates without launch/copy (agent discovers paths, never asks the user for paths); obtain profile-copy and browser-wide access approval before initial managed setup, even with one candidate. Explicit discover is inventory-only. Compatibility autoConnect/attach only with explicit approval. Page tools require pageId; CDP access is browser-wide. Guidance: v:skills/chrome-devtools.',
       transport: 'stdio',
-      command: 'npx',
-      args: [CHROME_MCP_PACKAGE],
+      ...bundledChromeAdapter(),
     },
     configPath: workspacePath(workspace, '.chrome-devtools.json'),
   })

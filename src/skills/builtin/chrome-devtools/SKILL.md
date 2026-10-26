@@ -35,10 +35,32 @@ Use short English keywords from this table even when the task is in another
 language: tool search uses case-sensitive regular expressions, not semantic matching. These are routing hints, not a
 fixed inventory or a guarantee that every installed version has every feature.
 
+## Connect first; choose a source only when needed
+
+The everyday entry is `browser_setup` with `action: "connect"` (optional `instance`).
+It reuses this session's binding, otherwise binds the approved Project managed choice,
+and restores that same managed copy after a crash. Success returns `status: "connected"`,
+`ready: true`, actual `list_pages`, source and usage. MCP initialization alone is only
+`adapterReady`, not proof of CDP access. A failed page-list probe must not be described
+as connected. Multiple bindings require an explicit instance; never silently pick one.
+Reusing a binding grants no extra tool authority. Sessions share browser-wide pages,
+not owned tabs. No automatic fallback to a human browser is permitted.
+
+With no binding or approved choice, connect returns `needs-selection` and discovery
+candidates without copying or launching. Even one candidate does not authorize copying.
+After approved initial `managed` setup (or explicitly approved compatibility setup),
+call connect to verify the real browser connection.
+
 ## Choose the source profile explicitly
 
 Discover setup with `search({ handler: "grep", path: "v:tools", query: "browser_setup" })`.
 Read its contract, then invoke:
+
+```
+invoke_tool({ name: "browser_setup", args: { action: "connect" } })
+```
+
+For inventory-only inspection without connection or copying, use explicit discover:
 
 ```
 invoke_tool({ name: "browser_setup", args: { action: "discover" } })
@@ -48,7 +70,7 @@ Discovery returns installed supported browsers, stable installation IDs, matchin
 and profile candidates (directory identifier and display name only), plus the existing
 Project shared choice. It never launches/copies or reads cookies/history/credentials.
 The agent/tool discovers paths: do not ask the user for executable or root paths.
-Reuse an existing Project choice first (managed with no selectors). Otherwise choose
+Reuse an existing Project choice first (connect with no selectors). Otherwise choose
 the user's browser/installation and match their stated profile name. Unique candidates
 are selected automatically. Ask which profile name only when multiple candidates are
 ambiguous; never silently choose Default or last-used. If multiple browsers are installed,
@@ -129,12 +151,16 @@ explicitly authorized copy. Setup does not change Project MCP configuration.
 
 ## Address pages explicitly
 
-Setup loads adapter contracts; `ready` means adapter-ready, not proof of browser
-connection or human profile identity. The adapter establishes CDP on the first
-browser operation. List pages and verify the intended target before acting. If
-wrong, disconnect and ask the user, rather than choosing another browser silently.
+Lower-level managed/attach/autoConnect setup loads adapter contracts only:
+`adapterReady` means MCP initialization. `ready` records a successful connect
+`list_pages` probe, not continuous liveness or verified human profile identity.
+Use the pages returned by connect to verify the intended target before acting;
+no duplicate list_pages is needed immediately after successful connect. Request a
+fresh list when page state may have changed or after lower-level setup without connect.
+If wrong, disconnect and ask the user, rather than choosing another browser silently.
 
 ```
+// Only when a fresh page list is needed (connect already returns one):
 invoke_tool({ name: "chrome-devtools__list_pages", instance: "<id>", args: {} })
 invoke_tool({ name: "chrome-devtools__take_snapshot", instance: "<id>", args: { pageId: 1 } })
 ```

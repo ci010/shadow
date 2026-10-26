@@ -24,7 +24,8 @@ import { readSkillDirectory } from '../skills/edit-store.ts'
 import { parseSkillFile } from '../skills/parse.ts'
 import { SharedChrome } from '../browser/shared-chrome.ts'
 import { attachmentTarget, SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
-import { CHROME_MCP_PACKAGE, chromeToolAllowed } from '../browser/chrome-contract.ts'
+import { chromeToolAllowed } from '../browser/chrome-contract.ts'
+import { bundledChromeAdapter } from '../browser/chrome-adapter.ts'
 import { BrowserSetupTool } from './browser-setup.ts'
 import type { VirtualEntry, VirtualListOptions } from '../vfs/virtual-fs.ts'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js'
@@ -254,6 +255,40 @@ export class ImportTool implements Tool {
             await this.browsers.close(context.tools, instance)
             return JSON.stringify({ instance: instance.id, closed: true })
           }
+          if (request.action === 'connect') {
+            // Setup authority is not authority to execute arbitrary borrowed tools.
+            if (!context.tools.canUseDynamic('chrome-devtools__list_pages')) return 'Error: list_pages is not available for this agent type; connection was not verified.'
+            let instance = this.browsers.resolve(context.tools, request.instance)
+            if (typeof instance === 'string') {
+              if (request.instance || this.browsers.list(context.tools).length) return instance
+              const choice = this.sharedChrome.selectedChoice()
+              if (!choice) return 'Error: no approved Project browser choice; use discover and obtain profile-copy and browser-wide access approval before managed.'
+              instance = this.browsers.create(context.tools, { mode: 'managed', ...choice, arguments: [] })
+            }
+            const binding = instance
+            binding.ready = false
+            try {
+              return await this.withImports(binding.tools, signal, async () => {
+                const imported = await this.loadByName('chrome-devtools', binding.tools, [], { signal, cwd: context.cwd ?? this.workspace })
+                if (typeof imported === 'string') return imported
+                const pages = binding.tools.activeDynamicTools().find(tool => tool.name === 'chrome-devtools__list_pages')
+                if (!(pages instanceof McpToolAdapter)) return 'Error: list_pages is unavailable; CDP connection was not verified.'
+                const validate = new AjvJsonSchemaValidator().getValidator(pages.parameters as JsonSchemaType)
+                if (!validate({}).valid) return 'Error: list_pages contract changed; CDP connection was not verified.'
+                const result = await pages.execute({}, { ...context, signal, tools: binding.tools })
+                signal.throwIfAborted()
+                if ((typeof result !== 'string' && result.isError) || /^(Error|Blocked):/.test(toolResultText(result))) {
+                  return JSON.stringify({ ...this.browserReceipt(binding), status: 'connection-failed', list_pages: result })
+                }
+                binding.ready = true
+                return JSON.stringify({ ...this.browserReceipt(binding), status: 'connected', list_pages: result })
+              })
+            } catch (error) {
+              binding.ready = false
+              signal.throwIfAborted()
+              return `Error: browser connection/list_pages failed: ${error instanceof Error ? error.message : String(error)}`
+            }
+          }
           const instance = this.browsers.create(context.tools, request.target)
           const result = await this.withImports(instance.tools, signal, () =>
             this.loadByName('chrome-devtools', instance.tools, [], { signal, cwd: context.cwd ?? this.workspace }))
@@ -276,12 +311,12 @@ export class ImportTool implements Tool {
     return {
       instance: instance.id, source: 'v:tools/chrome-devtools', mode: instance.target.mode,
       copyReport: instance.target.mode === 'managed' ? this.sharedChrome.copyReport() : undefined,
-      owned: instance.target.mode === 'managed', ready: instance.ready, binding: instance.target,
+      adapterReady: instance.adapterReady ?? false, owned: instance.target.mode === 'managed', ready: instance.ready, binding: instance.target,
       lifetime: instance.target.mode === 'managed'
         ? 'Project runtime shared browser; session close/sleep/reset only disconnects this binding. Project shutdown stops its managed child; copy is retained.'
         : 'Session only; sleep/reset disconnects and forgets this binding. Browser remains user-owned.',
       scope: 'Browser-wide CDP access, not profile isolation. pageId addresses a page only.',
-      usage: 'Search with handler "glob" or "grep" and path "v:tools/chrome-devtools/<instance>". Pass instance to invoke_tool({name:"chrome-devtools__...",instance,args:{...}}).',
+      usage: `Search with handler "glob" or "grep" and path "v:tools/chrome-devtools/${instance.id}". Pass instance to invoke_tool({name:"chrome-devtools__...",instance,args:{...}}).`,
     }
   }
 
@@ -662,7 +697,7 @@ export class ImportTool implements Tool {
     } finally {
       if (this.imports.get(tools) === pending) this.imports.delete(tools)
       const instance = this.browsers.forTools(tools)
-      if (signal.aborted && instance && !instance.ready) await this.browsers.close(instance.owner, instance)
+      if (signal.aborted && instance && !instance.adapterReady) await this.browsers.close(instance.owner, instance)
     }
   }
 
@@ -834,12 +869,12 @@ export class ImportTool implements Tool {
             const result = await this.loadMcp(name, entry, instance.tools, instanceArgs, { ...options, signal })
             signal.throwIfAborted()
             if (typeof result !== 'string') {
-              instance.ready = true
+              instance.adapterReady = true
               instance.importArgs = [...instanceArgs]
-            } else if (!instance.ready) await this.browsers.close(instance.owner, instance)
+            } else if (!instance.adapterReady) await this.browsers.close(instance.owner, instance)
             return result
           } catch (error) {
-            if (!instance.ready) {
+            if (!instance.adapterReady) {
               try { await this.browsers.close(instance.owner, instance) }
               catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Browser setup and cleanup failed') }
             }
@@ -904,10 +939,12 @@ export class ImportTool implements Tool {
     let effectiveArgs = [...(connOwner.config.args ?? []), ...configArgs, ...extraCliArgs]
     if (managedChrome) {
       try {
-        const [packageName, ...baseArgs] = connOwner.config.args ?? []
+        const bundled = bundledChromeAdapter()
+        const [adapterEntry, ...baseArgs] = connOwner.config.args ?? []
         if (connOwner.config.transport !== 'stdio' || connOwner.config.url ||
-          connOwner.config.command !== 'npx' || packageName !== CHROME_MCP_PACKAGE) {
-          throw new Error(`Chrome requires the reviewed npx ${CHROME_MCP_PACKAGE} adapter`)
+          connOwner.config.command !== bundled.command || adapterEntry !== bundled.args[0] ||
+          !isDeepStrictEqual(connOwner.config.env, bundled.env)) {
+          throw new Error('Chrome requires the reviewed bundled adapter')
         }
         const parsed = managedChromeArgs([...baseArgs, ...configArgs, ...extraCliArgs])
         const instance = this.browsers.forTools(sessionTools)
@@ -917,7 +954,7 @@ export class ImportTool implements Tool {
           ? attachmentTarget(await this.sharedChrome.ensure(instance.target, options.signal)).arguments
           : instance.target.arguments
         options.signal.throwIfAborted()
-        effectiveArgs = [packageName, ...parsed.args, '--page-id-routing', ...targetArgs]
+        effectiveArgs = [adapterEntry, ...parsed.args, '--page-id-routing', ...targetArgs]
       } catch (error) {
         return `Error loading Chrome: ${error instanceof Error ? error.message : String(error)}`
       }
@@ -965,7 +1002,9 @@ export class ImportTool implements Tool {
     }
     const connect = async () => {
       checkCurrent()
-      const conn = new McpConnection(config, browserRoot ?? options.cwd ?? this.workspace, browserRoot)
+      // Adapter startup is application-owned; file roots remain session-owned.
+      const cwd = config.name === 'chrome-devtools' ? bundledChromeAdapter().cwd : browserRoot ?? options.cwd ?? this.workspace
+      const conn = new McpConnection(config, cwd, browserRoot)
       try {
         await conn.connect(options.signal)
         checkCurrent()

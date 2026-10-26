@@ -144,6 +144,9 @@ importers:
       '@opentelemetry/sdk-trace-node':
         specifier: ^2.11.0
         version: 2.11.0(@opentelemetry/api@1.9.1)
+      chrome-devtools-mcp:
+        specifier: 1.10.1
+        version: 1.10.1
       croner:
         specifier: ^10.0.1
         version: 10.0.1
@@ -2028,6 +2031,19 @@ packages:
   chownr@3.0.0:
     resolution: {integrity: sha1-mFXmTs0kCpzEJnzopKpdJKHaFeQ=}
     engines: {node: '>=18'}
+
+  chrome-devtools-mcp@1.10.1:
+    resolution: {integrity: sha512-Klw6HWDqHC/XS1JwZldd2r49aUhbUJN9m9Mvcx4SEueIPXtzuQX+QelxAViobv8YUkDZ7HWDrmViR6LeYK0wAw==}
+    engines: {node: ^20.19.0 || ^22.12.0 || >=23}
+    hasBin: true
+    peerDependencies:
+      '@blackwell-systems/gcf': ^2.2.2
+      '@toon-format/toon': ^4.1.0
+    peerDependenciesMeta:
+      '@blackwell-systems/gcf':
+        optional: true
+      '@toon-format/toon':
+        optional: true
 
   chromium-pickle-js@0.2.0:
     resolution: {integrity: sha1-BKEGZywYsIWrd02YPfo+oTjyIgU=}
@@ -5874,6 +5890,8 @@ snapshots:
       readdirp: 5.1.1
 
   chownr@3.0.0: {}
+
+  chrome-devtools-mcp@1.10.1: {}
 
   chromium-pickle-js@0.2.0: {}
 

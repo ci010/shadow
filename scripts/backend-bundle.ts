@@ -13,8 +13,10 @@ export const backendEntries = [
   'runtime/startup-profile-preload', 'script-runtime/runtime', 'channels/feishu-transport',
   'execution/computer/agent-desktop-worker',
 ]
-// These packages resolve adjacent WASM, compiler libraries or native executables at runtime.
-export const backendExternals = ['@jsquash/png', '@jsquash/webp', 'typescript', 'esbuild']
+// Copy these packages intact: adjacent WASM/compiler/native assets and the Chrome
+// adapter child entry (with its bundled dependencies and license notices) are not
+// discoverable as ordinary imports in the backend graph.
+export const backendExternals = ['@jsquash/png', '@jsquash/webp', 'typescript', 'esbuild', 'chrome-devtools-mcp']
 
 /** Compile direct TS entries into the same relocatable layout used in dev and production.
  * Additional entries are useful for native-Node integration tests of exported APIs.

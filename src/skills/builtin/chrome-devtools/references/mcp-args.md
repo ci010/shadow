@@ -1,19 +1,27 @@
 # Chrome DevTools MCP — Connection contract
 
 Browser actions use discovered tools, not shell-launched adapters. The built-in
-adapter is pinned to `chrome-devtools-mcp@1.10.1`; upgrading requires reviewing
+adapter ships as the exact dependency `chrome-devtools-mcp@1.10.1`, launched directly
+by the application Node runtime, never runtime npx/download. It resolves from the
+application installation and does not load the business folder .npmrc or .env.
+A missing/incompatible bundled adapter requires application repair, not a registry
+switch or ad-hoc install. Upgrading requires reviewing
 routing, schemas and disconnect behavior. This is not a promise about arbitrary
 custom MCP servers or host commands.
 
 ## Project-managed copied profile (default)
 
-Start with browser_setup discover: installed supported browsers, stable installation IDs,
+Start with browser_setup connect: reuse a session binding or approved Project choice,
+restore the same managed copy after a crash, and return actual list_pages results.
+Multiple bindings require instance. No choice returns needs-selection (no copy/launch),
+including when only one candidate exists; obtain approval before initial managed setup.
+Explicit discover also returns installed supported browsers, stable installation IDs,
 standard source roots, minimal profile directory/display names, existing shared choice.
 The agent/tool discovers paths; never ask users for executable/root paths. Use managed
 with installation (e.g. edge:stable) or browser, and optional profile display name or
 directory. A sole candidate is automatic; honor the user's named profile and ask only
 for ambiguous choices. No Default/last_used guessing. Reuse an existing Project choice
-with managed and no selectors, without copying or asking again. Confirm copying and
+with connect and no selectors, without copying or asking again. Confirm copying and
 browser-wide Project sharing. Legacy explicit path overrides remain validated, not the
 normal workflow. Only reviewed matching brand/channel executable/root pairs are accepted.
 Discovery reads bounded Local State profile labels only; it does not output account
@@ -72,8 +80,12 @@ debugging yourself. Chrome 136+ rejects debugging flags against its default root
 never launch against that root or bypass its locks. No silent fallback from
 managed copying to human-owned attachment is allowed.
 
-Setup loads MCP contracts without browser business RPCs. ready means adapter-ready,
-not verified profile/login identity. Use list_pages to verify the target first.
+Lower-level managed/attach/autoConnect load MCP contracts (`adapterReady`) without
+browser business RPCs. Connect additionally invokes list_pages with the caller's existing
+permission; only its success sets ready and returns status connected plus actual pages.
+Ready records the last successful connect probe, not ongoing liveness or verified
+profile/login identity. Failures clear ready; no human-browser fallback or tool-authority
+expansion occurs. Inspect returned pages before acting.
 Bindings are session-only; reconnect explicitly with the still-approved choice.
 Reconfirm changed scope/target. Leaf calls borrow but cannot connect/disconnect.
 ## Routing and imports
@@ -120,15 +132,17 @@ separate task covered by `v:skills/mcp-config`.
 - Upstream connection guide: https://github.com/ChromeDevTools/chrome-devtools-mcp#connecting-to-a-running-chrome-instance
 - Chrome default-directory change: https://developer.chrome.com/blog/remote-debugging-port
 
-`src/browser/chrome-package_test.ts` is an opt-in offline compatibility test:
-set `SHADOW_CHROME_MCP_PACKAGE_DIR` to an already installed 1.10.1 package root.
+`src/browser/chrome-package_test.ts` is an offline compatibility test against the
+installed shipped dependency; it runs by default after dependency installation.
 It verifies the package version and starts its Node adapter explicitly configured
 for loopback port 1, with telemetry disabled; only initialize/tools/list execute.
 The full default set (30 upstream tools, 29 exposed) and all eight combinations of
 the supported emulation/performance/network category switches are checked. A second
 test exercises the actual BrowserManager with synthetic DevToolsActivePort data
 and mocked Puppeteer connect/launch, proving failure does not fall back to launch.
-Without the environment variable these tests explicitly skip, never download.
+These tests never download. `scripts/backend-bundle_test.ts` also relocates the
+backend outside the checkout and initializes/lists tools using both Node and
+Electron Node mode with no PATH launcher and synthetic hostile folder configuration.
 
 Lifecycle/copy tests use synthetic profile files and injected process/MCP boundaries.
 No tests here verify actual Chrome launch, login inheritance, encryption portability,

@@ -7,6 +7,7 @@ import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 
 const requestSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('connect'), instance: z.string().min(1).optional() }).strict(),
   z.object({ action: z.literal('discover') }).strict(),
   z.object({ action: z.literal('managed'), browser: z.enum(managedBrowserNames).optional(), installation: z.string().min(1).optional(), profile: z.string().trim().min(1).optional(), executablePath: z.string().trim().min(1).optional(), userDataDir: z.string().trim().min(1).optional(), profileDirectory: z.string().regex(/^(Default|Profile [0-9]+)$/).optional() }).strict(),
   z.object({ action: z.literal('autoConnect'), channel: z.enum(['stable', 'beta', 'dev', 'canary']), userDataDir: z.string().trim().min(1).optional() }).strict(),
@@ -15,18 +16,18 @@ const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('close'), instance: z.string().min(1) }).strict(),
 ])
 
-export const browserConnectionGuide = `Default: use an application-managed Chromium-family browser with a COPY of the user's explicitly selected profile, never launch against their original directory. Run discover to inspect installed browsers, matching standard source roots and minimal profile directory/display names. The agent/tool discovers paths; never ask the user for executable or root paths. Use installation ID or browser and optional profile name. A unique candidate is automatic; ask only to disambiguate multiple browser/profile choices, honoring an explicit user profile name. Reuse the existing Project choice before discovering/selecting again. Confirm copying and browser-wide Project access before managed. Recognized Chrome, Edge, Brave and Chromium installations are supported; source must match brand AND channel. Custom layouts require explicitly approved attach. Discovery reads only bounded Local State profile labels, never credentials/history/cookies, and does not launch or copy.
+export const browserConnectionGuide = `Everyday entry: connect (optional instance). It reuses a session binding or the approved Project managed choice, restoring the same copy after a crash, and returns actual list_pages results. Multiple bindings require instance. With no approved choice it returns needs-selection candidates and confirmation guidance without copying or launching; even a unique candidate needs approval for profile copying and browser-wide Project access before managed. Reusing a binding does not grant additional tool permissions. Default: use an application-managed Chromium-family browser with a COPY of the user's explicitly selected profile, never launch against their original directory. Run discover to inspect installed browsers, matching standard source roots and minimal profile directory/display names. The agent/tool discovers paths; never ask the user for executable or root paths. Use installation ID or browser and optional profile name. A unique candidate is automatic; ask only to disambiguate multiple browser/profile choices, honoring an explicit user profile name. Reuse the existing Project choice before discovering/selecting again. Confirm copying and browser-wide Project access before managed. Recognized Chrome, Edge, Brave and Chromium installations are supported; source must match brand AND channel. Custom layouts require explicitly approved attach. Discovery reads only bounded Local State profile labels, never credentials/history/cookies, and does not launch or copy.
 Copies only key data from the selected profile: Cookies, Login Data, Web Data, Preferences, Secure Preferences (and SQLite sidecars), Local Storage, Session Storage, IndexedDB, Network, plus root Local State. History, other profiles, caches and runtime locks are omitted. Source files are read-only; never remove locks, bypass OS locks, or require the user to close their browser. Each source read/copy failure (including Local State and changed files) skips only that item with a structured warning: stage, source-relative item, safe code and OS code, never file contents/native error text. Optional missing items appear in absent, not warning floods. browser_setup returns copyReport with ready/ready_with_warnings, copiedFiles, absent, warnings, loginData and message. Relay warnings to the user: missing data may require signing in again. Even if all key data fails, launch the usable copy and clearly state no login data migrated; never claim complete login inheritance. Invalid source roots/boundaries, destination infrastructure failures, cancellation, invalid executables and shared-choice conflicts remain blocking. Linked/unsupported individual entries are skipped with warnings, never followed. Metadata checks are not atomic snapshots; encrypted credentials may not transfer. The original initialization report survives cross-session reuse and crash restart; reuse does not refresh/copy again. Copies are sensitive and retained, never written back or silently refreshed.
 All sessions in this Project runtime share ONE managed browser process and its pages, but must bind explicitly and retain independent tool permissions/registries. Other Projects do not share it. Use list_pages and explicit pageId; coordinate concurrent edits to the same page. A different source cannot replace a running Project choice. close/sleep/reset disconnect only that session; the Project manager owns process shutdown. After a crash reconnect using the SAME choice; the existing copy is reused without overwriting. A new Project runtime makes a new unique copy; old copies remain for user-controlled cleanup.
 Compatibility only when explicitly requested: autoConnect uses Chrome 144+ user-enabled debugging (chrome://inspect/#remote-debugging and Chrome's approval prompt), chosen channel and optional root; attach uses a supplied already-enabled loopback CDP endpoint for Chrome/Edge/Brave/Electron. These access a human-owned browser directly, NOT the default isolation policy. Explain browser-wide access and obtain explicit approval; never silently fall back to them. Chrome 136+ rejects debugging flags against its default root. Do not bypass this protection.`
 export class BrowserSetupTool implements Tool {
   readonly name = 'browser_setup'
   readonly readonly = (args: Record<string, unknown>) => args.action === 'list' || args.action === 'discover'
-  readonly description = 'Discover then explicitly bind the Project shared managed Chromium-family browser using a copy of a user-selected profile. Best-effort key-data copy; copyReport exposes partial migration warnings and possible re-login, including on shared reuse. Never launch the original profile. Independent session permissions; pageId routing. Compatibility autoConnect/attach require explicit user approval. close/sleep only disconnect; Project lifecycle owns shutdown.'
+  readonly description = 'Use connect as the idempotent everyday entry: reuse an explicit session binding or approved Project choice and verify actual list_pages; no choice returns candidates without launch/copy. Discover then explicitly bind the Project shared managed Chromium-family browser using a copy of a user-selected profile. Best-effort key-data copy; copyReport exposes partial migration warnings and possible re-login, including on shared reuse. Never launch the original profile. Independent session permissions; pageId routing. Compatibility autoConnect/attach require explicit user approval. close/sleep only disconnect; Project lifecycle owns shutdown.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['discover', 'managed', 'autoConnect', 'attach', 'list', 'close'] },
+      action: { type: 'string', enum: ['connect', 'discover', 'managed', 'autoConnect', 'attach', 'list', 'close'] },
       installation: { type: 'string', description: 'managed: stable ID from discover, e.g. edge:stable; no paths needed.' },
       profile: { type: 'string', description: 'managed: discovered display name or directory; omit when unique or reusing shared choice.' },
       browser: { type: 'string', enum: [...managedBrowserNames], description: 'managed only; optional discovered browser family. Source root must match this installation and channel; never substitute another browser profile.' },
@@ -35,12 +36,12 @@ export class BrowserSetupTool implements Tool {
       channel: { type: 'string', enum: ['stable', 'beta', 'dev', 'canary'], description: 'autoConnect only; explicitly chosen Chrome installation channel.' },
       userDataDir: { type: 'string', description: 'Legacy managed override: agent-discovered source data ROOT (not Default/Profile N). autoConnect: optional root for an already-running user-authorized browser.' },
       endpoint: { type: 'string', description: 'attach only; user-selected, already-enabled loopback CDP HTTP origin or browser WebSocket URL.' },
-      instance: { type: 'string', description: 'close only; binding ID returned by this session. Disconnects, never closes the browser.' },
+      instance: { type: 'string', description: 'connect/close: binding ID returned by this session; required for connect when multiple bindings exist. close disconnects, never closes the browser.' },
     },
     required: ['action'], additionalProperties: false,
   }
   constructor(private setup: (
-    request: { action: 'open'; target: BrowserTarget } | { action: 'list' } | { action: 'close'; instance: string },
+    request: { action: 'connect'; instance?: string } | { action: 'open'; target: BrowserTarget } | { action: 'list' } | { action: 'close'; instance: string },
     context: ExecutionContext,
   ) => Promise<string>, private readonly selectedChoice: () => ManagedChromeChoice | undefined = () => undefined,
     private readonly inventoryProvider = discoverManagedBrowsers) {}
@@ -60,6 +61,14 @@ export class BrowserSetupTool implements Tool {
     }
     if (context.tools.executionMode === 'call' || context.tools.dynamicOwner !== context.tools) {
       if (request.action !== 'list') return context.tools.rejectExecution('Leaf calls may borrow browser bindings; only their owner may connect or disconnect.')
+    }
+    if (request.action === 'connect' && !request.instance && !this.selectedChoice()) {
+      const bindings = await this.setup({ action: 'list' }, context)
+      if (/^(Error|Blocked):/.test(bindings)) return bindings
+      if (JSON.parse(bindings).instances.length === 0) return JSON.stringify({
+        status: 'needs-selection', ready: false, guide: browserConnectionGuide,
+        installations: await this.discover(),
+      })
     }
     if (request.action === 'managed') {
       if (request.profile && request.profileDirectory) return 'Error: choose profile name OR exact profileDirectory, not both.'

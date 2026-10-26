@@ -29,7 +29,7 @@ export interface McpDiagnostic {
   causes?: string[]
   stderr?: string
   elapsedMs?: number
-  packageErrorCode?: 'ETARGET' | 'E404' | 'EBADENGINE'
+  packageErrorCode?: 'ETARGET' | 'E404' | 'EBADENGINE' | 'E401'
   cleanupFailure?: McpDiagnostic
 }
 
@@ -148,9 +148,9 @@ export function mcpFailure(error: unknown, context: McpErrorContext): McpError {
   const stderr = context.stderr ? redactMcpText(context.stderr, context) : undefined
   const detail = [...messages, stderr ?? ''].join('\n')
   const npmCode = context.phase === 'connect' && context.config?.transport === 'stdio'
-    ? context.stderr?.match(/^npm (?:error|ERR!) code (ETARGET|E404|EBADENGINE)\s*$/m)?.[1]
+    ? context.stderr?.match(/^npm (?:error|ERR!) code (ETARGET|E404|EBADENGINE|E401)\s*$/m)?.[1]
     : undefined
-  const packageErrorCode = npmCode === 'ETARGET' || npmCode === 'E404' || npmCode === 'EBADENGINE' ? npmCode : undefined
+  const packageErrorCode = npmCode === 'ETARGET' || npmCode === 'E404' || npmCode === 'EBADENGINE' || npmCode === 'E401' ? npmCode : undefined
   let category = 'unknown'
   let retryable = false
   let needsUserAction = false
@@ -162,10 +162,12 @@ export function mcpFailure(error: unknown, context: McpErrorContext): McpError {
   } else if (context.phase === 'validate_config') {
     category = 'invalid_config'
     nextAction = 'Correct the indicated configuration field or JSON syntax, then import again. Do not guess credentials.'
-  } else if (httpStatus === 401 || /unauthorized|authentication required|login required|sign[- ]in required|interaction_required|invalid_grant/i.test(detail)) {
+  } else if (packageErrorCode === 'E401' || httpStatus === 401 || /unauthorized|authentication required|login required|sign[- ]in required|interaction_required|invalid_grant/i.test(detail)) {
     category = 'authentication_required'
     needsUserAction = true
-    nextAction = 'Ask the user to sign in or renew this server credential using its supported flow, then import again. Never request a token in chat.'
+    nextAction = packageErrorCode === 'E401'
+      ? 'The package registry rejected authentication before MCP initialized. Ask the user to repair the approved registry credential through its supported flow; never request credentials in chat, switch registries, or repeatedly reconnect.'
+      : 'Ask the user to sign in or renew this server credential using its supported flow, then import again. Never request a token in chat.'
   } else if (httpStatus === 403 || systemCode === 'EACCES' || systemCode === 'EPERM') {
     category = 'permission_denied'
     needsUserAction = true

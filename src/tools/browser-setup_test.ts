@@ -14,7 +14,7 @@ import { InvokeTool } from './invoke-tool.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { SearchTool } from './search.ts'
 import { BrowserSetupTool } from './browser-setup.ts'
-import { CHROME_MCP_PACKAGE } from '../browser/chrome-contract.ts'
+import { bundledChromeAdapter } from '../browser/chrome-adapter.ts'
 import { attachmentTarget } from '../browser/session-browsers.ts'
 import { SharedChrome } from '../browser/shared-chrome.ts'
 import { join } from 'node:path'
@@ -23,7 +23,7 @@ import { ChromeToolSchema } from '../config/schema.ts'
 function fixture(t: TestContext, home: string) {
   t.mock.method(BrowserSetupTool.prototype, 'discover', async () => []) // never inspect real profiles in tests
   const importer = new ImportTool(new Map<string, LoadableEntry>([['chrome-devtools', {
-    config: { name: 'chrome-devtools', transport: 'stdio', command: 'npx', args: [CHROME_MCP_PACKAGE] },
+    config: { name: 'chrome-devtools', transport: 'stdio', ...bundledChromeAdapter() },
   }]]), home, 'project')
   const base = new Tools(home)
   base.register(new InvokeTool(importer))
@@ -70,7 +70,11 @@ test('explicit binding, page interleaving, select hidden and invalid IDs never f
   assert.equal(receipt.owned, false)
   assert.match(receipt.scope, /not profile isolation/)
   const config = (f.connect.mock.calls[0].this as McpConnection).config
-  assert.deepEqual(config.args, [CHROME_MCP_PACKAGE, '--page-id-routing', '--browserUrl=http://127.0.0.1:9555/'])
+  assert.deepEqual(config.args, [...bundledChromeAdapter().args, '--page-id-routing', '--browserUrl=http://127.0.0.1:9555/'])
+  assert.equal(config.command, process.execPath)
+  assert.deepEqual(config.env, bundledChromeAdapter().env)
+  assert.equal(Reflect.get(f.connect.mock.calls[0].this as McpConnection, 'cwd'), bundledChromeAdapter().cwd)
+  assert.equal((f.connect.mock.calls[0].this as McpConnection).workspaceRoot, home)
   assert.match(String(await f.invoke(ctx, { function: '() => 1' })), /pageId/)
   assert.equal(f.call.mock.callCount(), 0)
   assert.match(String(await f.invoke(ctx, { pageId: 1 }, receipt.instance, 'select_page')), /not advertised|not found|unavailable|Unknown|not available/)
@@ -86,7 +90,7 @@ test('bindings are owner-local, explicit when multiple, forgotten on reset; disc
   const f = fixture(t, home), ctx = f.session(), peer = f.session()
   const first = JSON.parse(String(await f.setup(ctx, { action: 'autoConnect', channel: 'stable' })))
   const second = JSON.parse(String(await f.setup(ctx, { action: 'autoConnect', channel: 'canary', userDataDir: home })))
-  assert.deepEqual((f.connect.mock.calls[1].this as McpConnection).config.args, [CHROME_MCP_PACKAGE, '--page-id-routing', '--auto-connect', '--channel=canary', `--user-data-dir=${home}`])
+  assert.deepEqual((f.connect.mock.calls[1].this as McpConnection).config.args, [...bundledChromeAdapter().args, '--page-id-routing', '--auto-connect', '--channel=canary', `--user-data-dir=${home}`])
   assert.match(String(await f.invoke(ctx, { pageId: 1, function: '() => 1' })), /multiple browser/)
   assert.equal(await f.invoke(ctx, { pageId: 2, function: '() => 1' }, second.instance), 'B')
   assert.match(String(await f.setup(peer, { action: 'close', instance: first.instance })), /unknown browser instance/)
@@ -410,4 +414,107 @@ test('managed setup requires an explicit supported family and forwards it unchan
     assert.equal(ensure.mock.calls.at(-1)!.arguments[0]!.browser, browser)
     await ctx.tools.resetDynamicAndWait()
   }
+}))
+
+
+test('connect discovers without approval, reuses only an unambiguous session binding and probes CDP', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home), ctx = f.session()
+  const discovery = JSON.parse(String(await f.setup(ctx, { action: 'connect' })))
+  assert.equal(discovery.status, 'needs-selection')
+  assert.equal(discovery.ready, false)
+  assert.equal(f.connect.mock.callCount(), 0)
+  const first = JSON.parse(String(await f.setup(ctx, { action: 'attach', endpoint: 'http://localhost:9555' })))
+  assert.equal(first.ready, false)
+  assert.equal(first.adapterReady, true)
+  for (let i = 0; i < 2; i++) {
+    const connected = JSON.parse(String(await f.setup(ctx, { action: 'connect' })))
+    assert.equal(connected.instance, first.instance)
+    assert.equal(connected.status, 'connected')
+    assert.equal(connected.ready, true)
+    assert.equal(connected.list_pages, '1: A\n2: B')
+    assert.match(connected.usage, new RegExp(first.instance))
+  }
+  assert.equal(f.connect.mock.callCount(), 1)
+  assert.equal(f.call.mock.callCount(), 2)
+  await f.setup(ctx, { action: 'attach', endpoint: 'http://localhost:9666' })
+  assert.match(String(await f.setup(ctx, { action: 'connect' })), /multiple browser instances/)
+  assert.match(String(await f.setup(ctx, { action: 'connect', instance: 'unknown' })), /unknown browser instance/)
+  assert.equal(f.call.mock.callCount(), 2)
+  assert.equal(JSON.parse(String(await f.setup(ctx, { action: 'connect', instance: first.instance }))).instance, first.instance)
+  const peer = f.session()
+  assert.match(String(await f.setup(peer, { action: 'connect', instance: first.instance })), /unknown browser instance/)
+  assert.equal(JSON.parse(String(await f.setup(peer, { action: 'connect' }))).status, 'needs-selection')
+}))
+
+test('connect restores the approved shared target with independent per-session bindings', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home), owner = f.session(), peer = f.session()
+  const choice = { browser: 'chrome' as const, executablePath: join(home, 'fake'), userDataDir: join(home, 'source'), profileDirectory: 'Default' }
+  t.mock.method(SharedChrome.prototype, 'selectedChoice', () => choice)
+  let port = 9555
+  const ensure = t.mock.method(SharedChrome.prototype, 'ensure', async () => `ws://127.0.0.1:${port}/devtools/browser/shared`)
+  const first = JSON.parse(String(await f.setup(owner, { action: 'connect' })))
+  const second = JSON.parse(String(await f.setup(peer, { action: 'connect' })))
+  assert.notEqual(first.instance, second.instance)
+  assert.equal(first.ready, true)
+  port = 9666 // simulated restarted shared process, same approved profile/copy
+  const restored = JSON.parse(String(await f.setup(owner, { action: 'connect' })))
+  assert.equal(restored.instance, first.instance)
+  assert.equal(restored.ready, true)
+  assert.equal(f.connect.mock.callCount(), 3)
+  assert.equal(f.disconnect.mock.callCount(), 1)
+  for (const call of ensure.mock.calls) assert.deepEqual(call.arguments[0], { mode: 'managed', ...choice, arguments: [] })
+  const denied = f.session(['chrome-devtools__list_pages'])
+  const before = ensure.mock.callCount()
+  assert.match(String(await f.setup(denied, { action: 'connect' })), /not available/)
+  assert.equal(ensure.mock.callCount(), before)
+  assert.equal(JSON.parse(String(await f.setup(denied, { action: 'list' }))).instances.length, 0)
+}))
+
+test('connect reports actual list_pages failures without claiming readiness or widening permissions', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home), ctx = f.session()
+  const receipt = JSON.parse(String(await f.setup(ctx, { action: 'attach', endpoint: 'http://localhost:9555' })))
+  await f.setup(ctx, { action: 'connect' })
+  f.call.mock.mockImplementation(async () => { throw new Error('synthetic CDP failure') })
+  assert.match(String(await f.setup(ctx, { action: 'connect' })), /synthetic CDP failure/)
+  assert.equal(JSON.parse(String(await f.setup(ctx, { action: 'list' }))).instances[0].ready, false)
+  f.call.mock.mockImplementation(async () => 'Error: synthetic page failure')
+  const failed = JSON.parse(String(await f.setup(ctx, { action: 'connect' })))
+  assert.equal(failed.status, 'connection-failed')
+  assert.equal(failed.ready, false)
+  assert.equal(failed.instance, receipt.instance)
+  const leaf = new CallTools(ctx.tools, home)
+  leaf.setExecutionScope('call', [])
+  assert.match(String(await f.setup({ ...ctx, tools: leaf }, { action: 'connect' })), /only their owner/)
+  await leaf.resetDynamicAndWait()
+  const denied = f.session(['chrome-devtools__list_pages'])
+  await f.setup(denied, { action: 'attach', endpoint: 'http://localhost:9555' })
+  const calls = f.call.mock.callCount()
+  assert.match(String(await f.setup(denied, { action: 'connect' })), /not available/)
+  assert.equal(f.call.mock.callCount(), calls)
+}))
+
+
+test('connect never authorizes copying even a unique discovered candidate', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home), ctx = f.session()
+  const candidate = { browser: 'chrome' as const, channel: 'stable', executable: join(home, 'fake'), userDataDir: join(home, 'source'), id: 'chrome:stable', profiles: [{ directory: 'Default', displayName: 'Person' }], profileStatus: 'available' as const }
+  t.mock.method(BrowserSetupTool.prototype, 'discover', async () => [candidate])
+  const ensure = t.mock.method(SharedChrome.prototype, 'ensure', async () => { throw new Error('must not copy') })
+  const result = JSON.parse(String(await f.setup(ctx, { action: 'connect' })))
+  assert.equal(result.status, 'needs-selection')
+  assert.deepEqual(result.installations, [candidate])
+  assert.equal(ensure.mock.callCount(), 0)
+  assert.equal(f.connect.mock.callCount(), 0)
+}))
+
+test('connect cannot claim readiness when the actual page contract or adapter is unavailable', async t => withTempWorkspace(async home => {
+  const f = fixture(t, home), ctx = f.session()
+  await f.setup(ctx, { action: 'attach', endpoint: 'http://localhost:9555' })
+  f.list.mock.mockImplementation(async () => [])
+  assert.match(String(await f.setup(ctx, { action: 'connect' })), /list_pages is unavailable/)
+  assert.equal(JSON.parse(String(await f.setup(ctx, { action: 'list' }))).instances[0].ready, false)
+  assert.equal(f.call.mock.callCount(), 0)
+  f.list.mock.mockImplementation(async () => { throw new Error('synthetic initialization failure') })
+  assert.match(String(await f.setup(ctx, { action: 'connect' })), /Error/)
+  assert.equal(JSON.parse(String(await f.setup(ctx, { action: 'list' }))).instances[0].ready, false)
+  assert.equal(f.call.mock.callCount(), 0)
 }))

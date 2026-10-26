@@ -51,6 +51,7 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/sdk-trace-node": "^2.11.0",
+    "chrome-devtools-mcp": "1.10.1",
     "croner": "^10.0.1",
     "diff": "^8.0.2",
     "hono": "4.13.5",
