@@ -190,7 +190,7 @@ export class ReadTool implements Tool<ToolResult> {
   readonly supportsRemoteWorkdir = true
   readonly description =
     'Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. ' +
-    'Text supports offset/limit, including URLs and virtual text. Local session paths default to /overview, which omits tool payloads and links exact /calls/<id> details; /full retains payloads. Line ranges match grep on that path; omit ranges for the last 200 lines. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.'
+    'Text supports offset/limit, including URLs and virtual text. Local session paths default to /overview, which includes bounded collaboration previews and links exact /c/<message>.<call> details via short physical references (legacy /calls/<id> paths still work); /full retains payloads. Line ranges match grep on that path; omit ranges for the last 200 lines. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {

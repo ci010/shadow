@@ -21,7 +21,7 @@ import { join, resolve } from 'node:path'
 import { isNotFoundError } from '../utils/runtime.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
 import { WriteTool } from '../tools/filesystem.ts'
-import { formatSessionMessage, formatSessionHistory } from '../sessions/history-view.ts'
+import { formatSessionMessage, formatSessionHistory, shortPhysicalReference } from '../sessions/history-view.ts'
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -82,12 +82,38 @@ export function createSessionsHandler(
     const entries = []
     const requested = options?.subpath
     if (!requested?.startsWith('remote:') && requested?.includes('?')) throw new Error('Session query parameters are not supported. Use /overview or /full and read.offset/read.limit, not index/page_size.')
-    if (requested && !requested.startsWith('remote:') && requested.includes('/calls/')) {
-      const match = /^([^/]+)\/calls\/([^/]+)$/.exec(requested)
+    // Resolve display aliases against all known physical segments, never the current
+    // segment alone. Ambiguity fails closed rather than selecting a different history.
+    let resolved = requested
+    const alias = requested?.split('/')[0]
+    if (alias?.startsWith('~')) {
+      if (!/^~[0-9a-f]{16}$/.test(alias)) throw new Error('Invalid physical session reference.')
+      const matches = new Set<string>()
+      for (const summary of all) {
+        const state = await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(summary.sessionId)
+        if (!state) continue
+        for (let index = 0; index <= state.segmentIndex; index++) {
+          context.signal.throwIfAborted()
+          const physical = physicalSessionId(state, index)
+          if (shortPhysicalReference(physical) === alias) matches.add(physical)
+        }
+      }
+      if (matches.size !== 1) throw new Error('Unknown or ambiguous physical session reference; use the full physical ID.')
+      resolved = [...matches][0] + requested!.slice(alias.length)
+    }
+    if (resolved && !resolved.startsWith('remote:') && /\/(?:calls|c)\//.test(resolved)) {
+      const match = /^([^/]+)\/(calls|c)\/([^/]+)$/.exec(resolved)
       if (!match || match[1].includes(':')) throw new Error('Tool-call references require a physical session ID and an encoded call ID.')
-      const callId = decodeURIComponent(match[2])
+      let callId = decodeURIComponent(match[3])
       const { messages } = await sessions.getHistory(match[1], { physicalId: match[1], maxMessages: Number.MAX_SAFE_INTEGER })
       context.signal.throwIfAborted()
+      if (match[2] === 'c') {
+        const coordinate = /^([1-9]\d*)\.([1-9]\d*)$/.exec(callId)
+        const message = coordinate ? messages[Number(coordinate[1]) - 1] : undefined
+        const call = message?.role === 'assistant' ? message.tool_calls?.[Number(coordinate![2]) - 1] : undefined
+        if (!call) throw new Error('Unknown tool call coordinate in physical session.')
+        callId = call.id
+      }
       const selected: string[] = []
       for (const [index, message] of messages.entries()) {
         const call = message.role === 'assistant' ? message.tool_calls?.find(call => call.id === callId) : undefined
@@ -95,10 +121,10 @@ export function createSessionsHandler(
         if (message.role === 'tool' && message.tool_call_id === callId) selected.push(formatSessionMessage(message, index + 1).join('\n'))
       }
       if (!selected.length || !messages.some(message => message.role === 'assistant' && message.tool_calls?.some(call => call.id === callId))) throw new Error(`Unknown tool call ${JSON.stringify(callId)} in physical session ${match[1]}.`)
-      return [{ name: requested, content: options?.content === false ? '' : `Physical Session ID: ${match[1]}; tool call: ${callId}\n\n${selected.join('\n\n')}` }]
+      return [{ name: requested!, content: options?.content === false ? '' : `Physical Session ID: ${match[1]}; tool call: ${callId}\n\n${selected.join('\n\n')}` }]
     }
-    const overview = !requested?.endsWith('/full')
-    const subpath = requested?.startsWith('remote:') ? requested : requested?.replace(/\/(overview|full)$/, '')
+    const overview = !resolved?.endsWith('/full')
+    const subpath = requested?.startsWith('remote:') ? requested : resolved?.replace(/\/(overview|full)$/, '')
     const viewSuffix = requested?.match(/\/(overview|full)$/)?.[0] ?? ''
     const selected = (name: string) => !subpath || name === subpath || name.startsWith(`${subpath}/`)
     if (subpath?.startsWith('remote:')) {
@@ -114,7 +140,7 @@ export function createSessionsHandler(
       context.signal.throwIfAborted()
       if (total === 0) return []
       return [{
-        name: subpath + viewSuffix,
+        name: requested ?? subpath + viewSuffix,
         content: options?.content === false ? ''
           : `Physical Session ID: ${subpath}\n\n${formatSessionHistory(messages, overview, subpath)}`,
       }]

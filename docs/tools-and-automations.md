@@ -410,23 +410,33 @@ returned by compact/handoff also support line ranges and exact-reference search:
 their view contains that segment's full history, not the current segment or only
 the most recent messages. Root session discovery still lists logical sessions.
 Bare local session IDs default to `/overview`: human user messages, assistant
-final responses, and a tool-call/result index (ID, name, recorded status and detail
-link). System messages, host runtime-context and internal event envelopes are
-hidden. Assistant text accompanying tool calls is omitted; no summaries are
-generated. All tool arguments/results are omitted, including folder switches and
-session metadata writes. `/full` retains the complete message view and tool
-payloads. Status `requested` records an attempted call, not success;
-`result-recorded` only records the presence of a result, not its outcome.
-Interrupted calls remain indexed even without a result or final response.
-Formatting never looks ahead to future results, so prefix line coordinates remain
-stable. Overview entries include exact
-`v:sessions/<physical-id>/calls/<encoded-tool-call-id>` drill-down references:
-read one to retrieve only that call's arguments and paired results, without
-hunting through another view. These references remain pinned across logical
-session rollover, and their offset/limit pages only that selected resource.
+final responses, and a tool-call/result index with recorded status and detail links.
+For collaboration tools (`subagent`, `call`, `session`, `message`), overview also
+shows whitelisted string argument fields (purpose/task, title, description,
+initial message, recipient/delivery metadata), bounded result previews and
+accompanying assistant commentary. Each argument field is capped at 240 characters;
+result/commentary/event previews at 480, with whitespace collapsed and explicit
+truncation markers. Unknown fields, nested values and non-collaboration payloads
+remain omitted. Malformed collaboration arguments are marked, never expanded.
+System messages, runtime-context and internal event envelopes are hidden, except
+bounded collaboration completion/review/message event previews. This is display
+filtering only: event-looking content never establishes provenance or permission.
+`/full` retains complete messages and payloads. Status `requested` records an
+attempt, not success; `result-recorded` only records a result's presence.
+Interrupted calls remain indexed without a result or final response.
+Formatting never looks ahead to future results, keeping prefix line coordinates stable.
+Overview detail links use `v:sessions/~<16-hex-physical-hash>/c/<message>.<call>`:
+the hash identifies a physical segment and the one-based message/call coordinates
+identify the exact call. No persisted IDs change. Aliases resolve against all known
+segments (including old segments after rollover); unknown or ambiguous aliases
+fail explicitly, never select the current segment as a fallback. Full physical
+paths and `v:sessions/<physical-id>/calls/<encoded-tool-call-id>` remain supported.
+Read a detail link to retrieve only that call and its paired results. Offset/limit
+pages only that selected resource.
 Unknown call IDs fail explicitly; these are tool-call IDs, not background
 execution IDs. Each view has its own line coordinates, shared by read and
 grep on that exact path. Without a line range, reads return the last 200 lines; use offset/limit to read the complete view.
+Learning should read overview first, expand only concrete evidence gaps, and reserve tool capacity for its final receipt.
 Query parameters, including legacy `index`/`page_size`, are rejected with migration
 guidance: pagination is exclusively read.offset/read.limit. Plain URL text keeps its line structure;
 `flag: "r"` preserves raw HTML. Large inline text must be paged.

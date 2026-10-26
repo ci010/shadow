@@ -442,7 +442,7 @@ test('session overview/full paths share read and grep coordinates for logical an
   for (const id of [logical, physical]) {
     const path = `v:sessions/${id}/overview`
     const overview = requireToolText(await read.execute({ path }, context))
-    assert.match(overview, /Outward question[\s\S]*read status=requested[\s\S]*result for call-1[\s\S]*Final outward answer/)
+    assert.match(overview, /Outward question[\s\S]*read status=requested[\s\S]*result for 4.1[\s\S]*Final outward answer/)
     assert.doesNotMatch(overview, /secretArgument|secretResult|HIDDEN/)
     assert.ok(overview.length < 1000)
     const match = await search.execute({ handler: 'grep', path, query: '^second line$' }, context)
@@ -489,15 +489,24 @@ test('overview drill-down targets isolate encoded tool-call IDs and survive logi
   const search = new SearchTool('.', undefined, vfs)
   const overview = requireToolText(await read.execute({ path: `v:sessions/${logical}/overview`, offset: 1, limit: 100 }, context))
   const target = `v:sessions/${physical}/calls/${encodeURIComponent(callId)}`
-  assert.ok(overview.includes(target), overview)
+  const shortTarget = overview.match(/v:sessions\/~[0-9a-f]{16}\/c\/1\.1/)?.[0]
+  assert.ok(shortTarget, overview)
+  const shortOverview = shortTarget.replace(/\/c\/1\.1$/, '/overview')
+  const physicalOverview = `v:sessions/${physical}/overview`
+  assert.equal(requireToolText(await read.execute({ path: shortOverview, offset: 2, limit: 8 }, context)), requireToolText(await read.execute({ path: physicalOverview, offset: 2, limit: 8 }, context)))
+  await assert.rejects(read.execute({ path: shortTarget.replace(/~[0-9a-f]{16}/, '~bad') }, context), /Invalid physical session reference/)
+  await assert.rejects(read.execute({ path: shortTarget.replace('/1.1', '/0.1') }, context), /Unknown tool call coordinate/)
   segmentIndex = 1
-  const result = requireToolText(await read.execute({ path: target }, context))
+  const result = requireToolText(await read.execute({ path: shortTarget }, context))
+  assert.equal(result, requireToolText(await read.execute({ path: target }, context)))
+  await assert.rejects(read.execute({ path: shortTarget.replace('/1.1', '/99.1') }, context), /Unknown tool call coordinate/)
+  await assert.rejects(read.execute({ path: shortTarget.replace(/~[0-9a-f]{16}/, '~0000000000000000') }, context), /Unknown or ambiguous/)
   assert.match(result, /selected.txt[\s\S]*selected-result/)
   assert.doesNotMatch(result, /unrelated.txt|unrelated-result|\[call other\]/)
-  const match = await search.execute({ handler: 'grep', path: target, query: '^second result line$' }, context)
+  const match = await search.execute({ handler: 'grep', path: shortTarget, query: '^second result line$' }, context)
   const line = Number(match.match(/Line (\d+):/)?.[1])
   assert.ok(line > 0)
-  assert.equal(requireToolText(await read.execute({ path: target, offset: line, limit: 1 }, context)), 'second result line')
+  assert.equal(requireToolText(await read.execute({ path: shortTarget, offset: line, limit: 1 }, context)), 'second result line')
   await assert.rejects(read.execute({ path: `v:sessions/${physical}/calls/missing` }, context), /Unknown tool call/)
   await assert.rejects(read.execute({ path: `v:sessions/${logical}/calls/other`, offset: 1, limit: 1 }, context), /physical session ID/)
 })
