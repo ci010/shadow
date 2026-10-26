@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { createRenderer, defineComponent, reactive } from 'vue'
+import { createInstallationContextProvider } from './composables/useInstallationContext.ts'
+import { createMobileClientContext } from './installation-context.ts'
 import { parseComputerStatus, useComputer, type ComputerSource } from './computer-use.ts'
 
 const targetId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -20,7 +22,7 @@ const makePointerStatus = () => ({
     element: null, frame: { width: 500, height: 300 } },
 })
 const settle = () => new Promise(resolve => setImmediate(resolve))
-function harness(t: TestContext) {
+function harness(t: TestContext, mobile = false) {
   const requests: Array<{ url: string; init: RequestInit; finish: (response: Response) => void; reject: (error: Error) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: string, init: RequestInit) =>
     new Promise<Response>((finish, reject) => requests.push({ url, init, finish, reject })))
@@ -35,6 +37,7 @@ function harness(t: TestContext) {
     parentNode: () => null, nextSibling: () => null,
   })
   const app = renderer.createApp(defineComponent({ setup() { state = useComputer(() => source); return () => null } }))
+  if (mobile) app.use(createInstallationContextProvider(createMobileClientContext('http://192.168.1.4:3125')))
   app.mount({})
   t.after(() => app.unmount())
   return { requests, source, state }
@@ -260,4 +263,19 @@ test('release removes desktop access without leaving a manual setup state', asyn
   assert.equal(state.status.value?.grant, null)
   assert.equal('enableForeground' in state, false)
   assert.equal('expanded' in state, false)
+})
+
+test('mobile active conversations never request desktop-only computer APIs', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const { state, requests, source } = harness(t, true)
+  assert.equal(state.enabled.value, false)
+  assert.equal(requests.length, 0)
+  source.active = false
+  await settle()
+  source.active = true
+  source.sessionId = 'web:another-mobile-conversation'
+  await settle()
+  t.mock.timers.tick(5000)
+  await state.refresh()
+  assert.equal(requests.length, 0)
 })

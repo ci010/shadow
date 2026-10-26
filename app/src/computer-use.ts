@@ -1,5 +1,6 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { z } from 'zod'
+import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { apiUrl } from './api-url.ts'
 import { t } from './i18n.ts'
 import { ComputerStatusSchema, type ComputerStatus } from '../../src/computer/contracts.ts'
@@ -29,6 +30,7 @@ export function parseComputerStatus(value: unknown, source: Pick<ComputerSource,
 }
 
 export function useComputer(source: () => ComputerSource) {
+  const installation = useInstallationContext()
   const status = ref<ComputerStatus | null>(null)
   const error = ref('')
   const loading = ref(false)
@@ -36,7 +38,7 @@ export function useComputer(source: () => ComputerSource) {
   const now = ref(Date.now())
   const operation = ref<'approving' | 'denying' | 'stopping' | null>(null)
   const busy = computed(() => operation.value !== null)
-  const enabled = computed(() => source().active && source().canSubmit && !!source().projectId && !!source().sessionId)
+  const enabled = computed(() => installation.value.mode !== 'client' && source().active && source().canSubmit && !!source().projectId && !!source().sessionId)
   const remaining = computed(() => Math.max(0, Math.ceil((Date.parse(status.value?.pending?.expiresAt ?? '') - now.value) / 1000)) || 0)
   const frameUrl = ref('')
   const frameState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')

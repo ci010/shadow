@@ -182,3 +182,20 @@ test('pending service groups client validates scoped observations without genera
   const invalid = createBotSettingsClient('http://localhost', 'project', async () => Response.json({ groups: [{ ...groups[0], botInstanceId: 'other' }] }))
   await assert.rejects(invalid.pendingGroups('qq-bot'), /Invalid discovery/)
 })
+
+
+test('BOT release UI removes one-off migration controls but retains normal review and rollback', async () => {
+  const source = await readFile(new URL('./components/BotPackage.vue', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /v-model="adoptLegacy"|const adoptLegacy|adoptLegacy:true|Adopt identical legacy policy/)
+  assert.match(source, /Freeze and review Release/)
+  assert.match(source, /Review rollback/)
+  assert.match(source, /Approve and apply/)
+  assert.match(source, /discordDraft.change.adoptLegacy/) // Existing pending reviews still disclose legacy policy.
+  const require = createRequire(import.meta.url)
+  const { parse, compileScript, compileTemplate } = require('vue/compiler-sfc') as typeof import('vue/compiler-sfc')
+  const { descriptor, errors } = parse(source)
+  assert.deepEqual(errors, [])
+  const script = compileScript(descriptor, { id: 'bot-package-cleanup' })
+  const template = compileTemplate({ source: descriptor.template!.content, filename: 'BotPackage.vue', id: 'bot-package-cleanup', compilerOptions: { bindingMetadata: script.bindings } })
+  assert.deepEqual(template.errors, [])
+})

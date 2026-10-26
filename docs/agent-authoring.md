@@ -752,10 +752,12 @@ skills, grants, folders, parameters, prompts and any other override fields.
 
 ### Explicit legacy BOT adoption
 
-The owner BOT directory form offers **Adopt identical legacy policy**. This is
-not automatic migration: it freezes the local package and creates the usual
-exact owner review; activation still requires separate human approval. Ordinary
-imports retain their collision guards.
+The one-off migration checkbox has been removed from the normal BOT directory
+form after existing packages were adopted. Normal imports, exact owner review,
+retained releases and rollback remain available. The explicit adoption API and
+legacy metadata reader remain for compatibility; adoption is never automatic
+and still requires exact owner approval. Ordinary imports retain their collision
+guards. Existing package updates must use normal import, not adoption.
 
 To retain approved legacy metadata, BOT frontmatter may include `agentMarkdown`
 (the complete approved AGENT.md, not a manually edited file). QQ/Feishu verify

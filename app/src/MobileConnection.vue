@@ -5,6 +5,7 @@
       <div class="connection-content">
         <strong>{{ t('Connected to Main') }}</strong>
         <p>{{ session.origin.value }}</p>
+        <p v-if="session.origin.value.startsWith('http:')" role="alert">{{ t('LAN HTTP: connection is not encrypted. Use only a trusted network.') }}</p>
         <p>{{ t('Sessions and tasks run on Main, not this device.') }}</p>
         <p v-if="session.resourceError.value" role="alert">{{ session.resourceError.value }}</p>
         <div class="connection-actions">
@@ -20,6 +21,8 @@
       <h1 id="mobile-auth-title">{{ session.view.value === 'pairing' ? t('Connect to Main') : session.view.value === 'error' ? t('Cannot connect to Main') : session.view.value === 'paused' ? t('Connection paused') : t('Connecting to Main') }}</h1>
       <p>{{ t('This device is a Shadow client. Sessions and tasks run on your Main computer.') }}</p>
       <form v-if="session.view.value === 'pairing'" @submit.prevent="pair">
+        <label><input id="allow-lan-http" v-model="allowLanHttp" type="checkbox">{{ t('Allow LAN HTTP (unencrypted; trusted networks only)') }}</label>
+        <p v-if="allowLanHttp" role="alert">{{ t('HTTP is not encrypted. Pairing codes, credentials and conversations can be read or changed by others on the network. Use a private/loopback numeric IP only. HTTPS will never automatically downgrade.') }}</p>
         <label for="main-address">{{ t('Main HTTPS address') }}</label>
         <input id="main-address" v-model="endpoint" type="url" placeholder="https://shadow.example.com" autocomplete="url" autocapitalize="off" :spellcheck="false" :disabled="session.busy.value" required>
         <label for="mobile-pair-code">{{ t('One-use pairing code') }}</label>
@@ -48,10 +51,11 @@ import LanguageSelector from './components/LanguageSelector.vue'
 const props = defineProps<{ session: MobileSession; connected?: boolean }>()
 const endpoint = ref(props.session.origin.value)
 const code = ref('')
+const allowLanHttp = ref(false)
 async function pair() {
   const submitted = code.value
   code.value = ''
-  await props.session.pair(endpoint.value, submitted)
+  await props.session.pair(endpoint.value, submitted, allowLanHttp.value)
 }
 </script>
 

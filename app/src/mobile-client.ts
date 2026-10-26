@@ -1,9 +1,11 @@
+import { isLanHttpHost } from '../../src/shared/lan-http.ts'
 import { t } from './i18n.ts'
 import { ref, type InjectionKey } from 'vue'
 
 export interface MobileCredentials {
   version: 1
   origin: string
+  allowLanHttp?: boolean
   accessToken: string
   expiresAt: string
 }
@@ -15,14 +17,14 @@ export interface CredentialStore {
 export function mobileBootTarget(mode: string, native: boolean): 'native' | 'unavailable' | 'standard' {
   return mode === 'mobile' ? native ? 'native' : 'unavailable' : 'standard'
 }
-export function validateMainOrigin(value: string): string {
+export function validateMainOrigin(value: string, allowLanHttp = false): string {
   const trimmed = value.trim()
   let url: URL
   try { url = new URL(trimmed) } catch { throw new Error(t('Enter a complete HTTPS Main address, such as https://shadow.example.com.')) }
-  if (url.protocol !== 'https:' || !url.hostname || url.username || url.password ||
+  if ((url.protocol !== 'https:' && !(allowLanHttp && url.protocol === 'http:' && isLanHttpHost(url.hostname))) || !url.hostname || url.username || url.password ||
     url.pathname !== '/' || url.search || url.hash || /[\\?#]/.test(trimmed) ||
-    !/^https:\/\/[^/]+\/?$/i.test(trimmed)) {
-    throw new Error(t('Use an HTTPS origin only, without a username, password, path, query, or fragment.'))
+    !/^https?:\/\/[^/]+\/?$/i.test(trimmed)) {
+    throw new Error(t('Use an HTTPS origin only, or explicitly enable LAN HTTP with a private/loopback numeric IP; no username, password, path, query, or fragment.'))
   }
   return url.origin
 }
@@ -32,11 +34,11 @@ function validExpiry(value: unknown): value is string {
 export function parseMobileCredentials(value: string): MobileCredentials {
   const data = JSON.parse(value)
   if (!data || data.version !== 1 || typeof data.origin !== 'string' ||
-    validateMainOrigin(data.origin) !== data.origin || typeof data.accessToken !== 'string' ||
+    validateMainOrigin(data.origin, data.allowLanHttp === true) !== data.origin || typeof data.accessToken !== 'string' ||
     !/^[\x21-\x7e]{16,4096}$/.test(data.accessToken) || !validExpiry(data.expiresAt)) {
     throw new Error(t('Saved mobile credentials are invalid or expired. Pair this device again.'))
   }
-  return { version: 1, origin: data.origin, accessToken: data.accessToken, expiresAt: data.expiresAt }
+  return { version: 1, origin: data.origin, ...(data.allowLanHttp === true ? { allowLanHttp: true } : {}), accessToken: data.accessToken, expiresAt: data.expiresAt }
 }
 
 export function isMobileBusinessPath(path: string, method = 'GET'): boolean {
@@ -83,9 +85,12 @@ export function createMobileFetch(options: {
     const headers = new Headers(request.headers)
     headers.set('authorization', `Bearer ${credentials.accessToken}`)
     const signal = AbortSignal.any([request.signal, options.signal()])
-    const response = await options.fetch(new Request(target, new Request(request, {
-      headers, credentials: 'omit', redirect: 'error', signal,
-    })))
+    // Chromium requires HTTP/2 for ReadableStream uploads, even JSON bodies
+    // rewrapped through Request. Buffer before forwarding to LAN HTTP/1.1.
+    const body = request.body ? await request.blob() : undefined
+    const response = await options.fetch(new Request(target, {
+      method: request.method, headers, body, credentials: 'omit', redirect: 'error', signal,
+    }))
     if (response.status === 401) options.unauthorized()
     return response
   }
@@ -178,12 +183,12 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
       if (id === generation) fail(t('Could not verify the connection or save it securely. Check Main, HTTPS, and device secure storage, then retry.'))
     } finally { if (id === generation) busy.value = false }
   }
-  async function pair(endpoint: string, code: string) {
+  async function pair(endpoint: string, code: string, allowLanHttp = false) {
     if (busy.value || disposed || !active) return
     const { id, signal } = begin()
     view.value = 'pairing'
     try {
-      origin.value = validateMainOrigin(endpoint)
+      origin.value = validateMainOrigin(endpoint, allowLanHttp)
       if (!/^(?:[a-f\d]+-)*[a-f\d]+$/i.test(code.trim()) || code.trim().replaceAll('-', '').length !== 24) {
         throw new Error(t('Enter the 24-character one-use pairing code generated on Main.'))
       }
@@ -195,7 +200,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
       let next: MobileCredentials
       try {
         const data = await response.json()
-        next = parseMobileCredentials(JSON.stringify({ ...data, origin: origin.value }))
+        next = parseMobileCredentials(JSON.stringify({ ...data, origin: origin.value, allowLanHttp }))
       } catch { throw new Error(t('Main returned an invalid pairing response. Check that Main supports this mobile client, then generate a new code.')) }
       if (id !== generation) return
       try { await persist(() => store.set({ value: JSON.stringify(next) })) }

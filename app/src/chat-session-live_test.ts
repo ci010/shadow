@@ -308,7 +308,8 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   stale.sessions[1]!.waitingForCall = true
   f.requests[7].finish(stale)
   await settle()
-  assert.equal(stage(a), 'Waiting for a response')
+  assert.equal(stage(a), 'Status unavailable', 'Switching Projects clears the old graph instead of showing foreign execution metadata')
+  assert.deepEqual(a.state().allSessions, [])
   f.requests[9].finish(graph())
   await settle()
   const state = a.state()
@@ -370,7 +371,13 @@ test('live peer messages render like persisted history without becoming human pr
     assert.deepEqual(peer.sessionSource, { id: 'web:peer', name: 'A & B', intent })
     assert.equal(peer.isSystemEvent, undefined)
     assert.deepEqual(peer.media, ['media:fixture.png'])
-    assert.deepEqual(state.historyMarkers, [])
+    const [marker] = state.historyMarkers
+    assert.equal(state.historyMarkers.length, 1)
+    assert.equal(marker.kind, 'session')
+    assert.equal(marker.sourceId, 'web:peer')
+    assert.equal(marker.source, 'A & B')
+    assert.equal(marker.preview, peer.content)
+    assert.equal(marker.groupable, ['progress', 'acknowledgement'].includes(intent))
     assert.equal(state.canResend, false)
     assert.equal(stream.accumulated, '')
     const restored = state.collapseHistory([message])[0]

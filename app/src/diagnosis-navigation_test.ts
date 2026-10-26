@@ -7,6 +7,7 @@ import { useDiagnosisNavigation } from './composables/useDiagnosisNavigation.ts'
 async function fixture(url: string, embedded = false, sessionId = 'one') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { name: 'chat', path: '/projects/:projectId/chat/:sessionId?', component: {} },
+    { name: 'project-settings', path: '/projects/:projectId/settings/:section', component: {} },
   ] })
   await router.push(url)
   const scope = effectScope()
@@ -65,4 +66,18 @@ test('cached conversations and invalid section values cannot corrupt another rou
   await settle()
   assert.equal(router.currentRoute.value.query.diagnosis, 'prompt')
   scope.stop()
+})
+
+test('hiding diagnosis for project settings does not cancel the pending tab navigation', async () => {
+  const { router, state, scope, settle } = await fixture('/projects/a/chat/one?panel=diagnosis&diagnosis=tools')
+  try {
+    const navigation = router.push({ name: 'project-settings', params: { projectId: 'a', section: 'general' } })
+    // The workbench hides diagnosis before the new route has finished resolving.
+    state.selectPanel(false, false)
+    await navigation
+    await settle()
+    assert.equal(router.currentRoute.value.name, 'project-settings')
+    assert.equal(router.currentRoute.value.params.section, 'general')
+    assert.deepEqual(router.currentRoute.value.query, {})
+  } finally { scope.stop() }
 })

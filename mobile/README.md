@@ -4,8 +4,7 @@ This package wraps the shared `app/` renderer with Capacitor. It is a **client
 of an already-running Main**, not a Node runtime, Main, Child executor, shell
 worker, or offline agent. Native platform sources are checked in; the Capacitor
 8.5.2 CLI generated the Android and iOS/SPM projects. Only bundled renderer assets
-are loaded. Do not add `server.url`, cleartext traffic, arbitrary navigation,
-transport-security exceptions, or a downloaded web application.
+are loaded. Do not add `server.url`, arbitrary navigation, TLS certificate bypasses, or a downloaded web application.
 
 `app.shadow.mobile` is a development publisher identifier. **Choose and register
 the definitive publisher-owned Android application ID and Apple bundle ID before
@@ -114,7 +113,7 @@ Before distribution, run device tests for empty/get/set/remove/restart, a
 16-KiB Unicode boundary and oversize rejection, locked-device behavior, corrupt
 Android ciphertext/missing key, backup/restore exclusion, explicit disconnect,
 and resume reconnect on both platforms. Keychain/Keystore failure must remain a
-visible pairing error. Trusted HTTPS is required for connections; do not work
+visible pairing error. Trusted HTTPS is the default for connections; do not work
 around self-signed or expired certificates by weakening TLS.
 
 ## CI artifacts and signing
@@ -191,3 +190,27 @@ Native icons reuse `app/public/pwa/icon-512.png`, resized into committed native
 resources (iOS flattened to an opaque 1024px icon). Splash resources use the same
 artwork on an opaque background. These are build inputs, not a separate mobile UI.
 Revisit high-resolution publisher artwork before store submission.
+
+## Explicit trusted-LAN HTTP (unencrypted)
+
+Prefer HTTPS. For an isolated trusted LAN only, start Main with
+`SHADOW_MOBILE_ALLOW_LAN_HTTP=1`, `SHADOW_MOBILE_ORIGIN=http://192.168.1.10:3125`
+and `SHADOW_MOBILE_PORT=3125` (substitute the actual local interface IP).
+This requires a Main restart; it binds only the mobile ingress to that IP, not
+the owner/admin gateway. Without this opt-in HTTPS still requires a loopback TLS
+reverse proxy. Generate a fresh one-use code with the trusted Main CLI; also set
+`SHADOW_MOBILE_ALLOW_LAN_HTTP=1` in the CLI process so it explicitly accepts the
+private HTTP address returned by Main.
+On the phone explicitly check **Allow LAN HTTP**, enter the same origin and pair.
+Only RFC1918 IPv4, 127/8 loopback, IPv6 ULA and ::1 numeric literals are accepted;
+DNS names, public IPs and link-local addresses are rejected. Peer addresses come
+from TCP, never forwarded headers. No HTTPS error triggers HTTP fallback.
+
+HTTP exposes pairing codes, bearer credentials, conversations and files to network
+observation or tampering. Secure storage does not protect traffic. Disconnect and
+re-pair with HTTPS after testing; the HTTP opt-in is saved only with that exact
+origin's secure credential record and defaults off for new pairing.
+Android must permit cleartext and mixed content for dynamic LAN IPs; this is a
+platform capability, not authorization. The application origin/peer validation
+and redirect rejection remain enforced. iOS uses NSAllowsLocalNetworking only,
+not NSAllowsArbitraryLoads; real iOS LAN behavior requires device validation.

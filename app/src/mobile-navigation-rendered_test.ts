@@ -10,6 +10,7 @@ import test from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
+import { pdfViewerAssets } from '../pdf-viewer-assets.ts'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -28,8 +29,8 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
   const history = [{ role: 'user', content: 'Investigate the mobile layout.' }, { role: 'assistant', content: 'Synthetic reply: ready to continue. ' + 'Long replies should use the available phone width without reserving desktop navigation gutters. '.repeat(8) }]
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
-    optimizeDeps: { include: ['vue', 'vue-router', 'vue-i18n'], entries: [] },
-    plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
+    optimizeDeps: { include: ['vue', 'vue-router', 'vue-i18n'], entries: [], noDiscovery: true },
+    plugins: [pdfViewerAssets(), vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'synthetic-mobile-navigation',
       resolveId: id => id === '/mobile-fixture.ts' ? '\0mobile-fixture' : undefined,
       load(id) {
@@ -89,6 +90,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           else if (path === '/api/audio/status') data = { asr: { ready: false, route: 'local' }, tts: { ready: false, route: 'local' } }
           else if (operation === 'work') data = { records: [], effects: [] }
           else if (path === '/api/folders') data = { folders: [] }
+          else if (path === '/api/service-groups') data = { revision: 'fixture', agents: [], groups: [] }
           else if (path === '/api/channels') data = { channels: [] }
           else if (path === '/api/automations') data = { automations: [] }
           else if (path === '/api/sessions/graph') data = { sessions: [...names].map(([sessionId, title]) => ({ sessionId, title })), nodes: [] }
