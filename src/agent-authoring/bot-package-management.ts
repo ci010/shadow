@@ -3,6 +3,7 @@ import { lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { Hono } from 'hono'
+import type { Tool } from '../tools/tool.ts'
 import type { AuthoringManagementOptions } from './management.ts'
 import { parseFrontmatter } from '../utils/frontmatter.ts'
 import type { IntegrationStore } from '../channels/integration-store.ts'
@@ -42,6 +43,35 @@ export async function stageBotDirectory(options: BotPackageOptions, input: unkno
     await options.validateLive(candidate)
     return await store.stage({ expectedRevision: parsed.expectedRevision, bundle: aggregate, expectedActiveRelease: parsed.expectedActiveRelease })
   } finally { release() }
+}
+
+/** Project-bound chat entry point. Approval is deliberately absent from this contract. */
+export function botPackageTool(options: BotPackageOptions & { canAuthor: (sessionId: string) => boolean; registeredFolders?: () => unknown }): Tool {
+  return {
+    name: 'bot_package', optIn: true,
+    description: 'Freeze a registered local Folder BOT directory into an immutable owner review. status returns authoritative Project revisions and package status. propose never publishes; the human reviews and approves in chat.',
+    parameters: { type: 'object', properties: {
+      action: { type: 'string', enum: ['status', 'propose'] }, folderId: { type: 'string' }, directory: { type: 'string' },
+      expectedRevision: { type: 'string' }, expectedActiveRelease: { type: 'string' }, discordRevision: { type: 'integer' }, adoptLegacy: { type: 'boolean' },
+    }, required: ['action'], additionalProperties: false },
+    execute: async (raw, context) => {
+      context.signal.throwIfAborted()
+      if (context.projectId !== options.service.options.projectId || context.channel !== 'web' || context.inputSource !== 'user' ||
+        context.admin !== true || context.isGroup || context.channelAddress || context.remoteWorkdir || context.memoryAccess ||
+        context.tools.executionMode !== 'session' || !options.canAuthor(context.sessionId)) throw new Error('Use an authenticated owner conversation in this Project.')
+      const store = options.service.options.store
+      if (raw.action === 'status') {
+        z.object({action:z.literal('status')}).strict().parse(raw)
+        return JSON.stringify({ projectId: options.service.options.projectId, draftRevision: store.draft().revision,
+          activeRelease: store.snapshot().revision, packages: store.packageStatus(), discord: options.discord?.snapshot(), inventory: options.inventory(), folders: options.registeredFolders?.(), publicationRequests: options.publicationRequests.list() })
+      }
+      const { action, ...input } = z.object({action:z.literal('propose')}).passthrough().parse(raw)
+      const staged = await stageBotDirectory(options, input)
+      if ('discordDraft' in staged) return JSON.stringify({ ...staged, nextStep: 'The owner must inspect and approve the exact pending review in chat. No live configuration changed.' })
+      const request = await options.publicationRequests.propose(undefined, staged.revision, context.sessionId, input.expectedActiveRelease as string | undefined)
+      return JSON.stringify({request, nextStep:'The owner must inspect and approve the exact publication card in chat. No live configuration changed.'})
+    },
+  }
 }
 
 /** Owner-only local snapshot/review API. There is deliberately no activation endpoint here. */

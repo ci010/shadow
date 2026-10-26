@@ -1,3 +1,4 @@
+import type { SourceResources } from './source-resources.ts'
 import { compileDiscordPackage } from './bot-package.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { isDeepStrictEqual } from 'node:util'
@@ -35,11 +36,22 @@ const stateSchema = z.object({
 }).strict()
 type State = z.infer<typeof stateSchema>
 const targetKey = (binding: DiscordBinding) => JSON.stringify([binding.botInstanceId, binding.target])
-const narrowBinding = (binding: DiscordBinding, agent: IntegrationAgent): DiscordBinding => ({
+const narrowBinding = (binding: DiscordBinding, agent: IntegrationAgent): DiscordBinding => {
+  const narrowed: DiscordBinding = {
   ...binding, tools: binding.tools.filter(tool => agent.tools.includes(tool)),
   readDomains: binding.readDomains.filter(domain => agent.readDomains.includes(domain)),
+  ...(binding.sourceFolders ? {sourceFolders:binding.sourceFolders.filter(id => agent.sourceFolders?.includes(id))} : {}),
+  ...(binding.discordHistory ? {discordHistory: agent.discordHistory && binding.discordHistory.guildId === agent.discordHistory.guildId ? {
+    guildId:binding.discordHistory.guildId,
+    channelIds:binding.discordHistory.channelIds.filter(id => agent.discordHistory!.channelIds.includes(id)),
+    threads: ['none','public-active','public-archived'].indexOf(binding.discordHistory.threads) <= ['none','public-active','public-archived'].indexOf(agent.discordHistory.threads) ? binding.discordHistory.threads : agent.discordHistory.threads,
+    preEpoch:binding.discordHistory.preEpoch && agent.discordHistory.preEpoch,
+  } : undefined} : {}),
   manage: binding.manage && agent.tools.includes('channel_config'),
-})
+  }
+  if (!narrowed.discordHistory?.channelIds.length) delete narrowed.discordHistory
+  return narrowed
+}
 
 export class IntegrationStore {
   private readonly document: PrivateDocument<State>
@@ -49,6 +61,7 @@ export class IntegrationStore {
 
   constructor(readonly options: {
     projectId: string; directory: string; workspace: string
+    sources?: SourceResources
     bots: BotInstanceStore; agents: AgentTypesManager; memory: MemoryDomains
   }) {
     this.document = new PrivateDocument({
@@ -124,6 +137,10 @@ export class IntegrationStore {
   }
 
   definition(agent: IntegrationAgent): AgentTypeDefinition {
+    if (agent.sourceFolders?.length) {
+      if (!this.options.sources) throw new IntegrationError('source_unavailable', 'Registered source resources unavailable.')
+      this.options.sources.validate(agent.sourceFolders)
+    }
     const parsed = parseAgentFile(agent.markdown, agent.name, this.agentDirectory(agent.name))
     return { ...parsed, name: agent.name, allowedTools: [...agent.tools], blockedTools: undefined,
       allowedModules: [], soul: false, skills: false }
@@ -179,6 +196,10 @@ export class IntegrationStore {
   }
 
   private validateAgent(agent: z.infer<typeof IntegrationAgentSchema> | Extract<IntegrationChange, { kind: 'agent.save' }>['agent']): void {
+    if (agent.sourceFolders?.length) {
+      if (!this.options.sources) throw new IntegrationError('source_unavailable', 'Registered source resources unavailable.')
+      this.options.sources.validate(agent.sourceFolders)
+    }
     const parsed = parseAgentFile(agent.markdown, agent.name, this.agentDirectory(agent.name))
     if (parsed.name !== agent.name || parsed.root || parsed.defaultMode !== 'session' || !parsed.prompt.trim()) {
       throw new IntegrationError('invalid_agent', 'Channel Agents require a non-system session definition with a matching name and nonempty instructions.')
@@ -203,9 +224,21 @@ export class IntegrationStore {
     if (!agent) throw new IntegrationError('agent_missing', 'Choose a published Agent before assigning a channel.')
     const bot = this.options.bots.get(binding.botInstanceId)
     if (bot.platform !== 'discord') throw new IntegrationError('wrong_platform', 'The binding requires a Discord Bot.')
+    if ((binding.sourceFolders ?? []).some(id => !agent.sourceFolders?.includes(id)) ||
+      binding.discordHistory && (!agent.discordHistory || binding.discordHistory.guildId !== agent.discordHistory.guildId ||
+        binding.discordHistory.channelIds.some(id => !agent.discordHistory!.channelIds.includes(id)) ||
+        binding.discordHistory.preEpoch && !agent.discordHistory.preEpoch ||
+        ['none','public-active','public-archived'].indexOf(binding.discordHistory.threads) > ['none','public-active','public-archived'].indexOf(agent.discordHistory.threads))) {
+      throw new IntegrationError('permission_ceiling', 'Source/history scopes cannot exceed Agent permissions.')
+    }
+    if (binding.discordHistory && (binding.target.kind !== 'channel' || binding.target.guildId !== binding.discordHistory.guildId)) throw new IntegrationError('history_scope', 'History requires a same-guild channel audience.')
     if (binding.tools.some(tool => !agent.tools.includes(tool)) ||
       binding.readDomains.some(domain => !agent.readDomains.includes(domain))) {
       throw new IntegrationError('permission_ceiling', 'Channel permissions cannot exceed the Agent permissions.')
+    }
+    if (binding.sourceFolders?.length) {
+      if (!this.options.sources) throw new IntegrationError('source_unavailable','Source resources unavailable.')
+      this.options.sources.validate(binding.sourceFolders)
     }
     if (binding.enabled) for (const id of binding.readDomains) this.options.memory.domain(id)
     if (!binding.observation && !binding.participants.everyone && !binding.participants.userIds.length && !binding.participants.roleIds.length) {
@@ -215,7 +248,7 @@ export class IntegrationStore {
     if (binding.observation) {
       const scope = binding.observation
       if (bot.purpose !== 'service' || binding.target.kind !== 'channel' || binding.target.guildId !== scope.guildId || binding.target.channelId !== scope.audienceChannelId ||
-        binding.manage || binding.inheritThreads || binding.processor || agent.execution !== 'restricted' || agent.tools.length || agent.readDomains.length ||
+        binding.sourceFolders?.length || binding.discordHistory || agent.sourceFolders?.length || agent.discordHistory || binding.manage || binding.inheritThreads || binding.processor || agent.execution !== 'restricted' || agent.tools.length || agent.readDomains.length ||
         binding.tools.length || binding.readDomains.length || binding.participants.everyone || binding.participants.userIds.length || binding.participants.roleIds.length) {
         throw new IntegrationError('observation_scope', 'Observation requires a dedicated same-guild output channel binding, restricted tool/domain-free Agent, no participants, management, threads or ordinary processor.')
       }
@@ -271,6 +304,7 @@ export class IntegrationStore {
       const compiled = compileDiscordPackage(change.package)
       const previous = state.packages[change.package.id]
       const old = previous ? compileDiscordPackage(previous.active) : undefined
+      if (old && old.agent.id !== compiled.agent.id) throw new IntegrationError('immutable_agent_id','A BOT update must preserve its Agent UUID.')
       if (!change.adoptLegacy && !old && (state.agents.some(a=>a.name === compiled.agent.name || a.id === compiled.agent.id) || this.options.agents.resolve(compiled.agent.name) || existsSync(this.agentDirectory(compiled.agent.name)))) throw new IntegrationError('agent_name_exists','BOT identity collides with an existing Agent.')
       const oldIds = new Set(old?.bindings.map(b=>b.id) ?? (change.adoptLegacy ? compiled.bindings.map(b=>b.id) : []))
       for (const binding of compiled.bindings) {
@@ -295,6 +329,15 @@ export class IntegrationStore {
         if (live.botUserId !== binding.botUserId) throw new IntegrationError('bot_identity_changed', 'The connected Bot identity changed. Refresh before assigning channels.', 409)
         if (binding.participants.roleIds.some(role => !live.roleIds.includes(role))) throw new IntegrationError('role_missing', 'An allowed role is no longer present in this server.', 409)
         inspected.push({ id: binding.id, bot: live.botUserId, roles: binding.participants.roleIds })
+        if (binding.discordHistory) {
+          const scope = binding.discordHistory
+          const directory = await this.transport.directory(binding.botInstanceId, scope.guildId, undefined, signal)
+          for (const channelId of scope.channelIds) {
+            const channel = directory.channels.find(item => item.id === channelId)
+            if (directory.botUserId !== binding.botUserId || directory.guildId !== scope.guildId || !channel || ![0,5,15,16].includes(channel.type) || !channel.canView || !channel.canReadHistory) throw new IntegrationError('history_scope', 'Selected history channel is unavailable in the live directory.')
+          }
+          inspected.push({ history: scope })
+        }
         if (binding.observation?.enabled) {
           for (const channelId of binding.observation.channelIds) {
             const location = await this.transport.inspect(binding.botInstanceId,channelId,binding.botUserId,signal)
@@ -343,6 +386,7 @@ export class IntegrationStore {
       change.kind === 'agent.save' && before.bindings.some(binding => binding.observation && binding.agentId === change.agent.id))) {
       throw new IntegrationError('observation_owner_review','Observation scopes and their Agents require owner review.')
     }
+    if (actor.kind !== 'owner' && (change.kind === 'agent.save' && (change.agent.sourceFolders?.length || change.agent.discordHistory) || change.kind === 'bindings.save' && change.bindings.some(binding => binding.sourceFolders?.length || binding.discordHistory))) throw new IntegrationError('owner_required','Source and history grants require owner review.',403)
     if (before.drafts.some(draft => draft.status === 'applying')) throw new IntegrationError('recovery_required', 'An approved change needs recovery. Retry or resolve it in Reviews before proposing another change.', 409)
     if (this.committing || before.revision !== baseRevision) throw new IntegrationError('revision_conflict', 'Configuration changed. Refresh and review your changes again.', 409)
     const validation = await this.validate(change, signal)
@@ -352,13 +396,19 @@ export class IntegrationStore {
     if (this.committing || state.revision !== baseRevision) throw new IntegrationError('revision_conflict', 'Configuration changed during validation.', 409)
     const pending = state.drafts.filter(draft => draft.status === 'applying' || draft.status === 'pending' && Date.parse(draft.expiresAt) > Date.now())
     if (pending.length >= 40) throw new IntegrationError('too_many_drafts', 'Resolve outstanding configuration reviews before creating more.', 409)
+    const compiledReview = change.kind === 'bot.save' ? compileDiscordPackage(change.package) : undefined
     const id = randomUUID()
     const draft = IntegrationDraftSchema.parse({
+      ...(compiledReview ? { resourceReview: {
+        agent: {sourceFolders:compiledReview.agent.sourceFolders ?? [],discordHistory:compiledReview.agent.discordHistory ?? null},
+        bindings:compiledReview.bindings.map(binding => ({id:binding.id,target:binding.target,sourceFolders:binding.sourceFolders ?? [],discordHistory:binding.discordHistory ?? null})),
+      }} : {}),
       id, actor, baseRevision, change, validationHash, hash: hash({ id, actor, baseRevision, change, validationHash }),
       ...(change.kind === 'agent.save' ? { agentFileHash: validation.fileRevision } : {}),
       createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
       status: 'pending', affectedBindings: this.affected(change, state),
-      warning: change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation)
+      warning: change.kind === 'bot.save' ? 'Frozen BOT source includes sourceFolders and discordHistory for Agent and each binding. Review exact registered Folder IDs, guild/channel allowlist, threads (none/public-active/public-archived, private threads excluded), and preEpoch (permission to read pre-authorization platform history, never old internal memory). Cross-channel output requires equivalent live audiences. No write, terminal or execution authority is granted. Drafts do not change the active release.'
+        : change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation)
         ? 'Owner-only observation review: selected source channels permit observation of nonparticipants but grant them no commands/tools. Evidence enters only a dedicated restricted service context and can be reported to the exact binding output audience, whose readers may differ from participants. Review source guild/channels, output privacy, frozen program, enable flag and model before approving. Metadata signatures are not visual hashes.'
         : change.kind === 'knowledge.publish'
         ? 'This approves a fixed copy for the selected domain audience. Source permissions will not automatically revoke this approved copy; revoke its publication explicitly.'
@@ -445,6 +495,7 @@ export class IntegrationStore {
       const compiled = compileDiscordPackage(change.package)
       const previous = state.packages[change.package.id]
       const old = previous ? compileDiscordPackage(previous.active) : undefined
+      if (old && old.agent.id !== compiled.agent.id) throw new IntegrationError('immutable_agent_id','A BOT update must preserve its Agent UUID.')
       const oldIds = new Set(old?.bindings.map(b=>b.id) ?? (change.adoptLegacy ? compiled.bindings.map(b=>b.id) : []))
       const agent: IntegrationAgent = change.adoptLegacy ? state.agents.find(a=>a.id===compiled.agent.id)! : {...compiled.agent,version:hash(compiled.agent),publishedAt:draft.createdAt}
       state.agents = [...state.agents.filter(a=>a.id !== agent.id),agent]

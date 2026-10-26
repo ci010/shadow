@@ -1,3 +1,4 @@
+import type { SourceResources } from './source-resources.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { ConversationPolicies } from '../agent-authoring/service.ts'
@@ -123,6 +124,7 @@ export class DiscordIntegration implements ConversationPolicies {
 
   constructor(readonly options: {
     store: IntegrationStore; memory: MemoryDomains; bots: BotInstanceStore; workspace: string; projectId: string
+    sources?: SourceResources
     classifier?:import('../events/input-classifier.ts').InputClassifier
     baseTools: Tools
   }) {
@@ -455,7 +457,7 @@ export class DiscordIntegration implements ConversationPolicies {
           ...(binding.manage ? ['Use channel_config to propose changes. Only a verified human can approve the exact review; a model response is not approval.'] : []),
           'Location and effective configuration (data):',
           JSON.stringify({ location, agent: profile.displayName, execution: profile.execution,
-            tools: binding.tools, readDomains: binding.readDomains, revision: policy.revision }),
+            tools: binding.tools, readDomains: binding.readDomains, sourceFolders:binding.sourceFolders ?? [], discordHistory:binding.discordHistory ?? null, revision: policy.revision }),
         ].join('\n') },
         { name: 'memory', content: this.options.memory.context(access) },
       ]
@@ -481,6 +483,7 @@ export class DiscordIntegration implements ConversationPolicies {
     }
     const inspect = async (signal: AbortSignal) => {
       assertCurrent()
+      await this.inspectResourceScopes(binding, policy.binding.conversationId, senderId, state, signal)
       if (service) { await this.inspectObservation(binding,AbortSignal.any([signal,controller.signal])); assertCurrent(); return }
       if (!senderId || !this.transport) throw new IntegrationError('verified_input_required', 'A verified platform sender is required.', 403)
       const result = await this.transport.inspect(binding.botInstanceId, policy.binding.conversationId, senderId,
@@ -547,10 +550,16 @@ export class DiscordIntegration implements ConversationPolicies {
     } })
     register({
       name: 'read', readonly: true,
-      description: 'Read authorized memory or this context history. Paths: v:memory, v:memory/<domainId>/<resourceId>, v:sessions/current. No raw filesystem or other virtual namespaces.',
-      parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false },
-      execute: async raw => {
-        const { path } = safeToolArgs.parse(raw)
+      description: 'Read authorized memory, v:sessions/current, or approved source files: v:source/<Folder UUID>/<relative file>. v:source lists approved IDs. No writes or execution.',
+      parameters: { type: 'object', properties: { path: { type: 'string' }, offset: {type:'integer'}, limit:{type:'integer'} }, required: ['path'], additionalProperties: false },
+      execute: async (raw, context) => {
+        const { path, offset, limit } = safeToolArgs.extend({offset:z.number().int().min(1).max(1_000_000).optional(),limit:z.number().int().min(1).max(500).optional()}).parse(raw)
+        if (path === 'v:source') return JSON.stringify({folderIds:binding.sourceFolders ?? [], path:'v:source/<Folder UUID>/<relative file>',search:'Use search with folderId, query and mode names or content.'})
+        if (path.startsWith('v:source/')) {
+          const match = /^v:source\/([a-f0-9-]{36})\/(.+)$/.exec(path)
+          if (!match || !this.options.sources) throw new IntegrationError('source_scope','Source resource unavailable.',403)
+          return JSON.stringify(await this.options.sources.run(binding.sourceFolders ?? [], match[1]!, {path:match[2]!,offset,limit}, AbortSignal.any([context.signal,controller.signal])))
+        }
         if (path === 'v:sessions/current') {
           if (!state?.channelBoundary || !this.sessions) throw new IntegrationError('history_unavailable', 'Conversation history is unavailable.', 503)
           return JSON.stringify(await this.sessions.getHistory(sessionId, { shallow: true }))
@@ -566,9 +575,18 @@ export class DiscordIntegration implements ConversationPolicies {
       },
     })
     register({
-      name: 'search', readonly: true, description: 'Search literal text only in authorized memory; hidden records and counts are excluded.',
-      parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
-      execute: async raw => JSON.stringify(this.options.memory.search(access, z.object({ query: z.string().min(1).max(1000) }).strict().parse(raw).query)),
+      name: 'search', readonly: true, description: 'Literal search in authorized memory, or approved source with folderId and mode names/content. One bounded page, excluded files never searched.',
+      parameters: { type: 'object', properties: { query: { type: 'string' }, folderId:{type:'string'}, path:{type:'string'}, mode:{type:'string',enum:['names','content']}, limit:{type:'integer'} }, required: ['query'], additionalProperties: false },
+      execute: async (raw, context) => {
+        const input = z.object({query:z.string().min(1).max(1000),folderId:z.string().uuid().optional(),path:z.string().max(1024).optional(),mode:z.enum(['names','content']).optional(),limit:z.number().int().min(1).max(100).optional()}).strict().parse(raw)
+        if (!input.folderId) {
+          if (input.path || input.mode || input.limit) throw new IntegrationError('search_scope','Source parameters require folderId.',403)
+          return JSON.stringify(this.options.memory.search(access,input.query))
+        }
+        if (!this.options.sources) throw new IntegrationError('source_scope','Source resource unavailable.',403)
+        const { folderId, ...operation } = input
+        return JSON.stringify(await this.options.sources.run(binding.sourceFolders ?? [], folderId, operation, AbortSignal.any([context.signal,controller.signal])))
+      },
     })
     register({
       name: 'memory_save', description: 'Save a private note or lesson for this conversation context. Shared knowledge requires a separate human-reviewed publication. Use the last read version, or empty string for a new record.',
@@ -581,22 +599,45 @@ export class DiscordIntegration implements ConversationPolicies {
       }).strict().parse(raw))),
     })
     for (const name of ['discord_history', 'discord_message_get'] as const) register({
-      name, readonly: true, description: 'Read messages only in the current Discord conversation; current sender and Bot permissions are checked.',
+      name, readonly: true, description: 'Read one bounded Discord history page/message or discover public threads in the exact reviewed channel scope. query is literal within one page. Archived discovery uses archiveBefore timestamps, active discovery is a single bounded response. Caller, Bot and output audience are checked live. Private threads are excluded.',
       parameters: name === 'discord_history'
-        ? { type: 'object', properties: { limit: { type: 'integer', description: '1 to 100 messages.' }, before: { type: 'string' } }, additionalProperties: false }
-        : { type: 'object', properties: { messageId: { type: 'string' } }, required: ['messageId'], additionalProperties: false },
+        ? { type: 'object', properties: { limit: { type: 'integer', description: '1 to 100 messages.' }, before: { type: 'string' }, channelId:{type:'string'}, query:{type:'string'}, threads:{type:'string',enum:['active','archived']},archiveBefore:{type:'string'},threadAfter:{type:'string'} }, additionalProperties: false }
+        : { type: 'object', properties: { messageId: { type: 'string' }, channelId:{type:'string'} }, required: ['messageId'], additionalProperties: false },
       execute: async (raw, context) => {
         if (!this.operations) throw new IntegrationError('unavailable', 'Discord operations are unavailable.', 503)
         const request: ChannelOperationRequest = name === 'discord_history'
           ? { name, args: discordHistoryArguments.parse(raw) } : { name, args: discordMessageArguments.parse(raw) }
         const address = this.address(sessionId)!
+        const destination = request.args.channelId ?? address.conversationId
+        if (!binding.discordHistory && (destination !== address.conversationId || request.name === 'discord_history' && (request.args.threads || request.args.query || request.args.archiveBefore || request.args.threadAfter))) throw new IntegrationError('history_scope','Explicit reviewed history scope required.',403)
+        if (binding.discordHistory) {
+          if (!this.transport?.assertHistory) throw new IntegrationError('history_scope','Scoped history verification unavailable.',403)
+          await this.transport.assertHistory(binding.botInstanceId,destination,senderId,address.conversationId,binding.discordHistory,context.signal)
+          if (!state?.channelBoundary) throw new IntegrationError('history_scope','Current epoch required.',403)
+          const locations = state.channelBoundary.historyLocations ??= []
+          if (!locations.includes(destination)) {
+            if (locations.length >= 200) throw new IntegrationError('history_scope','History source limit reached; start a new context.',403)
+            locations.push(destination)
+          }
+        }
         const result = await this.operations(request, child ? {
-          ...context, sessionId: child.owner, channel: 'discord', chatId: address.conversationId,
+          ...context, discordReadScope:binding.discordHistory, sessionId: child.owner, channel: 'discord', chatId: address.conversationId,
           channelAddress: address, senderId: child.senderId, inputSource: 'user',
-        } : context)
+        } : {...context, discordReadScope:binding.discordHistory})
+        await inspect(context.signal)
+        if (request.name === 'discord_history' && request.args.threads) {
+          const discovery = z.object({threads:z.array(z.object({id:z.string().regex(/^[0-9]{1,20}$/),parentId:z.literal(destination)}).passthrough()).max(100)}).passthrough().parse(result)
+          const locations = state!.channelBoundary!.historyLocations ??= []
+          for (const thread of discovery.threads) if (!locations.includes(thread.id)) {
+            if (locations.length >= 200) throw new IntegrationError('history_scope','History source limit reached; start a new context.',403)
+            locations.push(thread.id)
+          }
+          await inspect(context.signal)
+          return JSON.stringify(discovery)
+        }
         if (!state?.channelBoundary) throw new IntegrationError('history_unavailable', 'A current conversation epoch is required.', 403)
-        const message = z.object({ timestamp: z.string().datetime({ offset: true }), conversationId: z.literal(address.conversationId) }).passthrough()
-        const start = Date.parse(state.channelBoundary.startedAt)
+        const message = z.object({ timestamp: z.string().datetime({ offset: true }), conversationId: z.literal(destination) }).passthrough()
+        const start = binding.discordHistory?.preEpoch ? -Infinity : Date.parse(state.channelBoundary.startedAt)
         if (name === 'discord_message_get') {
           const envelope = z.object({ message }).passthrough().parse(result)
           if (Date.parse(envelope.message.timestamp) < start) throw new IntegrationError('history_unavailable', 'Message is outside this authorized context.', 403)
@@ -606,7 +647,7 @@ export class DiscordIntegration implements ConversationPolicies {
         const visible = history.messages.filter(item => Date.parse(item.timestamp) >= start)
         return JSON.stringify({ ...history, messages: visible,
           nextBefore: visible.length === history.messages.length ? history.nextBefore : null,
-          scope: 'Current authorization epoch only; earlier platform history is not imported.' })
+          scope: binding.discordHistory?.preEpoch ? 'Explicit platform pre-epoch history; no earlier internal memory is imported.' : 'Current authorization epoch only; earlier platform history is not imported.' })
       },
     })
     register({
@@ -726,6 +767,7 @@ export class DiscordIntegration implements ConversationPolicies {
   }
 
   private assertChatChange(binding: DiscordBinding, change: z.infer<typeof IntegrationChangeSchema>): void {
+    if (change.kind === 'bindings.save' && change.bindings.some(item => item.sourceFolders?.length || item.discordHistory) || change.kind === 'agent.save' && (change.agent.sourceFolders?.length || change.agent.discordHistory)) throw new IntegrationError('owner_review_required','Source/history grants require owner review.',403)
     if (change.kind === 'bindings.save' && change.bindings.every(item => item.botInstanceId === binding.botInstanceId &&
       !item.manage && this.manageableAgent(binding, item.agentId) && item.tools.every(tool => binding.tools.includes(tool)) &&
       item.readDomains.every(domain => this.manageableDomain(binding, domain)))) return
@@ -788,6 +830,19 @@ export class DiscordIntegration implements ConversationPolicies {
     } finally { tools.resetDynamic() }
   }
 
+  private async inspectResourceScopes(binding: DiscordBinding, audienceId: string, senderId: string, state: SessionState | undefined, signal: AbortSignal) {
+    if (binding.sourceFolders?.length) {
+      if (!this.options.sources) throw new IntegrationError('source_scope','Source resources unavailable.',403)
+      this.options.sources.validate(binding.sourceFolders)
+    }
+    if (binding.discordHistory) {
+      if (!senderId || !this.transport?.assertHistory) throw new IntegrationError('history_scope','History verification unavailable.',403)
+      for (const channelId of new Set([...binding.discordHistory.channelIds,...(state?.channelBoundary?.historyLocations ?? [])])) {
+        await this.transport.assertHistory(binding.botInstanceId,channelId,senderId,audienceId,binding.discordHistory,signal)
+      }
+    }
+  }
+
   async assertDelivery(message: OutboundMessage, signal: AbortSignal): Promise<void> {
     const stamp = message.boundary
     const output = stamp && this.outputs.get(stamp.access)
@@ -806,6 +861,7 @@ export class DiscordIntegration implements ConversationPolicies {
       this.options.memory.assert(stamp.access)
     }
     assertCurrent()
+    await this.inspectResourceScopes(binding,message.chatId,stamp.senderId,output.state,signal)
     if (this.serviceBinding(stamp.access.sessionId)) await this.inspectObservation(binding,signal)
     else {
       const inspection = await this.transport.inspect(binding.botInstanceId, message.chatId, stamp.senderId, signal)

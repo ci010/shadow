@@ -90,6 +90,89 @@ readDomains: []
 Answer support questions using only approved information.
 ```
 
+#### Owner-reviewed source and platform-history resources
+
+Two optional permissions can be frozen in the same Discord BOT release:
+
+```yaml
+# BOT.md frontmatter: Agent ceilings, not implicit binding grants.
+sourceFolders: [<registered local source Folder UUID>]
+discordHistory:
+  guildId: "<guild snowflake>"
+  channelIds: ["<exact channel snowflake>", "<another exact channel snowflake>"]
+  threads: public-archived  # none, public-active, or public-archived
+  preEpoch: true           # explicit pre-authorization PLATFORM history opt-in
+```
+
+Repeat these fields in each channel JSON binding that should receive them. A
+binding can only narrow its Agent's Folder IDs, guild/channel IDs, thread tier,
+and preEpoch flag. Omission defaults closed. These fields grant no write,
+terminal, trusted execution, arbitrary Discord API, private-thread or internal
+pre-epoch session-memory access. Existing Agent UUID (`agentId`), optional exact
+`agentMarkdown`, unrelated prompt rules, binding IDs and participant restrictions
+can be preserved. Updates of a packaged BOT do not use `adoptLegacy` and cannot
+change its Agent UUID. Draft edits never affect the active release; an owner must
+approve the exact frozen hash. Review displays both Agent and binding resource
+scopes, including the preEpoch flag, alongside complete frozen source.
+
+Source tools use only the current Project's registered local Folder IDs:
+
+- `read {path:"v:source"}` lists approved IDs.
+- `read {path:"v:source/<Folder UUID>/src/file.ts",offset:1,limit:200}` reads lines.
+- `search {folderId:"<Folder UUID>",query:"literal",mode:"names"}` finds names;
+  `mode:"content"` finds matching lines. Optional `path` is a relative subtree;
+  `limit` is at most 100 matches. Search scans at most 10,000 entries, about 8 MiB
+  of source text and 32 levels; results report truncation. No regex or execution.
+
+This deliberately conservative surface excludes hidden paths (including `.git`
+and `.env*`), dependency/build/runtime directories, recognized credential/config
+containers, non-source extensions, binary/invalid-UTF8 files, files over 256 KB,
+hard links and all symlinks, including internal ones. Recognizable embedded keys
+and credential fields also exclude a file. This is not a universal secret/DLP
+classifier: owners should register a sanitized source checkout, not a Home,
+credential or runtime-data directory. Filename search applies the same content
+exclusions. Folder unregistration/revocation is rechecked before returning data
+and before output/delivery. No Main-path fallback exists for missing/remote IDs.
+
+Safe source reads currently support macOS and Linux, failing closed elsewhere.
+A fixed, one-shot host-owned Node helper performs descriptor-verified directory
+traversal and never evaluates source. Its executable, program, environment and
+cwd are not model-selectable; it has no Bot exec/tool bridge. It uses a 64 MiB
+V8 heap, bounded file/output sizes, a 5-second deadline, abort/child/descriptor
+cleanup, and post-read registration/authorization checks. This implementation
+detail does not grant the BOT terminal or script-execution rights.
+
+Scoped Discord reads are bounded, explicit and live-authorized:
+
+- `discord_history {channelId,limit,before,query?}` scans **one** page of at most
+  100 messages. Query is a case-insensitive literal content filter within that
+  page, not a server-wide search. `nextBefore` advances the scanned page.
+- `discord_message_get {channelId,messageId}` fetches only that scoped location.
+  IDs/links never grant authority. Results include guild, parent channel, thread
+  and message identifiers.
+- `discord_history {channelId,threads:"active",limit,threadAfter?}` discovers
+  public threads under an allowlisted parent. The guild active-thread response
+  is capped at 1,000 entries, filtered to that parent, then paged by ascending
+  thread ID. This is a live view, not snapshot-consistent enumeration.
+- `discord_history {channelId,threads:"archived",limit,archiveBefore?}` uses only
+  Discord's **public archived** endpoint, at most 100 posts per page, with
+  `nextArchiveBefore` timestamp pagination. `public-active` cannot read archived
+  threads. Private/joined-private archives are never queried or included.
+  Forum/media parents use these discovery operations; messages live in posts.
+
+Every scoped read checks current caller and Bot membership, View Channel and Read
+Message History in both source and output locations. Cross-channel output is
+conservatively allowed only when effective same-guild parent permission
+_overwrites are identical_ and source age restrictions do not exceed the output
+location. This may reject a genuinely safe subset audience; there is no unsafe
+"caller can see it, therefore everyone can" fallback. Parent and used-thread
+permissions, active/archive boundaries and source registrations are rechecked
+before inference/output and queued delivery, including later turns and persisted
+JSONL/SQLite contexts. Permission changes can therefore stop a scoped conversation
+rather than silently dropping provenance and continuing. `preEpoch:true` affects
+platform messages only; an authorization change still starts a fresh internal
+conversation epoch.
+
 Channel JSON is an array of existing Discord binding declarations, omitting
 `agentId` and server-owned `epochRevision`: each includes a stable UUID `id`,
 `botInstanceId`, `botUserId`, exact `target`, `enabled`, `trigger`, participants,
@@ -776,3 +859,15 @@ ownership in the same private-document transition. QQ adoption checks both
 active Release and draft revision before staging and binds review to that exact
 base. No credentials, pairing, connection state or external platform registration
 are changed. Stale revisions or changed policy require a fresh export/review.
+
+### BOT directory publication from owner chat
+
+In a direct administrator Web conversation in the owning Project, import `bot_package`.
+Use `status` to discover registered Folders and current service/Discord revisions, then
+`propose` with `folderId`, relative `directory` and the exact status revisions. This
+uses the same safe snapshot staging as the Settings API. Publication is not a tool
+action: the owner reviews the frozen source and permission scope in chat and clicks
+the explicit approval button. Proposal alone never changes active policies. Directory
+edits after proposal are excluded; changed configuration invalidates stale approvals.
+Existing package updates do not need `adoptLegacy`; legacy adoption is explicit and
+requires the exact active Release. Remote directories fail closed with no Main fallback.

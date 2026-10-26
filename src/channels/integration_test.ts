@@ -1,3 +1,8 @@
+import { AgentResourceStore } from '../agent-authoring/store.ts'
+import { botPackageTool } from '../agent-authoring/bot-package-management.ts'
+import { FolderRegistry } from '../folders/registry.ts'
+import { SourceResources } from './source-resources.ts'
+import { stringify } from 'yaml'
 import { ImportTool } from '../tools/load-tool.ts'
 import { InvokeTool } from '../tools/invoke-tool.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
@@ -153,9 +158,10 @@ async function fixture(t: TestContext, Store = JsonlSessionStore as typeof Jsonl
   tools.register(channelTool)
   tools.register(new InvokeTool(new ImportTool(new Map([[channelTool.name, channelTool]]), home)))
   integration.attach(sessions, transport, async (request, context) => {
+    const targetChat = 'channelId' in request.args ? request.args.channelId ?? context.chatId : context.chatId
     const messages = [
-      { conversationId: context.chatId, timestamp: '2000-01-01T00:00:00.000Z', content: 'OLD_HISTORY_CANARY' },
-      { conversationId: context.chatId, timestamp: new Date().toISOString(), content: 'CURRENT_DISCORD_MESSAGE' },
+      { conversationId: targetChat, timestamp: '2000-01-01T00:00:00.000Z', content: 'OLD_HISTORY_CANARY' },
+      { conversationId: targetChat, timestamp: new Date().toISOString(), content: 'CURRENT_DISCORD_MESSAGE' },
     ]
     return request.name === 'discord_message_get' ? { message: messages[request.args.messageId === '1' ? 0 : 1] }
       : { messages, nextBefore: '1' }
@@ -1192,7 +1198,27 @@ test('BOT packages atomically publish frozen Discord Agent, binding and processo
   }})
   const aId=randomUUID(),bId=randomUUID()
   const a1=packageFor('package-a','205','FROZEN_A1',aId), b1=packageFor('package-b','206','FROZEN_B1',bId)
-  const draft=await f.config.propose(owner,{kind:'bot.save',package:a1},f.config.snapshot().revision,signal())
+  const directory=join(f.root,'bot-directory')
+  await mkdir(join(directory,'channels'),{recursive:true})
+  for (const [path,content] of Object.entries(a1.source)) await writeFile(join(directory,path),content)
+  const packageStore=new AgentResourceStore({projectId:f.projectId,directory:join(f.root,'service-resources')})
+  const chatTool=botPackageTool({discord:f.config,service:{options:{projectId:f.projectId,store:packageStore,folders:{acquireAccess:()=>()=>{},requireAvailable:async (id:string)=>{
+    assert.equal(id,'registered-folder'); return {id,path:directory,kind:'local'}
+  }}}},publicationRequests:{list:()=>[]},inventory:()=>({}),canAuthor:(id:string)=>id==='web:owner'} as unknown as Parameters<typeof botPackageTool>[0])
+  const chatTools=new SessionTools(f.tools,f.home);chatTools.setExecutionScope('session',[])
+  const chatContext={physicalSessionId:'web_owner_0',messageId:'human-turn',senderId:'owner',chatId:'owner',projectId:f.projectId,channel:'web',inputSource:'user' as const,admin:true,isGroup:false,sessionId:'web:owner',tools:chatTools,signal:signal()}
+  for(const patch of [{projectId:'foreign'},{channel:'discord'},{admin:false},{sessionId:'web:child'},{inputSource:'session'}]) {
+    await assert.rejects(()=>chatTool.execute({action:'status'},{...chatContext,...patch} as typeof chatContext),/authenticated owner/)
+  }
+  chatTools.setExecutionScope('task',[])
+  await assert.rejects(()=>chatTool.execute({action:'status'},chatContext),/authenticated owner/)
+  chatTools.setExecutionScope('session',[])
+  const status=JSON.parse(await chatTool.execute({action:'status'},chatContext) as string)
+  assert.equal(status.projectId,f.projectId);assert.notEqual(f.projectId,'default')
+  assert.equal(status.discord.revision,f.config.snapshot().revision)
+  const staged=JSON.parse(await chatTool.execute({action:'propose',folderId:'registered-folder',expectedRevision:status.draftRevision,discordRevision:status.discord.revision},chatContext) as string)
+  const draft=staged.discordDraft
+  await writeFile(join(directory,'BOT.md'),a1.source['BOT.md']+'\nUNREVIEWED_DISK_EDIT')
   const pendingRestart=new IntegrationStore({projectId:f.projectId,workspace:f.home,directory:join(f.root,'config'),bots:f.bots,agents:f.agents,memory:f.memory})
   assert.equal(pendingRestart.draft(draft.id).hash,draft.hash)
   assert(!pendingRestart.snapshot().packages['package-a'])
@@ -1271,4 +1297,140 @@ test('explicit legacy BOT adoption preserves approved Discord identities and rej
   assert.deepEqual(after.bindings.map(({epochRevision,...b})=>b).sort((a,b)=>a.id.localeCompare(b.id)),current.bindings.map(({epochRevision,...b})=>b).sort((a,b)=>a.id.localeCompare(b.id)))
   assert.equal(after.packages[agent.name]!.active.source['BOT.md'],pkg.source['BOT.md'])
   assert(after.drafts.some(d=>d.id===draft.id))
+})
+
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: reviewed source/history scopes default closed, freeze atomically, isolate internal epochs and recheck output`, async t => {
+    const f = await fixture(t,Store)
+    const sourcePath = join(f.root,'source'); await mkdir(sourcePath)
+    await writeFile(join(sourcePath,'main.ts'),'SOURCE_RESOURCE_CANARY')
+    const folders = new FolderRegistry(f.home); await folders.init()
+    const folder = await folders.register(sourcePath), resources = new SourceResources(folders)
+    f.config.options.sources = resources; f.integration.options.sources = resources
+    const history = {guildId:'100',channelIds:['205','206'],threads:'public-archived' as const,preEpoch:true}
+    f.transport.directory = async (_bot,guildId) => ({botUserId:'900',guilds:[],guildId:guildId ?? null,guildCursor:null,
+      channels:['205','206'].map(id=>({id,name:id,type:0,parentId:null,canView:true,canSend:true,canReadHistory:true,supported:true})),roles:[],synchronizedAt:new Date().toISOString(),completeness:'channels-and-active-threads',notice:'Synthetic'})
+    let revoked = false
+    f.transport.assertHistory = async (_bot,chat,sender,audience,scope) => {
+      assert.equal(sender,'500');assert.equal(audience,'205')
+      if (revoked || !scope.channelIds.includes(chat)) throw new Error('LIVE_HISTORY_REVOKED')
+    }
+    const agentId = randomUUID(), bindingId = randomUUID()
+    const pkg = (preEpoch:boolean, grants = true) => ({id:'scoped-package',source:{
+      'BOT.md':'---\n'+stringify({name:'scoped-package',platform:'discord',botInstanceId:f.bot.id,agentId,
+        channels:['channels/main.json'],tools:['read','search','discord_history','discord_message_get'],
+        ...(grants ? {sourceFolders:[folder.id],discordHistory:{...history,preEpoch}} : {})})+'---\nPRESERVED_PROMPT_RULE',
+      'channels/main.json':JSON.stringify([{...f.a,id:bindingId,agentId:undefined,target:{kind:'channel',guildId:'100',channelId:'205'},
+        tools:['read','search','discord_history','discord_message_get'],sourceFolders:grants?[folder.id]:undefined,discordHistory:grants?{...history,preEpoch}:undefined}]),
+    }})
+    await f.approve({kind:'bot.save',package:pkg(false,false)})
+    assert.equal(f.config.agent(agentId).sourceFolders,undefined)
+    await f.send('205')
+    const oldPhysical = physicalSessionId(f.sessions.getSessionState(f.id('205'))!)
+    await f.storage.appendMessages(oldPhysical,[{role:'user',content:'INTERNAL_PRE_SCOPE_CANARY',timestamp:new Date().toISOString()}])
+    const before=f.config.snapshot(), candidate=pkg(false)
+    const draft=await f.config.propose(owner,{kind:'bot.save',package:candidate},before.revision,signal())
+    assert.deepEqual(draft.resourceReview?.agent.sourceFolders,[folder.id]);assert.equal(draft.resourceReview?.agent.discordHistory?.preEpoch,false)
+    assert.equal(f.config.agent(agentId).sourceFolders,undefined)
+    candidate.source['BOT.md']+='\nUNREVIEWED_SCOPE_EDIT'
+    const missing=t.mock.method(folders,'get',()=>undefined)
+    await assert.rejects(f.config.commit(owner,draft.id,draft.hash,signal()),/unavailable/)
+    assert.equal(f.config.agent(agentId).sourceFolders,undefined)
+    missing.mock.restore()
+    await f.config.commit(owner,draft.id,draft.hash,signal())
+    assert(!f.config.agent(agentId).markdown.includes('UNREVIEWED_SCOPE_EDIT'))
+    assert.equal(f.config.agent(agentId).id,agentId)
+    assert.deepEqual(f.config.snapshot().bindings.find(b=>b.id===bindingId)?.participants,f.a.participants)
+    f.responses.push({content:'',toolCalls:[
+      {id:'source',name:'read',arguments:{path:`v:source/${folder.id}/main.ts`}},
+      {id:'source-names',name:'search',arguments:{folderId:folder.id,query:'main',mode:'names'}},
+      {id:'source-content',name:'search',arguments:{folderId:folder.id,query:'SOURCE_RESOURCE_CANARY',mode:'content',path:'',limit:10}},
+      {id:'source-denied-search',name:'search',arguments:{folderId:randomUUID(),query:'SOURCE_RESOURCE_CANARY',mode:'content'}},
+      {id:'source-denied-read',name:'read',arguments:{path:`v:source/${randomUUID()}/main.ts`}},
+      {id:'history',name:'discord_history',arguments:{channelId:'206'}},
+      {id:'single-old',name:'discord_message_get',arguments:{channelId:'206',messageId:'1'}},
+    ]})
+    f.requests.length=0;await f.send('205')
+    let input=JSON.stringify(f.requests.map(request=>request.messages))
+    assert(input.includes('SOURCE_RESOURCE_CANARY'));assert(input.includes('CURRENT_DISCORD_MESSAGE'))
+    // Exercise the actual restricted tool adapters through the real resource broker and
+    // fixed helper. Presence of the canary in a tool-call argument is not proof of success.
+    const toolResult = (id:string) => {
+      const message=f.requests.flatMap(request=>request.messages).find(message=>message.role==='tool'&&message.tool_call_id===id)
+      assert.equal(typeof message?.content,'string',`Tool result ${id} was returned to the provider`)
+      return String(message!.content)
+    }
+    assert.deepEqual(JSON.parse(toolResult('source')).lines,['SOURCE_RESOURCE_CANARY'])
+    assert.deepEqual(JSON.parse(toolResult('source-names')).matches,[{path:'main.ts'}])
+    assert.deepEqual(JSON.parse(toolResult('source-content')).matches,[{path:'main.ts',line:1,text:'SOURCE_RESOURCE_CANARY'}])
+    for (const id of ['source-denied-search','source-denied-read']) {
+      assert.match(toolResult(id),/outside the approved scope/)
+      assert(!toolResult(id).includes('SOURCE_RESOURCE_CANARY'))
+    }
+    assert(!input.includes('OLD_HISTORY_CANARY'));assert(!input.includes('INTERNAL_PRE_SCOPE_CANARY'))
+    assert(input.includes('outside this authorized context'))
+    await f.approve({kind:'bot.save',package:pkg(true)})
+    f.requests.length=0
+    f.responses.push({content:'',toolCalls:[{id:'pre-epoch',name:'discord_history',arguments:{channelId:'206'}}]})
+    await f.send('205')
+    input=JSON.stringify(f.requests.map(request=>request.messages))
+    assert(input.includes('OLD_HISTORY_CANARY'));assert(!input.includes('INTERNAL_PRE_SCOPE_CANARY'))
+    const state=f.sessions.getSessionState(f.id('205'))!
+    assert(state.channelBoundary?.historyLocations?.includes('206'))
+    assert.deepEqual((await f.storage.getState(f.id('205')))?.channelBoundary?.historyLocations,state.channelBoundary?.historyLocations)
+    const output=f.outbound.filter(message=>message.event==='response'&&message.chatId==='205').at(-1)!
+    await f.integration.assertDelivery(output,signal())
+    revoked=true;await assert.rejects(f.integration.assertDelivery(output,signal()),/LIVE_HISTORY_REVOKED/)
+    revoked=false
+    t.mock.method(folders,'get',()=>undefined)
+    await assert.rejects(f.integration.assertDelivery(output,signal()),/unavailable/)
+  })
+}
+
+test('source/history grants require registered folders, Agent ceilings and owner-only review',async t=>{
+  const f=await fixture(t)
+  const sourceId=randomUUID(), history={guildId:'100',channelIds:['201'],threads:'public-active' as const,preEpoch:true}
+  await assert.rejects(f.config.propose(owner,{kind:'agent.save',agent:{...f.profile,sourceFolders:[sourceId]}},f.config.snapshot().revision,signal()),/unavailable/)
+  await assert.rejects(f.config.propose(owner,{kind:'bindings.save',bindings:[{...f.a,discordHistory:history}]},f.config.snapshot().revision,signal()),/exceed/)
+  await assert.rejects(f.config.propose({kind:'discord',id:'500',botInstanceId:f.bot.id,channelId:'201',userId:'500',bindingId:f.a.id},
+    {kind:'agent.save',agent:{...f.profile,discordHistory:history}},f.config.snapshot().revision,signal()),/owner review/)
+  // Narrowing the Agent must revoke existing binding history instead of retaining stale grants.
+  f.transport.directory=async (_bot,guildId)=>({botUserId:'900',guilds:[],guildId:guildId ?? null,guildCursor:null,channels:[{id:'201',name:'channel',type:0,parentId:null,canView:true,canSend:true,canReadHistory:true,supported:true}],roles:[],synchronizedAt:new Date().toISOString(),completeness:'channels-and-active-threads',notice:'Synthetic'})
+  await f.approve({kind:'agent.save',agent:{...f.profile,discordHistory:history}})
+  await f.approve({kind:'bindings.save',bindings:[{...f.a,discordHistory:history}]})
+  await f.approve({kind:'agent.save',agent:f.profile})
+  assert.equal(f.config.snapshot().bindings.find(b=>b.id===f.a.id)?.discordHistory,undefined)
+})
+
+
+test('restricted history runtime uses real Discord permission proof and blocks changed queued-output audiences',async t=>{
+  const f=await fixture(t)
+  const {DiscordChannel}=await import('./discord.ts')
+  const {DiscordPermission:P}=await import('./discord-permissions.ts')
+  const adapter=new DiscordChannel(new Bus(),{token:'synthetic',allowFrom:['500']})
+  const scope={guildId:'100',channelIds:['201','202'],threads:'public-active' as const,preEpoch:true}
+  const channels:Record<string,Record<string,unknown>>=Object.fromEntries(['201','202'].map(id=>[id,{id,type:0,guild_id:'100',permission_overwrites:[]}]))
+  t.mock.method(adapter as unknown as {api:(path:string)=>Promise<unknown>},'api',async (path:string)=>{
+    if(path==='/users/@me') return {id:'900',bot:true}
+    if(path==='/guilds/100') return {id:'100',owner_id:'999'}
+    if(path==='/guilds/100/roles') return [{id:'100',permissions:String(P.view|P.readHistory)}]
+    if(path==='/guilds/100/members/900') return {user:{id:'900',bot:true},roles:[]}
+    if(path==='/guilds/100/members/500') return {user:{id:'500',bot:false},roles:[]}
+    if(path.startsWith('/channels/202/messages?')) return [{id:'800',channel_id:'202',type:0,author:{id:'501',username:'author'},content:'REAL_ADAPTER_HISTORY_CANARY',timestamp:'2000-01-01T00:00:00.000Z'}]
+    if(channels[path.split('/')[2]!]) return channels[path.split('/')[2]!]!
+    throw new Error('Unexpected Discord request')
+  })
+  f.transport.directory=async (_bot,guildId)=>({botUserId:'900',guilds:[],guildId:guildId ?? null,guildCursor:null,channels:['201','202'].map(id=>({id,name:id,type:0,parentId:null,canView:true,canSend:true,canReadHistory:true,supported:true})),roles:[],synchronizedAt:new Date().toISOString(),completeness:'channels-and-active-threads',notice:'Synthetic'})
+  f.transport.assertHistory=(_bot,chat,sender,audience,history,signal)=>adapter.assertScopedHistory(chat,sender,audience,history,signal)
+  f.integration.attach(f.sessions,f.transport,(request,context)=>adapter.executeOperation(request,{chatId:context.chatId,senderId:context.senderId,signal:context.signal,discordReadScope:context.discordReadScope}))
+  await f.approve({kind:'agent.save',agent:{...f.profile,discordHistory:scope}})
+  await f.approve({kind:'bindings.save',bindings:[{...f.a,discordHistory:scope}]})
+  f.responses.push({content:'',toolCalls:[{id:'real-history',name:'discord_history',arguments:{channelId:'202',limit:1}}]})
+  await f.send()
+  assert(JSON.stringify(f.requests).includes('REAL_ADAPTER_HISTORY_CANARY'))
+  const output=f.outbound.filter(message=>message.event==='response'&&message.chatId==='201').at(-1)!
+  await f.integration.assertDelivery(output,signal())
+  channels['202']!.permission_overwrites=[{id:'501',type:1,allow:'0',deny:String(P.view)}]
+  await assert.rejects(f.integration.assertDelivery(output,signal()),/audiences differ/)
 })

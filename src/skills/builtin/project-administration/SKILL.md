@@ -117,3 +117,9 @@ Be concise: report the outcome, session link, evidence and any real blocker.
 Do not claim admitted work is completed or promise a response from an idle peer.
 
 
+
+For registered Folder BOT directories, import `bot_package` and use `status` to
+discover Project Folders and authoritative revisions, then `propose` to freeze the
+exact directory into an owner review in chat. Show the frozen scope to the owner;
+only their explicit review click publishes. Never infer approval or use legacy
+adoption for an already-managed package update. No tool can approve itself.
