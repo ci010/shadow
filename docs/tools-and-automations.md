@@ -675,18 +675,33 @@ not reconnecting the same command. Shadow does not silently substitute versions,
 switch registries or relax runtime/TLS checks.
 Connection diagnostics include elapsed initialization time. For a stdio timeout,
 inspect sanitized stderr to separate package/bootstrap problems from MCP
-initialization; a running managed browser does not establish adapter readiness.
-Retry import at most once without replaying tool effects.
+initialization; a running managed browser does not establish adapter readiness. npm `E401`
+during stdio initialization is non-retryable `authentication_required`, requiring
+user action to repair the approved registry credential, never a silent registry
+switch. The built-in Chrome adapter instead ships with the application and runs
+directly on its Node runtime, without npx or business-folder npm/.env configuration.
+For retryable initialization failures, retry import at most once without replaying
+tool effects.
 `call_tool` timeouts instead report elapsed request time and an unknown execution
 outcome: inspect pending effects before any retry. A long browser evaluation
 can exceed the request deadline even on a healthy connection. For idle checks,
 record state/time and inspect later with a short call, rather than sleeping
 inside one RPC. MCP-declared text errors retain their JSON envelope and explicit
 failure status.
-The user selects a running browser through browser_setup: Chrome 144+ authorized
-autoConnect or explicit already-enabled loopback CDP attachment. Shadow never
-allocates/scans ports, launches browsers or copies profiles. Bindings are session-only;
-CDP is browser-wide, not profile isolation. Page operations require explicit pageId.
+Use `browser_setup(action: "connect")` as the idempotent everyday entry. It reuses
+this session's binding or binds the approved Project managed choice; after a managed
+crash it restores the same copy. Multiple bindings require `instance`. With no approved
+choice or binding it returns `needs-selection` candidates and confirmation guidance,
+without launching or copying. Even a unique candidate requires profile-copy and
+browser-wide Project access approval before the initial `managed` operation.
+Successful connect returns actual `list_pages`, `ready: true`, source and usage.
+`adapterReady` alone only means MCP initialization, not verified CDP access; a failed
+probe is not success. Binding reuse never grants additional tool permissions.
+`managed` retains its lower-level selection/copy setup contract. Explicitly approved
+Chrome 144+ `autoConnect` and already-enabled loopback CDP `attach` remain compatibility
+modes, never automatic fallbacks. The Project owns one shared managed process; sessions
+own independent adapter bindings and disconnect only those bindings. CDP is browser-wide,
+not tab ownership or profile isolation. Page operations require explicit pageId.
 
 ### MCP read-only policy and execution ordering
 

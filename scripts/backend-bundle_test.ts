@@ -38,13 +38,13 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
   try {
     const target = join(root, 'resources/backend')
     const prepared = join(root, 'prepared')
-    await compileBackend(repository, join(prepared, 'dist'), [...backendEntries, 'events/input-processor-compiler'])
+    await compileBackend(repository, join(prepared, 'dist'), [...backendEntries, 'events/input-processor-compiler', 'browser/chrome-adapter', 'mcp/client'])
     const fingerprint = await directoryFingerprint(join(prepared, 'dist'))
     await stageBackend(prepared, target)
     assert.equal(await directoryFingerprint(join(target, 'dist')), fingerprint)
     await rm(prepared, { recursive: true, force: true })
     assert.deepEqual((await readdir(join(target, 'dist/node_modules'))).sort(),
-      ['@esbuild', '@jsquash', 'esbuild', 'typescript', 'wasm-feature-detect'])
+      ['@esbuild', '@jsquash', 'chrome-devtools-mcp', 'esbuild', 'typescript', 'wasm-feature-detect'])
     assert.match(await readFile(join(target, 'dist/THIRD-PARTY-NOTICES.txt'), 'utf8'), /hono@/)
     assert.ok((await readdir(join(target, 'dist/_chunks'))).length > 1, 'entries should share chunks')
     for (const entry of backendEntries) {
@@ -80,6 +80,46 @@ test('relocated Vite backend preserves CLI, assets, WASM and isolated script ent
       `const backend = await import(${JSON.stringify(pathToFileURL(entry).href)}); if(typeof backend.runRootProcessEntry !== 'function') throw Error('missing CLI');`],
     { cwd: root, encoding: 'utf8', stdio: 'pipe' })
     const electron: string = createRequire(new URL('../desktop/package.json', import.meta.url))('electron')
+    // Exercise the exact relocated adapter resolver/transport under both Node and
+    // Electron's Node mode. Port 1 is synthetic; tools/list never acquires CDP.
+    const chromeProbe = `
+      import assert from 'node:assert/strict';
+      import { bundledChromeAdapter } from ${JSON.stringify(pathToFileURL(join(target, 'dist/src/browser/chrome-adapter.js')).href)};
+      import { McpConnection } from ${JSON.stringify(pathToFileURL(join(target, 'dist/src/mcp/client.js')).href)};
+      const launch = bundledChromeAdapter();
+      assert.ok(launch.args[0].startsWith(${JSON.stringify(target)}));
+      assert.equal(launch.command, process.execPath);
+      const conn = new McpConnection({ name: 'chrome-devtools', transport: 'stdio', ...launch,
+        args: [...launch.args, '--page-id-routing', '--browser-url=http://127.0.0.1:1', '--no-usage-statistics', '--no-performance-crux'] }, launch.cwd, ${JSON.stringify(root)});
+      try {
+        await conn.connect(AbortSignal.timeout(15000));
+        const tools = await conn.listTools(AbortSignal.timeout(15000));
+        assert.equal(tools.length, 30);
+        assert.ok(tools.find(t => t.name === 'click').inputSchema.required.includes('pageId'));
+      } finally { await conn.disconnect(); }
+    `
+    await writeFile(join(root, '.npmrc'), 'registry=https://registry.invalid/forbidden\n')
+    await writeFile(join(root, '.env'), 'NODE_OPTIONS=--require=missing-business-preload.cjs\n')
+    for (const executable of [process.execPath, electron]) {
+      execFileSync(executable, ['--input-type=module', '-e', chromeProbe], {
+        cwd: root, encoding: 'utf8', timeout: 30000,
+        env: { ...process.env, PATH: '', NODE_OPTIONS: '', ELECTRON_RUN_AS_NODE: '1' },
+      })
+    }
+    const chromeManifest = join(target, 'dist/node_modules/chrome-devtools-mcp/package.json')
+    const originalChromeManifest = await readFile(chromeManifest, 'utf8')
+    const invalidChromeManifest = JSON.parse(originalChromeManifest)
+    invalidChromeManifest.version = '0.0.0'
+    await writeFile(chromeManifest, JSON.stringify(invalidChromeManifest))
+    const rejectChrome = `
+      import assert from 'node:assert/strict';
+      import { bundledChromeAdapter } from ${JSON.stringify(pathToFileURL(join(target, 'dist/src/browser/chrome-adapter.js')).href)};
+      assert.throws(() => bundledChromeAdapter(), /repair the application installation/);
+    `
+    execFileSync(process.execPath, ['--input-type=module', '-e', rejectChrome], { cwd: root })
+    await rm(chromeManifest)
+    execFileSync(process.execPath, ['--input-type=module', '-e', rejectChrome], { cwd: root })
+    await writeFile(chromeManifest, originalChromeManifest)
     const processor = join(root, 'processor')
     await mkdir(processor)
     await writeFile(join(processor, 'valid.ts'),

@@ -12,7 +12,9 @@ export interface BrowserInstance {
   tools: SessionTools
   owner: SessionTools
   active: boolean
+  /** A successful explicit connect/list_pages probe, not just MCP initialization. */
   ready: boolean
+  adapterReady?: boolean
   importArgs?: string[]
   fileRoot?: string
 }

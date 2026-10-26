@@ -100,6 +100,17 @@ test('stdio retains cwd and config > process > workspace environment priority', 
   assert.equal(environments[0].SHADOW_MCP_ONLY_FILE, 'file')
 })
 
+test('Chrome transport never imports folder dotenv even when its cwd contains one', async t => withTempWorkspace(async home => {
+  await writeFile(join(home, '.env'), 'SHADOW_CHROME_ONLY_FILE=must-not-leak\n')
+  t.mock.method(Client.prototype, 'connect', async (transport: Transport) => {
+    const parameters = Reflect.get(transport, '_serverParams')
+    assert.equal(parameters.cwd, home)
+    assert.equal(parameters.env.SHADOW_CHROME_ONLY_FILE, undefined)
+  })
+  const connection = new McpConnection({ name: 'chrome-devtools', transport: 'stdio', command: process.execPath }, home)
+  try { await connection.connect() } finally { await connection.disconnect() }
+}))
+
 test('listTools follows all pages including empty cursor and guards cursor cycles', async (t) => {
   const connection = await connected(t)
   const controller = new AbortController()
@@ -431,19 +442,22 @@ test('stdio stderr preserves split UTF-8 and redacts secrets after decoding', as
 })
 
 test('actual stdio package-launch failures retain npm error codes through SDK connection closure', async () => withTempWorkspace(async home => {
-  const connection = new McpConnection({
-    name: 'fixture', transport: 'stdio', command: process.execPath,
-    args: ['-e', 'process.stderr.write("npm error code ETARGET\\nnpm error notarget No matching version\\n",()=>process.exit(1))'],
-  }, home)
-  try {
-    await assert.rejects(connection.connect(AbortSignal.timeout(10_000)), error => {
-      assert(error instanceof McpError)
-      assert.equal(error.diagnostic.category, 'package_unavailable')
-      assert.equal(error.diagnostic.packageErrorCode, 'ETARGET')
-      assert.equal(error.diagnostic.retryable, false)
-      return true
-    })
-  } finally { await connection.disconnect() }
+  for (const code of ['ETARGET', 'E401']) {
+    const connection = new McpConnection({
+      name: 'fixture', transport: 'stdio', command: process.execPath,
+      args: ['-e', `process.stderr.write(${JSON.stringify(`npm error code ${code}\n`)},()=>process.exit(1))`],
+    }, home)
+    try {
+      await assert.rejects(connection.connect(AbortSignal.timeout(10_000)), error => {
+        assert(error instanceof McpError)
+        assert.equal(error.diagnostic.category, code === 'E401' ? 'authentication_required' : 'package_unavailable')
+        assert.equal(error.diagnostic.packageErrorCode, code)
+        assert.equal(error.diagnostic.needsUserAction, true)
+        assert.equal(error.diagnostic.retryable, false)
+        return true
+      })
+    } finally { await connection.disconnect() }
+  }
 }))
 
 test('Windows absolute extensionless executables still resolve through SDK PATHEXT lookup', { skip: process.platform !== 'win32' }, async () => {

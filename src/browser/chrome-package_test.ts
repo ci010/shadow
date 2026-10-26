@@ -1,19 +1,18 @@
+import { createRequire } from 'node:module'
 import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { McpConnection } from '../mcp/client.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { CHROME_MCP_PACKAGE, chromeToolAllowed } from './chrome-contract.ts'
 
-// Opt-in offline compatibility check against an already installed package root.
-// No npx/download, browser operation, profile discovery, or CDP connection occurs.
-// Example: SHADOW_CHROME_MCP_PACKAGE_DIR=/.../node_modules/chrome-devtools-mcp
-const packageDir = process.env.SHADOW_CHROME_MCP_PACKAGE_DIR
+// Offline compatibility check against the shipped dependency; no browser operation,
+// profile discovery, package download, or CDP connection occurs.
+const packageDir = dirname(createRequire(import.meta.url).resolve('chrome-devtools-mcp/package.json'))
 
 test('installed pinned Chrome package advertises compatible full and category-restricted schemas without a browser', {
-  skip: !packageDir && 'Set SHADOW_CHROME_MCP_PACKAGE_DIR to an installed chrome-devtools-mcp@1.10.1',
   timeout: 90_000,
 }, async t => withTempWorkspace(async home => {
   const manifest = JSON.parse(await readFile(join(packageDir!, 'package.json'), 'utf8'))
@@ -55,7 +54,6 @@ test('installed pinned Chrome package advertises compatible full and category-re
 }))
 
 test('installed autoConnect with userDataDir fails closed and disconnects without launch', {
-  skip: !packageDir && 'Set SHADOW_CHROME_MCP_PACKAGE_DIR to an installed chrome-devtools-mcp@1.10.1',
 }, async t => withTempWorkspace(async home => {
   const manifest = JSON.parse(await readFile(join(packageDir!, 'package.json'), 'utf8'))
   assert.equal(`${manifest.name}@${manifest.version}`, CHROME_MCP_PACKAGE)

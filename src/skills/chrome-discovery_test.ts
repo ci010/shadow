@@ -42,7 +42,15 @@ test('browser capabilities are visible in the compact summary before tool discov
       for (const contract of [
         /copyReport with ready\/ready_with_warnings/,
         /Even if all key data fails/,
+        /action: "connect"/,
+        /everyday entry is `browser_setup` with `action: "connect"`/,
+        /connect returns `needs-selection`/,
+        /Even one candidate does not authorize copying/,
+        /inventory-only inspection without connection or copying, use explicit discover/,
         /action: "discover"/,
+        /`adapterReady` means MCP initialization/,
+        /`ready` records a successful connect `list_pages` probe/,
+        /no duplicate list_pages is needed immediately after successful connect/,
         /action: "managed"/,
         /One managed browser per Project runtime/,
         /installation: "edge:stable"/,
@@ -71,6 +79,8 @@ test('browser capabilities are visible in the compact summary before tool discov
         /Installed MCP search is offline/,
         /Browser tests are synthetic/,
       ]) assert.match(normalized, contract)
+      assert.doesNotMatch(normalized, /`ready` means adapter[- ]ready|ready means adapter[- ]ready/)
+      assert.ok(body.indexOf('action: "connect"') < body.indexOf('action: "discover"'), 'Connect must be the first setup entry, before inventory-only discover')
       assert.doesNotMatch(body, /All tools share one managed browser|Each subagent gets a separate browser|Do not attach a manually launched browser/)
       assert.doesNotMatch(body, /chrome-devtools-full|~30 MCP tools|## Tool sets|npx chrome-devtools-mcp/)
     } finally {
