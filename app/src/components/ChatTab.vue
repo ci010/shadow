@@ -64,7 +64,9 @@
             :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
         </div>
       </div>
-      <template v-else>
+      <!-- Draft documents use FileWorkbench's outer document scroller. -->
+      <BotPublicationReview v-if="!activeSessionId && isDirectChat && !isExecution" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'" />
+      <template v-if="activeSessionId">
         <div v-show="!mobileLayout || previousPhysicalId || viewingPhysicalId || automationConversation" class="conversation-heading-row">
           <button v-if="embedded && executionParent" class="btn btn-sm" :aria-label="t('Back to owning execution')" @click="inspectExecution(executionParent.sessionId)">
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
@@ -236,6 +238,8 @@
             <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
           </div>
+          <!-- Keep long reviews in the bounded history scroller, not the absolute composer dock. -->
+          <BotPublicationReview v-if="isDirectChat && !isExecution" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'" />
         </div>
         <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
         </div>
@@ -291,7 +295,6 @@
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="true" />
-        <BotPublicationReview v-if="isDirectChat && !isExecution" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'" />
         <PublicationRequest :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
