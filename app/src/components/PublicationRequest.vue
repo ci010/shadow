@@ -10,6 +10,8 @@
       <p>{{ t('Publish these changes together for the affected conversations. Nothing is published until you approve.') }}</p>
       <p class="publication-summary">{{ request.files.length }} {{ t('changed files ·') }} {{ request.impact ? t('{length} affected conversations', { length: request.impact.affectedBindings.length }) : t('Review conversation changes below') }}</p>
       <p>{{ request.impact ? (request.impact.permissionsChanged ? t('Permissions change — review access below.') : t('No permission changes.')) : t('Permission impact is not summarized — review bindings below.') }}</p>
+      <p v-if="request.files.some(file => file.path.startsWith('bot/'))">{{ t('BOT Release review: all source and permissions activate together. No external platform changes are performed.') }}</p>
+      <p v-if="request.impact">{{ request.impact.promptsChanged ? t('Prompt behavior changes.') : t('No prompt changes.') }} {{ request.impact.toolsChanged ? t('Tool runtime changes; review source and imports.') : t('No tool runtime changes.') }}</p>
       <p v-if="request.status === 'waiting'" role="status">{{ t('Approved; waiting for active conversations to finish. No further approval is needed.') }}</p>
       <p v-if="request.status === 'error'" class="publication-error" role="alert">{{ t('Publication failed.') }} {{ request.error?.message }} {{ t('Cancel this review and request a new one after correcting the problem.') }}</p>
       <div class="publication-review">

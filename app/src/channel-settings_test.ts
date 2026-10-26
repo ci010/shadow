@@ -112,7 +112,7 @@ test('client patches only selected channel and refuses unexpected success payloa
 test('Settings shell and channel forms compile and preserve accessible navigation and hidden drafts', async () => {
   const require = createRequire(new URL('./package.json', import.meta.url))
   const compiler = require('vue/compiler-sfc') as typeof import('vue/compiler-sfc')
-  for (const filename of ['SettingsView.vue', 'ProjectSettings.vue', 'ChannelsView.vue']) {
+  for (const filename of ['SettingsView.vue', 'ProjectSettings.vue', 'ChannelsView.vue', 'BotPackage.vue']) {
     const source = await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8')
     const { descriptor, errors } = compiler.parse(source, { filename })
     assert.deepEqual(errors, [])
@@ -124,6 +124,13 @@ test('Settings shell and channel forms compile and preserve accessible navigatio
       assert.match(source, /<ProvidersView\b[^>]*\bv-show=/)
       assert.doesNotMatch(source, /<ChannelsView/)
     }
+    if (filename === 'BotPackage.vue') {
+      assert.match(source, /session-id="owner:bot-package"/)
+      assert.match(source, /expectedRevision: state.value.draftRevision/)
+      assert.match(source, /api\/bot-package\/review/)
+      assert.doesNotMatch(source, /publication-requests\/.*POST|secretRef.*input/)
+    }
+    if (filename === 'ChannelsView.vue') assert.match(source, /BotPackage v-if="available" :key="projectId"/)
     if (filename === 'ProjectSettings.vue') assert.match(source, /ChannelsView v-if="botsOpened" v-show=/)
   }
   const app = await readFile(new URL('./App.vue', import.meta.url), 'utf8')

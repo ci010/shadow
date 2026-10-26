@@ -13,6 +13,34 @@ user turn. Group chats, managed Bots, temporary tasks/calls and background event
 cannot request credentials or publication changes. No dedicated management
 session or role exists.
 
+## Primary BOT directory publication (Discord / QQ / Feishu service Bots)
+
+Use Project Bots → BOT directory releases to freeze a registered local directory
+and request one exact owner review. Stable BOT `name` identifies an independently
+versioned package, not the source path. Updating or reviewing rollback of one
+package preserves unrelated packages and legacy bindings; collisions are rejected.
+Source edits remain draft-only until the owner approves. Never write private
+release storage or activate through general tools.
+
+QQ/Feishu BOT.md declares name, allowedTools, allowedModules and channels; channel
+JSON uses conversation bindings without agent, and declared skill sources use
+pure Node modules or scoped grants. Discord BOT.md instead declares name,
+platform: discord, botInstanceId, channels, tools and readDomains. Its channel JSON
+uses the existing Discord binding contract without agentId/epochRevision, including
+frozen processors/observation policies where needed; skills are prompt-only.
+Discord packages reuse existing platform inspection, closed tools, participant
+permissions and authorization epochs through one atomic aggregate bot.save review.
+No per-Agent/binding/processor follow-up approval is required. Use the import card
+or Discord access Reviews for the same exact durable review, not two approvals.
+
+Connections, credential references, domains and installation must already exist.
+Remote folders, initialize hooks, full SDK/npm dependencies, trusted Discord exec
+and arbitrary native network/filesystem imports are unsupported and fail closed.
+No code executes while importing and no external platform mutation is performed;
+local rollback is not external undo. Concurrent platform publication can stale a
+review; recreate it explicitly. See docs/agent-authoring.md for exact formats,
+legacy compatibility, retention and operational boundaries.
+
 ## Discover tools on demand
 
 Use `invoke_tool` with the exact name and `args: {action: "schema"}` for
@@ -22,7 +50,7 @@ resident system-prompt schemas. Read/search `v:tools/<name>` for their current
 contracts. Invalid arguments return contracts without executing a change.
 Registration lasts until session sleep; it is not authorization.
 
-`authoring_change` is the normal published-base development workflow. Keep the
+`authoring_change` remains the published-base compatibility development workflow for existing resource configurations. Keep the
 legacy shared draft `project_config` workflow for existing drafts and recovery.
 `project_config` action `request_secret` takes only secretRef and purpose and opens
 a private credential card in this requesting Web session. Never ask for or pass
@@ -48,7 +76,7 @@ ordinary chat as publication approval. Conversation memory stays separate even
 when channels share an Agent; participants do not limit who reads Discord replies.
 
 Use `authoring_change` with `action: schema` for the current edit/check/review
-workflow for QQ/Feishu, and `v:skills/tool-operations` for detailed authoring guidance.
+workflow for Discord/QQ/Feishu, and `v:skills/tool-operations` for detailed authoring guidance.
 These platforms are supported even when `channel_config` has no Discord bindings
 for them. Use `authoring_change inspect` to discover published bindings, known
 uncovered conversations, exact addresses and provider model/effort capabilities.
@@ -66,7 +94,7 @@ session overrides take precedence over published Agent settings.
 Draft `agents/<name>/AGENT.md`, explicitly selected tool Skills and the binding
 from the user's requirements. Do not promise the generic host tool set: this
 workflow permits read/search and published skill tool aliases under explicit grants.
-Keep authoring in Shadow owner chat, not in the QQ/Feishu conversation being configured.
+Keep authoring in Shadow owner chat, not in the Discord/QQ/Feishu conversation being configured.
 Show the existing publication review card; do not invent a Discord Settings review
 link or treat the user's configuration request as permission to publish.
 After approval, query `authoring_change status` for the exact Change. Missing

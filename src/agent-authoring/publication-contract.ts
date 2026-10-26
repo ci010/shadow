@@ -3,7 +3,7 @@ import { ConversationBindingSchema } from './contracts.ts'
 
 const revision = z.string().regex(/^sha256:[a-f0-9]{64}$/)
 const identifier = z.string().min(1).max(200).regex(/^[^\x00-\x20\x7f]+$/)
-const resourcePath = z.string().max(160).regex(/^(?:agents\/[a-z][a-z0-9_-]{0,63}\/AGENT\.md|skills\/[a-z][a-z0-9_-]{0,63}\/(?:SKILL\.md|[a-z][a-z0-9_-]{0,63}\.(?:js|ts)))$/)
+const resourcePath = z.string().max(256).regex(/^(?:bot\/(?:[a-z][a-z0-9_-]{0,63}\/)?(?:BOT\.md|channels\/[a-zA-Z0-9_-]+\.json|skills\/[a-z][a-z0-9_-]{0,63}\/(?:SKILL\.md|[a-zA-Z0-9_-]+\.(?:js|ts)))|agents\/[a-z][a-z0-9_-]{0,63}\/AGENT\.md|skills\/[a-z][a-z0-9_-]{0,63}\/(?:SKILL\.md|[a-z][a-z0-9_-]{0,63}\.(?:js|ts)))$/)
 const source = z.string().max(512_000).nullable()
 const binding = ConversationBindingSchema.extend({
   enabled: ConversationBindingSchema.shape.enabled.removeDefault(),
@@ -15,7 +15,7 @@ const binding = ConversationBindingSchema.extend({
 const requestSchema = z.object({
   id: identifier,
   projectId: identifier,
-  sessionId: z.union([z.string().regex(/^web:[^\x00-\x20\x7f]{1,500}$/), z.literal('owner:service-groups')]),
+  sessionId: z.union([z.string().regex(/^web:[^\x00-\x20\x7f]{1,500}$/), z.literal('owner:service-groups'), z.literal('owner:bot-package')]),
   revision,
   baseRevision: revision,
   createdAt: z.string().datetime().refine(value => {
