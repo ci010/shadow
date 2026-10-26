@@ -49,3 +49,10 @@ test('mobile CLI supports listing, revocation and non-secret help', async () => 
   await runMobilePair(['--help'], value => { help = value })
   assert(help.includes('SHADOW_MOBILE_ORIGIN'))
 })
+
+ test('mobile CLI accepts private HTTP only with explicit opt-in', async () => {
+  const response = (url: string) => async () => Response.json({ version: 1, url, code, expiresAt: new Date(Date.now() + 60_000).toISOString() })
+  await assert.rejects(manageMobileAccess(connection, { kind: 'pair' }, response('http://192.168.1.4:3125')))
+  assert((await manageMobileAccess(connection, { kind: 'pair' }, response('http://192.168.1.4:3125'), true)).includes('http://192.168.1.4:3125'))
+  await assert.rejects(manageMobileAccess(connection, { kind: 'pair' }, response('http://8.8.8.8:3125'), true))
+ })

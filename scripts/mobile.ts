@@ -83,7 +83,7 @@ export function checkMobileProject(): void {
   }
   if (manifest.devDependencies['@capacitor/cli'] !== '8.5.2') throw new Error('Unpinned CLI');
   requireText('android/app/src/main/AndroidManifest.xml', 'android:allowBackup="false"');
-  requireText('android/app/src/main/AndroidManifest.xml', 'android:usesCleartextTraffic="false"');
+  requireText('android/app/src/main/AndroidManifest.xml', 'android:usesCleartextTraffic="true"');
   requireText('android/app/src/main/AndroidManifest.xml', 'android.permission.INTERNET');
   requireText('android/app/src/main/java/app/shadow/mobile/MainActivity.java', 'registerPlugin(ShadowCredentialsPlugin.class)');
   requireText('android/app/src/main/java/app/shadow/mobile/ShadowCredentialsPlugin.java', 'AES/GCM/NoPadding');

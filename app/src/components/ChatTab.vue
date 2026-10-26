@@ -750,7 +750,7 @@ const attachmentInput = ref<HTMLInputElement>()
 const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && typeof File === 'function' && typeof FormData === 'function')
 const canPickContext = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
 const computerAccessActions = ref<HTMLElement>()
-const canUseComputer = computed(() => isDirectChat.value && !isCall.value && !remoteConversation.value && !props.embedded
+const canUseComputer = computed(() => installation.value.mode !== 'client' && isDirectChat.value && !isCall.value && !remoteConversation.value && !props.embedded
   && !!activeSessionId.value)
 const canOpenComposerPopover = computed(() => canAttachFiles.value || canPickContext.value)
 const composerPopoverTitle = computed(() =>
@@ -1223,7 +1223,7 @@ function diagnosisVisibilityChanged(visible: boolean) {
   const panel = visible ? 'diagnosis' : 'conversation'
   if (panel !== activePanel.value) switchPanel(panel)
   void nextTick(() => {
-    if (activePanel.value === panel && !knowledgeDocumentVisible.value) diagnosisNavigation.selectPanel(visible)
+    if (activePanel.value === panel && !knowledgeDocumentVisible.value) diagnosisNavigation.selectPanel(visible, conversationDocumentVisible.value)
   })
 }
 interface ChatMsg {

@@ -26,7 +26,10 @@ export function useDiagnosisNavigation(options: {
     if (requested.value) section.value = diagnosisSection(route.query[sectionKey.value])
   }, { immediate: true, flush: 'sync' })
 
-  function selectPanel(active: boolean) {
+  function selectPanel(active: boolean, conversationVisible = true) {
+    // Hiding diagnosis for another document (notably Project settings) must
+    // not start a query-only replacement that cancels that document's navigation.
+    if (!active && !conversationVisible) return
     if (!ownsRoute.value) return
     const query = { ...route.query }
     if (active) {

@@ -97,7 +97,7 @@ test('rendered mobile connection clears pairing code at submission and exposes e
   await session.load()
   const view = mount(t, './MobileConnection.vue', { session })
   assert.match(view.text(), /Sessions and tasks run on your Main computer/)
-  const inputs = view.nodes().filter(node => node.tag === 'input')
+  const inputs = view.nodes().filter(node => node.tag === 'input' && node.props.type !== 'checkbox')
   inputs[0].props['onUpdate:modelValue']('http://insecure.example')
   inputs[1].props['onUpdate:modelValue']('abcdef-abcdef-abcdef-abcdef')
   await nextTick()

@@ -24,6 +24,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict><key>NSAllowsLocalNetworking</key><true/></dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your paired Shadow Main on your local network.</string>
 	<key>UIApplicationSceneManifest</key>

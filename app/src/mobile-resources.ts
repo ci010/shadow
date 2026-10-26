@@ -23,7 +23,7 @@ export function validateResourceTicket(data: unknown, path: string, origin: stri
   if (!value || value.version !== 1 || typeof value.url !== 'string' || typeof value.expiresAt !== 'string') throw new Error(t('Main returned an invalid resource ticket.'))
   const url = new URL(value.url)
   const expires = Date.parse(value.expiresAt)
-  if (url.origin !== origin || url.protocol !== 'https:' || url.username || url.password || url.hash ||
+  if (url.origin !== origin || url.protocol !== new URL(origin).protocol || url.username || url.password || url.hash ||
     !url.searchParams.get('ticket') || mobileResourcePath(url.href, origin) !== path ||
     !Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + 65_000) {
     throw new Error(t('Main returned an invalid resource ticket.'))

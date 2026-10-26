@@ -117,8 +117,9 @@ export async function startProjectHost(
   cleanup.push(() => browserAuth.close())
   const mobileConfig = mobileGatewayConfig(process.env)
   const mobileAccess = mobileConfig ? new MobileAccess({
-    publicOrigin: mobileConfig.publicOrigin, launchCredential: launchCredential ?? '', clientAddresses,
+    publicOrigin: mobileConfig.publicOrigin, allowLanHttp: mobileConfig.allowLanHttp, launchCredential: launchCredential ?? '', clientAddresses,
   }) : undefined
+  if (mobileConfig?.publicOrigin.startsWith('http:')) console.warn('WARNING: LAN HTTP is unencrypted. Pairing codes, tokens and conversations are exposed to the network. Use only a trusted LAN; prefer HTTPS.')
   if (mobileAccess) cleanup.push(() => mobileAccess.close())
   let deviceUi: MainDeviceUi | undefined
   const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || browserAuth.authorize(request)
@@ -307,7 +308,7 @@ export async function startProjectHost(
   const gateway = serveGateway(app, { ...options.gateway, clientAddresses })
   cleanup.push(() => gateway.shutdown())
   const mobileGateway = mobileAccess && mobileConfig
-    ? serveGateway(mobileAccess.createGateway(app), { host: '127.0.0.1', port: mobileConfig.port, clientAddresses })
+    ? serveGateway(mobileAccess.createGateway(app), { host: mobileConfig.publicOrigin.startsWith('http:') ? new URL(mobileConfig.publicOrigin).hostname.replace(/^\[|\]$/g, '') : '127.0.0.1', port: mobileConfig.port, clientAddresses })
     : undefined
   if (mobileGateway) cleanup.push(() => mobileGateway.shutdown())
   let shutdownPromise: Promise<void> | undefined

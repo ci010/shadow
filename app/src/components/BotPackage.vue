@@ -9,8 +9,6 @@
     <form @submit.prevent="review()">
       <label>{{ t('Registered local folder ID') }} <input v-model="folderId" required /></label>
       <label>{{ t('Relative BOT directory (empty for folder root)') }} <input v-model="directory" /></label>
-      <label><input v-model="adoptLegacy" type="checkbox" />{{ t('Adopt identical legacy policy (owner review required)') }}</label>
-      <p v-if="adoptLegacy">{{ t('Adoption requires the complete unchanged approved Agent and assignments. It preserves identities and does not connect or activate a Bot until exact owner approval.') }}</p>
       <button :disabled="busy || !state">{{ t('Freeze and review Release') }}</button>
     </form>
     <details><summary>{{ t('Connection and folder references') }}</summary><pre>{{ JSON.stringify(state?.inventory, null, 2) }}</pre></details>
@@ -35,11 +33,10 @@ const packages = computed(()=>[...(state.value?.packages ?? []).map(p=>({...p,pl
 const selected = computed(()=>packages.value.find(p=>`${p.platform}:${p.id}`===packageId.value))
 const discordDraft = ref<(IntegrationDraft & {change: Extract<IntegrationDraft['change'],{kind:'bot.save'}>})>()
 const acknowledged = ref(false)
-const adoptLegacy = ref(false)
 const folderId = ref(''), directory = ref(''), retained = ref(''), error = ref('')
 const busy = ref(false), version = ref(0)
 let generation = 0
-watch(() => props.projectId, () => { generation++; adoptLegacy.value=false; discordDraft.value=undefined; acknowledged.value=false; packageId.value=''; state.value = undefined; folderId.value = ''; directory.value = ''; retained.value = ''; error.value = '' })
+watch(() => props.projectId, () => { generation++; discordDraft.value=undefined; acknowledged.value=false; packageId.value=''; state.value = undefined; folderId.value = ''; directory.value = ''; retained.value = ''; error.value = '' })
 async function load() {
   const current = generation
   try {
@@ -54,7 +51,7 @@ async function review(release?: string) {
   const current = generation
   busy.value = true; error.value = ''
   try {
-    const response = await fetch(apiUrl(props.apiBase, '/api/bot-package/review'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(release ? { ...(selected.value?.platform === 'discord' ? {discordRelease:release,discordRevision:state.value.discord?.revision} : {release}), packageId:selected.value?.id, expectedRevision: state.value.draftRevision } : { ...(adoptLegacy.value ? {adoptLegacy:true,expectedActiveRelease:state.value.activeRelease} : {}), discordRevision: state.value.discord?.revision, folderId: folderId.value, directory: directory.value, expectedRevision: state.value.draftRevision }) })
+    const response = await fetch(apiUrl(props.apiBase, '/api/bot-package/review'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(release ? { ...(selected.value?.platform === 'discord' ? {discordRelease:release,discordRevision:state.value.discord?.revision} : {release}), packageId:selected.value?.id, expectedRevision: state.value.draftRevision } : { discordRevision: state.value.discord?.revision, folderId: folderId.value, directory: directory.value, expectedRevision: state.value.draftRevision }) })
     const result = await response.json()
     if (!response.ok) throw new Error(result.error || t('BOT review failed.'))
     if (current === generation) { version.value++; discordDraft.value = result.discordDraft; acknowledged.value = false; await load() }

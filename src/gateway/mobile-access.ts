@@ -1,3 +1,4 @@
+import { isLanHttpHost } from '../shared/lan-http.ts'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
@@ -31,13 +32,14 @@ interface ResourceTicket {
 export interface MobileGatewayConfig {
   publicOrigin: string
   port: number
+  allowLanHttp?: boolean
 }
 
-export function mobilePublicOrigin(value: string): string {
+export function mobilePublicOrigin(value: string, allowLanHttp = false): string {
   const url = new URL(value)
-  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/'
+  if ((url.protocol !== 'https:' && !(allowLanHttp && url.protocol === 'http:' && isLanHttpHost(url.hostname))) || url.username || url.password || url.pathname !== '/'
     || url.search || url.hash || (value !== url.origin && value !== `${url.origin}/`)) {
-    throw new TypeError('Mobile access requires a canonical HTTPS origin without a path or credentials')
+    throw new TypeError('Mobile access requires a canonical HTTPS origin (or explicitly enabled private/loopback numeric LAN HTTP) without a path or credentials')
   }
   return url.origin
 }
@@ -49,7 +51,8 @@ export function mobileGatewayConfig(environment: NodeJS.ProcessEnv): MobileGatew
   }
   const port = Number(environment.SHADOW_MOBILE_PORT ?? 3125)
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError('Invalid mobile gateway port')
-  return { publicOrigin: mobilePublicOrigin(environment.SHADOW_MOBILE_ORIGIN), port }
+  const allowLanHttp = environment.SHADOW_MOBILE_ALLOW_LAN_HTTP === '1'
+  return { publicOrigin: mobilePublicOrigin(environment.SHADOW_MOBILE_ORIGIN, allowLanHttp), port, ...(allowLanHttp ? { allowLanHttp: true } : {}) }
 }
 
 function businessPath(path: string, method: string): boolean {
@@ -85,11 +88,12 @@ export class MobileAccess {
 
   constructor(private readonly options: {
     publicOrigin: string
+    allowLanHttp?: boolean
     launchCredential: string
     clientAddresses: GatewayClientAddressRegistry
     now?: () => number
   }) {
-    this.publicOrigin = mobilePublicOrigin(options.publicOrigin)
+    this.publicOrigin = mobilePublicOrigin(options.publicOrigin, options.allowLanHttp)
     if (!options.launchCredential) throw new TypeError('Mobile access requires a Main launch credential')
   }
 
@@ -152,9 +156,11 @@ export class MobileAccess {
       c.header('Cache-Control', 'no-store')
       c.header('Referrer-Policy', 'no-referrer')
       c.header('X-Content-Type-Options', 'nosniff')
-      // This listener is only a loopback upstream for an explicitly configured TLS reverse proxy.
+      // HTTPS uses a loopback TLS proxy; explicit LAN HTTP also accepts private numeric TCP peers.
       const peer = this.options.clientAddresses.resolve(c.req.raw)
-      if (!['tcp:127.0.0.1', 'tcp:::1', 'tcp:::ffff:127.0.0.1'].includes(peer)) {
+      const host = peer.slice(4).replace(/^::ffff:/, '')
+      const lanPeer = this.options.allowLanHttp && this.publicOrigin.startsWith('http:') && peer.startsWith('tcp:') && isLanHttpHost(host.includes(':') ? `[${host}]` : host)
+      if (!lanPeer && !['tcp:127.0.0.1', 'tcp:::1', 'tcp:::ffff:127.0.0.1'].includes(peer)) {
         return c.json({ error: 'loopback_proxy_required' }, 403)
       }
       if (c.req.header('Upgrade')) return c.json({ error: 'mobile_websocket_not_supported' }, 400)

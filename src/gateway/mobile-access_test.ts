@@ -232,3 +232,20 @@ test('real mobile listener captures the proxy TCP peer and enforces authenticati
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('Access-Control-Allow-Origin'), 'https://localhost')
 })
+
+test('LAN HTTP Main requires explicit opt-in and rejects public hosts and peers', async () => {
+  const origin = 'http://192.168.1.2:3125'
+  assert.throws(() => mobileGatewayConfig({ SHADOW_MOBILE_ORIGIN: origin }))
+  assert.equal(mobileGatewayConfig({ SHADOW_MOBILE_ORIGIN: origin, SHADOW_MOBILE_ALLOW_LAN_HTTP: '1' })?.allowLanHttp, true)
+  for (const host of ['example.com', '8.8.8.8', '169.254.1.2']) assert.throws(() => mobileGatewayConfig({ SHADOW_MOBILE_ORIGIN: `http://${host}`, SHADOW_MOBILE_ALLOW_LAN_HTTP: '1' }))
+  const addresses = new GatewayClientAddressRegistry()
+  const access = new MobileAccess({ publicOrigin: origin, allowLanHttp: true, launchCredential: credential, clientAddresses: addresses })
+  try {
+    const gateway = access.createGateway(new Hono())
+    for (const [host, expected] of [['192.168.1.3', 401], ['8.8.8.8', 403]] as const) {
+      const request = new Request(origin + '/mobile/v1/session')
+      addresses.capture(request, { transport: 'tcp', hostname: host! })
+      assert.equal((await gateway.request(request)).status, expected)
+    }
+  } finally { access.close() }
+})

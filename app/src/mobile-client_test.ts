@@ -282,3 +282,35 @@ test('live retry clears cursor and reconstructs subscriber history; disposal sto
   client.dispose()
   assert.equal(closed, 2)
 })
+
+test('LAN HTTP requires explicit per-origin opt-in and a numeric private host', async () => {
+  for (const host of ['10.0.2.2', '192.168.1.2', '172.16.1.2', '127.0.0.1', '[::1]', '[fd12::1]']) {
+    const origin = `http://${host}:3125`
+    assert.throws(() => validateMainOrigin(origin))
+    assert.equal(validateMainOrigin(origin, true), origin)
+    const saved = { ...credential(), origin, allowLanHttp: true }
+    assert.equal(parseMobileCredentials(JSON.stringify(saved)).allowLanHttp, true)
+    assert.throws(() => parseMobileCredentials(JSON.stringify({ ...saved, allowLanHttp: false })))
+  }
+  for (const host of ['example.com', 'localhost', '8.8.8.8', '172.32.0.1', '169.254.1.2', '[fe80::1]']) {
+    assert.throws(() => validateMainOrigin(`http://${host}:3125`, true))
+  }
+})
+
+test('LAN HTTP forwards JSON and multipart bodies without streaming Request construction', async () => {
+  const calls: Request[] = []
+  const c = { ...credential(), origin: 'http://192.168.1.4:3125', allowLanHttp: true }
+  const request = createMobileFetch({
+    fetch: async input => { calls.push(input as Request); return new Response('{}') },
+    credentials: () => c, webviewOrigin: 'https://localhost', signal: () => new AbortController().signal, unauthorized() {},
+  })
+  await request('/api/chat/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: 'synthetic' }) })
+  assert.deepEqual(await calls[0].json(), { content: 'synthetic' })
+  const form = new FormData(); form.set('file', new Blob(['synthetic']), 'fixture.txt')
+  await request('/api/chat/upload', { method: 'POST', body: form })
+  const forwarded = await calls[1].formData()
+  assert.equal(await (forwarded.get('file') as Blob).text(), 'synthetic')
+  const source = await readFile(new URL('./mobile-client.ts', import.meta.url), 'utf8')
+  assert.match(source, /const body = request.body \? await request.blob\(\) : undefined/)
+  assert.doesNotMatch(source, /new Request\(target, new Request/)
+})

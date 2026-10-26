@@ -5,6 +5,7 @@ export async function manageMobileAccess(
   connection: { apiBase: string; token: string },
   action: { kind: 'pair' | 'list' } | { kind: 'revoke'; id: string },
   request: typeof fetch = fetch,
+  allowLanHttp = false,
 ): Promise<string> {
   try {
     const url = new URL(connection.apiBase)
@@ -44,7 +45,7 @@ export async function manageMobileAccess(
         || !('code' in result) || typeof result.code !== 'string' || !/^(?:[A-F0-9]{4}-){5}[A-F0-9]{4}$/.test(result.code)
         || !('expiresAt' in result) || typeof result.expiresAt !== 'string'
         || !validExpiry(result.expiresAt, 5 * 60_000)) throw new Error('Invalid mobile pairing response')
-      return `Main HTTPS address: ${mobilePublicOrigin(result.url)}\nOne-use mobile pairing code: ${result.code}\nExpires: ${result.expiresAt}\nThis grants owner access to Main's application APIs, not device or runtime control.\n`
+      return `Main HTTPS address: ${mobilePublicOrigin(result.url, allowLanHttp)}\nOne-use mobile pairing code: ${result.code}\nExpires: ${result.expiresAt}\nThis grants owner access to Main's application APIs, not device or runtime control.\n`
     }
     if (!('sessions' in result) || !Array.isArray(result.sessions) || result.sessions.length > 32) throw new Error('Invalid session list')
     const lines = result.sessions.map((session: unknown) => {
@@ -80,5 +81,5 @@ export async function runMobilePair(args: readonly string[], output: (text: stri
   if (args[0] === '--list') { action = { kind: 'list' }; args = args.slice(1) }
   else if (args[0] === '--revoke') { action = { kind: 'revoke', id: args[1] ?? '' }; args = args.slice(2) }
   const connection = await loadPairConnection(parsePairArguments(args))
-  output(await manageMobileAccess(connection, action))
+  output(await manageMobileAccess(connection, action, fetch, process.env.SHADOW_MOBILE_ALLOW_LAN_HTTP === '1'))
 }

@@ -10,6 +10,7 @@ import test from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
+import { pdfViewerAssets } from '../pdf-viewer-assets.ts'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -24,7 +25,8 @@ test('native boot gates browser preview, pairs securely, and unmounts on backgro
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', mode: 'mobile',
     cacheDir: resolve(directory, 'vite-cache'),
-    plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
+    optimizeDeps: { entries: [], noDiscovery: true },
+    plugins: [pdfViewerAssets(), vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'mobile-native-fixture',
       enforce: 'pre',
       resolveId(id) {
