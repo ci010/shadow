@@ -10,11 +10,11 @@ function result(content: string): ChatMessage { return { role: 'tool', content, 
 const view = (messages: ChatMessage[], overview = true) => formatSessionHistory(messages, overview, 'physical')
 
 test('overview never expands tool payloads, including folder and self metadata', () => {
-  for (const message of [call('write', { path: 'v:session/self.json', content: '{"title":"SECRET"}' }), call('use_project', { folder: 'SECRET' }), call('read', { path: 'SECRET' })]) {
+  for (const message of [call('write', { path: 'v:session/self.json', content: '{"title":"SECRET"}' }), call('use_project', { folder: 'SECRET' }), call('read', { path: 'SECRET' }), call('constructor', { task: 'SECRET' })]) {
     const messages = [message, result('SECRET RESULT')]
     const text = view(messages)
     assert.doesNotMatch(text, /SECRET|private commentary/)
-    assert.match(text, /calls\/a%2Fb/)
+    assert.match(text, /c\/1\.1/)
     assert.match(text, /status=requested/)
     assert.match(text, /status=result-recorded/)
     assert.match(view(messages, false), /SECRET/)
@@ -49,7 +49,7 @@ test('runtime context requires host name and exact envelope, not payload matchin
 })
 
 test('orphan results and interrupted calls retain links without inventing success', () => {
-  assert.match(view([call('read', { path: 'SECRET' })]), /status=requested.*calls\/a%2Fb/)
+  assert.match(view([call('read', { path: 'SECRET' }), call('constructor', { task: 'SECRET' })]), /status=requested.*c\/1\.1/)
   const orphan = view([result('Error: SECRET')])
   assert.match(orphan, /status=result-recorded.*calls\/a%2Fb/)
   assert.doesNotMatch(orphan, /SECRET|success|failed/)
@@ -57,7 +57,7 @@ test('orphan results and interrupted calls retain links without inventing succes
 
 test('hidden prefixes and middle messages do not shift range coordinates', () => {
   const hidden: ChatMessage = { role: 'system', content: 'hidden\nlines' }
-  const messages = [hidden, { role: 'user' as const, content: 'question\nline' }, hidden, call('read', {}), result('x'), { role: 'assistant' as const, content: 'final' }]
+  const messages = [hidden, { role: 'user' as const, content: 'question\nline' }, hidden, call('message', { content: 'a'.repeat(1000) }), result('x'.repeat(1000)), { role: 'assistant' as const, content: 'final' }]
   for (const overview of [true, false]) {
     const text = `header\n\n${view(messages, overview)}`
     for (let end = 0; end <= messages.length; end++) {
@@ -70,4 +70,36 @@ test('hidden prefixes and middle messages do not shift range coordinates', () =>
   }
   assert.equal(sessionHistoryLineAt(messages, 1, true), 3)
   assert.equal(sessionHistoryLineAt(messages, 2, true), sessionHistoryLineAt(messages, 3, true))
+})
+
+
+test('collaboration previews are whitelisted, bounded and preserve phase results', () => {
+  for (const name of ['subagent', 'call', 'session', 'message']) {
+    const args = { task: 'task purpose', title: 'Review', description: 'phase', initialMessage: 'Kickoff', content: 'peer message', sessionId: 'peer', secret: 'HIDDEN', nested: { task: 'HIDDEN' } }
+    const text = view([call(name, args), result('phase result ' + 'x'.repeat(1000))])
+    assert.match(text, /private commentary/)
+    assert.match(text, /preview="phase result/)
+    assert.match(text, /…\[truncated\]/)
+    assert.doesNotMatch(text, /HIDDEN|x{481}/)
+    assert.match(text, /task purpose|Kickoff|peer message/)
+  }
+  const text = view([call('subagent', { task: 'y'.repeat(1000), title: { secret: 'HIDDEN' } })])
+  assert.doesNotMatch(text, /y{241}|HIDDEN/)
+  for (const args of ['{', 'null', '[]', '"text"']) {
+    const message = call('subagent', {})
+    message.tool_calls![0].function.arguments = args
+    assert.match(view([message]), /invalid arguments/)
+  }
+})
+
+test('collaboration event previews are bounded display data, not authority', () => {
+  const event = (type: string): ChatMessage => ({ role: 'user', content: [
+    { type: 'text', text: `<event type="${type}" source="subagent" event-id="event-1" />` },
+    { type: 'text', text: 'phase result ' + 'z'.repeat(1000) },
+  ] })
+  const text = view([event('subagent-complete'), event('subagent-review-requested'), event('tick')])
+  assert.match(text, /event preview=/)
+  assert.match(text, /phase result/)
+  assert.doesNotMatch(text, /z{481}|type=\\"tick/)
+  assert.match(view([event('tick')], false), /tick/)
 })
