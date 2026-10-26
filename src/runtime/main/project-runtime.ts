@@ -30,6 +30,7 @@ import { CapabilityBroker } from '../../agent-authoring/capabilities.ts'
 import { AgentCredentialStore } from '../../agent-authoring/credentials.ts'
 import { CredentialRequests } from '../../agent-authoring/credential-requests.ts'
 import { agentToolTest } from '../../tools/agent-tool-test.ts'
+import { botPackagePlugin } from '../../agent-authoring/bot-package-management.ts'
 import { PublicationBusyError, PublicationRequestError, PublicationRequests, authoringPublicationPlugin } from '../../agent-authoring/publication-requests.ts'
 import { authoringManagementTool, registerAuthoringCommands, authoringCredentialsPlugin, type AuthoringManagementOptions } from '../../agent-authoring/management.ts'
 import { AgentApp } from '../../agent/app.ts'
@@ -1453,6 +1454,7 @@ export async function createProjectRuntime(
     slashCommandsPlugin(commandDispatcher, sessions, dependencies.authorize),
     authoringCredentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
     authoringPublicationPlugin(publicationRequests, dependencies.authorize),
+    botPackagePlugin({...authoringManagement, discord: channelIntegrations}, dependencies.authorize),
     authoringProbesPlugin(probeRequests, dependencies.authorize),
     otelPlugin(otelStore),
     agentTypesPlugin(sessions, agentTypes),

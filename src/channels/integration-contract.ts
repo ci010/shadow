@@ -58,7 +58,9 @@ export const DiscordBindingSchema = z.object({
   epochRevision: z.number().int().nonnegative().optional(),
 }).strict()
 export type DiscordBinding = z.infer<typeof DiscordBindingSchema>
+export const DiscordPackageSchema = z.object({ id: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/), source: z.record(z.string().max(512_000)) }).strict()
 export const IntegrationChangeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('bot.save'), package: DiscordPackageSchema, adoptLegacy: z.literal(true).optional() }).strict(),
   z.object({ kind: z.literal('agent.save'), agent: IntegrationAgentInputSchema }).strict(),
   z.object({ kind: z.literal('bindings.save'), bindings: z.array(DiscordBindingSchema).min(1).max(200) }).strict(),
   z.object({ kind: z.literal('domain.create'), name: z.string().trim().min(1).max(160), domainKind: z.enum(['shared', 'agent-private']) }).strict(),
@@ -232,6 +234,7 @@ export interface DiscordAdapterIntegration {
 }
 
 export const IntegrationOverviewSchema = z.object({
+  packages: z.record(z.object({active: DiscordPackageSchema, revision:z.string(), history:z.array(DiscordPackageSchema)})).default({}),
   projectId: id, version: z.literal(1), revision: z.number().int().nonnegative(),
   agents: z.array(IntegrationAgentSchema), bindings: z.array(DiscordBindingSchema),
   deploymentIssues: z.array(z.object({ agentId: z.string().uuid(), message: z.string() }).strict()),

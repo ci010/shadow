@@ -9,6 +9,7 @@
     <div v-if="listError" class="channel-error" role="alert"><p>{{ listError }}</p><button @click="refresh()">{{ t('Retry') }}</button></div>
     <p v-if="notice" class="channel-notice" role="status">{{ notice }}</p>
     <p v-if="reviewLinkError" class="channel-error" role="alert">{{ reviewLinkError }}</p>
+    <BotPackage v-if="available" :key="projectId" :api-base="apiBase" :project-id="projectId" :active="active" />
     <form v-if="available" class="bot-create" @submit.prevent="addBot">
       <label>{{ t('Role') }}<UiSelect v-model="newPurpose" required :disabled="!!saving"><option value="" disabled>{{ t('Select a role') }}</option><option value="personal">{{ t('Personal assistant — owner-only Project entry') }}</option><option value="service">{{ t('Service Bot — explicitly restricted Agent') }}</option></UiSelect></label>
       <label>{{ t('Platform') }}<UiSelect v-model="newPlatform" :disabled="!!saving"><option v-for="item in channelDefinitions" :key="item.id" :value="item.id" :disabled="item.id === 'wechat' && newPurpose !== 'personal'">{{ item.id === 'wechat' ? t('WeChat (personal Bots only)') : item.label }}</option></UiSelect></label>
@@ -195,6 +196,7 @@
 </template>
 
 <script setup lang="ts">
+import BotPackage from './BotPackage.vue'
 import UiSelect from './UiSelect.vue'
 import { RouterLink } from 'vue-router'
 import BotPairingCommand from './BotPairingCommand.vue'

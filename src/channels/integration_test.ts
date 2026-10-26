@@ -1182,3 +1182,93 @@ test('trusted stream scope only inherits enabled configured channel parents, not
   await f.approve({ kind: 'bindings.save', bindings: [{ ...f.a, enabled: false }] })
   assert.equal(f.integration.streamAssigned(f.bot.id, '201'), false)
 })
+
+test('BOT packages atomically publish frozen Discord Agent, binding and processor; independent releases and exact owner review survive restart', async t => {
+  const f = await fixture(t)
+  const packageFor = (id: string, channel: string, prompt: string, bindingId: string) => ({id,source:{
+    'BOT.md': `---\nname: ${id}\nplatform: discord\nbotInstanceId: ${f.bot.id}\nchannels: [channels/main.json]\ntools: []\n---\n${prompt}`,
+    'channels/main.json': JSON.stringify([{...f.a,id:bindingId,target:{kind:'channel',guildId:'100',channelId:channel},agentId:undefined,
+      tools:[],readDomains:[],inheritThreads:false,processor:{code:'export async function run() { return {action:"emit"} }',delayMs:100}}]),
+  }})
+  const aId=randomUUID(),bId=randomUUID()
+  const a1=packageFor('package-a','205','FROZEN_A1',aId), b1=packageFor('package-b','206','FROZEN_B1',bId)
+  const draft=await f.config.propose(owner,{kind:'bot.save',package:a1},f.config.snapshot().revision,signal())
+  const pendingRestart=new IntegrationStore({projectId:f.projectId,workspace:f.home,directory:join(f.root,'config'),bots:f.bots,agents:f.agents,memory:f.memory})
+  assert.equal(pendingRestart.draft(draft.id).hash,draft.hash)
+  assert(!pendingRestart.snapshot().packages['package-a'])
+  a1.source['BOT.md']+='\nUNREVIEWED_EDIT'
+  await assert.rejects(()=>f.config.commit({kind:'discord',id:'500',botInstanceId:f.bot.id,channelId:'205',userId:'500',bindingId:aId},draft.id,draft.hash,signal()),/another actor/)
+  assert(!f.config.snapshot().packages['package-a'])
+  await f.config.commit(owner,draft.id,draft.hash,signal())
+  await f.send('205')
+  assert(JSON.stringify(f.requests.at(-1)!.messages).includes('FROZEN_A1'))
+  assert(!JSON.stringify(f.requests).includes('UNREVIEWED_EDIT'))
+  const ingress=await f.integration.prepareIngress(f.bot.id,{chatId:'205',senderId:'500',messageId:randomUUID()},signal())
+  assert.equal(ingress.processor?.code,'export async function run() { return {action:"emit"} }')
+  await f.approve({kind:'bot.save',package:b1})
+  const beforeB=f.config.snapshot().bindings.find(b=>b.id===bId)!
+  const activeA=f.config.snapshot().packages['package-a']!.active
+  await f.approve({kind:'bot.save',package:packageFor('package-a','205','FROZEN_A2',aId)})
+  await f.approve({kind:'bot.save',package:activeA})
+  assert.deepEqual(f.config.snapshot().bindings.find(b=>b.id===bId),beforeB)
+  assert.equal(f.config.snapshot().packages['package-b']!.active.source['BOT.md'],b1.source['BOT.md'])
+  const reopened=new IntegrationStore({projectId:f.projectId,workspace:f.home,directory:join(f.root,'config'),bots:f.bots,agents:f.agents,memory:f.memory})
+  assert.equal(reopened.agent(f.config.snapshot().bindings.find(b=>b.id===aId)!.agentId).markdown.includes('FROZEN_A1'),true)
+  const base=f.config.snapshot().revision
+  const stale=await f.config.propose(owner,{kind:'bot.save',package:packageFor('package-a','205','STALE',aId)},base,signal())
+  await f.approve({kind:'bot.save',package:packageFor('package-b','206','B2',bId)})
+  const unchanged=f.config.snapshot()
+  await assert.rejects(()=>f.config.commit(owner,stale.id,stale.hash,signal()),/configuration changed/)
+  assert.deepEqual(f.config.snapshot(),unchanged)
+  const liveDraft=await f.config.propose(owner,{kind:'bot.save',package:packageFor('package-a','205','LIVE_DENIED',aId)},f.config.snapshot().revision,signal())
+  const previousInspection=f.transport.inspectTarget
+  const beforeFailed=f.config.snapshot()
+  f.transport.inspectTarget=async()=>({botUserId:'999',roleIds:['700']})
+  await assert.rejects(()=>f.config.commit(owner,liveDraft.id,liveDraft.hash,signal()),/identity changed/)
+  assert.deepEqual(f.config.snapshot(),beforeFailed)
+  f.transport.inspectTarget=previousInspection
+  f.config.cancel(owner,liveDraft.id)
+  const afterCancel=f.config.snapshot()
+  await assert.rejects(()=>f.config.commit(owner,liveDraft.id,liveDraft.hash,signal()),/cancelled/)
+  assert.deepEqual(f.config.snapshot(),afterCancel)
+  const unchangedAfterCancel=f.config.snapshot()
+  const invalid=packageFor('package-a','205','DENIED',aId)
+  invalid.source['channels/main.json']=invalid.source['channels/main.json'].replace('"900"','"999"')
+  await assert.rejects(()=>f.config.propose(owner,{kind:'bot.save',package:invalid},f.config.snapshot().revision,signal()),/identity changed/)
+  assert.deepEqual(f.config.snapshot(),unchangedAfterCancel)
+  const owned=f.config.snapshot().bindings.find(b=>b.id===aId)!
+  await assert.rejects(()=>f.config.propose(owner,{kind:'bindings.save',bindings:[{...owned,tools:['read']}]},f.config.snapshot().revision,signal()),/permissions|complete BOT/)
+})
+
+test('explicit legacy BOT adoption preserves approved Discord identities and rejects unauthorized stale or changed policy', async t => {
+  const { stringify } = await import('yaml')
+  const { parseFrontmatter } = await import('../utils/frontmatter.ts')
+  const f = await fixture(t)
+  const before = f.config.snapshot()
+  const agent = before.agents.find(a=>a.id===f.profile.id)!
+  const pkg = {id:agent.name,source:{
+    'BOT.md': `---\n${stringify({name:agent.name,platform:'discord',botInstanceId:f.bot.id,agentId:agent.id,agentMarkdown:agent.markdown,description:agent.displayName,tools:agent.tools,readDomains:agent.readDomains,channels:['channels/main.json']})}---\n${parseFrontmatter(agent.markdown).body}`,
+    'channels/main.json': JSON.stringify(before.bindings.filter(b=>b.agentId===agent.id).map(({agentId,epochRevision,...b})=>b)),
+  }}
+  const change = {kind:'bot.save' as const,package:pkg,adoptLegacy:true as const}
+  const actor = {kind:'discord' as const,id:'500',botInstanceId:f.bot.id,channelId:'201',userId:'500',bindingId:f.a.id}
+  await assert.rejects(()=>f.config.propose(actor,change,before.revision,signal()),/owner/)
+  await assert.rejects(()=>f.config.propose(owner,{kind:'bot.save',package:pkg},before.revision,signal()),/collides/)
+  await assert.rejects(()=>f.config.propose(owner,{...change,package:{...pkg,source:{...pkg.source,'channels/main.json':'[]'}}},before.revision,signal()),/identical/)
+  const draft = await f.config.propose(owner,change,before.revision,signal())
+  assert.deepEqual(f.config.snapshot().agents,before.agents)
+  assert.deepEqual(f.config.snapshot().bindings,before.bindings)
+  await assert.rejects(()=>f.config.commit(actor,draft.id,draft.hash,signal()),/another actor/)
+  await f.approve({kind:'bindings.save',bindings:[{...f.a,enabled:false}]})
+  await assert.rejects(()=>f.config.commit(owner,draft.id,draft.hash,signal()),/expired|changed/)
+  await f.approve({kind:'bindings.save',bindings:[f.a]})
+  const current = f.config.snapshot()
+  const adopted = await f.config.propose(owner,change,current.revision,signal())
+  await f.config.commit(owner,adopted.id,adopted.hash,signal())
+  const after = f.config.snapshot()
+  const strip = ({version,publishedAt,...a}: typeof agent) => a
+  assert.deepEqual(after.agents.map(strip),current.agents.map(strip))
+  assert.deepEqual(after.bindings.map(({epochRevision,...b})=>b).sort((a,b)=>a.id.localeCompare(b.id)),current.bindings.map(({epochRevision,...b})=>b).sort((a,b)=>a.id.localeCompare(b.id)))
+  assert.equal(after.packages[agent.name]!.active.source['BOT.md'],pkg.source['BOT.md'])
+  assert(after.drafts.some(d=>d.id===draft.id))
+})

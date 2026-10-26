@@ -190,7 +190,7 @@ export class PublicationRequests {
     })
   }
 
-  async propose(input: PublicationProposal | undefined, expectedDraftRevision: string | undefined, sessionId: string): Promise<PublicationRequest> {
+  async propose(input: PublicationProposal | undefined, expectedDraftRevision: string | undefined, sessionId: string, expectedBaseRevision?: string): Promise<PublicationRequest> {
     this.assertRunning()
     if (this.submitting) throw new PublicationRequestError('publication_in_progress', 409, 'Publication is already in progress.')
     const store = this.options.service.options.store
@@ -199,6 +199,7 @@ export class PublicationRequests {
     const proposal = input === undefined ? undefined : structuredClone(input)
     const draft = proposal?.snapshot ?? store.draft()
     const base = store.snapshot()
+    if (expectedBaseRevision !== undefined && base.revision !== expectedBaseRevision) throw this.stale()
     if (expectedDraftRevision !== undefined && draft.revision !== expectedDraftRevision) throw this.stale()
     const validation = store.validate(draft)
     if (!validation.valid) throw new Error(validation.errors.join('\n'))

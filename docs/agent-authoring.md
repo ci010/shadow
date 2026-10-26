@@ -6,7 +6,130 @@ collector, GitHub workflow or group bot. The normal Home agent/skill loader
 remains separate: published resources are immutable snapshot contents, not
 files imported into unrestricted Node execution.
 
-## Authoring and approval
+## Primary local BOT directory flow (Discord / QQ / Feishu service Bots)
+
+Project **Bots → BOT directory releases** imports a registered **local** folder
+(or a relative subdirectory). Edit that directory with ordinary development
+tools; nothing in it is live. Freeze and review snapshots every supported source
+file and compiles the runtime resources without executing scripts. One existing
+owner publication card reviews the complete source diff, binding permissions,
+affected conversations and exact content-addressed Release. Approving it uses
+the same live validation, idle-context retirement and atomic active snapshot
+switch as existing publication. No per-agent, binding or skill approvals follow.
+Later disk edits have no effect until another snapshot is reviewed. Use retained
+Release → Review rollback to review and activate a prior snapshot; current draft
+edits are replaced only by this explicit action. Up to 20 unique Releases are
+retained, subject to the existing 32 MiB private document limit.
+
+Each BOT has a stable `name` identity, its own active content-addressed Release,
+and up to 20 retained releases. Importing or restoring one package preserves
+unrelated packages and legacy configurations. Resource/binding identity collisions
+are rejected, not overwritten. QQ/Feishu package sources are retained under
+`bot/<name>/` in the aggregate private resource snapshot; the active aggregate
+switch remains atomic. Discord packages use the existing Discord integration
+store, platform inspection, authorization epochs and processor runtime, with one
+`bot.save` aggregate review and one atomic state switch. There is no Agent →
+binding → processor approval cascade. All access checks remain on Main.
+
+Existing configurations and the prior single-directory release envelope remain
+compatible; they are not silently adopted by a new package. Use explicit owner-reviewed
+legacy adoption (below) to retain an identical legacy policy, or choose new Agent
+and binding identities for a new package. Source directory paths are not identities. Changing `name` creates a
+new package and never renames or removes an old one. A package is limited to one
+connection/platform; different connections use different packages. Packages do
+not create connections or provision credentials.
+
+Example directory (no credentials):
+
+```text
+BOT.md
+channels/support.json
+skills/status/SKILL.md
+skills/status/status.ts
+```
+
+```markdown
+---
+name: support
+allowedTools: [read, service_status]
+allowedModules: ["@shadow/service-read"]
+channels: [channels/support.json]
+---
+Answer using only approved documentation and service status.
+```
+
+Channel JSON is an array of existing ConversationBinding objects **without
+agent**: botInstanceId, platform, conversationId, enabled, skills, readFolders,
+allowFrom, parameters and grants. Bot IDs reference privately managed connections;
+HTTP credentials contain secretRef/header/prefix only. Skill format and scoped
+@shadow grants are unchanged (see below). Omitted allowedTools defaults to none;
+no permission is inferred from a directory or existing binding. Omitted allowFrom
+still inherits channel admission; [] admits nobody.
+
+Supported local dependencies are declared skill JS/erasable TS source plus pure
+Node builtins and scoped @shadow grants. Every source is included in the hash,
+along with the deterministic compiled representation. Symlinks/hardlinks,
+unreferenced channel configs, extra files, node_modules, package manifests,
+initialize hooks and arbitrary SDK/native network/filesystem imports are rejected,
+not ignored or executed. Source must fit the bounded 2 MiB/240-file import limit.
+There is no trusted plugin execution mode in this flow.
+
+### Discord directory
+
+Use the same **Bots → BOT directory releases** import. Discord BOT.md uses:
+
+```markdown
+---
+name: discord-support
+platform: discord
+botInstanceId: <existing Discord connection ID>
+channels: [channels/support.json]
+tools: [discord_history]
+readDomains: []
+---
+Answer support questions using only approved information.
+```
+
+Channel JSON is an array of existing Discord binding declarations, omitting
+`agentId` and server-owned `epochRevision`: each includes a stable UUID `id`,
+`botInstanceId`, `botUserId`, exact `target`, `enabled`, `trigger`, participants,
+tools, readDomains, inheritThreads and manage. See `channel_config schema` or
+[channels](channels.md) for the full strict binding contract. The host derives a
+stable package Agent UUID. Tools come only from the existing closed Discord
+registry and bindings may narrow the Agent ceiling. This iteration always uses
+restricted execution, never trusted exec. Optional ordinary `processor` and
+owner-only `observation` declarations include the complete frozen program/code
+and policy in the channel JSON; dependency snapshots already supported by that
+contract remain frozen data, never evaluated during import. Skill SKILL.md files
+are prompt-only for Discord, without executable declarations. Scope, participant,
+role, live Bot identity/visibility and observation permissions use existing
+Discord validation and per-input authorization, not QQ/Feishu grant semantics.
+
+Review the exact source (including every channel audience and processor), hash,
+base revision and previous package in the import card, then **Approve and apply**.
+The same durable review is also available under **Discord access → Reviews**.
+There is one approval, not one in each view. Pending reviews survive restart,
+expire after 15 minutes and cannot be reused after cancellation or a configuration
+change. Retained releases can be selected for review rollback. Package-owned
+Agents/bindings cannot be changed through fragmented legacy proposals; edit the
+complete package instead. Unrelated legacy Discord Agents/bindings continue to
+use their existing flow. Removed assignments become default-deny; changed scopes
+receive fresh authorization epochs. Published package Agents use frozen private
+state directly, not mutable live AGENT.md files.
+
+**Boundaries:** Remote folder import is rejected, never resolved on Main.
+`initialize`, full SDK imports and arbitrary dependency execution are unsupported
+and fail closed. No external installation, commands, webhooks or platform
+mutations run during import/publication; rollback cannot undo later external
+side effects. Reviews use the current aggregate platform base: concurrent
+publications can stale a pending review, which must be recreated explicitly.
+There is no cross-platform package/transaction. Retention is bounded by private
+store size limits; an oversized publication fails without changing the active
+release. The host development exec tool is not an OS sandbox; restricted
+conversation tools do not expose filesystem writes or activation. Do not put
+secrets in source: only private reference provisioning avoids model disclosure.
+
+## Existing Change workflow and compatibility
 
 Read the on-demand built-in `v:skills/project-administration` from any ordinary
 administrator Web durable session. No main coordination session is required.
@@ -15,7 +138,7 @@ and request `action: schema` for exact current inputs. Complex contracts stay in
 the dynamic catalog rather than the resident system prompt. Reading a Skill or
 registering a tool is not authorization.
 
-The preferred workflow is **create Change → edit files → check → request owner
+For existing resource-based authoring, the workflow is **create Change → edit files → check → request owner
 review**. Delegate substantial implementation with a `changeId`, explicit resource
 paths and acceptance cases, not copied bundles or checksum reports. Delegated
 editors may edit/check their authorized paths; creating owner delegations and
@@ -232,13 +355,10 @@ The binding chooses the role and selected skills:
 }
 ```
 
-The legacy binding schema retains `qq`, `discord` and `feishu` for compatibility.
-Current Main composition routes **Discord** through its explicit channel policy
-service and rejects Discord publication through this authoring path. Use
-`channel_config` and **Bots > Discord access** for Discord Agents, closed tool
-registries, memory domains and clean authorization epochs; see
-[Messaging channels](channels.md). The behavior below describes QQ/Feishu
-managed authoring, not an alternative Discord authority.
+QQ/Feishu resource bindings use the contract above. Discord packages compile
+through the Discord integration contract instead, preserving its default-deny
+admission and authorization epochs. Generic resource authoring still rejects
+Discord bindings; it is not an alternate Discord authority.
 
 Different groups may choose different
 roles, prompts, skill selections, folder scopes and grants. `parameters` are
@@ -629,3 +749,28 @@ skills, grants, folders, parameters, prompts and any other override fields.
   不能新启用群。显式空 profile 可用于无工具 Agent。更改 profile 不自动扩大既有群权限。
 - Project 数据与凭据隔离；另一个 Bot 必须有自己的明确 profile。每个群仍使用独立候选、
   精确 candidate/base revision 和原发布审批，未批准不执行，不覆盖无关脏 draft。
+
+### Explicit legacy BOT adoption
+
+The owner BOT directory form offers **Adopt identical legacy policy**. This is
+not automatic migration: it freezes the local package and creates the usual
+exact owner review; activation still requires separate human approval. Ordinary
+imports retain their collision guards.
+
+To retain approved legacy metadata, BOT frontmatter may include `agentMarkdown`
+(the complete approved AGENT.md, not a manually edited file). QQ/Feishu verify
+its prompt, description, tool/module ceilings against BOT fields, then preserve
+its full metadata, including capability profiles and inference settings. Discord
+also accepts `agentId` to retain the approved UUID and uses `description` as the
+existing display name. Normal policy validation still applies.
+
+Adoption requires byte-identical legacy resource files and all exact Agent
+bindings for QQ/Feishu; shared skill ownership is refused. Discord requires the
+complete identical approved Agent and assignments, excluding only stored
+publication/epoch bookkeeping from the equality check. Existing identities,
+publication metadata and binding epochs are retained on adoption. Existing
+packages cannot be adopted again. Discord adopts Agent, assignments and package
+ownership in the same private-document transition. QQ adoption checks both
+active Release and draft revision before staging and binds review to that exact
+base. No credentials, pairing, connection state or external platform registration
+are changed. Stale revisions or changed policy require a fresh export/review.
