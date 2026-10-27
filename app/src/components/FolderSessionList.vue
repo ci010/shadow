@@ -32,7 +32,7 @@
       <template #icon>
         <span v-if="session.groupObservation?.pending" class="i-lucide-message-circle-question w-4 h-4" :title="t('Pending setup approval')" />
         <span v-else-if="session.groupObservation && !session.groupObservation.enabled" class="i-lucide-circle-dashed w-4 h-4" :title="t('Not enabled')" />
-        <SessionActivity v-else :stage="sidebarSessionIconStage(activityStage(session), session.completed)" :has-cron="session.hasCron" :subagents="delegatedActivity(session)" compact icon-only status-icons />
+        <SessionActivity v-else :stage="sidebarSessionIconStage(activityStage(session), session.completed)" :has-cron="session.hasCron" :has-background-tasks="hasBackgroundTasks(session)" :subagents="delegatedActivity(session)" compact icon-only status-icons />
       </template>
       <template #meta><WorkingWave v-if="isAnimating(session)" class="session-working-wave" /></template>
       <template v-if="!session.sessionId.startsWith('observed-group:')" #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
@@ -102,6 +102,9 @@ function isSelected(session: SidebarSession) {
 }
 function activityStage(session: SidebarSession) {
   return props.rail ? prominentWorkingStage(family(session).map(item => props.stages[item.sessionId])) ?? props.stages[session.sessionId] : props.stages[session.sessionId]
+}
+function hasBackgroundTasks(session: SidebarSession) {
+  return (props.rail ? family(session) : [session]).some(item => item.hasBackgroundTasks)
 }
 function delegatedActivity(session: SidebarSession) {
   const members = props.rail ? family(session) : [session]

@@ -37,6 +37,7 @@ export interface SidebarSession {
   agentType?: string
   completed?: boolean
   hasCron?: boolean
+  hasBackgroundTasks?: boolean
   executionStatus?: ExecutionStatus
   waitingForCall?: boolean
   parentToolCallId?: string
@@ -129,6 +130,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       || (session.parentSessionId !== undefined && session.parentSessionId !== null && (typeof session.parentSessionId !== 'string' || !session.parentSessionId))
       || (session.executionStatus !== undefined && !isExecutionStatus(session.executionStatus))
       || (session.hasCron !== undefined && typeof session.hasCron !== 'boolean')
+      || (session.hasBackgroundTasks !== undefined && typeof session.hasBackgroundTasks !== 'boolean')
       || (session.waitingForCall !== undefined && typeof session.waitingForCall !== 'boolean')
       || (session.parentToolCallId !== undefined && (typeof session.parentToolCallId !== 'string' || !session.parentToolCallId))
       || (session.description !== undefined && typeof session.description !== 'string')) throw invalid()
@@ -185,6 +187,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       agentType: session.agentType as string | undefined,
       completed: session.completed === true,
       hasCron: session.hasCron === true,
+      hasBackgroundTasks: session.hasBackgroundTasks === true,
       executionStatus: session.executionStatus as ExecutionStatus | undefined,
       waitingForCall: session.waitingForCall as boolean | undefined,
       parentToolCallId: session.parentToolCallId as string | undefined,

@@ -26,10 +26,17 @@ test('computer tools use lazy discovery, preserve transient observations through
     }
     const invoke = (name: string, args: Record<string, unknown>, patch: Partial<ExecutionContext> = {}) =>
       tools.execute('invoke_tool', { name, args }, { ...context, ...patch })
-    const observed = await invoke('computer_observe', { targetId: f.desktop.target.id })
+    const observed = await invoke('computer_observe', {})
     assert.ok(transientToolSummary(observed))
     assert.match(toolResultText(observed), /Synthetic field/)
     assert.doesNotMatch(transientToolSummary(observed)!, /Synthetic field/)
+    const connected = await invoke('computer_setup', { action: 'connect' })
+    assert.match(toolResultText(connected), /"observed":true/)
+    assert.match(toolResultText(connected), /Synthetic field/)
+    assert.doesNotMatch(transientToolSummary(connected)!, /Synthetic field/)
+    const stale = await invoke('computer_act', { observationId: crypto.randomUUID(), action: { kind: 'invoke', elementId: '0' } })
+    assert.match(toolResultText(stale), /Observe the window again/)
+    assert.match(toolResultText(await invoke('computer_setup', { action: 'connect' }, { recoveringToolCall: true })), /not replayed/)
     const before = f.desktop.calls.length
     const executor: Executor = {
       async *execute() { assert.fail('No remote desktop execution is implemented') },

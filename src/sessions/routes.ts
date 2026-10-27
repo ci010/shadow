@@ -19,6 +19,7 @@ import { FolderError } from '../folders/registry.ts'
 import { isLearningAutomationSession } from './session-purpose.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
 import { cronContextMode, type CronService } from '../cron/service.ts'
+import type { BackgroundTaskManager } from '../agent/background-task.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { physicalSessionId, SessionIdentityError } from './session-identity.ts'
 import {
@@ -185,6 +186,7 @@ export function sessionsApiPlugin(
   sessions: SessionManager | undefined,
   options: {
     cron?: Pick<CronService, 'listJobs'>
+    backgroundTasks?: Pick<BackgroundTaskManager, 'listTasks'>
     authorizeContext?: (request: Request) => boolean | Promise<boolean>
     authorizeRename?: (request: Request) => boolean | Promise<boolean>
     authorizeOwnerDecision?: (request: Request) => boolean | Promise<boolean>
@@ -277,6 +279,9 @@ export function sessionsApiPlugin(
       const cronTargets = new Set(options.cron?.listJobs()
         .filter(job => job.enabled !== false && cronContextMode(job) === 'existing')
         .map(job => job.target?.sessionId))
+      const backgroundOwners = new Set(options.backgroundTasks?.listTasks()
+        .filter(task => task.status === 'running' || task.status === 'cancelling')
+        .map(task => task.sessionId))
       const enrichedSessions = []
       for (const session of list) {
         const state = await sessions.readSessionState(session.sessionId)
@@ -311,6 +316,7 @@ export function sessionsApiPlugin(
           automation,
           completed: state?.completed ?? false,
           hasCron: cronTargets.has(session.sessionId),
+          hasBackgroundTasks: backgroundOwners.has(session.sessionId),
           title: automation?.config?.source === 'system' ? automation.name : state?.name ?? state?.topic?.title ?? state?.generatedTitle ?? state?.chatName ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,

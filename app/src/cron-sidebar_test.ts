@@ -25,8 +25,8 @@ test('sidebar renders cron instead of moon only when inactive, below completion 
   })
   try {
     const { default: FolderSessionList } = await server.ssrLoadModule('/src/components/FolderSessionList.vue')
-    const render = async (stage: string | undefined, hasCron: boolean, completed = false, child?: string, rail = false) => {
-      const sessions = parseSessionGraph({ sessions: [{ sessionId: 'web:target', hasCron, completed }], nodes: [] })
+    const render = async (stage: string | undefined, hasCron: boolean, completed = false, child?: string, rail = false, hasBackgroundTasks = false) => {
+      const sessions = parseSessionGraph({ sessions: [{ sessionId: 'web:target', hasCron, completed, hasBackgroundTasks }], nodes: [] })
       const executions = child ? [{ sessionId: 'sub-child', mode: 'task', executionStatus: child }] : []
       return renderToString(createSSRApp({ render: () => h(FolderSessionList, {
         sessions, activeSessionId: '', collapsed: new Set(), stages: stage ? { 'web:target': stage } : {},
@@ -37,6 +37,12 @@ test('sidebar renders cron instead of moon only when inactive, below completion 
       for (const stage of [undefined, 'idle', 'inactive']) {
         assert.match(await render(stage, true, false, undefined, rail), /i-lucide-alarm-clock/)
         assert.match(await render(stage, false, false, undefined, rail), /i-lucide-moon/)
+        for (const cron of [false, true]) {
+          const background = await render(stage, cron, false, undefined, rail, true)
+          assert.match(background, /i-lucide-terminal/)
+          assert.doesNotMatch(background, /i-lucide-moon|i-lucide-alarm-clock/)
+          assert.doesNotMatch(await render(stage, cron, true, undefined, rail, true), /i-lucide-terminal/)
+        }
         const completed = await render(stage, true, true, undefined, rail)
         assert.match(completed, /i-lucide-circle-check/)
         assert.doesNotMatch(completed, /i-lucide-alarm-clock|i-lucide-moon/)
@@ -44,6 +50,7 @@ test('sidebar renders cron instead of moon only when inactive, below completion 
     }
     for (const stage of ['llm', 'tool', 'waiting', 'waiting-for-call', 'running', 'pending', 'failed', 'cancelled']) {
       assert.doesNotMatch(await render(stage, true), /i-lucide-alarm-clock|i-lucide-moon/)
+      assert.doesNotMatch(await render(stage, true, false, undefined, false, true), /i-lucide-terminal/)
     }
     const delegated = await render('idle', true, false, 'running')
     assert.match(delegated, /i-lucide-git-branch/)
@@ -55,7 +62,16 @@ test('sidebar renders cron instead of moon only when inactive, below completion 
     assert.doesNotMatch(await render('running', true, false, 'running'), /i-lucide-git-branch/)
     assert.match(await render('idle', true, false, 'waiting'), /i-lucide-message-circle-question/)
     for (const child of ['running', 'waiting', 'pending']) {
+      assert.doesNotMatch(await render('idle', true, false, child, false, true), /i-lucide-terminal/)
       assert.doesNotMatch(await render('idle', true, false, child), /i-lucide-alarm-clock|i-lucide-moon/)
     }
   } finally { await server.close() }
+})
+
+test('background graph flag is optional and validated', () => {
+  const parse = (value: unknown) => parseSessionGraph({ sessions: [{ sessionId: 'web:target', hasBackgroundTasks: value }], nodes: [] })[0].hasBackgroundTasks
+  assert.equal(parse(undefined), false)
+  assert.equal(parse(false), false)
+  assert.equal(parse(true), true)
+  assert.throws(() => parse('true'))
 })

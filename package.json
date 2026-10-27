@@ -28,6 +28,7 @@
     "desktop:install": "node --import tsx scripts/install-local.ts",
     "desktop:build": "node --import tsx scripts/desktop.ts build",
     "desktop:prepare-aria2": "node --import tsx scripts/local-aria2.ts",
+    "desktop:repair-native": "powershell -NoProfile -File scripts/repair-agent-desktop.ps1",
     "release": "node --import tsx scripts/release-mac.ts",
     "desktop:package": "node --import tsx scripts/desktop.ts package",
     "release:prepare": "node --import tsx scripts/prepared-build.ts prepare",
