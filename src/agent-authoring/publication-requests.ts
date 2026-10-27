@@ -127,6 +127,7 @@ export async function publishAgentResources(
 export class PublicationRequests {
   private entries: Array<{ request: PublicationRequest; snapshot: ResourceSnapshot; approved: boolean }>
   private readonly document: PrivateDocument<typeof this.entries>
+  private readonly reviewHistory: PrivateDocument<Array<{id:string; revision:string; status:'applied'|'cancelled'; decidedAt:string}>>
   private submitting = false
   private stopped = false
   private generation = 0
@@ -173,6 +174,11 @@ export class PublicationRequests {
         return entries
       },
     })
+    this.reviewHistory = new PrivateDocument({
+      projectId: options.service.options.projectId,
+      directory: options.directory ?? store.storageDirectory, filename:'publication-review-history.json', initial:[],
+      parse: value => z.array(z.object({id:z.string(),revision:z.string(),status:z.enum(['applied','cancelled']),decidedAt:z.string().datetime()}).strict()).parse(value),
+    })
     this.entries = this.document.read().map(entry => entry.approved
       ? { ...entry, request: { ...entry.request, status: 'waiting' } } : entry)
     let draft = store.draft().revision
@@ -190,7 +196,7 @@ export class PublicationRequests {
     })
   }
 
-  async propose(input: PublicationProposal | undefined, expectedDraftRevision: string | undefined, sessionId: string, expectedBaseRevision?: string): Promise<PublicationRequest> {
+  async propose(input: PublicationProposal | undefined, expectedDraftRevision: string | undefined, sessionId: string, expectedBaseRevision?: string, botReviewOrigin?: PublicationRequest['botReviewOrigin']): Promise<PublicationRequest> {
     this.assertRunning()
     if (this.submitting) throw new PublicationRequestError('publication_in_progress', 409, 'Publication is already in progress.')
     const store = this.options.service.options.store
@@ -208,6 +214,7 @@ export class PublicationRequests {
       id: randomUUID(), projectId: this.options.service.options.projectId,
       sessionId: proposal?.change.sourceSessionId ?? sessionId, revision: draft.revision, baseRevision: base.revision,
       createdAt: new Date().toISOString(),
+      ...(botReviewOrigin ? {botReviewOrigin} : {}),
       files: paths.filter(path => base.bundle.files[path] !== draft.bundle.files[path])
         .map(path => ({ path, before: base.bundle.files[path] ?? null, after: draft.bundle.files[path] ?? null })),
       previousBindings: base.bundle.bindings, bindings: draft.bundle.bindings,
@@ -241,8 +248,10 @@ export class PublicationRequests {
   list(): PublicationRequest[] {
     if (this.stopped) return []
     const store = this.options.service.options.store
+    const terminal = this.reviewHistory.read()
     const entries = this.entries.filter(entry => {
       const request = entry.request
+      if (terminal.some(item => item.id === request.id && item.revision === request.revision)) return false
       if (request.baseRevision !== store.snapshot().revision ||
         (!request.change && request.revision !== store.draft().revision)) return false
       try { this.options.validateRequest?.(structuredClone(request)) } catch (error) {
@@ -262,12 +271,14 @@ export class PublicationRequests {
 
   async submit(id: string, decision: { revision: string; baseRevision: string }): Promise<PublicationResult> {
     const entry = this.requirePending(id, decision)
-    const request = entry.request
+    const originalRequest = entry.request
+    const request = {...originalRequest,approvedAt:originalRequest.approvedAt ?? new Date().toISOString()}
     this.submitting = true
     const wasWaiting = entry.approved
     try {
       entry.approved = true
-      try { this.save(this.entries) } catch (error) { entry.approved = wasWaiting; throw error }
+      entry.request = request
+      try { this.save(this.entries) } catch (error) { entry.approved = wasWaiting; entry.request = originalRequest; throw error }
       const assertPending = () => {
         this.assertRunning()
         if (!this.entries.includes(entry) ||
@@ -290,6 +301,7 @@ export class PublicationRequests {
       } else {
         await publishAgentResources(this.options, request.revision, request.baseRevision, assertPending)
       }
+      this.finishReview(request, 'applied')
       if (this.entries.includes(entry)) this.save(this.entries.filter(item => item !== entry))
       return { requestId: request.id, revision: request.revision, status: 'published' }
     } catch (error) {
@@ -301,7 +313,7 @@ export class PublicationRequests {
           return { requestId: request.id, revision: request.revision, status: 'waiting' }
         }
         entry.approved = false
-        entry.request = { ...request, status: 'error', error: {
+        entry.request = { ...originalRequest, status: 'error', error: {
           code: 'publication_failed', message: 'Publication failed. Review the current configuration before explicitly retrying.',
         } }
         this.save(this.entries)
@@ -325,8 +337,26 @@ export class PublicationRequests {
   cancel(id: string, decision: { revision: string; baseRevision: string }): PublicationResult {
     const entry = this.requirePending(id, decision)
     const request = entry.request
+    this.finishReview(request, 'cancelled')
     this.save(this.entries.filter(item => item !== entry))
     return { requestId: request.id, revision: request.revision, status: 'cancelled' }
+  }
+
+  /** Durable terminal receipts are separate from the actionable request queue. */
+  reviewStatus(request: PublicationRequest): {status:'pending'|'waiting'|'error'|'applied'|'cancelled'|'stale'|'unavailable'; decidedAt?:string} {
+    const terminal = this.reviewHistory.read().find(item => item.id === request.id && item.revision === request.revision)
+    if (terminal) return {status:terminal.status, decidedAt:terminal.decidedAt}
+    const pending = this.list().find(item => item.id === request.id && item.revision === request.revision)
+    if (pending) return {status:pending.status ?? 'pending',...(pending.approvedAt ? {decidedAt:pending.approvedAt} : {})}
+    // An equal release is not proof this particular request was approved.
+    if (this.options.service.options.store.snapshot().revision === request.revision) return {status:'unavailable'}
+    return {status:'stale'}
+  }
+
+  private finishReview(request: PublicationRequest, status:'applied'|'cancelled'): void {
+    const records = this.reviewHistory.read()
+    if (records.some(item => item.id === request.id)) return
+    this.reviewHistory.write([...records,{id:request.id,revision:request.revision,status,decidedAt:status === 'applied' ? request.approvedAt ?? new Date().toISOString() : new Date().toISOString()}])
   }
 
   stop(): void {

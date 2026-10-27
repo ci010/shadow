@@ -1400,7 +1400,32 @@ export async function createProjectRuntime(
     stream: (action,args,context) => (action==='send'?channelStreamSend:channelStreamRead).execute(args,context),
   }))
   discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
-  importTool.registerBuiltin('bot_package', botPackageTool({ ...authoringManagement, discord: channelIntegrations, canAuthor, registeredFolders: () => folderRegistry.list() }))
+  const botReviews = {record:(record:import('../../agent-authoring/bot-review-contract.ts').BotReviewRecord) => sessions.recordBotReview(record), read:(id:string,physicalId?:string) => sessions.getBotReviews(id,physicalId)}
+  let botReviewWrites = Promise.resolve()
+  const syncBotReviewHistory = () => {
+    const snapshot = channelIntegrations.snapshot()
+    botReviewWrites = botReviewWrites.then(async () => {
+      for (const draft of snapshot.drafts) {
+        if (!draft.origin || draft.change.kind !== 'bot.save' || !await sessions.readSessionState(draft.origin.sessionId)) continue
+        await sessions.recordBotReview({version:1,projectId:project.id,id:draft.id,origin:draft.origin,createdAt:draft.createdAt,currentRevision:snapshot.revision,
+          status:draft.status === 'pending' ? Date.parse(draft.expiresAt) <= Date.now() ? 'expired' : draft.baseRevision !== snapshot.revision ? 'stale' : 'pending' : draft.status === 'applying' ? 'waiting' : draft.status,
+          ...(draft.status === 'pending' ? {previousSource:snapshot.packages[draft.change.package.id]?.active.source ?? {}} : {}),
+          ...(draft.decidedAt ? {decidedAt:draft.decidedAt} : {}),candidate:{kind:'discord',draft}})
+      }
+      for (const request of publicationRequests.list()) {
+        if (!request.botReviewOrigin || !await sessions.readSessionState(request.botReviewOrigin.sessionId)) continue
+        await sessions.recordBotReview({version:1,projectId:project.id,id:request.id,origin:request.botReviewOrigin,
+          createdAt:request.createdAt,...publicationRequests.reviewStatus(request),candidate:{kind:'service',request}})
+      }
+    }).catch(error => console.error('[bot-review] History synchronization failed', error instanceof Error ? error.name : 'Error'))
+  }
+  const stopBotReviewSync = channelIntegrations.onChange(syncBotReviewHistory)
+  // Recover only explicit host-owned origins; never attach legacy/admin proposals to a chat.
+  syncBotReviewHistory()
+  await botReviewWrites
+  cleanup.push(stopBotReviewSync)
+  cleanup.push(async () => { await botReviewWrites })
+  importTool.registerBuiltin('bot_package', botPackageTool({ ...authoringManagement, discord: channelIntegrations, reviews:botReviews, canAuthor, registeredFolders: () => folderRegistry.list() }))
   const channelConfigurationTool = ownerChannelConfigurationTool(channelIntegrations, memoryDomains, channels.discordTransport(), canAuthor)
   tools.register(channelConfigurationTool)
   importTool.registerBuiltin(channelConfigurationTool.name, channelConfigurationTool)
@@ -1458,7 +1483,7 @@ export async function createProjectRuntime(
     slashCommandsPlugin(commandDispatcher, sessions, dependencies.authorize),
     authoringCredentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
     authoringPublicationPlugin(publicationRequests, dependencies.authorize),
-    botPackagePlugin({...authoringManagement, discord: channelIntegrations}, dependencies.authorize),
+    botPackagePlugin({...authoringManagement, discord: channelIntegrations, reviews:botReviews}, dependencies.authorize),
     authoringProbesPlugin(probeRequests, dependencies.authorize),
     otelPlugin(otelStore),
     agentTypesPlugin(sessions, agentTypes),
@@ -1548,6 +1573,7 @@ export async function createProjectRuntime(
       () => a2a.close(),
       () => credentialRequests.stop(),
       stopPublicationReviews,
+      async () => {stopBotReviewSync(); await botReviewWrites},
       () => probeRequests.stop(),
       () => io.shutdown(),
       () => microApps.shutdown(),

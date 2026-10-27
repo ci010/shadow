@@ -378,8 +378,9 @@ export class IntegrationStore {
     return { hash: hash({ inspected, refs, fileRevision }), fileRevision }
   }
 
-  async propose(actor: IntegrationActor, raw: unknown, baseRevision: number, signal: AbortSignal): Promise<IntegrationDraft> {
+  async propose(actor: IntegrationActor, raw: unknown, baseRevision: number, signal: AbortSignal, origin?: IntegrationDraft['origin']): Promise<IntegrationDraft> {
     const change = IntegrationChangeSchema.parse(raw)
+    if (origin && (actor.kind !== 'owner' || change.kind !== 'bot.save')) throw new IntegrationError('owner_required','Timeline BOT reviews require an owner proposal.',403)
     if (change.kind === 'bot.save' && actor.kind !== 'owner') throw new IntegrationError('owner_required','BOT releases require owner review.',403)
     const before = this.snapshot()
     if (actor.kind !== 'owner' && (change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation || before.bindings.find(old => old.id === binding.id)?.observation) ||
@@ -403,7 +404,7 @@ export class IntegrationStore {
         agent: {sourceFolders:compiledReview.agent.sourceFolders ?? [],discordHistory:compiledReview.agent.discordHistory ?? null},
         bindings:compiledReview.bindings.map(binding => ({id:binding.id,target:binding.target,sourceFolders:binding.sourceFolders ?? [],discordHistory:binding.discordHistory ?? null})),
       }} : {}),
-      id, actor, baseRevision, change, validationHash, hash: hash({ id, actor, baseRevision, change, validationHash }),
+      id, actor, baseRevision, change, validationHash, ...(origin ? {origin} : {}), hash: hash({ id, actor, baseRevision, change, validationHash, ...(origin ? {origin} : {}) }),
       ...(change.kind === 'agent.save' ? { agentFileHash: validation.fileRevision } : {}),
       createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
       status: 'pending', affectedBindings: this.affected(change, state),
@@ -447,7 +448,7 @@ export class IntegrationStore {
         signal.throwIfAborted()
         const state = this.snapshot()
         if (state.revision !== draft.baseRevision) throw new IntegrationError('revision_conflict', 'Configuration changed.', 409)
-        draft = { ...draft, status: 'applying' }
+        draft = { ...draft, status: 'applying', decidedAt: new Date().toISOString() }
         this.document.write({ ...state, drafts: state.drafts.map(item => item.id === id ? draft : item) })
       }
       // The durable approved record is the recovery boundary; applying is intentionally idempotent.
@@ -468,7 +469,7 @@ export class IntegrationStore {
       }
     } else if (draft.status !== 'pending') throw new IntegrationError('review_not_pending', 'This review is no longer pending.', 409)
     const state = this.snapshot()
-    this.document.write({ ...state, drafts: state.drafts.map(item => item.id === id ? { ...item, status: 'cancelled' } : item),
+    this.document.write({ ...state, drafts: state.drafts.map(item => item.id === id ? { ...item, status: 'cancelled', decidedAt: new Date().toISOString() } : item),
       audit: [...state.audit, { id: randomUUID(), at: new Date().toISOString(), actor: actor.id,
         kind: draft.status === 'applying' ? 'review.abandoned' : 'review.cancelled', revision: state.revision, affectedBindings: draft.affectedBindings }].slice(-1000),
     })
@@ -536,7 +537,7 @@ export class IntegrationStore {
     }
     const revision = state.revision + 1
     this.document.write({ ...state, revision,
-      drafts: state.drafts.map(item => item.id === draft.id ? { ...item, status: 'applied', appliedRevision: revision } : item),
+      drafts: state.drafts.map(item => item.id === draft.id ? { ...item, status: 'applied', appliedRevision: revision, decidedAt: draft.decidedAt ?? new Date().toISOString() } : item),
       audit: [...state.audit, { id: draft.id, at: new Date().toISOString(), actor: draft.actor.id,
         kind: change.kind, revision, affectedBindings: draft.affectedBindings }].slice(-1000),
     })

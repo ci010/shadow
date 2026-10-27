@@ -35,13 +35,15 @@ test('BOT directory API freezes exact source; owner approval activates actual po
   const requests = new PublicationRequests(options)
   const app = new Hono()
   const authorize = (req: Request) => req.headers.get('Authorization') === 'owner'
-  botPackagePlugin({ ...options, publicationRequests: requests, inventory: () => ({}) }, authorize)(app)
   authoringPublicationPlugin(requests, authorize)(app)
   const post = async (path: string, body: unknown, owner = true) => app.request(path, { method: 'POST', headers: { Authorization: owner ? 'owner' : '', 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   const tools = new SessionTools(new Tools(root), root)
   tools.setExecutionScope('session', [])
-  const context = {projectId:'p', sessionId:'web:owner', channel:'web', inputSource:'user', admin:true, tools, signal:new AbortController().signal} as ExecutionContext
-  const tool = botPackageTool({...options, publicationRequests:requests, inventory:()=>({}), canAuthor:id=>id==='web:owner'})
+  const records = new Map<string, import('./bot-review-contract.ts').BotReviewRecord>()
+  const reviews = {record:async (record:import('./bot-review-contract.ts').BotReviewRecord) => {records.set(record.id,structuredClone(record))},read:async (id:string) => [...records.values()].filter(record => record.origin.sessionId === id)}
+  botPackagePlugin({...options,publicationRequests:requests,inventory:()=>({}),reviews},authorize)(app)
+  const context = {toolCallId:'host-call',physicalSessionId:'owner-segment',projectId:'p', sessionId:'web:owner', channel:'web', inputSource:'user', admin:true, tools, signal:new AbortController().signal} as ExecutionContext
+  const tool = botPackageTool({...options, reviews, publicationRequests:requests, inventory:()=>({}), canAuthor:id=>id==='web:owner'})
   const review = async () => JSON.parse(await tool.execute({action:'propose', folderId:'folder',expectedRevision:store.draft().revision}, context) as string).request
   const approve = (request: { id: string; revision: string; baseRevision: string }) => post(`/api/agent-resources/publication-requests/${request.id}`, { revision: request.revision, baseRevision: request.baseRevision })
   try {
@@ -53,12 +55,24 @@ test('BOT directory API freezes exact source; owner approval activates actual po
     await assert.rejects(()=>tool.execute({action:'status'},context),/authenticated owner/)
     tools.setExecutionScope('session',[])
     assert.equal(JSON.parse(await tool.execute({action:'status'},context) as string).projectId,'p')
+    await assert.rejects(() => tool.execute({action:'commit'},context))
     const first = await review()
     assert.equal(first.sessionId,'web:owner')
+    assert.equal(records.get(first.id)?.status,'pending')
+    assert.equal((await app.request('/api/bot-package/reviews/web%3Aowner')).status,401)
+    const history = async (id='web:owner') => (await (await app.request('/api/bot-package/reviews/'+encodeURIComponent(id),{headers:{Authorization:'owner'}})).json()).reviews
+    assert.equal((await history())[0].id,first.id)
+    assert.deepEqual(await history('web:other'),[])
     assert.ok(first.files.some((file: { path: string }) => file.path === 'bot/support/BOT.md'))
     assert.equal(store.resolve({ projectId: 'p', botInstanceId: 'bot', platform: 'qq', conversationId: 'group:one' }), undefined)
     save('Unreviewed disk edit')
     assert.equal((await approve(first)).status, 200)
+    assert.equal((await history())[0].status,'applied')
+    assert.ok((await history())[0].decidedAt)
+    assert.equal((await approve(first)).status,409)
+    const reopenedRequests = new PublicationRequests(options)
+    assert.equal(reopenedRequests.reviewStatus(first).status,'applied')
+    reopenedRequests.stop()
     const address = { projectId: 'p', botInstanceId: 'bot', platform: 'qq', conversationId: 'group:one' }
     assert.equal(store.resolve(address)?.agent.prompt, 'Frozen instructions')
     const second = await review()
@@ -68,6 +82,14 @@ test('BOT directory API freezes exact source; owner approval activates actual po
     fail = false
     assert.equal((await approve(second)).status, 200)
     assert.equal(store.resolve(address)?.agent.prompt, 'Unreviewed disk edit')
+    save('Cancelled candidate')
+    const cancelled = await review()
+    requests.cancel(cancelled.id,{revision:cancelled.revision,baseRevision:cancelled.baseRevision})
+    assert.equal((await history()).find((r:{id:string})=>r.id===cancelled.id).status,'cancelled')
+    const afterCancelRestart = new PublicationRequests(options)
+    assert.equal(afterCancelRestart.reviewStatus(cancelled).status,'cancelled')
+    afterCancelRestart.stop()
+    assert.equal((await approve(cancelled)).status,409)
     const response = await post('/api/bot-package/review', { packageId: 'support', release: store.packageStatus()[0]!.retained[0]!.revision, expectedRevision: store.draft().revision })
     assert.equal(response.status, 200)
     assert.equal((await approve((await response.json()).request)).status, 200)

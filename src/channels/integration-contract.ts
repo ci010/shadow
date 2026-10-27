@@ -144,6 +144,8 @@ export const IntegrationActorSchema = z.discriminatedUnion('kind', [
 ])
 export type IntegrationActor = z.infer<typeof IntegrationActorSchema>
 export const IntegrationDraftSchema = z.object({
+  origin: z.object({ sessionId: z.string().regex(/^web:/).max(512), physicalId: z.string().min(1).max(512), toolCallId: z.string().min(1).max(512) }).strict().optional(),
+  decidedAt: z.string().datetime().optional(),
   id: z.string().uuid(), baseRevision: z.number().int().nonnegative(),
   hash: z.string().regex(/^[a-f0-9]{64}$/), change: IntegrationChangeSchema, actor: IntegrationActorSchema,
   createdAt: z.string().datetime(), expiresAt: z.string().datetime(),

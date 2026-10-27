@@ -871,3 +871,26 @@ the explicit approval button. Proposal alone never changes active policies. Dire
 edits after proposal are excluded; changed configuration invalidates stale approvals.
 Existing package updates do not need `adoptLegacy`; legacy adoption is explicit and
 requires the exact active Release. Remote directories fail closed with no Main fallback.
+
+Chat Bot proposals create host-owned review records in the originating logical session
+and physical history segment, anchored to the tool call and exact frozen version.
+The inline card is actionable only in that conversation's current owner view. After
+approval or cancellation it remains a collapsed, read-only historical card with the
+version, outcome and recorded decision time; reload does not replace it with a local
+success notice. Expired or stale Discord reviews are read-only and require a fresh
+proposal. These display-only events use the session store (JSONL and SQLite) and do
+not enter model messages or alter fork offsets. Owner authorization, exact hash/revision
+CAS and the real publication endpoints remain the authority, not an ask decision or
+model-written message. Service reviews retain their existing waiting/retry semantics.
+
+Legacy reviews and Settings-created reviews without a chat origin are not assigned
+a synthetic conversation or automatically re-proposed. They remain discoverable in
+the existing owner administration/status paths. Missing authoritative records are
+shown as unavailable rather than assumed approved. Chat cards refresh on history/activity
+changes, focus, explicit retry and human decisions, not a Project-wide polling panel.
+
+Pending cards explain disabled approval controls (acknowledgement, expiry, stale
+base/current configuration revisions, an in-flight decision or a failed status).
+Navigating away aborts only the client request wait, not an already accepted server
+commit. Returning to the conversation reads the authoritative durable outcome;
+obsolete responses cannot update another session's card or replay the decision.
