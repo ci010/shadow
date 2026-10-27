@@ -55,8 +55,8 @@ async function fixture(developmentUrl?: string) {
 }
 
 test('workspace tunnels only business routes, never control/credentials or path escapes', () => {
-  for (const path of ['/api/projects', '/projects/p1/api/sessions', '/api/live?topics=projects', '/api/media?chatId=chat&path=%2Fhome%2Fuploads%2Fpasted.png', '/projects/p1/api/media?path=C%3A%5Cuploads%5Cpasted%2Epng&download=1', '/nodes/v1', '/host/v1/query']) assert.equal(deviceUiPath(path), true, path)
-  for (const path of ['/local/v1/stop', '/cluster/v1/node', '/pair/v1/offers', '/api/web-auth/pair', '/api/mobile',
+  for (const path of ['/api/models', '/projects/p1/api/models', '/api/projects', '/projects/p1/api/sessions', '/api/live?topics=projects', '/api/media?chatId=chat&path=%2Fhome%2Fuploads%2Fpasted.png', '/projects/p1/api/media?path=C%3A%5Cuploads%5Cpasted%2Epng&download=1', '/nodes/v1', '/host/v1/query']) assert.equal(deviceUiPath(path), true, path)
+  for (const path of ['/api/agent-types', '/projects/p1/api/agent-types/general/context', '/debug/models', '/local/v1/stop', '/cluster/v1/node', '/pair/v1/offers', '/api/web-auth/pair', '/api/mobile',
     '/projects/p1/api/web-auth/session', '//evil.test/api/projects', '/api/../local/v1', '/api/%2e%2e/local', '/api/%2fmedia?path=%2Fuploads%2Fimage.png', '/api/%5cmedia?path=ok', '/api\\local']) assert.equal(deviceUiPath(path), false, path)
 })
 

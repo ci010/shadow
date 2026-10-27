@@ -1145,6 +1145,15 @@ for limits and the owner-visible status surface.
 
 ## Model providers
 
+Product model discovery uses `GET /api/models` (model IDs, capability metadata,
+and safe provider labels). Agent discovery and assembled-context previews use
+`GET /api/agent-types` and `GET /api/agent-types/:name/context?channel=...`.
+Project-scoped clients prefix these paths with `/projects/:projectId`.
+These replace the former `/debug/models` and `/debug/agent-types` routes; no legacy
+aliases are registered. `/v1/models` remains the OpenAI-compatible interface.
+Mobile and Child ingress continue to exclude agent-type/context inspection;
+renaming these routes does not widen their previous access boundary.
+
 `providers/provider.ts` defines the common chat, message, tool-call, usage, and
 model-listing contract. Implementations include:
 
@@ -1163,6 +1172,15 @@ selection when ambiguity matters.
 provider**; it does not redetect every per-session model override. An
 `@provider` suffix chooses another instantiated provider or fails if absent.
 Aggregation is routing and model discovery, not automatic failover.
+
+Copilot checks model capabilities before chat and reuses a successful in-memory
+model catalog for 10 minutes from fetch completion (reads do not extend it).
+This is a local freshness policy, not credential expiry or a server guarantee.
+An expired catalog is refreshed on demand, not by a periodic network poll;
+authentication changes and model-rejection recovery can invalidate it earlier.
+Failed lookups fall back to the persisted catalog without renewing the in-memory
+TTL. Concurrent cache misses are not coalesced, so this TTL is not a strict rate
+limit. Generic OpenAI-compatible providers retain their separate 5-minute TTL.
 
 Explicit Copilot sign-in requests a fresh GitHub device code rather than silently
 reusing cached authentication. `POST /api/auth/login` accepts an optional `host`

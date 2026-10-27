@@ -45,10 +45,10 @@ export function isMobileBusinessPath(path: string, method = 'GET'): boolean {
   if (/%(?:2f|5c|2e)/i.test(path) || path.includes('\\')) return false
   const local = path.replace(/^\/projects\/[^/]+(?=\/)/, '')
   if (method.toUpperCase() === 'GET' && (
-    /^\/(?:host\/)?v1\/query(?:\/|$)/.test(local) || local === '/debug/models' || path === '/nodes/v1'
+    /^\/(?:host\/)?v1\/query(?:\/|$)/.test(local) || path === '/nodes/v1'
   )) return true
   if (/^\/(?:local|cluster|pair|nodes|devices)(?:\/|$)/.test(local) ||
-    /^\/api\/(?:local|cluster|pair|nodes|devices)(?:\/|$)/.test(local)) return false
+    /^\/api\/(?:local|cluster|pair|nodes|devices|agent-types)(?:\/|$)/.test(local)) return false
   return /^\/api(?:\/|$)/.test(local)
 }
 

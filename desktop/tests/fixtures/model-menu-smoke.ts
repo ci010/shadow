@@ -66,7 +66,7 @@ const server = createServer(async (request, response) => {
       return json({ ready: true, provider: 'custom', model, authMode: 'none', hasApiKey: false })
     }
     if (path === '/api/provider/configured') return json({ providers: [{ provider: 'custom', model, selected: true, authMode: 'none', hasApiKey: false }] })
-    if (path === '/debug/models') return json({ models: ['gpt-6-astra@copilot', 'synthetic-model', 'synthetic-other'] })
+    if (path === '/api/models') return json({ models: ['gpt-6-astra@copilot', 'synthetic-model', 'synthetic-other'] })
     if (path === '/api/config') return json({ agent: { ...builtins, ...appDefaults, model, workspace: directory } })
     if (path === '/api/app/model-defaults') {
       if (request.method === 'PATCH') {

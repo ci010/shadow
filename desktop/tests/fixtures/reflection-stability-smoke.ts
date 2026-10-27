@@ -54,7 +54,7 @@ const server = createServer(async (request, response) => {
     if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-15T00:00:00Z' }] })
     if (path === '/api/provider/setup') return json({ ready: true, provider: 'custom', model: 'synthetic-model', authMode: 'none', hasApiKey: false })
     if (path === '/api/provider/configured') return json({ providers: [{ provider: 'custom', model: 'synthetic-model', selected: true, authMode: 'none', hasApiKey: false }] })
-    if (path === '/debug/models') return json({ models: ['synthetic-model'] })
+    if (path === '/api/models') return json({ models: ['synthetic-model'] })
     if (path === '/api/config') return json({ agent: { model: 'synthetic-model', workspace: home, temperature: 0.7 } })
     if (path === '/api/folders') return json({ folders: [] })
     if (path === '/api/automations') return json({ automations: [{

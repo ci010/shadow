@@ -93,14 +93,16 @@ test('model catalog exposes only safe instance labels and rename keeps model IDs
   let aggregate = createAggregatedProvider(cfg)
   const app = new Hono()
   providerPlugin(() => aggregate)(app)
-  const before = await (await app.request('/debug/models')).json()
+  assert.equal((await app.request('/debug/models')).status, 404)
+  assert.equal((await app.request('/v1/models')).status, 200)
+  const before = await (await app.request('/api/models')).json()
   assert.deepEqual(before.providers, [
     { id: 'personal', type: 'deepseek', name: 'Personal' }, { id: 'work', type: 'deepseek', name: 'Work' },
   ])
   assert.ok(!JSON.stringify(before).includes('synthetic-'))
   cfg.providers.work.name = 'Office'
   aggregate = createAggregatedProvider(cfg)
-  const after = await (await app.request('/debug/models')).json()
+  const after = await (await app.request('/api/models')).json()
   assert.deepEqual(after.models, before.models)
   assert.equal(after.providers[1].name, 'Office')
 })

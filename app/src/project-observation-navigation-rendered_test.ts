@@ -44,7 +44,7 @@ test('project settings and Knowledge click through history and observed groups w
       if (path === '/api/projects') { json({ projects }); return }
       if (/\/status$/.test(path)) { json({ state: 'ready' }); return }
       if (path.endsWith('/api/config')) { json({ agent: { model: 'fixture', workspace: '/synthetic/home', temperature: 0.5 } }); return }
-      if (path.endsWith('/debug/models')) { json({ models: ['fixture'], providers: [] }); return }
+      if (path.endsWith('/api/models')) { json({ models: ['fixture'], providers: [] }); return }
       if (path.endsWith('/api/service-groups')) { json({ revision: 'r1', agents: [], groups: [{ botInstanceId: 'bot', platform: 'qq', conversationId: 'group:received', botName: 'Bot', enabled: false, pending: false, lastSeen: 1, messages: [{ id: 'm', sender: 'fixture', text: 'Received-only fixture', receivedAt: 1, state: 'not_enabled' }] }] }); return }
       if (path.endsWith('/api/knowledge')) { json({ entries: [], links: [] }); return }
       if (path.endsWith('/api/folders')) { json({ folders: [] }); return }

@@ -99,7 +99,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         for (const channel of ['heartbeat', 'web', 'discord', 'wechat', 'feishu']) {
           for (const role of ['a2a-text', 'general', 'reflector']) {
-            const response = await f.app.request(`/debug/agent-types/${role}/context?channel=${channel}`)
+            const response = await f.app.request(`/api/agent-types/${role}/context?channel=${channel}`)
             assert.equal(response.status, 200, `${role}/${channel}: ${f.errors.at(-1)?.message}`)
             const body = await response.json()
             assert.equal(body.source, 'preview')
@@ -147,7 +147,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           throw new Error('Role previews must not consult active conversations')
         })
         for (const role of ['a2a-text', 'general']) {
-          const response = await f.app.request(`/debug/agent-types/${role}/context?channel=heartbeat`)
+          const response = await f.app.request(`/api/agent-types/${role}/context?channel=heartbeat`)
           assert.equal(response.status, 200, f.errors.at(-1)?.message)
           const body = await response.json()
           const ctx = f.contexts.at(-1)!

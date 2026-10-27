@@ -107,14 +107,14 @@ test('agent browser separates definitions and previews with accessible desktop a
             response.end('OK')
             return
           }
-          const catalog = url.pathname.match(/^\/projects\/([^/]+)\/debug\/agent-types$/)
+          const catalog = url.pathname.match(/^\/projects\/([^/]+)\/api\/agent-types$/)
           if (catalog) {
             catalogRequests++
             if (catalog[1] === 'broken') { response.statusCode = 503; json({ error: 'Synthetic catalog failure' }) }
             else json(catalog[1] === 'empty' ? [] : agents)
             return
           }
-          const context = url.pathname.match(/^\/projects\/([^/]+)\/debug\/agent-types\/([^/]+)\/context$/)
+          const context = url.pathname.match(/^\/projects\/([^/]+)\/api\/agent-types\/([^/]+)\/context$/)
           if (context) {
             const agent = decodeURIComponent(context[2]!)
             const channel = url.searchParams.get('channel') ?? 'heartbeat'
@@ -130,7 +130,7 @@ test('agent browser separates definitions and previews with accessible desktop a
             else send()
             return
           }
-          if (url.pathname.includes('/debug/') || request.method !== 'GET') {
+          if (url.pathname.includes('/api/agent-types') || request.method !== 'GET') {
             unexpected.push(`${request.method} ${url.pathname}`)
             response.statusCode = 404
             json({ error: 'Unstubbed endpoint' })

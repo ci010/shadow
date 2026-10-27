@@ -86,7 +86,7 @@ const server = createServer(async (request, response) => {
       nodeRequests++
       return json({ version: 1, nodes: [{ nodeId: 'fixture-main', displayName: 'Fixture Main', role: 'main', connection: 'connected', capabilities: [] }] })
     }
-    if (path === '/debug/models') return json({ models: ['synthetic-model'] })
+    if (path === '/api/models') return json({ models: ['synthetic-model'] })
     if (path === '/api/config') return json({ agent: { model: 'synthetic-model', workspace: directory, temperature: 0.7 } })
     if (path === '/api/folders') return json({ folders: [] })
     if (path === '/api/automations') return json({ automations: automationDefinitions })

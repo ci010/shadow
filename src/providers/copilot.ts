@@ -734,7 +734,7 @@ export class CopilotProvider implements LLMProvider {
   /**
    * Dynamically fetch the list of models (with metadata) the authenticated
    * Copilot account is entitled to from `GET {api}/models`. Results are cached
-   * in-memory for 5 minutes and persisted to disk. Falls back to the on-disk
+   * in-memory for 10 minutes and persisted to disk. Falls back to the on-disk
    * cache on any failure (e.g. offline or rate-limited).
    */
   @Span('CopilotProvider.fetchModels')
@@ -742,7 +742,7 @@ export class CopilotProvider implements LLMProvider {
     signal?.throwIfAborted()
     const revision = this.auth.getRevision()
     this.syncModelsRevision()
-    const CACHE_TTL = 5 * 60_000 // 5 minutes
+    const CACHE_TTL = 10 * 60_000 // 10 minutes; local freshness policy, not token expiry
     if (this._modelsCache && Date.now() - this._modelsCacheTime < CACHE_TTL) {
       return this._modelsCache
     }

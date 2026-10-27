@@ -83,7 +83,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           ] }
           else if (path === '/api/provider/setup') data = { provider: 'openai', model: 'gpt-test', ready: true, hasApiKey: false, authMode: 'none' }
           else if (path === '/api/config') data = { agent: { model: 'gpt-test', workspace: 'synthetic', temperature: 0.5 } }
-          else if (path === '/debug/models') data = { models: ['gpt-test', 'gpt-alternate'] }
+          else if (path === '/api/models') data = { models: ['gpt-test', 'gpt-alternate'] }
           else if (path === '/api/runtime/frontend-logs' && request.method === 'GET') data = { events: [] }
           else if (path === '/api/bot-chat-setup/request') data = { request: null }
           else if (/^\/api\/computer\/[^/]+$/.test(path)) data = { projectId: scope?.[1] ?? 'work', sessionId: decodeURIComponent(path.split('/').at(-1)!), available: false, busy: false, grant: null, pending: null, executing: false, lastAction: null }

@@ -21,7 +21,7 @@ const baseB = projectBase('http://fixture', 'b')
 
 test('central API resolution scopes snapshots and files to projects but shared live updates to the host', () => {
   for (const suffix of ['/api/sessions', '/api/folders', '/api/config', '/api/channels', '/v1/query/logs',
-    '/api/chat/upload', '/api/media', '/debug/models', '/api/sessions/web%3Achat-a/raw']) {
+    '/api/chat/upload', '/api/media', '/api/models', '/api/sessions/web%3Achat-a/raw']) {
     assert.equal(apiUrl(baseA, suffix).pathname, `/projects/a${suffix}`)
     assert.equal(apiUrl('http://fixture', suffix).pathname, suffix, 'Fixed root compatibility remains available')
   }

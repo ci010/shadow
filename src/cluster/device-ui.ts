@@ -29,9 +29,9 @@ export function deviceUiPath(value: string): boolean {
   if (!rawPath.startsWith('/') || rawPath.startsWith('//') || rawPath.includes('\\') || /%2f|%5c|%2e/i.test(rawPath)) return false
   const path = new URL(value, 'http://workspace.internal').pathname
   const bare = path.replace(/^\/projects\/[^/]+(?=\/)/, '')
-  return (/^\/api(?:\/|$)/.test(bare) && !/^\/api\/(?:web-auth|mobile)(?:\/|$)/.test(bare))
+  return (/^\/api(?:\/|$)/.test(bare) && !/^\/api\/(?:web-auth|mobile|agent-types)(?:\/|$)/.test(bare))
     || /^\/(?:host\/)?v1\/query(?:\/|$)/.test(bare)
-    || /^\/nodes\/v1(?:\/|$)/.test(bare) || bare === '/debug/models'
+    || /^\/nodes\/v1(?:\/|$)/.test(bare)
 }
 /** Read-only renderer resources; never admit backend/control routes by SPA fallback. */
 export function deviceUiResourcePath(value: string): boolean {

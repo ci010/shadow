@@ -319,7 +319,7 @@ const server = createServer(async (request, response) => {
       return
     }
     if (path === '/api/config') return json({ agent: { model: 'synthetic-model', workspace: directory, temperature: 0.7 } })
-    if (path === '/debug/models') return json({ models: ['synthetic-model', 'synthetic-other'] })
+    if (path === '/api/models') return json({ models: ['synthetic-model', 'synthetic-other'] })
     if (path === '/api/sessions/graph') return json({
       sessions: [{ sessionId: idA, title: 'Trace preview', current: 'physical-a' }, { sessionId: idB, title: 'Second conversation', current: 'physical-b' }, { sessionId: idGroup, title: 'Group conversation', current: 'physical-group' },
         { sessionId: idChild, title: 'Child conversation', current: 'physical-child' }, { sessionId: idAgent, title: 'Analysis agent', current: 'physical-agent' }, ...extraSessions, ...(sidebarEdgeCases ? sidebarSessions : [])].map(item => ({

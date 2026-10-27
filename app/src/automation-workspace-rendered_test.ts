@@ -123,7 +123,7 @@ test('automations open ordinary conversations and navigate run history without a
           else if (path === '/api/folders') json({ folders: [] })
           else if (path === '/api/channels') json({ channels: [] })
           else if (path === '/api/config') json({ agent: { model: 'fixture:model', workspace: 'synthetic', temperature: 0.7 } })
-          else if (path === '/debug/models') json({ models: ['fixture:model'] })
+          else if (path === '/api/models') json({ models: ['fixture:model'] })
           else if (path.endsWith('/details')) {
             const sessionId = decodeURIComponent(path.split('/').at(-2)!)
             json({ sessionId, name: 'Saved run', workdir: { kind: 'local', displayPath: 'C:\\synthetic' }, usage: null,

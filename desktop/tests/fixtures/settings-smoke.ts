@@ -42,7 +42,7 @@ const server = createServer(async (request, response) => {
     const json = (data: unknown, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(data)) }
     if (path === '/api/provider/setup') return json({ ready: readyProvider, provider: 'custom', model: 'fixture-model', authMode: 'none', hasApiKey: false })
     if (path === '/api/provider/configured') return json({ providers: [{ provider: 'custom', model: 'fixture-model', selected: true, authMode: 'none', hasApiKey: false }] })
-    if (path === '/debug/models') return json({ models: ['fixture-model'] })
+    if (path === '/api/models') return json({ models: ['fixture-model'] })
     if (path === '/api/auth/login' && request.method === 'POST') {
       let text = ''
       for await (const chunk of request) text += chunk

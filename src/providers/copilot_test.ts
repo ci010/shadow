@@ -443,6 +443,27 @@ test('failed enterprise exchange does not clear the active github.com key', asyn
   assert.equal(await h.auth.getApiKey(), keyResponse.token)
 })
 
+test('provider model catalog cache lasts ten minutes without extending on reads', async (t) => {
+  const h = harness([], { 'access-token': 'legacy-access', 'api-key.json': JSON.stringify(keyResponse) })
+  const provider = new CopilotProvider(h.auth)
+  let now = epoch
+  let requests = 0
+  t.mock.method(Date, 'now', () => now)
+  t.mock.method(globalThis, 'fetch', async () => {
+    requests++
+    return Response.json({ data: [{ id: `model-${requests}` }] })
+  })
+  assert.deepEqual(await provider.listModels(), ['model-1'])
+  now = epoch + 5 * 60_000
+  assert.deepEqual(await provider.listModels(), ['model-1'])
+  now = epoch + 10 * 60_000 - 1
+  assert.deepEqual(await provider.listModels(), ['model-1'])
+  assert.equal(requests, 1)
+  now = epoch + 10 * 60_000
+  assert.deepEqual(await provider.listModels(), ['model-2'])
+  assert.equal(requests, 2)
+})
+
 test('provider model caches are reset on host switch and requests pair credentials with the same host', async (t) => {
   const h = harness([], { 'access-token': 'legacy-access', 'api-key.json': JSON.stringify(keyResponse) })
   const provider = new CopilotProvider(h.auth)
