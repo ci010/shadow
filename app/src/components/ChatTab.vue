@@ -135,16 +135,16 @@
               <div class="chat-footer"><MessageTimestamp :timestamp="msg.timestamp" /></div>
             </div>
             <CommandResult v-else-if="msg.commandReceipt" :receipt="msg.commandReceipt">
-              <div class="prose" v-answer-html v-html="renderMarkdown(msg.content)" />
+              <MarkdownContent class="prose" :text="msg.content" :render-content="renderMarkdown" />
             </CommandResult>
             <ExecutionMessage v-else-if="inlineExecutions.entries.has(idx)" :execution="inlineExecutions.entries.get(idx)!"
               :selected="childSessionId === inlineExecutions.entries.get(idx)!.sessionId"
               @inspect="inspectExecution" @interact="clearSelection">
-              <div v-if="inlineExecutions.entries.get(idx)!.output" class="chat-content prose" v-answer-html v-html="renderMarkdown(inlineExecutions.entries.get(idx)!.output!)" />
+              <MarkdownContent v-if="inlineExecutions.entries.get(idx)!.output" class="chat-content prose" :text="inlineExecutions.entries.get(idx)!.output!" :render-content="renderMarkdown" />
             </ExecutionMessage>
             <MessageAction v-else-if="messageActions.entries.has(idx)" :message="messageActions.entries.get(idx)!"
               :running="streaming && !viewingPhysicalId" @inspect="inspectExecution" @interact="clearSelection">
-              <div class="chat-content prose" v-answer-html v-html="renderMarkdown(messageActions.entries.get(idx)!.content)" />
+              <MarkdownContent class="chat-content prose" :text="messageActions.entries.get(idx)!.content" :render-content="renderMarkdown" />
             </MessageAction>
             <InputQuestion v-else-if="inputQuestions.entries.has(idx)" :entry="inputQuestions.entries.get(idx)!"
               :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" :data-msg-idx="idx"
@@ -164,7 +164,7 @@
               :meta="msg.eventMeta" :content="msg.content" :timestamp="msg.timestamp" :source="sourceForEvent(msg.eventMeta)"
               :selected="childSessionId === eventSourceSession(msg.eventMeta)"
               @inspect="inspectExecution" @interact="clearSelection">
-              <div v-if="msg.content" class="chat-content prose" v-answer-html v-html="renderMarkdown(msg.content)" />
+              <MarkdownContent v-if="msg.content" class="chat-content prose" :text="msg.content" :render-content="renderMarkdown" />
             </ConversationEvent>
             <!-- Compaction summary (previous conversation context) -->
             <ConversationSummary v-else-if="msg.isSummary" :content="msg.content"
@@ -190,7 +190,7 @@
               :aria-label="msg.sessionSource ? t('{value1} from {value2}', { value1: sessionMessageTitle(msg.sessionSource), value2: sessionMessageSourceLabel(msg.sessionSource, allSessions) }) : msg.role === 'user' ? (msg.senderName ? t('Message from {senderName}', { senderName: msg.senderName }) : t('User message')) : t('Assistant message')"
             >
               <div v-if="!msg.sessionSource && msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
-              <div v-if="msg.attachmentBody.text" class="chat-content prose" v-answer-html v-html="renderMarkdown(msg.attachmentBody.text)" />
+              <MarkdownContent v-if="msg.attachmentBody.text" class="chat-content prose" :text="msg.attachmentBody.text" :render-content="renderMarkdown" />
               <div
                 v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
                 class="retry-row"
@@ -401,7 +401,7 @@
               :rows="mobileLayout ? 1 : 3"
               :disabled="submissionBusy"
               @keydown="handleKeyDown"
-              @input="autoResize(); updateComposerSelection()"
+              @input="updateComposerSelection()"
               @focus="composerFocused = true; updateComposerSelection()"
               @blur="composerFocused = false"
               @click="updateComposerSelection"
@@ -504,7 +504,8 @@ import SessionReferenceMenu from './SessionReferenceMenu.vue'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
 import { Marked } from 'marked'
-import { answerHtmlExtension, sanitizeAnswerHtmlRoots, vAnswerHtml } from '../answer-html'
+import { answerHtmlExtension, sanitizeAnswerHtmlRoots } from '../answer-html'
+import MarkdownContent from './MarkdownContent.vue'
 import { paddedStrongCompatibility } from '../markdown-strong-compat.ts'
 import { markedMath } from '../marked-math.ts'
 import MessageAttachments from './MessageAttachments.vue'
@@ -3228,15 +3229,14 @@ function resendLastMessage() {
 .mobile-chat .chat-composer { margin: 8px auto max(8px, env(safe-area-inset-bottom, 0px)); }
 .mobile-history summary { min-height: 44px; box-sizing: border-box; padding: 12px 10px; font-size: 14px; cursor: pointer; }
 .mobile-history summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.mobile-chat .composer-box { position: relative; padding: 8px 52px; }
-.mobile-chat .composer-dual-actions .composer-input { margin-inline-end: 54px; }
+.mobile-chat .composer-box { position: relative; padding: 8px; }
 .mobile-chat .composer-input textarea { min-height: 44px; max-height: min(200px, 28dvh); padding: 10px 0; font-size: 16px; line-height: 1.5; }
-.mobile-chat .composer-toolbar { position: absolute; bottom: 8px; left: 8px; right: 8px; margin: 0; pointer-events: none; }
+.mobile-chat .composer-toolbar { position: static; margin-top: 4px; pointer-events: none; }
 .mobile-chat .composer-controls { pointer-events: auto; flex: 0 0 44px; max-width: 44px; }
-.mobile-chat .composer-submit { pointer-events: auto; flex: 0 0 auto; max-width: none; }
+.mobile-chat .composer-submit { pointer-events: auto; flex: 0 0 auto; max-width: none; container: none; }
 .mobile-chat .composer-send, .mobile-chat .composer-controls :deep(> .composer-control) { width: 44px; height: 44px; min-height: 44px; padding: 0; justify-content: center; }
 .mobile-chat .composer-hint { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.mobile-chat .composer-context { margin-inline: -44px; }
+.mobile-chat .composer-context { margin-inline: 0; }
 .mobile-message-settings { display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--c-border); }
 .mobile-composer-note { margin: 4px 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
 .mobile-message-settings :deep(.composer-control), .mobile-message-settings .context-action { width: 100%; min-height: 44px; justify-content: flex-start; font-size: 14px; }
