@@ -28,10 +28,10 @@ test('BOT inline review renders frozen scopes and exact human decisions with aut
   // Compile the production ChatTab layout rules, not an unconstrained document fixture.
   const chat = parse(await readFile(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')).descriptor
   const template = chat.template!.content
-  const reviewPosition = template.lastIndexOf('<BotPublicationReview ')
+  const reviewPosition = template.lastIndexOf('<BotReviewCard ')
   assert(reviewPosition > template.indexOf('ref="messagesContainer"'))
   assert(reviewPosition < template.indexOf('<MessageHistoryRail v-if="!mobileLayout"'))
-  assert(!template.slice(template.indexOf('<template #composer>')).includes('<BotPublicationReview '))
+  assert(!template.slice(template.indexOf('<template #composer>')).includes('<BotReviewCard '))
   const layout = compileStyle({source:chat.styles.map(s => s.content).join('\n'), filename:'ChatTab.vue', id:'fixture', scoped:false})
   assert.deepEqual(layout.errors, [])
   const fixture = `import '/src/styles.css'; import {createApp,h,reactive} from 'vue'; import Review from '/src/components/BotPublicationReview.vue'; import {setLocalePreference} from '/src/i18n.ts';setLocalePreference('en');
