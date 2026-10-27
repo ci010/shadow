@@ -66,7 +66,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { usePublicationRequest } from '../publication-requests.ts'
 
 const props = defineProps<{
-  conversation?: { botInstanceId: string; platform: string; conversationId: string };
+  hideTimelineReviews?: boolean; conversation?: { botInstanceId: string; platform: string; conversationId: string };
   apiBase: string; projectId: string; sessionId: string; active: boolean; canSubmit: boolean; stage?: string | null
 }>()
 function conversationBindings<T extends { botInstanceId: string; platform: string; conversationId: string }>(bindings: T[]) {

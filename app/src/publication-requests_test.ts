@@ -209,3 +209,15 @@ test('group approval surface selects only affected exact Bot/platform/conversati
   assert.deepEqual(state.requests.value.map(item => item.id), ['sibling'])
   assert.equal(calls.some(call => call.init.method === 'POST'), false)
 })
+
+
+test('timeline Bot reviews never duplicate into the polling composer, even before timeline history loads', async t => {
+  const {state,calls} = harness(t,{hideTimelineReviews:true})
+  const request = {...proposal(),botReviewOrigin:{sessionId:'web:chat-admin',physicalId:'host-segment',toolCallId:'host-call'}}
+  calls[0]!.finish(Response.json({request,requests:[request]}))
+  await settle()
+  assert.equal(state.request.value,null)
+  assert.equal(state.requests.value.length,0)
+  assert.equal(await state.confirm(),false)
+  assert.equal(calls.length,1,'reading or hiding a card cannot approve it')
+})

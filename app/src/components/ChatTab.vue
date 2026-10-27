@@ -65,7 +65,6 @@
         </div>
       </div>
       <!-- Draft documents use FileWorkbench's outer document scroller. -->
-      <BotPublicationReview v-if="!activeSessionId && isDirectChat && !isExecution" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'" />
       <template v-if="activeSessionId">
         <div v-show="!mobileLayout || previousPhysicalId || viewingPhysicalId || automationConversation" class="conversation-heading-row">
           <button v-if="embedded && executionParent" class="btn btn-sm" :aria-label="t('Back to owning execution')" @click="inspectExecution(executionParent.sessionId)">
@@ -126,6 +125,8 @@
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :data-msg-idx="index" :can-manage="true" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
           </div>
+          <p v-if="botReviewError" class="composer-error" role="alert">{{ botReviewError }} <button @click="refreshBotReviews">{{ t('Retry decision history') }}</button></p>
+          <BotReviewCard v-for="review in botReviewEntries.get(-1)" :key="review.id" :review="review" :api-base="apiBase" :session-id="activeSessionId" :can-submit="!viewingPhysicalId && composerVisible" @updated="refreshBotReviews" />
           <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
           <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx">
             <div v-if="automationConversation?.automation.value?.source === 'system' && (msg.role === 'user' || (msg.role === 'assistant' && !msg.event && !!msg.content))"
@@ -216,6 +217,7 @@
               :data-msg-idx="index" :can-manage="true" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </div>
+          <BotReviewCard v-for="review in botReviewEntries.get(idx)" :key="review.id" :review="review" :api-base="apiBase" :session-id="activeSessionId" :can-submit="!viewingPhysicalId && composerVisible" @updated="refreshBotReviews" />
           </template>
           <p v-if="decisionRecordError" class="composer-error" role="alert">{{ decisionRecordError }}
             <button type="button" @click="refreshDecisionRecords">{{ t('Retry decision history') }}</button>
@@ -238,8 +240,6 @@
             <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
           </div>
-          <!-- Keep long reviews in the bounded history scroller, not the absolute composer dock. -->
-          <BotPublicationReview v-if="isDirectChat && !isExecution" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'" />
         </div>
         <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
         </div>
@@ -295,7 +295,7 @@
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="true" />
-        <PublicationRequest :api-base="apiBase"
+        <PublicationRequest :hide-timeline-reviews="true" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="true" />
@@ -552,7 +552,8 @@ import CredentialRequest from './CredentialRequest.vue'
 import BotChatSetup from './BotChatSetup.vue'
 import ComputerControl from './ComputerControl.vue'
 import PublicationRequest from './PublicationRequest.vue'
-import BotPublicationReview from './BotPublicationReview.vue'
+import BotReviewCard from './BotReviewCard.vue'
+import { useBotReviews, botReviewPositions } from '../bot-review-timeline.ts'
 import ChannelGroupContext from './ChannelGroupContext.vue'
 import { serviceGroupKey } from '../service-groups.ts'
 import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
@@ -1264,6 +1265,7 @@ const messages = ref<ChatMsg[]>([])
 const displayMessages = computed(() => messages.value.map(msg => ({
   ...msg, attachmentBody: messageAttachments(msg.content, msg.media),
 })))
+
 const inlineExecutions = computed(() => inlineExecutionMessages(
   displayMessages.value, allSessions.value, activeSessionId.value, sessionStages.value, streaming.value,
 ))
@@ -1337,6 +1339,13 @@ const expandedThinking = reactive(new Set<number>())
 // ── Segment navigation state ─────────────────────────────────────────────────
 const previousPhysicalId = ref<string | null>(null)
 const viewingPhysicalId = ref<string | null>(null)
+// Immediate review watchers require all session/segment refs to be initialized.
+const {reviews:botReviews,error:botReviewError,refresh:refreshBotReviews} = useBotReviews(() => ({
+  apiBase:props.apiBase,projectId:props.projectId || liveProjectId(props.apiBase),sessionId:activeSessionId.value,
+  physicalId:viewingPhysicalId.value,active:paneActive.value && isDirectChat.value && !isExecution.value && route.name === 'chat',
+  stage:sessionStage.value,messageCount:messages.value.length,
+}))
+const botReviewEntries = computed(() => botReviewPositions(botReviews.value, displayMessages.value))
 const imagePreview = shallowRef<ImagePreview>()
 function openImagePreview(image: ImagePreview) {
   clearSelection()

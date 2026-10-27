@@ -4066,5 +4066,10 @@
   "Current status could not be verified. Approval is paused until status refresh succeeds.": "无法核实当前状态。审批已暂停，直到状态刷新成功。",
   "Check the acknowledgement above to enable approval.": "请勾选上方确认框以启用审批。",
   "Could not refresh authoritative Bot status. Approval is paused; automatic refresh will retry.": "无法刷新 Bot 权威状态。审批已暂停；系统将自动重试刷新。",
-  "Reviewed revision {base}; current configuration {current}.": "审核基准版本为 {base}；当前配置版本为 {current}。"
+  "Reviewed revision {base}; current configuration {current}.": "审核基准版本为 {base}；当前配置版本为 {current}。",
+  "Participant invocation policy": "参与者调用策略",
+  "Reply audience": "回复受众",
+  "Readers of the destination channel or DM; participant invocation policy does not restrict who can see replies.": "目标频道或私信的可见成员；参与者调用策略不限制谁能看到回复。",
+  "Publication outcome is not yet confirmed. Refresh authoritative status before another decision.": "发布结果尚未确认。再次决策前请刷新权威状态。",
+  "Current configuration revision unavailable. Refresh before approving.": "当前配置版本不可用。请刷新后再审批。"
 }

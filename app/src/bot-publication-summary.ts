@@ -35,7 +35,8 @@ export function summarizeBot(draft: IntegrationDraft) {
       for (const binding of bindings) groups.push({title: binding.id, rows: [
         ...(binding.target.kind === 'channel' ? [{label:'Server ID' as const, value:binding.target.guildId}, {label:'Channel ID' as const, value:binding.target.channelId}] : [{label:'DM user ID' as const,value:binding.target.userId}]),
         {label:'Enabled', value:binding.enabled ? t('Yes') : t('No')},
-        {label:'Audience', value:binding.participants.everyone ? t('Everyone') : t('Listed users and roles only')},
+        {label:'Participant invocation policy', value:binding.participants.everyone ? t('Everyone') : t('Listed users and roles only')},
+        {label:'Reply audience',value:t('Readers of the destination channel or DM; participant invocation policy does not restrict who can see replies.')},
         {label:'User IDs', value:binding.participants.userIds.join(', ') || '[]'},
         {label:'Role IDs', value:binding.participants.roleIds.join(', ') || '[]'},
         {label:'Trigger', value:binding.trigger === 'mention' ? t('mention') : t('all')},

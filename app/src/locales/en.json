@@ -4066,5 +4066,10 @@
   "Current status could not be verified. Approval is paused until status refresh succeeds.": "Current status could not be verified. Approval is paused until status refresh succeeds.",
   "Check the acknowledgement above to enable approval.": "Check the acknowledgement above to enable approval.",
   "Could not refresh authoritative Bot status. Approval is paused; automatic refresh will retry.": "Could not refresh authoritative Bot status. Approval is paused; automatic refresh will retry.",
-  "Reviewed revision {base}; current configuration {current}.": "Reviewed revision {base}; current configuration {current}."
+  "Reviewed revision {base}; current configuration {current}.": "Reviewed revision {base}; current configuration {current}.",
+  "Participant invocation policy": "Participant invocation policy",
+  "Reply audience": "Reply audience",
+  "Readers of the destination channel or DM; participant invocation policy does not restrict who can see replies.": "Readers of the destination channel or DM; participant invocation policy does not restrict who can see replies.",
+  "Publication outcome is not yet confirmed. Refresh authoritative status before another decision.": "Publication outcome is not yet confirmed. Refresh authoritative status before another decision.",
+  "Current configuration revision unavailable. Refresh before approving.": "Current configuration revision unavailable. Refresh before approving."
 }
