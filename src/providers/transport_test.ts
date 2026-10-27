@@ -129,18 +129,22 @@ test('transport classification preserves abort reasons and rejects arbitrary dia
 })
 
 
-test('shared retry exhausts five retries and preserves the final classified error', async t => {
+test('shared retry exhausts five retries with exponential pre-connection backoff', async t => {
   const errors: ProviderTransportError[] = []
   const waits: string[] = []
+  const sleeps: number[] = []
   t.mock.method(console, 'warn', (message: string) => { waits.push(message) })
   await assert.rejects(withProviderRetry(async () => {
     const error = new ProviderTransportError('connect', 'ECONNREFUSED')
     errors.push(error)
     throw error
-  }), error => error === errors.at(-1))
+  }, undefined, { random: () => 0.5, sleep: async ms => { sleeps.push(ms) } }), error => error === errors.at(-1))
   assert.equal(errors.length, 6)
   assert.equal(waits.length, 5)
-  waits.forEach((message, i) => assert.match(message, new RegExp(`after ${(i + 1) * 1000}ms`)))
+  // Doubles from 0.5s and stops growing at the cap: a longer schedule would
+  // only lengthen a stall the user cannot see.
+  assert.deepEqual(sleeps, [500, 1000, 2000, 4000, 8000])
+  waits.forEach((message, i) => assert.match(message, new RegExp(`after ${sleeps[i]}ms`)))
 })
 
 test('shared retry pre-abort prevents even the initial request', async () => {

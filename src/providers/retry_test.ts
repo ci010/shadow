@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { ProviderHttpError, ProviderTransportError } from './provider.ts'
-import { providerRetryScope, retryAfterMs, withProviderRetry, withRateLimitWaiting, type RateLimitWait } from './retry.ts'
+import { providerRetryScope, retryAfterMs, transportBackoffMs, withProviderRetry, withRateLimitWaiting, type RateLimitWait } from './retry.ts'
 import { openaiChat } from './openai-compatible.ts'
 
 const rejected = (retryAfter?: string, code?: string) => new ProviderHttpError(429, 'private upstream body', code, { rejectedRequest: true, retryAfter })
@@ -61,6 +61,14 @@ test('waiting is abortable, clears status and never replays', async () => {
     states.push(state); if (state) controller.abort(reason)
   }, () => withProviderRetry(async () => { calls++; throw rejected('30') }, controller.signal)), e => e === reason || e instanceof Error && e.name === 'AbortError')
   assert.equal(calls, 1); assert.equal(states.at(-1), undefined)
+})
+test('pre-connection backoff doubles with bounded jitter and caps at 8s', () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map(attempt => transportBackoffMs(attempt, () => 0.5)), [500, 1000, 2000, 4000, 8000, 8000])
+  assert.equal(transportBackoffMs(0, () => 0), 375)
+  assert.equal(transportBackoffMs(0, () => 1), 625)
+  assert.equal(transportBackoffMs(3, () => 1), 5000)
+  // Jitter applies to the capped interval, so the worst case stays bounded.
+  assert.equal(transportBackoffMs(9, () => 1), 10_000)
 })
 test('cooldown coordinates same credential/endpoint, not another credential', async () => {
   const c = clock(); const scope = providerRetryScope('endpoint', 'secret')

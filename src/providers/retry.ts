@@ -51,6 +51,14 @@ export interface ProviderRetryOptions {
 }
 const MAX_RETRIES = 5
 const MAX_WAIT_MS = 120_000
+const TRANSPORT_BASE_MS = 500
+const TRANSPORT_MAX_MS = 8_000
+/** Exponential pre-connection backoff (0.5s, 1s, 2s, 4s, 8s) with bounded jitter.
+ * Capped well below the 429 curve: this wait is not shown to the user, so the
+ * whole schedule must stay near one short visible stall. */
+export function transportBackoffMs(attempt: number, random: () => number = Math.random): number {
+  return Math.round(Math.min(TRANSPORT_MAX_MS, TRANSPORT_BASE_MS * 2 ** attempt) * (0.75 + random() * 0.5))
+}
 /** Only preconnection transport failures or definitively rejected HTTP 429s are replayable. */
 export async function withProviderRetry<T>(request: () => Promise<T>, signal?: AbortSignal, options: ProviderRetryOptions = {}): Promise<T> {
   const now = options.clock ?? Date.now
@@ -89,8 +97,9 @@ export async function withProviderRetry<T>(request: () => Promise<T>, signal?: A
       const transport = error instanceof ProviderTransportError && !error.mayHaveBeenProcessed
       if (!rateLimit && (!transport || attempt === MAX_RETRIES)) throw error
       if (!rateLimit) {
-        console.warn(`LLM fetch attempt ${attempt + 2} after ${1000 * (attempt + 1)}ms (preconnection failure)`)
-        await wait(1000 * (attempt + 1), attempt + 2, false)
+        const backoff = transportBackoffMs(attempt, options.random ?? Math.random)
+        console.warn(`LLM fetch attempt ${attempt + 2} after ${backoff}ms (preconnection failure)`)
+        await wait(backoff, attempt + 2, false)
         continue
       }
       const ms = retryAfterMs(error.retryAfter, now())
