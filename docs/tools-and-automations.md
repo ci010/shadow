@@ -258,11 +258,13 @@ transport code. An interrupted response is discarded, including partial tool
 calls, and is not automatically replayed: the provider may already have processed
 or billed the request. Inspect completed work before explicitly continuing.
 Chat Completions, Responses and Anthropic Messages share the same bounded retry
-policy: at most five retries after the initial attempt, with 1, 2, 3, 4 and 5 second
-backoffs, only for known failures before connection (DNS, connection refusal or
-connect timeout). Cancellation interrupts backoff and prevents another request.
-Ambiguous connection failures, interrupted responses and HTTP errors are not
-retried by this mechanism. Copilot retains its separate single refresh/retry on
+policy: at most five retries after the initial attempt. Rejected HTTP 429s wait for
+`Retry-After` or exponential jittered backoff; known pre-connection failures (DNS,
+connection refusal or connect timeout) back off from 0.5 seconds, doubling to an
+8 second cap with ±25% jitter (nominally 0.5, 1, 2, 4 and 8 seconds). Cancellation
+interrupts backoff and prevents another request.
+Ambiguous connection failures, interrupted responses and non-429 HTTP errors are
+not retried by this mechanism. Copilot retains its separate single refresh/retry on
 HTTP 401; other HTTP authorization handling remains provider-specific.
 
 Shadow keeps the base tool list small. Search and read virtual paths to
