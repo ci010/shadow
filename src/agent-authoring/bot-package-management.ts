@@ -1,3 +1,5 @@
+import { BotReviewOriginSchema, type BotReviewRecord } from './bot-review-contract.ts'
+import { parsePublicationRequest } from './publication-contract.ts'
 import { createHash } from 'node:crypto'
 import { lstatSync } from 'node:fs'
 import { join } from 'node:path'
@@ -9,11 +11,11 @@ import { parseFrontmatter } from '../utils/frontmatter.ts'
 import type { IntegrationStore } from '../channels/integration-store.ts'
 import { readBotSources, compileBotPackage, replaceBotPackage } from './bot-package.ts'
 
-type BotPackageOptions = Pick<AuthoringManagementOptions, 'service' | 'validateLive' | 'publicationRequests' | 'inventory'> & { discord?: IntegrationStore }
+type BotPackageOptions = Pick<AuthoringManagementOptions, 'service' | 'validateLive' | 'publicationRequests' | 'inventory'> & { discord?: IntegrationStore; reviews?: { record: (record:BotReviewRecord) => Promise<void>; read:(sessionId:string,physicalId?:string) => Promise<BotReviewRecord[]> } }
 
 const importSchema = z.object({ folderId: z.string().min(1), directory: z.string().max(1024).default(''), expectedRevision: z.string(), adoptLegacy: z.boolean().optional(), expectedActiveRelease: z.string().optional(), discordRevision: z.number().int().nonnegative().optional() }).strict()
 
-export async function stageBotDirectory(options: BotPackageOptions, input: unknown) {
+export async function stageBotDirectory(options: BotPackageOptions, input: unknown, origin?: NonNullable<import('../channels/integration-contract.ts').IntegrationDraft['origin']>) {
   const parsed = importSchema.parse(input)
   const parts = parsed.directory ? parsed.directory.split('/') : []
   if (parts.some(part => !/^[a-zA-Z0-9_.-]+$/.test(part) || part === '.' || part === '..')) throw new Error('Choose a relative BOT subdirectory without traversal.')
@@ -31,7 +33,7 @@ export async function stageBotDirectory(options: BotPackageOptions, input: unkno
     const metadata = parseFrontmatter(source['BOT.md'] ?? '').frontmatter
     if (metadata.platform === 'discord') {
       if (!options.discord || parsed.discordRevision === undefined) throw new Error('Discord package review requires the exact Discord configuration revision.')
-      return { discordDraft: await options.discord.propose({kind:'owner',id:'shadow-owner'}, {kind:'bot.save', package:{id:metadata.name,source}, ...(parsed.adoptLegacy ? {adoptLegacy:true} : {})}, parsed.discordRevision, new AbortController().signal) }
+      return { discordDraft: await options.discord.propose({kind:'owner',id:'shadow-owner'}, {kind:'bot.save', package:{id:metadata.name,source}, ...(parsed.adoptLegacy ? {adoptLegacy:true} : {})}, parsed.discordRevision, new AbortController().signal, origin) }
     }
     const bundle = compileBotPackage(source)
     const store = options.service.options.store
@@ -66,9 +68,15 @@ export function botPackageTool(options: BotPackageOptions & { canAuthor: (sessio
           activeRelease: store.snapshot().revision, packages: store.packageStatus(), discord: options.discord?.snapshot(), inventory: options.inventory(), folders: options.registeredFolders?.(), publicationRequests: options.publicationRequests.list() })
       }
       const { action, ...input } = z.object({action:z.literal('propose')}).passthrough().parse(raw)
-      const staged = await stageBotDirectory(options, input)
-      if ('discordDraft' in staged) return JSON.stringify({ ...staged, nextStep: 'The owner must inspect and approve the exact pending review in chat. No live configuration changed.' })
-      const request = await options.publicationRequests.propose(undefined, staged.revision, context.sessionId, input.expectedActiveRelease as string | undefined)
+      const origin = BotReviewOriginSchema.parse({sessionId:context.sessionId,physicalId:context.physicalSessionId,toolCallId:context.toolCallId})
+      if (!options.reviews) throw new Error('Durable Bot review history is unavailable.')
+      const staged = await stageBotDirectory(options, input, origin)
+      if ('discordDraft' in staged) {
+        await options.reviews.record({version:1,projectId:context.projectId,id:staged.discordDraft.id,origin,createdAt:staged.discordDraft.createdAt,status:'pending',previousSource:staged.discordDraft.change.kind === 'bot.save' ? options.discord?.snapshot().packages[staged.discordDraft.change.package.id]?.active.source ?? {} : {},candidate:{kind:'discord',draft:staged.discordDraft}})
+        return JSON.stringify({ ...staged, nextStep: 'The owner must inspect and approve the exact pending review in chat. No live configuration changed.' })
+      }
+      const request = await options.publicationRequests.propose(undefined, staged.revision, context.sessionId, input.expectedActiveRelease as string | undefined, origin)
+      await options.reviews.record({version:1,projectId:context.projectId,id:request.id,origin,createdAt:request.createdAt,status:'pending',candidate:{kind:'service',request}})
       return JSON.stringify({request, nextStep:'The owner must inspect and approve the exact publication card in chat. No live configuration changed.'})
     },
   }
@@ -78,6 +86,34 @@ export function botPackageTool(options: BotPackageOptions & { canAuthor: (sessio
 export function botPackagePlugin(options: BotPackageOptions, authorize: (request: Request) => boolean | Promise<boolean>) {
   return (app: Hono) => {
     app.use('/api/bot-package*', async (context, next) => { context.header('Cache-Control', 'no-store'); await next() })
+    app.get('/api/bot-package/reviews/:sessionId', async context => {
+      if (!await authorize(context.req.raw)) return context.json({error:'Unauthorized'},401)
+      if (!options.reviews) return context.json({error:'Review history unavailable'},503)
+      try {
+        const sessionId = context.req.param('sessionId')
+        const records = await options.reviews.read(sessionId, context.req.query('physicalId'))
+        const snapshot = options.discord?.snapshot()
+        const reviews: BotReviewRecord[] = []
+        for (const stored of records) {
+          if (stored.status === 'applied' || stored.status === 'cancelled') {reviews.push(stored);continue}
+          let record = stored
+          if (stored.candidate.kind === 'discord') {
+            const expectedHash = stored.candidate.draft.hash
+            const current = snapshot?.drafts.find(d => d.id === stored.id && d.hash === expectedHash)
+            if (current && JSON.stringify(current.origin) === JSON.stringify(stored.origin)) {
+              const status = current.status === 'pending' ? Date.parse(current.expiresAt) <= Date.now() ? 'expired' : current.baseRevision !== snapshot!.revision ? 'stale' : 'pending' : current.status === 'applying' ? 'waiting' : current.status
+              record = {...stored,status,currentRevision:snapshot!.revision,candidate:{kind:'discord',draft:current},...(current.decidedAt ? {decidedAt:current.decidedAt} : {})}
+            } else if (stored.status === 'pending' || stored.status === 'waiting') record = {...stored,status:'unavailable'}
+          } else {
+            const request = parsePublicationRequest(stored.candidate.request, stored.projectId)
+            record = {...stored,currentRevision:options.service.options.store.snapshot().revision,...options.publicationRequests.reviewStatus(request)}
+          }
+          if (JSON.stringify(stored) !== JSON.stringify(record)) await options.reviews.record(record)
+          reviews.push(record)
+        }
+        return context.json({projectId:options.service.options.projectId,reviews})
+      } catch { return context.json({error:'Review history unavailable'},409) }
+    })
     app.get('/api/bot-package', async context => {
       if (!await authorize(context.req.raw)) return context.json({ error: 'Unauthorized' }, 401)
       const store = options.service.options.store

@@ -1202,11 +1202,12 @@ test('BOT packages atomically publish frozen Discord Agent, binding and processo
   await mkdir(join(directory,'channels'),{recursive:true})
   for (const [path,content] of Object.entries(a1.source)) await writeFile(join(directory,path),content)
   const packageStore=new AgentResourceStore({projectId:f.projectId,directory:join(f.root,'service-resources')})
-  const chatTool=botPackageTool({discord:f.config,service:{options:{projectId:f.projectId,store:packageStore,folders:{acquireAccess:()=>()=>{},requireAvailable:async (id:string)=>{
+  const timeline:import('../agent-authoring/bot-review-contract.ts').BotReviewRecord[]=[]
+  const chatTool=botPackageTool({reviews:{record:async (record:import('../agent-authoring/bot-review-contract.ts').BotReviewRecord)=>{timeline.push(record)},read:async()=>timeline},discord:f.config,service:{options:{projectId:f.projectId,store:packageStore,folders:{acquireAccess:()=>()=>{},requireAvailable:async (id:string)=>{
     assert.equal(id,'registered-folder'); return {id,path:directory,kind:'local'}
   }}}},publicationRequests:{list:()=>[]},inventory:()=>({}),canAuthor:(id:string)=>id==='web:owner'} as unknown as Parameters<typeof botPackageTool>[0])
   const chatTools=new SessionTools(f.tools,f.home);chatTools.setExecutionScope('session',[])
-  const chatContext={physicalSessionId:'web_owner_0',messageId:'human-turn',senderId:'owner',chatId:'owner',projectId:f.projectId,channel:'web',inputSource:'user' as const,admin:true,isGroup:false,sessionId:'web:owner',tools:chatTools,signal:signal()}
+  const chatContext={toolCallId:'host-call',physicalSessionId:'web_owner_0',messageId:'human-turn',senderId:'owner',chatId:'owner',projectId:f.projectId,channel:'web',inputSource:'user' as const,admin:true,isGroup:false,sessionId:'web:owner',tools:chatTools,signal:signal()}
   for(const patch of [{projectId:'foreign'},{channel:'discord'},{admin:false},{sessionId:'web:child'},{inputSource:'session'}]) {
     await assert.rejects(()=>chatTool.execute({action:'status'},{...chatContext,...patch} as typeof chatContext),/authenticated owner/)
   }
@@ -1218,6 +1219,10 @@ test('BOT packages atomically publish frozen Discord Agent, binding and processo
   assert.equal(status.discord.revision,f.config.snapshot().revision)
   const staged=JSON.parse(await chatTool.execute({action:'propose',folderId:'registered-folder',expectedRevision:status.draftRevision,discordRevision:status.discord.revision},chatContext) as string)
   const draft=staged.discordDraft
+  assert.equal(timeline.length,1)
+  assert.equal(timeline[0]!.origin.sessionId,'web:owner')
+  assert.equal(timeline[0]!.candidate.kind,'discord')
+  assert.equal(draft.origin.toolCallId,'host-call')
   await writeFile(join(directory,'BOT.md'),a1.source['BOT.md']+'\nUNREVIEWED_DISK_EDIT')
   const pendingRestart=new IntegrationStore({projectId:f.projectId,workspace:f.home,directory:join(f.root,'config'),bots:f.bots,agents:f.agents,memory:f.memory})
   assert.equal(pendingRestart.draft(draft.id).hash,draft.hash)
@@ -1226,6 +1231,8 @@ test('BOT packages atomically publish frozen Discord Agent, binding and processo
   await assert.rejects(()=>f.config.commit({kind:'discord',id:'500',botInstanceId:f.bot.id,channelId:'205',userId:'500',bindingId:aId},draft.id,draft.hash,signal()),/another actor/)
   assert(!f.config.snapshot().packages['package-a'])
   await f.config.commit(owner,draft.id,draft.hash,signal())
+  assert.ok(f.config.draft(draft.id).decidedAt)
+  assert.equal(new IntegrationStore({projectId:f.projectId,workspace:f.home,directory:join(f.root,'config'),bots:f.bots,agents:f.agents,memory:f.memory}).draft(draft.id).status,'applied')
   await f.send('205')
   assert(JSON.stringify(f.requests.at(-1)!.messages).includes('FROZEN_A1'))
   assert(!JSON.stringify(f.requests).includes('UNREVIEWED_EDIT'))
@@ -1434,3 +1441,68 @@ test('restricted history runtime uses real Discord permission proof and blocks c
   channels['202']!.permission_overwrites=[{id:'501',type:1,allow:'0',deny:String(P.view)}]
   await assert.rejects(f.integration.assertDelivery(output,signal()),/audiences differ/)
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: trusted Bot cards remain session-scoped durable history after cancel, expiry and reload`, async t => {
+    const f = await fixture(t, Store)
+    await f.sessions.buildSession('web:review-history')
+    const state = f.sessions.getSessionState('web:review-history')!
+    const origin = {sessionId:state.sessionId,physicalId:physicalSessionId(state),toolCallId:'host-call'}
+    const pkg = {id:'history-bot',source:{
+      'BOT.md':`---\nname: history-bot\nplatform: discord\nbotInstanceId: ${f.bot.id}\nchannels: [channels/main.json]\ntools: []\n---\nFrozen history`,
+      'channels/main.json':JSON.stringify([{...f.a,id:randomUUID(),target:{kind:'channel',guildId:'100',channelId:'205'},agentId:undefined,tools:[],readDomains:[],inheritThreads:false}]),
+    }}
+    const draft = await f.config.propose(owner,{kind:'bot.save',package:pkg},f.config.snapshot().revision,signal(),origin)
+    const record:import('../agent-authoring/bot-review-contract.ts').BotReviewRecord = {version:1,projectId:f.projectId,id:draft.id,origin,createdAt:draft.createdAt,status:'pending',candidate:{kind:'discord',draft}}
+    await f.sessions.recordBotReview(record)
+    await f.sessions.recordBotReview(record)
+    assert.equal((await f.sessions.getBotReviews(state.sessionId)).length,1)
+    assert.deepEqual(await f.sessions.getBotReviews('web:other'),[])
+    await assert.rejects(f.sessions.getBotReviews(state.sessionId,'wrong-segment'),/segment mismatch/)
+    await assert.rejects(f.sessions.recordBotReview({...record,projectId:'foreign'}),/Project mismatch/)
+    assert.equal((await f.sessions.getHistory(state.sessionId,{physicalId:origin.physicalId})).messages.length,0,'display records do not enter model/fork history')
+    const {botPackagePlugin} = await import('../agent-authoring/bot-package-management.ts')
+    const app = new Hono()
+    botPackagePlugin({service:{options:{projectId:f.projectId}},discord:f.config,
+      reviews:{record:r=>f.sessions.recordBotReview(r),read:(id,physical)=>f.sessions.getBotReviews(id,physical)},
+    } as Parameters<typeof botPackagePlugin>[0], request=>request.headers.get('x-owner')==='yes')(app)
+    const read = async()=> (await (await app.request(`/api/bot-package/reviews/${encodeURIComponent(state.sessionId)}`,{headers:{'x-owner':'yes'}})).json()).reviews
+    assert.equal((await read())[0].status,'pending')
+    assert.equal((await read())[0].currentRevision,f.config.snapshot().revision)
+    f.config.cancel(owner,draft.id)
+    const cancelled=(await read())[0]
+    assert.equal(cancelled.status,'cancelled'); assert.ok(cancelled.decidedAt)
+    assert.equal((await f.sessions.getBotReviews(state.sessionId)).length,1)
+    assert.equal((await f.sessions.getBotReviews(state.sessionId))[0]!.status,'cancelled')
+    await f.sessions.recordBotReview(record)
+    assert.equal((await f.sessions.getBotReviews(state.sessionId))[0]!.status,'cancelled','a delayed pending event cannot reopen a decision')
+    const reopened = new Store(join(f.root,'sessions')); await reopened.init()
+    try {
+      const events=[]
+      for await (const event of reopened.readSessionLog(origin.physicalId)) if (event.bot_review) events.push(event.bot_review)
+      assert.equal((events.at(-1) as typeof record).status,'cancelled')
+    } finally {reopened.close?.()}
+    await assert.rejects(f.config.commit(owner,draft.id,draft.hash,signal()),/cancelled/)
+    const next = await f.config.propose(owner,{kind:'bot.save',package:pkg},f.config.snapshot().revision,signal(),{...origin,toolCallId:'next-host-call'})
+    await f.sessions.recordBotReview({...record,id:next.id,origin:next.origin!,createdAt:next.createdAt,candidate:{kind:'discord',draft:next}})
+    t.mock.timers.enable({apis:['Date'],now:Date.parse(next.expiresAt)+1})
+    try {
+      assert.equal((await read()).find((r:typeof record)=>r.id===next.id).status,'expired')
+      await assert.rejects(f.config.commit(owner,next.id,next.hash,signal()),/expired|changed/)
+    } finally {t.mock.timers.reset()}
+    const approved = await f.config.propose(owner,{kind:'bot.save',package:pkg},f.config.snapshot().revision,signal(),{...origin,toolCallId:'approve-host-call'})
+    await f.sessions.recordBotReview({...record,id:approved.id,origin:approved.origin!,createdAt:approved.createdAt,candidate:{kind:'discord',draft:approved}})
+    await f.config.commit(owner,approved.id,approved.hash,signal())
+    const completed = (await read()).find((r:typeof record)=>r.id===approved.id)
+    assert.equal(completed.status,'applied');assert.ok(completed.decidedAt)
+    const staleCard=(await read()).find((r:typeof record)=>r.id===next.id)
+    assert.equal(staleCard.status,'stale');assert.equal(staleCard.currentRevision,f.config.snapshot().revision)
+    assert.notEqual(staleCard.currentRevision,staleCard.candidate.draft.baseRevision)
+    const version = f.config.snapshot().revision
+    await f.config.commit(owner,approved.id,approved.hash,signal())
+    assert.equal(f.config.snapshot().revision,version,'duplicate HTTP confirmation never reapplies a completed version')
+    const cards = await f.sessions.getBotReviews(state.sessionId)
+    assert.equal(cards.filter(card=>card.id===approved.id).length,1)
+    assert.equal(cards.find(card=>card.id===approved.id)?.status,'applied')
+  })
+}
