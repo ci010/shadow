@@ -10,7 +10,7 @@ test('desktop access starts only after an exact, current listed window is select
   const service = new ComputerService(desktop)
   t.after(() => service.close())
   assert.equal(service.status(owner).grant, null)
-  await assert.rejects(service.observe(owner, desktop.target.id, false, new AbortController().signal), /List supported windows/)
+  await assert.rejects(service.observe(owner, desktop.target.id, false, new AbortController().signal), /action:connect/)
   await assert.rejects(service.share(owner, desktop.window.id, new AbortController().signal), /Refresh/)
   assert.equal(desktop.calls.length, 0)
   await service.windows(owner, new AbortController().signal)
@@ -195,7 +195,7 @@ test('lost action outcomes revoke grants instead of inviting replay', async t =>
   assert.equal(f.service.status(owner).grant, null)
   assert.equal(f.service.status(owner).lastAction?.outcome, 'outcome_unknown')
   assert.equal(f.desktop.calls.filter(call => call.method === 'act').length, 1)
-  await assert.rejects(f.service.act(owner, f.input(), f.signal), /List supported windows/)
+  await assert.rejects(f.service.act(owner, f.input(), f.signal), /action:connect/)
 })
 
 test('native restart invalidates observations and grant, and other projects cannot release ownership', async t => {
@@ -204,7 +204,7 @@ test('native restart invalidates observations and grant, and other projects cann
   assert.ok(f.service.status(owner).grant)
   f.desktop.generation++
   assert.equal(f.service.status(owner).grant, null)
-  await assert.rejects(f.observe(), /List supported windows/)
+  await assert.rejects(f.observe(), /action:connect/)
 })
 
 test('disabled Main and unsupported platforms do not start a host', async () => {
@@ -316,7 +316,7 @@ test('foreground requests cannot cross targets or owners, extend the lease, or e
   f.service.decide(owner, f.service.status(owner).pending!.id, false)
   await execution
   await f.service.release(owner)
-  await assert.rejects(f.service.act(owner, input, f.signal), /List supported/)
+  await assert.rejects(f.service.act(owner, input, f.signal), /action:connect/)
 })
 
 
@@ -348,4 +348,92 @@ test('a direct UIA request cannot approve or bypass an already pending foregroun
   f.service.decide(owner, pending.id, false)
   await execution
   assert.equal(f.desktop.calls.some(call => call.method === 'act'), false)
+})
+
+test('connect reuses without lease renewal; selection observes; targetless actions retain exact freshness', async t => {
+  const f = await fixture(t)
+  const expiry = f.service.status(owner).grant!.expiresAt
+  const before = f.desktop.calls.length
+  const reused = await f.service.connect(owner, {}, f.signal)
+  assert.equal(reused.state, 'observed')
+  assert.deepEqual(f.desktop.calls.slice(before).map(c => c.method), ['observe'])
+  assert.equal(f.service.status(owner).grant!.expiresAt, expiry)
+  await assert.rejects(f.service.act(owner, { observationId: crypto.randomUUID(), action: { kind: 'invoke', elementId: '0' } }, f.signal), /Observe/)
+  await f.service.act(owner, { observationId: f.desktop.observation.id, action: { kind: 'invoke', elementId: '0' } }, f.signal)
+  await f.service.release(owner)
+  const list = await f.service.connect(owner, {}, f.signal)
+  assert.equal(list.state, 'needs-selection')
+  assert.equal(list.observed, false)
+  assert.equal(f.desktop.calls.at(-1)!.method, 'list')
+  const selected = await f.service.connect(owner, { windowId: f.desktop.window.id }, f.signal)
+  assert.equal(selected.state, 'observed')
+  assert.deepEqual(f.desktop.calls.slice(-2).map(c => c.method), ['bind', 'observe'])
+  await assert.rejects(f.service.connect({ ...owner, sessionId: 'other' }, {}, f.signal), /Another conversation/)
+  await assert.rejects(f.service.connect(owner, { windowId: crypto.randomUUID() }, f.signal), /Release/)
+})
+
+test('connect reports observation failure, expiry and invalid generation without auto-selecting', async t => {
+  let now = Date.now()
+  const f = await fixture(t, { now: () => now })
+  f.desktop.failure = new ComputerError('observation_failed', 'Synthetic observation failure')
+  const failed = await f.service.connect(owner, {}, f.signal)
+  assert.equal(failed.state, 'observation-failed')
+  assert.equal(failed.bound, true)
+  assert.equal(failed.observed, false)
+  f.desktop.failure = undefined
+  now += 600_001
+  const expired = await f.service.connect(owner, { windowId: f.desktop.window.id }, f.signal)
+  assert.equal(expired.state, 'needs-selection')
+  assert.equal(expired.reason, 'lease-expired')
+  assert.equal(f.service.status(owner).grant, null)
+  await f.service.connect(owner, { windowId: f.desktop.window.id }, f.signal)
+  f.desktop.generation++
+  // A diagnostic status check must not erase the reason or resurrect the lease.
+  f.service.status(owner)
+  const invalid = await f.service.connect(owner, {}, f.signal)
+  assert.equal(invalid.state, 'needs-selection')
+  assert.equal(invalid.reason, 'target-invalid')
+})
+
+test('connect and targetless observe cannot replace a pending exact-action review', async t => {
+  const f = await fixture(t)
+  const { targetId: _, ...input } = f.input()
+  const running = f.service.act(owner, input, f.signal)
+  await new Promise(resolve => setImmediate(resolve))
+  const pending = f.service.status(owner).pending!
+  const before = f.desktop.calls.length
+  await assert.rejects(f.service.connect(owner, {}, f.signal), /pending action/)
+  await assert.rejects(f.service.observe(owner, undefined, false, f.signal), /pending action/)
+  assert.equal(f.service.status(owner).pending!.id, pending.id)
+  assert.equal(f.desktop.calls.length, before)
+  f.service.decide(owner, pending.id, false)
+  await running
+})
+
+test('connect selection distinguishes bound from observed; a vanished live target returns candidates', async t => {
+  const f = await fixture(t)
+  await f.service.release(owner)
+  await f.service.connect(owner, {}, f.signal)
+  const request = f.desktop.request.bind(f.desktop)
+  let failObservation = true
+  let code = 'observation_failed'
+  t.mock.method(f.desktop, 'request', async (input: Parameters<FixtureDesktop['request']>[0], signal: AbortSignal) => {
+    if (input.method === 'observe' && failObservation) {
+      failObservation = false
+      throw new ComputerError(code, 'Synthetic failure')
+    }
+    return request(input, signal)
+  })
+  const failed = await f.service.connect(owner, { windowId: f.desktop.window.id }, f.signal)
+  assert.equal(failed.state, 'observation-failed')
+  assert.equal(failed.bound, true)
+  assert.equal(failed.observed, false)
+  code = 'window_unavailable'
+  failObservation = true
+  const invalid = await f.service.connect(owner, {}, f.signal)
+  assert.equal(invalid.state, 'needs-selection')
+  assert.equal(invalid.bound, false)
+  assert.equal(invalid.reason, 'target-invalid')
+  assert.equal(invalid.windows?.length, 1)
+  assert.equal(f.service.status(owner).grant, null)
 })

@@ -27,7 +27,7 @@ export async function copyAgentDesktopAssets(root: string, output: string, optio
     }
   } catch (error) {
     const triple = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
-    throw new Error(`agent-desktop native assets are missing or invalid (or stale; rebuild required) for ${platform}-${arch}. From integrations/agent-desktop, run node scripts/fetch.mjs and node scripts/build.mjs ${triple} in a VS developer shell; then rebuild the backend. See integrations/agent-desktop/README.md.`, { cause: error })
+    throw new Error(`agent-desktop native assets are missing or invalid (or stale; rebuild required) for ${platform}-${arch}. From the repository root, run pnpm desktop:repair-native -Arch ${arch}, then rebuild the backend. Manual alternative: from integrations/agent-desktop, run node scripts/fetch.mjs (only on first setup) and node scripts/build.mjs ${triple} in a VS developer shell. See integrations/agent-desktop/README.md.`, { cause: error })
   }
   for (const file of files) {
     const target = join(output, 'integrations/agent-desktop', file)

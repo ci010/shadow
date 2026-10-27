@@ -148,7 +148,7 @@ not appropriate, the owner can open a non-sensitive ordinary application instead
 After restart and opening the window, tests must use the existing computer-use
 host only:
 
-1. `computer_setup` status/windows/select the exact synthetic window.
+1. `computer_setup` connect, then connect with the exact synthetic windowId if selection is needed (bind + observe).
 2. Observe the tree; verify password content is absent, disabled/readonly/long
    fields do not advertise unsafe edits, and actual geometry/actions are present.
 3. Approve each ordinary UIA operation separately; inspect returned fresh IDs.

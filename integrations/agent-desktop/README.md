@@ -151,7 +151,22 @@ DPI restoration/CoUninitialize. No persistent interface crosses that thread.
 
 ## Reproduce Windows x64
 
-Requires Git, Node 24+, Rust >=1.89, VS2022 C++/Windows SDK. From this directory
+From an ordinary terminal at the repository root:
+
+```powershell
+pnpm desktop:repair-native
+pnpm build
+```
+
+The repair command discovers Visual Studio C++ tools, selects an installed MSVC
+Rust toolchain meeting `Cargo.toml`'s minimum version, fetches the pinned upstream
+only if absent, and runs the existing locked native/guard builder to regenerate
+the integrity manifest. It does not install toolchains, change global Rust
+defaults, or bypass freshness checks. Rerun it after native/worker source changes.
+For ARM64, use `pnpm desktop:repair-native -Arch arm64` with the matching VS tools
+and Rust target installed; target-device acceptance is still required.
+
+Manual alternative: requires Git, Node 24.15+, Rust >=1.89, VS2022 C++/Windows SDK. From this directory
 in an x64 VS developer shell (MSVC link.exe first):
 
     node scripts/fetch.mjs
@@ -323,7 +338,8 @@ existence/nonzero size is no longer sufficient. Cross-architecture builds record
 hashes but still need target-device identity/ABI acceptance.
 
 The build fails with the exact native build command rather than silently running
-an expensive native compilation/toolchain install. Use a VS developer shell and
+an expensive native compilation/toolchain install. Run `pnpm desktop:repair-native`
+from the repository root, then rerun the backend build. For manual builds, use a VS developer shell and
 an already installed Rust >=1.89; if your default Rust is older, select a suitable
 installed version with `RUSTUP_TOOLCHAIN` (for example `1.98.0`). Do not remove
 `--locked`. Then rerun the backend build. Native source/patch changes also invalidate

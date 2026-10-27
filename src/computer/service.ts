@@ -11,6 +11,7 @@ import {
 const GRANT_MS = 10 * 60_000
 const REVIEW_MS = 60_000
 interface Grant {
+  windowId: string
   owner: ComputerOwner
   target: ComputerTarget
   generation: number
@@ -39,6 +40,7 @@ export class ComputerService {
   private operation = false
   private stopped = false
   private revision = 0
+  private invalidated?: { owner: ComputerOwner; reason: string; stopped: Promise<void> }
   private last?: { owner: ComputerOwner; receipt: ComputerReceipt }
 
   constructor(private readonly desktop: ComputerDesktop, private readonly options: {
@@ -123,11 +125,12 @@ export class ComputerService {
       }
       const expiresAt = this.now() + (this.options.grantMs ?? GRANT_MS)
       const timer = setTimeout(() => {
-        void this.release(owner).catch(() => console.error('[computer] Could not stop the desktop host after grant expiry.'))
+        this.expire(true)
       }, this.options.grantMs ?? GRANT_MS)
       timer.unref()
-      this.grant = { owner: { ...owner }, target, expiresAt, generation, timer, controller: new AbortController() }
+      this.grant = { windowId, owner: { ...owner }, target, expiresAt, generation, timer, controller: new AbortController() }
       this.last = undefined
+      this.invalidated = undefined
     } catch (error) {
       await this.desktop.interrupt()
       throw error
@@ -135,17 +138,65 @@ export class ComputerService {
     return this.status(owner)
   }
 
-  private requireGrant(owner: ComputerOwner, targetId: string): Grant {
+  /** Idempotent owner entry: never switch targets or refresh a lease/review. */
+  async connect(owner: ComputerOwner, input: { windowId?: string; screenshot?: boolean }, signal: AbortSignal) {
+    ComputerOwnerSchema.parse(owner)
+    signal.throwIfAborted()
+    if (this.operation) throw new ComputerError('action_pending', 'Finish or reject the pending action before connecting again.')
+    const previous = this.grant
+    const invalid = previous && sameOwner(previous.owner, owner)
+      && (previous.generation !== this.desktop.generation || previous.expiresAt <= this.now())
+    if (invalid) this.expire()
+    const invalidation = this.invalidated && sameOwner(this.invalidated.owner, owner) ? this.invalidated : undefined
+    if (invalidation) await invalidation.stopped
+    this.assertAvailable(owner)
+    if (!this.grant) {
+      if (!input.windowId || invalid || invalidation && (!this.listing
+        || !sameOwner(this.listing.owner, owner) || !this.listing.ids.has(input.windowId)
+        || this.listing.generation !== this.desktop.generation)) {
+        return { state: 'needs-selection' as const, reason: invalidation?.reason ?? 'no-target',
+          bound: false, observed: false, ...await this.windows(owner, signal) }
+      }
+      try {
+        await this.share(owner, input.windowId, signal)
+      } catch (error) {
+        signal.throwIfAborted()
+        if (!(error instanceof ComputerError) || error.code !== 'window_unavailable') throw error
+        return { state: 'needs-selection' as const, reason: 'candidate-expired-or-invalid', bound: false, observed: false,
+          ...await this.windows(owner, signal) }
+      }
+    } else if (input.windowId && input.windowId !== this.grant.windowId) {
+      throw new ComputerError('already_shared', 'Release the current target before selecting another window.')
+    }
+    const targetId = this.requireGrant(owner).target.id
+    try {
+      const observation = await this.observe(owner, targetId, input.screenshot ?? false, signal)
+      return { state: 'observed' as const, bound: true, observed: true, observation }
+    } catch (error) {
+      signal.throwIfAborted()
+      if (!(error instanceof ComputerError)) throw error
+      if (error.code === 'window_unavailable' || error.code === 'protected_target') {
+        await this.release(owner)
+        return { state: 'needs-selection' as const, reason: 'target-invalid', bound: false, observed: false,
+          error: { code: error.code, message: error.message }, ...await this.windows(owner, signal) }
+      }
+      return { state: 'observation-failed' as const, bound: this.status(owner).grant !== null,
+        observed: false, error: { code: error.code, message: error.message } }
+    }
+  }
+
+  private requireGrant(owner: ComputerOwner, targetId?: string): Grant {
     this.assertAvailable(owner)
     const grant = this.grant
-    if (!grant || !sameOwner(grant.owner, owner) || grant.target.id !== targetId) {
-      throw new ComputerError('not_shared', 'List supported windows with computer_setup action:windows, then select a task-relevant windowId.', 403)
+    if (!grant || !sameOwner(grant.owner, owner) || (targetId !== undefined && grant.target.id !== targetId)) {
+      throw new ComputerError('not_shared', 'Use computer_setup action:connect and select a current task-relevant windowId if needed.', 403)
     }
     return grant
   }
 
-  async observe(owner: ComputerOwner, targetId: string, screenshot: boolean, signal: AbortSignal): Promise<ComputerObservation> {
+  async observe(owner: ComputerOwner, targetId: string | undefined, screenshot: boolean, signal: AbortSignal): Promise<ComputerObservation> {
     const grant = this.requireGrant(owner, targetId)
+    targetId = grant.target.id
     if (this.operation) throw new ComputerError('action_pending', 'Finish or reject the pending action before observing again.')
     const result = ComputerObservationSchema.parse(await this.desktop.request(
       { method: 'observe', targetId, screenshot }, AbortSignal.any([signal, grant.controller.signal]),
@@ -154,6 +205,7 @@ export class ComputerService {
     if (this.requireGrant(owner, targetId) !== grant || result.targetId !== targetId) {
       throw new ComputerError('stale_observation', 'The shared window changed. Observe again.')
     }
+    if (this.operation) throw new ComputerError('action_pending', 'Finish or reject the pending action before observing again.')
     this.retainObservation(grant, result)
     return result
   }
@@ -177,10 +229,10 @@ export class ComputerService {
     grant.observation = undefined
   }
 
-  async act(owner: ComputerOwner, input: { targetId: string; observationId: string; action: ComputerAction }, signal: AbortSignal) {
-    const action = ComputerActionSchema.parse(input.action)
-    input = { ...input, action }
-    const grant = this.requireGrant(owner, input.targetId)
+  async act(owner: ComputerOwner, request: { targetId?: string; observationId: string; action: ComputerAction }, signal: AbortSignal) {
+    const action = ComputerActionSchema.parse(request.action)
+    const grant = this.requireGrant(owner, request.targetId)
+    const input = { ...request, action, targetId: grant.target.id }
     signal.throwIfAborted()
     if (this.operation) throw new ComputerError('action_pending', 'Another action is already awaiting review or executing.')
     const observed = grant.observation
@@ -322,10 +374,14 @@ export class ComputerService {
     this.listing = undefined
   }
 
-  private expire(): void {
-    if (this.grant && (this.grant.generation !== this.desktop.generation || this.grant.expiresAt <= this.now())) {
+  private expire(timerExpired = false): void {
+    if (this.grant && (timerExpired || this.grant.generation !== this.desktop.generation || this.grant.expiresAt <= this.now())) {
+      const owner = this.grant.owner
+      const reason = timerExpired || this.grant.expiresAt <= this.now() ? 'lease-expired' : 'target-invalid'
       this.clear()
-      void this.desktop.interrupt().catch(() => console.error('[computer] Could not stop the expired desktop host.'))
+      const stopped = this.desktop.interrupt()
+      this.invalidated = { owner, reason, stopped }
+      void stopped.catch(() => console.error('[computer] Could not stop the expired desktop host.'))
     }
   }
 

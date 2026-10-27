@@ -531,3 +531,28 @@ test('session graph marks enabled cron targets, not creators or ID patterns, and
   jobs.splice(0)
   assert.deepEqual(await marked(), [])
 })
+
+
+test('session graph reflects active background owners and clears terminal tasks', async () => {
+  const manager = {
+    listHistorySessions: async () => ['web:owner', 'web:other'].map(sessionId => ({ sessionId, segmentIndex: 0 })),
+    readSessionState: async (sessionId: string) => ({ sessionId, segmentIndex: 0 }),
+    getFirstUserMessage: async () => null,
+    getSessionInferenceDefaults: () => ({ model: 'test' }),
+    yields: new Map(), inputs: new Map(),
+  } as unknown as SessionManager
+  const tasks: ReturnType<import('../agent/background-task.ts').BackgroundTaskManager['listTasks']> = []
+  const app = new Hono()
+  sessionsApiPlugin(manager, { backgroundTasks: { listTasks: () => tasks } })(app)
+  const marked = async () => {
+    const response = await app.request('/api/sessions/graph')
+    assert.equal(response.status, 200)
+    return (await response.json()).sessions.filter((s: { hasBackgroundTasks: boolean }) => s.hasBackgroundTasks).map((s: { sessionId: string }) => s.sessionId)
+  }
+  assert.deepEqual(await marked(), [])
+  tasks.push({ id: 'process', sessionId: 'web:owner', kind: 'process', title: 'test', status: 'running', createdAt: new Date().toISOString() } as typeof tasks[number])
+  for (const status of ['running', 'cancelling', 'completed', 'failed', 'cancelled'] as const) {
+    tasks[0].status = status
+    assert.deepEqual(await marked(), status === 'running' || status === 'cancelling' ? ['web:owner'] : [])
+  }
+})

@@ -25,7 +25,7 @@ import { computed } from 'vue'
 import { isWaitingStage, isWorkingStage, sessionActivity } from '../session-activity.ts'
 import { subagentActivityLabel, type SubagentActivity } from '../subagent-executions.ts'
 
-const props = defineProps<{ stage?: string | null; hasCron?: boolean; compact?: boolean; iconOnly?: boolean; statusIcons?: boolean; hideSymbol?: boolean; subagents?: SubagentActivity }>()
+const props = defineProps<{ stage?: string | null; hasCron?: boolean; hasBackgroundTasks?: boolean; compact?: boolean; iconOnly?: boolean; statusIcons?: boolean; hideSymbol?: boolean; subagents?: SubagentActivity }>()
 const activity = computed(() => sessionActivity(props.iconOnly && !isWorkingStage(props.stage)
   ? props.subagents?.waiting ? 'waiting' : props.subagents?.running ? 'running' : props.subagents?.pending ? 'pending' : props.stage
   : props.stage))
@@ -37,9 +37,15 @@ const icons: Record<string, string> = {
   pending: 'i-lucide-clock', running: 'i-lucide-play', completed: 'i-lucide-circle-check',
   failed: 'i-lucide-circle-alert', cancelled: 'i-lucide-circle-slash', unknown: 'i-lucide-circle-help',
 }
-// Apply after delegated activity promotion; schedules replace only the idle moon.
-const statusIcon = computed(() => delegatedRunning.value ? 'i-lucide-git-branch' : props.hasCron && activity.value.kind === 'inactive'
-  ? 'i-lucide-alarm-clock' : icons[activity.value.kind])
+// Active background work outranks schedules, but never foreground/delegated activity or completion.
+const statusIcon = computed(() => {
+  if (delegatedRunning.value) return 'i-lucide-git-branch'
+  if (activity.value.kind === 'inactive') {
+    if (props.hasBackgroundTasks) return 'i-lucide-terminal'
+    if (props.hasCron) return 'i-lucide-alarm-clock'
+  }
+  return icons[activity.value.kind]
+})
 const delegatedLabel = computed(() => subagentActivityLabel(props.subagents))
 const subagentCount = computed(() => props.subagents ? props.subagents.running + props.subagents.waiting + props.subagents.pending : 0)
 const label = computed(() => [props.stage || !delegatedLabel.value ? activity.value.label : '', delegatedLabel.value].filter(Boolean).join(' · '))

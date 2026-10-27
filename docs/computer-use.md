@@ -23,9 +23,19 @@ Ask the assistant to perform your task in an ordinary-privilege application.
 The assistant selects an existing task-relevant window; you need not open the
 controls or designate a window first. Application launching is not supported;
 only if the requested application is absent may the assistant ask you to open it.
-The assistant lists supported window metadata with
-`computer_setup {action:"windows"}`, then acquires a current `windowId` with
-`{action:"select",windowId}`. It can observe and propose UIA actions immediately;
+The assistant calls `computer_setup {action:"connect"}`. A valid same-owner
+binding is reused and observed without renewing its lease. With no target it
+returns `needs-selection` and metadata only; `{action:"connect",windowId}` binds
+a current task-relevant candidate and observes it. `observed:true` means an actual
+observation returned; `bound:true` alone is not observation success. Failures are
+explicit, and invalid/expired targets are never automatically replaced.
+`computer_observe {}` refreshes the current owner's target; `computer_act
+{observationId,action}` still requires the exact observation ID, never an implicit
+latest observation. Optional `targetId` remains a strict compatibility guard.
+Both observation entry points default to `screenshot:false`. `status`/`release`
+remain diagnostic/cleanup operations. Legacy `windows`/`select` remain public for
+compatibility; select only binds. Pending actions cannot be bypassed by connect.
+It can observe and propose UIA actions immediately;
 you do not need to choose/share a window first. Only windows relevant to your
 request should be selected or observed, not unrelated background content.
 Window metadata and observations go to your configured model. Raw metadata,
@@ -138,6 +148,9 @@ model. **Local execution does not mean local-only inference.** Close sensitive
 documents before sharing; password controls are omitted from the tree, but
 screenshots and other controls may still expose secrets.
 
+For a screen question, describe the observation immediately before release.
+For operation tasks, act directly from it without mandatory narration. After
+another tool call, re-observe if the raw content is needed again.
 Raw observations are delivered to the next inference only. The tool
 pipeline saves a summary in both JSONL and SQLite, without writing screenshot
 files, raw trees or large-result spill files. The current bounded tree remains
