@@ -2446,8 +2446,9 @@ its position and backdrop track the held finger; a 64px threshold commits the
 change on release, otherwise it settles back. Vertical scrolling, multi-touch,
 editing controls and code surfaces do not initiate it; browser-owned
 history gestures may take precedence. The hamburger remains the reliable entry.
-The mobile composer exposes plus/options and send/stop around a single-row
-16px textarea; options retain attachments, model settings, execution location
+The mobile composer places plus/options, microphone and send/stop in a toolbar
+below the full-width 16px textarea, so simultaneous actions do not overlap typed
+text. Options retain attachments, model settings, execution location
 and guidance for a running agent. Plain Enter inserts a newline on phones.
 The frame follows the visual viewport to accommodate keyboard resizing and uses
 safe-area insets. Hardware/browser-specific keyboard and gesture behavior still

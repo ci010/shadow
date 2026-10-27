@@ -127,9 +127,9 @@ async function main() {
     await wait(`window.__composerFixture.sent.length === 3`)
     assert.equal(await execute(`window.__composerFixture.sent[2].delivery`), undefined)
     await execute(`window.__composerFixture.ask()`)
-    await wait(`!!document.querySelector('.yield-composer-note') && !!document.querySelector('.composer-reply-context')`)
+    await wait(`!!document.querySelector('.yield-question .yield-custom-toggle') && !!document.querySelector('.composer-reply-context')`)
     assert.equal(await execute(`document.querySelectorAll('textarea').length`), 1)
-    assert.match(await execute(`document.querySelector('.yield-composer-note').textContent`), /below.*images and files/)
+    assert.equal(await execute(`document.querySelector('.yield-custom-toggle').getAttribute('aria-controls')`), await execute(`document.querySelector('.composer-input textarea').id`))
     await execute(`document.querySelector('.yield-custom-toggle').click()`)
     await wait(`document.activeElement === document.querySelector('.composer-input textarea')`)
     await type('/my literal custom answer')
@@ -147,14 +147,21 @@ async function main() {
     assert.deepEqual(await execute(`window.__composerFixture.answers.at(-1).media`), ['C:\\fixture\\uploads\\notes.txt'])
     assert.equal(await execute(`document.querySelector('.composer-input textarea').value`), '')
     await execute(`window.__composerFixture.ask('input')`)
-    await wait(`!!document.querySelector('.yield-composer-note')`)
+    await wait(`!!document.querySelector('.yield-question') && !!document.querySelector('.composer-reply-context')`)
     await screenshot('composer-desktop')
     window.setContentSize(390, 844)
     await delay(100)
     await wait(`document.querySelector('.chat-workspace').classList.contains('mobile-chat')`)
     assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false)
     assert.equal(await execute(`document.querySelectorAll('textarea').length`), 1)
-    assert.equal(await execute(`document.querySelector('.composer-input textarea').getBoundingClientRect().right <= document.querySelector('.composer-stop').getBoundingClientRect().left`), true, 'Text input must not overlap the stop and send buttons')
+    const inputOverlapsAction = await execute(`(() => {
+      const input=document.querySelector('.composer-input textarea').getBoundingClientRect();
+      return Array.from(document.querySelectorAll('.composer-submit button')).some(button => {
+        const rect=button.getBoundingClientRect();
+        return rect.width>0 && rect.height>0 && input.left<rect.right && input.right>rect.left && input.top<rect.bottom && input.bottom>rect.top;
+      });
+    })()`)
+    assert.equal(inputOverlapsAction, false, 'Text input must not overlap microphone, stop or send actions')
     await screenshot('composer-mobile')
     await type('My narrow-screen answer')
     assert.equal(await key(), false, 'Mobile keeps native newline input')
@@ -182,6 +189,7 @@ async function main() {
     assert.match(await execute(`document.querySelector('.model-option[aria-pressed="true"]').textContent`), /1M/)
     await execute(`document.querySelector('.model-option').click()`)
     await wait(`window.__composerFixture.patches.at(-1)?.patch.contextWindow === null`)
+    await execute(`window.__composerFixture.patches.length=0`)
     await openSettings('model')
     await execute(`document.querySelector('.model-option[title="gpt-override@fixture"]').click()`)
     await wait(`window.__composerFixture.patches.length === 1 && !window.__composerFixture.state().savingSettings`)

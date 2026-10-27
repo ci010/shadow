@@ -34,7 +34,7 @@ test('rendered composer distinguishes queue actions and routes custom question a
             <script setup>defineExpose({showConversation(){},openLinkedFile(){}})</script>`
         }
         if (id.replaceAll('\\', '/').includes('/components/') && id.endsWith('.vue')
-          && !['ChatTab', 'YieldQuestion', 'ComposerPopover', 'OverlayTransition', 'SlashCommandMenu', 'MessageAttachments', 'ModelSelector', 'ReasoningControls', 'MobileSheet'].some(name => id.endsWith(`/${name}.vue`))) {
+          && !['ChatTab', 'YieldQuestion', 'ComposerPopover', 'OverlayTransition', 'SlashCommandMenu', 'SessionReferenceMenu', 'AudioSetupButton', 'MessageAttachments', 'ModelSelector', 'ReasoningControls', 'MobileSheet'].some(name => id.endsWith(`/${name}.vue`))) {
           return '<template><span/></template><script setup>defineExpose({dismiss(){},show(){},rename(){},showDetails(){}})</script>'
         }
         if (id !== '\0composer-fixture') return
@@ -75,7 +75,7 @@ test('rendered composer distinguishes queue actions and routes custom question a
             if (url.pathname.endsWith('/graph')) return json({nodes:[],sessions:[
               {sessionId,mode:'session',segmentIndex:0,label:'Composer fixture'},
               ...channelIds.map(id=>({sessionId:id,mode:'session',segmentIndex:0,label:'Channel fixture',config:fixture.configs[id] ?? {},
-                inferenceDefaults:{model:'gpt-agent@fixture',thinking:{type:'enabled'},reasoningEffort:'low'}})),
+                inferenceDefaults:{model:'gpt-agent@fixture',thinking:{type:'enabled'},reasoningEffort:'low',contextWindow:400000}})),
             ]});
             if (url.pathname.endsWith('/config') && init.method === 'PATCH') {
               const key=decodeURIComponent(url.pathname.split('/').at(-2));
@@ -85,6 +85,7 @@ test('rendered composer distinguishes queue actions and routes custom question a
               for (const [name,value] of Object.entries(patch)) {if(value===null) delete config[name];else config[name]=value;}
               return json({key,config});
             }
+            if (url.pathname.includes('/bot-package/reviews/')) return json({projectId:'fixture',reviews:[]});
             if (url.pathname.endsWith('/stages')) return json({stages:{[sessionId]:fixture.question?'waiting':'idle'}});
             if (url.pathname.endsWith('/ask')) {
               if (init.method === 'POST') {
