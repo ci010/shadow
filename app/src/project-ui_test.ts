@@ -757,12 +757,12 @@ test('concurrent model providers retain their immutable org base and ignore anot
     probe(selection => { b = selection }))
   const finish = (path: string, body: unknown) => { const request = requests.find(item => item.path === path); assert.ok(request); request.resolve(body) }
   finish('/projects/b/api/config', config('b-default'))
-  finish('/projects/b/debug/models', { models: ['b-default', 'b-choice'] })
+  finish('/projects/b/api/models', { models: ['b-default', 'b-choice'] })
   await settle()
   assert.equal(b.current.value, 'b-default')
   await b.select('b-choice')
   finish('/projects/a/api/config', config('a-default'))
-  finish('/projects/a/debug/models', { models: ['a-default', 'a-choice'] })
+  finish('/projects/a/api/models', { models: ['a-default', 'a-choice'] })
   await settle()
   assert.equal(a.current.value, 'a-default')
   assert.equal(b.current.value, 'b-choice')
@@ -770,7 +770,7 @@ test('concurrent model providers retain their immutable org base and ignore anot
   requests.length = 0
   const retry = stateA().load()
   finish('/projects/a/api/config', config('a-new-default'))
-  finish('/projects/a/debug/models', { models: ['a-new-default', 'a-choice'] })
+  finish('/projects/a/api/models', { models: ['a-new-default', 'a-choice'] })
   await retry
   assert.equal(a.current.value, 'a-choice', 'Reload must not overwrite a pending conversation model choice')
   assert.equal(b.current.value, 'b-choice')
@@ -811,7 +811,7 @@ test('connected Child with empty legacy scopes loads and saves project settings 
     if (input.pathname === '/api/projects') {
       return Response.json({ projects: [{ id: 'a', name: 'Project A', createdAt: '2026-09-14' }] })
     }
-    if (input.pathname.endsWith('/debug/models')) return Response.json({ models: ['a-default'] })
+    if (input.pathname.endsWith('/api/models')) return Response.json({ models: ['a-default'] })
     assert.equal(input.pathname, '/projects/a/api/config')
     if (init?.method === 'PATCH') saved = JSON.parse(String(init.body))
     return Response.json(saved)

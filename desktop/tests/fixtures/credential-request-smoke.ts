@@ -68,7 +68,7 @@ const server = createServer(async (request, response) => {
     if (path === '/api/automations') return json({ automations: [] })
     if (path === '/api/provider/setup') return json({ ready: true, provider: 'custom', model: 'synthetic', authMode: 'none', hasApiKey: false })
     if (path === '/api/provider/configured') return json({ providers: [] })
-    if (path === '/debug/models') return json({ models: ['synthetic'] })
+    if (path === '/api/models') return json({ models: ['synthetic'] })
     if (path === '/api/config') return json({ agent: { model: 'synthetic', temperature: .7, workspace: directory } })
     if (path === '/api/folders') return json({ folders: [] })
     if (path === '/api/sessions/graph') return json({

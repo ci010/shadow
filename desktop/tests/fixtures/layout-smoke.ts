@@ -166,7 +166,7 @@ const server = createServer(async (request, response) => {
         userCode: 'TEST-CODE', verificationUri: 'https://github.com/login/device',
         expiresAt: Date.now() + 600_000, intervalMs: 1000,
       })
-    } else if (path === '/debug/models') json({ models: [initialModel, alternateModel] })
+    } else if (path === '/api/models') json({ models: [initialModel, alternateModel] })
     else if (path === '/api/config') json({ agent: { provider: selectedProvider, model: selectedModel, workspace: directory, temperature: 0.7 } })
     else if (path === '/api/sessions/graph') {
       const graph = folders.graph()
@@ -181,12 +181,12 @@ const server = createServer(async (request, response) => {
     })
     else if (/^\/api\/sessions\/[^/]+\/files$/.test(path)) json({ path: '', workdir: { kind: 'local', displayPath: directory }, entries: [] })
     else if (/^\/api\/sessions\/[^/]+\/git\/status$/.test(path)) json({ available: false, reason: 'not_repository', entries: [] })
-    else if (path === '/debug/agent-types') {
+    else if (path === '/api/agent-types') {
       json(Array.from({ length: 40 }, (_, index) => ({
         name: `fixture-agent-${index}`, description: 'Synthetic non-chat layout fixture '.repeat(5),
         source: 'builtin', canSpawn: false, ephemeral: false,
       })))
-    } else if (path.startsWith('/debug/agent-types/') && path.endsWith('/context')) json({ systemPrompt: prompt, tools })
+    } else if (path.startsWith('/api/agent-types/') && path.endsWith('/context')) json({ systemPrompt: prompt, tools })
     else if (path.startsWith('/api/') || path.startsWith('/debug/')) {
       failures.push(`Unstubbed API: ${request.method} ${path}`)
       response.writeHead(404).end()

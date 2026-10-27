@@ -57,11 +57,11 @@ export function mobileGatewayConfig(environment: NodeJS.ProcessEnv): MobileGatew
 
 function businessPath(path: string, method: string): boolean {
   const unscoped = path.replace(/^\/projects\/[^/]+(?=\/)/, '')
-  if (/^\/api\/(?:web-auth|mobile)(?:\/|$)/.test(unscoped)) return false
+  if (/^\/api\/(?:web-auth|mobile|agent-types)(?:\/|$)/.test(unscoped)) return false
   if (/^\/api(?:\/|$)/.test(unscoped)) return true
   if (method !== 'GET' && method !== 'HEAD') return false
   return /^\/(?:host\/)?v1\/query(?:\/|$)/.test(unscoped)
-    || unscoped === '/debug/models' || unscoped === '/nodes/v1'
+    || unscoped === '/nodes/v1'
 }
 
 export function mobileResourcePath(path: string): boolean {

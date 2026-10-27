@@ -57,7 +57,7 @@ export function createProjectSettingsClient(base: string, request: typeof fetch 
       return parseProjectConfig(await projectJson(base, '/api/config', { method: 'PATCH', body: JSON.stringify(next), signal }, request))
     },
     async catalog(signal?: AbortSignal): Promise<{ models: string[]; providers: ProviderInstanceLabel[] }> {
-      const result = await projectJson(base, '/debug/models', { signal }, request)
+      const result = await projectJson(base, '/api/models', { signal }, request)
       if (!isRecord(result) || !Array.isArray(result.models) || !result.models.every(model => typeof model === 'string')
         || (result.providers !== undefined && (!Array.isArray(result.providers) || !result.providers.every(item =>
           isRecord(item) && typeof item.id === 'string' && typeof item.type === 'string' && (item.name === undefined || typeof item.name === 'string'))))) {

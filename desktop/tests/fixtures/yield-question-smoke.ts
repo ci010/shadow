@@ -78,7 +78,7 @@ const server = createServer(async (request, response) => {
     if (path === '/api/automations') return json({ automations: [] })
     if (path === '/api/provider/setup') return json(status)
     if (path === '/api/provider/configured') return json({ providers: [{ ...status, selected: true }] })
-    if (path === '/debug/models') return json({ models: ['gpt-5-mini@copilot'] })
+    if (path === '/api/models') return json({ models: ['gpt-5-mini@copilot'] })
     if (path === '/api/config') return json({ agent: { ...status, workspace: directory, temperature: 0.7 } })
     if (path === '/api/folders') return json({ folders: [] })
     if (path === '/api/work') return json({

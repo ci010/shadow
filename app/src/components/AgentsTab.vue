@@ -180,7 +180,7 @@ async function loadAgentTypes() {
   loadingList.value = true
   listError.value = ''
   try {
-    const response = await fetch(buildUrl('/debug/agent-types'), { signal: request.signal })
+    const response = await fetch(buildUrl('/api/agent-types'), { signal: request.signal })
     if (!response.ok) throw new Error(t('Failed to load agent types ({status}).', { status: response.status }))
     const data = parseAgentTypes(await response.json())
     if (request.signal.aborted) return
@@ -200,7 +200,7 @@ async function loadContext(agent: AgentTypeMeta) {
   loadingContext.value = true
   contextError.value = ''
   try {
-    const response = await fetch(buildUrl(`/debug/agent-types/${encodeURIComponent(agent.name)}/context`, { channel: previewChannel }), { signal: request.signal })
+    const response = await fetch(buildUrl(`/api/agent-types/${encodeURIComponent(agent.name)}/context`, { channel: previewChannel }), { signal: request.signal })
     if (!response.ok) throw new Error(t('Failed to load {name} context ({status}).', { name: agent.name, status: response.status }))
     const data = parseAgentContext(await response.json())
     if (request.signal.aborted) return

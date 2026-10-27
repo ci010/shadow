@@ -16,7 +16,7 @@ export function providerPlugin(
 ): GatewayPlugin {
   const current = () => typeof source === 'function' ? source() : source
   return (app) => {
-    app.get('/debug/models', async (c) => {
+    app.get('/api/models', async (c) => {
       const provider = current()
       const models = await (provider?.listModels() ?? [])
       const infos = provider?.listModelInfos

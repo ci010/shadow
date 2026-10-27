@@ -553,11 +553,11 @@ test('provider routes list live providers independently of primary readiness', a
   providerPlugin(() => provider, async () => ({
     provider: 'openai', model: 'gpt-4o', authMode: 'api-key', ready, hasApiKey: ready,
   }))(app)
-  assert.deepEqual((await (await app.request('/debug/models')).json()).models, ['first'])
+  assert.deepEqual((await (await app.request('/api/models')).json()).models, ['first'])
   assert.equal(calls, 1)
   ready = true
   provider = { ...provider, name: 'second', listModels: async () => ['second'] }
-  assert.deepEqual((await (await app.request('/debug/models')).json()).models, ['second'])
+  assert.deepEqual((await (await app.request('/api/models')).json()).models, ['second'])
   assert.equal((await (await app.request('/v1/models')).json()).data[0].owned_by, 'second')
 })
 

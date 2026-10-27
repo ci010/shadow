@@ -89,7 +89,7 @@ test('mobile ingress rejects other origins, non-loopback upstreams, control rout
   const f = fixture()
   t.after(() => f.access.close())
   const token = await f.login()
-  for (const path of ['/local/v1/readiness', '/pair/v1/offers', '/cluster/v1/nodes', '/api/web-auth/pair',
+  for (const path of ['/api/agent-types', '/projects/p/api/agent-types/general/context', '/debug/models', '/local/v1/readiness', '/pair/v1/offers', '/cluster/v1/nodes', '/api/web-auth/pair',
     '/projects/default/local/v1/shutdown', '/nodes/v1/network', '/', '/assets/main.js']) {
     assert.equal((await f.client(path, token)).status, 403, path)
   }

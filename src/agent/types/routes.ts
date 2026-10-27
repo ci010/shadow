@@ -7,8 +7,8 @@ export function agentTypesPlugin(
   agentTypes?: AgentTypesManager,
 ): GatewayPlugin {
   return (app) => {
-    // ── /debug/agent-types — list all agent type definitions ─────
-    app.get('/debug/agent-types', (c) => {
+    // ── /api/agent-types — list all agent type definitions ─────
+    app.get('/api/agent-types', (c) => {
       if (!agentTypes) {
         return c.json({ error: 'agent_types_unavailable' }, 501)
       }
@@ -26,8 +26,8 @@ export function agentTypesPlugin(
       return c.json(types)
     })
 
-    // ── /debug/agent-types/:name/context — fully assembled prompt + tools ──
-    app.get('/debug/agent-types/:name/context', async (c) => {
+    // ── /api/agent-types/:name/context — fully assembled prompt + tools ──
+    app.get('/api/agent-types/:name/context', async (c) => {
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }

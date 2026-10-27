@@ -75,7 +75,7 @@ const server = createServer(async (request, response) => {
     if (path === '/api/provider/configured') return json({ providers: [{ provider: 'custom', model: 'synthetic-model', selected: true, authMode: 'none', hasApiKey: false }] })
     if (path === '/api/folders') return json({ folders: [] })
     if (path === '/api/config') return json({ agent: { model: 'synthetic-model', workspace: sourceDirectory, temperature: 0.7 } })
-    if (path === '/debug/models') return json({ models: ['synthetic-model'] })
+    if (path === '/api/models') return json({ models: ['synthetic-model'] })
     if (path === '/api/sessions/graph') return json({
       sessions: [{ sessionId, title: 'Image annotation regression', current: 'physical-image' }],
       nodes: [{ physicalId: 'physical-image', logicalId: sessionId }],

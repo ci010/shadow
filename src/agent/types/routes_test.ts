@@ -12,7 +12,9 @@ test('agent role API exposes default execution mode rather than a lifetime flag'
     await roles.load()
     const app = new Hono()
     await agentTypesPlugin(undefined, roles)(app)
-    const response = await app.request('/debug/agent-types')
+    assert.equal((await app.request('/debug/agent-types')).status, 404)
+    assert.equal((await app.request('/debug/agent-types/general/context')).status, 404)
+    const response = await app.request('/api/agent-types')
     assert.equal(response.status, 200)
     const body: unknown = await response.json()
     assert(Array.isArray(body))
@@ -28,4 +30,14 @@ test('agent role API exposes default execution mode rather than a lifetime flag'
     assert.equal(listed.find(role => role.name === 'general')?.defaultMode, 'session')
     assert.deepEqual(verify.allowedTools, ['read', 'search', 'exec', 'ask', 'reply', 'work'])
   })
+})
+
+
+test('agent catalog and context use product API paths, not debug paths', async () => {
+  const app = new Hono()
+  await agentTypesPlugin(undefined)(app)
+  assert.equal((await app.request('/api/agent-types')).status, 501)
+  assert.equal((await app.request('/api/agent-types/general/context')).status, 501)
+  assert.equal((await app.request('/debug/agent-types')).status, 404)
+  assert.equal((await app.request('/debug/agent-types/general/context')).status, 404)
 })
