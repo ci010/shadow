@@ -40,3 +40,33 @@ test('compatibility applies in blockquotes and tables, with escape boundaries in
   assert.match(render('| 结果 |\n| --- |\n| ** 验证 ** |'), /<td><strong>验证<\/strong><\/td>/)
   assert.equal(render(String.raw`\** 验证 **`), standard.parse(String.raw`\** 验证 **`, { async: false }))
 })
+
+test('CJK punctuation-ended strong remains bold before adjacent prose', () => {
+  for (const punctuation of ['。', '，', '：', '！', '？', '；', '）', '”', '.']) {
+    const label = `首选 Sahil Tara，次选 Pankaj Gaur${punctuation}`
+    for (const prefix of ['', '建议']) {
+      assert.equal(render(`${prefix}**${label}**两人都有经验`),
+        `<p>${prefix}<strong>${label}</strong>两人都有经验</p>\n`)
+    }
+  }
+  assert.equal(render('**重点。**说明，**其次。**继续'),
+    '<p><strong>重点。</strong>说明，<strong>其次。</strong>继续</p>\n')
+  assert.match(render('> **重点。**说明'), /<strong>重点。<\/strong>说明/)
+  assert.match(render('| 结果 |\n| --- |\n| **重点。**说明 |'), /<td><strong>重点。<\/strong>说明<\/td>/)
+})
+
+test('CJK repair preserves protected, ambiguous and incomplete Markdown', () => {
+  const cases = [
+    '`**重点。**说明`', '```md\n**重点。**说明\n```',
+    String.raw`\**重点。**说明`, String.raw`**重点。\**说明`,
+    '**包含 `**` 的代码。**说明', '***重点。***说明', '****重点。****说明',
+    '**包含 *强调*。**说明', '**跨行\n重点。**说明',
+    '[**重点。**说明](https://example.com)', '![**重点。**说明](image.png)',
+    '<span>**重点。**说明</span>', '$**重点。**说明$',
+    'a**label.**b', 'a**重点。**说明', '**重点。**English',
+    '**重点。', '**重点。*', '**重点。**',
+  ]
+  for (const source of cases) assert.equal(render(source), standard.parse(source, { async: false }), source)
+  // Streaming reparses the accumulated source; only the completed boundary changes.
+  assert.equal(render('**重点。**说'), '<p><strong>重点。</strong>说</p>\n')
+})

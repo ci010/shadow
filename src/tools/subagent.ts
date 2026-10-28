@@ -15,6 +15,37 @@ import { z } from 'zod'
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { parseSessionName } from '../sessions/session-name.ts'
 
+const reviewSchema = z.object({
+  mode: z.enum(['parent', 'agent']).default('parent'),
+  agent_type: z.string().min(1).optional(),
+  max_rounds: z.number().int().min(1).max(10).default(3),
+  criteria: z.string().max(16000).default(''),
+}).strict()
+
+// Keep the advertised nested contract covered alongside runtime validation in tests.
+const reviewParameters = {
+  type: 'object',
+  description: 'Local task review policy. Omission defaults to parent review; agent creates an independent reviewer automatically. PASS alone delivers success; changes rerun the original worker. Calls and A2A do not accept review.',
+  properties: {
+    mode: { type: 'string', enum: ['parent', 'agent'], default: 'parent' },
+    agent_type: { type: 'string', minLength: 1, description: 'Agent review only: configured local reviewer role; defaults to verify.' },
+    max_rounds: { type: 'integer', minimum: 1, maximum: 10, default: 3, description: 'Maximum submissions including the first. Use max_rounds, not maxRounds.' },
+    criteria: { type: 'string', maxLength: 16000, default: '' },
+  },
+  additionalProperties: false,
+}
+
+function reviewError(error: z.ZodError): string {
+  const aliases: Record<string, string> = { maxRounds: 'max_rounds', agentType: 'agent_type' }
+  const details = error.issues.flatMap(issue => {
+    const path = ['review', ...issue.path].join('.')
+    if (issue.code === 'unrecognized_keys') return issue.keys.map(key =>
+      `${path}.${key}: unknown field.${Object.hasOwn(aliases, key) ? ` Use ${path}.${aliases[key]} instead.` : ''}`)
+    return [`${path}: ${issue.message}`]
+  })
+  return `Error: invalid subagent review policy. ${details.join(' ')} Allowed fields: review.mode, review.agent_type, review.max_rounds, review.criteria. No subagent was started.`
+}
+
 /** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
   readonly name = 'subagent'
@@ -44,9 +75,7 @@ export class SubagentTool implements Tool {
           'Agent role. Defaults to "general"; explicit call mode inherits the caller role when omitted. ' +
           'Discover local roles and configured a2a:<agent> targets with read("v:agents"). Remote targets support task mode only and inherit no local resources.',
       },
-      review: {
-        type: 'object', description: 'Local task review policy {mode: parent|agent, agent_type?: local role (default verify), max_rounds?: integer 1..10 (default 3), criteria?: text}. Omission defaults to parent review; agent creates an independent reviewer automatically. PASS alone delivers success; changes rerun the original worker. Calls and A2A do not accept review.',
-      },
+      review: reviewParameters,
       report_to: {
         type: 'string',
         description:
@@ -140,7 +169,9 @@ export class SubagentTool implements Tool {
     } : { ...overrides }
     if (mode === 'call' && reportTo !== undefined) return 'Error: call mode cannot use report_to.'
     if (mode === 'call' && args.review !== undefined) return 'Error: calls do not support review policies.'
-    const review = mode === 'task' ? z.object({ mode: z.enum(['parent', 'agent']).default('parent'), agent_type: z.string().min(1).optional(), max_rounds: z.number().int().min(1).max(10).default(3), criteria: z.string().max(16000).default('') }).strict().parse(args.review ?? {}) : undefined
+    const parsedReview = mode === 'task' ? reviewSchema.safeParse(args.review === undefined ? {} : args.review) : undefined
+    if (parsedReview && !parsedReview.success) return reviewError(parsedReview.error)
+    const review = parsedReview?.success ? parsedReview.data : undefined
     if (review?.mode === 'parent' && review.agent_type !== undefined) return 'Error: parent review does not accept agent_type.'
     if (review?.mode === 'agent' && (!this.agentTypes.resolve(review.agent_type ?? 'verify'))) return 'Error: reviewer must be a configured local agent.'
     if (review?.mode === 'agent') {
