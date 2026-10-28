@@ -2,191 +2,143 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import { Hono } from 'hono'
-import { compileBotPackage, readBotDirectory, replaceBotPackage } from './bot-package.ts'
-import { testResourceTool } from './checks.ts'
-import { AgentResourceStore } from './store.ts'
-import { AgentAuthoringService } from './service.ts'
-import { CapabilityBroker } from './capabilities.ts'
-import { PublicationRequests, authoringPublicationPlugin } from './publication-requests.ts'
-import { botPackagePlugin, botPackageTool } from './bot-package-management.ts'
+import { BotDeployments } from '../bots/deployments.ts'
+import { DirectoryBots } from './bot-runtime.ts'
+import { botPackageTool, botPackagePlugin } from './bot-package-management.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
+import type { Tool, ToolResult } from '../tools/tool.ts'
 
-function sources(prompt = 'Frozen instructions') {
-  return { 'BOT.md': `---\nname: support\nallowedTools: []\nchannels: [channels/qq.json]\n---\n${prompt}`,
-    'channels/qq.json': JSON.stringify([{ botInstanceId: 'bot', platform: 'qq', conversationId: 'group:one', allowFrom: ['owner'] }]) }
+function files(prompt='Frozen instructions') {
+  return {'BOT.md':`---\nid: support\nconfig: bot.json\n---\n${prompt}`,'bot.json':JSON.stringify({mode:'service',allowedModules:[],tools:[],bindings:[{platform:'qq',botInstanceId:'bot',conversationId:'group:one',tools:[]}]})}
+}
+function fixture(t:TestContext) {
+  const root=join(process.cwd(),'.tmp',`bot-integration-${randomUUID()}`),source=join(root,'source')
+  mkdirSync(source,{recursive:true})
+  const save=(prompt?:string)=>{for(const[path,text]of Object.entries(files(prompt)))writeFileSync(join(source,path),text)}
+  save()
+  t.after(()=>rmSync(root,{recursive:true,force:true}))
+  const deployments=new BotDeployments({directory:join(root,'internal'),projectId:'p',runGit:async()=>{throw new Error('Git unavailable')}})
+  const runtime=new DirectoryBots(deployments)
+  const tools=new SessionTools(new Tools(root),root);tools.setExecutionScope('session',[])
+  const context={projectId:'p',sessionId:'web:owner',physicalSessionId:'physical',channel:'web',inputSource:'user',admin:true,tools,signal:new AbortController().signal} as ExecutionContext
+  let onAsk:(args:Record<string,unknown>)=>unknown=()=>undefined,fail=false,asks=0
+  const ask:Tool<ToolResult>={name:'ask',description:'Ask',parameters:{type:'object',properties:{}},execute:async args=>{asks++;await onAsk(args);return JSON.stringify({option:(args.options as string[])[0],answeredBy:'user'})}}
+  const options={pending:new Map<string,unknown>(),projectId:'p',deployments,runtime,folders:{acquireAccess:()=>()=>{},requireAvailable:async()=>({id:'folder',name:'source',path:source,createdAt:new Date().toISOString()}),list:()=>[]},ask,canAuthor:(id:string)=>id==='web:owner',validate:async(_files:Record<string,string>,_signal:AbortSignal)=>{if(fail)throw new Error('live authority changed')},publish:async<T>(_id:string,change:()=>Promise<T>)=>change(),changed:(_ids:string[])=>{}}
+  const tool=botPackageTool(options)
+  return {root,source,save,deployments,runtime,context,options,tool,get asks(){return asks},onAsk:(fn:typeof onAsk)=>{onAsk=fn},fail:()=>{fail=true},propose:(expectedRevision?:string)=>tool.execute({action:'propose',folderId:'folder',summary:'Update support instructions',...(expectedRevision?{expectedRevision}:{})},context)}
 }
 
-test('BOT directory API freezes exact source; owner approval activates actual policy; retained rollback and failed activation are safe', async () => {
-  const root = join(process.cwd(), '.test-artifacts', randomUUID())
-  const draft = join(root, 'draft')
-  mkdirSync(join(draft, 'channels'), { recursive: true })
-  const save = (prompt?: string) => { for (const [path, text] of Object.entries(sources(prompt))) writeFileSync(join(draft, path), text) }
-  save()
-  const store = new AgentResourceStore({ projectId: 'p', directory: join(root, 'private') })
-  const broker = new CapabilityBroker({ projectId: 'p', directory: join(root, 'broker'), resolveSecret: async () => undefined, canDeliver: () => false, deliver: async () => {} })
-  const service = new AgentAuthoringService({ projectId: 'p', workspace: root, store, broker, folders: {
-    get: () => undefined, requireAvailable: async () => ({ id: 'folder', name: 'draft', path: draft, createdAt: new Date().toISOString() }), acquireAccess: () => () => {},
-  } })
-  let fail = false
-  const options = { service, retire: async () => {}, validateLive: async () => { if (fail) throw new Error('Live validation failed') } }
-  const requests = new PublicationRequests(options)
-  const app = new Hono()
-  const authorize = (req: Request) => req.headers.get('Authorization') === 'owner'
-  authoringPublicationPlugin(requests, authorize)(app)
-  const post = async (path: string, body: unknown, owner = true) => app.request(path, { method: 'POST', headers: { Authorization: owner ? 'owner' : '', 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  const tools = new SessionTools(new Tools(root), root)
-  tools.setExecutionScope('session', [])
-  const records = new Map<string, import('./bot-review-contract.ts').BotReviewRecord>()
-  const reviews = {record:async (record:import('./bot-review-contract.ts').BotReviewRecord) => {records.set(record.id,structuredClone(record))},read:async (id:string) => [...records.values()].filter(record => record.origin.sessionId === id)}
-  botPackagePlugin({...options,publicationRequests:requests,inventory:()=>({}),reviews},authorize)(app)
-  const context = {toolCallId:'host-call',physicalSessionId:'owner-segment',projectId:'p', sessionId:'web:owner', channel:'web', inputSource:'user', admin:true, tools, signal:new AbortController().signal} as ExecutionContext
-  const tool = botPackageTool({...options, reviews, publicationRequests:requests, inventory:()=>({}), canAuthor:id=>id==='web:owner'})
-  const review = async () => JSON.parse(await tool.execute({action:'propose', folderId:'folder',expectedRevision:store.draft().revision}, context) as string).request
-  const approve = (request: { id: string; revision: string; baseRevision: string }) => post(`/api/agent-resources/publication-requests/${request.id}`, { revision: request.revision, baseRevision: request.baseRevision })
-  try {
-    assert.equal((await post('/api/bot-package/review', {}, false)).status, 401)
-    for (const patch of [{projectId:'foreign'}, {channel:'discord'}, {admin:false}, {inputSource:'session'}, {sessionId:'virtual:child'}]) {
-      await assert.rejects(() => tool.execute({action:'status'}, {...context,...patch} as ExecutionContext), /authenticated owner/)
-    }
-    tools.setExecutionScope('task',[])
-    await assert.rejects(()=>tool.execute({action:'status'},context),/authenticated owner/)
-    tools.setExecutionScope('session',[])
-    assert.equal(JSON.parse(await tool.execute({action:'status'},context) as string).projectId,'p')
-    await assert.rejects(() => tool.execute({action:'commit'},context))
-    const first = await review()
-    assert.equal(first.sessionId,'web:owner')
-    assert.equal(records.get(first.id)?.status,'pending')
-    assert.equal((await app.request('/api/bot-package/reviews/web%3Aowner')).status,401)
-    const history = async (id='web:owner') => (await (await app.request('/api/bot-package/reviews/'+encodeURIComponent(id),{headers:{Authorization:'owner'}})).json()).reviews
-    assert.equal((await history())[0].id,first.id)
-    assert.deepEqual(await history('web:other'),[])
-    assert.ok(first.files.some((file: { path: string }) => file.path === 'bot/support/BOT.md'))
-    assert.equal(store.resolve({ projectId: 'p', botInstanceId: 'bot', platform: 'qq', conversationId: 'group:one' }), undefined)
-    save('Unreviewed disk edit')
-    assert.equal((await approve(first)).status, 200)
-    assert.equal((await history())[0].status,'applied')
-    assert.ok((await history())[0].decidedAt)
-    assert.equal((await approve(first)).status,409)
-    const reopenedRequests = new PublicationRequests(options)
-    assert.equal(reopenedRequests.reviewStatus(first).status,'applied')
-    reopenedRequests.stop()
-    const address = { projectId: 'p', botInstanceId: 'bot', platform: 'qq', conversationId: 'group:one' }
-    assert.equal(store.resolve(address)?.agent.prompt, 'Frozen instructions')
-    const second = await review()
-    fail = true
-    assert.equal((await approve(second)).status, 500)
-    assert.equal(store.snapshot().revision, first.revision)
-    fail = false
-    assert.equal((await approve(second)).status, 200)
-    assert.equal(store.resolve(address)?.agent.prompt, 'Unreviewed disk edit')
-    save('Cancelled candidate')
-    const cancelled = await review()
-    requests.cancel(cancelled.id,{revision:cancelled.revision,baseRevision:cancelled.baseRevision})
-    assert.equal((await history()).find((r:{id:string})=>r.id===cancelled.id).status,'cancelled')
-    const afterCancelRestart = new PublicationRequests(options)
-    assert.equal(afterCancelRestart.reviewStatus(cancelled).status,'cancelled')
-    afterCancelRestart.stop()
-    assert.equal((await approve(cancelled)).status,409)
-    const response = await post('/api/bot-package/review', { packageId: 'support', release: store.packageStatus()[0]!.retained[0]!.revision, expectedRevision: store.draft().revision })
-    assert.equal(response.status, 200)
-    assert.equal((await approve((await response.json()).request)).status, 200)
-    assert.equal(store.resolve(address)?.agent.prompt, 'Frozen instructions')
-    const tampered = structuredClone(store.snapshot().bundle)
-    tampered.files['agents/support/AGENT.md'] += '\nBypass'
-    assert.equal(store.validate(store.candidate(tampered)).valid, false)
-    assert.equal(new AgentResourceStore({ projectId: 'p', directory: join(root, 'private') }).snapshot().revision, first.revision)
-  } finally { requests.stop(); rmSync(root, { recursive: true, force: true }) }
+test('one native owner confirmation deploys exact frozen files, never later workspace edits',async t=>{
+  const f=fixture(t)
+  f.onAsk(args=>{assert.match(String(args.question),/Added permissions/);assert.equal(args.default_option,'Cancel deployment');f.save('Unapproved disk edit')})
+  const result=JSON.parse(await f.propose() as string)
+  assert.equal(f.asks,1);assert.equal(result.status,'deployed')
+  assert.equal(f.runtime.resolve({platform:'qq',botInstanceId:'bot',conversationId:'group:one'})?.agent.prompt,'Frozen instructions')
+  assert.match(f.deployments.read('support')!.files['BOT.md']!,/Frozen instructions/)
+  const first=result.deployment.revision
+  f.onAsk(()=>{})
+  await f.propose(first)
+  assert.equal(f.deployments.read('support')!.deployment.previous,first)
+  assert.equal(f.runtime.resolve({platform:'qq',botInstanceId:'bot',conversationId:'group:one'})?.agent.prompt,'Unapproved disk edit')
 })
 
-test('plain validation never executes advanced entry; dependencies and unscoped native imports fail closed', () => {
-  assert.throws(() => compileBotPackage({ ...sources(), 'initialize.ts': 'throw new Error("executed")' }), /Unsupported BOT file/)
-  assert.throws(() => compileBotPackage({ ...sources(), 'package.json': '{}' }), /Unsupported BOT file/)
-  assert.throws(() => compileBotPackage({ ...sources(), 'BOT.md': sources()['BOT.md'].replace('allowedTools: []', 'allowedTools: []\nallowedModules: ["node:fs"]') }), /pure Node/)
-  const root = join(process.cwd(), '.test-artifacts', randomUUID())
-  mkdirSync(root, { recursive: true })
-  try { symlinkSync('missing', join(root, 'BOT.md')); assert.throws(() => readBotDirectory(root), /symlinks/) }
-  finally { rmSync(root, { recursive: true, force: true }) }
+test('owner-only publication, cancellation, stale base and live failure preserve deployment',async t=>{
+  const f=fixture(t)
+  for(const patch of [{projectId:'foreign'},{channel:'discord'},{admin:false},{inputSource:'session'},{sessionId:'virtual:child'}])await assert.rejects(()=>f.tool.execute({action:'status'},{...f.context,...patch} as ExecutionContext),/authenticated owner/)
+  const first=JSON.parse(await f.propose() as string).deployment.revision
+  f.save('Candidate')
+  await assert.rejects(()=>f.propose(),/revision changed/)
+  f.options.ask.execute=async()=>JSON.stringify({option:'Cancel deployment',answeredBy:'user'})
+  assert.equal(JSON.parse(await f.propose(first) as string).status,'cancelled')
+  assert.equal(f.deployments.read('support')!.deployment.revision,first)
+  f.options.ask.execute=async args=>{f.fail();return JSON.stringify({option:(args.options as string[])[0],answeredBy:'user'})}
+  await assert.rejects(()=>f.propose(first),/live authority changed/)
+  assert.equal(f.deployments.read('support')!.deployment.revision,first)
 })
 
-test('declared skill dependency closure is frozen, validated and permission-restricted', async () => {
-  const root = join(process.cwd(), '.test-artifacts', randomUUID())
-  mkdirSync(root, { recursive: true })
-  const source = sources()
-  source['BOT.md'] = source['BOT.md'].replace('allowedTools: []', 'allowedTools: [echo]')
-  source['channels/qq.json'] = JSON.stringify([{ botInstanceId: 'bot', platform: 'qq', conversationId: 'group:one', skills: ['echo'] }])
-  const skillSource = { ...source,
-    'skills/echo/SKILL.md': '---\nname: echo\ntools:\n  echo:\n    source: echo.ts\n    description: Echo\n    parameters:\n      type: object\n      properties: {}\n      additionalProperties: false\n---\nEcho only.',
-    'skills/echo/echo.ts': 'export async function run(args: Record<string, unknown>) { return { ok: true } }',
+test('BOT inventory is owner-only and has no publication/review-history endpoints',async t=>{
+  const f=fixture(t),app=new Hono()
+  botPackagePlugin(f.options,request=>request.headers.get('x-owner')==='yes')(app)
+  assert.equal((await app.request('/api/bot-package')).status,401)
+  assert.equal((await app.request('/api/bot-package',{headers:{'x-owner':'yes'}})).status,200)
+  assert.equal((await app.request('/api/bot-package/review',{method:'POST'})).status,404)
+  assert.equal((await app.request('/api/bot-package/reviews/web:owner')).status,404)
+})
+
+test('source traversal, symlinks and top-level source execution fail closed',async t=>{
+  const f=fixture(t)
+  await assert.rejects(()=>f.tool.execute({action:'propose',folderId:'folder',directory:'../escape',summary:'Deploy'},f.context),/traversal/)
+  symlinkSync(join(f.source,'BOT.md'),join(f.source,'linked'))
+  await assert.rejects(()=>f.propose(),/symlinks/)
+  assert.equal(f.asks,0)
+})
+
+test('fresh cross-BOT ownership validation runs inside publication exclusion, not before waiting for it',async t=>{
+  const f=fixture(t)
+  const firstQuestion=Promise.withResolvers<void>(),bothQuestions=Promise.withResolvers<void>()
+  let questions=0,tail:Promise<unknown>=Promise.resolve(),inside=false
+  f.onAsk(async()=>{if(++questions===1)firstQuestion.resolve();if(questions===2)bothQuestions.resolve();await bothQuestions.promise})
+  f.options.publish=async<T>(_id:string,change:()=>Promise<T>)=>{
+    const run=tail.then(async()=>{inside=true;try{return await change()}finally{inside=false}})
+    tail=run.catch(()=>{});return run
   }
-  try {
-    const store = new AgentResourceStore({ projectId: 'p', directory: root })
-    const bundle = compileBotPackage(skillSource)
-    assert.equal(store.validate(store.candidate(bundle)).valid, true)
-    assert.equal(bundle.files['bot/support/skills/echo/echo.ts'], bundle.files['skills/echo/echo.ts'])
-    const address = { projectId: 'p', botInstanceId: 'bot', platform: 'qq', conversationId: 'group:one' }
-    const policy = store.preview(address, store.candidate(bundle))!
-    assert.deepEqual((await testResourceTool(policy, { toolName: 'echo', arguments: {} }, new AbortController().signal)).result, { ok: true })
-    const forbidden = store.preview(address, store.candidate(compileBotPackage({ ...skillSource, 'skills/echo/echo.ts': 'import fs from "node:fs"; export function run() {}' })))!
-    await assert.rejects(() => testResourceTool(forbidden, { toolName: 'echo', arguments: {} }, new AbortController().signal), /import|module|denied|permitted/i)
-    assert.throws(() => compileBotPackage({ ...skillSource, 'channels/unreferenced.json': '[]' }), /Unreferenced/)
-  } finally { rmSync(root, { recursive: true, force: true }) }
+  let finalChecks=0
+  f.options.validate=async source=>{
+    const {parseBot}=await import('../bots/sdk.ts'),candidate=parseBot(source)
+    if(inside)finalChecks++
+    const other=f.runtime.definitions().find(item=>item.bot.id!==candidate.id)
+    if(other)throw new Error('conversation already owned')
+  }
+  const first=f.propose()
+  await firstQuestion.promise
+  writeFileSync(join(f.source,'BOT.md'),files()['BOT.md']!.replace('id: support','id: beta'))
+  const second=f.propose()
+  const results=await Promise.allSettled([first,second])
+  assert.equal(results.filter(result=>result.status==='fulfilled').length,1)
+  assert.equal(finalChecks,2)
+  assert.equal(f.deployments.list().length,1)
 })
 
+test('top-level authority ceiling changes are disclosed even when binding permissions do not change',async t=>{
+  const f=fixture(t),first=JSON.parse(await f.propose() as string).deployment.revision
+  const config=JSON.parse(files()['bot.json']!)
+  const folder=randomUUID(),domain=randomUUID()
+  config.sourceFolders=[folder];config.readDomains=[domain];config.discordHistory={guildId:'100',channelIds:['200'],threads:'public-active',preEpoch:true}
+  writeFileSync(join(f.source,'bot.json'),JSON.stringify(config))
+  f.onAsk(args=>{const question=String(args.question);assert.match(question,/BOT source-folder ceiling/);assert(question.includes(folder));assert(question.includes(domain));assert.match(question,/preEpoch=true/)})
+  await f.propose(first)
+})
 
-test('independent BOT releases retain policies, sources and rollback history across restart', async () => {
-  const root = join(process.cwd(), '.test-artifacts', randomUUID())
-  const options = {projectId:'p',directory:root}
-  const bot = (name: string, prompt: string) => compileBotPackage({
-    'BOT.md': `---\nname: ${name}\nchannels: [channels/main.json]\n---\n${prompt}`,
-    'channels/main.json': JSON.stringify([{botInstanceId:name,platform:'qq',conversationId:'group:one'}]),
+test('removed Discord binding IDs are invalidated together with retained/new IDs',async t=>{
+  const f=fixture(t),a=randomUUID(),b=randomUUID()
+  const binding=(id:string,channelId:string)=>({platform:'discord',id,botInstanceId:'discord',botUserId:'900',target:{kind:'channel',guildId:'100',channelId},enabled:true,trigger:'mention',participants:{everyone:false,userIds:['500'],roleIds:[]},tools:[],readDomains:[],inheritThreads:false,manage:false})
+  const config={mode:'service',allowedModules:[],tools:[],bindings:[binding(a,'201'),binding(b,'202')]}
+  writeFileSync(join(f.source,'bot.json'),JSON.stringify(config))
+  const notifications:string[][]=[];f.options.changed=ids=>{notifications.push(ids)}
+  const first=JSON.parse(await f.propose() as string).deployment.revision
+  config.bindings=[binding(b,'202')]
+  writeFileSync(join(f.source,'bot.json'),JSON.stringify(config))
+  await f.propose(first)
+  assert.deepEqual(notifications.at(-1)!.sort(),[a,b].sort())
+})
+
+test('personal preparation confirms exact hash and role without replacing live owner authority',async t=>{
+  const f=fixture(t),connection=randomUUID()
+  const config={mode:'personal',connection,agent:'general',allowedModules:[],tools:[],bindings:[]}
+  writeFileSync(join(f.source,'bot.json'),JSON.stringify(config))
+  let confirmedHash=''
+  f.onAsk(args=>{
+    const facts=[...f.options.pending.values()][0] as Record<string,unknown>
+    confirmedHash=String(facts.exactContent)
+    assert.equal(facts.mode,'personal');assert.equal(facts.agent,'general');assert.equal(facts.connection,connection)
+    assert.match(String(args.question),/ordinary verified-owner tools/)
+    writeFileSync(join(f.source,'BOT.md'),'unapproved edit')
   })
-  const address = (name:string) => ({projectId:'p',platform:'qq',botInstanceId:name,conversationId:'group:one'})
-  try {
-    let store = new AgentResourceStore(options)
-    const publish = async (bundle: ReturnType<typeof bot>) => {
-      const staged = await store.stage({expectedRevision:store.draft().revision,bundle:replaceBotPackage(store.snapshot().bundle,bundle)})
-      return store.publish(staged.revision)
-    }
-    await publish(bot('alpha','A1'))
-    const a1 = store.packageStatus().find(p=>p.id==='alpha')!.activeRelease
-    await publish(bot('beta','B1'))
-    const beforeB = store.resolve(address('beta'))!
-    await publish(bot('alpha','A2'))
-    assert.equal(store.resolve(address('beta'))!.agent.prompt,beforeB.agent.prompt)
-    assert.equal(store.snapshot().bundle.files['bot/beta/BOT.md'],bot('beta','B1').files['bot/beta/BOT.md'])
-    store = new AgentResourceStore(options)
-    await publish(store.retainedPackage('alpha',a1))
-    assert.equal(store.resolve(address('alpha'))!.agent.prompt,'A1')
-    assert.equal(store.resolve(address('beta'))!.agent.prompt,'B1')
-    assert.throws(()=>replaceBotPackage(store.snapshot().bundle,compileBotPackage({...sources(),'BOT.md':sources()['BOT.md'].replace('name: support','name: gamma'),'channels/qq.json':JSON.stringify([{botInstanceId:'alpha',platform:'qq',conversationId:'group:one'}])})),/owned/)
-  } finally {rmSync(root,{recursive:true,force:true})}
-})
-
-test('explicit legacy adoption preserves exact approved policy and refuses drift or owned resources', async () => {
-  const { stringify } = await import('yaml')
-  const markdown = '---\ndescription: Legacy\ndefaultMode: session\nallowedTools: []\nallowedModules: []\ncapabilityProfiles: []\n---\nFrozen instructions'
-  const source = {...sources(), 'BOT.md': `---\n${stringify({name:'support',description:'Legacy',allowedTools:[],allowedModules:[],channels:['channels/qq.json'],agentMarkdown:markdown})}---\nFrozen instructions`}
-  const next = compileBotPackage(source)
-  const base = {version:1 as const,files:Object.fromEntries(Object.entries(next.files).filter(([p])=>!p.startsWith('bot/'))),bindings:next.bindings}
-  assert.throws(()=>replaceBotPackage(base,next),/owned/)
-  const adopted = replaceBotPackage(base,next,true)
-  assert.equal(adopted.files['agents/support/AGENT.md'],markdown)
-  assert.deepEqual(adopted.bindings,base.bindings)
-  assert.throws(()=>replaceBotPackage({...base,bindings:[]},next,true),/exact/)
-  assert.throws(()=>replaceBotPackage({...base,files:{...base.files,'agents/support/AGENT.md':markdown+'drift'}},next,true),/identical/)
-  assert.throws(()=>replaceBotPackage(adopted,next,true),/unowned/)
-})
-
-test('legacy adoption staging checks active Release CAS inside the store mutation', async () => {
-  const root = join(process.cwd(), '.test-artifacts', randomUUID())
-  const store = new AgentResourceStore({projectId:'p',directory:root})
-  try {
-    const before = store.snapshot(), draft = store.draft()
-    await assert.rejects(()=>store.stage({expectedRevision:draft.revision,expectedActiveRelease:'sha256:stale',bundle:compileBotPackage(sources())}),/Stale active Release/)
-    assert.deepEqual(store.snapshot(),before)
-    assert.deepEqual(store.draft(),draft)
-  } finally { rmSync(root,{recursive:true,force:true}) }
+  const result=JSON.parse(await f.propose() as string)
+  assert.equal(result.deployment.revision,confirmedHash)
+  assert.equal(f.runtime.personal(connection)?.prompt,'Frozen instructions')
+  assert.equal(f.runtime.resolve({platform:'qq',botInstanceId:connection,conversationId:'dm'}),undefined)
 })

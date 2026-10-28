@@ -2507,7 +2507,7 @@
   "Revision": "修订",
   "Revision history and proposals": "修订历史与提议",
   "Revision requested by user:": "用户请求的修改：",
-  "Revision:": "修订：",
+  "Revision:": "版本：",
   "Revoke access and stop": "撤销访问并停止",
   "Revoke domain access": "撤销知识域访问",
   "Revoke published copy": "撤销已发布的副本",
@@ -4071,5 +4071,16 @@
   "Reply audience": "回复受众",
   "Readers of the destination channel or DM; participant invocation policy does not restrict who can see replies.": "目标频道或私信的可见成员；参与者调用策略不限制谁能看到回复。",
   "Publication outcome is not yet confirmed. Refresh authoritative status before another decision.": "发布结果尚未确认。再次决策前请刷新权威状态。",
-  "Current configuration revision unavailable. Refresh before approving.": "当前配置版本不可用。请刷新后再审批。"
+  "Current configuration revision unavailable. Refresh before approving.": "当前配置版本不可用。请刷新后再审批。",
+  "BOT deployments": "BOT 部署",
+  "Edit BOT.md, bot.json and tool modules in a registered local Folder, then ask your Agent to deploy. One confirmation shows the summary and permission changes. Workspace edits never change a running deployment.": "在已注册的本地文件夹中编辑 BOT.md、bot.json 和工具模块，再让 Agent 部署。一次确认会展示摘要及权限变化；工作区编辑不会改变运行中的部署。",
+  "No directory BOT deployments.": "尚无目录 BOT 部署。",
+  "Pending exact permissions and affected locations": "待确认的完整权限与影响范围",
+  "Deployment details": "部署详情",
+  "Internal isolated Git repository": "内部隔离 Git 仓库",
+  "Current and previous only (Git unavailable)": "仅保留当前和上一版（Git 不可用）",
+  "BOT deployment status unavailable.": "BOT 部署状态不可用。",
+  "Source:": "来源：",
+  "History:": "历史：",
+  "Previous:": "上一版："
 }

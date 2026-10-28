@@ -76,9 +76,19 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     object: object; array: object
   }
   const parse = vm.runInContext('JSON.parse', context) as (text: string) => unknown
+  // Await entry values inside the guest realm: host await would give hostile
+  // thenables (including a replaced Promise.prototype.then) host resolvers.
+  // The private finish bridge returns void and is never exported to guest code.
+  const entryAdapter = vm.runInContext(`(finish) => (run, args) => {
+    void (async () => {
+      try { finish(await run(args), false); }
+      catch (error) { finish(error, true); }
+    })();
+  }`, context) as (finish: (value: unknown, failure: boolean) => void) =>
+    (run: unknown, args: unknown) => void
   const modules = new Map<string, Promise<vm.SyntheticModule>>()
   const loads = new Map<vm.Module, Promise<void>>()
-  const call = async (name: string, input: unknown = {}, inference = false): Promise<unknown> => {
+  const call = async (name: string, input: unknown = {}, inference = false, raw = false): Promise<unknown> => {
     if (failed || completed) throw new Error('Execution ended.')
     if (++calls > packet.maxCalls) {
       fail('capability_limit')
@@ -95,7 +105,8 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     process.channel?.ref()
     const result = new Promise<string>((resolve, reject) => pending.set(id, { resolve, reject }))
     send(inference ? { type: 'infer', id, json } : { type: 'call', id, name, json })
-    return parse(await result)
+    const jsonResult = await result
+    return raw ? jsonResult : parse(jsonResult)
   }
   if (host) {
     const globals: Record<string, unknown> = {
@@ -131,7 +142,40 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     if (!existing) {
       existing = (async () => {
         if (specifier.startsWith('@shadow/')) {
-          const invoke = (input: unknown) => call(specifier.slice('@shadow/'.length), input)
+          // Public adapters, promises, errors and JSON results must all belong
+          // to the guest realm. A guest arrow returning a host Promise is not
+          // sufficient: its constructor would still expose the host Function.
+          const adapter = vm.runInContext(`(bridge) => {
+            const parse = JSON.parse, PromiseCtor = Promise, ErrorCtor = Error;
+            return (input = {}) => new PromiseCtor((resolve, reject) => {
+              bridge(input, (text, failure) => {
+                if (!failure) { resolve(parse(text)); return; }
+                const info = parse(text);
+                const error = new ErrorCtor(info.message);
+                if (info.code !== undefined) error.code = info.code;
+                if (info.status !== undefined) error.status = info.status;
+                reject(error);
+                return error;
+              });
+            });
+          }`, context) as (bridge: (input: unknown, settle: (text: string, failure: boolean) => unknown) => void) =>
+            (input?: unknown) => Promise<unknown>
+          const invoke = adapter((input, settle) => {
+            // Return void; never hand the host Promise or exception to guests.
+            void (async () => {
+              try {
+                const result = await call(specifier.slice('@shadow/'.length), input, false, true)
+                settle(result as string, false)
+              } catch (error) {
+                const failure = error && typeof error === 'object' ? callFailures.get(error) : undefined
+                const guestError = settle(JSON.stringify({
+                  message: failure ? (host && failure.message ? failure.message : callFailureMessage(failure)) : 'Script module call failed.',
+                  ...(failure ? { code: failure.code, status: failure.status } : {}),
+                }), true)
+                if (failure && guestError && typeof guestError === 'object') callFailures.set(guestError, failure)
+              }
+            })().catch(error => fail('guest_failed', error))
+          })
           const fetchFactory = vm.runInContext(
             '(invoke) => (path, options = {}) => { if (typeof path !== "string" || !options || typeof options !== "object" || Array.isArray(options)) throw new TypeError("fetch requires a path and options object"); return invoke({ ...options, path, method: options.method ?? "GET" }) }',
             context,
@@ -145,6 +189,10 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
             if (specifier === '@shadow/fetch') this.setExport('fetch', fetch)
           }, { context, identifier: specifier })
         }
+        // Native imports intentionally retain Node APIs and their host realm.
+        // Even a PURE_NODE_MODULES grant is host-realm trust, not a sandbox
+        // guarantee: native function constructors can reach Node globals.
+        // Callers requiring isolation must grant only @shadow JSON bridges.
         const resolved = host ? import.meta.resolve(specifier, identifier) : specifier
         const native = await import(resolved) as Record<string, unknown>
         return new vm.SyntheticModule(Object.keys(native), function () {
@@ -190,15 +238,20 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     fail('invalid_entry')
     return
   }
-  const result: unknown = typeof run === 'function' ? await run(parse(packet.args)) : null
-  if (failed) return
-  let json: string
-  try {
-    json = encodeJson(result === undefined && packet.entry === 'script' ? null : result, 'output', false, realm)
-  } catch {
-    fail('invalid_json')
-    return
-  }
+  const json = await new Promise<string | undefined>(resolve => {
+    const finish = (result: unknown, failure: boolean): void => {
+      if (failure) { fail('guest_failed', result); resolve(undefined); return; }
+      try {
+        resolve(encodeJson(result === undefined && packet.entry === 'script' ? null : result, 'output', false, realm))
+      } catch {
+        fail('invalid_json')
+        resolve(undefined)
+      }
+    }
+    if (typeof run === 'function') entryAdapter(finish)(run, parse(packet.args))
+    else finish(null, false)
+  })
+  if (failed || json === undefined) return
   const complete = () => {
     if (failed || completed) return
     completed = true

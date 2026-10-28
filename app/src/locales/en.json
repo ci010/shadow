@@ -4071,5 +4071,16 @@
   "Reply audience": "Reply audience",
   "Readers of the destination channel or DM; participant invocation policy does not restrict who can see replies.": "Readers of the destination channel or DM; participant invocation policy does not restrict who can see replies.",
   "Publication outcome is not yet confirmed. Refresh authoritative status before another decision.": "Publication outcome is not yet confirmed. Refresh authoritative status before another decision.",
-  "Current configuration revision unavailable. Refresh before approving.": "Current configuration revision unavailable. Refresh before approving."
+  "Current configuration revision unavailable. Refresh before approving.": "Current configuration revision unavailable. Refresh before approving.",
+  "BOT deployments": "BOT deployments",
+  "Edit BOT.md, bot.json and tool modules in a registered local Folder, then ask your Agent to deploy. One confirmation shows the summary and permission changes. Workspace edits never change a running deployment.": "Edit BOT.md, bot.json and tool modules in a registered local Folder, then ask your Agent to deploy. One confirmation shows the summary and permission changes. Workspace edits never change a running deployment.",
+  "No directory BOT deployments.": "No directory BOT deployments.",
+  "Pending exact permissions and affected locations": "Pending exact permissions and affected locations",
+  "Deployment details": "Deployment details",
+  "Internal isolated Git repository": "Internal isolated Git repository",
+  "Current and previous only (Git unavailable)": "Current and previous only (Git unavailable)",
+  "BOT deployment status unavailable.": "BOT deployment status unavailable.",
+  "Source:": "Source:",
+  "History:": "History:",
+  "Previous:": "Previous:"
 }

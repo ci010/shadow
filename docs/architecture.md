@@ -292,9 +292,11 @@ standalone callers fall back to `agent.workspace`. Pure helpers in
     config/
       project.json                   Project settings, no shared providers
       bots.v1.json                    private bot-instance configuration
-      agent-resources/               authored resources and credentials
-      channel-integrations/          integration configuration
-      skills/  agents/  SOUL.md      project-owned learned content
+      skills/  agents/  SOUL.md       project-owned learned content
+      # Former BOT resource/configuration paths are not read by directory runtime.
+    authoring/                        non-BOT resources and credential provisioning
+    bots/deployments/<projectId>/     frozen BOT files, isolated Git and separate data
+    bots/runtime/discord-security/    mutable Discord security/memory state
     memory/                          wiki, identities, events and indexes
     state/
       sessions/                      JSONL and/or SQLite history
@@ -1083,7 +1085,7 @@ Same-scope blocking leaf calls and compaction preserve the owner's source
 restrictions. Output leases are checked before individual Discord sends/edits
 and cannot survive a changed connection generation or policy. The private
 memory catalog is under the owning Project's
-`config/channel-integrations/memory`, separate from the file-backed owner
+`bots/runtime/discord-security/memory`, separate from the file-backed owner
 Knowledge browser. Trusted `exec` is deliberately outside an OS sandbox and
 can bypass application memory controls through host authority.
 
@@ -2170,8 +2172,9 @@ through `project-administration` and the dynamic catalog; manager chat retains a
 later manual edits. Vue's **Discord access** manages Agents, assignments,
 knowledge publication, learning status and reviews; Project-scoped
 `integrations` SSE carries invalidation only, never private content. Main blocks
-Discord publication through legacy `authoring_change`; QQ/Feishu retain that
-existing route. See [Messaging channels](channels.md) for operation and the
+mutable Agent/binding publication when directory mode is installed. QQ, Feishu
+and Discord BOT lifecycle/configuration now use `bot_package` and immutable
+registered-source deployments; generic resource authoring is not a BOT fallback. See [Messaging channels](channels.md) for operation and the
 outstanding live Discord acceptance boundary.
 
 `trustedChats` separately names exact group/channel IDs whose complete audience
@@ -3152,7 +3155,7 @@ or state-save failure leaves the previous working context intact.
 | --- | --- |
 | Session state and logs | `.sessions`: JSONL files/state or SQLite `sessions.db` |
 | Memory and learning | Markdown/JSONL under `memory`, `.learning` progress/outcomes and Soul/identity files |
-| Discord policies and scoped memory | Project `config/channel-integrations`: protected reviews/audit, `memory` catalog and immutable blobs, per-scope `learning` journals; session boundary/worker receipts in both session stores |
+| Discord policies and scoped memory | Project `bots/runtime/discord-security`: protected reviews/audit, `memory` catalog and immutable blobs, per-scope `learning` journals; session boundary/worker receipts in both session stores |
 | Agent types and skills | Workspace `agents` and `skills`; shipped definitions are application assets |
 | Initiative context | Project-local SQLite work records and bounded prompt summaries; folder ownership lives in the host catalog |
 | Project catalog/config | Sibling host `projects.v2.json`; per-project `config/project.json` and `config/bots.v1.json` |

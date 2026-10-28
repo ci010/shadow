@@ -1,7 +1,7 @@
 <template>
   <section class="discord-access" :aria-labelledby="`${uid}-title`">
     <header class="access-heading">
-      <div><h4 :id="`${uid}-title`" tabindex="-1">{{ t('Discord access') }}</h4><p>{{ t('Assign an Agent to each channel. Instructions can be reused; conversations stay separate.') }}</p></div>
+      <div><h4 :id="`${uid}-title`" tabindex="-1">{{ t('Discord access') }}</h4><p>{{ t('BOT deployments') }}</p></div>
       <button :disabled="!!busy" @click="reload(true)">{{ t('Refresh configuration') }}</button>
     </header>
     <nav class="access-nav" :aria-label="t('Discord configuration')">
@@ -16,7 +16,6 @@
       <p v-for="issue in overview.deploymentIssues" :key="issue.agentId" class="access-error" role="alert">{{ agentName(issue.agentId) }} {{ t('is paused:') }} {{ issue.message }}</p>
       <div v-if="tab === 'channels'">
         <div class="boundary-note"><strong>{{ botBindings.length ? t('Saved assignments') + ' · ' + botBindings.length : t('No channels or DMs are assigned to this Bot.') }}</strong> {{ t('Unassigned channels and DMs do not enter an Agent. Legacy admin-chat settings and Discord administrator roles do not grant Shadow access.') }}</div>
-        <details v-if="legacy?.legacySessionId || legacy?.adminChats.length"><summary>{{ t('Review previous Discord settings') }}</summary><p>{{ legacy.notice }}</p><p class="muted">{{ t('Choose the server below to resolve saved channel names. Migration copies no administrative permission automatically.') }}</p><div class="choices"><button v-for="id in legacy.adminChats" :key="id" :disabled="!!busy || !directory?.channels.some(channel => channel.id === id && channel.supported && channel.canSend)" @click="prepareLegacy(id)">{{ t('Review') }} {{ directory?.channels.find(channel => channel.id === id)?.name ?? t('saved channel {value1}', { value1: id.slice(-6) }) }}</button></div></details>
         <div class="directory-toolbar">
           <label>{{ t('Server') }}<UiSelect v-model="guildId" :disabled="!!busy" @change="loadDirectory()"><option value="">{{ t('Choose a server') }}</option><option v-for="guild in guilds" :key="guild.id" :value="guild.id">{{ guild.name }} · {{ guild.id.slice(-6) }}</option></UiSelect></label>
           <button :disabled="!!busy || !connected" @click="loadDirectory()">{{ t('Sync Discord directory') }}</button>
@@ -24,65 +23,13 @@
         </div>
         <p v-if="!connected" class="access-notice">{{ t('Connect this Bot before discovering resources, previewing access, or enabling assignments. Saved configuration remains available.') }}</p>
         <p v-if="directory" class="muted">{{ directory.notice }} {{ t('Last synchronized') }} {{ localTime(directory.synchronizedAt) }}.</p>
-        <form @submit.prevent="proposeBindings">
-          <fieldset :disabled="!!busy">
-            <legend>{{ t('Channel assignment') }}</legend>
-            <div class="form-grid">
-              <label>{{ t('Location type') }}<UiSelect v-model="locationType" @change="selectedChannels = []; roleIds = []; userIds = ''"><option value="channel">{{ t('Server channels') }}</option><option value="dm">{{ t('One person\'s direct messages') }}</option></UiSelect></label>
-              <label>{{ t('Published Agent') }}<UiSelect v-model="assignedAgentId" required @change="selectAgentPermissions"><option value="" disabled>{{ t('Select an Agent') }}</option><option v-for="agent in overview.agents" :key="agent.id" :value="agent.id">{{ agent.displayName }}</option></UiSelect></label>
-            </div>
-            <p v-if="!overview.agents.length">{{ t('Publish an Agent in') }} <button type="button" class="text-button" @click="tab = 'agents'">{{ t('Agents') }}</button> {{ t('before assigning a channel.') }}</p>
-            <template v-if="locationType === 'channel'">
-              <div class="form-grid search-field"><label>{{ t('Find channels') }}<input v-model="channelSearch" type="search" :placeholder="t('Channel or parent name')" /></label><label>{{ t('Show') }}<UiSelect v-model="channelFilter"><option value="all">{{ t('All visible channels') }}</option><option value="assigned">{{ t('Assigned') }}</option><option value="unassigned">{{ t('Not assigned') }}</option><option value="blocked">{{ t('Cannot use') }}</option></UiSelect></label></div>
-              <div v-if="visibleChannels.length" class="channel-picker" :aria-label="t('Channels to assign')">
-                <label v-for="channel in visibleChannels" :key="channel.id" class="picker-row">
-                  <input v-model="selectedChannels" type="checkbox" :value="channel.id" :disabled="!channel.supported || !channel.canSend" />
-                  <span><strong>{{ channel.type === 15 ? t('Forum') : channel.type === 10 || channel.type === 11 ? t('Thread') : '#' }} {{ channel.name }}</strong><small>{{ channelParent(channel.parentId) }} · {{ channel.id.slice(-6) }}</small></span>
-                  <span class="row-status">{{ !channel.supported ? t('Unsupported type') : !channel.canSend ? t('Cannot send') : existingChannel(channel.id) ? (existingChannel(channel.id)!.enabled ? agentName(existingChannel(channel.id)!.agentId) : t('Disabled')) : t('Not assigned') }}</span>
-                </label>
-              </div>
-              <p v-else class="muted">{{ guildId && directory?.guildId === guildId ? t('No matching Bot-visible channels. Check Discord permissions or change the search.') : t('Select a server and synchronize its channel directory.') }}</p>
-            </template>
-            <section class="people-section">
-              <h5>{{ locationType === 'dm' ? t('DM recipient') : t('Who may use this Agent') }}</h5>
-              <p v-if="locationType === 'channel'" class="muted">{{ t('Participant controls decide who can invoke the Agent, not who can read Discord replies. Use a private channel for confidential work.') }}</p>
-              <label v-if="locationType === 'channel'" class="check-label"><input v-model="everyone" type="checkbox" />{{ t('Everyone who can send in this channel') }}</label>
-              <p v-if="everyone && (assignedAgent?.execution === 'trusted' || selectedTools.includes('channel_config'))" class="access-error">{{ t('Privileged Agents require selected users or roles, not everyone.') }}</p>
-              <div v-if="locationType === 'channel' && !everyone" class="choices">
-                <label v-for="role in directory?.roles ?? []" :key="role.id" class="check-label"><input v-model="roleIds" type="checkbox" :value="role.id" />{{ role.name }}</label>
-              </div>
-              <div class="directory-toolbar">
-                <label>{{ t('Find a person in this server') }}<input v-model="memberQuery" maxlength="100" :placeholder="t('Display name or username')" /></label>
-                <button type="button" :disabled="!guildId || !memberQuery.trim() || !connected" @click="findMembers">{{ t('Find people') }}</button>
-              </div>
-              <p v-if="memberNotice" class="muted" role="status">{{ memberNotice }}</p>
-              <div v-if="members.length" class="choices"><button v-for="member in members" :key="member.id" type="button" @click="addMember(member)">{{ member.name }} · @{{ member.username }}</button></div>
-              <p v-if="namedUsers.length" class="muted">{{ t('Selected:') }} {{ namedUsers.join(', ') }}</p>
-              <details><summary>{{ t('Exact user IDs and users outside this server') }}</summary><label>{{ t('Allowed user IDs') }}<textarea v-model="userIds" rows="2" :placeholder="t('One ID per line')" /></label><p class="muted">{{ t('Discord cannot search all users by name. For a DM recipient outside a mutual server, copy their user ID in Discord. DMs never inherit roles.') }}</p></details>
-            </section>
-            <div class="form-grid">
-              <label>{{ t('Respond to') }}<UiSelect v-model="trigger"><option value="mention">{{ t('Mentions and replies to the Bot') }}</option><option value="all">{{ t('Every authorized message') }}</option></UiSelect></label>
-              <label v-if="locationType === 'channel'" class="check-label"><input v-model="inheritThreads" type="checkbox" />{{ t('New public threads inherit this assignment, not its history') }}</label>
-            </div>
-            <p v-if="locationType === 'channel' && directory?.channels.some(channel => channel.type === 15 && selectedChannels.includes(channel.id))" class="access-notice">{{ t('Forum assignments apply inside public posts when thread inheritance is enabled. Each post has separate history; the forum parent is not a chat.') }}</p>
-            <h5>{{ t('Tools available here') }}</h5>
-            <div class="choices"><label v-for="tool in assignedAgent?.tools ?? []" :key="tool" class="check-label"><input v-model="selectedTools" type="checkbox" :value="tool" />{{ toolLabel(tool) }}</label></div>
-            <p v-if="selectedTools.includes('channel_config')" class="access-notice">{{ t('This grants configuration management within the manager\'s approved tool and knowledge limits. Every change still requires human approval.') }}</p>
-            <h5>{{ t('Additional readable knowledge') }}</h5>
-            <p class="muted">{{ t('This conversation gets its own memory automatically. Project-private memory, SOUL, other customers, and old authorization contexts are excluded.') }}</p>
-            <div class="choices"><label v-for="domain in assignableDomains" :key="domain.id" class="check-label"><input v-model="selectedDomains" type="checkbox" :value="domain.id" />{{ domain.name }}</label><span v-if="!assignableDomains.length" class="muted">{{ t('No knowledge domains approved for this Agent.') }}</span></div>
-            <div class="form-actions"><button class="primary" :disabled="!assignedAgentId || !connected || locationType === 'channel' && !selectedChannels.length">{{ t('Review assignments', {}, Math.max(1, selectedChannels.length)) }}</button><small>{{ t('No change is applied until you approve the review.') }}</small></div>
-          </fieldset>
-        </form>
+        <p>{{ t('Edit BOT.md, bot.json and tool modules in a registered local Folder, then ask your Agent to deploy. One confirmation shows the summary and permission changes. Workspace edits never change a running deployment.') }}</p>
         <section class="saved-section">
           <h5>{{ t('Saved assignments') }}</h5>
           <p v-if="!botBindings.length" class="muted">{{ t('No channels or DMs are assigned to this Bot.') }}</p>
           <div v-for="binding in botBindings" :key="binding.id" class="saved-row">
             <div><strong>{{ locationLabel(binding) }}</strong><p>{{ agentName(binding.agentId) }} · {{ availability(binding) }} · {{ binding.readDomains.length }} {{ t('additional knowledge domains') }}</p></div>
             <button v-if="binding.target.kind === 'channel'" type="button" :disabled="!!busy || !connected" @click="syncBinding(binding)">{{ t('Sync this server') }}</button>
-            <button type="button" :disabled="!!busy" @click="editBinding(binding)">{{ t('Edit') }}</button>
-            <button v-if="binding.enabled" type="button" :disabled="!!busy" @click="propose({ kind: 'bindings.save', bindings: [{ ...binding, enabled: false }] })">{{ t('Review disable') }}</button>
-            <button v-if="binding.enabled" type="button" :disabled="!!busy" @click="propose({ kind: 'bindings.save', bindings: [binding] })">{{ t('Start fresh context') }}</button>
           </div>
         </section>
         <details class="preview-section">
@@ -99,31 +46,8 @@
       </div>
 
       <div v-else-if="tab === 'agents'">
-        <p class="boundary-note">{{ t('Agent instructions and skills are approved snapshots. The tool and knowledge selections below are the maximum a channel can receive; Markdown cannot grant more.') }}</p>
-        <div class="directory-toolbar"><label>{{ t('Edit a published Agent') }}<UiSelect :value="editingAgentId" @change="editAgent(($event.target as HTMLSelectElement).value)"><option value="">{{ t('New Agent') }}</option><option v-for="agent in overview.agents" :key="agent.id" :value="agent.id">{{ agent.displayName }}</option></UiSelect></label><button :disabled="!!busy" @click="editAgent('')">{{ t('New Agent') }}</button></div>
-        <form @submit.prevent="proposeAgent">
-          <fieldset :disabled="!!busy"><legend>{{ t('Agent definition') }}</legend>
-            <div class="form-grid">
-              <label>{{ t('Display name') }}<input v-model="agentDraft.displayName" required maxlength="100" :placeholder="t('Customer support')" /></label>
-              <label>{{ t('Stable name') }}<input v-model="agentDraft.name" required pattern="[a-z][a-z0-9_-]{0,63}" :disabled="!!editingAgentId" placeholder="discord-support" /></label>
-              <label>{{ t('Execution') }}<UiSelect v-model="agentDraft.execution" @change="restrictAgent"><option value="restricted">{{ t('Restricted tools') }}</option><option value="trusted">{{ t('Trusted host execution') }}</option></UiSelect></label>
-              <label>{{ t('Start instructions from') }}<UiSelect @change="copyTemplate(($event.target as HTMLSelectElement).value)"><option value="">{{ t('Choose an existing role') }}</option><option v-for="template in overview.templates" :key="template.name" :value="template.name">{{ template.name }}</option></UiSelect></label>
-            </div>
-            <p v-if="agentDraft.execution === 'trusted'" class="access-error">{{ t('Trusted execution is not a sandbox. Shell code can access host files and credentials beyond memory-domain controls. Use a private management audience and consider a separate Bot.') }}</p>
-            <label>AGENT.md<textarea v-model="agentDraft.markdown" required class="code-input" rows="12" spellcheck="false" /></label>
-            <button v-if="editingAgentId" type="button" @click="loadAgentFile">{{ t('Load current AGENT.md for review') }}</button>
-            <p class="muted">{{ t('Use existing Agent frontmatter for model, temperature and token settings. The stable name cannot change after publication.') }}</p>
-            <h5>{{ t('Maximum tool permissions') }}</h5>
-            <div class="choices"><label v-for="tool in overview.tools" :key="tool" class="check-label"><input v-model="agentDraft.tools" type="checkbox" :value="tool" :disabled="tool === 'exec' && agentDraft.execution === 'restricted'" />{{ toolLabel(tool) }}</label></div>
-            <h5>{{ t('Approved knowledge domains') }}</h5>
-            <div class="choices"><label v-for="domain in availableDomains" :key="domain.id" class="check-label"><input v-model="agentDraft.readDomains" type="checkbox" :value="domain.id" />{{ domain.name }}</label></div>
-            <p v-if="!availableDomains.length" class="muted">{{ t('Create a domain in Knowledge when this Agent needs shared reference material. It otherwise uses only conversation memory.') }}</p>
-            <h5>{{ t('Approved skill instructions') }}</h5>
-            <div v-for="(skill, index) in agentDraft.skills" :key="index" class="skill-editor"><label>{{ t('Skill name') }}<input v-model="skill.name" required maxlength="100" /></label><label>{{ t('Instructions') }}<textarea v-model="skill.content" required rows="5" /></label><button type="button" @click="agentDraft.skills.splice(index, 1)">{{ t('Remove skill') }}</button></div>
-            <button type="button" :disabled="agentDraft.skills.length >= 16" @click="agentDraft.skills.push({ name: '', content: '' })">{{ t('Add instruction skill') }}</button>
-            <div class="form-actions"><button class="primary">{{ t('Review Agent publication') }}</button><small>{{ t('Changed instructions or access start fresh contexts in affected channels.') }}</small></div>
-          </fieldset>
-        </form>
+        <p>{{ t('Edit BOT.md, bot.json and tool modules in a registered local Folder, then ask your Agent to deploy. One confirmation shows the summary and permission changes. Workspace edits never change a running deployment.') }}</p>
+        <details v-for="agent in overview.agents" :key="agent.id"><summary>{{ agent.displayName }}</summary><pre>{{ agent.markdown }}</pre></details>
       </div>
 
       <div v-else-if="tab === 'knowledge'">
@@ -167,16 +91,15 @@
           <header><div><h5>{{ changeTitle(draft.change) }}</h5><p>{{ enumLabel(draft.status) }} · {{ localTime(draft.createdAt) }} · {{ draft.actor.kind === 'owner' ? t('Shadow owner') : t('Discord manager') }}</p></div><button @click="reviewId = reviewId === draft.id ? '' : draft.id" :aria-expanded="reviewId === draft.id">{{ reviewId === draft.id ? t('Hide review') : t('Open review') }}</button></header>
           <div v-if="reviewId === draft.id" class="review-body">
             <p class="access-notice">{{ draft.warning }}</p>
-            <template v-if="draft.resourceReview"><h5>{{ t('Reviewed source folders and Discord history scope') }}</h5><pre>{{ JSON.stringify(draft.resourceReview, null, 2) }}</pre></template>
             <p v-if="draft.status === 'applied'" class="boundary-note">{{ t('This is an applied historical review, not current access status.') }} <button @click="tab = 'channels'">{{ t('Return to current assignments and test access') }}</button></p>
             <p>{{ t('Affected assignments:') }} {{ draft.affectedBindings.map(bindingName).join(', ') || t('None yet') }}</p>
-            <template v-if="draft.change.kind === 'bot.save'"><strong>{{ draft.change.package.id }}</strong><p>{{ t('Review every source file, channel audience, processor and permission in the exact data below. One approval activates the complete frozen BOT package.') }}</p></template><template v-else-if="draft.change.kind === 'agent.save'"><strong>{{ draft.change.agent.displayName }} · {{ draft.change.agent.execution }}</strong><p>{{ t('Tools:') }} {{ draft.change.agent.tools.map(toolLabel).join(', ') || t('None') }}</p><p>{{ t('Knowledge:') }} {{ draft.change.agent.readDomains.map(domainNameFor).join(', ') || t('Conversation only') }}</p><pre>{{ draft.change.agent.markdown }}</pre></template>
+            <template v-if="draft.change.kind === 'agent.save'"><strong>{{ draft.change.agent.displayName }} · {{ draft.change.agent.execution }}</strong><p>{{ t('Tools:') }} {{ draft.change.agent.tools.map(toolLabel).join(', ') || t('None') }}</p><p>{{ t('Knowledge:') }} {{ draft.change.agent.readDomains.map(domainNameFor).join(', ') || t('Conversation only') }}</p><pre>{{ draft.change.agent.markdown }}</pre></template>
             <template v-else-if="draft.change.kind === 'bindings.save'"><div v-for="binding in draft.change.bindings" :key="binding.id" class="review-assignment"><strong>{{ locationLabel(binding) }} → {{ agentName(binding.agentId) }}</strong><p>{{ binding.enabled ? t('Enable') : t('Disable') }} · {{ participantNames(binding) }} · {{ binding.trigger === 'all' ? t('Every message') : t('Mentions and replies') }}</p><p>{{ t('Tools:') }} {{ binding.tools.map(toolLabel).join(', ') || t('None') }}</p><p>{{ t('Knowledge:') }} {{ binding.readDomains.map(domainNameFor).join(', ') || t('Conversation only') }}</p></div></template>
             <template v-else-if="draft.change.kind === 'knowledge.publish'"><strong>{{ draft.change.title }} → {{ domainNameFor(draft.change.domainId) }}</strong><pre>{{ draft.change.content }}</pre></template>
             <details><summary>{{ t('Exact reviewed data and previous configuration') }}</summary><p>{{ t('Candidate') }}</p><pre>{{ JSON.stringify(draft.change, null, 2) }}</pre><p>{{ t('Currently published') }}</p><pre>{{ previousData(draft.change) }}</pre></details>
             <template v-if="draft.status === 'pending'"><p class="muted">{{ t('Expires') }} {{ localTime(draft.expiresAt) }}. {{ draft.baseRevision !== overview.revision ? t('Configuration changed; recreate this review.') : '' }}</p><label class="check-label"><input v-model="reviewAcknowledged" type="checkbox" />{{ t('I reviewed the exact text, audience and permission changes.') }}</label><div class="form-actions"><button class="primary" :disabled="!!busy || !reviewAcknowledged || draft.baseRevision !== overview.revision || Date.parse(draft.expiresAt) <= Date.now()" @click="commit(draft)">{{ t('Approve and apply') }}</button><button :disabled="!!busy" @click="cancel(draft)">{{ t('Cancel review') }}</button><button :disabled="!!busy" @click="propose(draft.change)">{{ t('Create fresh review') }}</button></div></template>
             <template v-else-if="draft.status === 'applying'"><p class="access-error">{{ t('Approved, but application did not finish. Retry this exact approval. If an external Agent-file edit conflicts, it is preserved; abandon the interrupted review before reviewing the current file.') }}</p><div class="form-actions"><button :disabled="!!busy" @click="commit(draft)">{{ t('Retry approved change') }}</button><button v-if="draft.change.kind === 'agent.save'" :disabled="!!busy" @click="cancel(draft)">{{ t('Abandon conflicting review') }}</button></div></template>
-            <button v-else-if="draft.status === 'applied' && (draft.change.kind === 'agent.save' || draft.change.kind === 'bindings.save' || draft.change.kind === 'bot.save')" :disabled="!!busy" @click="propose(draft.change)">{{ t('Review restoring this version') }}</button>
+            <button v-else-if="draft.status === 'applied' && (draft.change.kind === 'agent.save' || draft.change.kind === 'bindings.save')" :disabled="!!busy" @click="propose(draft.change)">{{ t('Review restoring this version') }}</button>
           </div>
         </div>
         <details v-if="overview.audit.length"><summary>{{ t('Applied change audit') }}</summary><div v-for="entry in [...overview.audit].reverse()" :key="entry.id" class="audit-row">{{ localTime(entry.at) }} · {{ entry.kind }} {{ t('· revision') }} {{ entry.revision }} · {{ entry.actor }}</div></details>
@@ -290,7 +213,7 @@ const participantNames = (binding: DiscordBinding) => binding.participants.every
   [...binding.participants.roleIds.map(id => directory.value?.roles.find(role => role.id === id)?.name ?? t('Role {id}', { id: id })),
     ...binding.participants.userIds.map(id => userNames.value[id] ?? t('User {id}', { id: id }))].join(', ')
 const changeTitle = (change: IntegrationChange) => ({ 'agent.save': t('Publish Agent'), 'bindings.save': t('Change channel assignments'),
-  'bot.save': t('BOT directory releases'), 'domain.create': t('Create knowledge domain'), 'knowledge.publish': t('Publish knowledge copy'), 'knowledge.revoke': t('Revoke published copy'), 'domain.revoke': t('Revoke domain access') })[change.kind]
+  'domain.create': t('Create knowledge domain'), 'knowledge.publish': t('Publish knowledge copy'), 'knowledge.revoke': t('Revoke published copy'), 'domain.revoke': t('Revoke domain access') })[change.kind]
 
 async function run(label: string, action: (signal: AbortSignal) => Promise<void>) {
   if (controller) return
@@ -440,7 +363,7 @@ async function cancel(draft: IntegrationDraft) {
   await run(t('Cancelling review...'), async signal => { await client().cancel(draft.id, signal); overview.value = await client().overview(signal); reviewAcknowledged.value = false })
 }
 function previousData(change: IntegrationChange) {
-  return JSON.stringify(change.kind === 'bot.save' ? overview.value?.packages?.[change.package.id] ?? null : change.kind === 'agent.save' ? overview.value?.agents.find(agent => agent.id === change.agent.id) ?? null
+  return JSON.stringify(change.kind === 'agent.save' ? overview.value?.agents.find(agent => agent.id === change.agent.id) ?? null
     : change.kind === 'bindings.save' ? overview.value?.bindings.filter(binding => change.bindings.some(next => next.id === binding.id))
       : change.kind === 'knowledge.revoke' ? overview.value?.resources.find(resource => resource.id === change.resourceId)
         : t('No existing object is overwritten by this operation.'), null, 2)

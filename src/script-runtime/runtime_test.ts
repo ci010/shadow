@@ -464,3 +464,74 @@ test('compiled worker runs without tsx on plain Node and Electron RUN_AS_NODE', 
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+test('virtual imports expose only guest functions, promises, JSON graphs and errors', async () => {
+  const code = `
+    import call, * as ns from '@shadow/check';
+    import { fetch } from '@shadow/fetch';
+    function blocked(value) {
+      try { value.constructor.constructor('return process.version')(); return false; }
+      catch { return true; }
+    }
+    export async function run() {
+      const promise = call({});
+      const result = await promise;
+      let error;
+      try { await call({ reject: true }); } catch (e) { error = e; }
+      let fetchError;
+      try { fetch(1); } catch (e) { fetchError = e; }
+      const dynamic = await import('@shadow/check');
+      return [
+        blocked(call), blocked(ns.call), Object.getPrototypeOf(ns) === null,
+        blocked(promise), blocked(promise.then), blocked(result),
+        blocked(result.nested), blocked(result.nested[0]), blocked(result.nested.map),
+        blocked(error), blocked(error.message), blocked(fetch), blocked(fetchError),
+        blocked(dynamic.default), blocked(await fetch('/allowed')),
+        result.nested[0].value === 7, error.code === 'http_status', error.status === 403,
+      ];
+    }
+  `
+  for (const mode of ['live', 'test', 'probe'] as const) {
+    const result = await execute(code, {
+      policy: restricted(['@shadow/check', '@shadow/fetch'], mode),
+      callModule: async (_name, input) => {
+        if (input.reject) throw new ScriptCallError('http_status', 'PRIVATE_HOST_MESSAGE', 403)
+        return { nested: [{ value: 7 }] }
+      },
+    })
+    assert.deepEqual(result.value, Array(18).fill(true))
+  }
+  await assert.rejects(execute(`import fn from '@shadow/check';
+    export function run() { return fn.constructor('return process.version')(); }`, {
+    policy: restricted(['@shadow/check']),
+  }), /guest_failed/)
+})
+
+test('explicit native grants retain host-realm trust, including pure Node modules', async () => {
+  // Compatibility boundary, NOT an isolation assertion. Pure describes effects,
+  // not realm confinement. Isolation callers must not grant native imports.
+  const result = await execute(`import { basename } from 'node:path';
+    export function run() { return basename.constructor('return process.version')(); }`, {
+    policy: restricted(['node:path']),
+  })
+  assert.equal(result.value, process.version)
+})
+
+test('entry thenables and overridden Promise.then receive only guest resolvers', async () => {
+  for (const code of [
+    `export function run() { return { then(resolve) {
+      try { resolve(resolve.constructor('return process.version')()); }
+      catch { resolve('blocked'); }
+    } }; }`,
+    `const then = Promise.prototype.then;
+    Promise.prototype.then = function(resolve, reject) {
+      return then.call(this, () => {
+        try { resolve(resolve.constructor('return process.version')()); }
+        catch { resolve('blocked'); }
+      }, reject);
+    };
+    export function run() { return Promise.resolve('blocked'); }`,
+  ]) {
+    assert.equal((await execute(code)).value, 'blocked')
+  }
+})

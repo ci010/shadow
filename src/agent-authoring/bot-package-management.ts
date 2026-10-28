@@ -1,153 +1,125 @@
-import { BotReviewOriginSchema, type BotReviewRecord } from './bot-review-contract.ts'
-import { parsePublicationRequest } from './publication-contract.ts'
-import { createHash } from 'node:crypto'
 import { lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { Hono } from 'hono'
-import type { Tool } from '../tools/tool.ts'
-import type { AuthoringManagementOptions } from './management.ts'
-import { parseFrontmatter } from '../utils/frontmatter.ts'
-import type { IntegrationStore } from '../channels/integration-store.ts'
-import { readBotSources, compileBotPackage, replaceBotPackage } from './bot-package.ts'
+import type { Tool, ToolResult } from '../tools/tool.ts'
+import type { FolderRegistry } from '../folders/registry.ts'
+import { BotDeployments } from '../bots/deployments.ts'
+import { parseBot, type BotDefinition } from '../bots/sdk.ts'
+import { DirectoryBots } from './bot-runtime.ts'
+import { snapshotBotDirectory, sourceUsesGit } from './bot-directory.ts'
 
-type BotPackageOptions = Pick<AuthoringManagementOptions, 'service' | 'validateLive' | 'publicationRequests' | 'inventory'> & { discord?: IntegrationStore; reviews?: { record: (record:BotReviewRecord) => Promise<void>; read:(sessionId:string,physicalId?:string) => Promise<BotReviewRecord[]> } }
+type Options = {
+  inventory?:()=>unknown
+  projectId: string; deployments: BotDeployments; runtime: DirectoryBots
+  folders: Pick<FolderRegistry,'acquireAccess'|'requireAvailable'|'list'>
+  ask: Tool<ToolResult>; canAuthor: (sessionId:string) => boolean
+  validate: (files:Record<string,string>,signal:AbortSignal) => Promise<void>
+  pending: Map<string, unknown>
+  publish: <T>(id:string,change:()=>Promise<T>, candidate?:BotDefinition) => Promise<T>; changed: (ids:string[]) => void
+}
+const proposal = z.object({action:z.literal('propose'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),expectedRevision:z.string().optional(),summary:z.string().trim().min(1).max(800)}).strict()
 
-const importSchema = z.object({ folderId: z.string().min(1), directory: z.string().max(1024).default(''), expectedRevision: z.string(), adoptLegacy: z.boolean().optional(), expectedActiveRelease: z.string().optional(), discordRevision: z.number().int().nonnegative().optional() }).strict()
-
-export async function stageBotDirectory(options: BotPackageOptions, input: unknown, origin?: NonNullable<import('../channels/integration-contract.ts').IntegrationDraft['origin']>) {
-  const parsed = importSchema.parse(input)
-  const parts = parsed.directory ? parsed.directory.split('/') : []
-  if (parts.some(part => !/^[a-zA-Z0-9_.-]+$/.test(part) || part === '.' || part === '..')) throw new Error('Choose a relative BOT subdirectory without traversal.')
-  const folders = options.service.options.folders
-  const release = folders.acquireAccess()
-  try {
-    const folder = await folders.requireAvailable(parsed.folderId)
-    if (folder.kind === 'remote') throw new Error('Remote BOT snapshot import is not implemented; no Main fallback is allowed.')
-    let directory = folder.path
-    for (const part of parts) {
-      directory = join(directory, part)
-      if (lstatSync(directory).isSymbolicLink()) throw new Error('BOT directory symlinks are forbidden.')
+function location(binding: ReturnType<typeof parseBot>['bindings'][number]): string {
+  return binding.platform === 'discord' ? `Discord ${binding.target.kind === 'dm' ? 'DM '+binding.target.userId : binding.target.guildId+'/'+binding.target.channelId}` : `${binding.platform} ${binding.botInstanceId}/${binding.conversationId}`
+}
+function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> {
+  if(!bot)return new Set()
+  const facts:string[]=[`mode ${bot.mode}`, ...(bot.mode === 'personal' ? [`personal connection ${bot.connection}; role ${bot.agent}; ordinary verified-owner tools/context`] : [])]
+  facts.push(...bot.tools.flatMap(tool=>tool.imports.map(name=>`tool ${tool.name}: service module ${name}`)))
+  for(const name of bot.allowedModules)facts.push(`BOT module ceiling ${name}`)
+  for(const id of bot.sourceFolders ?? [])facts.push(`BOT source-folder ceiling ${id}`)
+  for(const id of bot.readDomains ?? [])facts.push(`BOT memory-domain ceiling ${id}`)
+  if(bot.discordHistory)facts.push(`BOT history ceiling ${bot.discordHistory.guildId}/${bot.discordHistory.channelIds.join(',')} threads=${bot.discordHistory.threads} preEpoch=${bot.discordHistory.preEpoch}`)
+  for(const binding of bot.bindings){
+    const target=location(binding)
+    facts.push(`${target}: ${binding.enabled ? 'enabled' : 'disabled'}`)
+    for(const name of binding.tools)facts.push(`${target}: tool ${name}`)
+    for(const grant of binding.grants ?? [])facts.push(`${target}: ${grant.kind === 'http' ? grant.routes.map(route=>`${route.method} ${grant.origin}${route.path}`).join(', ') : 'inbox '+grant.sessionId}`)
+    if(binding.platform==='discord'){
+      facts.push(`${target}: participants ${binding.participants.everyone ? 'everyone' : [...binding.participants.userIds.map(id=>'user '+id),...binding.participants.roleIds.map(id=>'role '+id)].join(', ')}`)
+      for(const folder of binding.sourceFolders ?? [])facts.push(`${target}: folder ${folder}`)
+      for(const domain of binding.readDomains)facts.push(`${target}: domain ${domain}`)
+      if(binding.discordHistory)facts.push(`${target}: history ${binding.discordHistory.guildId}/${binding.discordHistory.channelIds.join(',')} threads=${binding.discordHistory.threads} preEpoch=${binding.discordHistory.preEpoch}`)
+      if(binding.observation)facts.push(`${target}: observation ${binding.observation.enabled?'enabled':'disabled'} sources=${binding.observation.channelIds.join(',')}`)
+      if(binding.inheritThreads)facts.push(`${target}: inherited threads`)
+      if(binding.manage)facts.push(`${target}: configuration management`)
+    }else{
+      for(const folder of binding.readFolders)facts.push(`${target}: folder ${folder}`)
+      if(binding.allowFrom)facts.push(`${target}: allowed senders ${binding.allowFrom.join(',') || 'nobody'}`)
+      else facts.push(`${target}: inherited channel admission`)
     }
-    const source = readBotSources(directory)
-    const metadata = parseFrontmatter(source['BOT.md'] ?? '').frontmatter
-    if (metadata.platform === 'discord') {
-      if (!options.discord || parsed.discordRevision === undefined) throw new Error('Discord package review requires the exact Discord configuration revision.')
-      return { discordDraft: await options.discord.propose({kind:'owner',id:'shadow-owner'}, {kind:'bot.save', package:{id:metadata.name,source}, ...(parsed.adoptLegacy ? {adoptLegacy:true} : {})}, parsed.discordRevision, new AbortController().signal, origin) }
-    }
-    const bundle = compileBotPackage(source)
-    const store = options.service.options.store
-    if (parsed.adoptLegacy && parsed.expectedActiveRelease !== store.snapshot().revision) throw new Error('Legacy adoption requires the exact active Release.')
-    const aggregate = replaceBotPackage(store.snapshot().bundle, bundle, parsed.adoptLegacy)
-    const candidate = store.candidate(aggregate)
-    const validation = store.validate(candidate)
-    if (!validation.valid) throw new Error(validation.errors.join('; '))
-    await options.validateLive(candidate)
-    return await store.stage({ expectedRevision: parsed.expectedRevision, bundle: aggregate, expectedActiveRelease: parsed.expectedActiveRelease })
-  } finally { release() }
+  }
+  return new Set(facts)
 }
 
-/** Project-bound chat entry point. Approval is deliberately absent from this contract. */
-export function botPackageTool(options: BotPackageOptions & { canAuthor: (sessionId: string) => boolean; registeredFolders?: () => unknown }): Tool {
-  return {
-    name: 'bot_package', optIn: true,
-    description: 'Freeze a registered local Folder BOT directory into an immutable owner review. status returns authoritative Project revisions and package status. propose never publishes; the human reviews and approves in chat.',
-    parameters: { type: 'object', properties: {
-      action: { type: 'string', enum: ['status', 'propose'] }, folderId: { type: 'string' }, directory: { type: 'string' },
-      expectedRevision: { type: 'string' }, expectedActiveRelease: { type: 'string' }, discordRevision: { type: 'integer' }, adoptLegacy: { type: 'boolean' },
-    }, required: ['action'], additionalProperties: false },
-    execute: async (raw, context) => {
+export function botPackageTool(options: Options): Tool {
+  return {name:'bot_package',optIn:true,
+    description:'Manage unified directory BOTs for QQ, Feishu and Discord. status lists deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then asks one exact-content owner confirmation. Supply a concise user-facing summary. No review history or embedded source snapshots. Edit source and propose again to update.',
+    parameters:{type:'object',properties:{action:{type:'string',enum:['status','propose']},folderId:{type:'string'},directory:{type:'string'},expectedRevision:{type:'string'},summary:{type:'string'}},required:['action'],additionalProperties:false},
+    execute:async(raw,context) => {
       context.signal.throwIfAborted()
-      if (context.projectId !== options.service.options.projectId || context.channel !== 'web' || context.inputSource !== 'user' ||
-        context.admin !== true || context.isGroup || context.channelAddress || context.remoteWorkdir || context.memoryAccess ||
-        context.tools.executionMode !== 'session' || !options.canAuthor(context.sessionId)) throw new Error('Use an authenticated owner conversation in this Project.')
-      const store = options.service.options.store
+      if (context.projectId !== options.projectId || context.channel !== 'web' || context.inputSource !== 'user' || context.admin !== true || context.isGroup || context.channelAddress || context.remoteWorkdir || context.memoryAccess || context.tools.executionMode !== 'session' || !options.canAuthor(context.sessionId)) throw new Error('Use an authenticated owner conversation in this Project.')
       if (raw.action === 'status') {
         z.object({action:z.literal('status')}).strict().parse(raw)
-        return JSON.stringify({ projectId: options.service.options.projectId, draftRevision: store.draft().revision,
-          activeRelease: store.snapshot().revision, packages: store.packageStatus(), discord: options.discord?.snapshot(), inventory: options.inventory(), folders: options.registeredFolders?.(), publicationRequests: options.publicationRequests.list() })
+        return JSON.stringify({projectId:options.projectId,deployments:options.deployments.list(),folders:options.folders.list(),inventory:options.inventory?.(),format:'BOT.md {id, config: bot.json} + data-only bot.json + tool modules'})
       }
-      const { action, ...input } = z.object({action:z.literal('propose')}).passthrough().parse(raw)
-      const origin = BotReviewOriginSchema.parse({sessionId:context.sessionId,physicalId:context.physicalSessionId,toolCallId:context.toolCallId})
-      if (!options.reviews) throw new Error('Durable Bot review history is unavailable.')
-      const staged = await stageBotDirectory(options, input, origin)
-      if ('discordDraft' in staged) {
-        await options.reviews.record({version:1,projectId:context.projectId,id:staged.discordDraft.id,origin,createdAt:staged.discordDraft.createdAt,status:'pending',previousSource:staged.discordDraft.change.kind === 'bot.save' ? options.discord?.snapshot().packages[staged.discordDraft.change.package.id]?.active.source ?? {} : {},candidate:{kind:'discord',draft:staged.discordDraft}})
-        return JSON.stringify({ ...staged, nextStep: 'The owner must inspect and approve the exact pending review in chat. No live configuration changed.' })
-      }
-      const request = await options.publicationRequests.propose(undefined, staged.revision, context.sessionId, input.expectedActiveRelease as string | undefined, origin)
-      await options.reviews.record({version:1,projectId:context.projectId,id:request.id,origin,createdAt:request.createdAt,status:'pending',candidate:{kind:'service',request}})
-      return JSON.stringify({request, nextStep:'The owner must inspect and approve the exact publication card in chat. No live configuration changed.'})
+      const input = proposal.parse(raw)
+      const parts = input.directory ? input.directory.split('/') : []
+      if (parts.some(part => !/^[a-zA-Z0-9_.-]+$/.test(part) || part === '.' || part === '..')) throw new Error('Choose a relative BOT directory without traversal.')
+      const release = options.folders.acquireAccess()
+      let frozen: ReturnType<BotDeployments['freeze']>, gitSource = false
+      try {
+        const folder = await options.folders.requireAvailable(input.folderId)
+        if (folder.kind === 'remote') throw new Error('BOT source must be a registered local Folder; no Main fallback is permitted.')
+        let path = folder.path
+        if (lstatSync(path).isSymbolicLink()) throw new Error('BOT source symlinks are forbidden.')
+        for (const part of parts) {path=join(path,part);if(lstatSync(path).isSymbolicLink())throw new Error('BOT source symlinks are forbidden.')}
+        frozen = options.deployments.freeze(snapshotBotDirectory(path))
+        gitSource = sourceUsesGit(path)
+      } finally {release()}
+      const bot = parseBot(frozen.files)
+      const current = options.deployments.read(bot.id)?.deployment
+      if (current?.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before proposing.')
+      await options.validate(frozen.files,context.signal)
+      const facts = {projectId:options.projectId,bot:bot.id,source:{folderId:input.folderId,directory:input.directory},sourceGit:gitSource,
+        exactContent:frozen.revision,fileCount:Object.keys(frozen.files).length,
+        mode:bot.mode,connection:bot.connection,agent:bot.agent,bindings:bot.bindings,toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
+        modules:bot.allowedModules,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders ?? [],discordHistory:bot.discordHistory ?? null,
+        storage:'BOT- and binding-scoped mutable data, separate from immutable deployment files',
+        execution:bot.mode === 'personal' ? 'Normal verified-owner session, ordinary role tools/context; BOT prompt only, no custom modules' : 'Restricted child runtime, no raw credentials/platform clients; no source executes during deployment'}
+      const approve = `Deploy ${bot.id}`
+      options.pending.set(frozen.revision,facts)
+      const before = current ? parseBot(options.deployments.read(bot.id)!.files) : undefined
+      const oldAuthority=authorities(before),newAuthority=authorities(bot)
+      const added=[...newAuthority].filter(value=>!oldAuthority.has(value)),removed=[...oldAuthority].filter(value=>!newAuthority.has(value))
+      const targets=[...new Set([...(before?.bindings ?? []),...bot.bindings].map(location))]
+      let result: ToolResult
+      try {
+        result = await options.ask.execute({kind:'decision',question:`Agent summary: ${input.summary.replace(/\s+/g,' ')}\nAffected: ${targets.join('; ') || 'no channel bindings'}.\nAdded permissions: ${added.join('; ') || 'none'}.\nRemoved permissions: ${removed.join('; ') || 'none'}.\nDeploy this frozen BOT version? Optional exact source/permission details are in Channels → BOT deployments.`,options:[approve,'Cancel deployment'],default_option:'Cancel deployment'},context)
+      } finally { options.pending.delete(frozen.revision) }
+      const answer = typeof result === 'string' ? JSON.parse(result) as Record<string,unknown> : undefined
+      if (!answer || answer.option !== approve || answer.answeredBy !== 'user' || answer.custom) return JSON.stringify({status:'cancelled',bot:bot.id,activeUnchanged:true})
+      context.signal.throwIfAborted()
+      // Recheck live authority after the human delay; approval never blesses future permission changes.
+      const deployment = await options.publish(bot.id,async () => {
+        await options.validate(frozen.files,context.signal)
+        return options.deployments.deploy({id:bot.id,source:{folderId:input.folderId,directory:input.directory},files:frozen.files,revision:frozen.revision,expectedRevision:input.expectedRevision,signal:context.signal})
+      }, bot)
+      options.changed([...new Set([...(before?.bindings ?? []),...bot.bindings].flatMap(binding=>binding.platform === 'discord' ? [binding.id] : []))])
+      return JSON.stringify({status:'deployed',deployment})
     },
   }
 }
 
-/** Owner-only local snapshot/review API. There is deliberately no activation endpoint here. */
-export function botPackagePlugin(options: BotPackageOptions, authorize: (request: Request) => boolean | Promise<boolean>) {
-  return (app: Hono) => {
-    app.use('/api/bot-package*', async (context, next) => { context.header('Cache-Control', 'no-store'); await next() })
-    app.get('/api/bot-package/reviews/:sessionId', async context => {
+/** Read-only owner inventory. Publication is the single native ask confirmation in bot_package. */
+export function botPackagePlugin(options: Pick<Options,'projectId'|'deployments'|'pending'>, authorize:(request:Request)=>boolean|Promise<boolean>) {
+  return (app:Hono) => {
+    app.get('/api/bot-package',async context => {
+      context.header('Cache-Control','no-store')
       if (!await authorize(context.req.raw)) return context.json({error:'Unauthorized'},401)
-      if (!options.reviews) return context.json({error:'Review history unavailable'},503)
-      try {
-        const sessionId = context.req.param('sessionId')
-        const records = await options.reviews.read(sessionId, context.req.query('physicalId'))
-        const snapshot = options.discord?.snapshot()
-        const reviews: BotReviewRecord[] = []
-        for (const stored of records) {
-          if (stored.status === 'applied' || stored.status === 'cancelled') {reviews.push(stored);continue}
-          let record = stored
-          if (stored.candidate.kind === 'discord') {
-            const expectedHash = stored.candidate.draft.hash
-            const current = snapshot?.drafts.find(d => d.id === stored.id && d.hash === expectedHash)
-            if (current && JSON.stringify(current.origin) === JSON.stringify(stored.origin)) {
-              const status = current.status === 'pending' ? Date.parse(current.expiresAt) <= Date.now() ? 'expired' : current.baseRevision !== snapshot!.revision ? 'stale' : 'pending' : current.status === 'applying' ? 'waiting' : current.status
-              record = {...stored,status,currentRevision:snapshot!.revision,candidate:{kind:'discord',draft:current},...(current.decidedAt ? {decidedAt:current.decidedAt} : {})}
-            } else if (stored.status === 'pending' || stored.status === 'waiting') record = {...stored,status:'unavailable'}
-          } else {
-            const request = parsePublicationRequest(stored.candidate.request, stored.projectId)
-            record = {...stored,currentRevision:options.service.options.store.snapshot().revision,...options.publicationRequests.reviewStatus(request)}
-          }
-          if (JSON.stringify(stored) !== JSON.stringify(record)) await options.reviews.record(record)
-          reviews.push(record)
-        }
-        return context.json({projectId:options.service.options.projectId,reviews})
-      } catch { return context.json({error:'Review history unavailable'},409) }
-    })
-    app.get('/api/bot-package', async context => {
-      if (!await authorize(context.req.raw)) return context.json({ error: 'Unauthorized' }, 401)
-      const store = options.service.options.store
-      return context.json({ draftRevision: store.draft().revision, activeRelease: store.snapshot().revision, retained: store.history(), packages: store.packageStatus(), discord: options.discord?.snapshot(), discordPackages: Object.entries(options.discord?.snapshot().packages ?? {}).map(([id,p])=>({id,activeRelease:p.revision,retained:p.history.map(source=>({revision:createHash('sha256').update(JSON.stringify(source)).digest('hex')}))})), inventory: options.inventory() })
-    })
-    app.post('/api/bot-package/review', async context => {
-      if (!await authorize(context.req.raw)) return context.json({ error: 'Unauthorized' }, 401)
-      try {
-        const text = await context.req.text()
-        if (text.length > 4096) return context.json({ error: 'Request too large' }, 413)
-        const input = JSON.parse(text)
-        const store = options.service.options.store
-        let revision: string
-        if (input.discordRelease) {
-          const rollback = z.object({discordRelease:z.string(),packageId:z.string(),discordRevision:z.number().int().nonnegative(),expectedRevision:z.string()}).strict().parse(input)
-          const retained = options.discord?.snapshot().packages[rollback.packageId]?.history.find(p=>createHash('sha256').update(JSON.stringify(p)).digest('hex') === rollback.discordRelease)
-          if (!retained || !options.discord) throw new Error('Unknown Discord BOT Release')
-          return context.json({discordDraft: await options.discord.propose({kind:'owner',id:'shadow-owner'}, {kind:'bot.save',package:retained},rollback.discordRevision,context.req.raw.signal)})
-        }
-        if (input.release) {
-          const rollback = z.object({ release: z.string(), packageId: z.string(), expectedRevision: z.string() }).strict().parse(input)
-          const retained = store.candidate(replaceBotPackage(store.snapshot().bundle, store.retainedPackage(rollback.packageId, rollback.release)))
-          await options.validateLive(retained)
-          revision = (await store.stage({ expectedRevision: rollback.expectedRevision, bundle: retained.bundle })).revision
-        } else {
-          const staged = await stageBotDirectory(options, input)
-          if ('discordDraft' in staged) return context.json(staged)
-          revision = staged.revision
-        }
-        const request = await options.publicationRequests.propose(undefined, revision, 'owner:bot-package', input.expectedActiveRelease)
-        return context.json({ request })
-      } catch (error) {
-        return context.json({ error: error instanceof Error ? error.message : 'BOT review failed; active Release unchanged.' }, 400)
-      }
+      try { return context.json({projectId:options.projectId,deployments:options.deployments.list(),pending:[...options.pending].map(([revision,facts])=>({revision,facts}))}) }
+      catch { return context.json({error:'BOT deployment unavailable; active content was not replaced.'},409) }
     })
   }
 }

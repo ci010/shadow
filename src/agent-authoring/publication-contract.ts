@@ -39,12 +39,11 @@ const requestSchema = z.object({
     affectedBindings: z.array(z.string().max(4096)).max(2000),
     permissionsChanged: z.boolean(), toolsChanged: z.boolean(), promptsChanged: z.boolean(),
   }).strict().optional(),
-  botReviewOrigin: z.object({sessionId:z.string().regex(/^web:/).max(512),physicalId:z.string().min(1).max(512),toolCallId:z.string().min(1).max(512)}).strict().optional(),
   approvedAt: z.string().datetime().optional(),
   status: z.enum(['waiting', 'error']).optional(),
   error: z.object({ code: z.literal('publication_failed'), message: z.string().max(500) }).strict().optional(),
 }).strict().refine(request => new Set(request.files.map(file => file.path)).size === request.files.length,
-  'Duplicate review paths.').refine(request => !request.botReviewOrigin || request.botReviewOrigin.sessionId === request.sessionId, 'Bot review origin must match its requesting session.')
+  'Duplicate review paths.')
 const resultSchema = z.object({
   requestId: identifier,
   revision,

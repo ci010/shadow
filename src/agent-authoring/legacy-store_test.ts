@@ -90,7 +90,7 @@ test('legacy v1 tools reopen with exact grant authority and unchanged revisioned
     ['owner-inbox', { content: 'Synthetic report', idempotencyKey: 'one' }],
   ])
   const persisted = JSON.parse(readFileSync(file, 'utf8'))
-  assert.deepEqual(persisted, { ...document, version: 2, packages: {}, legacyRevisions: [snapshot.revision] })
+  assert.deepEqual(persisted, { ...document, version: 2, legacyRevisions: [snapshot.revision] })
   const beforeRestart = readFileSync(file, 'utf8')
   assert.deepEqual(new AgentResourceStore(options).resolve(address), policy)
   assert.equal(readFileSync(file, 'utf8'), beforeRestart)

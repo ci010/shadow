@@ -1,3 +1,6 @@
+import { BotDeployments } from '../../bots/deployments.ts'
+import { parseBot, type BotDefinition } from '../../bots/sdk.ts'
+import { DirectoryBots, DirectoryBotService } from '../../agent-authoring/bot-runtime.ts'
 import { isOwnerAuthoringSession } from '../../agent-authoring/owner-session.ts'
 import { SourceResources } from '../../channels/source-resources.ts'
 import { discordReadMessage } from '../../channels/discord-operations.ts'
@@ -15,7 +18,7 @@ import { registerDevelopmentRestart } from '../../tools/development-restart.ts'
 import { TaskTool } from '../../tools/task.ts'
 import { isLightweightTopic, sessionTopicKey, sessionTopicSequence, sessionTopicTitle, sessionTopicDescription } from '../../sessions/lightweight-topic.ts'
 import { botConversationPolicies } from '../../channels/bot-policies.ts'
-import { channelSessionId } from '../../bus/events.ts'
+import { channelSessionId, channelAddressFromSessionId } from '../../bus/events.ts'
 import { automationModelSettings, automationDispatchModel } from '../../cron/automation-model.ts'
 import { isLearningSourceEligible } from '../../agent/learning/source-eligibility.ts'
 import { resolve } from 'node:path'
@@ -507,18 +510,20 @@ export async function createProjectRuntime(
     ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
   })
   const serviceDiscovery = new ServiceDiscoveryStore(project.id, resolve(workspace, 'config', 'service-discovery.json'))
-  const authoringDirectory = resolve(workspace, 'config', 'agent-resources')
-  const integrationDirectory = resolve(workspace, 'config', 'channel-integrations')
+  const authoringDirectory = resolve(workspace, 'authoring')
+  const integrationDirectory = resolve(workspace, 'bots', 'runtime', 'discord-security')
+  const botDeployments = new BotDeployments({directory:resolve(workspace,'bots','deployments'),projectId:project.id,validate:files => {parseBot({...files})}})
+  const directoryBots = new DirectoryBots(botDeployments)
   const memoryDomains = new MemoryDomains(project.id, resolve(integrationDirectory, 'memory'))
   const sourceResources = new SourceResources(folderRegistry)
   const channelIntegrations = new IntegrationStore({
-    sources: sourceResources,
+    sources: sourceResources,deployedBots:()=>directoryBots.discord(),
     projectId: project.id, workspace, directory: integrationDirectory, bots: botStore, agents: agentTypes, memory: memoryDomains,
   })
   const classifier = new InputClassifier(() => provider, resolve(integrationDirectory, 'classifier-ledger.json'))
   const discordIntegration = new DiscordIntegration({
     classifier, sources: sourceResources,
-    store: channelIntegrations, memory: memoryDomains, bots: botStore, workspace, projectId: project.id, baseTools: tools,
+    store: channelIntegrations, memory: memoryDomains, bots: botStore, workspace, projectId: project.id, baseTools: tools, directoryBots,
   })
   cleanup.push(channelIntegrations.onChange(() => realtime.invalidateIntegrations?.()))
   cleanup.push(() => discordIntegration.stop())
@@ -537,18 +542,14 @@ export async function createProjectRuntime(
     deliver: (id, input) => deliverInput(id, input),
     canDeliver: canDeliverAuthoredMessage,
   })
-  const authoring = new AgentAuthoringService({
+  directoryBots.setBroker(capabilityBroker)
+  const authoring = new DirectoryBotService({
     projectId: project.id, workspace, store: agentResources, broker: capabilityBroker,
     folders: folderRegistry, remoteExecutor: mainCluster.remoteExecutor,
-    legacyAddress: id => {
-      const colon = id.indexOf(':')
-      if (colon < 0) return undefined
-      const bot = botStore.list().find(bot => bot.legacySessionId && bot.platform === id.slice(0, colon))
-      return bot ? { projectId: project.id, botInstanceId: bot.id, platform: bot.platform, conversationId: id.slice(colon + 1), legacySessionId: true } : undefined
-    },
-  })
+
+  }, directoryBots)
   const sessions: SessionManager = new SessionManager({
-    conversationPolicies: botConversationPolicies(botStore, combineConversationPolicies(discordIntegration, authoring)),
+    conversationPolicies: botConversationPolicies(botStore, combineConversationPolicies(discordIntegration, authoring), directoryBots),
     projectId: project.id,
     promptCaptures,
     hasInitiative: id => initiatives.getSummary(id) !== null,
@@ -1067,6 +1068,7 @@ export async function createProjectRuntime(
       }
     },
     validateLive: async snapshot => {
+      if(snapshot.bundle.bindings.length)throw new Error('BOT bindings must be configured and deployed from a registered source directory with bot_package.')
       const catalog = snapshot.bundle.bindings.some(binding => binding.enabled) ? await inferenceCatalog() : undefined
       for (const binding of [...snapshot.bundle.bindings.filter(binding => binding.enabled), ...profileBindings(snapshot)]) {
         if (binding.platform === 'discord') throw new Error('Discord assignments are managed in Project Bots > Discord access. Disable legacy bindings before publishing this bundle.')
@@ -1400,32 +1402,49 @@ export async function createProjectRuntime(
     stream: (action,args,context) => (action==='send'?channelStreamSend:channelStreamRead).execute(args,context),
   }))
   discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
-  const botReviews = {record:(record:import('../../agent-authoring/bot-review-contract.ts').BotReviewRecord) => sessions.recordBotReview(record), read:(id:string,physicalId?:string) => sessions.getBotReviews(id,physicalId)}
-  let botReviewWrites = Promise.resolve()
-  const syncBotReviewHistory = () => {
-    const snapshot = channelIntegrations.snapshot()
-    botReviewWrites = botReviewWrites.then(async () => {
-      for (const draft of snapshot.drafts) {
-        if (!draft.origin || draft.change.kind !== 'bot.save' || !await sessions.readSessionState(draft.origin.sessionId)) continue
-        await sessions.recordBotReview({version:1,projectId:project.id,id:draft.id,origin:draft.origin,createdAt:draft.createdAt,currentRevision:snapshot.revision,
-          status:draft.status === 'pending' ? Date.parse(draft.expiresAt) <= Date.now() ? 'expired' : draft.baseRevision !== snapshot.revision ? 'stale' : 'pending' : draft.status === 'applying' ? 'waiting' : draft.status,
-          ...(draft.status === 'pending' ? {previousSource:snapshot.packages[draft.change.package.id]?.active.source ?? {}} : {}),
-          ...(draft.decidedAt ? {decidedAt:draft.decidedAt} : {}),candidate:{kind:'discord',draft}})
+  directoryBots.setChannelOperations((request,context)=>channels.executeOperation(request,context))
+  const botPackageOptions = {
+    projectId:project.id,deployments:botDeployments,runtime:directoryBots,folders:folderRegistry,
+    ask:tools.get('ask')!,canAuthor,inventory:authoringOptions.inventory,pending:new Map<string,unknown>(),
+    validate:async (files:Record<string,string>,signal:AbortSignal) => {
+      const bot = parseBot(files)
+      if (bot.mode === 'personal') {
+        const connection = botStore.get(bot.connection!)
+        botStore.assertAccess(connection.id)
+        if (!connection.enabled || connection.purpose !== 'personal' || !connection.verifiedOwner) throw new Error('Personal BOT requires an enabled verified-owner personal connection.')
+        const role = agentTypes.resolve(bot.agent!)
+        if (!role || role.defaultMode !== 'session') throw new Error('Personal BOT requires an existing session agent role.')
+        if (directoryBots.definitions().some(item => item.bot.id !== bot.id && item.bot.mode === 'personal' && item.bot.connection === bot.connection)) throw new Error('Personal connection already assigned.')
       }
-      for (const request of publicationRequests.list()) {
-        if (!request.botReviewOrigin || !await sessions.readSessionState(request.botReviewOrigin.sessionId)) continue
-        await sessions.recordBotReview({version:1,projectId:project.id,id:request.id,origin:request.botReviewOrigin,
-          createdAt:request.createdAt,...publicationRequests.reviewStatus(request),candidate:{kind:'service',request}})
+      const candidate = directoryBots.discord([{bot,files,deployment:{id:bot.id,revision:botDeployments.freeze(files).revision,source:{folderId:'validation',directory:''},mode:'bounded'}}])
+      await channelIntegrations.validateBotDeployment(candidate.agents,candidate.bindings,signal)
+      const other = directoryBots.definitions().filter(item => item.bot.id !== bot.id)
+      directoryBots.discord([...other,{bot,files,deployment:{id:bot.id,revision:botDeployments.freeze(files).revision,source:{folderId:'validation',directory:''},mode:'bounded'}}])
+      const keys = new Set<string>()
+      for (const binding of [...other.flatMap(item=>item.bot.bindings),...bot.bindings]) {
+        if (binding.platform === 'discord') continue
+        const connection = botStore.get(binding.botInstanceId)
+        if (connection.platform !== binding.platform || connection.purpose !== 'service') throw new Error('BOT bindings require a matching service connection/platform.')
+        const key = JSON.stringify([binding.botInstanceId,binding.platform,binding.conversationId])
+        if(keys.has(key))throw new Error('Conversation already belongs to another BOT.')
+        keys.add(key)
+        for(const id of binding.readFolders) await folderRegistry.requireAvailable(id)
       }
-    }).catch(error => console.error('[bot-review] History synchronization failed', error instanceof Error ? error.name : 'Error'))
+    },
+    publish:async <T>(id:string,change:()=>Promise<T>,candidate?:BotDefinition):Promise<T> => {
+      const definitions = directoryBots.definitions().filter(item=>item.bot.id===id)
+      const personalConnections = [...definitions.filter(item=>item.bot.mode==='personal').map(item=>item.bot.connection), ...(candidate?.mode === 'personal' ? [candidate.connection] : [])].filter((id): id is string => !!id)
+      const bindings = definitions.flatMap(item=>item.bot.bindings)
+      return authoring.changePublished(async () => { await sessions.retireIdleConversationContexts(sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
+        ? sessions.getSessionState(sessionId)?.channelBoundary?.bindingId === binding.id
+        : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId}))) },async () => {
+        channelIntegrations.setBotPublication(true)
+        try{return await change()}finally{channelIntegrations.setBotPublication(false)}
+      })
+    },
+    changed:(ids:string[]) => {channelIntegrations.refreshBotDeployments(ids);realtime.invalidateIntegrations?.()},
   }
-  const stopBotReviewSync = channelIntegrations.onChange(syncBotReviewHistory)
-  // Recover only explicit host-owned origins; never attach legacy/admin proposals to a chat.
-  syncBotReviewHistory()
-  await botReviewWrites
-  cleanup.push(stopBotReviewSync)
-  cleanup.push(async () => { await botReviewWrites })
-  importTool.registerBuiltin('bot_package', botPackageTool({ ...authoringManagement, discord: channelIntegrations, reviews:botReviews, canAuthor, registeredFolders: () => folderRegistry.list() }))
+  importTool.registerBuiltin('bot_package', botPackageTool(botPackageOptions))
   const channelConfigurationTool = ownerChannelConfigurationTool(channelIntegrations, memoryDomains, channels.discordTransport(), canAuthor)
   tools.register(channelConfigurationTool)
   importTool.registerBuiltin(channelConfigurationTool.name, channelConfigurationTool)
@@ -1483,7 +1502,7 @@ export async function createProjectRuntime(
     slashCommandsPlugin(commandDispatcher, sessions, dependencies.authorize),
     authoringCredentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
     authoringPublicationPlugin(publicationRequests, dependencies.authorize),
-    botPackagePlugin({...authoringManagement, discord: channelIntegrations, reviews:botReviews}, dependencies.authorize),
+    botPackagePlugin(botPackageOptions, dependencies.authorize),
     authoringProbesPlugin(probeRequests, dependencies.authorize),
     otelPlugin(otelStore),
     agentTypesPlugin(sessions, agentTypes),
@@ -1510,16 +1529,7 @@ export async function createProjectRuntime(
       managedSessions: { projectId: project.id, inventory: () => mainCluster.getNodeInventory() },
     }),
     folders.plugin,
-    serviceGroupsPlugin({ bots: botStore, discovery: serviceDiscovery, resources: agentResources, reviews: publicationRequests, changes: authoringChanges, authorize: dependencies.authorize,
-      readiness: binding => {
-        if (binding.readFolders.some(id => !folderRegistry.get(id))) return 'folder_missing'
-        for (const grant of binding.grants) {
-          if (grant.kind === 'http' && grant.credential && !agentCredentials.names().includes(grant.credential.secretRef)) return 'credential_missing'
-          if (grant.kind === 'inbox' && !canDeliverAuthoredMessage(grant.sessionId)) return 'inbox_invalid'
-        }
-        return undefined
-      },
-    }),
+    serviceGroupsPlugin({bots:botStore,discovery:serviceDiscovery,runtime:directoryBots,authorize:dependencies.authorize}),
     botSetupPlugin({
       store: botStore,
       runtime: channels,
@@ -1573,7 +1583,6 @@ export async function createProjectRuntime(
       () => a2a.close(),
       () => credentialRequests.stop(),
       stopPublicationReviews,
-      async () => {stopBotReviewSync(); await botReviewWrites},
       () => probeRequests.stop(),
       () => io.shutdown(),
       () => microApps.shutdown(),

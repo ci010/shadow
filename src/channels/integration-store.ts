@@ -1,5 +1,4 @@
 import type { SourceResources } from './source-resources.ts'
-import { compileDiscordPackage } from './bot-package.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { createHash, randomUUID } from 'node:crypto'
@@ -13,7 +12,7 @@ import type { AgentTypesManager, AgentTypeDefinition } from '../agent/types/mana
 import type { BotInstanceStore } from './bot-store.ts'
 import type { MemoryDomains } from '../memory/domains.ts'
 import {
-  DiscordPackageSchema, DiscordBindingSchema, IntegrationAgentSchema, IntegrationChangeSchema, IntegrationDraftSchema,
+  DiscordBindingSchema, IntegrationAgentSchema, IntegrationChangeSchema, IntegrationDraftSchema,
   type DiscordBinding, type DiscordIntegrationTransport, type IntegrationActor, type IntegrationAgent,
   type IntegrationChange, type IntegrationDraft,
 } from './integration-contract.ts'
@@ -31,7 +30,6 @@ const auditSchema = z.object({
 const stateSchema = z.object({
   version: z.literal(1), revision: z.number().int().nonnegative(),
   agents: z.array(IntegrationAgentSchema), bindings: z.array(DiscordBindingSchema),
-  packages: z.record(z.object({ active: DiscordPackageSchema, revision: z.string(), history: z.array(DiscordPackageSchema).max(20) }).strict()).default({}),
   drafts: z.array(IntegrationDraftSchema).max(100), audit: z.array(auditSchema).max(1000),
 }).strict()
 type State = z.infer<typeof stateSchema>
@@ -57,40 +55,38 @@ export class IntegrationStore {
   private readonly document: PrivateDocument<State>
   private transport?: DiscordIntegrationTransport
   private committing = false
+  private botPublishing = false
+  setBotPublication(active:boolean):void { this.botPublishing = active }
+  private deployedBots?: () => { agents: IntegrationAgent[]; bindings: DiscordBinding[] }
+  get directoryManaged():boolean {return !!this.deployedBots}
+  setBotDeployments(reader: () => { agents: IntegrationAgent[]; bindings: DiscordBinding[] }): void { this.deployedBots = reader }
+  refreshBotDeployments(ids: string[]): void { for (const listener of this.listeners) listener(ids) }
+  private writeState(state: State): void {
+    const deployed = this.deployedBots?.()
+    const agents = new Set(deployed?.agents.map(agent => agent.id) ?? [])
+    const bindings = new Set(deployed?.bindings.map(binding => binding.id) ?? [])
+    this.document.write({...state,agents:state.agents.filter(agent => !agents.has(agent.id)),bindings:state.bindings.filter(binding => !bindings.has(binding.id))})
+  }
   private readonly listeners = new Set<(bindings: string[]) => void>()
 
   constructor(readonly options: {
     projectId: string; directory: string; workspace: string
     sources?: SourceResources
+    deployedBots?: () => {agents:IntegrationAgent[];bindings:DiscordBinding[]}
     bots: BotInstanceStore; agents: AgentTypesManager; memory: MemoryDomains
   }) {
+    this.deployedBots=options.deployedBots
     this.document = new PrivateDocument({
       projectId: options.projectId, directory: options.directory, filename: 'channel-integrations.json',
-      initial: { version: 1, revision: 0, agents: [], bindings: [], packages: {}, drafts: [], audit: [] },
+      initial: { version: 1, revision: 0, agents: [], bindings: [], drafts: [], audit: [] },
       parse: value => stateSchema.parse(value), maxBytes: 64 * 1024 * 1024,
     })
     const state = this.document.read()
+    if(this.deployedBots && (state.agents.length || state.bindings.length || state.drafts.some(draft=>['agent.save','bindings.save'].includes(draft.change.kind) && ['pending','applying'].includes(draft.status))))throw new IntegrationError('directory_required','Mutable BOT definitions or unfinished lifecycle drafts cannot be loaded by directory runtime. No data was changed.',503)
     if (new Set(state.bindings.map(targetKey)).size !== state.bindings.length ||
       new Set(state.agents.map(agent => agent.name)).size !== state.agents.length ||
       new Set(state.agents.map(agent => agent.id)).size !== state.agents.length) {
       throw new Error('Invalid channel integration identities.')
-    }
-    const packageAgents = new Set<string>(), packageBindings = new Set<string>()
-    for (const [id, item] of Object.entries(state.packages)) {
-      if (id !== item.active.id || item.revision !== hash(item.active)) throw new Error('Invalid BOT release identity or hash.')
-      const compiled = compileDiscordPackage(item.active)
-      const agent = state.agents.find(a=>a.id === compiled.agent.id)
-      if (!agent || agent.version !== hash(compiled.agent) || !isDeepStrictEqual({...agent,version:undefined,publishedAt:undefined},{...compiled.agent,version:undefined,publishedAt:undefined}) || packageAgents.has(agent.id)) throw new Error('Published BOT Agent differs from frozen source.')
-      packageAgents.add(agent.id)
-      for (const binding of compiled.bindings) {
-        const active = state.bindings.find(b=>b.id===binding.id)
-        if (!active || !isDeepStrictEqual({...active,epochRevision:undefined},{...binding,epochRevision:undefined}) || packageBindings.has(binding.id)) throw new Error('Published BOT binding differs from frozen source.')
-        packageBindings.add(binding.id)
-      }
-      for (const release of item.history) {
-        if (release.id !== id) throw new Error('BOT history identity mismatch.')
-        compileDiscordPackage(release)
-      }
     }
     for (const draft of state.drafts.filter(draft => draft.status === 'applying')) {
       try { this.apply(draft) }
@@ -107,7 +103,18 @@ export class IntegrationStore {
     return () => this.listeners.delete(listener)
   }
 
-  snapshot(): State { this.document.assertCurrent(); return this.document.read() }
+  snapshot(): State {
+    if (this.botPublishing) throw new IntegrationError('bot_deployment_busy','BOT publication is in progress. Retry shortly.',409)
+    return this.readState()
+  }
+  private readState():State {
+    this.document.assertCurrent()
+    const state = this.document.read(), deployed = this.deployedBots?.()
+    if (!deployed) return state
+    const agents = new Set(state.agents.map(agent => agent.id)), bindings = new Set(state.bindings.map(binding => binding.id))
+    if (deployed.agents.some(agent => agents.has(agent.id)) || deployed.bindings.some(binding => bindings.has(binding.id))) throw new IntegrationError('bot_identity_collision','BOT identity collides with mutable channel configuration.')
+    return {...state,agents:[...state.agents,...deployed.agents],bindings:[...state.bindings,...deployed.bindings]}
+  }
   agents(): IntegrationAgent[] { return this.snapshot().agents }
   bindings(): DiscordBinding[] { return this.snapshot().bindings }
   deploymentIssues(): Array<{ agentId: string; message: string }> {
@@ -160,7 +167,7 @@ export class IntegrationStore {
 
   private agentDirectory(name: string): string { return projectStoragePath(this.options.workspace, 'agents', name) }
   private packagedAgent(id: string): boolean {
-    return Object.values(this.snapshot().packages).some(item => compileDiscordPackage(item.active).agent.id === id)
+    return !!this.deployedBots?.().agents.some(agent => agent.id === id)
   }
   private assertAgentFile(agent: IntegrationAgent): void {
     if (this.packagedAgent(agent.id)) return
@@ -179,10 +186,6 @@ export class IntegrationStore {
   }
 
   private affected(change: IntegrationChange, state = this.snapshot()): string[] {
-    if (change.kind === 'bot.save') {
-      const old = state.packages[change.package.id]
-      return [...new Set([...(old ? compileDiscordPackage(old.active).bindings.map(b=>b.id) : []), ...compileDiscordPackage(change.package).bindings.map(b=>b.id)])]
-    }
     if (change.kind === 'bindings.save') return change.bindings.map(binding => binding.id)
     if (change.kind === 'agent.save') return state.bindings.filter(binding => binding.agentId === change.agent.id).map(binding => binding.id)
     if (change.kind === 'domain.revoke' || change.kind === 'knowledge.publish') {
@@ -268,6 +271,37 @@ export class IntegrationStore {
     }
   }
 
+  async validateBotDeployment(agents: IntegrationAgent[], bindings: DiscordBinding[], signal: AbortSignal): Promise<void> {
+    const state=this.readState()
+    for (const agent of agents) {
+      this.validateAgent(agent)
+      if(state.agents.some(existing=>existing.name===agent.name && existing.id!==agent.id))throw new IntegrationError('agent_owned','BOT Agent identity is owned by another configuration.')
+    }
+    for (const binding of bindings) {
+      if(this.options.bots.get(binding.botInstanceId).purpose!=='service')throw new IntegrationError('service_connection_required','Directory BOTs require a service connection.')
+      if(state.bindings.some(existing=>(existing.id===binding.id || targetKey(existing)===targetKey(binding)) && existing.agentId!==binding.agentId))throw new IntegrationError('binding_owned','BOT target is already owned by another configuration.')
+      this.validateBinding(binding, agents)
+      if (!binding.enabled) continue
+      if (!this.transport) throw new IntegrationError('unavailable','Discord discovery is unavailable.',503)
+      signal.throwIfAborted()
+      const live = await this.transport.inspectTarget(binding.botInstanceId,binding.target,signal)
+      if (live.botUserId !== binding.botUserId || binding.participants.roleIds.some(id => !live.roleIds.includes(id))) throw new IntegrationError('scope_changed','Discord Bot identity or role scope changed.',409)
+      if (binding.discordHistory) {
+        const scope = binding.discordHistory
+        const directory = await this.transport.directory(binding.botInstanceId,scope.guildId,undefined,signal)
+        for (const id of scope.channelIds) {
+          const channel = directory.channels.find(channel => channel.id === id)
+          if (directory.botUserId !== binding.botUserId || directory.guildId !== scope.guildId || !channel || ![0,5,15,16].includes(channel.type) || !channel.canView || !channel.canReadHistory) throw new IntegrationError('history_scope','Selected history channel is unavailable in the live directory.')
+        }
+      }
+      if (binding.observation?.enabled) for (const id of binding.observation.channelIds) {
+        const inspection = await this.transport.inspect(binding.botInstanceId,id,binding.botUserId,signal)
+        if (inspection.botUserId !== binding.botUserId || inspection.location.guildId !== binding.observation.guildId || inspection.location.id !== id || !inspection.canView) throw new IntegrationError('observation_permission','Bot cannot observe a selected channel.')
+      }
+    }
+    signal.throwIfAborted()
+  }
+
   private async validate(change: IntegrationChange, signal: AbortSignal): Promise<{ hash: string; fileRevision: string | null }> {
     const state = this.snapshot()
     let agents = state.agents
@@ -299,31 +333,10 @@ export class IntegrationStore {
       : change.kind === 'bindings.save' && change.bindings.some(next => next.id === binding.id))) {
       this.validateBinding(binding, agents)
     }
-    if (change.kind === 'bot.save') {
-      if (change.adoptLegacy) this.assertLegacyAdoption(change.package)
-      const compiled = compileDiscordPackage(change.package)
-      const previous = state.packages[change.package.id]
-      const old = previous ? compileDiscordPackage(previous.active) : undefined
-      if (old && old.agent.id !== compiled.agent.id) throw new IntegrationError('immutable_agent_id','A BOT update must preserve its Agent UUID.')
-      if (!change.adoptLegacy && !old && (state.agents.some(a=>a.name === compiled.agent.name || a.id === compiled.agent.id) || this.options.agents.resolve(compiled.agent.name) || existsSync(this.agentDirectory(compiled.agent.name)))) throw new IntegrationError('agent_name_exists','BOT identity collides with an existing Agent.')
-      const oldIds = new Set(old?.bindings.map(b=>b.id) ?? (change.adoptLegacy ? compiled.bindings.map(b=>b.id) : []))
-      for (const binding of compiled.bindings) {
-        if (state.bindings.some(b=>b.id === binding.id && !oldIds.has(b.id))) throw new IntegrationError('binding_owned','Binding belongs to another BOT or legacy configuration.')
-      }
-      agents = [...state.agents.filter(a=>a.id !== compiled.agent.id), {...compiled.agent,version:hash(compiled.agent),publishedAt:new Date().toISOString()}]
-      bindings = [...state.bindings.filter(b=>!oldIds.has(b.id)), ...compiled.bindings]
-      this.validateAgent(compiled.agent)
-      if (new Set(bindings.map(targetKey)).size !== bindings.length) throw new IntegrationError('duplicate_binding','BOT target already belongs to another assignment.')
-      for (const binding of compiled.bindings) this.validateBinding(binding,agents)
-    } else {
-      const owned = Object.values(state.packages).map(p=>compileDiscordPackage(p.active))
-      if (change.kind === 'agent.save' && owned.some(p=>p.agent.id === change.agent.id) ||
-          change.kind === 'bindings.save' && owned.some(p=>p.bindings.some(b=>change.bindings.some(next=>next.id === b.id)))) throw new IntegrationError('package_owned','Edit the complete BOT directory and review a new Release instead.')
-    }
     const inspected: unknown[] = []
-    if (change.kind === 'bindings.save' || change.kind === 'bot.save') {
+    if (change.kind === 'bindings.save') {
       if (!this.transport) throw new IntegrationError('unavailable', 'Discord discovery is unavailable.', 503)
-      for (const binding of (change.kind === 'bot.save' ? compileDiscordPackage(change.package).bindings : change.bindings).filter(binding => binding.enabled)) {
+      for (const binding of change.bindings.filter(binding => binding.enabled)) {
         signal.throwIfAborted()
         const live = await this.transport.inspectTarget(binding.botInstanceId, binding.target, signal)
         if (live.botUserId !== binding.botUserId) throw new IntegrationError('bot_identity_changed', 'The connected Bot identity changed. Refresh before assigning channels.', 409)
@@ -370,7 +383,6 @@ export class IntegrationStore {
       if (domain.kind === 'conversation' || domain.kind === 'project-private') throw new IntegrationError('invalid_domain', 'Only explicitly shared or Agent-private domains can be revoked here.')
     }
     const domains = new Set<string>()
-    if (change.kind === 'bot.save') compileDiscordPackage(change.package).agent.readDomains.forEach(id => domains.add(id))
     if (change.kind === 'agent.save') change.agent.readDomains.forEach(id => domains.add(id))
     if (change.kind === 'bindings.save') change.bindings.filter(binding => binding.enabled).forEach(binding => binding.readDomains.forEach(id => domains.add(id)))
     if (change.kind === 'knowledge.publish' || change.kind === 'domain.revoke') domains.add(change.domainId)
@@ -378,10 +390,13 @@ export class IntegrationStore {
     return { hash: hash({ inspected, refs, fileRevision }), fileRevision }
   }
 
-  async propose(actor: IntegrationActor, raw: unknown, baseRevision: number, signal: AbortSignal, origin?: IntegrationDraft['origin']): Promise<IntegrationDraft> {
+  async propose(actor: IntegrationActor, raw: unknown, baseRevision: number, signal: AbortSignal): Promise<IntegrationDraft> {
     const change = IntegrationChangeSchema.parse(raw)
-    if (origin && (actor.kind !== 'owner' || change.kind !== 'bot.save')) throw new IntegrationError('owner_required','Timeline BOT reviews require an owner proposal.',403)
-    if (change.kind === 'bot.save' && actor.kind !== 'owner') throw new IntegrationError('owner_required','BOT releases require owner review.',403)
+    if (this.deployedBots) {
+      if(['agent.save','bindings.save'].includes(change.kind))throw new IntegrationError('directory_required','BOT Agents and bindings must be deployed from registered source directories.')
+      const deployed = this.deployedBots()
+      if (change.kind === 'agent.save' && deployed.agents.some(agent => agent.id === change.agent.id || agent.name === change.agent.name) || change.kind === 'bindings.save' && change.bindings.some(binding => deployed.bindings.some(item => item.id === binding.id || targetKey(item) === targetKey(binding)))) throw new IntegrationError('directory_required','BOT definitions and bindings are immutable deployment content. Edit and deploy their source directory.')
+    }
     const before = this.snapshot()
     if (actor.kind !== 'owner' && (change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation || before.bindings.find(old => old.id === binding.id)?.observation) ||
       change.kind === 'agent.save' && before.bindings.some(binding => binding.observation && binding.agentId === change.agent.id))) {
@@ -397,19 +412,13 @@ export class IntegrationStore {
     if (this.committing || state.revision !== baseRevision) throw new IntegrationError('revision_conflict', 'Configuration changed during validation.', 409)
     const pending = state.drafts.filter(draft => draft.status === 'applying' || draft.status === 'pending' && Date.parse(draft.expiresAt) > Date.now())
     if (pending.length >= 40) throw new IntegrationError('too_many_drafts', 'Resolve outstanding configuration reviews before creating more.', 409)
-    const compiledReview = change.kind === 'bot.save' ? compileDiscordPackage(change.package) : undefined
     const id = randomUUID()
     const draft = IntegrationDraftSchema.parse({
-      ...(compiledReview ? { resourceReview: {
-        agent: {sourceFolders:compiledReview.agent.sourceFolders ?? [],discordHistory:compiledReview.agent.discordHistory ?? null},
-        bindings:compiledReview.bindings.map(binding => ({id:binding.id,target:binding.target,sourceFolders:binding.sourceFolders ?? [],discordHistory:binding.discordHistory ?? null})),
-      }} : {}),
-      id, actor, baseRevision, change, validationHash, ...(origin ? {origin} : {}), hash: hash({ id, actor, baseRevision, change, validationHash, ...(origin ? {origin} : {}) }),
+      id, actor, baseRevision, change, validationHash, hash: hash({ id, actor, baseRevision, change, validationHash }),
       ...(change.kind === 'agent.save' ? { agentFileHash: validation.fileRevision } : {}),
       createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
       status: 'pending', affectedBindings: this.affected(change, state),
-      warning: change.kind === 'bot.save' ? 'Frozen BOT source includes sourceFolders and discordHistory for Agent and each binding. Review exact registered Folder IDs, guild/channel allowlist, threads (none/public-active/public-archived, private threads excluded), and preEpoch (permission to read pre-authorization platform history, never old internal memory). Cross-channel output requires equivalent live audiences. No write, terminal or execution authority is granted. Drafts do not change the active release.'
-        : change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation)
+      warning: change.kind === 'bindings.save' && change.bindings.some(binding => binding.observation)
         ? 'Owner-only observation review: selected source channels permit observation of nonparticipants but grant them no commands/tools. Evidence enters only a dedicated restricted service context and can be reported to the exact binding output audience, whose readers may differ from participants. Review source guild/channels, output privacy, frozen program, enable flag and model before approving. Metadata signatures are not visual hashes.'
         : change.kind === 'knowledge.publish'
         ? 'This approves a fixed copy for the selected domain audience. Source permissions will not automatically revoke this approved copy; revoke its publication explicitly.'
@@ -418,7 +427,7 @@ export class IntegrationStore {
         : change.kind === 'agent.save' ? 'Removed Agent permissions are also removed from every assignment. Changed instructions or access start a fresh context; previous history remains available to the owner.'
         : 'Agent and access changes start a fresh context. Unassigned channels and DMs remain disabled. Same-Agent conversations do not share memory.',
     })
-    this.document.write({ ...state, drafts: [...state.drafts.filter(item => !pending.includes(item)).slice(-59), ...pending, draft].slice(-100) })
+    this.writeState({ ...state, drafts: [...state.drafts.filter(item => !pending.includes(item)).slice(-59), ...pending, draft].slice(-100) })
     for (const listener of this.listeners) listener([])
     return draft
   }
@@ -434,6 +443,7 @@ export class IntegrationStore {
     this.committing = true
     try {
       let draft = this.draft(id)
+      if(this.deployedBots && ['agent.save','bindings.save'].includes(draft.change.kind))throw new IntegrationError('directory_required','BOT lifecycle drafts cannot be applied in directory runtime.')
       if (draft.hash !== expectedHash || actor.kind !== 'owner' && JSON.stringify(actor) !== JSON.stringify(draft.actor)) {
         throw new IntegrationError('confirmation_mismatch', 'This review belongs to another actor or version.', 403)
       }
@@ -449,7 +459,7 @@ export class IntegrationStore {
         const state = this.snapshot()
         if (state.revision !== draft.baseRevision) throw new IntegrationError('revision_conflict', 'Configuration changed.', 409)
         draft = { ...draft, status: 'applying', decidedAt: new Date().toISOString() }
-        this.document.write({ ...state, drafts: state.drafts.map(item => item.id === id ? draft : item) })
+        this.writeState({ ...state, drafts: state.drafts.map(item => item.id === id ? draft : item) })
       }
       // The durable approved record is the recovery boundary; applying is intentionally idempotent.
       this.apply(draft)
@@ -469,42 +479,19 @@ export class IntegrationStore {
       }
     } else if (draft.status !== 'pending') throw new IntegrationError('review_not_pending', 'This review is no longer pending.', 409)
     const state = this.snapshot()
-    this.document.write({ ...state, drafts: state.drafts.map(item => item.id === id ? { ...item, status: 'cancelled', decidedAt: new Date().toISOString() } : item),
+    this.writeState({ ...state, drafts: state.drafts.map(item => item.id === id ? { ...item, status: 'cancelled', decidedAt: new Date().toISOString() } : item),
       audit: [...state.audit, { id: randomUUID(), at: new Date().toISOString(), actor: actor.id,
         kind: draft.status === 'applying' ? 'review.abandoned' : 'review.cancelled', revision: state.revision, affectedBindings: draft.affectedBindings }].slice(-1000),
     })
     for (const listener of this.listeners) listener([])
   }
 
-  private assertLegacyAdoption(input: z.infer<typeof DiscordPackageSchema>): void {
-    const state = this.snapshot()
-    const compiled = compileDiscordPackage(input)
-    if (state.packages[input.id] || Object.values(state.packages).some(p => compileDiscordPackage(p.active).agent.id === compiled.agent.id)) throw new IntegrationError('package_owned','Legacy Agent is already owned.')
-    const existing = state.agents.find(a => a.id === compiled.agent.id)
-    if (!existing) throw new IntegrationError('agent_missing','Legacy adoption requires an existing Agent.')
-    const {version, publishedAt, ...policy} = existing
-    const bindings = state.bindings.filter(b => b.agentId === existing.id).map(({epochRevision,...b}) => b)
-    if (!isDeepStrictEqual(policy,compiled.agent) || !bindings.length || !isDeepStrictEqual(bindings.sort((a,b)=>a.id.localeCompare(b.id)),[...compiled.bindings].sort((a,b)=>a.id.localeCompare(b.id)))) throw new IntegrationError('adoption_policy_changed','Legacy adoption requires the complete identical approved Agent and assignments.')
-  }
-
   private apply(draft: IntegrationDraft): void {
+    if(this.deployedBots && ['agent.save','bindings.save'].includes(draft.change.kind))throw new IntegrationError('directory_required','BOT lifecycle recovery cannot apply mutable definitions in directory runtime.')
     const state = this.snapshot()
     if (state.revision !== draft.baseRevision) throw new IntegrationError('revision_conflict', 'Approved configuration cannot be applied over a newer version.', 409)
     const change = draft.change
-    if (change.kind === 'bot.save') {
-      if (change.adoptLegacy) this.assertLegacyAdoption(change.package)
-      const compiled = compileDiscordPackage(change.package)
-      const previous = state.packages[change.package.id]
-      const old = previous ? compileDiscordPackage(previous.active) : undefined
-      if (old && old.agent.id !== compiled.agent.id) throw new IntegrationError('immutable_agent_id','A BOT update must preserve its Agent UUID.')
-      const oldIds = new Set(old?.bindings.map(b=>b.id) ?? (change.adoptLegacy ? compiled.bindings.map(b=>b.id) : []))
-      const agent: IntegrationAgent = change.adoptLegacy ? state.agents.find(a=>a.id===compiled.agent.id)! : {...compiled.agent,version:hash(compiled.agent),publishedAt:draft.createdAt}
-      state.agents = [...state.agents.filter(a=>a.id !== agent.id),agent]
-      state.bindings = [...state.bindings.filter(b=>!oldIds.has(b.id)),...compiled.bindings.map(b=>({...b,epochRevision:(state.bindings.find(old=>old.id===b.id)?.epochRevision ?? 0)+(change.adoptLegacy ? 0 : 1)}))]
-      const history = [...(previous?.history ?? []).filter(p=>hash(p)!==hash(change.package)),change.package].slice(-20)
-      state.packages[change.package.id] = {active:change.package,revision:hash(change.package),history}
-      // A single private-document write below switches source, Agent, processor and access together.
-    } else if (change.kind === 'agent.save') {
+    if (change.kind === 'agent.save') {
       const managementBindingId = state.agents.find(agent => agent.id === change.agent.id)?.managementBindingId ??
         (draft.actor.kind === 'discord' ? draft.actor.bindingId : undefined)
       const agent: IntegrationAgent = { ...change.agent, version: hash(change.agent), publishedAt: draft.createdAt,
@@ -536,7 +523,7 @@ export class IntegrationStore {
       this.options.memory.revokeDomain(change.domainId)
     }
     const revision = state.revision + 1
-    this.document.write({ ...state, revision,
+    this.writeState({ ...state, revision,
       drafts: state.drafts.map(item => item.id === draft.id ? { ...item, status: 'applied', appliedRevision: revision, decidedAt: draft.decidedAt ?? new Date().toISOString() } : item),
       audit: [...state.audit, { id: draft.id, at: new Date().toISOString(), actor: draft.actor.id,
         kind: change.kind, revision, affectedBindings: draft.affectedBindings }].slice(-1000),

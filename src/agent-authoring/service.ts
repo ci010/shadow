@@ -14,11 +14,12 @@ import type { Executor } from '../execution/executor.ts'
 import { AgentResourceStore } from './store.ts'
 import { CapabilityBroker, assertSupportedJsonSchema, validateJsonSchema } from './capabilities.ts'
 import { executeAuthoredTool } from './tool-runtime.ts'
-import { conversationBindingKey, type ResolvedConversationPolicy } from './contracts.ts'
+import { conversationBindingKey, type ResolvedConversationPolicy, type PublishedTool } from './contracts.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 import type { ChannelBoundary } from '../channels/integration-contract.ts'
 
 export interface ConversationPolicies {
+  personal?(sessionId: string): { agent: string; prompt: string } | undefined
   managed(sessionId: string): boolean
   resolve(sessionId: string): ResolvedConversationPolicy | undefined
   authorize(sessionId: string, input: SessionInput): void
@@ -49,22 +50,25 @@ export class AgentAuthoringService implements ConversationPolicies {
     legacyAddress?: (sessionId: string) => ChannelAddress | undefined
   }) {}
 
+  protected get policyStore(): Pick<AgentResourceStore,'isManaged'|'resolve'> { return this.options.store }
+
   address(sessionId: string): ChannelAddress | undefined {
     const address = channelAddressFromSessionId(sessionId) ?? this.options.legacyAddress?.(sessionId)
     if (address && address.projectId !== this.options.projectId) throw new Error('Conversation policy belongs to another Project.')
     return address
   }
 
+  personal?(sessionId: string): { agent: string; prompt: string } | undefined
   managed(sessionId: string): boolean {
     const address = this.address(sessionId)
-    return !!address && this.options.store.isManaged(address)
+    return !!address && this.policyStore.isManaged(address)
   }
 
   resolve(sessionId: string): ResolvedConversationPolicy | undefined {
     const address = this.address(sessionId)
     if (!address) return undefined
-    const policy = this.options.store.resolve(address)
-    if (!policy?.binding.enabled && this.options.store.isManaged(address)) {
+    const policy = this.policyStore.resolve(address)
+    if (!policy?.binding.enabled && this.policyStore.isManaged(address)) {
       throw new Error('This conversation agent is disabled or no longer published. Ask the Project owner to configure it.')
     }
     return policy
@@ -180,22 +184,7 @@ export class AgentAuthoringService implements ConversationPolicies {
         execute: async (args, context) => {
           contextCheck(context)
           validateToolArguments(tool.parameters, args)
-          const output = await executeAuthoredTool({
-            code: tool.code, args, signal: context.signal,
-            filename: tool.source, imports: tool.imports, allowedModules: policy.agent.allowedModules,
-            mode: 'live', cwd: this.options.workspace,
-            callModule: async (name, input, signal) => {
-              contextCheck(context)
-              if (!tool.imports.includes(`@shadow/${name}`)) throw new Error('This tool did not declare that module.')
-              const grant = policy.binding.grants.find(grant => grant.id === name)
-              if (!grant) throw new Error('This conversation has no grant for that capability.')
-              return this.options.broker.execute(grant, input, {
-                sessionId, inputId: context.messageId, toolCallId: context.toolCallId ?? context.messageId,
-                bindingKey: conversationBindingKey(policy.binding), revision: policy.revision,
-                signal, assertCurrent: () => contextCheck(context),
-              })
-            },
-          })
+          const output = await this.executeDeclaredTool(policy,tool,args,context,() => contextCheck(context))
           contextCheck(context)
           return JSON.stringify(output)
         },
@@ -207,6 +196,25 @@ export class AgentAuthoringService implements ConversationPolicies {
     )
     tools.setExecutionScope('session', [])
     return tools
+  }
+
+  protected async executeDeclaredTool(policy:ResolvedConversationPolicy,tool:PublishedTool,args:Record<string,unknown>,context:ExecutionContext,assertCurrent:()=>void):Promise<unknown> {
+    return executeAuthoredTool({
+            code: tool.code, args, signal: context.signal,
+            filename: tool.source, imports: tool.imports, allowedModules: policy.agent.allowedModules,
+            mode: 'live', cwd: this.options.workspace,
+            callModule: async (name, input, signal) => {
+              assertCurrent()
+              if (!tool.imports.includes(`@shadow/${name}`)) throw new Error('This tool did not declare that module.')
+              const grant = policy.binding.grants.find(grant => grant.id === name)
+              if (!grant) throw new Error('This conversation has no grant for that capability.')
+              return this.options.broker.execute(grant, input, {
+                sessionId:context.sessionId, inputId: context.messageId, toolCallId: context.toolCallId ?? context.messageId,
+                bindingKey: conversationBindingKey(policy.binding), revision: policy.revision,
+                signal, assertCurrent: () => assertCurrent(),
+              })
+            },
+          })
   }
 
   private async read(policy: ResolvedConversationPolicy, sessionId: string, path: string, context: ExecutionContext): Promise<string> {

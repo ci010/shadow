@@ -127,6 +127,7 @@ export class DiscordIntegration implements ConversationPolicies {
     sources?: SourceResources
     classifier?:import('../events/input-classifier.ts').InputClassifier
     baseTools: Tools
+    directoryBots?: import('../agent-authoring/bot-runtime.ts').DirectoryBots
   }) {
     this.invalidations.push(options.store.onChange(ids => this.invalidate(new Set(ids))))
     this.invalidations.push(options.memory.onChange(domainId => this.invalidate(new Set([
@@ -739,6 +740,12 @@ export class DiscordIntegration implements ConversationPolicies {
         })
       },
     })
+    for (const tool of this.options.directoryBots?.customTools(profile.name) ?? []) {
+      if (!binding.tools.includes(tool.name) || !profile.tools.includes(tool.name)) continue
+      if (base.get(tool.name)) throw new IntegrationError('tool_collision','BOT custom tool collides with a controlled platform tool.')
+      register({name:tool.name,description:tool.description,parameters:tool.parameters as import('../tools/tool.ts').ToolParameters,
+        execute:async (args,context) => JSON.stringify(await this.options.directoryBots!.execute(profile.name,profile.version,binding.tools,tool.name,args,context,binding.id,async signal=>{check(context);await inspect(signal)}))})
+    }
     const tools = new SessionTools(base, this.options.workspace,
       child ? binding.tools.filter(name => !['subagent', 'channel_config'].includes(name)) : binding.tools, undefined, [])
     tools.setExecutionScope(child ? 'call' : 'session', child || service ? [] : ['call'])

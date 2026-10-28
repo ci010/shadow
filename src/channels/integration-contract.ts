@@ -1,5 +1,6 @@
 import { InputProcessorSchema } from '../events/input-processor-contract.ts'
 import { z } from 'zod'
+import { CapabilityGrantSchema } from '../agent-authoring/contracts.ts'
 import { MemorySourceSchema, MemoryDomainSchema, MemoryResourceSchema } from '../memory/contracts.ts'
 
 const snowflake = z.string().regex(/^[0-9]{1,20}$/)
@@ -23,7 +24,7 @@ export const IntegrationAgentInputSchema = z.object({
   displayName: z.string().trim().min(1).max(100),
   markdown: z.string().min(1).max(128_000),
   execution: z.enum(['restricted', 'trusted']),
-  tools: z.array(z.enum(integrationToolNames)).max(32),
+  tools: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,127}$/)).max(64),
   readDomains: z.array(z.string().uuid()).max(32),
   sourceFolders: SourceFoldersSchema.optional(),
   discordHistory: DiscordHistoryScopeSchema.optional(),
@@ -62,18 +63,17 @@ export const DiscordBindingSchema = z.object({
   participants: z.object({
     everyone: z.boolean(), userIds: z.array(snowflake).max(1000), roleIds: z.array(snowflake).max(250),
   }).strict(),
-  tools: z.array(z.enum(integrationToolNames)).max(32),
+  tools: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,127}$/)).max(64),
   readDomains: z.array(z.string().uuid()).max(32),
   sourceFolders: SourceFoldersSchema.optional(),
   discordHistory: DiscordHistoryScopeSchema.optional(),
   inheritThreads: z.boolean(),
   manage: z.boolean(),
   epochRevision: z.number().int().nonnegative().optional(),
+  grants: z.array(CapabilityGrantSchema).max(32).optional(),
 }).strict()
 export type DiscordBinding = z.infer<typeof DiscordBindingSchema>
-export const DiscordPackageSchema = z.object({ id: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/), source: z.record(z.string().max(512_000)) }).strict()
 export const IntegrationChangeSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('bot.save'), package: DiscordPackageSchema, adoptLegacy: z.literal(true).optional() }).strict(),
   z.object({ kind: z.literal('agent.save'), agent: IntegrationAgentInputSchema }).strict(),
   z.object({ kind: z.literal('bindings.save'), bindings: z.array(DiscordBindingSchema).min(1).max(200) }).strict(),
   z.object({ kind: z.literal('domain.create'), name: z.string().trim().min(1).max(160), domainKind: z.enum(['shared', 'agent-private']) }).strict(),
@@ -91,7 +91,7 @@ export type IntegrationChange = z.infer<typeof IntegrationChangeSchema>
 export const integrationConfigurationGuide = {
   workflow: 'list -> directory/members -> propose with the exact list revision -> human review. schema only documents inputs; it grants no permission.',
   actions: {
-    list: 'Read current Discord revision, Agents, bindings and permitted domains. Owner chat lists named Discord connections in bots and QQ/Feishu connections with their authoring route in otherPlatformBots; enabled is configuration, not proof of connectivity. QQ/Feishu use authoring_change, not these Discord revisions or proposal formats.',
+    list: 'Read current Discord revision, Agents, bindings and permitted domains. Owner chat lists named Discord connections in bots and QQ/Feishu connections with their authoring route in otherPlatformBots; enabled is configuration, not proof of connectivity. All platforms use bot_package and registered directory sources for BOT lifecycle; these Discord proposals manage knowledge/domain data only in directory mode.',
     directory: 'Owner: {botId,guildId?,after?}. Discord manager: {guildId?,after?}, always its own Bot. Omit guildId to discover named servers, then supply a returned guild ID for channels/roles. Use guildCursor as after for another server page.',
     members: '{guildId,query}, plus botId in owner chat. Search a name in a mutual server; at most 25 results. Discord has no global person-name search. Use returned IDs, not guessed IDs.',
     resource: 'Owner only: {resourceId}. Read an exact catalog resource and its version/source metadata before proposing a fixed-copy publication.',
@@ -99,8 +99,8 @@ export const integrationConfigurationGuide = {
     propose: '{baseRevision,changeJson}. changeJson is a JSON-encoded change below. This creates an expiring review, never approval.',
   },
   changes: {
-    'agent.save': '{kind:"agent.save",agent:{id:<new UUID or existing Agent ID>,name:<stable lowercase name>,displayName,markdown,execution:"restricted"|"trusted",tools:[...],readDomains:[<domain UUID>],skills:[{name,content}]}}. markdown is AGENT.md with matching name and defaultMode: session. Omit server-owned version, publishedAt and managementBindingId when editing a listed Agent.',
-    'bindings.save': '{kind:"bindings.save",bindings:[{id:<new UUID or existing binding ID>,botInstanceId,botUserId,target:{kind:"channel",guildId,channelId}|{kind:"dm",userId},enabled,agentId,trigger:"mention"|"all",participants:{everyone,userIds:[...],roleIds:[...]},tools:[...],readDomains:[...],inheritThreads,manage,processor?:{code,delayMs,includeBots?:boolean}}]}. processor runs restricted export async function run({event}) returning {action:"ignore"|"buffer"|"emit"}; no imports or tools. includeBots defaults false; self messages are always ignored and other bots have a 60s per-conversation cooldown. Windows are per sender and conversation, at most 60s; managed pending messages use a bounded private durable inbox with fresh authorization on recovery; no exactly-once guarantee. botUserId comes from directory. Every save, including an unchanged save, starts fresh context. Omitted bindings are unchanged.',
+    'agent.save': 'Internal non-production security-fixture Agent shape (IntegrationAgentInputSchema); unavailable in directory runtime.',
+    'bindings.save': 'Internal non-production security-fixture binding shape (DiscordBindingSchema); unavailable in directory runtime.',
     'domain.create': '{kind:"domain.create",name,domainKind:"shared"|"agent-private"}. Review before referring to the returned domain ID; a domain name grants no access.',
     'knowledge.publish': '{kind:"knowledge.publish",domainId,title,content,sources:[{domain:{id,revision},resourceId?,version?,sessionId?,epoch?}],resourceKind?:"note"|"skill"}. Reference exact observed sources; resourceId/version and sessionId/epoch are pairs. [] is for genuinely new owner-provided text, never removal of known provenance. Publication copies the reviewed content; it does not expose the original or future edits.',
     'knowledge.revoke': 'Owner only: {kind:"knowledge.revoke",resourceId}. Revokes future access, not content already delivered.',
@@ -144,17 +144,12 @@ export const IntegrationActorSchema = z.discriminatedUnion('kind', [
 ])
 export type IntegrationActor = z.infer<typeof IntegrationActorSchema>
 export const IntegrationDraftSchema = z.object({
-  origin: z.object({ sessionId: z.string().regex(/^web:/).max(512), physicalId: z.string().min(1).max(512), toolCallId: z.string().min(1).max(512) }).strict().optional(),
   decidedAt: z.string().datetime().optional(),
   id: z.string().uuid(), baseRevision: z.number().int().nonnegative(),
   hash: z.string().regex(/^[a-f0-9]{64}$/), change: IntegrationChangeSchema, actor: IntegrationActorSchema,
   createdAt: z.string().datetime(), expiresAt: z.string().datetime(),
   status: z.enum(['pending', 'applying', 'applied', 'cancelled']), appliedRevision: z.number().int().positive().optional(),
   affectedBindings: z.array(z.string().uuid()),
-  resourceReview: z.object({
-    agent: z.object({sourceFolders:SourceFoldersSchema,discordHistory:DiscordHistoryScopeSchema.nullable()}).strict(),
-    bindings:z.array(z.object({id:z.string().uuid(),target:DiscordTargetSchema,sourceFolders:SourceFoldersSchema,discordHistory:DiscordHistoryScopeSchema.nullable()}).strict()).max(200),
-  }).strict().optional(),
   warning: z.string(),
   validationHash: z.string(),
   agentFileHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
@@ -261,7 +256,6 @@ export interface DiscordAdapterIntegration {
 }
 
 export const IntegrationOverviewSchema = z.object({
-  packages: z.record(z.object({active: DiscordPackageSchema, revision:z.string(), history:z.array(DiscordPackageSchema)})).default({}),
   projectId: id, version: z.literal(1), revision: z.number().int().nonnegative(),
   agents: z.array(IntegrationAgentSchema), bindings: z.array(DiscordBindingSchema),
   deploymentIssues: z.array(z.object({ agentId: z.string().uuid(), message: z.string() }).strict()),
