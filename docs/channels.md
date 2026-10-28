@@ -333,6 +333,27 @@ proxy credentials and automatic credential logon for PAC downloads are not used.
 If the Windows PAC address points to localhost, its proxy/PAC application must
 be running for outbound requests; Main can be locally ready while that service
 is unavailable.
+On macOS, standard proxy environment variables take precedence over the effective
+global SystemConfiguration policy read by `/usr/sbin/scutil --proxy` (5-second
+timeout, bounded output, abort support). Web Proxy and Secure Web Proxy are
+separate HTTP CONNECT endpoints. Missing protocol routes remain direct. Bypass
+supports hostname wildcards, IPv4/IPv6 CIDR and “Exclude simple hostnames”.
+Scoped per-interface dictionaries are not merged into the global policy.
+Enabled SOCKS is rejected explicitly.
+
+macOS PAC and automatic discovery are detected but **not evaluated**: non-loopback
+requests fail with instructions to configure static Web Proxy/Secure Web Proxy
+or `HTTP_PROXY`/`HTTPS_PROXY`. No PAC URL is fetched or JavaScript run in Node;
+static routes alongside enabled PAC do not bypass this restriction. Loopback and
+the disabled application proxy toggle still work. Local readiness is not blocked
+by PAC detection. This also applies to downloads and hosted Node Micro Apps.
+Restart or use application re-detection after changing static settings.
+
+The Electron backend uses this same Node implementation, not Chromium's proxy
+resolver. Renderer/browser networking remains a separate Chromium/OS boundary;
+no Electron session proxy settings are changed. Tests cover synthetic macOS
+output and routing on Windows; real macOS networking has not been verified.
+
 SOCKS and credential-bearing proxy URLs remain unsupported and fail explicitly.
 This is not a proxy guarantee for SDKs using
 their own HTTP agents or for arbitrary subprocesses.

@@ -1,10 +1,11 @@
-import { isIP } from 'node:net'
+import { BlockList, isIP } from 'node:net'
 import { z } from 'zod'
 import { readWindowsProxy, resolveWindowsProxy, type WindowsProxySettings } from './windows-proxy.ts'
+import { readMacOSProxy, type MacOSProxySettings } from './macos-proxy.ts'
 export type { WindowsProxySettings } from './windows-proxy.ts'
 
 export const proxyConfigurationSchema = z.object({
-  source: z.enum(['direct', 'environment', 'windows-static', 'windows-auto']),
+  source: z.enum(['direct', 'environment', 'windows-static', 'windows-auto', 'macos-static', 'macos-auto']),
   http: z.string().optional(),
   https: z.string().optional(),
   bypass: z.array(z.string()),
@@ -47,8 +48,19 @@ export function windowsProxyConfiguration(settings: WindowsProxySettings): Proxy
   return configuration
 }
 
+export function macOSProxyConfiguration(settings: MacOSProxySettings): ProxyConfiguration {
+  if (settings.automatic) return { source: 'macos-auto', bypass: [] }
+  if (settings.socks) throw new Error('SOCKS macOS system proxies are unsupported. Configure a static HTTP(S) proxy in Network > Proxies or HTTP_PROXY/HTTPS_PROXY.')
+  if (!settings.http && !settings.https) return direct()
+  return { source: 'macos-static',
+    ...(settings.http ? { http: proxyUrl(settings.http) } : {}),
+    ...(settings.https ? { https: proxyUrl(settings.https) } : {}),
+    bypass: [...settings.bypass, ...(settings.excludeSimple ? ['<local>'] : [])],
+  }
+}
+
 export async function localProxyConfiguration(signal?: AbortSignal, options: {
-  env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; readWindows?: typeof readWindowsProxy; detectOnly?: boolean
+  env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; readWindows?: typeof readWindowsProxy; readMacOS?: typeof readMacOSProxy; detectOnly?: boolean
 } = {}): Promise<ProxyConfiguration> {
   signal?.throwIfAborted()
   if (!options.detectOnly && !proxyEnabled) return direct()
@@ -60,6 +72,11 @@ export async function localProxyConfiguration(signal?: AbortSignal, options: {
       source: 'environment', ...(http ? { http: proxyUrl(http) } : {}), ...(https ? { https: proxyUrl(https) } : {}),
       bypass: (env.no_proxy ?? env.NO_PROXY ?? '').split(/[,\s]+/).filter(Boolean),
     }
+  }
+  if ((options.platform ?? process.platform) === 'darwin') {
+    const settings = await (options.readMacOS ?? readMacOSProxy)(signal)
+    signal?.throwIfAborted()
+    return macOSProxyConfiguration(settings)
   }
   if ((options.platform ?? process.platform) !== 'win32') return direct()
   const settings = await (options.readWindows ?? readWindowsProxy)(signal)
@@ -91,10 +108,23 @@ export function proxyForUrl(configuration: ProxyConfiguration, value: string | U
   const url = networkUrl(value)
   // Never send local app credentials or loopback service traffic through an upstream proxy.
   if (isLoopback(url)) return undefined
+  if (configuration.source === 'macos-auto') throw new Error('macOS PAC/automatic proxy resolution is not supported by the Node backend. Configure static Web Proxy and Secure Web Proxy in Network > Proxies, or HTTP_PROXY/HTTPS_PROXY; no direct fallback was attempted.')
   if (configuration.source === 'windows-auto') throw new Error('Automatic Windows proxy routes require asynchronous resolution.')
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-  if (configuration.source === 'windows-static') {
-    if (configuration.bypass.some(pattern => windowsBypass(pattern, url))) return undefined
+  if (configuration.source === 'windows-static' || configuration.source === 'macos-static') {
+    if (configuration.bypass.some(pattern => {
+      if (configuration.source === 'macos-static' && pattern.includes('/')) {
+        const [address, prefix, extra] = pattern.split('/')
+        const family = isIP(address)
+        if (!family || extra !== undefined || !/^\d+$/.test(prefix ?? '')) return false
+        try {
+          const block = new BlockList()
+          block.addSubnet(address, Number(prefix), family === 4 ? 'ipv4' : 'ipv6')
+          return isIP(hostname) === family && block.check(hostname, family === 4 ? 'ipv4' : 'ipv6')
+        } catch { return false }
+      }
+      return windowsBypass(pattern, url)
+    })) return undefined
   } else if (configuration.bypass.some(entry => {
     if (entry === '*') return true
     const match = entry.match(/^(.+):(\d+)$/)

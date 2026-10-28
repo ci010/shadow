@@ -25,6 +25,11 @@ test('disabled bypasses invalid environment and Windows detection; detection rem
     assert.doesNotMatch(JSON.stringify(status), /password-secret/)
     const pac = await proxyStatus(false, async () => ({ source: 'windows-auto', bypass: [] }))
     assert.deepEqual(pac, { enabled: false, detected: true, source: 'windows-auto', http: '', https: '', detectionFailed: false })
+    const macPAC = await proxyStatus(true, async () => ({ source: 'macos-auto', bypass: [] }))
+    assert.deepEqual(macPAC, { enabled: true, detected: true, source: 'macos-auto', http: '', https: '', detectionFailed: false })
+    const macStatic = await proxyStatus(true, async () => ({ source: 'macos-static', http: 'http://fixture.invalid:8080/', bypass: [] }))
+    assert.equal(macStatic.source, 'macos-static')
+    assert.equal(macStatic.detectionFailed, false)
   } finally { setLocalProxyEnabled(true) }
 })
 
