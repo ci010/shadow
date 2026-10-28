@@ -11,6 +11,8 @@
     "node": ">=24.15.0"
   },
   "scripts": {
+    "pnpm:devPreinstall": "node scripts/postinstall-native.ts",
+    "postinstall": "node scripts/postinstall-native.ts",
     "dev": "node --env-file-if-exists=.env --import tsx scripts/desktop.ts dev",
     "start": "node --env-file-if-exists=.env --import tsx scripts/start.ts",
     "a2a:bridge": "node --import tsx integrations/a2a/cli.ts",
