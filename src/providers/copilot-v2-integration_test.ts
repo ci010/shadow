@@ -21,15 +21,15 @@ function fixture() {
   return { auth, files, grant }
 }
 
-test('stable Copilot ID and explicit v2 select v2; v1 remains explicit rollback', () => {
+test('stable Copilot ID and explicit v2 select v2', () => {
   const { auth } = fixture()
-  for (const type of ['copilot', 'copilot-v2', 'copilot-v1']) {
+  for (const type of ['copilot', 'copilot-v2']) {
     const config = ConfigSchema.parse({ agent: { model: 'gpt-6-astra@office' }, providers: { office: { type } } })
     const provider = createProvider('gpt-6-astra', config, 'office', auth)
     assert.ok(provider instanceof CopilotProvider)
-    assert.equal(provider instanceof CopilotProviderV2, type !== 'copilot-v1')
+    assert.equal(provider instanceof CopilotProviderV2, true)
     assert.equal(provider.auth, copilotAuthForInstance(config, 'office', auth))
-    assert.equal(provider.auth instanceof CopilotAuthenticatorV2, type !== 'copilot-v1')
+    assert.equal(provider.auth instanceof CopilotAuthenticatorV2, true)
     assert.equal(resolveProviderSettings(config, 'office').authMode, 'copilot')
     assert.equal(provider.name, 'copilot', 'protocol and AI credit accounting remain stable')
     assert.doesNotThrow(() => createAggregatedProvider(config, auth))
@@ -38,14 +38,12 @@ test('stable Copilot ID and explicit v2 select v2; v1 remains explicit rollback'
   assert.ok(createProvider('claude-sonnet-4.6', config, undefined, auth) instanceof CopilotProviderV2)
 })
 
-for (const type of ['copilot', 'copilot-v2', 'copilot-v1']) {
+for (const type of ['copilot', 'copilot-v2']) {
   test(`${type}: setup readiness and inference share the same credential instance`, async t => {
     const { auth, grant } = fixture()
     const config = ConfigSchema.parse({ agent: { model: 'gpt-6-astra@office' }, providers: { office: { type, name: 'Office' } } })
     const scoped = copilotAuthForInstance(config, 'office', auth)
-    scoped.persistGrant(type === 'copilot-v1'
-      ? { ...grant, apiKey: { token: grant.apiKey.token, expires_at: grant.apiKey.expires_at } }
-      : grant)
+    scoped.persistGrant(grant)
     const store = new ConfigStore({ configPath: join(process.cwd(), '.test-data', 'unused-v2-config.json'), getConfig: () => config, onChanged: () => {} })
     const setup = new ProviderSetup({ getConfig: () => config, store, auth })
     t.after(() => setup.dispose())
@@ -119,4 +117,52 @@ test('login HTTP preserves server 404 at Copilot access stage without exposing b
   assert.equal(status.httpStatus, 404)
   assert.equal(status.state, 'error')
   assert.doesNotMatch(JSON.stringify(status), /private-device/)
+})
+
+
+test('retired v1 configuration fails closed without changing credentials or selecting another account', async t => {
+  const { auth, files, grant } = fixture()
+  auth.persistGrant(grant)
+  const before = new Map(files)
+  for (const providers of [{ office: { type: 'copilot-v1' } }, { 'copilot-v1': {} }]) {
+    const id = 'office' in providers ? 'office' : 'copilot-v1'
+    const config = ConfigSchema.parse({ agent: { model: `gpt-6-astra@${id}` }, providers })
+    const direct = createProvider('gpt-6-astra', config, id, auth)
+    await assert.rejects(direct.chat([], [], { model: 'gpt-6-astra' }), /no longer supported.*Reconfigure/)
+    await assert.rejects(Promise.resolve().then(() => direct.listModels()), /no longer supported/)
+    assert.throws(() => resolveProviderSettings(config, id), /no longer supported/)
+    assert.throws(() => copilotAuthForInstance(config, id, auth), /no longer supported/)
+    const aggregated = createAggregatedProvider(config, auth)
+    assert.ok(aggregated.getProvider(id))
+    assert.equal(aggregated.qualifiedModelId('gpt-6-astra'), `gpt-6-astra@${id}`)
+    await assert.rejects(aggregated.chat([], [], { model: 'gpt-6-astra' }), /no longer supported/)
+    await assert.rejects(aggregated.chat([], [], { model: `gpt-6-astra@${id}` }), /no longer supported/)
+    assert.deepEqual(await aggregated.listModels(), [])
+    const store = new ConfigStore({ configPath: join(process.cwd(), '.test-data', 'unused-retired.json'), getConfig: () => config, onChanged: () => assert.fail('must not change config') })
+    const setup = new ProviderSetup({ getConfig: () => config, store, auth })
+    t.after(() => setup.dispose())
+    assert.equal((await setup.status()).ready, false)
+    assert.equal((await setup.status()).reason, 'retired_copilot')
+    assert.ok(setup.configured().some(p => p.provider === id && p.reason === 'retired_copilot'))
+    const app = new Hono(); setup.plugin()(app)
+    assert.equal((await app.request(`/api/auth/login?provider=${id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 409)
+    assert.equal((await app.request('/api/provider/instances', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'new-old', type: 'copilot-v1', name: 'Old' }) })).status, 400)
+    assert.deepEqual(files, before)
+  }
+  assert.equal(await auth.getApiKey(), grant.accessToken, 'existing v2 login remains usable')
+  const config = ConfigSchema.parse({ agent: { model: 'gpt-6-astra@copilot' }, providers: { copilot: {}, retired: { type: 'copilot-v1' } } })
+  const aggregated = createAggregatedProvider(config, auth)
+  assert.ok(aggregated.getProvider('copilot') instanceof CopilotProviderV2)
+  assert.ok(aggregated.getProvider('retired'), 'retain retired secondary routing identity')
+  assert.equal(aggregated.qualifiedModelId('gpt-6-astra'), 'gpt-6-astra@copilot')
+  let currentCalls = 0
+  t.mock.method(aggregated.getProvider('copilot')!, 'chat', async () => {
+    currentCalls++
+    return { content: 'synthetic-current', toolCalls: [], usage: { promptTokens: 0, completionTokens: 0 } }
+  })
+  await aggregated.chat([], [], { model: 'gpt-6-astra' })
+  assert.equal(currentCalls, 1, 'valid primary remains usable')
+  await assert.rejects(aggregated.chat([], [], { model: 'gpt-6-astra@retired' }), /Reconfigure/)
+  assert.equal(currentCalls, 1, 'retired request must not fall back to current account')
+  assert.deepEqual(files, before)
 })

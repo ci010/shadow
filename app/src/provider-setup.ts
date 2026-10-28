@@ -37,6 +37,7 @@ export interface ConfiguredProvider {
   selected: boolean
   baseUrl?: string
   model?: string
+  reason?: string
 }
 
 export const providerPresets = [
@@ -52,7 +53,6 @@ export const providerPresets = [
 export function providerDisplayName(provider: string): string {
   if (provider === 'copilot') return 'GitHub Copilot'
   if (provider === 'copilot-v2') return 'GitHub Copilot v2'
-  if (provider === 'copilot-v1') return 'GitHub Copilot v1'
   return providerPresets.find(item => item.id === provider)?.name ?? provider
 }
 
@@ -98,6 +98,7 @@ export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
   let selected = false
   return value.providers.map((item: unknown) => {
     if (!isRecord(item) || typeof item.provider !== 'string' || !item.provider
+      || (item.reason !== undefined && typeof item.reason !== 'string')
       || (item.type !== undefined && typeof item.type !== 'string')
       || (item.name !== undefined && typeof item.name !== 'string')
       || names.has(item.provider) || typeof item.selected !== 'boolean'
@@ -112,6 +113,7 @@ export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
     selected ||= item.selected
     return {
       provider: item.provider,
+      ...(typeof item.reason === 'string' ? { reason: item.reason } : {}),
       ...(typeof item.type === 'string' ? { type: item.type } : {}),
       ...(typeof item.name === 'string' ? { name: item.name } : {}),
       ...(item.host !== undefined ? { host: normalizeCopilotHost(item.host) } : {}),

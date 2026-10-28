@@ -5,7 +5,7 @@ import { providerPlugin } from './routes.ts'
 import { join, relative } from 'node:path'
 import { ConfigSchema } from '../config/schema.ts'
 import { createAggregatedProvider, createProvider, resolveProviderSettings } from './factory.ts'
-import { CopilotAuthenticator, CopilotProvider } from './copilot.ts'
+import { CopilotAuthenticatorV2, CopilotProviderV2 } from './copilot-v2.ts'
 import { DeepSeekProvider } from './deepseek.ts'
 import { AggregatedProvider } from './aggregated.ts'
 import type { LLMProvider } from './provider.ts'
@@ -58,7 +58,7 @@ test('Copilot tokens, refreshes, persisted hosts and model caches are isolated b
   const root = join(process.cwd(), '.test-data', 'virtual-instances')
   const key = (path: string) => relative(root, path).replaceAll('\\', '/')
   const now = 1_800_000_000_000
-  const auth = new CopilotAuthenticator(root, {
+  const auth = new CopilotAuthenticatorV2(root, {
     now: () => now,
     storage: { read: path => files.get(key(path)), write: (path, value) => { files.set(key(path), value) }, remove: path => { files.delete(key(path)) } },
     fetch: async (_url, init) => Response.json({ token: new Headers(init?.headers).get('authorization'), expires_at: now / 1000 + 3600 }),
@@ -66,25 +66,25 @@ test('Copilot tokens, refreshes, persisted hosts and model caches are isolated b
   const a = auth.forInstance('a'), b = auth.forInstance('b')
   assert.equal(auth.forInstance('a'), a)
   assert.equal(auth.forInstance('copilot'), auth)
-  const grant = (id: string) => ({ accessToken: `synthetic-${id}`, apiKey: { token: `key-${id}`, expires_at: now / 1000 + 3600 } })
+  const grant = (id: string) => ({ accessToken: `synthetic-${id}`, apiKey: { token: `synthetic-${id}`, expires_at: now / 1000 + 3600, directOAuth: { clientId: 'Ov23ctr1Udn5GokVCVJf', scope: 'copilot', expiryKnown: true } } })
   auth.persistGrant(grant('legacy'))
   a.persistGrant(grant('a'))
   b.persistGrant(grant('b'))
   a.writeModelsCache([{ id: 'a-model' }]); b.writeModelsCache([{ id: 'b-model' }])
   assert.deepEqual(a.readModelsCache()?.models, [{ id: 'a-model' }])
   assert.deepEqual(b.readModelsCache()?.models, [{ id: 'b-model' }])
-  assert.equal(await a.getApiKey(), 'key-a')
-  assert.equal(await b.getApiKey(), 'key-b')
+  assert.equal(await a.getApiKey(), 'synthetic-a')
+  assert.equal(await b.getApiKey(), 'synthetic-b')
   assert.notEqual(await a.getApiKey(undefined, true), await b.getApiKey(undefined, true))
   a.signOut()
   await assert.rejects(a.getApiKey(), /sign in|credentials|Sign in/i)
-  assert.equal(await auth.getApiKey(), 'key-legacy')
+  assert.equal(await auth.getApiKey(), 'synthetic-legacy')
   assert.ok(await b.getApiKey())
   assert.ok(b.readModelsCache())
   assert.ok([...files.keys()].some(name => name.startsWith('instances/b/')))
   assert.throws(() => auth.forInstance('../escape'), /Invalid/)
   const cfg = ConfigSchema.parse({ agent: { model: 'gpt-4o@b' }, providers: { b: { type: 'copilot' } } })
-  assert.ok(createProvider('gpt-4o', cfg, 'b', auth) instanceof CopilotProvider)
+  assert.ok(createProvider('gpt-4o', cfg, 'b', auth) instanceof CopilotProviderV2)
 })
 
 

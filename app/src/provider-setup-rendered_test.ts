@@ -369,15 +369,7 @@ test('new Copilot connection registers explicit v2 before login and keeps its st
   assert.equal(posts[1].body.reauthenticate, true)
 })
 
-test('explicit rollback form shows v1 without changing the connection ID', t => {
-  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'edit', status: { ...status, type: 'copilot-v1' } })
-  assert.match(view.text(), /v1/)
-  assert.doesNotMatch(view.text(), /v2/)
-  assert.doesNotMatch(view.text(), /only the copilot scope/)
-})
-
-
-for (const type of ['copilot', 'copilot-v1', 'copilot-v2']) {
+for (const type of ['copilot', 'copilot-v2']) {
   test(`setup retry preserves immutable existing ${type} when registering a display name`, async t => {
     const bodies: Record<string, unknown>[] = []
     t.mock.method(globalThis, 'fetch', async (url, init) => {
@@ -392,3 +384,11 @@ for (const type of ['copilot', 'copilot-v1', 'copilot-v2']) {
     assert.equal(bodies[0].provider, 'copilot')
   })
 }
+
+
+test('retired authentication status explains reconfiguration without offering the old sign-in flow', t => {
+  const view = mount(t, { apiBase: 'http://fixture.invalid', mode: 'setup', status: { ...status, type: 'copilot-v1', authMode: 'api-key', ready: false, reason: 'retired_copilot' } })
+  assert.match(view.text(), /no longer supported/)
+  assert.match(view.text(), /change its configured type to copilot or copilot-v2/)
+  assert.doesNotMatch(view.text(), /GitHub Copilot v1/)
+})

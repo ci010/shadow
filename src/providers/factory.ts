@@ -3,7 +3,7 @@ import type { Config } from '../config/schema.ts'
 import { env } from 'node:process'
 import { OpenAICompatibleProvider } from './openai-compatible.ts'
 import { AnthropicProvider } from './anthropic.ts'
-import { CopilotProvider, CopilotAuthenticator } from './copilot.ts'
+import { type CopilotAuthenticator } from './copilot.ts'
 import { CopilotAuthenticatorV2, CopilotProviderV2 } from './copilot-v2.ts'
 import { DeepSeekProvider } from './deepseek.ts'
 import { AgnesProvider } from './agnes.ts'
@@ -29,7 +29,6 @@ const PROVIDER_DEFAULTS: Record<string, {
   },
   copilot: {},
   'copilot-v2': {},
-  'copilot-v1': {},
   deepseek: {
     baseUrl: 'https://api.deepseek.com',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
@@ -62,14 +61,24 @@ export function providerType(config: Config, id: string): string {
 }
 
 export function isCopilotProviderType(type: string): boolean {
-  return type === 'copilot' || type === 'copilot-v2' || type === 'copilot-v1'
+  return type === 'copilot' || type === 'copilot-v2'
 }
 
-/** Setup and inference must use the same instance broker, including rollback. */
+export const LEGACY_COPILOT_ERROR = 'copilot-v1 is no longer supported. Reconfigure this provider as copilot or copilot-v2 and sign in again. Saved credentials have not been changed.'
+
+/** Retains routing identity without constructing an authenticator or contacting any account. */
+function retiredCopilotProvider(): LLMProvider {
+  const fail = async (): Promise<never> => { throw new Error(LEGACY_COPILOT_ERROR) }
+  return { name: 'copilot-v1', chat: fail, listModels: fail, listModelInfos: fail }
+}
+
+export function rejectLegacyCopilot(type: string): void {
+  if (type === 'copilot-v1') throw new Error(LEGACY_COPILOT_ERROR)
+}
+
+/** Setup and inference use the same current instance broker. */
 export function copilotAuthForInstance(config: Config, id: string, root: CopilotAuthenticator): CopilotAuthenticator {
-  if (providerType(config, id) === 'copilot-v1' && root instanceof CopilotAuthenticatorV2) {
-    return root.forLegacyInstance(id)
-  }
+  rejectLegacyCopilot(providerType(config, id))
   return root.forInstance(id)
 }
 
@@ -115,6 +124,7 @@ export function resolveProviderSettings(config: Config, name: string): {
 } {
   const configured = config.providers[name] ?? {}
   const type = providerType(config, name)
+  rejectLegacyCopilot(type)
   const defaults = PROVIDER_DEFAULTS[type]
   const apiKey = configured.apiKey ??
     (name === type && defaults?.apiKeyEnv ? env[defaults.apiKeyEnv] : undefined) ?? ''
@@ -144,6 +154,7 @@ export function createProvider(
   copilotAuth?: CopilotAuthenticator,
 ): LLMProvider {
   const name = providerName ?? detectProvider(model)
+  if (providerType(config, name) === 'copilot-v1') return retiredCopilotProvider()
   if (providerName && !config.providers[name] && !PROVIDER_DEFAULTS[name]) throw new Error(`Unknown provider instance "${name}"`)
   const type = providerType(config, name)
   const { apiKey, baseUrl } = resolveProviderSettings(config, name)
@@ -160,7 +171,7 @@ export function createProvider(
   if (isCopilotProviderType(type)) {
     const root = copilotAuth ?? new CopilotAuthenticatorV2()
     const auth = copilotAuthForInstance(config, name, root)
-    return type === 'copilot-v1' ? new CopilotProvider(auth) : new CopilotProviderV2(auth)
+    return new CopilotProviderV2(auth)
   }
 
   if (type === 'deepseek') {
@@ -209,7 +220,7 @@ export function createAggregatedProvider(config: Config, copilotAuth?: CopilotAu
   // Providers with explicit config entries. Copilot authenticates via OAuth
   // (no apiKey/baseUrl), so an empty `providers.copilot: {}` entry enables it.
   for (const [name, pc] of Object.entries(config.providers)) {
-    if (isCopilotProviderType(providerType(config, name)) || pc.apiKey || pc.baseUrl) names.add(name)
+    if (providerType(config, name) === 'copilot-v1' || isCopilotProviderType(providerType(config, name)) || pc.apiKey || pc.baseUrl) names.add(name)
   }
 
   // Instantiate each provider
