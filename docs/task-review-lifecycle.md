@@ -9,6 +9,7 @@ Local `subagent` task creation declares its review policy. This workflow is sepa
 - Omission selects parent review. The parent receives `subagent-review-requested`, not a success completion, and supplies a structured verdict.
 - `mode:"agent"` creates a fresh independent review session for each submission; `agent_type` defaults to `verify`. No pre-created reviewer or parent lifecycle orchestration is needed.
 - `max_rounds` defaults to 3, accepts integers 1–10, and counts submissions including the first. At the last round, a request for more changes fails explicitly.
+- The tool advertises the nested `review` fields as structured JSON Schema. Unknown fields are rejected before creating a child; use `review.max_rounds`, not the internal camelCase `maxRounds`. Validation errors include the `review` path and correction hints for common naming mistakes; invalid fields are never silently ignored.
 - Reviewers receive original task text, acceptance criteria, fixed submission revision, exact artifact reference and submitted final content. File references are references, not immutable filesystem snapshots; reviewers must verify artifacts as appropriate.
 - `agent_type` is not accepted in parent mode. Review policies are rejected for calls and remote A2A tasks.
 
