@@ -29,6 +29,7 @@ Start with the [project README](../README.md) for installation and commands,
 
 - [Local development and troubleshooting](development.md)
 - [Localization development](localization.md)
+- [User Alignment Lab](user-alignment.md): image, media timeline, storyboard with shot timeline, graph and 3D intent views and integration boundaries
 - [Architecture and implementation boundaries](architecture.md)
 - [Visual design system](../DESIGN.md)
 - [File spaces](file-spaces.md) and [media attachments](media-attachments.md)

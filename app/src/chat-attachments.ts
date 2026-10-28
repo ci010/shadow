@@ -1,3 +1,4 @@
+import { parseImageAlignment, formatImageAlignment, type ImageAlignmentDocument } from './image-alignment.ts'
 import { t } from './i18n.ts'
 import type { ImageSource } from './image-context.ts'
 import { apiUrl } from './api-url.ts'
@@ -10,6 +11,7 @@ export interface PendingChatAttachment {
   previewUrl?: string
   sourceKey?: string
   source?: ImageSource
+  alignment?: ImageAlignmentDocument
 }
 
 export function updateImageAttachment(
@@ -18,20 +20,25 @@ export function updateImageAttachment(
   file: File | null,
   options: {
     source?: ImageSource
+    alignment?: ImageAlignmentDocument | null
     createObjectUrl?: (file: File) => string
     revokeObjectUrl?: (url: string) => void
     createId?: () => string
   } = {},
 ): PendingChatAttachment[] {
   const previous = existing.find(attachment => attachment.sourceKey === sourceKey)
+  const alignment = options.alignment === undefined
+    ? (previous?.file === file ? previous?.alignment : undefined)
+    : options.alignment === null ? undefined : parseImageAlignment(options.alignment)
   if (previous?.file === file) {
-    return existing.map(attachment => attachment === previous && options.source
-      ? { ...attachment, source: { ...options.source } } : attachment)
+    return existing.map(attachment => attachment === previous && (options.source || options.alignment !== undefined)
+      ? { ...attachment, ...(options.source ? { source: { ...options.source } } : {}), alignment } : attachment)
   }
   if (file && !isImageAttachment(file)) throw new Error(t('Only an image can be added from the image preview.'))
   const next: PendingChatAttachment | undefined = file ? {
     key: previous?.key ?? (options.createId ?? createUuid)(),
     sourceKey,
+    ...(alignment ? { alignment } : {}),
     ...(options.source ? { source: { ...options.source } } : {}),
     file,
     kind: 'image',
@@ -47,14 +54,19 @@ export function replaceDraftImageAttachment(
   existing: readonly PendingChatAttachment[],
   key: string,
   file: File,
-  options: { createObjectUrl?: (file: File) => string; revokeObjectUrl?: (url: string) => void } = {},
+  options: { alignment?: ImageAlignmentDocument | null; createObjectUrl?: (file: File) => string; revokeObjectUrl?: (url: string) => void } = {},
 ): PendingChatAttachment[] {
   const previous = existing.find(item => item.key === key)
-  if (!previous || previous.file === file) return [...existing]
+  if (!previous) return [...existing]
+  const alignment = options.alignment === undefined
+    ? (previous.file === file ? previous.alignment : undefined)
+    : options.alignment === null ? undefined : parseImageAlignment(options.alignment)
+  if (previous.file === file && options.alignment === undefined) return [...existing]
+  if (previous.file === file) return existing.map(item => item === previous ? { ...item, alignment } : item)
   if (!isImageAttachment(file)) throw new Error(t('Only an image can be added from the image preview.'))
   const previewUrl = (options.createObjectUrl ?? (image => URL.createObjectURL(image)))(file)
   const replacement: PendingChatAttachment = {
-    ...previous, file, kind: 'image', previewUrl,
+    ...previous, alignment, file, kind: 'image', previewUrl,
     ...(previous.source ? { source: { ...previous.source, modified: true } } : {}),
   }
   revokeChatAttachmentPreviews([previous], options.revokeObjectUrl)
@@ -68,11 +80,12 @@ export interface UploadedChatAttachment extends PendingChatAttachment {
 export function composeImageReferenceMessage(content: string, attachments: readonly UploadedChatAttachment[]): string {
   const lines = attachments.flatMap((attachment, index) => {
     const source = attachment.source
-    if (!source) return []
+    const alignment = attachment.alignment ? formatImageAlignment(attachment.alignment, attachment.path) : undefined
+    if (!source) return alignment ? [alignment] : []
     return [`- Attached image: ${JSON.stringify(attachment.path)}\n`
       + `  Original file: ${JSON.stringify(source.path)}\n`
       + `  Version: ${source.modified ? 'marked copy; original file unchanged.' : 'original image (unmarked).'}\n`
-      + `  Media item: ${index + 1} of ${attachments.length} (message attachment order).`]
+      + `  Media item: ${index + 1} of ${attachments.length} (message attachment order).`, ...(alignment ? [alignment] : [])]
   })
   if (!lines.length) return content
   return [content, `Image references (source metadata):\n${lines.join('\n')}`].filter(Boolean).join('\n\n')

@@ -17,6 +17,7 @@ node_modules/
 build/
 dist/
 /app/dist-mobile/
+/app/dist-alignment/
 desktop/release/
 /desktop/release-local-*/
 desktop/backend/

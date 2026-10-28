@@ -24,9 +24,9 @@ const graph = () => ({ nodes: [], sessions: [
 
 function fixture(t: TestContext, canWrite = false) {
   const subscriptions: Array<{ projectId: string; observer: LiveObserver; closed: boolean }> = []
-  const requests: Array<{ path: string; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
+  const requests: Array<{ path: string; init: RequestInit; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: URL, init: RequestInit) => new Promise<Response>(resolve => {
-    requests.push({ path: new URL(url).pathname, signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
+    requests.push({ path: new URL(url).pathname, init, signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
   }))
   const pool = { client: (): Pick<LiveClient, 'subscribe'> => ({
     subscribe: (topic, observer) => {
@@ -51,6 +51,8 @@ function fixture(t: TestContext, canWrite = false) {
   }).outputText
   new Function('require', 'module', 'exports', 'window', 'document', code)((id: string) => {
     if (id === '../file-reference-drag.ts') return fileReferenceDrag
+    // Keep this chat fixture isolated from unrelated review-history polling and DOM hooks.
+    if (id === '../bot-review-timeline.ts') return { useBotReviews: () => ({ reviews: Vue.ref([]), error: Vue.ref(''), refresh: async () => {} }), botReviewPositions: () => new Map() }
     if (id === 'vue') return { ...Vue, onMounted: () => {} }
     if (id.endsWith('.vue')) return { default: {} }
     if (id === 'vue-router') return { useRoute: () => ({ name: 'chat', query: {}, params: {} }), useRouter: () => ({ replace() {} }) }
@@ -580,4 +582,65 @@ test('deleting the current last conversation clears its active identity and navi
   assert.equal(state.activeSessionId, '')
   assert.deepEqual(state.messages, [])
   assert.ok(view.navigation.includes(''))
+})
+
+
+test('image region instructions enter only their draft attachment and survive reopening without implicit requests', async t => {
+  const f = fixture(t, true)
+  const state = f.mount('a').state()
+  state.currentWorkdir = { kind: 'local', displayPath: '/synthetic' }
+  const file = new File(['unchanged pixels'], 'image.png', { type: 'image/png' })
+  state.handleAttachmentDrop({ dataTransfer: { types: ['Files'], files: [file] }, preventDefault() {}, stopPropagation() {} })
+  const image = state.pendingAttachments[0]
+  state.openImagePreview({ src: image.previewUrl, name: image.file.name })
+  const alignment = { version: 1, asset: { sha256: 'a'.repeat(64), width: 640, height: 400 }, description: '',
+    regions: [{ id: 'window', x: 40, y: 20, width: 100, height: 80, intent: 'change', description: 'Make this window round' }] }
+  const update = { contextKey: state.fileContextKey, sourceKey: image.key, file, alignment }
+  state.handleDraftImageContext(update)
+  assert.equal(state.pendingAttachments[0].file, file)
+  assert.deepEqual(state.pendingAttachments[0].alignment, alignment)
+  assert.equal(state.inputText, 'Keep this exact unsent draft')
+  assert.equal(f.requests.length, 0, 'Applying region instructions does not upload or send')
+  state.openImagePreview({ src: image.previewUrl, name: image.file.name })
+  assert.deepEqual(state.imagePreview.alignment, alignment)
+  state.handleDraftImageContext({ ...update, contextKey: 'another conversation', alignment: null })
+  assert.deepEqual(state.pendingAttachments[0].alignment, alignment, 'Stale editors cannot clear another draft')
+  state.handleDraftImageContext({ ...update, alignment: null })
+  assert.equal(state.pendingAttachments[0].alignment, undefined)
+  state.handleDraftImageContext(update)
+  state.handleDraftImageContext({ ...update, file: new File(['marked pixels'], 'marked.png', { type: 'image/png' }), alignment: undefined })
+  assert.equal(state.pendingAttachments[0].alignment, undefined, 'Changing image bytes invalidates old region instructions')
+  await Vue.nextTick()
+})
+
+
+test('explicit chat send uploads original image and carries its alignment request through the ordinary message path', async t => {
+  const f = fixture(t, true)
+  const state = f.mount('a').state()
+  state.currentWorkdir = { kind: 'local', displayPath: '/synthetic' }
+  state.inputText = ''
+  const file = new File(['original bytes'], 'image.png', { type: 'image/png' })
+  state.handleAttachmentDrop({ dataTransfer: { types: ['Files'], files: [file] }, preventDefault() {}, stopPropagation() {} })
+  const image = state.pendingAttachments[0]
+  state.openImagePreview({ src: image.previewUrl, name: file.name })
+  state.handleDraftImageContext({ contextKey: state.fileContextKey, sourceKey: image.key, file,
+    alignment: { version: 1, asset: { sha256: 'b'.repeat(64), width: 640, height: 400 }, description: 'Keep natural lighting',
+      regions: [{ id: 'window', x: 40, y: 20, width: 100, height: 80, intent: 'change', description: 'Make this window round' }] } })
+  const sending = state.sendMessage()
+  await settle()
+  const upload = f.requests.find(request => request.path.endsWith('/api/chat/upload'))
+  assert.ok(upload)
+  assert.equal(await ((upload.init.body as FormData).get('file') as File).text(), 'original bytes')
+  upload.finish({ path: '/synthetic/uploads/image.png' })
+  await settle()
+  const send = f.requests.find(request => request.path.endsWith('/api/chat/send'))
+  assert.ok(send)
+  const payload = JSON.parse(send.init.body as string)
+  assert.deepEqual(payload.media, ['/synthetic/uploads/image.png'])
+  assert.match(payload.content, /Make this window round/)
+  assert.match(payload.content, /not an executed edit/)
+  assert.match(payload.content, /"attachmentPath":"\/synthetic\/uploads\/image.png"/)
+  send.finish({ chatId: root.replace('web:', ''), requestId: 'alignment-request' })
+  await sending
+  assert.equal(state.pendingAttachments.length, 0)
 })

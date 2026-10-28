@@ -315,3 +315,55 @@ test('draft annotation replaces the original slot and clear restores the origina
   assert.deepEqual(revoked, ['blob:paste.png', 'blob:paste-marked.png'])
   assert.deepEqual(replaceDraftImageAttachment([], key, marked, options), [])
 })
+
+test('alignment metadata updates same-file drafts, clears on replacement, and validates before mutation', () => {
+  const file = new File(['original'], 'original.png', { type: 'image/png' })
+  const other = new File(['new'], 'new.png', { type: 'image/png' })
+  const alignment = {
+    version: 1 as const, asset: { sha256: 'a'.repeat(64), width: 100, height: 100 },
+    regions: [], description: 'Change the background',
+  }
+  const options = { createObjectUrl: () => 'blob:image', revokeObjectUrl: () => {}, createId: () => 'draft' }
+  const initial = updateImageAttachment([], 'source', file, options)
+  const updated = updateImageAttachment(initial, 'source', file, { alignment })
+  assert.deepEqual(updated[0]!.alignment, alignment)
+  assert.notEqual(updated[0]!.alignment, alignment)
+  assert.equal(updated[0]!.file, file)
+  assert.equal(updated[0]!.previewUrl, initial[0]!.previewUrl)
+  assert.deepEqual(updateImageAttachment(updated, 'source', file)[0]!.alignment, alignment)
+  assert.equal(updateImageAttachment(updated, 'source', file, { alignment: null })[0]!.alignment, undefined)
+  assert.equal(updateImageAttachment(updated, 'source', other, options)[0]!.alignment, undefined)
+  assert.deepEqual(updateImageAttachment(updated, 'source', other, { ...options, alignment })[0]!.alignment, alignment)
+  assert.throws(() => updateImageAttachment(updated, 'source', file, { alignment: { ...alignment, description: '' } }))
+  const replaced = replaceDraftImageAttachment(initial, 'draft', file, { alignment })
+  assert.deepEqual(replaced[0]!.alignment, alignment)
+  assert.deepEqual(replaceDraftImageAttachment(replaced, 'draft', file)[0]!.alignment, alignment)
+  assert.equal(replaceDraftImageAttachment(replaced, 'draft', file, { alignment: null })[0]!.alignment, undefined)
+  assert.equal(replaceDraftImageAttachment(replaced, 'draft', other, options)[0]!.alignment, undefined)
+  assert.deepEqual(replaceDraftImageAttachment(replaced, 'draft', other, { ...options, alignment })[0]!.alignment, alignment)
+  assert.throws(() => replaceDraftImageAttachment(replaced, 'draft', file, { alignment: { ...alignment, description: '' } }))
+  assert.equal(replaced[0]!.file, file)
+})
+
+test('upload preserves local alignment metadata and original bytes; composition includes it without source', async () => {
+  const file = new File(['original bytes'], 'original.png', { type: 'image/png' })
+  const alignment = {
+    version: 1 as const, asset: { sha256: 'b'.repeat(64), width: 10, height: 10 },
+    regions: [], description: 'Make the background blue',
+  }
+  const pending = updateImageAttachment([], 'local', file, { alignment, createId: () => 'local', createObjectUrl: () => 'blob:local' })
+  const uploaded = await uploadChatAttachments('http://localhost:3000', 'chat', pending, new AbortController().signal, (async (_url, init) => {
+    const body = init!.body as FormData
+    const uploadedFile = body.get('file') as File
+    assert.equal(await uploadedFile.text(), 'original bytes')
+    return new Response(JSON.stringify({ path: '/uploaded/original.png' }), { status: 200 })
+  }) as typeof fetch)
+  assert.deepEqual(uploaded[0]!.alignment, alignment)
+  assert.equal(uploaded[0]!.file, file)
+  const message = composeImageReferenceMessage('Please edit', uploaded)
+  assert.ok(message.startsWith('Please edit\n\n'))
+  assert.ok(message.includes('not an executed edit'))
+  assert.ok(message.includes('"attachmentPath":"/uploaded/original.png"'))
+  assert.ok(message.includes('"description":"Make the background blue"'))
+  assert.ok(composeImageReferenceMessage('', [{ ...uploaded[0]!, source: { path: '/original.png', modified: false } }]).includes('original image (unmarked)'))
+})

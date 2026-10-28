@@ -113,8 +113,6 @@ overrides:
   '@open-file-viewer/core>seek-bzip': '-'
   '@open-file-viewer/core>xz-decompress': '-'
 
-pnpmfileChecksum: sha256-Z4Cw8JhEFFAZnhFE8nnBrZx+6LLxOG38JV37FRTLvUA=
-
 patchedDependencies:
   '@open-file-viewer/core@0.1.48': 70ff5fed1745c0d74aecc4e5321d6c94e524bc025f6880de9560e6db685a4a5a
 
@@ -204,12 +202,18 @@ importers:
       7z-wasm:
         specifier: 1.2.0
         version: 1.2.0
+      '@annotorious/annotorious':
+        specifier: 3.9.5
+        version: 3.9.5
       '@capacitor/app':
         specifier: 8.1.1
         version: 8.1.1(@capacitor/core@8.5.2)
       '@capacitor/core':
         specifier: 8.5.2
         version: 8.5.2
+      '@google/model-viewer':
+        specifier: 4.4.0
+        version: 4.4.0(three@0.183.2)
       '@monaco-editor/loader':
         specifier: ^1.7.0
         version: 1.7.0
@@ -246,12 +250,18 @@ importers:
       vue:
         specifier: ^3.5.42
         version: 3.5.42(typescript@5.9.3)
+      vue-draggable-plus:
+        specifier: 0.6.1
+        version: 0.6.1(@types/sortablejs@1.15.9)
       vue-i18n:
         specifier: ^11.1.12
         version: 11.4.12(vue@3.5.42(typescript@5.9.3))
       vue-router:
         specifier: ^5.3.1
         version: 5.3.1(@vue/compiler-sfc@3.5.42)(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))(vue@3.5.42(typescript@5.9.3))
+      wavesurfer.js:
+        specifier: 8.0.3
+        version: 8.0.3
     devDependencies:
       '@iconify-json/lucide':
         specifier: ^1.2.129
@@ -346,6 +356,12 @@ packages:
     peerDependenciesMeta:
       pdfjs-dist:
         optional: true
+
+  '@annotorious/annotorious@3.9.5':
+    resolution: {integrity: sha512-cKXReeqzsrh/VKLL4nVjWVaI7323OD0Tf3NN7+MTg0niTA/qqLBF7Q1/HuP8MDwDYupMi/lgLVLhCRPxoNB5iQ==}
+
+  '@annotorious/core@3.9.5':
+    resolution: {integrity: sha512-nTyWALQseIo8NS0OffILlGAmLJtBi0TDTAbbbaSfgDjC1duT8rdaSBLund9pMmcFCKZw9Iu4GStad2hmuTSuqQ==}
 
   '@antfu/install-pkg@1.1.0':
     resolution: {integrity: sha1-ePoDa+GmCBtad6XPWfUMd1K2uiY=}
@@ -766,6 +782,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@google/model-viewer@4.4.0':
+    resolution: {integrity: sha512-8z1SB5sPlzKoak5mdx/D31brBakPYm3Qi31EfAucHAUrtrHHCbabypkKvSwReYhUpPaxyJ46oT47uWE/hrs1Zw==}
+    engines: {node: '>=6.0.0'}
+    peerDependencies:
+      three: ^0.183.0
+
   '@hono/node-server@1.19.17':
     resolution: {integrity: sha1-mb2GJc266CZSoTXHE2PNYyL65IM=}
     engines: {node: '>=18.14.1'}
@@ -881,6 +903,12 @@ packages:
     resolution: {integrity: sha1-XWWh7clhAZGM95iDE7pi8+d/z/g=}
     engines: {node: '>= 10'}
 
+  '@lit-labs/ssr-dom-shim@1.6.0':
+    resolution: {integrity: sha512-VHb0ALPMTlgKjM6yIxxoQNnpKyUKLD04VzeQdsiXkMqkvYlAHxq9glGLmgbb889/1GsohSOAjvQYoiBppXFqrQ==}
+
+  '@lit/reactive-element@2.1.2':
+    resolution: {integrity: sha512-pbCDiVMnne1lYUIaYNN5wrwQXDtHaYtg7YEFPeW+hws6U47WeFvISGUWekPGKWOP1ygrs0ef0o1VJMk1exos5A==}
+
   '@malept/cross-spawn-promise@2.0.0':
     resolution: {integrity: sha1-0Hct4apoCgv7m6LzK0yCjHhXy50=}
     engines: {node: '>= 12.13.0'}
@@ -908,6 +936,11 @@ packages:
 
   '@monaco-editor/loader@1.7.0':
     resolution: {integrity: sha1-lnqqRgGxnpE2J2iN/oFZ1XVJ55M=}
+
+  '@monogrid/gainmap-js@3.7.2':
+    resolution: {integrity: sha512-nwbyP5gskF1clzuEynSG8uqmLhZYDkQa0zZYBQmh30OoVVqaDaZOUy93NIDjdTJB34go3mqVAQgxJKBlStOnig==}
+    peerDependencies:
+      three: '>= 0.159.0'
 
   '@napi-rs/canvas-android-arm64@0.1.100':
     resolution: {integrity: sha1-t8aLkdV3AqX8Uj+oLecup0Hmdm4=}
@@ -1641,6 +1674,9 @@ packages:
 
   '@types/slice-ansi@4.0.0':
     resolution: {integrity: sha1-60DfvjrFwd5h9ry57UcfVLqpidY=}
+
+  '@types/sortablejs@1.15.9':
+    resolution: {integrity: sha512-7HP+rZGE2p886PKV9c9OJzLBI6BBJu1O7lJGYnPyG3fS4/duUCcngkNCjsLwIMV+WMqANe3tt4irrXHSIe68OQ==}
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha1-usywepcLkXB986PoumiWxX6tLRE=}
@@ -2862,6 +2898,9 @@ packages:
     resolution: {integrity: sha1-8Rb4Bk/pCz94RKOJl8C3UFEmnx0=}
     engines: {node: '>=8'}
 
+  is-promise@2.2.2:
+    resolution: {integrity: sha512-+lP4/6lKUBfQjZ2pdxThZvLUAafmZb8OAxFb8XXtiQmS35INgr85hdOGoEs124ez1FCnZJt6jau/T+alh58QFQ==}
+
   is-promise@4.0.0:
     resolution: {integrity: sha1-Qv+fhCBsGZHSbev1IN1cAQQt0vM=}
 
@@ -3044,6 +3083,15 @@ packages:
     resolution: {integrity: sha1-wIhn1xp5OFxuGQIU/XL+8+X5Xws=}
     engines: {node: '>= 12.0.0'}
 
+  lit-element@4.2.2:
+    resolution: {integrity: sha512-aFKhNToWxoyhkNDmWZwEva2SlQia+jfG0fjIWV//YeTaWrVnOxD89dPKfigCUspXFmjzOEUQpOkejH5Ly6sG0w==}
+
+  lit-html@3.3.3:
+    resolution: {integrity: sha512-el8M6jK2o3RXBnrSHX3ZKrsN8zEV63pSExTO1wYJz7QndGYZ8353e2a5PPX+qHe2aGayfnchQmkAojaWAREOIA==}
+
+  lit@3.3.3:
+    resolution: {integrity: sha512-fycuvZg/hkpozL00lm1pEJH5nN/lr9ZXd6mJI2HSN4+Bzc+LDNdEApJ6HFbPkdFNHLvOplIIuJvxkS4XUxqirw==}
+
   local-pkg@1.2.1:
     resolution: {integrity: sha1-lig4k5mFHXjztQySNu3bAvDDGys=}
     engines: {node: '>=14'}
@@ -3215,10 +3263,23 @@ packages:
   muggle-string@0.4.1:
     resolution: {integrity: sha1-OzZr1Dsy+AncIGWVNN0w58ig0yg=}
 
+  nanoevents@10.0.0:
+    resolution: {integrity: sha512-PmIJ3BNxOzgVgnS1r/Pvyj6eZx/xUV2JCPogh0brD6smDIwjRlr1KBl9yoRX323PlfaNrBDDnfCgC9SL00OjSg==}
+    engines: {node: ^22.0.0 || ^24.0.0 || >=26.0.0}
+
   nanoid@3.3.18:
     resolution: {integrity: sha1-9mot4Rmf/eD88hyKXxMQaxwIGRM=}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
+
+  nanoid@6.0.2:
+    resolution: {integrity: sha512-hIvVOb9Qr1p/9CNNLOe0OlWvgx/ziTsVwKN/GDSsuArN2K0wDiafP3s0SWmsm7o2BdnyS8Z9Z64NFBUbn6ziBg==}
+    engines: {node: ^22 || ^24 || >=26}
+    hasBin: true
+
+  nanostores@1.5.5:
+    resolution: {integrity: sha512-FixtE239Gl6Gz0ZGCK0WzvNwObNCIwVT+L7zQcf1QgcA6AzBxblzqe9OT88qiucNkhsjSOqiogSaF5jVbJiqSA==}
+    engines: {node: ^20.0.0 || >=22.0.0}
 
   native-run@2.0.3:
     resolution: {integrity: sha1-sc6znI0kq/SRbAeumq1an7zTGgI=}
@@ -3451,6 +3512,9 @@ packages:
     resolution: {integrity: sha1-/3R6E2IKtXumiPX8Z4VUEMNw2iI=}
     engines: {node: '>=10'}
 
+  promise-worker-transferable@1.0.4:
+    resolution: {integrity: sha512-bN+0ehEnrXfxV2ZQvU2PetO0n4gqBD4ulq3MI1WOPLgr7/Mg9yRQkX5+0v1vagr74ZTsl7XtzlaYDo2EuCeYJw==}
+
   prompts@2.4.2:
     resolution: {integrity: sha1-e1fnOzpIAprRDr1E90sBcipMsGk=}
     engines: {node: '>= 6'}
@@ -3492,6 +3556,9 @@ packages:
     resolution: {integrity: sha1-NmST5rPkKjpoheLpnRj4D7eoyTI=}
     engines: {node: '>=10'}
 
+  quickselect@3.0.0:
+    resolution: {integrity: sha512-XdjUArbK4Bm5fLLvlm5KpTFOiOThgfWWI4axAZDWg4E/0mKdZyI9tNEfds27qCi1ze/vwTR16kvmmGhRra3c2g==}
+
   range-parser@1.3.0:
     resolution: {integrity: sha1-1/Gb6BK7YnIUcrRdO+IZ7wlXK0c=}
     engines: {node: '>= 0.6'}
@@ -3499,6 +3566,9 @@ packages:
   raw-body@3.0.2:
     resolution: {integrity: sha1-PjraWuVWj5CV2EN2/TpJuPsAClE=}
     engines: {node: '>= 0.10'}
+
+  rbush@4.0.1:
+    resolution: {integrity: sha512-IP0UpfeWQujYC8Jg162rMNc01Rf0gWMMAb2Uxus/Q0qOFw4lCcq6ZnQEZwUoJqWyUGJ9th7JjwI4yIWo+uvoAQ==}
 
   read-binary-file-arch@1.0.6:
     resolution: {integrity: sha1-lZxGN9qpMigKm5EbGmdmp+RCiPw=}
@@ -3690,6 +3760,9 @@ packages:
     resolution: {integrity: sha1-1wuSvat9bZDf1zkxGVowtuPXzrs=}
     engines: {node: '>=10'}
 
+  simplify-js@1.2.4:
+    resolution: {integrity: sha512-vITfSlwt7h/oyrU42R83mtzFpwYk3+mkH9bOHqq/Qw6n8rtR7aE3NZQ5fbcyCUVVmuMJR6ynsAhOfK2qoah8Jg==}
+
   sirv@3.0.2:
     resolution: {integrity: sha1-93X8zxDiKkCDJoSEjWNjRvQc2XA=}
     engines: {node: '>=18'}
@@ -3778,6 +3851,9 @@ packages:
   temp@0.9.4:
     resolution: {integrity: sha1-zSCoWAy2NjXQ5OnUvZidRChudiA=}
     engines: {node: '>=6.0.0'}
+
+  three@0.183.2:
+    resolution: {integrity: sha512-di3BsL2FEQ1PA7Hcvn4fyJOlxRRgFYBpMTcyOgkwJIaDOdJMebEFPA+t98EvjuljDx4hNulAGwF6KIjtwI5jgQ==}
 
   three@0.184.0:
     resolution: {integrity: sha1-W8oKOFHupTReTCBVZ7QN+km3kbU=}
@@ -4056,6 +4132,15 @@ packages:
       '@vue/composition-api':
         optional: true
 
+  vue-draggable-plus@0.6.1:
+    resolution: {integrity: sha512-FbtQ/fuoixiOfTZzG3yoPl4JAo9HJXRHmBQZFB9x2NYCh6pq0TomHf7g5MUmpaDYv+LU2n6BPq2YN9sBO+FbIg==}
+    peerDependencies:
+      '@types/sortablejs': ^1.15.0
+      '@vue/composition-api': '*'
+    peerDependenciesMeta:
+      '@vue/composition-api':
+        optional: true
+
   vue-i18n@11.4.12:
     resolution: {integrity: sha512-yvArvvo3ErLKFNlQrZUGmRkxL/ctM5xFYtE9FxTKiE/PalWP1bnTopBgbSRGLluYEyYSNl1Pt8l2J7zVavbXww==}
     engines: {node: '>= 22'}
@@ -4096,6 +4181,9 @@ packages:
 
   wasm-feature-detect@1.9.0:
     resolution: {integrity: sha1-rmK5RIBRCPzDtfHgSK0rqi2Kwto=}
+
+  wavesurfer.js@8.0.3:
+    resolution: {integrity: sha512-DLRSw/NoIlyFxMzmiGlwGJaEn44p8DiCRyKYjbPxGa3QjdTrCxa0CvAH+/TEijrzcZ/w2GVt8wM80WFsPtnPVw==}
 
   webcrypto-core@1.9.2:
     resolution: {integrity: sha1-It1qD7VSF7EwHqtxUdAdXGjlLMs=}
@@ -4224,6 +4312,22 @@ snapshots:
       mtx-decompressor: 1.8.0
     optionalDependencies:
       pdfjs-dist: 5.7.284
+
+  '@annotorious/annotorious@3.9.5':
+    dependencies:
+      '@annotorious/core': 3.9.5
+      dequal: 2.0.3
+      rbush: 4.0.1
+      simplify-js: 1.2.4
+      uuid: 14.0.2
+
+  '@annotorious/core@3.9.5':
+    dependencies:
+      dequal: 2.0.3
+      nanoevents: 10.0.0
+      nanoid: 6.0.2
+      nanostores: 1.5.5
+      uuid: 14.0.2
 
   '@antfu/install-pkg@1.1.0':
     dependencies:
@@ -4557,6 +4661,12 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
+  '@google/model-viewer@4.4.0(three@0.183.2)':
+    dependencies:
+      '@monogrid/gainmap-js': 3.7.2(three@0.183.2)
+      lit: 3.3.3
+      three: 0.183.2
+
   '@hono/node-server@1.19.17(hono@4.13.5)':
     dependencies:
       hono: 4.13.5
@@ -4724,6 +4834,12 @@ snapshots:
       '@kenjiuno/decompressrtf': 0.1.4
       iconv-lite: 0.6.3
 
+  '@lit-labs/ssr-dom-shim@1.6.0': {}
+
+  '@lit/reactive-element@2.1.2':
+    dependencies:
+      '@lit-labs/ssr-dom-shim': 1.6.0
+
   '@malept/cross-spawn-promise@2.0.0':
     dependencies:
       cross-spawn: 7.0.6
@@ -4772,6 +4888,11 @@ snapshots:
   '@monaco-editor/loader@1.7.0':
     dependencies:
       state-local: 1.0.7
+
+  '@monogrid/gainmap-js@3.7.2(three@0.183.2)':
+    dependencies:
+      promise-worker-transferable: 1.0.4
+      three: 0.183.2
 
   '@napi-rs/canvas-android-arm64@0.1.100':
     optional: true
@@ -5345,8 +5466,9 @@ snapshots:
 
   '@types/slice-ansi@4.0.0': {}
 
-  '@types/trusted-types@2.0.7':
-    optional: true
+  '@types/sortablejs@1.15.9': {}
+
+  '@types/trusted-types@2.0.7': {}
 
   '@types/unist@3.0.3': {}
 
@@ -6837,6 +6959,8 @@ snapshots:
 
   is-fullwidth-code-point@3.0.0: {}
 
+  is-promise@2.2.2: {}
+
   is-promise@4.0.0: {}
 
   is-wsl@2.2.0:
@@ -6975,6 +7099,22 @@ snapshots:
       lightningcss-linux-x64-musl: 1.33.0
       lightningcss-win32-arm64-msvc: 1.33.0
       lightningcss-win32-x64-msvc: 1.33.0
+
+  lit-element@4.2.2:
+    dependencies:
+      '@lit-labs/ssr-dom-shim': 1.6.0
+      '@lit/reactive-element': 2.1.2
+      lit-html: 3.3.3
+
+  lit-html@3.3.3:
+    dependencies:
+      '@types/trusted-types': 2.0.7
+
+  lit@3.3.3:
+    dependencies:
+      '@lit/reactive-element': 2.1.2
+      lit-element: 4.2.2
+      lit-html: 3.3.3
 
   local-pkg@1.2.1:
     dependencies:
@@ -7167,7 +7307,13 @@ snapshots:
 
   muggle-string@0.4.1: {}
 
+  nanoevents@10.0.0: {}
+
   nanoid@3.3.18: {}
+
+  nanoid@6.0.2: {}
+
+  nanostores@1.5.5: {}
 
   native-run@2.0.3(supports-color@7.2.0):
     dependencies:
@@ -7420,6 +7566,11 @@ snapshots:
       err-code: 2.0.3
       retry: 0.12.0
 
+  promise-worker-transferable@1.0.4:
+    dependencies:
+      is-promise: 2.2.2
+      lie: 3.3.0
+
   prompts@2.4.2:
     dependencies:
       kleur: 3.0.3
@@ -7462,6 +7613,8 @@ snapshots:
 
   quick-lru@5.1.1: {}
 
+  quickselect@3.0.0: {}
+
   range-parser@1.3.0: {}
 
   raw-body@3.0.2:
@@ -7470,6 +7623,10 @@ snapshots:
       http-errors: 2.0.1
       iconv-lite: 0.7.3
       unpipe: 1.0.0
+
+  rbush@4.0.1:
+    dependencies:
+      quickselect: 3.0.0
 
   read-binary-file-arch@1.0.6(supports-color@7.2.0):
     dependencies:
@@ -7743,6 +7900,8 @@ snapshots:
     dependencies:
       semver: 7.8.5
 
+  simplify-js@1.2.4: {}
+
   sirv@3.0.2:
     dependencies:
       '@polka/url': 1.0.0-next.29
@@ -7833,6 +7992,8 @@ snapshots:
     dependencies:
       mkdirp: 0.5.6
       rimraf: 2.6.3
+
+  three@0.183.2: {}
 
   three@0.184.0: {}
 
@@ -8052,6 +8213,10 @@ snapshots:
     dependencies:
       vue: 3.5.42(typescript@5.9.3)
 
+  vue-draggable-plus@0.6.1(@types/sortablejs@1.15.9):
+    dependencies:
+      '@types/sortablejs': 1.15.9
+
   vue-i18n@11.4.12(vue@3.5.42(typescript@5.9.3)):
     dependencies:
       '@intlify/core-base': 11.4.12
@@ -8109,6 +8274,8 @@ snapshots:
       typescript: 5.9.3
 
   wasm-feature-detect@1.9.0: {}
+
+  wavesurfer.js@8.0.3: {}
 
   webcrypto-core@1.9.2:
     dependencies:

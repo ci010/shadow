@@ -119,7 +119,7 @@ export default defineConfig({
   })],
   // Lazy Shiki entrypoints must be in the initial optimizer batch, not discovered
   // while a file preview is opening (which invalidates already served import URLs).
-  optimizeDeps: { include: highlightingDeps, exclude: ['emf-converter'] },
+  optimizeDeps: { include: [...highlightingDeps, '@annotorious/annotorious', 'wavesurfer.js', 'wavesurfer.js/dist/plugins/regions.esm.js', 'wavesurfer.js/dist/plugins/timeline.esm.js', 'vue-draggable-plus', '@google/model-viewer'], exclude: ['emf-converter'] },
   build: { rollupOptions: { external: ['@napi-rs/canvas'] } },
   server: {
     host: process.env.VITE_DEV_HOST ?? '127.0.0.1',

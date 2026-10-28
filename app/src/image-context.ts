@@ -1,3 +1,4 @@
+import type { ImageAlignmentDocument } from './image-alignment.ts'
 import { t } from './i18n.ts'
 import { createUuid } from './uuid.ts'
 
@@ -26,6 +27,7 @@ export interface ImageContextUpdate {
   sourceKey: string
   file: File | null
   source?: ImageSource
+  alignment?: ImageAlignmentDocument | null
 }
 
 export interface ImageContextBusy {
@@ -38,6 +40,7 @@ export interface ImageReference {
   sourceKey: string
   file: File
   source: ImageSource
+  alignment?: ImageAlignmentDocument
 }
 
 export const IMAGE_REFERENCE_MIME = 'application/x-shadow-image-reference'

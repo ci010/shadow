@@ -1,0 +1,39 @@
+/* Deliberately local: never changes chat controls or third-party canvas internals. */
+:where(.alignment-workbench,.alignment-panel){--align-radius:5px;--align-control-height:32px}
+:where(.alignment-workbench,.alignment-panel) :is(.btn,.surface-toolbar button,.timeline-toolbar button,.intent-actions button,.intent-target button,.lab-languages button){min-height:var(--align-control-height);padding:6px 10px;border:1px solid var(--c-border);border-radius:var(--align-radius);background:var(--c-bg-card);color:var(--c-text);font:inherit;font-size:12px;line-height:1.4;cursor:pointer;box-shadow:none}
+:where(.alignment-workbench,.alignment-panel) :is(.btn,.surface-toolbar button,.intent-actions button):hover:not(:disabled){background:var(--c-bg-muted);border-color:var(--c-text-secondary)}
+:where(.alignment-workbench,.alignment-panel) :is(select,input[type=number],input[type=text],textarea){box-sizing:border-box;border:1px solid var(--c-border);border-radius:var(--align-radius);background:var(--c-bg-card);color:inherit;font:inherit;font-size:12px;line-height:1.55;padding:6px 8px}
+:where(.alignment-workbench,.alignment-panel) :is(select,input[type=number],input[type=text]){min-height:32px}
+:where(.alignment-workbench,.alignment-panel) :is(button,input,select,textarea,summary):focus-visible{outline:2px solid var(--c-blue);outline-offset:2px}
+:where(.alignment-workbench,.alignment-panel) button:disabled{opacity:.45;cursor:default}
+:where(.alignment-workbench,.alignment-panel) :is(.surface-toolbar,.library-toolbar,.intent-actions,.prompt-actions){gap:8px;align-items:center}
+:where(.alignment-workbench,.alignment-panel) :is(.surface-toolbar label,.lab-file){position:relative;display:inline-flex;align-items:center;min-height:32px;box-sizing:border-box;padding:6px 10px;border:1px solid var(--c-border);border-radius:5px;background:var(--c-bg-card);font-size:12px;cursor:pointer;gap:6px}
+:where(.alignment-workbench,.alignment-panel) :is(.surface-toolbar label,.lab-file):has(input[type=file]):hover{background:var(--c-bg-muted)}
+:where(.alignment-workbench,.alignment-panel) :is(.surface-toolbar label,.lab-file):focus-within{outline:2px solid var(--c-blue);outline-offset:2px}
+:where(.alignment-workbench,.alignment-panel) :is(.surface-toolbar label,.lab-file) input[type=file]{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
+.alignment-workbench .intent-inspector{border-radius:5px;font-size:12px;line-height:1.55}
+.alignment-workbench .intent-inspector :is(label,textarea){font-size:12px}
+.alignment-workbench .intent-inspector h3{font-size:12px;letter-spacing:.02em}
+.alignment-workbench .editor-view .intent-inspector{border-left-width:1px;padding:14px 16px}
+.alignment-workbench .editor-view .intent-actions button{font-size:12px}
+.alignment-workbench .lab-tabs button{border-radius:4px 4px 0 0}
+.alignment-workbench .lab-tabs span{font-size:11px}
+.alignment-workbench .image-prompt-details{position:static;border-radius:5px;padding:16px;background:var(--c-bg-card)}
+.alignment-workbench .image-prompt-details h2{font-size:15px;margin-bottom:8px}
+.alignment-workbench .image-prompt-details label{font-size:12px;margin:14px 0;gap:6px}
+.alignment-workbench .image-prompt-details .keyword-tags{gap:6px;margin:12px 0}
+.alignment-workbench .image-prompt-details .keyword-tags span{font-size:11px;padding:4px 7px;border-radius:4px}
+.alignment-workbench .image-prompt-details .full-prompt{min-height:140px}
+.alignment-workbench .image-prompt-details .keyword-input{min-height:60px}
+.alignment-workbench .image-prompt-details .prompt-actions{display:grid;grid-template-columns:1fr}
+.alignment-workbench .image-detail>h2{font-size:16px;overflow-wrap:anywhere}
+.alignment-workbench .image-detail .alignment-layout{grid-template-columns:minmax(0,1fr) minmax(310px,370px);gap:14px}
+.alignment-workbench .image-detail .alignment-visual{align-self:start;position:sticky;top:12px}
+.alignment-workbench .image-detail .alignment-details{font-size:12px;min-width:0}
+@media(max-width:1100px){.alignment-workbench .image-detail .alignment-layout{grid-template-columns:minmax(0,1fr) minmax(260px,.8fr)}.alignment-workbench .image-detail .image-prompt-details{grid-column:1/-1}.alignment-workbench .image-detail .alignment-visual{position:static}}
+@media(max-width:760px){.alignment-workbench .image-detail .alignment-layout{grid-template-columns:minmax(0,1fr)}.alignment-workbench .lab-tabs button{padding:10px}.alignment-workbench .image-prompt-details .prompt-actions{grid-template-columns:1fr 1fr}}
+
+.alignment-workbench .image-detail .image-prompt-details{border-radius:5px;padding:16px;background:var(--c-bg-card)}
+.alignment-workbench :is(.spatial-toolbar,.alignment-controls){display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.alignment-workbench .spatial-toolbar span{font-size:12px;color:var(--c-text-secondary);overflow-wrap:anywhere}
+.alignment-workbench .spatial-toolbar a{text-decoration:none;box-sizing:border-box}
