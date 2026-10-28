@@ -20,13 +20,13 @@ is resolved by the existing default transport, not guessed by this tool.
 
 The application currently has no named multi-proxy registry. Its HTTP(S) network
 configuration comes from the existing standard proxy environment variables,
-then Windows system proxy settings. `configured` is a single adapter ID for
+then Windows or macOS system proxy settings. `configured` is a single adapter ID for
 that existing configuration, **not** a newly registered proxy address. The list
 of supported IDs is not an assertion that a proxy is currently available.
 
 `set` validates and captures the currently configured static proxy, even if the
 application's default proxy toggle is off. Unknown IDs, missing static routes,
-credentials/unsupported proxy schemes, and Windows automatic/PAC-only selection
+credentials/unsupported proxy schemes, and Windows/macOS automatic/PAC selection
 fail explicitly and leave the previous override unchanged. Set again to capture
 changed static settings. No global configuration or environment is modified.
 

@@ -17,9 +17,9 @@ export async function configureSessionProxy(context: ExecutionContext, mode: 'di
   let policy: Override
   if (mode === 'direct') policy = { mode }
   else {
-    if (proxyId !== 'configured') throw new Error('Unknown proxyId. The only supported ID is configured (existing environment/Windows static proxy).')
+    if (proxyId !== 'configured') throw new Error('Unknown proxyId. The only supported ID is configured (existing environment/Windows/macOS static proxy).')
     const configuration = await detect(context.signal, { detectOnly: true })
-    if (configuration.source === 'windows-auto') throw new Error('Explicit proxy selection does not support Windows PAC/automatic routes; configure a static HTTP(S) proxy.')
+    if (configuration.source === 'windows-auto' || configuration.source === 'macos-auto') throw new Error('Explicit proxy selection does not support system PAC/automatic routes; configure a static HTTP(S) proxy.')
     if (!configuration.http && !configuration.https) throw new Error('No configured static proxy is available.')
     policy = { mode, proxyId: 'configured', configuration }
   }
@@ -37,7 +37,7 @@ export function describeSessionProxy(context: ExecutionContext) {
       : { mode: 'application-default', dynamic: true, ...backendNetworkPolicySummary() },
     scope: 'current session search web and read URL only; cleared on session sleep/reset; not persisted',
     supportedProxyIds: ['configured'],
-    proxyIdMeaning: 'configured resolves the existing environment/Windows static proxy at set time; availability is validated on set',
+    proxyIdMeaning: 'configured resolves the existing environment/Windows/macOS static proxy at set time; availability is validated on set',
   }
 }
 
