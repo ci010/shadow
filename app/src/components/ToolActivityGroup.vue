@@ -7,7 +7,6 @@
       <span v-if="batch.durationMs !== undefined" class="tool-duration">{{ formatToolDuration(batch.durationMs) }}</span>
       <LineChangeCounts v-if="batch.changes" :changes="batch.changes" :partial="batch.incomplete" />
       <span v-else-if="batch.files" class="activity-status">{{ t('Line counts unavailable') }}</span>
-      <span v-if="hasFailure" class="activity-failed">{{ t('Failed') }}</span>
       <span v-if="running" class="activity-status">{{ t('Running') }}</span>
     </summary>
     <div class="activity-list trace-guide">
@@ -70,7 +69,6 @@ const summaryTitle = computed(() => {
 })
 const groupOpen = ref(!!props.defaultOpen)
 const manualOpen = ref<boolean>()
-const hasFailure = computed(() => props.batch.entries.some(entry => entry.failed))
 function chooseGroup() {
   emit('interact')
   manualOpen.value = !groupOpen.value
@@ -78,28 +76,13 @@ function chooseGroup() {
 function onGroupToggle(event: Event) {
   groupOpen.value = isOpen(event)
 }
-watch([() => props.defaultOpen, hasFailure], ([open, failed], previous) => {
-  // Surface a new failure once, without preventing subsequent manual collapse.
-  if (failed && !previous?.[1]) {
-    manualOpen.value = undefined
-    groupOpen.value = true
-  } else {
-    groupOpen.value = manualOpen.value ?? (failed || !!open)
-  }
+watch(() => props.defaultOpen, open => {
+  groupOpen.value = manualOpen.value ?? !!open
 }, { immediate: true })
 const expanded = reactive(new Set<number>())
-const revealedFailures = new Set<number>()
 function chooseEntry() {
   emit('interact')
 }
-watch(() => props.batch.entries, entries => {
-  for (const entry of entries) {
-    if (entry.failed && !revealedFailures.has(entry.index)) {
-      revealedFailures.add(entry.index)
-      expanded.add(entry.index)
-    }
-  }
-}, { immediate: true })
 const closedResults = reactive(new Set<number>())
 function isOpen(event: Event): boolean {
   return event.currentTarget instanceof HTMLDetailsElement && event.currentTarget.open
