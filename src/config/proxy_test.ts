@@ -1,3 +1,4 @@
+import { ProxyDetectionError } from '../execution/network/proxy-error.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Hono } from 'hono'
@@ -22,6 +23,9 @@ test('disabled bypasses invalid environment and Windows detection; detection rem
     const status = await proxyStatus(false, async () => { throw new Error('password-secret') })
     assert.equal(status.enabled, false)
     assert.equal(status.detectionFailed, true)
+    assert.equal(status.failureCode, 'SYSTEM_PROXY_UNAVAILABLE')
+    const classified = await proxyStatus(true, async () => { throw new ProxyDetectionError('SYSTEM_PROXY_READ_FAILED') })
+    assert.equal(classified.failureCode, 'SYSTEM_PROXY_READ_FAILED')
     assert.doesNotMatch(JSON.stringify(status), /password-secret/)
     const pac = await proxyStatus(false, async () => ({ source: 'windows-auto', bypass: [] }))
     assert.deepEqual(pac, { enabled: false, detected: true, source: 'windows-auto', http: '', https: '', detectionFailed: false })
@@ -60,7 +64,9 @@ test('App proxy routes authenticate, strictly validate, persist and redetect wit
       const restored = ConfigSchema.parse(await new AppProviderConfigStore({ configPath }).read())
       assert.equal(restored.network?.proxyEnabled, false)
       const detected = await app.request('/api/app/proxy/detect', { method: 'POST', headers })
-      assert.equal((await detected.json()).enabled, false)
+      const detectedStatus = await detected.json()
+      assert.equal(detectedStatus.enabled, false)
+      assert.deepEqual(detectedStatus.effective, { source: 'direct', enabled: false, blocked: false })
       assert.equal(isLocalProxyEnabled(), false)
       assert.equal(JSON.parse(await readFile(configPath, 'utf8')).network.proxyEnabled, false)
       assert.doesNotMatch(await (await app.request('/api/app/proxy', { headers })).text(), /private-key|private-search/)
@@ -115,6 +121,9 @@ test('failed enable preserves disabled runtime and persisted policy without leak
       assert.equal(status.enabled, false)
       assert.equal(status.source, 'environment')
       assert.equal(status.detectionFailed, true)
+    assert.equal(status.failureCode, 'SYSTEM_PROXY_UNAVAILABLE')
+    const classified = await proxyStatus(true, async () => { throw new ProxyDetectionError('SYSTEM_PROXY_READ_FAILED') })
+    assert.equal(classified.failureCode, 'SYSTEM_PROXY_READ_FAILED')
     })
   } finally {
     for (const [index, key] of keys.entries()) {

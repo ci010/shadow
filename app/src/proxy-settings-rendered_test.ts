@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -67,8 +67,24 @@ test('App proxy settings render detected routes, persist toggles and keep disabl
       await server.listen()
       const url = server.resolvedUrls?.local[0]
       assert.ok(url)
+      const smoke = await readFile(resolve(root, 'desktop', 'tests', 'fixtures', 'proxy-settings-smoke.ts'), 'utf8')
+      const macAssertions = `
+        await execute("Object.assign(window.fixture.state, {source:'macos-static',detected:true,http:'http://mac-proxy.example:8080/',https:''}); document.querySelector('.proxy-settings button').click()")
+        await wait("document.body.innerText.includes('macOS static proxy')")
+        assert.deepEqual(await execute("Array.from(document.querySelectorAll('.proxy-settings input[readonly]'), input => input.value)"), ['http://mac-proxy.example:8080/'])
+        await execute("Object.assign(window.fixture.state, {source:'macos-auto',http:'',effective:{source:'macos-auto',enabled:true,blocked:true}}); document.querySelector('.proxy-settings button').click()")
+        await wait("document.body.innerText.includes('macOS automatic proxy (PAC / auto-discovery) is not supported')")
+        assert.equal(await execute("document.querySelectorAll('.proxy-settings input[readonly]').length"), 0)
+        await execute("Object.assign(window.fixture.state, {source:'unknown',detected:false,detectionFailed:true,effective:{source:'unavailable',enabled:true,blocked:true}}); document.querySelector('.proxy-settings button').click()")
+        await wait("document.body.innerText.includes('Proxy detection failed.')")
+        assert.equal(await execute("!!document.querySelector('.proxy-settings [role=alert]')"), false)
+        assert.equal(await execute("document.querySelector('.proxy-settings button').textContent.trim()"), 'Detect again')
+        await execute("Object.assign(window.fixture.state, {source:'macos-static',detected:true,detectionFailed:false}); document.querySelector('.proxy-settings button').click()")
+        await wait("document.body.innerText.includes('macOS static proxy') && !document.body.innerText.includes('Proxy detection failed.')")
+      `
+      assert.ok(smoke.includes("console.log('PROXY_SMOKE_OK')"))
       await build({
-        entryPoints: [resolve(root, 'desktop', 'tests', 'fixtures', 'proxy-settings-smoke.ts')],
+        stdin: { contents: smoke.replace("console.log('PROXY_SMOKE_OK')", macAssertions + "\nconsole.log('PROXY_SMOKE_OK')"), resolveDir: resolve(root, 'desktop', 'tests', 'fixtures'), sourcefile: 'proxy-settings-smoke.ts', loader: 'ts' },
         outfile: join(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs',
         target: 'node24', external: ['electron'], logLevel: 'silent',
       })

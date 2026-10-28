@@ -1,7 +1,7 @@
 <template>
   <section class="proxy-settings" aria-labelledby="proxy-title" :aria-busy="busy">
     <h2 id="proxy-title">{{ t('Proxy') }}</h2>
-    <p>{{ t('Detect the system proxy on Main, not on this browser device. Environment proxy variables take precedence over Windows static or automatic (PAC) settings.') }}</p>
+    <p>{{ t('Detect the system proxy on Main, not on this browser device. Environment proxy variables take precedence over Windows or macOS system proxy settings.') }}</p>
     <p>{{ t('This only controls proxy use by Shadow; it never changes operating system settings. Enabled by default, even when no proxy is detected.') }}</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <template v-if="state">
@@ -13,6 +13,7 @@
       <template v-else>
         <p>{{ t('Detected source') }}: {{ sourceLabel }}</p>
         <p v-if="state.source === 'windows-auto'">{{ t('Windows automatic proxy (PAC / auto-detect): the route is resolved separately for each destination.') }}</p>
+        <p v-if="state.source === 'macos-auto'">{{ t('macOS automatic proxy (PAC / auto-discovery) is not supported. Configure a static system proxy or environment proxy, or disable proxy use to connect directly.') }}</p>
         <label v-if="state.http">HTTP<input :value="state.http" readonly /></label>
         <label v-if="state.https">HTTPS<input :value="state.https" readonly /></label>
       </template>
@@ -30,7 +31,7 @@ const state = ref<ProxyStatus | null>(null)
 const busy = ref(false)
 const error = ref('')
 let generation = 0
-const sourceLabel = computed(() => ({ direct: t('No proxy'), environment: t('Environment variables'), 'windows-static': t('Windows static proxy'), 'windows-auto': t('Windows automatic proxy'), unknown: t('Unknown') })[state.value?.source ?? 'unknown'])
+const sourceLabel = computed(() => ({ direct: t('No proxy'), environment: t('Environment variables'), 'windows-static': t('Windows static proxy'), 'windows-auto': t('Windows automatic proxy'), 'macos-static': t('macOS static proxy'), 'macos-auto': t('macOS automatic proxy'), unknown: t('Unknown') })[state.value?.source ?? 'unknown'])
 async function run(enabled?: boolean, detect = false) {
   const current = ++generation
   busy.value = true; error.value = ''

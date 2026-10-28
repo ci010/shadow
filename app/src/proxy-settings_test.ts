@@ -34,3 +34,14 @@ test('proxy client errors do not reflect private backend bodies', async () => {
     await assert.rejects(client.save(false), error => error instanceof Error && !error.message.includes('private-password'))
   }
 })
+
+test('proxy parser accepts macOS static and unsupported automatic detection without widening detected sources', () => {
+  for (const source of ['macos-static', 'macos-auto'] as const) {
+    const value = { ...state, source, http: '', https: '' }
+    assert.deepEqual(parseProxyStatus(value), value)
+  }
+  const failed = { ...state, source: 'unknown' as const, detected: false, detectionFailed: true, http: '' }
+  assert.deepEqual(parseProxyStatus({ ...failed, effective: { source: 'unavailable', enabled: true, blocked: true, failureCode: 'proxy_detection_failed' } }), failed)
+  assert.throws(() => parseProxyStatus({ ...state, source: 'unavailable' }))
+  assert.throws(() => parseProxyStatus({ ...state, source: 'macOS-auto' }))
+})
