@@ -3554,7 +3554,6 @@
   "Main returned invalid proxy settings.": "Main 返回了无效的代理设置。",
   "Could not load proxy settings.": "无法加载代理设置。",
   "Could not load or save proxy settings. Check your Main administrator connection and proxy configuration, then retry.": "无法加载或保存代理设置。请检查 Main 管理员连接及代理配置后重试。",
-  "Detect the system proxy on Main, not on this browser device. Environment proxy variables take precedence over Windows static or automatic (PAC) settings.": "检测的是 Main 所在设备的系统代理，而非当前浏览器设备。环境代理变量优先于 Windows 静态或自动（PAC）设置。",
   "This only controls proxy use by Shadow; it never changes operating system settings. Enabled by default, even when no proxy is detected.": "此设置仅控制 Shadow 使用代理，不会更改操作系统设置。默认启用，即使未检测到代理。",
   "Proxy detection failed. Unsupported or credential-bearing proxy settings are not displayed. You can still disable proxy use.": "代理检测失败。不支持或包含凭据的代理配置不会显示。您仍可停用代理使用。",
   "No system proxy detected. Shadow connects directly.": "未检测到系统代理。Shadow 将直接连接。",
@@ -4090,5 +4089,9 @@
   "Enterprise subdomain prefix": "企业子域名前缀",
   "Enter only your enterprise subdomain, for example octocat. The .ghe.com suffix is added automatically.": "只需输入企业子域名前缀，例如 octocat。系统会自动添加 .ghe.com 后缀。",
   "Enter only a valid enterprise subdomain prefix, such as octocat, without .ghe.com, a URL, port or path.": "请输入有效的企业子域名前缀，例如 octocat，不要包含 .ghe.com、网址、端口或路径。",
-  "Remove provider {account} and its saved Copilot sign-in on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.": "删除提供商 {account} 及其在 {host} 上保存的 Copilot 登录信息？这将影响使用此实例的所有项目。其他实例（包括同一主机上的账号）和其他主机上的登录信息不变。此操作不会退出浏览器登录或撤销 GitHub 授权。"
+  "Remove provider {account} and its saved Copilot sign-in on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.": "删除提供商 {account} 及其在 {host} 上保存的 Copilot 登录信息？这将影响使用此实例的所有项目。其他实例（包括同一主机上的账号）和其他主机上的登录信息不变。此操作不会退出浏览器登录或撤销 GitHub 授权。",
+  "Detect the system proxy on Main, not on this browser device. Environment proxy variables take precedence over Windows or macOS system proxy settings.": "检测的是 Main 所在设备的系统代理，而非当前浏览器设备。环境代理变量优先于 Windows 或 macOS 系统代理设置。",
+  "macOS static proxy": "macOS 静态代理",
+  "macOS automatic proxy": "macOS 自动代理",
+  "macOS automatic proxy (PAC / auto-discovery) is not supported. Configure a static system proxy or environment proxy, or disable proxy use to connect directly.": "暂不支持 macOS 自动代理（PAC / 自动发现）。请配置系统静态代理或环境代理，或禁用代理以直接连接。"
 }

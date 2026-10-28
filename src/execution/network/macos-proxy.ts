@@ -1,3 +1,4 @@
+import { ProxyDetectionError } from './proxy-error.ts'
 import { execFile } from 'node:child_process'
 
 export interface MacOSProxySettings {
@@ -9,7 +10,7 @@ export interface MacOSProxySettings {
   socks: boolean
 }
 
-const invalid = () => new Error('macOS system proxy settings could not be read safely; check Network > Proxies or configure HTTP_PROXY/HTTPS_PROXY. No settings were logged.')
+const invalid = () => new ProxyDetectionError('SYSTEM_PROXY_INVALID')
 
 // scutil exposes the effective SystemConfiguration dictionary, not a guessed network service.
 // Only the top-level effective policy applies; __SCOPED__/__SUPPLEMENTAL__ are not global routes.
@@ -31,14 +32,14 @@ export function parseMacOSProxyOutput(output: string): MacOSProxySettings {
     }
     if (depth) {
       if (exceptions && depth === 1) {
-        const match = line.match(/^\d+ : (.+)$/)
+        const match = line.match(/^\d+[ \t]+:[ \t]+(.+)$/)
         if (!match || /[\x00-\x1f]/.test(match[1])) throw invalid()
         bypass.push(match[1])
       }
       if (line.endsWith('{')) depth++
       continue
     }
-    const match = line.match(/^(\w+) : (.*)$/)
+    const match = line.match(/^(\w+)[ \t]+:[ \t]+(.*)$/)
     if (!match || values.has(match[1])) throw invalid()
     values.set(match[1], match[2])
     if (match[2].endsWith('{')) {
@@ -77,7 +78,7 @@ export async function readMacOSProxy(signal?: AbortSignal): Promise<MacOSProxySe
       signal, timeout: 5000, maxBuffer: 65_536, encoding: 'utf8',
     }, (error, stdout) => {
       if (signal?.aborted) reject(signal.reason)
-      else if (error) reject(invalid())
+      else if (error) reject(new ProxyDetectionError('SYSTEM_PROXY_READ_FAILED'))
       else resolve(stdout)
     })
   })

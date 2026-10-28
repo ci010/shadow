@@ -36,7 +36,7 @@ test('macOS effective scutil policy parses protocol routes, bypass and scoped di
   for (const url of ['http://printer', 'http://a.internal.invalid', 'http://10.2.3.4', 'http://[2001:db8::1]', 'http://127.0.0.2', 'http://localhost']) {
     assert.equal(proxyForUrl(config, url), undefined, url)
   }
-  assert.equal(proxyForUrl(macOSProxyConfiguration({ ...settings, https: undefined }), 'https://public.invalid'), undefined)
+  assert.throws(() => proxyForUrl(macOSProxyConfiguration({ ...settings, https: undefined }), 'https://public.invalid'), /SYSTEM_PROXY_UNSUPPORTED/)
   assert.equal(macOSProxyConfiguration(parseMacOSProxyOutput('<dictionary> {\n}')).source, 'direct')
 })
 
@@ -65,7 +65,7 @@ test('macOS malformed settings and SOCKS fail without disclosure', () => {
       return true
     })
   }
-  assert.throws(() => macOSProxyConfiguration(parseMacOSProxyOutput('<dictionary> {\nSOCKSEnable : 1\n}')), /SOCKS/)
+  assert.throws(() => macOSProxyConfiguration(parseMacOSProxyOutput('<dictionary> {\nSOCKSEnable : 1\n}')), /SYSTEM_PROXY_UNSUPPORTED/)
 })
 
 test('macOS PAC and WPAD never silently use static or direct routes; loopback remains direct', async () => {
@@ -81,4 +81,47 @@ test('macOS PAC and WPAD never silently use static or direct routes; loopback re
       return true
     }) } finally { await dispatcher.destroy() }
   }
+})
+
+// Synthetic equivalent of the reported macOS mixed-proxy scutil screenshot.
+const mixed = `<dictionary> {
+  ExceptionsList : <array> {
+    0 : 127.0.0.1
+    1 : 192.168.0.0/16
+    2 : 10.0.0.0/8
+    3 : 172.16.0.0/12
+    4 : localhost
+    5 : *.local
+    6 : *.crashlytics.com
+    7 : <local>
+  }
+  FTPPassive : 1
+  HTTPEnable : 1
+  HTTPPort : 7890
+  HTTPProxy : 127.0.0.1
+  HTTPSEnable : 1
+  HTTPSPort : 7890
+  HTTPSProxy : 127.0.0.1
+  ProxyAutoConfigEnable : 0
+  ProxyAutoDiscoveryEnable : 0
+  SOCKSEnable : 1
+  SOCKSPort : 7890
+  SOCKSProxy : 127.0.0.1
+}`
+
+test('reported mixed HTTP/HTTPS/SOCKS policy uses HTTP routes, not an unsupported SOCKS failure', () => {
+  const config = macOSProxyConfiguration(parseMacOSProxyOutput(mixed))
+  for (const scheme of ['http', 'https']) assert.equal(proxyForUrl(config, `${scheme}://public.invalid`), 'http://127.0.0.1:7890/')
+  assert.equal(proxyForUrl(config, 'http://192.168.2.3'), undefined)
+  assert.equal(proxyForUrl(config, 'http://printer.local'), undefined)
+  assert.throws(() => macOSProxyConfiguration(parseMacOSProxyOutput(mixed.replace('HTTPEnable : 1', 'HTTPEnable : 0').replace('HTTPSEnable : 1', 'HTTPSEnable : 0'))), /SYSTEM_PROXY_UNSUPPORTED/)
+  const partial = macOSProxyConfiguration(parseMacOSProxyOutput(mixed.replace('HTTPSEnable : 1', 'HTTPSEnable : 0')))
+  assert.throws(() => proxyForUrl(partial, 'https://public.invalid'), /SYSTEM_PROXY_UNSUPPORTED/)
+})
+
+test('scutil boundary formats tolerate CRLF/tabs and empty containers, reject truncated or duplicate policy', () => {
+  assert.deepEqual(parseMacOSProxyOutput(mixed.replaceAll('\n', '\r\n').replaceAll(' : ', '\t:\t')), parseMacOSProxyOutput(mixed))
+  assert.equal(macOSProxyConfiguration(parseMacOSProxyOutput('<dictionary> {}')).source, 'direct')
+  assert.equal(macOSProxyConfiguration(parseMacOSProxyOutput('<dictionary> {\nExceptionsList : <array> {}\n__SCOPED__ : <dictionary> {}\n}')).source, 'direct')
+  for (const invalid of [mixed.slice(0, -1), mixed.replace('FTPPassive : 1', 'HTTPEnable : 1'), 'x'.repeat(65_537)]) assert.throws(() => parseMacOSProxyOutput(invalid), /SYSTEM_PROXY_INVALID/)
 })

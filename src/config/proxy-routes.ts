@@ -1,4 +1,5 @@
-import { refreshBackendNetwork } from '../execution/network/backend.ts'
+import { proxyFailureCode } from '../execution/network/proxy-error.ts'
+import { backendNetworkPolicySummary, refreshBackendNetwork } from '../execution/network/backend.ts'
 import { z } from 'zod'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import type { AppProviderConfigStore } from '../projects/config-store.ts'
@@ -11,9 +12,9 @@ export async function proxyStatus(enabled: boolean, detect = localProxyConfigura
     // Configuration validation rejects credentials. Never return raw settings or detection errors.
     return { enabled, detected: configuration.source !== 'direct', source: configuration.source,
       http: configuration.http ?? '', https: configuration.https ?? '', detectionFailed: false }
-  } catch {
+  } catch (error) {
     const environment = ['http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY'].some(key => process.env[key] !== undefined)
-    return { enabled, detected: false, source: environment ? 'environment' as const : 'unknown' as const, http: '', https: '', detectionFailed: true }
+    return { enabled, detected: false, source: environment ? 'environment' as const : 'unknown' as const, http: '', https: '', detectionFailed: true, failureCode: proxyFailureCode(error) }
   }
 }
 
@@ -21,12 +22,12 @@ export function appProxyPlugin(store: AppProviderConfigStore, getConfig: () => C
   return app => {
     app.get('/api/app/proxy', async c => {
       c.header('Cache-Control', 'no-store')
-      return c.json(await proxyStatus(getConfig().network?.proxyEnabled ?? true))
+      return c.json({ ...await proxyStatus(getConfig().network?.proxyEnabled ?? true), effective: backendNetworkPolicySummary() })
     })
     app.post('/api/app/proxy/detect', async c => {
       c.header('Cache-Control', 'no-store')
-      try { await refreshBackendNetwork() } catch { /* The previous working route is retained. */ }
-      return c.json(await proxyStatus(getConfig().network?.proxyEnabled ?? true))
+      await refreshBackendNetwork()
+      return c.json({ ...await proxyStatus(getConfig().network?.proxyEnabled ?? true), effective: backendNetworkPolicySummary() })
     })
     app.patch('/api/app/proxy', async c => {
       c.header('Cache-Control', 'no-store')

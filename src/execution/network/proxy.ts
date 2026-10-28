@@ -1,3 +1,4 @@
+import { ProxyDetectionError } from './proxy-error.ts'
 import { BlockList, isIP } from 'node:net'
 import { z } from 'zod'
 import { readWindowsProxy, resolveWindowsProxy, type WindowsProxySettings } from './windows-proxy.ts'
@@ -5,7 +6,7 @@ import { readMacOSProxy, type MacOSProxySettings } from './macos-proxy.ts'
 export type { WindowsProxySettings } from './windows-proxy.ts'
 
 export const proxyConfigurationSchema = z.object({
-  source: z.enum(['direct', 'environment', 'windows-static', 'windows-auto', 'macos-static', 'macos-auto']),
+  source: z.enum(['direct', 'environment', 'windows-static', 'windows-auto', 'macos-static', 'macos-auto', 'unavailable']),
   http: z.string().optional(),
   https: z.string().optional(),
   bypass: z.array(z.string()),
@@ -50,7 +51,7 @@ export function windowsProxyConfiguration(settings: WindowsProxySettings): Proxy
 
 export function macOSProxyConfiguration(settings: MacOSProxySettings): ProxyConfiguration {
   if (settings.automatic) return { source: 'macos-auto', bypass: [] }
-  if (settings.socks) throw new Error('SOCKS macOS system proxies are unsupported. Configure a static HTTP(S) proxy in Network > Proxies or HTTP_PROXY/HTTPS_PROXY.')
+  if (settings.socks && !settings.http && !settings.https) throw new ProxyDetectionError('SYSTEM_PROXY_UNSUPPORTED')
   if (!settings.http && !settings.https) return direct()
   return { source: 'macos-static',
     ...(settings.http ? { http: proxyUrl(settings.http) } : {}),
@@ -108,6 +109,7 @@ export function proxyForUrl(configuration: ProxyConfiguration, value: string | U
   const url = networkUrl(value)
   // Never send local app credentials or loopback service traffic through an upstream proxy.
   if (isLoopback(url)) return undefined
+  if (configuration.source === 'unavailable') throw new ProxyDetectionError('SYSTEM_PROXY_UNAVAILABLE')
   if (configuration.source === 'macos-auto') throw new Error('macOS PAC/automatic proxy resolution is not supported by the Node backend. Configure static Web Proxy and Secure Web Proxy in Network > Proxies, or HTTP_PROXY/HTTPS_PROXY; no direct fallback was attempted.')
   if (configuration.source === 'windows-auto') throw new Error('Automatic Windows proxy routes require asynchronous resolution.')
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
@@ -132,6 +134,7 @@ export function proxyForUrl(configuration: ProxyConfiguration, value: string | U
     const host = (match?.[1] ?? entry).replace(/^\*?\./, '').replace(/^\[|\]$/g, '').toLowerCase()
     return hostname === host || hostname.endsWith(`.${host}`)
   })) return undefined
+  if (configuration.source === 'macos-static' && !(url.protocol === 'https:' ? configuration.https : configuration.http)) throw new ProxyDetectionError('SYSTEM_PROXY_UNSUPPORTED')
   return url.protocol === 'https:' ? configuration.https ?? (configuration.source === 'environment' ? configuration.http : undefined)
     : url.protocol === 'http:' ? configuration.http : undefined
 }

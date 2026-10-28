@@ -2,7 +2,7 @@ import { apiUrl, hostBase } from './api-url.ts'
 import { t } from './i18n.ts'
 export interface ProxyStatus {
   enabled: boolean; detected: boolean; detectionFailed: boolean
-  source: 'direct' | 'environment' | 'windows-static' | 'windows-auto' | 'unknown'
+  source: 'direct' | 'environment' | 'windows-static' | 'windows-auto' | 'macos-static' | 'macos-auto' | 'unknown'
   http: string; https: string
 }
 export function parseProxyStatus(value: unknown): ProxyStatus {
@@ -13,7 +13,7 @@ export function parseProxyStatus(value: unknown): ProxyStatus {
     try { const url = new URL(address); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash } catch { return false }
   }
   if (!v || typeof v.enabled !== 'boolean' || typeof v.detected !== 'boolean' || typeof v.detectionFailed !== 'boolean'
-    || !['direct', 'environment', 'windows-static', 'windows-auto', 'unknown'].includes(v.source ?? '')
+    || !['direct', 'environment', 'windows-static', 'windows-auto', 'macos-static', 'macos-auto', 'unknown'].includes(v.source ?? '')
     || !safeAddress(v.http) || !safeAddress(v.https)) throw new Error(t('Main returned invalid proxy settings.'))
   return { enabled: v.enabled, detected: v.detected, detectionFailed: v.detectionFailed, source: v.source!, http: v.http!, https: v.https! }
 }

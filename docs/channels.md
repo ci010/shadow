@@ -333,13 +333,18 @@ proxy credentials and automatic credential logon for PAC downloads are not used.
 If the Windows PAC address points to localhost, its proxy/PAC application must
 be running for outbound requests; Main can be locally ready while that service
 is unavailable.
+Proxy discovery failure does not prevent local Main startup: external requests are blocked,
+loopback remains direct, and Settings can show the detection failure and retry detection.
+Explicitly disabling the app proxy policy still permits direct traffic.
+
 On macOS, standard proxy environment variables take precedence over the effective
 global SystemConfiguration policy read by `/usr/sbin/scutil --proxy` (5-second
 timeout, bounded output, abort support). Web Proxy and Secure Web Proxy are
-separate HTTP CONNECT endpoints. Missing protocol routes remain direct. Bypass
-supports hostname wildcards, IPv4/IPv6 CIDR and “Exclude simple hostnames”.
+separate HTTP CONNECT endpoints. When a static proxy is configured, missing
+protocol routes are blocked instead of falling back to direct. Bypass supports
+hostname wildcards, IPv4/IPv6 CIDR and “Exclude simple hostnames”.
 Scoped per-interface dictionaries are not merged into the global policy.
-Enabled SOCKS is rejected explicitly.
+Mixed HTTP(S) + SOCKS configurations use their HTTP(S) routes; SOCKS-only configurations and missing protocol routes are rejected without direct fallback.
 
 macOS PAC and automatic discovery are detected but **not evaluated**: non-loopback
 requests fail with instructions to configure static Web Proxy/Secure Web Proxy
