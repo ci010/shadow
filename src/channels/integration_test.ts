@@ -1,3 +1,4 @@
+import { isRuntimeContextEvent } from '../sessions/runtime-context-contract.ts'
 import { AgentResourceStore } from '../agent-authoring/store.ts'
 import { botPackageTool } from '../agent-authoring/bot-package-management.ts'
 import { FolderRegistry } from '../folders/registry.ts'
@@ -52,7 +53,7 @@ const learningManifest = z.object({
 })
 
 function learningResponse(messages: ChatMessage[], save = true): LLMResponse {
-  const input = messages.find(message => message.role === 'user')
+  const input = messages.find(message => message.role === 'user' && !isRuntimeContextEvent(message))
   assert.equal(typeof input?.content, 'string')
   const manifest = learningManifest.parse(JSON.parse(String(input!.content)))
   const finished = new Set(messages.filter(message => message.role === 'tool').map(message => message.tool_call_id))
@@ -257,11 +258,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     assert.deepEqual(listed.bots.map(bot => bot.displayName), ['Help desk', 'Bot 901'])
     assert.equal(listed.bots[1]!.id, unassigned.id)
     assert.deepEqual(output('list').otherPlatformBots, [
-      { id: qq.id, displayName: 'QQ support', platform: 'qq', enabled: false, authoringTool: 'authoring_change' },
-      { id: feishu.id, displayName: 'Feishu support', platform: 'feishu', enabled: false, authoringTool: 'authoring_change' },
+      { id: qq.id, displayName: 'QQ support', platform: 'qq', enabled: false, authoringTool: 'bot_package' },
+      { id: feishu.id, displayName: 'Feishu support', platform: 'feishu', enabled: false, authoringTool: 'bot_package' },
     ])
-    assert.match(output('list').otherPlatformWorkflow, /inspect.*uncovered conversations/)
-    assert.match(output('list').otherPlatformWorkflow, /owner approval/)
+    assert.match(output('list').otherPlatformWorkflow, /bot_package.*registered local directory/)
+    assert.match(output('list').otherPlatformWorkflow, /owner confirmation/)
     assert(!JSON.stringify(f.requests).includes('synthetic-token') && !JSON.stringify(f.requests).includes('fixture-901'))
     assert.match(JSON.stringify(output('schema')), /human review/)
     assert.equal(output('directory').guilds[0].name, 'Our server')
@@ -284,7 +285,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       arguments: { action: 'propose', botId: qq.id, baseRevision: base,
         changeJson: JSON.stringify({ kind: 'agent.save', agent: f.profile }) } }] })
     await f.deliver('web:chat-admin', ownerMessage())
-    assert.match(JSON.stringify(f.requests), /QQ\/Feishu.*authoring_change/)
+    assert.match(JSON.stringify(f.requests), /All platforms.*bot_package/)
     assert.equal(f.config.snapshot().revision, base)
 
     f.requests.length = 0
@@ -647,7 +648,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     }
     for (const request of f.requests) {
       assert.deepEqual(request.tools, ['read', 'learning_record', 'learning_result'])
-      const input = learningManifest.parse(JSON.parse(String(request.messages.find(message => message.role === 'user')!.content)))
+      const input = learningManifest.parse(JSON.parse(String(request.messages.find(message => message.role === 'user' && !isRuntimeContextEvent(message))!.content)))
       const domainId = f.memory.ownerRead(input.requiredInputs[0]!.id).resource.domainId
       const text = JSON.stringify(request.messages)
       assert(!text.includes(domainId === a.domainId ? 'CUSTOMER_B_LEARNING_CANARY' : 'CUSTOMER_A_LEARNING_CANARY'))
@@ -775,7 +776,7 @@ test('successive decision versions remain distinct downstream inputs and new epo
   assert.notEqual(current.version, previous.version)
   f.requests.length = 0
   assert(await f.learning.run('encapsulator', signal()))
-  const input = learningManifest.parse(JSON.parse(String(f.requests[0]!.messages.find(message => message.role === 'user')!.content)))
+  const input = learningManifest.parse(JSON.parse(String(f.requests[0]!.messages.find(message => message.role === 'user' && !isRuntimeContextEvent(message))!.content)))
   assert(input.requiredInputs.some(ref => ref.id === previous.id && ref.version === previous.version))
   assert(input.requiredInputs.some(ref => ref.id === current.id && ref.version === current.version))
   await f.approve({ kind: 'bindings.save', bindings: [f.a] })
@@ -1189,211 +1190,22 @@ test('trusted stream scope only inherits enabled configured channel parents, not
   assert.equal(f.integration.streamAssigned(f.bot.id, '201'), false)
 })
 
-test('BOT packages atomically publish frozen Discord Agent, binding and processor; independent releases and exact owner review survive restart', async t => {
+test('directory BOT provider preserves live Discord authorization without persisting immutable source', async t => {
   const f = await fixture(t)
-  const packageFor = (id: string, channel: string, prompt: string, bindingId: string) => ({id,source:{
-    'BOT.md': `---\nname: ${id}\nplatform: discord\nbotInstanceId: ${f.bot.id}\nchannels: [channels/main.json]\ntools: []\n---\n${prompt}`,
-    'channels/main.json': JSON.stringify([{...f.a,id:bindingId,target:{kind:'channel',guildId:'100',channelId:channel},agentId:undefined,
-      tools:[],readDomains:[],inheritThreads:false,processor:{code:'export async function run() { return {action:"emit"} }',delayMs:100}}]),
-  }})
-  const aId=randomUUID(),bId=randomUUID()
-  const a1=packageFor('package-a','205','FROZEN_A1',aId), b1=packageFor('package-b','206','FROZEN_B1',bId)
-  const directory=join(f.root,'bot-directory')
-  await mkdir(join(directory,'channels'),{recursive:true})
-  for (const [path,content] of Object.entries(a1.source)) await writeFile(join(directory,path),content)
-  const packageStore=new AgentResourceStore({projectId:f.projectId,directory:join(f.root,'service-resources')})
-  const timeline:import('../agent-authoring/bot-review-contract.ts').BotReviewRecord[]=[]
-  const chatTool=botPackageTool({reviews:{record:async (record:import('../agent-authoring/bot-review-contract.ts').BotReviewRecord)=>{timeline.push(record)},read:async()=>timeline},discord:f.config,service:{options:{projectId:f.projectId,store:packageStore,folders:{acquireAccess:()=>()=>{},requireAvailable:async (id:string)=>{
-    assert.equal(id,'registered-folder'); return {id,path:directory,kind:'local'}
-  }}}},publicationRequests:{list:()=>[]},inventory:()=>({}),canAuthor:(id:string)=>id==='web:owner'} as unknown as Parameters<typeof botPackageTool>[0])
-  const chatTools=new SessionTools(f.tools,f.home);chatTools.setExecutionScope('session',[])
-  const chatContext={toolCallId:'host-call',physicalSessionId:'web_owner_0',messageId:'human-turn',senderId:'owner',chatId:'owner',projectId:f.projectId,channel:'web',inputSource:'user' as const,admin:true,isGroup:false,sessionId:'web:owner',tools:chatTools,signal:signal()}
-  for(const patch of [{projectId:'foreign'},{channel:'discord'},{admin:false},{sessionId:'web:child'},{inputSource:'session'}]) {
-    await assert.rejects(()=>chatTool.execute({action:'status'},{...chatContext,...patch} as typeof chatContext),/authenticated owner/)
-  }
-  chatTools.setExecutionScope('task',[])
-  await assert.rejects(()=>chatTool.execute({action:'status'},chatContext),/authenticated owner/)
-  chatTools.setExecutionScope('session',[])
-  const status=JSON.parse(await chatTool.execute({action:'status'},chatContext) as string)
-  assert.equal(status.projectId,f.projectId);assert.notEqual(f.projectId,'default')
-  assert.equal(status.discord.revision,f.config.snapshot().revision)
-  const staged=JSON.parse(await chatTool.execute({action:'propose',folderId:'registered-folder',expectedRevision:status.draftRevision,discordRevision:status.discord.revision},chatContext) as string)
-  const draft=staged.discordDraft
-  assert.equal(timeline.length,1)
-  assert.equal(timeline[0]!.origin.sessionId,'web:owner')
-  assert.equal(timeline[0]!.candidate.kind,'discord')
-  assert.equal(draft.origin.toolCallId,'host-call')
-  await writeFile(join(directory,'BOT.md'),a1.source['BOT.md']+'\nUNREVIEWED_DISK_EDIT')
-  const pendingRestart=new IntegrationStore({projectId:f.projectId,workspace:f.home,directory:join(f.root,'config'),bots:f.bots,agents:f.agents,memory:f.memory})
-  assert.equal(pendingRestart.draft(draft.id).hash,draft.hash)
-  assert(!pendingRestart.snapshot().packages['package-a'])
-  a1.source['BOT.md']+='\nUNREVIEWED_EDIT'
-  await assert.rejects(()=>f.config.commit({kind:'discord',id:'500',botInstanceId:f.bot.id,channelId:'205',userId:'500',bindingId:aId},draft.id,draft.hash,signal()),/another actor/)
-  assert(!f.config.snapshot().packages['package-a'])
-  await f.config.commit(owner,draft.id,draft.hash,signal())
-  assert.ok(f.config.draft(draft.id).decidedAt)
-  assert.equal(new IntegrationStore({projectId:f.projectId,workspace:f.home,directory:join(f.root,'config'),bots:f.bots,agents:f.agents,memory:f.memory}).draft(draft.id).status,'applied')
+  const profile = {...f.profile,id:randomUUID(),name:'directory-bot',publishedAt:new Date().toISOString(),version:'a'.repeat(64),markdown:'---\nname: directory-bot\ndefaultMode: session\nallowedTools: []\n---\nDIRECTORY_PROMPT',tools:[],readDomains:[]}
+  const binding = {...f.a,id:randomUUID(),agentId:profile.id,target:{kind:'channel' as const,guildId:'100',channelId:'205'},tools:[],readDomains:[],epochRevision:123}
+  f.config.setBotDeployments(()=>({agents:[profile],bindings:[binding]}))
+  await f.config.validateBotDeployment([profile],[binding],signal())
   await f.send('205')
-  assert(JSON.stringify(f.requests.at(-1)!.messages).includes('FROZEN_A1'))
-  assert(!JSON.stringify(f.requests).includes('UNREVIEWED_EDIT'))
-  const ingress=await f.integration.prepareIngress(f.bot.id,{chatId:'205',senderId:'500',messageId:randomUUID()},signal())
-  assert.equal(ingress.processor?.code,'export async function run() { return {action:"emit"} }')
-  await f.approve({kind:'bot.save',package:b1})
-  const beforeB=f.config.snapshot().bindings.find(b=>b.id===bId)!
-  const activeA=f.config.snapshot().packages['package-a']!.active
-  await f.approve({kind:'bot.save',package:packageFor('package-a','205','FROZEN_A2',aId)})
-  await f.approve({kind:'bot.save',package:activeA})
-  assert.deepEqual(f.config.snapshot().bindings.find(b=>b.id===bId),beforeB)
-  assert.equal(f.config.snapshot().packages['package-b']!.active.source['BOT.md'],b1.source['BOT.md'])
-  const reopened=new IntegrationStore({projectId:f.projectId,workspace:f.home,directory:join(f.root,'config'),bots:f.bots,agents:f.agents,memory:f.memory})
-  assert.equal(reopened.agent(f.config.snapshot().bindings.find(b=>b.id===aId)!.agentId).markdown.includes('FROZEN_A1'),true)
-  const base=f.config.snapshot().revision
-  const stale=await f.config.propose(owner,{kind:'bot.save',package:packageFor('package-a','205','STALE',aId)},base,signal())
-  await f.approve({kind:'bot.save',package:packageFor('package-b','206','B2',bId)})
-  const unchanged=f.config.snapshot()
-  await assert.rejects(()=>f.config.commit(owner,stale.id,stale.hash,signal()),/configuration changed/)
-  assert.deepEqual(f.config.snapshot(),unchanged)
-  const liveDraft=await f.config.propose(owner,{kind:'bot.save',package:packageFor('package-a','205','LIVE_DENIED',aId)},f.config.snapshot().revision,signal())
-  const previousInspection=f.transport.inspectTarget
-  const beforeFailed=f.config.snapshot()
+  assert(JSON.stringify(f.requests.at(-1)!.messages).includes('DIRECTORY_PROMPT'))
+  assert(!JSON.stringify(await readFile(join(f.root,'config','channel-integrations.json'),'utf8')).includes('DIRECTORY_PROMPT'))
+  await assert.rejects(()=>f.config.propose(owner,{kind:'bindings.save',bindings:[binding]},f.config.snapshot().revision,signal()),/registered source directories/)
+  await assert.rejects(()=>f.config.propose(owner,{kind:'bot.save',package:{id:'old',source:{}}},f.config.snapshot().revision,signal()))
+  const old=f.transport.inspectTarget
   f.transport.inspectTarget=async()=>({botUserId:'999',roleIds:['700']})
-  await assert.rejects(()=>f.config.commit(owner,liveDraft.id,liveDraft.hash,signal()),/identity changed/)
-  assert.deepEqual(f.config.snapshot(),beforeFailed)
-  f.transport.inspectTarget=previousInspection
-  f.config.cancel(owner,liveDraft.id)
-  const afterCancel=f.config.snapshot()
-  await assert.rejects(()=>f.config.commit(owner,liveDraft.id,liveDraft.hash,signal()),/cancelled/)
-  assert.deepEqual(f.config.snapshot(),afterCancel)
-  const unchangedAfterCancel=f.config.snapshot()
-  const invalid=packageFor('package-a','205','DENIED',aId)
-  invalid.source['channels/main.json']=invalid.source['channels/main.json'].replace('"900"','"999"')
-  await assert.rejects(()=>f.config.propose(owner,{kind:'bot.save',package:invalid},f.config.snapshot().revision,signal()),/identity changed/)
-  assert.deepEqual(f.config.snapshot(),unchangedAfterCancel)
-  const owned=f.config.snapshot().bindings.find(b=>b.id===aId)!
-  await assert.rejects(()=>f.config.propose(owner,{kind:'bindings.save',bindings:[{...owned,tools:['read']}]},f.config.snapshot().revision,signal()),/permissions|complete BOT/)
+  await assert.rejects(()=>f.config.validateBotDeployment([profile],[binding],signal()),/identity or role/)
+  f.transport.inspectTarget=old
 })
-
-test('explicit legacy BOT adoption preserves approved Discord identities and rejects unauthorized stale or changed policy', async t => {
-  const { stringify } = await import('yaml')
-  const { parseFrontmatter } = await import('../utils/frontmatter.ts')
-  const f = await fixture(t)
-  const before = f.config.snapshot()
-  const agent = before.agents.find(a=>a.id===f.profile.id)!
-  const pkg = {id:agent.name,source:{
-    'BOT.md': `---\n${stringify({name:agent.name,platform:'discord',botInstanceId:f.bot.id,agentId:agent.id,agentMarkdown:agent.markdown,description:agent.displayName,tools:agent.tools,readDomains:agent.readDomains,channels:['channels/main.json']})}---\n${parseFrontmatter(agent.markdown).body}`,
-    'channels/main.json': JSON.stringify(before.bindings.filter(b=>b.agentId===agent.id).map(({agentId,epochRevision,...b})=>b)),
-  }}
-  const change = {kind:'bot.save' as const,package:pkg,adoptLegacy:true as const}
-  const actor = {kind:'discord' as const,id:'500',botInstanceId:f.bot.id,channelId:'201',userId:'500',bindingId:f.a.id}
-  await assert.rejects(()=>f.config.propose(actor,change,before.revision,signal()),/owner/)
-  await assert.rejects(()=>f.config.propose(owner,{kind:'bot.save',package:pkg},before.revision,signal()),/collides/)
-  await assert.rejects(()=>f.config.propose(owner,{...change,package:{...pkg,source:{...pkg.source,'channels/main.json':'[]'}}},before.revision,signal()),/identical/)
-  const draft = await f.config.propose(owner,change,before.revision,signal())
-  assert.deepEqual(f.config.snapshot().agents,before.agents)
-  assert.deepEqual(f.config.snapshot().bindings,before.bindings)
-  await assert.rejects(()=>f.config.commit(actor,draft.id,draft.hash,signal()),/another actor/)
-  await f.approve({kind:'bindings.save',bindings:[{...f.a,enabled:false}]})
-  await assert.rejects(()=>f.config.commit(owner,draft.id,draft.hash,signal()),/expired|changed/)
-  await f.approve({kind:'bindings.save',bindings:[f.a]})
-  const current = f.config.snapshot()
-  const adopted = await f.config.propose(owner,change,current.revision,signal())
-  await f.config.commit(owner,adopted.id,adopted.hash,signal())
-  const after = f.config.snapshot()
-  const strip = ({version,publishedAt,...a}: typeof agent) => a
-  assert.deepEqual(after.agents.map(strip),current.agents.map(strip))
-  assert.deepEqual(after.bindings.map(({epochRevision,...b})=>b).sort((a,b)=>a.id.localeCompare(b.id)),current.bindings.map(({epochRevision,...b})=>b).sort((a,b)=>a.id.localeCompare(b.id)))
-  assert.equal(after.packages[agent.name]!.active.source['BOT.md'],pkg.source['BOT.md'])
-  assert(after.drafts.some(d=>d.id===draft.id))
-})
-
-
-for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: reviewed source/history scopes default closed, freeze atomically, isolate internal epochs and recheck output`, async t => {
-    const f = await fixture(t,Store)
-    const sourcePath = join(f.root,'source'); await mkdir(sourcePath)
-    await writeFile(join(sourcePath,'main.ts'),'SOURCE_RESOURCE_CANARY')
-    const folders = new FolderRegistry(f.home); await folders.init()
-    const folder = await folders.register(sourcePath), resources = new SourceResources(folders)
-    f.config.options.sources = resources; f.integration.options.sources = resources
-    const history = {guildId:'100',channelIds:['205','206'],threads:'public-archived' as const,preEpoch:true}
-    f.transport.directory = async (_bot,guildId) => ({botUserId:'900',guilds:[],guildId:guildId ?? null,guildCursor:null,
-      channels:['205','206'].map(id=>({id,name:id,type:0,parentId:null,canView:true,canSend:true,canReadHistory:true,supported:true})),roles:[],synchronizedAt:new Date().toISOString(),completeness:'channels-and-active-threads',notice:'Synthetic'})
-    let revoked = false
-    f.transport.assertHistory = async (_bot,chat,sender,audience,scope) => {
-      assert.equal(sender,'500');assert.equal(audience,'205')
-      if (revoked || !scope.channelIds.includes(chat)) throw new Error('LIVE_HISTORY_REVOKED')
-    }
-    const agentId = randomUUID(), bindingId = randomUUID()
-    const pkg = (preEpoch:boolean, grants = true) => ({id:'scoped-package',source:{
-      'BOT.md':'---\n'+stringify({name:'scoped-package',platform:'discord',botInstanceId:f.bot.id,agentId,
-        channels:['channels/main.json'],tools:['read','search','discord_history','discord_message_get'],
-        ...(grants ? {sourceFolders:[folder.id],discordHistory:{...history,preEpoch}} : {})})+'---\nPRESERVED_PROMPT_RULE',
-      'channels/main.json':JSON.stringify([{...f.a,id:bindingId,agentId:undefined,target:{kind:'channel',guildId:'100',channelId:'205'},
-        tools:['read','search','discord_history','discord_message_get'],sourceFolders:grants?[folder.id]:undefined,discordHistory:grants?{...history,preEpoch}:undefined}]),
-    }})
-    await f.approve({kind:'bot.save',package:pkg(false,false)})
-    assert.equal(f.config.agent(agentId).sourceFolders,undefined)
-    await f.send('205')
-    const oldPhysical = physicalSessionId(f.sessions.getSessionState(f.id('205'))!)
-    await f.storage.appendMessages(oldPhysical,[{role:'user',content:'INTERNAL_PRE_SCOPE_CANARY',timestamp:new Date().toISOString()}])
-    const before=f.config.snapshot(), candidate=pkg(false)
-    const draft=await f.config.propose(owner,{kind:'bot.save',package:candidate},before.revision,signal())
-    assert.deepEqual(draft.resourceReview?.agent.sourceFolders,[folder.id]);assert.equal(draft.resourceReview?.agent.discordHistory?.preEpoch,false)
-    assert.equal(f.config.agent(agentId).sourceFolders,undefined)
-    candidate.source['BOT.md']+='\nUNREVIEWED_SCOPE_EDIT'
-    const missing=t.mock.method(folders,'get',()=>undefined)
-    await assert.rejects(f.config.commit(owner,draft.id,draft.hash,signal()),/unavailable/)
-    assert.equal(f.config.agent(agentId).sourceFolders,undefined)
-    missing.mock.restore()
-    await f.config.commit(owner,draft.id,draft.hash,signal())
-    assert(!f.config.agent(agentId).markdown.includes('UNREVIEWED_SCOPE_EDIT'))
-    assert.equal(f.config.agent(agentId).id,agentId)
-    assert.deepEqual(f.config.snapshot().bindings.find(b=>b.id===bindingId)?.participants,f.a.participants)
-    f.responses.push({content:'',toolCalls:[
-      {id:'source',name:'read',arguments:{path:`v:source/${folder.id}/main.ts`}},
-      {id:'source-names',name:'search',arguments:{folderId:folder.id,query:'main',mode:'names'}},
-      {id:'source-content',name:'search',arguments:{folderId:folder.id,query:'SOURCE_RESOURCE_CANARY',mode:'content',path:'',limit:10}},
-      {id:'source-denied-search',name:'search',arguments:{folderId:randomUUID(),query:'SOURCE_RESOURCE_CANARY',mode:'content'}},
-      {id:'source-denied-read',name:'read',arguments:{path:`v:source/${randomUUID()}/main.ts`}},
-      {id:'history',name:'discord_history',arguments:{channelId:'206'}},
-      {id:'single-old',name:'discord_message_get',arguments:{channelId:'206',messageId:'1'}},
-    ]})
-    f.requests.length=0;await f.send('205')
-    let input=JSON.stringify(f.requests.map(request=>request.messages))
-    assert(input.includes('SOURCE_RESOURCE_CANARY'));assert(input.includes('CURRENT_DISCORD_MESSAGE'))
-    // Exercise the actual restricted tool adapters through the real resource broker and
-    // fixed helper. Presence of the canary in a tool-call argument is not proof of success.
-    const toolResult = (id:string) => {
-      const message=f.requests.flatMap(request=>request.messages).find(message=>message.role==='tool'&&message.tool_call_id===id)
-      assert.equal(typeof message?.content,'string',`Tool result ${id} was returned to the provider`)
-      return String(message!.content)
-    }
-    assert.deepEqual(JSON.parse(toolResult('source')).lines,['SOURCE_RESOURCE_CANARY'])
-    assert.deepEqual(JSON.parse(toolResult('source-names')).matches,[{path:'main.ts'}])
-    assert.deepEqual(JSON.parse(toolResult('source-content')).matches,[{path:'main.ts',line:1,text:'SOURCE_RESOURCE_CANARY'}])
-    for (const id of ['source-denied-search','source-denied-read']) {
-      assert.match(toolResult(id),/outside the approved scope/)
-      assert(!toolResult(id).includes('SOURCE_RESOURCE_CANARY'))
-    }
-    assert(!input.includes('OLD_HISTORY_CANARY'));assert(!input.includes('INTERNAL_PRE_SCOPE_CANARY'))
-    assert(input.includes('outside this authorized context'))
-    await f.approve({kind:'bot.save',package:pkg(true)})
-    f.requests.length=0
-    f.responses.push({content:'',toolCalls:[{id:'pre-epoch',name:'discord_history',arguments:{channelId:'206'}}]})
-    await f.send('205')
-    input=JSON.stringify(f.requests.map(request=>request.messages))
-    assert(input.includes('OLD_HISTORY_CANARY'));assert(!input.includes('INTERNAL_PRE_SCOPE_CANARY'))
-    const state=f.sessions.getSessionState(f.id('205'))!
-    assert(state.channelBoundary?.historyLocations?.includes('206'))
-    assert.deepEqual((await f.storage.getState(f.id('205')))?.channelBoundary?.historyLocations,state.channelBoundary?.historyLocations)
-    const output=f.outbound.filter(message=>message.event==='response'&&message.chatId==='205').at(-1)!
-    await f.integration.assertDelivery(output,signal())
-    revoked=true;await assert.rejects(f.integration.assertDelivery(output,signal()),/LIVE_HISTORY_REVOKED/)
-    revoked=false
-    t.mock.method(folders,'get',()=>undefined)
-    await assert.rejects(f.integration.assertDelivery(output,signal()),/unavailable/)
-  })
-}
 
 test('source/history grants require registered folders, Agent ceilings and owner-only review',async t=>{
   const f=await fixture(t)
@@ -1442,67 +1254,55 @@ test('restricted history runtime uses real Discord permission proof and blocks c
   await assert.rejects(f.integration.assertDelivery(output,signal()),/audiences differ/)
 })
 
-for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: trusted Bot cards remain session-scoped durable history after cancel, expiry and reload`, async t => {
-    const f = await fixture(t, Store)
-    await f.sessions.buildSession('web:review-history')
-    const state = f.sessions.getSessionState('web:review-history')!
-    const origin = {sessionId:state.sessionId,physicalId:physicalSessionId(state),toolCallId:'host-call'}
-    const pkg = {id:'history-bot',source:{
-      'BOT.md':`---\nname: history-bot\nplatform: discord\nbotInstanceId: ${f.bot.id}\nchannels: [channels/main.json]\ntools: []\n---\nFrozen history`,
-      'channels/main.json':JSON.stringify([{...f.a,id:randomUUID(),target:{kind:'channel',guildId:'100',channelId:'205'},agentId:undefined,tools:[],readDomains:[],inheritThreads:false}]),
-    }}
-    const draft = await f.config.propose(owner,{kind:'bot.save',package:pkg},f.config.snapshot().revision,signal(),origin)
-    const record:import('../agent-authoring/bot-review-contract.ts').BotReviewRecord = {version:1,projectId:f.projectId,id:draft.id,origin,createdAt:draft.createdAt,status:'pending',candidate:{kind:'discord',draft}}
-    await f.sessions.recordBotReview(record)
-    await f.sessions.recordBotReview(record)
-    assert.equal((await f.sessions.getBotReviews(state.sessionId)).length,1)
-    assert.deepEqual(await f.sessions.getBotReviews('web:other'),[])
-    await assert.rejects(f.sessions.getBotReviews(state.sessionId,'wrong-segment'),/segment mismatch/)
-    await assert.rejects(f.sessions.recordBotReview({...record,projectId:'foreign'}),/Project mismatch/)
-    assert.equal((await f.sessions.getHistory(state.sessionId,{physicalId:origin.physicalId})).messages.length,0,'display records do not enter model/fork history')
-    const {botPackagePlugin} = await import('../agent-authoring/bot-package-management.ts')
-    const app = new Hono()
-    botPackagePlugin({service:{options:{projectId:f.projectId}},discord:f.config,
-      reviews:{record:r=>f.sessions.recordBotReview(r),read:(id,physical)=>f.sessions.getBotReviews(id,physical)},
-    } as Parameters<typeof botPackagePlugin>[0], request=>request.headers.get('x-owner')==='yes')(app)
-    const read = async()=> (await (await app.request(`/api/bot-package/reviews/${encodeURIComponent(state.sessionId)}`,{headers:{'x-owner':'yes'}})).json()).reviews
-    assert.equal((await read())[0].status,'pending')
-    assert.equal((await read())[0].currentRevision,f.config.snapshot().revision)
-    f.config.cancel(owner,draft.id)
-    const cancelled=(await read())[0]
-    assert.equal(cancelled.status,'cancelled'); assert.ok(cancelled.decidedAt)
-    assert.equal((await f.sessions.getBotReviews(state.sessionId)).length,1)
-    assert.equal((await f.sessions.getBotReviews(state.sessionId))[0]!.status,'cancelled')
-    await f.sessions.recordBotReview(record)
-    assert.equal((await f.sessions.getBotReviews(state.sessionId))[0]!.status,'cancelled','a delayed pending event cannot reopen a decision')
-    const reopened = new Store(join(f.root,'sessions')); await reopened.init()
-    try {
-      const events=[]
-      for await (const event of reopened.readSessionLog(origin.physicalId)) if (event.bot_review) events.push(event.bot_review)
-      assert.equal((events.at(-1) as typeof record).status,'cancelled')
-    } finally {reopened.close?.()}
-    await assert.rejects(f.config.commit(owner,draft.id,draft.hash,signal()),/cancelled/)
-    const next = await f.config.propose(owner,{kind:'bot.save',package:pkg},f.config.snapshot().revision,signal(),{...origin,toolCallId:'next-host-call'})
-    await f.sessions.recordBotReview({...record,id:next.id,origin:next.origin!,createdAt:next.createdAt,candidate:{kind:'discord',draft:next}})
-    t.mock.timers.enable({apis:['Date'],now:Date.parse(next.expiresAt)+1})
-    try {
-      assert.equal((await read()).find((r:typeof record)=>r.id===next.id).status,'expired')
-      await assert.rejects(f.config.commit(owner,next.id,next.hash,signal()),/expired|changed/)
-    } finally {t.mock.timers.reset()}
-    const approved = await f.config.propose(owner,{kind:'bot.save',package:pkg},f.config.snapshot().revision,signal(),{...origin,toolCallId:'approve-host-call'})
-    await f.sessions.recordBotReview({...record,id:approved.id,origin:approved.origin!,createdAt:approved.createdAt,candidate:{kind:'discord',draft:approved}})
-    await f.config.commit(owner,approved.id,approved.hash,signal())
-    const completed = (await read()).find((r:typeof record)=>r.id===approved.id)
-    assert.equal(completed.status,'applied');assert.ok(completed.decidedAt)
-    const staleCard=(await read()).find((r:typeof record)=>r.id===next.id)
-    assert.equal(staleCard.status,'stale');assert.equal(staleCard.currentRevision,f.config.snapshot().revision)
-    assert.notEqual(staleCard.currentRevision,staleCard.candidate.draft.baseRevision)
-    const version = f.config.snapshot().revision
-    await f.config.commit(owner,approved.id,approved.hash,signal())
-    assert.equal(f.config.snapshot().revision,version,'duplicate HTTP confirmation never reapplies a completed version')
-    const cards = await f.sessions.getBotReviews(state.sessionId)
-    assert.equal(cards.filter(card=>card.id===approved.id).length,1)
-    assert.equal(cards.find(card=>card.id===approved.id)?.status,'applied')
-  })
-}
+
+test('directory Discord SDK tools run in the existing session loop with per-binding exposure and live callback checks',async t=>{
+  const {BotDeployments}=await import('../bots/deployments.ts')
+  const {DirectoryBots}=await import('../agent-authoring/bot-runtime.ts')
+  const f=await fixture(t)
+  const deployments=new BotDeployments({directory:join(f.root,'directory-deployments'),projectId:f.projectId,runGit:async()=>{throw new Error('Git unavailable')}})
+  const runtime=new DirectoryBots(deployments)
+  const {agentId: _agent,epochRevision:_epoch,...data}=f.a
+  const files={'BOT.md':'---\nid: sdk-helper\nconfig: bot.json\n---\nSDK_DIRECTORY_PROMPT','bot.json':JSON.stringify({allowedModules:[],tools:[{name:'sdk_probe',description:'Read and save conversation value',parameters:{type:'object',properties:{},additionalProperties:false},module:'tools/probe.ts',imports:[]}],bindings:[{...data,id:randomUUID(),platform:'discord',target:{kind:'channel',guildId:'100',channelId:'205'},tools:['sdk_probe'],readDomains:[],inheritThreads:false}]}),'tools/probe.ts':`import {defineTool} from '@shadow/bot-sdk'; export default defineTool({async execute(args,ctx){await ctx.storage.set('value','SDK_SCOPED_RECEIPT');return await ctx.storage.get('value')}});`}
+  const frozen=deployments.freeze(files)
+  await deployments.deploy({id:'sdk-helper',source:{folderId:'fixture',directory:''},...frozen})
+  f.config.setBotDeployments(()=>runtime.discord())
+  f.integration.options.directoryBots=runtime
+  const candidate=runtime.discord()
+  await f.config.validateBotDeployment(candidate.agents,candidate.bindings,signal())
+  let inspections=0
+  const original=f.transport.inspect
+  f.transport.inspect=async(...args)=>{inspections++;return original(...args)}
+  f.responses.push({content:'',toolCalls:[{id:'sdk-call',name:'sdk_probe',arguments:{}}]},{content:'Stored',toolCalls:[]})
+  await f.send('205')
+  assert(f.requests.some(request=>request.tools.includes('sdk_probe')))
+  assert(JSON.stringify(f.requests).includes('SDK_SCOPED_RECEIPT'))
+  assert(inspections>=6,'live authorization runs around inference/tool and each SDK callback')
+  assert(!JSON.stringify(await readFile(join(f.root,'config','channel-integrations.json'),'utf8')).includes('SDK_DIRECTORY_PROMPT'))
+})
+
+test('directory production mode rejects standalone lifecycle mutations through direct gateway and owner tool calls',async t=>{
+  const f=await fixture(t);f.config.setBotDeployments(()=>({agents:[],bindings:[]}))
+  const tool=ownerChannelConfigurationTool(f.config,f.memory,f.transport,()=>true)
+  const tools=new SessionTools(f.tools,f.home);tools.setExecutionScope('session',[])
+  const context={projectId:f.projectId,sessionId:'web:owner',physicalSessionId:'owner-physical',channel:'web',inputSource:'user',admin:true,tools,signal:signal()} as import('../tools/context.ts').ExecutionContext
+  for(const change of [{kind:'agent.save',agent:f.profile},{kind:'bindings.save',bindings:[f.a]}]){
+    const response=await f.app.request('/api/integrations/discord/drafts',{method:'POST',headers:{'x-owner':'yes','content-type':'application/json'},body:JSON.stringify({baseRevision:f.config.snapshot().revision,change})})
+    assert.equal(response.status,400);assert.equal((await response.json()).error,'directory_required')
+    await assert.rejects(()=>tool.execute({action:'propose',botId:f.bot.id,baseRevision:f.config.snapshot().revision,changeJson:JSON.stringify(change)},context),/registered source directories/)
+  }
+  const schema=JSON.parse(await tool.execute({action:'schema'},context) as string)
+  assert.equal(schema.changes['agent.save'],undefined);assert.equal(schema.changes['bindings.save'],undefined)
+})
+
+test('directory constructor fails closed before applying old mutable lifecycle drafts and preserves bytes',async t=>{
+  const f=await fixture(t),directory=join(f.root,'unapplied-security')
+  const store=new IntegrationStore({projectId:f.projectId,workspace:f.home,directory,bots:f.bots,agents:f.agents,memory:f.memory})
+  const draft=await store.propose(owner,{kind:'agent.save',agent:{...f.profile,id:randomUUID(),name:'unapplied-helper',markdown:'---\nname: unapplied-helper\ndefaultMode: session\n---\nNot yet approved'}},0,signal())
+  const file=join(directory,'channel-integrations.json'),document=JSON.parse(await readFile(file,'utf8'))
+  document.value.drafts.find((item:{id:string})=>item.id===draft.id).status='applying'
+  await writeFile(file,JSON.stringify(document))
+  const before=await readFile(file,'utf8')
+  assert.throws(()=>new IntegrationStore({projectId:f.projectId,workspace:f.home,directory,bots:f.bots,agents:f.agents,memory:f.memory,deployedBots:()=>({agents:[],bindings:[]})}),/unfinished lifecycle drafts/)
+  assert.equal(await readFile(file,'utf8'),before)
+  assert.equal(JSON.parse(before).value.agents.length,0)
+})

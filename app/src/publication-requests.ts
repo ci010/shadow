@@ -5,7 +5,6 @@ import { isRecord } from './folders-sidebar.ts'
 import { parsePublicationRequest, parsePublicationResult, type PublicationRequest } from '../../src/agent-authoring/publication-contract.ts'
 
 export interface PublicationSource {
-  hideTimelineReviews?: boolean
   apiBase: string
   projectId: string
   sessionId: string
@@ -39,7 +38,7 @@ export function visiblePublicationRequests(requests: PublicationRequest[], sessi
 export function usePublicationRequest(source: () => PublicationSource) {
   const requests = ref<PublicationRequest[]>([])
   const selectedId = ref('')
-  const visibleRequests = computed(() => requests.value.filter(item => !(source().hideTimelineReviews && item.botReviewOrigin)))
+  const visibleRequests = computed(() => requests.value)
   const request = computed(() => visibleRequests.value.find(item => item.id === selectedId.value) ?? visibleRequests.value[0] ?? null)
   const error = ref('')
   const notice = ref('')
@@ -87,7 +86,7 @@ export function usePublicationRequest(source: () => PublicationSource) {
       })
       if (!response.ok) throw new Error(t('Publication review unavailable'))
       const parsed = parsePublicationRequests(await response.json(), source().projectId)
-      const next = (source().conversation ? parsed : visiblePublicationRequests(parsed, source().sessionId)).filter(item => !(source().hideTimelineReviews && item.botReviewOrigin))
+      const next = (source().conversation ? parsed : visiblePublicationRequests(parsed, source().sessionId))
         .filter(item => {
           const target = source().conversation
           return !target || (item.impact ? item.impact.affectedBindings.includes(JSON.stringify([target.botInstanceId, target.platform, target.conversationId])) : [...item.bindings, ...item.previousBindings].some(binding => binding.botInstanceId === target.botInstanceId && binding.platform === target.platform && binding.conversationId === target.conversationId))

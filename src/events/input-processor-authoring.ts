@@ -1,7 +1,7 @@
 import { classifierExampleFiles } from './input-classifier-examples.ts'
 import { InputClassifier } from './input-classifier.ts'
 import { ClassifierPolicySchema } from './input-classifier-contract.ts'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { observationExampleFiles } from './input-processor-examples.ts'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -75,7 +75,7 @@ export async function testProcessor(root: string, filename: string, fixturePath:
   const checked = await checkProcessor(root, filename)
   if (!checked.ok) return { ok: false, diagnostics: checked.diagnostics, trace: [] }
   const fixture = FixtureSchema.parse(JSON.parse(await readProcessorFile(root, fixturePath, 256_000)))
-  const directory=mkdtempSync(path.join(tmpdir(),'shadow-classifier-fixture-'))
+  const directory=mkdtempSync(path.join(realpathSync(tmpdir()),'shadow-classifier-fixture-'))
   let modelCalls=0
   const classifier=fixture.classifier ? new InputClassifier(()=>({name:'fixture',listModels:()=>[fixture.classifier!.policy.model],chat:async()=>{
     const content=fixture.classifier!.responses[modelCalls++] ?? '{"label":"unknown","confidence":0}'

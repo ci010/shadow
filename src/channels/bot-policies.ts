@@ -1,9 +1,10 @@
 import { channelAddressFromSessionId } from '../bus/events.ts'
 import type { ConversationPolicies } from '../agent-authoring/service.ts'
+import type { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
 import type { BotInstanceStore } from './bot-store.ts'
 
 /** Enforced on session admission and policy refresh, including non-adapter inputs. */
-export function botConversationPolicies(store: BotInstanceStore, existing: ConversationPolicies): ConversationPolicies {
+export function botConversationPolicies(store: BotInstanceStore, existing: ConversationPolicies, directory?: DirectoryBots): ConversationPolicies {
   const botFor = (id: string) => {
     const address = channelAddressFromSessionId(id)
     if (address) {
@@ -28,6 +29,13 @@ export function botConversationPolicies(store: BotInstanceStore, existing: Conve
     return policy
   }
   return {
+    personal: id => {
+      const bot = botFor(id)
+      resolve(id) // Live purpose, enabled state, verified owner and Project checks.
+      if (bot?.purpose !== 'personal') return undefined
+      const definition = directory?.personal(bot.id)
+      return definition ? { agent: definition.agent!, prompt: definition.prompt } : undefined
+    },
     managed: id => botFor(id)?.purpose === 'personal' ? false : existing.managed(id),
     resolve,
     authorize: (id, input) => {

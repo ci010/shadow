@@ -13,7 +13,6 @@ import {
   type PublishedAgent, type PublishedTool, type ResourceBundle, type ResourceSnapshot, type ResolvedConversationPolicy,
 } from './contracts.ts'
 import { ScriptImportsSchema, assertImportPolicy, importedModules } from '../script-runtime/module-policy.ts'
-import { assertBotCompilation, botPackages } from './bot-package.ts'
 import { LegacyAuthoredToolSchema, legacyToolCode } from './legacy-tools.ts'
 
 const MAX_BUNDLE_BYTES = 4 * 1024 * 1024
@@ -63,7 +62,6 @@ const documentFields = {
   draft: snapshotSchema, published: snapshotSchema,
   history: z.array(snapshotSchema).max(MAX_HISTORY),
   managed: z.array(z.string().max(4096)).max(MAX_MANAGED),
-  packages: z.record(z.array(snapshotSchema).max(MAX_HISTORY)).default({}),
 }
 const currentDocumentSchema = z.object({
   ...documentFields, version: z.literal(2),
@@ -146,7 +144,7 @@ function bundleSnapshot(input: unknown): ResourceSnapshot {
   for (const [path, content] of Object.entries(bundle.files)) {
     const parts = path.split('/')
     const [kind, name, file] = parts
-    insist((path.startsWith('bot/') && !parts.some(part => !part || part === '.' || part === '..') && !/[\\\x00-\x1f]/.test(path)) || (parts.length === 3 && ResourceName.safeParse(name).success &&
+    insist((parts.length === 3 && ResourceName.safeParse(name).success &&
       ((kind === 'agents' && file === 'AGENT.md') ||
         (kind === 'skills' && (file === 'SKILL.md' ||
           (/\.(?:js|ts)$/.test(file) && ResourceName.safeParse(file.slice(0, -3)).success))))),
@@ -180,7 +178,6 @@ function safeRoute(path: string): void {
 }
 
 function parseResources(bundle: ResourceBundle, projectId: string, allowLegacy = false): ParsedResources {
-  assertBotCompilation(bundle)
   const agents: ParsedResources['agents'] = new Map()
   const skills: ParsedResources['skills'] = new Map()
   const aliases = new Set<string>()
@@ -188,7 +185,6 @@ function parseResources(bundle: ResourceBundle, projectId: string, allowLegacy =
   const legacyTools = new Set<string>()
   const profileBindings: ResourceBundle['bindings'] = []
   for (const [path, content] of Object.entries(bundle.files)) {
-    if (path.startsWith('bot/')) continue
     const [, name, file] = path.split('/')
     if (file === 'AGENT.md') {
       insist(!reservedAgents.has(name), `Builtin agent name is reserved: ${name}`)
@@ -240,7 +236,7 @@ function parseResources(bundle: ResourceBundle, projectId: string, allowLegacy =
     }
   }
   for (const path of Object.keys(bundle.files)) {
-    insist(path.startsWith('bot/') || !/\.(?:js|ts)$/.test(path) || usedSources.has(path), `Undeclared tool source: ${path}`)
+    insist(!/\.(?:js|ts)$/.test(path) || usedSources.has(path), `Undeclared tool source: ${path}`)
   }
   // Even unbound agents cannot hide a privileged tool request in the draft.
   for (const agent of agents.values()) {
@@ -312,7 +308,7 @@ export class AgentResourceStore {
     const empty = bundleSnapshot({ version: 1, files: {}, bindings: [] })
     this.document = {
       version: 2, projectId: this.projectId, draft: empty, published: empty, history: [], managed: [],
-      legacyRevisions: [], packages: {},
+      legacyRevisions: [],
     }
     const text = this.readDocument()
     if (text !== undefined) {
@@ -331,13 +327,6 @@ export class AgentResourceStore {
       for (const snapshot of [document.published, ...document.history]) {
         checkedSnapshot(snapshot)
         parseResources(snapshot.bundle, this.projectId, document.legacyRevisions.includes(snapshot.revision))
-      }
-      for (const [id, releases] of Object.entries(document.packages)) {
-        for (const release of releases) {
-          checkedSnapshot(release)
-          insist(botPackages(release.bundle).size === 1 && botPackages(release.bundle).has(id), 'Invalid BOT retained identity')
-          parseResources(release.bundle, this.projectId)
-        }
       }
       unique(document.history.map(snapshot => snapshot.revision), 'history revisions')
       unique(document.managed, 'managed conversations')
@@ -376,21 +365,6 @@ export class AgentResourceStore {
     const snapshot = this.document.history.find(item => item.revision === revision)
     insist(snapshot, 'Unknown or pruned Release')
     return copy(snapshot)
-  }
-
-  packageStatus(): Array<{ id: string; activeRelease: string; retained: Array<{ revision: string }> }> {
-    return [...botPackages(this.document.published.bundle)].map(([id, bundle]) => ({ id,
-      activeRelease: bundleSnapshot(bundle).revision,
-      retained: (this.document.packages[id] ?? []).map(({ revision }) => ({ revision })),
-    }))
-  }
-
-  retainedPackage(id: string, revision: string): ResourceBundle {
-    const retained = this.document.packages[id]?.find(item => item.revision === revision)
-    insist(retained, 'Unknown or pruned BOT Release')
-    checkedSnapshot(retained)
-    insist(botPackages(retained.bundle).has(id), 'BOT identity mismatch')
-    return copy(retained.bundle)
   }
 
   history(): Array<{ revision: string }> {
@@ -522,12 +496,7 @@ export class AgentResourceStore {
     insist(managed.length <= MAX_MANAGED, 'Managed conversation limit reached; tombstones cannot be discarded')
     const history = [...this.document.history.filter(item => item.revision !== snapshot.revision), snapshot]
       .slice(-MAX_HISTORY)
-    const packages = { ...this.document.packages }
-    for (const [id, bundle] of botPackages(snapshot.bundle)) {
-      const release = bundleSnapshot(bundle)
-      packages[id] = [...(packages[id] ?? []).filter(item => item.revision !== release.revision), release].slice(-MAX_HISTORY)
-    }
-    const next = { ...this.document, published: snapshot, history, managed, packages }
+    const next = { ...this.document, published: snapshot, history, managed }
     this.persist(next, true)
     return this.snapshot()
   }

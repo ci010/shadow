@@ -125,10 +125,9 @@ test('Settings shell and channel forms compile and preserve accessible navigatio
       assert.doesNotMatch(source, /<ChannelsView/)
     }
     if (filename === 'BotPackage.vue') {
-      assert.match(source, /session-id="owner:bot-package"/)
-      assert.match(source, /expectedRevision: state.value.draftRevision/)
-      assert.match(source, /api\/bot-package\/review/)
-      assert.doesNotMatch(source, /publication-requests\/.*POST|secretRef.*input/)
+      assert.match(source, /api\/bot-package/)
+      assert.match(source, /Pending exact permissions and affected locations/)
+      assert.doesNotMatch(source, /bot-package\/review|publication-requests|adoptLegacy/)
     }
     if (filename === 'ChannelsView.vue') assert.match(source, /BotPackage v-if="available" :key="projectId"/)
     if (filename === 'ProjectSettings.vue') assert.match(source, /ChannelsView v-if="botsOpened" v-show=/)
@@ -184,18 +183,10 @@ test('pending service groups client validates scoped observations without genera
 })
 
 
-test('BOT release UI removes one-off migration controls but retains normal review and rollback', async () => {
+test('BOT inventory keeps details optional and publication in the native owner question', async () => {
   const source = await readFile(new URL('./components/BotPackage.vue', import.meta.url), 'utf8')
-  assert.doesNotMatch(source, /v-model="adoptLegacy"|const adoptLegacy|adoptLegacy:true|Adopt identical legacy policy/)
-  assert.match(source, /Freeze and review Release/)
-  assert.match(source, /Review rollback/)
-  assert.match(source, /Approve and apply/)
-  assert.match(source, /discordDraft.change.adoptLegacy/) // Existing pending reviews still disclose legacy policy.
-  const require = createRequire(import.meta.url)
-  const { parse, compileScript, compileTemplate } = require('vue/compiler-sfc') as typeof import('vue/compiler-sfc')
-  const { descriptor, errors } = parse(source)
-  assert.deepEqual(errors, [])
-  const script = compileScript(descriptor, { id: 'bot-package-cleanup' })
-  const template = compileTemplate({ source: descriptor.template!.content, filename: 'BotPackage.vue', id: 'bot-package-cleanup', compilerOptions: { bindingMetadata: script.bindings } })
-  assert.deepEqual(template.errors, [])
+  assert.match(source, /<details v-for="item in pending"/)
+  assert.doesNotMatch(source, /method: 'POST'|Approve and apply|discordDraft|adoptLegacy|PublicationRequest/)
+  const chat = await readFile(new URL('./components/ChatTab.vue',import.meta.url),'utf8')
+  assert.doesNotMatch(chat,/BotReviewCard|useBotReviews|botReviewPositions/)
 })

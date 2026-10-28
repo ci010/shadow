@@ -114,7 +114,7 @@ export function discordIntegrationPlugin(options: {
 export function ownerChannelConfigurationTool(store: IntegrationStore, memory: MemoryDomains, transport: DiscordIntegrationTransport, canAuthor?: (sessionId: string) => boolean): Tool {
   return {
     name: 'channel_config', optIn: true,
-    description: 'Owner-only Bot configuration discovery and Discord draft creation. list includes QQ/Feishu authoring routes; use authoring_change for their Agent Markdown, tools and bindings, not Discord proposals. Read schema for formats. Discord directory/members resolve names; propose with botId returns a reviewUrl to show the user. Never approves changes.',
+    description: 'Owner-only connection discovery and scoped knowledge administration. All QQ/Feishu/Discord BOT lifecycle changes use bot_package with registered directory sources, not Agent/binding proposals. Read schema for formats. Discord directory/members resolve names; propose with botId returns a reviewUrl to show the user. Never approves changes.',
     parameters: { type: 'object', properties: { action: { type: 'string', enum: ['schema', 'processor_resource', 'list', 'directory', 'members', 'resource', 'agent_file', 'propose', 'processor_check', 'processor_test', 'processor_propose', 'observation_propose'] },
       botId: { type: 'string' }, guildId: { type: 'string' }, after: { type: 'string' }, query: { type: 'string' },
       resourceName: { type: 'string', description: 'processor_resource: documentation, types, example, fixtures, observation/processor.ts, observation/signature.ts or observation/fixtures.json' }, resourceId: { type: 'string' }, agentId: { type: 'string' },
@@ -152,7 +152,7 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
       ]).parse(raw)
       if (input.action === 'schema') {
         const { resources, typeDefinitions, ...guide } = processorAuthoringGuide
-        return JSON.stringify({ ...integrationConfigurationGuide, processorAuthoring: { ...guide,
+        return JSON.stringify({ ...integrationConfigurationGuide,...(store.directoryManaged ? {workflow:'Discover connections/targets here; edit BOT directory and use bot_package for Agents, bindings, processors and permissions. Only domain/knowledge changes can be proposed here.',changes:Object.fromEntries(Object.entries(integrationConfigurationGuide.changes).filter(([kind])=>!['agent.save','bindings.save'].includes(kind)))} : {}), processorAuthoring: { ...guide,
           resources: { action: 'processor_resource', resourceName: ['documentation','types','example','fixtures','observation/processor.ts','observation/signature.ts','observation/fixtures.json','classifier/processor.ts','classifier/policy.json','classifier/fixtures.json'],
             instructions: 'Fetch each named resource separately with channel_config; complete UTF-8 content, no repository access needed. This avoids model tool-result truncation.' } } })
       }
@@ -182,9 +182,9 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
         })),
         otherPlatformBots: store.options.bots.list().filter(bot => bot.platform !== 'discord').map(bot => ({
           id: bot.id, displayName: bot.displayName, platform: bot.platform, enabled: bot.enabled,
-          authoringTool: 'authoring_change',
+          authoringTool: 'bot_package',
         })),
-        otherPlatformWorkflow: 'QQ/Feishu use authoring_change in Shadow owner chat: schema, inspect for published bindings, uncovered conversations and model/effort capabilities, then create a Change, configure_inference or edit, check validate, propose, and status after owner approval. Model changes affect explicitly selected bound Agents, not Bot-wide defaults. Discord revisions and review URLs do not apply.',
+        otherPlatformWorkflow: 'All QQ, Feishu and Discord BOTs use bot_package with a registered local directory, data-only bot.json, one native owner confirmation and immutable deployed files.',
         domains: memory.domains(), resources: memory.ownerResources(), tools: integrationToolNames })
       if (input.action === 'directory') return JSON.stringify(await transport.directory(input.botId, input.guildId, input.after, context.signal))
       if (input.action === 'members') {
@@ -197,7 +197,7 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
       const change = IntegrationChangeSchema.parse(JSON.parse(input.changeJson))
       const botId = input.botId ?? (change.kind === 'bindings.save' ? change.bindings[0]?.botInstanceId : undefined)
       if (botId && !store.options.bots.list().some(bot => bot.id === botId && bot.platform === 'discord')) {
-        throw new IntegrationError('bot_unavailable', 'Choose a Discord Bot from this Project. QQ/Feishu Agent Markdown, tools and bindings use authoring_change with owner publication review, not channel_config propose.', 400)
+        throw new IntegrationError('bot_unavailable', 'Choose a Discord Bot from this Project. All platforms use registered BOT directories and bot_package for lifecycle; channel_config propose is for knowledge administration.', 400)
       }
       const draft = await store.propose({ kind: 'owner', id: 'shadow-owner' }, change, input.baseRevision, context.signal)
       const query = new URLSearchParams({ discordReview: draft.id, ...(botId ? { discordBot: botId } : {}) })

@@ -196,7 +196,7 @@ export class PublicationRequests {
     })
   }
 
-  async propose(input: PublicationProposal | undefined, expectedDraftRevision: string | undefined, sessionId: string, expectedBaseRevision?: string, botReviewOrigin?: PublicationRequest['botReviewOrigin']): Promise<PublicationRequest> {
+  async propose(input: PublicationProposal | undefined, expectedDraftRevision: string | undefined, sessionId: string, expectedBaseRevision?: string): Promise<PublicationRequest> {
     this.assertRunning()
     if (this.submitting) throw new PublicationRequestError('publication_in_progress', 409, 'Publication is already in progress.')
     const store = this.options.service.options.store
@@ -214,7 +214,6 @@ export class PublicationRequests {
       id: randomUUID(), projectId: this.options.service.options.projectId,
       sessionId: proposal?.change.sourceSessionId ?? sessionId, revision: draft.revision, baseRevision: base.revision,
       createdAt: new Date().toISOString(),
-      ...(botReviewOrigin ? {botReviewOrigin} : {}),
       files: paths.filter(path => base.bundle.files[path] !== draft.bundle.files[path])
         .map(path => ({ path, before: base.bundle.files[path] ?? null, after: draft.bundle.files[path] ?? null })),
       previousBindings: base.bundle.bindings, bindings: draft.bundle.bindings,

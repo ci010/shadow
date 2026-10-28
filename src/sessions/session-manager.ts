@@ -1,5 +1,3 @@
-import { parsePublicationRequest } from '../agent-authoring/publication-contract.ts'
-import { BotReviewRecordSchema, type BotReviewRecord } from '../agent-authoring/bot-review-contract.ts'
 import { createTaskLifecycle, transitionTaskLifecycle, type TaskLifecycleAction } from './task-lifecycle.ts'
 import { parseTaskRecord, type TaskRecord } from './task-record.ts'
 import { validateFreshAutomationState } from './fresh-automation-state.ts'
@@ -1449,6 +1447,13 @@ ${JSON.stringify(request)}`,
     return this.withSessionPreparation(sessionId, async (): Promise<DeliveryReceipt> => {
       this.deps.conversationPolicies?.authorize(sessionId, input)
       await this.reconcileChannelContext(sessionId)
+      const personal = this.deps.conversationPolicies?.personal?.(sessionId)
+      if (personal) {
+        const role = this.deps.agentTypes.resolve(personal.agent)
+        if (!role || role.defaultMode !== 'session') throw new Error('Personal BOT agent role unavailable')
+        const state = await this.getOrCreateState(sessionId)
+        if (state.agentType !== personal.agent) await this.saveState(sessionId, { ...state, agentType: personal.agent })
+      }
       this.assertFolderAccess(sessionId)
       this.assertHistoryWritable(sessionId)
       const state = this.sessionStates[sessionId]
@@ -1588,7 +1593,7 @@ ${JSON.stringify(request)}`,
           state.task = next
         }
         session.dispatch(deliveryInput, resolveInferenceSettings(
-          config, this.deps.conversationPolicies?.resolve(sessionId)?.agent, state?.config,
+          config, this.deps.conversationPolicies?.resolve(sessionId)?.agent ?? (personal ? this.deps.agentTypes.resolve(personal.agent) : undefined), state?.config,
         ))
       } catch (error) {
         if (resume) {
@@ -2284,7 +2289,8 @@ ${JSON.stringify(request)}`,
     if (!this.sessionStates[sessionId]) throw new Error('session_not_found')
     const defaults = this.deps.getLlmRuntimeConfig?.()
     if (!defaults) return undefined
-    const resolved = resolveInferenceSettings(defaults, this.deps.conversationPolicies?.resolve(sessionId)?.agent)
+    const personal = this.deps.conversationPolicies?.personal?.(sessionId)
+    const resolved = resolveInferenceSettings(defaults, this.deps.conversationPolicies?.resolve(sessionId)?.agent ?? (personal ? this.deps.agentTypes.resolve(personal.agent) : undefined))
     return { contextWindow: defaults.contextWindow, model: resolved.model, thinking: resolved.thinking, reasoningEffort: resolved.reasoningEffort }
   }
 
@@ -3226,7 +3232,12 @@ ${JSON.stringify(request)}`,
       )
     }
 
-    const { agentType, allowedTools, blockedTools } = this.resolveAgentTypeTools(agentTypeName)
+    const { agentType: roleAgentType, allowedTools, blockedTools } = this.resolveAgentTypeTools(agentTypeName)
+    const personal = this.deps.conversationPolicies?.personal?.(sessionId)
+    const agentType = personal
+      ? { ...roleAgentType, prompt: `${roleAgentType.prompt}\n\n# Personal BOT instructions\n${personal.prompt}` }
+      : roleAgentType
+
     const promptCtx: SessionPromptContext = {
       projectId: this.deps.projectId,
       behavior,
@@ -3337,45 +3348,6 @@ ${JSON.stringify(request)}`,
     this.deps.bus.emit('session.changed', { sessionId })
   }
 
-  /** Host-owned, display-only review events. Never inherited as model messages. */
-  async recordBotReview(value: BotReviewRecord): Promise<void> {
-    let record = BotReviewRecordSchema.parse(value)
-    if (record.projectId !== this.deps.projectId) throw new Error('Review Project mismatch')
-    await this.withStateCreation(record.origin.sessionId, async () => {
-      this.assertHistoryWritable(record.origin.sessionId)
-      const state = await this.readSessionState(record.origin.sessionId)
-      if (!state || !Array.from({length:state.segmentIndex + 1}, (_, i) => physicalSessionId(state, i)).includes(record.origin.physicalId)) throw new Error('Review session mismatch')
-      const existing = await this.getBotReviews(record.origin.sessionId, record.origin.physicalId)
-      const previous = existing.find(item => item.id === record.id)
-      if (previous?.previousSource) record = {...record,previousSource:previous.previousSource}
-      if (previous && JSON.stringify(previous.origin) !== JSON.stringify(record.origin)) throw new Error('Review origin is immutable')
-      const version = (review:BotReviewRecord) => review.candidate.kind === 'discord' ? review.candidate.draft.hash : parsePublicationRequest(review.candidate.request,review.projectId).revision
-      if (previous && (previous.candidate.kind !== record.candidate.kind || version(previous) !== version(record))) throw new Error('Review version is immutable')
-      if (previous && JSON.stringify(previous) === JSON.stringify(record)) return
-      if (previous && ['applied','cancelled'].includes(previous.status)) return
-      if (previous && ['waiting','expired','stale'].includes(previous.status) && record.status === 'pending') return
-      await this.store.appendRawEvents(record.origin.physicalId, [{bot_review:record}])
-      this.deps.bus.emit('session.changed', {sessionId:record.origin.sessionId})
-    })
-  }
-
-  async getBotReviews(sessionId: string, physicalId?: string): Promise<BotReviewRecord[]> {
-    const state = await this.readSessionState(sessionId)
-    if (!state) return []
-    const segments = Array.from({length:state.segmentIndex + 1}, (_, i) => physicalSessionId(state, i))
-    if (physicalId && !segments.includes(physicalId)) throw new Error('Review segment mismatch')
-    const records = new Map<string, BotReviewRecord>()
-    for (const id of physicalId ? [physicalId] : segments) {
-      for await (const event of this.store.readSessionLog(id)) {
-        if (!Object.hasOwn(event, 'bot_review')) continue
-        const record = BotReviewRecordSchema.parse(event.bot_review)
-        if (record.projectId !== this.deps.projectId || record.origin.sessionId !== sessionId || record.origin.physicalId !== id) throw new Error('Review history mismatch')
-        records.set(record.id, record)
-      }
-    }
-    return [...records.values()]
-  }
-
   async recordCommandResult(sessionId: string, receipt: CommandReceipt): Promise<void> {
     if (!isCommandReceipt(receipt)) throw new TypeError('Invalid command receipt')
     await this.withStateCreation(sessionId, async () => {
@@ -3468,9 +3440,14 @@ ${JSON.stringify(request)}`,
     const behavior = state.config ?? {}
 
     const conversationPolicy = this.deps.conversationPolicies?.resolve(sessionId)
-    const { agentType: resolvedAgentType, allowedTools, blockedTools } = conversationPolicy
+    const { agentType: roleAgentType, allowedTools, blockedTools } = conversationPolicy
       ? { agentType: conversationPolicy.agent, allowedTools: conversationPolicy.agent.allowedTools ?? [], blockedTools: undefined }
       : this.resolveAgentTypeTools(state.agentType)
+
+    const personal = this.deps.conversationPolicies?.personal?.(sessionId)
+    const resolvedAgentType = personal
+      ? { ...roleAgentType, prompt: `${roleAgentType.prompt}\n\n# Personal BOT instructions\n${personal.prompt}` }
+      : roleAgentType
 
     const promptCtx: SessionPromptContext = {
       projectId: this.deps.projectId,
@@ -3608,7 +3585,7 @@ ${JSON.stringify(request)}`,
 
     for await (const parsed of this.store.readSessionLog(physicalSessionId)) {
       // Display-only receipts must not shift existing model-history fork offsets.
-      if (Object.hasOwn(parsed, 'bot_review') || parsed.event === 'command_result' || Object.hasOwn(parsed, 'input_request') || Object.hasOwn(parsed, 'yield_decision') || Object.hasOwn(parsed, 'yield_review')
+      if (parsed.event === 'command_result' || Object.hasOwn(parsed, 'input_request') || Object.hasOwn(parsed, 'yield_decision') || Object.hasOwn(parsed, 'yield_review')
         || Object.hasOwn(parsed, 'yield_invalidation') || Object.hasOwn(parsed, 'decision_input')) continue
       if (maxRecords != null && recordIndex >= maxRecords) break
       recordIndex++
