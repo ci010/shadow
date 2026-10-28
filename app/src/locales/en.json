@@ -4082,5 +4082,13 @@
   "BOT deployment status unavailable.": "BOT deployment status unavailable.",
   "Source:": "Source:",
   "History:": "History:",
-  "Previous:": "Previous:"
+  "Previous:": "Previous:",
+  "The provider could not verify the credentials. Check the selected account, API key and endpoint in provider settings. Sign in again only if the credentials are invalid or expired.": "The provider could not verify the credentials. Check the selected account, API key and endpoint in provider settings. Sign in again only if the credentials are invalid or expired.",
+  "No provider credentials are available. Open provider settings to sign in or add an API key.": "No provider credentials are available. Open provider settings to sign in or add an API key.",
+  "The saved provider authorization has expired. Open provider settings to renew it.": "The saved provider authorization has expired. Open provider settings to renew it.",
+  "The provider denied access to this request. Check model access, subscription, account host, SSO and organization policy. Signing in again may not resolve this.": "The provider denied access to this request. Check model access, subscription, account host, SSO and organization policy. Signing in again may not resolve this.",
+  "Enterprise subdomain prefix": "Enterprise subdomain prefix",
+  "Enter only your enterprise subdomain, for example octocat. The .ghe.com suffix is added automatically.": "Enter only your enterprise subdomain, for example octocat. The .ghe.com suffix is added automatically.",
+  "Enter only a valid enterprise subdomain prefix, such as octocat, without .ghe.com, a URL, port or path.": "Enter only a valid enterprise subdomain prefix, such as octocat, without .ghe.com, a URL, port or path.",
+  "Remove provider {account} and its saved Copilot sign-in on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.": "Remove provider {account} and its saved Copilot sign-in on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization."
 }

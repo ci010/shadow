@@ -1,3 +1,4 @@
+import { httpFailure } from './http-failure.ts'
 import { estimateUsageCost } from './cost.ts'
 import { dirname, join } from 'node:path'
 import { chmodSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
@@ -522,6 +523,7 @@ export class CopilotAuthenticator {
         redirect: 'error',
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       })
+      if (!res.ok) await httpFailure(res, 'copilot-auth', 'authentication', signal)
       if (res.status === 401 || res.status === 403) throw new CopilotAuthError('denied', undefined, res.status)
       if (!res.ok) throw new CopilotAuthError('network', undefined, res.status)
       try { return record(await res.json()) } catch (error) {

@@ -305,3 +305,27 @@ place (including the file preview's style prohibition), and code text remains
 available for selection and copying. If updating Shiki themes, regenerate/review
 the palette against both themes' foreground colors. Focused regression:
 `pnpm exec node --import tsx --test app/src/markdown-highlight_test.ts app/src/file-highlighting_test.ts app/src/file-selection_test.ts`.
+
+### Provider rejection diagnostics
+
+Non-success inference HTTP responses (OpenAI-compatible chat, Responses, and
+Anthropic, including Copilot inference) emit `[provider.http.failure]` through
+the backend console warning sink. Copilot authentication HTTP rejections use the
+same event with provider `copilot-auth` and model `authentication` (no model is
+involved yet). Fields are `provider`, `model`, HTTP `status`, an allowlisted
+machine `code` (otherwise `unrecognized`), and an optional validated hex/UUID
+`requestId` from a supported response header. Unknown request-ID formats are
+omitted. Configured identifiers that resemble URLs or known credential prefixes
+are omitted. No endpoint, headers, credentials, response message/body or request
+context is logged. Error bodies are read only up to 16 KiB for structured code
+extraction, then discarded; malformed or oversized bodies retain status only.
+This deliberately cannot diagnose every vendor-specific error message. Correlate
+status and the safe request ID with provider support rather than enabling raw
+request/body logging. Rate-limit retries may produce more than one event.
+
+Recovery UI distinguishes missing credentials, expired authorization, failed
+credential verification (HTTP 401), and denied access (HTTP 403 / Copilot scope
+or access denial). Access denial calls for checking model entitlement, license,
+SSO, host and organization policy, not mandatory reauthentication. Legacy
+`authentication` recovery records remain valid; both JSONL and SQLite keep the
+same recovery metadata shape.

@@ -1,5 +1,6 @@
+import { httpFailure } from './http-failure.ts'
 import { withProviderRetry, providerRetryScope } from './retry.ts'
-import { ProviderHttpError, providerTransportFailure } from './provider.ts'
+import { providerTransportFailure } from './provider.ts'
 import type {
   ChatMessage,
   LLMProvider,
@@ -133,18 +134,7 @@ export class AnthropicProvider implements LLMProvider {
         })
 
         phase = 'response'
-        if (!res.ok) {
-          if (res.status === 413) throw new ProviderHttpError(413, 'Anthropic chat failed: request payload too large')
-          const text = await res.text().catch(() => {
-            options.signal?.throwIfAborted()
-            throw new ProviderHttpError(res.status, `Provider rejected request (HTTP ${res.status})`, undefined,
-              { retryAfter: res.headers.get('retry-after'), rejectedRequest: true })
-          })
-          let code: string | undefined
-          try { const error = JSON.parse(text)?.error; code = typeof error?.code === 'string' && error.code ? error.code : typeof error?.type === 'string' ? error.type : undefined } catch { /* Status remains authoritative. */ }
-          throw new ProviderHttpError(res.status, `Anthropic chat failed: ${res.status} ${text}`, code,
-            { retryAfter: res.headers.get('retry-after'), rejectedRequest: true })
-        }
+        if (!res.ok) throw await httpFailure(res, this.name, model, options.signal)
 
         const json = (await res.json()) as any
 

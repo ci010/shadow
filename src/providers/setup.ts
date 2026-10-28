@@ -306,6 +306,20 @@ export class ProviderSetup {
     this.auth.signOut()
   }
 
+  /** Remove a shared connection without rewriting defaults or session history. */
+  async removeConnection(signal?: AbortSignal): Promise<void> {
+    this.signOut()
+    await Promise.allSettled([...new Set(this.flows.values())].flatMap(flow => [flow.started, flow.done]))
+    await this.options.store.update(raw => {
+      const providers = { ...(raw.providers as Record<string, unknown> ?? {}) }
+      delete providers[this.instanceId]
+      return { ...raw, providers }
+    }, signal)
+    this.flows.clear()
+    this.active = undefined
+    this.invalidate()
+  }
+
   start(model?: string, attemptId: string = randomUUID(), requestSignal?: AbortSignal, reauthenticate = false, host?: string): Promise<LoginStatus & Partial<ProviderSetupStatus>> {
     this.prune()
     const targetHost = normalizeCopilotHost(host ?? this.auth.getHost())
@@ -527,9 +541,10 @@ export class ProviderSetup {
           return c.json({ error: 'Sign-in could not be started. Cancel the current attempt and try again.' }, 409)
         }
       })
-      app.post('/api/auth/logout', (c) => {
+      app.post('/api/auth/logout', async (c) => {
         try {
-          this.instance(c.req.query('provider')).signOut()
+          await this.instance(c.req.query('provider')).removeConnection(c.req.raw.signal)
+          this.invalidate()
           return c.json({ authenticated: false })
         } catch {
           return c.json({ error: 'Copilot credentials could not be removed. Check access to the application data directory and retry.' }, 500)

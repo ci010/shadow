@@ -58,7 +58,10 @@ export function providerDisplayName(provider: string): string {
 
 export function providerFailureMessage(kind: string): string {
   switch (kind) {
-    case 'authentication': return t('The model provider rejected authentication. Open provider settings to sign in again or update the API key.')
+    case 'authentication': return t('The provider could not verify the credentials. Check the selected account, API key and endpoint in provider settings. Sign in again only if the credentials are invalid or expired.')
+    case 'credentials-missing': return t('No provider credentials are available. Open provider settings to sign in or add an API key.')
+    case 'credentials-expired': return t('The saved provider authorization has expired. Open provider settings to renew it.')
+    case 'authorization': return t('The provider denied access to this request. Check model access, subscription, account host, SSO and organization policy. Signing in again may not resolve this.')
     case 'proxy': return t('The system proxy is unavailable. Check the proxy or PAC service, then continue. Signing in again will not fix this connection problem.')
     case 'network': return t('The model provider could not be reached. Check your connection and proxy, then continue.')
     case 'rate-limit': return t('The model provider rate limit was reached. Wait before continuing, or check your quota.')

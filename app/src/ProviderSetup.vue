@@ -27,10 +27,10 @@
           <option value="enterprise">{{ t('GitHub Enterprise Cloud (*.ghe.com)') }}</option>
         </UiSelect>
       </label>
-      <label v-if="copilotHostType === 'enterprise'">{{ t('Enterprise hostname') }}
-        <input v-model="enterpriseHost" placeholder="your-company.ghe.com" autocomplete="off" autocapitalize="none" spellcheck="false" :disabled="busy || saving" :aria-invalid="!!hostError">
+      <label v-if="copilotHostType === 'enterprise'">{{ t('Enterprise subdomain prefix') }}
+        <span class="enterprise-host-field"><input v-model="enterpriseHost" placeholder="octocat" maxlength="63" aria-describedby="enterprise-host-suffix" autocomplete="off" autocapitalize="none" spellcheck="false" :disabled="busy || saving" :aria-invalid="!!hostError"><span id="enterprise-host-suffix" class="enterprise-host-suffix">.ghe.com</span></span>
         <span v-if="hostError" class="help error">{{ hostError }}</span>
-        <span v-else class="help">{{ t('Enter your enterprise hostname, not a URL. Only GitHub Enterprise Cloud on ghe.com is supported.') }}</span>
+        <span v-else class="help">{{ t('Enter only your enterprise subdomain, for example octocat. The .ghe.com suffix is added automatically.') }}</span>
       </label>
       <div v-if="login.state === 'pending' && login.login" class="device-panel" role="status" aria-live="polite">
         <span>{{ t('Enter this code on GitHub') }}</span>
@@ -50,7 +50,7 @@
         <button v-if="mode === 'edit' && !confirmSignOut && !signedOut" :disabled="saving" @click="confirmSignOut = true">{{ t('Sign out of GitHub Copilot') }}</button>
       </div>
       <div v-if="confirmSignOut" class="notice" role="group" :aria-label="t('Confirm Copilot sign-out')">
-        <p>{{ t('Remove the saved Copilot sign-in for instance {account} on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.', { account: accountLabel, host: status?.host ?? 'github.com' }) }}</p>
+        <p>{{ t('Remove provider {account} and its saved Copilot sign-in on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.', { account: accountLabel, host: status?.host ?? 'github.com' }) }}</p>
         <div class="actions">
           <button :disabled="saving" @click="confirmSignOut = false">{{ t('Cancel') }}</button>
           <button :disabled="saving" @click="signOut">{{ saving ? t('Signing out...') : t('Sign out of GitHub Copilot') }}</button>
@@ -85,6 +85,7 @@
 </template>
 
 <script setup lang="ts">
+import { enterprisePrefix, enterpriseHostFromPrefix } from './copilot-host-input.ts'
 import { createUuid } from './uuid.ts'
 import UiSelect from './components/UiSelect.vue'
 import { t, formatDateTime } from './i18n.ts'
@@ -126,14 +127,17 @@ const model = ref(props.mode === 'add' || props.status?.authMode === 'copilot'
 const baseUrl = ref(props.mode === 'add' || props.status?.authMode === 'copilot' ? '' : props.status?.baseUrl ?? '')
 const initialCopilotHost = props.mode !== 'add' && props.status?.authMode === 'copilot' ? props.status.host ?? 'github.com' : 'github.com'
 const copilotHostType = ref(initialCopilotHost === 'github.com' ? 'github' : 'enterprise')
-const enterpriseHost = ref(initialCopilotHost === 'github.com' ? '' : initialCopilotHost)
-const selectedCopilotHost = computed(() => copilotHostType.value === 'github' ? 'github.com' : enterpriseHost.value)
+const enterpriseHost = ref(enterprisePrefix(initialCopilotHost))
+const selectedCopilotHost = computed(() => {
+  if (copilotHostType.value === 'github') return 'github.com'
+  try { return enterpriseHostFromPrefix(enterpriseHost.value) } catch { return '' }
+})
 const hostError = computed(() => {
   try {
     const host = normalizeCopilotHost(selectedCopilotHost.value)
     if (copilotHostType.value === 'enterprise' && host === 'github.com') throw new Error('Enterprise hostname required')
     return ''
-  } catch { return t('Enter a valid enterprise hostname such as your-company.ghe.com, without a URL, port or path.') }
+  } catch { return t('Enter only a valid enterprise subdomain prefix, such as octocat, without .ghe.com, a URL, port or path.') }
 })
 const newId = `account-${createUuid()}`
 const instanceId = computed(() => {
@@ -245,7 +249,7 @@ async function signOut() {
     login.value = { state: 'idle' }
     signedOut.value = true
     confirmSignOut.value = false
-    emit('retry')
+    emit('configured')
   } catch {
     message.value = t('Copilot sign-out failed. Check Main and access to the application data directory, then retry.')
   } finally {
@@ -301,6 +305,9 @@ button:where(:not(.ui-select)) { padding: 9px 14px; border: 1px solid var(--c-bo
 button:where(:not(.ui-select)):disabled { opacity: .55; cursor: not-allowed; } button:where(:not(.ui-select)):focus-visible, input:focus-visible, .ui-select:is(:focus-visible, :has(:focus-visible)) { outline: 2px solid var(--c-success); outline-offset: 2px; }
 .primary { background: #147a57; border-color: #147a57; color: white; }.actions { justify-content: flex-end; margin-top: 20px; }
 .method-panel { display: grid; gap: 12px; } label { display: grid; gap: 6px; font-size: 13px; }
+.enterprise-host-field { display: flex; align-items: center; min-width: 0; gap: 8px; }
+.enterprise-host-field input { flex: 1; width: 0; }
+.enterprise-host-suffix { color: var(--c-text-secondary); white-space: nowrap; }
 input, .ui-select { min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
 .help { font-size: 12px; }.notice { padding: 12px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); line-height: 1.5; }.error { border-color: var(--c-error); color: var(--c-error); }
 .device-panel { display: grid; gap: 14px; padding: 20px; background: var(--c-bg-soft); border: 1px solid var(--c-border); border-radius: var(--radius-surface); }.device-panel span { font-size: 13px; color: var(--c-text-secondary); }
