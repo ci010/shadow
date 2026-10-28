@@ -8,7 +8,7 @@ import { ConfigStore, REDACTED_SECRET } from '../config/store.ts'
 import { ConfigSchema, type Config } from '../config/schema.ts'
 import { DEFAULT_COPILOT_MODEL } from '../config/defaults.ts'
 import { parseModelSpec } from './aggregated.ts'
-import { detectProvider, providerType, knownProviderNames, resolveProviderSettings, isCopilotProviderType, copilotAuthForInstance } from './factory.ts'
+import { LEGACY_COPILOT_ERROR, rejectLegacyCopilot, detectProvider, providerType, knownProviderNames, resolveProviderSettings, isCopilotProviderType, copilotAuthForInstance } from './factory.ts'
 import { CopilotAuthenticatorV2 } from './copilot-v2.ts'
 import {
   CopilotAuthenticator,
@@ -42,6 +42,7 @@ export interface ConfiguredProvider {
   baseUrl?: string
   host?: string
   model?: string
+  reason?: string
 }
 
 type LoginState = 'pending' | 'succeeded' | 'denied' | 'expired' | 'cancelled' | 'error'
@@ -120,6 +121,7 @@ function selectedModel(input: SetupInput): string {
 function changeSelection(raw: Record<string, unknown>, input: SetupInput): Record<string, unknown> {
   const providers = { ...(raw.providers as Record<string, Record<string, unknown>> ?? {}) }
   const provider = { ...providers[input.provider] }
+  rejectLegacyCopilot(String(input.type ?? provider.type ?? input.provider))
   if (input.type !== undefined) {
     if (providers[input.provider] && (provider.type ?? input.provider) !== input.type) throw new Error('Provider type cannot change')
     provider.type = input.type
@@ -153,6 +155,7 @@ export class ProviderSetup {
   private readonly rootAuth: CopilotAuthenticator
   private get instanceId(): string { return this.options.instanceId ?? 'copilot' }
   private instance(id = 'copilot'): ProviderSetup {
+    rejectLegacyCopilot(providerType(this.options.getConfig(), id))
     if (id === this.instanceId) return this
     if (!ProviderName.safeParse(id).success || !isCopilotProviderType(providerType(this.options.getConfig(), id))) throw new Error('Unknown Copilot instance')
     let child = this.children.get(id)
@@ -173,7 +176,7 @@ export class ProviderSetup {
 
   constructor(private readonly options: SetupOptions) {
     this.rootAuth = options.auth ?? new CopilotAuthenticatorV2()
-    this.auth = copilotAuthForInstance(options.getConfig(), this.instanceId, this.rootAuth)
+    this.auth = this.rootAuth.forInstance(this.instanceId)
     this.request = options.fetch ?? fetch
     this.now = options.now ?? Date.now
     this.cleanupTimer = setInterval(() => this.prune(), 30_000)
@@ -194,6 +197,10 @@ export class ProviderSetup {
     for (const provider of names) {
       const entry = config.providers[provider]
       const type = providerType(config, provider)
+      if (type === 'copilot-v1') {
+        providers.push({ provider, type, name: entry?.name, authMode: 'api-key', hasApiKey: false, selected: provider === selected, reason: 'retired_copilot' })
+        continue
+      }
       const auth = isCopilotProviderType(type) ? copilotAuthForInstance(config, provider, this.rootAuth) : undefined
       const cachedCopilot = auth && (auth.hasAccessToken() || auth.hasValidApiKey())
       const settings = resolveProviderSettings(config, provider)
@@ -219,6 +226,10 @@ export class ProviderSetup {
     const config = this.options.getConfig()
     const selected = parseModelSpec(config.agent.model)
     const selectedId = selected.provider ?? detectProvider(selected.model)
+    if (providerType(config, selectedId) === 'copilot-v1') return {
+      provider: selectedId, type: 'copilot-v1', model: config.agent.model,
+      authMode: 'api-key', hasApiKey: false, ready: false, reason: 'retired_copilot',
+    }
     const auth = copilotAuthForInstance(config, isCopilotProviderType(providerType(config, selectedId)) ? selectedId : 'copilot', this.rootAuth)
     if (!refresh && this.readiness?.revision === auth.getRevision() && this.readiness?.host === auth.getHost() && this.readiness.config === config && this.readiness.until > this.now()) return this.readiness.value
     const value = this.check(config, this.shutdown.signal, refresh)
@@ -321,6 +332,7 @@ export class ProviderSetup {
   }
 
   start(model?: string, attemptId: string = randomUUID(), requestSignal?: AbortSignal, reauthenticate = false, host?: string): Promise<LoginStatus & Partial<ProviderSetupStatus>> {
+    rejectLegacyCopilot(providerType(this.options.getConfig(), this.instanceId))
     this.prune()
     const targetHost = normalizeCopilotHost(host ?? this.auth.getHost())
     const known = this.flows.get(attemptId)
@@ -506,6 +518,7 @@ export class ProviderSetup {
       app.post('/api/provider/instances', async (c) => {
         const input = z.object({ provider: ProviderName, type: ProviderName, name: z.string().trim().min(1).max(100) }).strict().safeParse(await c.req.json().catch(() => null))
         if (!input.success) return c.json({ error: 'Invalid instance settings.' }, 400)
+        if (input.data.type === 'copilot-v1') return c.json({ error: LEGACY_COPILOT_ERROR }, 400)
         try {
           await this.options.store.update(raw => {
             const providers = { ...(raw.providers as Record<string, Record<string, unknown>> ?? {}) }

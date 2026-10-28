@@ -17,7 +17,6 @@ export interface CopilotCredentialLease {
  */
 export class CopilotAuthenticatorV2 extends CopilotAuthenticator {
   private readonly children = new Map<string, CopilotAuthenticatorV2>()
-  private legacy?: CopilotAuthenticator
   private epoch = 0
   private recheck?: { epoch: number; promise: Promise<void> }
 
@@ -91,12 +90,6 @@ export class CopilotAuthenticatorV2 extends CopilotAuthenticator {
       this.children.set(id, child)
     }
     return child
-  }
-
-  /** Explicit rollback view. Composition must not run both versions for one instance. */
-  forLegacyInstance(id: string): CopilotAuthenticator {
-    this.legacy ??= new CopilotAuthenticator(this.tokenDir, this.v2Options)
-    return this.legacy.forInstance(id)
   }
 
   private invalidate(): void {

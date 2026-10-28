@@ -17,9 +17,9 @@
     </div>
 
     <div v-if="method === 'copilot'" class="method-panel">
-      <h2>{{ t('Use your GitHub Copilot account') }} <small>{{ props.mode !== 'add' && props.status?.type === 'copilot-v1' ? 'v1' : 'v2' }}</small></h2>
+      <h2>{{ t('Use your GitHub Copilot account') }} <small>v2</small></h2>
       <p>{{ t('Authorize Shadow on GitHub using a device code. Your account must have access to Copilot.') }}</p>
-      <p v-if="props.mode === 'add' || props.status?.type !== 'copilot-v1'" class="help">{{ t('This v2 sign-in uses the GitHub Copilot App OAuth client with only the copilot scope. Broader repository and workflow permissions are not requested. The authorization page may identify the official app rather than Shadow.') }}</p>
+      <p class="help">{{ t('This v2 sign-in uses the GitHub Copilot App OAuth client with only the copilot scope. Broader repository and workflow permissions are not requested. The authorization page may identify the official app rather than Shadow.') }}</p>
       <p v-if="mode === 'edit' && status?.authMode === 'copilot'" class="help">{{ t('Current Copilot host: {host}', { host: status.host ?? 'github.com' }) }}</p>
       <label>{{ t('GitHub account host') }}
         <UiSelect v-model="copilotHostType" :disabled="busy || saving">
@@ -166,6 +166,7 @@ const busy = computed(() => ['pending', 'starting', 'cancelling'].includes(login
 const failedLogin = computed(() => ['denied', 'expired', 'error'].includes(login.value.state))
 const hasSavedKey = computed(() => props.status?.provider === instanceId.value && props.status.hasApiKey)
 const readinessMessages: Record<string, string> = {
+  get retired_copilot() { return t('This Copilot authentication version is no longer supported. Select another connection to continue. To reuse this connection ID, stop Main and change its configured type to copilot or copilot-v2, then sign in if needed. Saved credentials have not been changed.') },
   get missing_credentials() { return t('Add credentials or choose another provider.') },
   get invalid_credentials() { return t('Credentials were rejected. Update them or sign in again.') },
   get permission_denied() { return t('The provider denied access. Check your API key and account permissions.') },

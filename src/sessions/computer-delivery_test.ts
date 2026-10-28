@@ -5,7 +5,7 @@ import { readdir } from 'node:fs/promises'
 import { BaseSession } from './base-session.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
-import { CopilotAuthenticator, CopilotProvider } from '../providers/copilot.ts'
+import { CopilotAuthenticatorV2, CopilotProviderV2 } from '../providers/copilot-v2.ts'
 import { AggregatedProvider } from '../providers/aggregated.ts'
 import { Bus } from '../bus/bus.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
@@ -45,8 +45,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             t.after(() => tools.resetDynamicAndWait())
             const hooks: string[] = []
             base.addHook({ name: 'privacy', async afterExecute(_name, _args, result) { hooks.push(result); return result } })
-            const files = new Map([['api-key.json', JSON.stringify({ token: 'synthetic', expires_at: Date.now() / 1000 + 3600 })]])
-            const auth = new CopilotAuthenticator(join(home, 'auth'), { storage: {
+            const files = new Map([['api-key.json', JSON.stringify({ token: 'synthetic', expires_at: Date.now() / 1000 + 3600, directOAuth: { clientId: 'Ov23ctr1Udn5GokVCVJf', scope: 'copilot', expiryKnown: true } })]])
+            const auth = new CopilotAuthenticatorV2(join(home, 'auth'), { storage: {
               read: path => files.get(basename(path)), write: (path, value) => { files.set(basename(path), value) }, remove: path => { files.delete(basename(path)) },
             }, fetch: async () => { throw new Error('No OAuth in fixture') } })
             const wire: Record<string, unknown>[] = []
@@ -67,7 +67,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
                 headers: { 'content-type': 'text/event-stream' },
               }) : Response.json(response)
             })
-            const provider = new AggregatedProvider(new Map([['copilot', new CopilotProvider(auth)]]), 'copilot')
+            const provider = new AggregatedProvider(new Map([['copilot', new CopilotProviderV2(auth)]]), 'copilot')
             const bus = new Bus()
             const outputs: unknown[] = []
             bus.on('message.outbound', message => { outputs.push(message) })

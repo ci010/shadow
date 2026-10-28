@@ -16,7 +16,7 @@ import { ProjectCatalog } from '../projects/catalog.ts'
 import { ProjectConfigStore } from '../projects/config-store.ts'
 import { createProjectScope } from '../projects/scope.ts'
 import { folderFixture } from '../folders/test-fixtures.ts'
-import { CopilotAuthenticator } from '../providers/copilot.ts'
+import { CopilotAuthenticatorV2 } from '../providers/copilot-v2.ts'
 
 for (const localExecutor of [undefined, false]) test(`production project composition creates remote folders and sessions with opaque refs (localExecutor=${localExecutor})`, { timeout: 60000 }, async t => {
   const { root, workspace, folders } = await folderFixture(t)
@@ -47,7 +47,7 @@ for (const localExecutor of [undefined, false]) test(`production project composi
   const effective = await configStore.init(config)
   let scope = createProjectScope('default')
   const startRuntime = () => scope.run(() => createProjectRuntime(effective, {
-    localExecutor, project, home, scope, catalog, configStore, mainCluster: cluster, copilotAuth: new CopilotAuthenticator(),
+    localExecutor, project, home, scope, catalog, configStore, mainCluster: cluster, copilotAuth: new CopilotAuthenticatorV2(),
     authorize: () => true,
   }))
   let runtime = await startRuntime()

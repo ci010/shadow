@@ -25,14 +25,6 @@ import { normalizeCopilotHost, copilotVerificationUri } from '../shared/copilot-
 //  Constants (matches litellm / VS Code Copilot extension)
 // ---------------------------------------------------------------------------
 
-const GITHUB_CLIENT_ID = 'Iv1.b507a08c87ecfe98'
-// Public source: microsoft/vscode/extensions/github-authentication/src/{config,flows}.ts
-// and vscode-copilot-chat@5863f5a/script/setup/getToken.mts. Hosted GHE uses the
-// VS Code OAuth app. Retain the existing GitHub.com client for compatibility.
-const GHE_CLIENT_ID = '01ab8ac9400c4e429b23'
-function clientId(host: string): string {
-  return host === 'github.com' ? GITHUB_CLIENT_ID : GHE_CLIENT_ID
-}
 function defaultApiBase(host: string): string {
   // GitHub Docs: Copilot enterprise-configuration documents copilot-api.SUBDOMAIN.ghe.com.
   // Deliberately narrower than the general *.SUBDOMAIN.ghe.com network allowlist.
@@ -208,14 +200,8 @@ export function validApiKey(value: unknown, host: string): ApiKeyInfo | null {
   return info
 }
 
-/**
- * Handles the two-step GitHub Copilot auth:
- *
- * 1. **Device-code flow** → GitHub *access token* (long-lived, persisted).
- * 2. **Copilot internal API** → short-lived *API key* (Bearer token for
- *    `api.githubcopilot.com`). Refreshed automatically when expired.
- */
-export class CopilotAuthenticator {
+/** Shared device flow, host-scoped storage and model cache; v2 owns the auth profile. */
+export abstract class CopilotAuthenticator {
   protected readonly tokenDir: string
   private readonly accessTokenFile: string
   private readonly apiKeyFile: string
@@ -227,23 +213,9 @@ export class CopilotAuthenticator {
   private readonly activeHostFile: string
   private activeHost: string
   private revision = 0
-  private readonly refreshing = new Map<string, { revision: number; promise: Promise<string> }>()
+  abstract forInstance(id: string): CopilotAuthenticator
 
-  private readonly instances = new Map<string, CopilotAuthenticator>()
-
-  /** Legacy identity keeps its old files; every additional identity has a separate namespace. */
-  forInstance(id: string): CopilotAuthenticator {
-    if (id === 'copilot') return this
-    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(id)) throw new Error('Invalid provider instance ID')
-    let auth = this.instances.get(id)
-    if (!auth) {
-      auth = new CopilotAuthenticator(join(this.tokenDir, 'instances', id), { ...this.options, isolated: true })
-      this.instances.set(id, auth)
-    }
-    return auth
-  }
-
-  constructor(tokenDir?: string, private readonly options: CopilotAuthOptions = {}) {
+  constructor(tokenDir?: string, options: CopilotAuthOptions = {}) {
     const homeDir = env.HOME || env.USERPROFILE || '.'
     this.tokenDir = tokenDir ??
       env.GITHUB_COPILOT_TOKEN_DIR ??
@@ -331,11 +303,11 @@ export class CopilotAuthenticator {
    * Request a GitHub device code (step 1 of the login flow).
    * Returns the verification URI and user code to display to the caller.
    */
-  protected deviceLoginClientId(host: string): string { return clientId(host) }
-  protected deviceLoginScope(_host: string): string { return 'read:user' }
+  protected abstract deviceLoginClientId(host: string): string
+  protected abstract deviceLoginScope(host: string): string
 
   /** Validate successful OAuth responses before exchanging or returning any credentials. */
-  protected validateOAuthTokenResponse(_response: Record<string, unknown>): void {}
+  protected abstract validateOAuthTokenResponse(response: Record<string, unknown>): void
 
   async startDeviceLogin(signal?: AbortSignal, targetHost?: string): Promise<DeviceAuthorization> {
     const host = authHost(targetHost === undefined ? this.activeHost : targetHost)
@@ -408,10 +380,7 @@ export class CopilotAuthenticator {
     throw new CopilotAuthError('expired')
   }
 
-  protected async buildGrantFromOAuthResponse(response: Record<string, unknown>, host: string, signal?: AbortSignal): Promise<CopilotGrant> {
-    const accessToken = response.access_token as string
-    return { accessToken, host, apiKey: await this.refreshApiKey(accessToken, host, signal) }
-  }
+  protected abstract buildGrantFromOAuthResponse(response: Record<string, unknown>, host: string, signal?: AbortSignal): Promise<CopilotGrant>
 
   /** Commit credentials first, selection last. The returned undo is for setup transaction failure. */
   persistGrant(grant: CopilotGrant, signal?: AbortSignal): () => void {
@@ -455,63 +424,11 @@ export class CopilotAuthenticator {
     }
   }
 
-  /** Refresh existing credentials, never start an interactive login. */
-  async getApiKey(signal?: AbortSignal, forceRefresh = false): Promise<string> {
-    signal?.throwIfAborted()
-    const host = this.activeHost
-    const revision = this.revision
-    const files = this.filesFor(host)
-    if (this.hasRejectedCredentialProfile(host)) throw new CopilotAuthError('missing')
-    const cached = this.readApiKeyFile(host)
-    if (cached && cached.expires_at > this.now() / 1000 && (!forceRefresh || !this.hasAccessToken())) {
-      return cached.token
-    }
-    const existing = this.refreshing.get(host)
-    if (existing?.revision === revision) return existing.promise
-    const promise = (async () => {
-      const accessToken = this.storage.read(files.access)?.trim()
-      if (!accessToken) throw new CopilotAuthError('missing')
-      const current = () => this.revision === revision && this.activeHost === host &&
-        this.storage.read(files.access)?.trim() === accessToken
-      let apiKeyInfo: ApiKeyInfo
-      try {
-        apiKeyInfo = await this.refreshApiKey(accessToken, host, signal)
-      } catch (error) {
-        if (current() && error instanceof CopilotAuthError && error.code === 'denied') {
-          this.storage.remove(files.key)
-        }
-        throw error
-      }
-      signal?.throwIfAborted()
-      if (!current()) throw new CopilotAuthError('cancelled')
-      this.writeApiKeyFile(apiKeyInfo, host)
-      return apiKeyInfo.token
-    })()
-    this.refreshing.set(host, { revision, promise })
-    try { return await promise } finally {
-      if (this.refreshing.get(host)?.promise === promise) this.refreshing.delete(host)
-    }
-  }
+  abstract getApiKey(signal?: AbortSignal, forceRefresh?: boolean): Promise<string>
 
   /** Validated API origin for the active host. */
   getApiBase(): string {
     return this.readApiKeyFile()?.endpoints?.api ?? defaultApiBase(this.activeHost)
-  }
-
-  protected async refreshApiKey(accessToken: string, host: string, signal?: AbortSignal): Promise<ApiKeyInfo> {
-    // Official VS Code CAPI client derives api.<enterprise-host>, not GHES /api/v3.
-    const json = await this.fetchJson(`https://api.${host}/copilot_internal/v2/token`, {
-      headers: {
-        accept: 'application/json',
-        authorization: `token ${accessToken}`,
-        'editor-version': EDITOR_VERSION,
-        'editor-plugin-version': PLUGIN_VERSION,
-        'user-agent': USER_AGENT,
-      },
-    }, signal)
-    const info = validApiKey(json, host)
-    if (!info || info.expires_at <= this.now() / 1000) throw new CopilotAuthError('invalid')
-    return info
   }
 
   protected async fetchJson(url: string, init: RequestInit, signal?: AbortSignal): Promise<Record<string, unknown>> {
@@ -543,9 +460,7 @@ export class CopilotAuthenticator {
   }
 
   /** A version must never silently interpret another version's credential profile. */
-  protected acceptsApiKeyProfile(info: ApiKeyInfo, _host: string): boolean {
-    return info.directOAuth === undefined
-  }
+  protected abstract acceptsApiKeyProfile(info: ApiKeyInfo, host: string): boolean
 
   private hasRejectedCredentialProfile(host = this.activeHost): boolean {
     const raw = this.storage.read(this.filesFor(host).key)
@@ -620,7 +535,7 @@ export class CopilotProvider implements LLMProvider {
   private _knownModels = new Set<string>()
   private _modelsRevision: number
 
-  constructor(auth = new CopilotAuthenticator()) {
+  constructor(auth: CopilotAuthenticator) {
     this.auth = auth
     this._modelsRevision = auth.getRevision()
     // Seed known models from the on-disk cache so model validation works

@@ -14,7 +14,7 @@ import { DEFAULT_COPILOT_MODEL } from '../config/defaults.ts'
 import { EventService } from '../events/service.ts'
 import { FolderRegistry } from '../folders/registry.ts'
 import { KnowledgeService } from '../knowledge/service.ts'
-import { CopilotProvider } from '../providers/copilot.ts'
+import { CopilotProviderV2 } from '../providers/copilot-v2.ts'
 import type { LLMProvider, ToolCall } from '../providers/provider.ts'
 import { SkillsManager } from '../skills/loader.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
@@ -157,7 +157,7 @@ async function scenario(
       getSkillsSummary: (admin, sessionId) => skills.getMetadataSummary(admin, sessionId),
       getAgentTypesSummary: () => agentTypes.getAgentTypesSummary(),
     }))
-    const actualProvider = live ? new CopilotProvider() : scriptedProvider(sourcePath)
+    const actualProvider = live ? new CopilotProviderV2() : scriptedProvider(sourcePath)
     let modelCalls = 0
     const deadline = AbortSignal.timeout(live ? 180_000 : 10_000)
     const provider: LLMProvider = {
