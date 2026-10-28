@@ -2364,6 +2364,9 @@ async function sendQuestionAnswer(question: AskRequest, text: string, attachment
   submittingMessage.value = true
   sendRequest = controller
   composerError.value = ''
+  let accepted = false
+  composerDraft.clearSubmitting()
+  if (chatInput.value) chatInput.value.style.height = 'auto'
   try {
     const uploaded = await uploadChatAttachments(props.apiBase, sessionId.replace('web:', ''), attachments, controller.signal)
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
@@ -2371,8 +2374,8 @@ async function sendQuestionAnswer(question: AskRequest, text: string, attachment
     if (content.length > MAX_YIELD_CUSTOM_TEXT_LENGTH) throw new Error(t('Your answer and image references exceed {MAX_YIELD_CUSTOM_TEXT_LENGTH} characters. Shorten the answer and retry.', { MAX_YIELD_CUSTOM_TEXT_LENGTH: MAX_YIELD_CUSTOM_TEXT_LENGTH }))
     if (!yieldQuestion.value) throw new Error(t('The question is unavailable. Reload it before sending your answer.'))
     if (!await yieldQuestion.value.submitCustom(question.id, content, uploaded.map(item => item.path))) return
+    accepted = true
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
-    composerDraft.clearSent(composerDraftKey(props.apiBase, props.projectId ?? '', sessionId), submittedText)
     clearPendingAttachments()
     contextItems.value = []
     if (chatInput.value) chatInput.value.style.height = 'auto'
@@ -2383,6 +2386,9 @@ async function sendQuestionAnswer(question: AskRequest, text: string, attachment
       composerError.value = error instanceof Error ? error.message : t('Could not send your answer. Check the connection and retry.')
     }
   } finally {
+    if (!accepted && generation === sessionSelectionGeneration) {
+      composerDraft.restoreUnsent(composerKey.value, submittedText)
+    }
     if (sendRequest === controller) { sendRequest = undefined; submittingMessage.value = false }
   }
 }
@@ -2573,6 +2579,11 @@ async function sendMessage(overrideContent?: string, opts?: {
   let rejected = false
   let messageAdded = retry
   let optimisticMessage: ChatMsg | undefined
+  const clearedComposer = !retry && overrideContent === undefined
+  if (clearedComposer) {
+    composerDraft.clearSubmitting()
+    if (chatInput.value) chatInput.value.style.height = 'auto'
+  }
 
   try {
     const sessionId = activeSessionId.value || await draft.value.prepare(controller.signal)
@@ -2655,9 +2666,8 @@ async function sendMessage(overrideContent?: string, opts?: {
       throw new Error(t('Main returned an invalid command result. Refresh the conversation before retrying.'))
     }
     accepted = true
-    if (!retry && overrideContent === undefined) {
-      composerDraft.clearSent(composerDraftKey(props.apiBase, props.projectId ?? '', sessionId), submittedText)
-    }
+    // The visible text was cleared at submission, not after Main's admission.
+    // Do not clear again here: the user may already be composing the next message.
     // Steered inputs are admitted before the tool boundary writes them to history.
     if (followUp && !isCommand && generation === sessionSelectionGeneration) deferActiveHistory = true
     if (!retry && generation === sessionSelectionGeneration) {
@@ -2701,6 +2711,9 @@ async function sendMessage(overrideContent?: string, opts?: {
     if (!submitted || rejected) control.finish()
     else if (control.state.phase === 'submitting') control.admitted()
     if (generation === sessionSelectionGeneration) {
+      if (clearedComposer && !accepted) {
+        composerDraft.restoreUnsent(composerKey.value, submittedText)
+      }
       if (sendRequest === controller) {
         sendRequest = undefined
         submittingMessage.value = false

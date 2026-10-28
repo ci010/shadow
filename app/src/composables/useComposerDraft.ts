@@ -51,8 +51,16 @@ export function useComposerDraft(key: Readonly<Ref<string>>, storage: () => Pick
       error.value = ''
     } catch (cause) { restoring = false; failure(cause) }
   }
+  // Clear the visible composer before awaiting network admission. The caller owns
+  // the send lifecycle and restores on failure, including after draft migration.
+  function clearSubmitting() {
+    text.value = ''
+  }
+  function restoreUnsent(target: string, sent: string) {
+    if (currentKey === target && text.value === '') text.value = sent
+  }
   function remove(target: string) {
     try { storage().removeItem(target) } catch (cause) { failure(cause) }
   }
-  return { text, error, migrate, clearSent, remove }
+  return { text, error, migrate, clearSent, clearSubmitting, restoreUnsent, remove }
 }

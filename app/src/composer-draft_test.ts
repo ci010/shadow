@@ -89,3 +89,27 @@ test('storage denial and quota failures are visible and do not prevent typing', 
   assert.match(draft.error.value, /Storage denied/)
   scope.stop()
 })
+
+
+test('submission clears immediately and failure restores without replacing newer input', () => {
+  const storage = memoryStorage()
+  const key = ref('draft')
+  const scope = effectScope()
+  const draft = scope.run(() => useComposerDraft(key, () => storage))!
+  draft.text.value = 'Send now'
+  draft.clearSubmitting()
+  assert.equal(draft.text.value, '', 'No network admission is needed to clear the composer')
+  draft.migrate('prepared')
+  key.value = 'prepared'
+  draft.restoreUnsent('prepared', 'Send now')
+  assert.equal(draft.text.value, 'Send now')
+  assert.equal(storage.getItem('prepared'), 'Send now')
+  draft.clearSubmitting()
+  draft.text.value = 'Next message'
+  draft.restoreUnsent('prepared', 'Send now')
+  assert.equal(draft.text.value, 'Next message')
+  key.value = 'other'
+  draft.restoreUnsent('prepared', 'Send now')
+  assert.equal(draft.text.value, '')
+  scope.stop()
+})
