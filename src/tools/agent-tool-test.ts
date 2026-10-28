@@ -8,7 +8,7 @@ import type { Tool } from './tool.ts'
 
 const grantSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
-  kind: z.enum(['http', 'inbox']),
+  kind: z.enum(['http', 'inbox', 'proposal-inbox']),
 }).strict()
 const inputSchema = z.object({
   code: z.string().min(1).max(256 * 1024),
@@ -58,7 +58,7 @@ export const agentToolTest: Tool = {
       for (const [name, result] of Object.entries(scenario.capabilityResults)) {
         const grant = input.grants.find(grant => grant.id === name)
         if (!grant) throw new Error(`Synthetic result has no grant metadata: ${name}`)
-        validateMockResult(grant.kind, result)
+        validateMockResult(grant.kind === 'proposal-inbox' ? 'inbox' : grant.kind, result)
       }
     }
     const signal = AbortSignal.any([context.signal, AbortSignal.timeout(60_000)])

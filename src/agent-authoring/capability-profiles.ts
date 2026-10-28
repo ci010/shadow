@@ -37,7 +37,7 @@ export function capabilitySummary(snapshot: ResourceSnapshot, agent: string, pro
     readFolders: profile.readFolders,
     targets: profile.grants.map(grant => grant.kind === 'http'
       ? { kind: 'http' as const, target: grant.origin, operations: grant.routes.map(route => `${route.method} ${route.path}`), authenticated: !!grant.credential }
-      : { kind: 'inbox' as const, target: grant.sessionId, operations: ['send'], authenticated: false }),
+      : { kind: 'inbox' as const, target: grant.kind === 'inbox' ? grant.sessionId : grant.inbox, operations: grant.kind === 'proposal-inbox' ? [`propose public issue ${grant.disclosurePolicy.repository}`] : ['send'], authenticated: false }),
     restrictedSenders: profile.allowFrom?.length ?? 0,
   }
 }

@@ -22,7 +22,7 @@ export async function testResourceTool(policy: ResolvedConversationPolicy, input
   for (const [name, result] of Object.entries(mocks)) {
     const grant = policy.binding.grants.find(grant => grant.id === name)
     if (!grant || !tool.imports.includes(`@shadow/${name}`)) throw new Error(`No imported grant for synthetic result: ${name}`)
-    validateMockResult(grant.kind, result)
+    validateMockResult(grant.kind === 'proposal-inbox' ? 'inbox' : grant.kind, result)
   }
   const respond = createMockResponder(mocks)
   if (input.assertion && !Object.hasOwn(input.assertion, 'expected')) throw new Error('An assertion requires explicit expected JSON output.')

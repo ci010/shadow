@@ -28,7 +28,7 @@ test('bounded frozen deployment, optimistic confirmation, previous restore and s
   await store.restorePrevious('alpha');
   assert.equal(store.read('alpha')?.files['bot.ts'], 'one');
   assert.equal(fs.readFileSync(path.join(store.dataDirectory('alpha'), 'state'), 'utf8'), 'retained');
-  assert.deepEqual(fs.readdirSync(path.join(root, 'project', 'alpha')).filter(n => n === 'current' || n === 'previous').sort(), ['current', 'previous']);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'alpha')).filter(n => n === 'current' || n === 'previous').sort(), ['current', 'previous']);
   assert.equal(store.list().length, 1);
 });
 
@@ -67,7 +67,7 @@ test('actual git probe and local history; later missing git fails closed', async
   const { root, store } = fixture(t);
   const first = await store.deploy({ id: 'alpha', source, ...freeze({ '.gitignore': '*.ts', 'bot.ts': 'one' }) });
   assert.equal(first.mode, 'git');
-  assert.ok(fs.existsSync(path.join(root, 'project', 'alpha', 'history.git', 'objects')));
+  assert.ok(fs.existsSync(path.join(root, 'alpha', 'history.git', 'objects')));
   const withoutGit = new BotDeployments({ directory: root, projectId: 'project', runGit: missing });
   await assert.rejects(withoutGit.deploy({ id: 'alpha', source, ...freeze({ 'bot.ts': 'two' }), expectedRevision: first.revision }), /Git unavailable/);
   assert.equal(store.read('alpha')?.deployment.revision, first.revision);
@@ -100,10 +100,10 @@ test('interrupted promotion fails closed and explicit offline recovery restores 
   const { root, store } = fixture(t, missing);
   const first = await store.deploy({ id: 'alpha', source, ...freeze({ 'bot.ts': 'one' }) });
   const second = await store.deploy({ id: 'alpha', source, ...freeze({ 'bot.ts': 'two' }), expectedRevision: first.revision });
-  const bot = path.join(root, 'project', 'alpha');
+  const bot = path.join(root, 'alpha');
   const staged = '.staged-11111111-1111-1111-1111-111111111111'; const saved = '.previous-22222222-2222-2222-2222-222222222222';
   fs.mkdirSync(path.join(bot, '.lock')); fs.mkdirSync(path.join(bot, staged));
-  fs.writeFileSync(path.join(bot, 'promotion.json'), JSON.stringify({ staged, saved, git: false, activeRevision: second.revision, nextRevision: freeze({ 'bot.ts': 'three' }).revision }));
+  fs.writeFileSync(path.join(bot, 'promotion.json'), JSON.stringify({ slotsBefore: JSON.parse(fs.readFileSync(path.join(bot, 'active.json'), 'utf8')), staged, saved, git: false, activeRevision: second.revision, nextRevision: freeze({ 'bot.ts': 'three' }).revision }));
   fs.renameSync(path.join(bot, 'previous'), path.join(bot, saved));
   fs.renameSync(path.join(bot, 'current'), path.join(bot, 'previous'));
   assert.throws(() => store.read('alpha'), /interrupted/);
@@ -116,15 +116,15 @@ test('interrupted promotion fails closed and explicit offline recovery restores 
 test('storage symlink boundaries and bounded metadata runtime validation', async t => {
   const { root, store } = fixture(t, missing);
   await store.deploy({ id: 'alpha', source, ...freeze({ 'bot.ts': 'one' }) });
-  const slot = path.join(root, 'project', 'alpha', 'current'); const metadata = path.join(slot, 'deployment.json');
+  const slot = path.join(root, 'alpha', 'current'); const metadata = path.join(path.dirname(slot), 'active.json');
   const original = fs.readFileSync(metadata, 'utf8');
-  fs.writeFileSync(metadata, JSON.stringify({ ...JSON.parse(original), source: { folderId: 42, directory: false } }));
+  fs.writeFileSync(metadata, JSON.stringify({ ...JSON.parse(original), current: {...JSON.parse(original).current, source: { folderId: 42, directory: false }} }));
   assert.throws(() => store.read('alpha'), /metadata/);
   fs.writeFileSync(metadata, 'x'.repeat(16385)); assert.throws(() => store.read('alpha'), /bounded/);
   fs.unlinkSync(metadata); const external = path.join(root, 'external.json'); fs.writeFileSync(external, original); fs.symlinkSync(external, metadata);
   assert.throws(() => store.read('alpha'), /Symlink/); fs.unlinkSync(metadata); fs.writeFileSync(metadata, original);
   fs.linkSync(metadata, path.join(root, 'metadata-hardlink')); assert.throws(() => store.read('alpha'), /bounded/);
-  const alias = path.join(root, 'alias'); fs.symlinkSync(path.join(root, 'project'), alias, 'dir');
+  const alias = path.join(root, 'alias'); fs.symlinkSync(root, alias, 'dir');
   assert.throws(() => new BotDeployments({ directory: alias, projectId: 'other' }), /Symlink/);
 });
 
@@ -161,11 +161,11 @@ test('abort and concurrent deployment preserve active snapshot', async t => {
   let release!: () => void; let entered!: () => void;
   const ready = new Promise<void>(resolve => { entered = resolve; }); const gate = new Promise<void>(resolve => { release = resolve; });
   const slow: GitRunner = async () => { entered(); await gate; throw new Error('missing'); };
-  const other = new BotDeployments({ directory: root, projectId: 'other', runGit: slow });
+  const other = new BotDeployments({ directory: path.join(root, 'other'), projectId: 'other', runGit: slow });
   const files = { 'bot.ts': 'approved' }; const snapshot = freeze(files);
   const pending = other.deploy({ id: 'beta', source, files, revision: snapshot.revision }); await ready;
   files['bot.ts'] = 'edited';
-  const rival = new BotDeployments({ directory: root, projectId: 'other', runGit: missing });
+  const rival = new BotDeployments({ directory: path.join(root, 'other'), projectId: 'other', runGit: missing });
   await assert.rejects(rival.deploy({ id: 'beta', source, ...freeze({ 'bot.ts': 'rival' }) }), /EEXIST/);
   release(); await pending;
   assert.equal(other.read('beta')?.files['bot.ts'], 'approved');
@@ -185,10 +185,10 @@ test('offline recovery of post-swap crash restores Git head and remains repeatab
   const first = await store.deploy({ id: 'alpha', source, ...freeze({ 'bot.ts': 'one' }) });
   const second = await store.deploy({ id: 'alpha', source, ...freeze({ 'bot.ts': 'two' }), expectedRevision: first.revision });
   const third = await store.deploy({ id: 'alpha', source, ...freeze({ 'bot.ts': 'three' }), expectedRevision: second.revision });
-  const bot = path.join(root, 'project', 'alpha');
+  const bot = path.join(root, 'alpha');
   const staged = '.staged-11111111-1111-1111-1111-111111111111'; const saved = '.previous-22222222-2222-2222-2222-222222222222';
-  fs.mkdirSync(path.join(bot, saved, 'files'), { recursive: true }); fs.writeFileSync(path.join(bot, saved, 'files', 'bot.ts'), 'one'); fs.writeFileSync(path.join(bot, saved, 'deployment.json'), JSON.stringify(first));
-  const journal = { staged, saved, git: true, activeRevision: second.revision, nextRevision: third.revision, oldCommit: second.gitCommit };
+  fs.mkdirSync(path.join(bot, saved), { recursive: true }); fs.writeFileSync(path.join(bot, saved, 'bot.ts'), 'one');
+  const journal = { slotsBefore: {current:second, previous:first}, staged, saved, git: true, activeRevision: second.revision, nextRevision: third.revision, oldCommit: second.gitCommit };
   fs.writeFileSync(path.join(bot, 'promotion.json'), JSON.stringify(journal));
   await store.recoverInterrupted('alpha');
   assert.equal(head, second.gitCommit); assert.equal(store.read('alpha')?.deployment.revision, second.revision);
@@ -197,4 +197,63 @@ test('offline recovery of post-swap crash restores Git head and remains repeatab
   await store.recoverInterrupted('alpha');
   assert.equal(store.read('alpha')?.deployment.revision, second.revision);
   assert.equal(store.read('alpha')?.deployment.previous, first.revision);
+});
+
+test('direct source slots, external metadata, reserved auxiliaries and fail-closed markers', async t => {
+  const {root, store} = fixture(t, missing);
+  for (const id of ['runtime', 'deployments']) {
+    fs.mkdirSync(path.join(root,id));
+    await assert.rejects(store.deploy({id,source,...freeze({'BOT.md':'x'})}), /Reserved/);
+  }
+  fs.mkdirSync(path.join(root,'unmarked'));
+  const files = {'BOT.md':'prompt','bot.json':'{}','tools/run.ts':'export {}'};
+  await store.deploy({id:'alpha',source,...freeze(files)});
+  assert.equal(store.runtimeDirectory('alpha'),path.join(root,'alpha','current'));
+  assert.deepEqual(store.read('alpha')?.files,freeze(files).files);
+  assert.deepEqual(fs.readdirSync(store.runtimeDirectory('alpha')).sort(),['BOT.md','bot.json','tools']);
+  assert.ok(fs.existsSync(path.join(root,'alpha','active.json')));
+  assert.equal(store.list().length,1);
+  fs.writeFileSync(path.join(root,'alpha','owner.json'),'{bad');
+  assert.throws(()=>store.list());
+});
+
+test('Project ownership is bound to the root, never an extra path segment', async t => {
+  const {root, store} = fixture(t, missing);
+  assert.throws(()=>new BotDeployments({directory:root,projectId:'other'}),/ownership/);
+  const other = new BotDeployments({directory:path.join(root,'separate'),projectId:'other',runGit:missing});
+  await store.deploy({id:'alpha',source,...freeze({'BOT.md':'first'})});
+  await other.deploy({id:'alpha',source,...freeze({'BOT.md':'second'})});
+  assert.notEqual(store.read('alpha')?.deployment.revision,other.read('alpha')?.deployment.revision);
+});
+
+test('abort after metadata publication rolls back manifest, slots and real Git head together', async t => {
+  const {root,store} = fixture(t);
+  const first = await store.deploy({id:'alpha',source,...freeze({'BOT.md':'one'})});
+  const second = await store.deploy({id:'alpha',source,...freeze({'BOT.md':'two'}),expectedRevision:first.revision});
+  const bot=path.join(root,'alpha');
+  const metadata=fs.readFileSync(path.join(bot,'active.json'),'utf8');
+  let checks=0;
+  const signal={throwIfAborted(){if(++checks===5)throw new Error('injected final abort')}} as AbortSignal;
+  await assert.rejects(store.deploy({id:'alpha',source,...freeze({'BOT.md':'three'}),expectedRevision:second.revision,signal}),/injected/);
+  assert.equal(checks,5);
+  assert.equal(fs.readFileSync(path.join(bot,'active.json'),'utf8'),metadata);
+  assert.equal(store.read('alpha')!.deployment.gitCommit,second.gitCommit);
+  assert.equal(store.read('alpha')!.deployment.previous,first.revision);
+  const {execFileSync}=await import('node:child_process');
+  assert.equal(execFileSync('git',[`--git-dir=${path.join(bot,'history.git')}`,'rev-parse','HEAD'],{encoding:'utf8'}).trim(),second.gitCommit);
+  assert.equal(fs.existsSync(path.join(bot,'promotion.json')),false);
+});
+
+test('offline recovery of interrupted initial activation removes incomplete marker and is repeatable', async t => {
+  const {root,store}=fixture(t,missing);
+  const first=await store.deploy({id:'alpha',source,...freeze({'BOT.md':'one'})});
+  const bot=path.join(root,'alpha');
+  fs.writeFileSync(path.join(bot,'promotion.json'),JSON.stringify({slotsBefore:{},staged:'.staged-11111111-1111-1111-1111-111111111111',saved:'.previous-22222222-2222-2222-2222-222222222222',git:false,nextRevision:first.revision}));
+  fs.mkdirSync(path.join(bot,'.lock'));
+  assert.throws(()=>store.list(),/interrupted/);
+  await store.recoverInterrupted('alpha');
+  await store.recoverInterrupted('alpha');
+  assert.equal(store.read('alpha'),undefined);
+  assert.deepEqual(store.list(),[]);
+  await store.deploy({id:'alpha',source,...freeze({'BOT.md':'one'})});
 });

@@ -110,15 +110,18 @@ export class BotDeployments {
   private root: string;
   private runner: GitRunner;
   constructor(private options: BotDeploymentsOptions) {
-    this.root = path.resolve(options.directory, identifier(options.projectId)); this.runner = options.runGit ?? runGit;
+    identifier(options.projectId); this.root = path.resolve(options.directory); this.runner = options.runGit ?? runGit;
     noLinks(this.root);
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
     if (!fs.lstatSync(this.root).isDirectory()) throw new Error('Store root is not a directory');
+    const owner = path.join(this.root, '.store.json');
+    if (!exists(owner)) fs.writeFileSync(owner, JSON.stringify({ projectId: options.projectId }), { flag: 'wx', mode: 0o600 });
+    if ((readJson(owner) as {projectId?: string}).projectId !== options.projectId) throw new Error('Store Project ownership mismatch');
   }
   freeze(files: Record<string, string>): FrozenBotSource { return freeze(files); }
   freezeDirectory(directory: string): FrozenBotSource { return freezeDirectory(directory); }
-  private bot(id: string): string { const bot = path.join(this.root, identifier(id)); noLinks(bot); return bot; }
-  runtimeDirectory(id: string): string { const target = path.join(this.bot(id), 'current', 'files'); noLinks(target); return target; }
+  private bot(id: string): string { if (['runtime', 'deployments'].includes(id.toLowerCase())) throw new Error('Reserved BOT identifier'); const bot = path.join(this.root, identifier(id)); noLinks(bot); return bot; }
+  runtimeDirectory(id: string): string { const target = path.join(this.bot(id), 'current'); noLinks(target); return target; }
   dataDirectory(id: string): string { return path.join(this.bot(id), 'data'); }
   private recover(bot: string): void {
     // Promotion journal precedes renames. A crash before the new current exists restores the old current.
@@ -129,25 +132,47 @@ export class BotDeployments {
   }
   read(id: string): { deployment: BotDeployment; files: Record<string, string> } | undefined {
     const bot = this.bot(id); this.recover(bot);
+    if (exists(bot)) this.checkOwner(bot, id);
     if (!exists(path.join(bot, 'current'))) return undefined;
     return this.readSlot(bot, 'current');
   }
   private readSlot(bot: string, slot: string): { deployment: BotDeployment; files: Record<string, string> } {
     const target = path.join(bot, slot);
     noLinks(target);
-    const deployment = readJson(path.join(target, 'deployment.json')) as BotDeployment;
-    if (!deployment || typeof deployment !== 'object' || !validSource(deployment.source) || (deployment.previous !== undefined && (typeof deployment.previous !== 'string' || !/^[a-f0-9]{64}$/.test(deployment.previous))) || (deployment.gitCommit !== undefined && (typeof deployment.gitCommit !== 'string' || !/^[a-f0-9]{40,64}$/.test(deployment.gitCommit)))) throw new Error('Invalid deployment metadata');
-    identifier(deployment.id);
-    if (this.bot(deployment.id) !== bot || !/^[a-f0-9]{64}$/.test(deployment.revision) || !['git', 'bounded'].includes(deployment.mode)) throw new Error('Invalid deployment metadata');
-    const snapshot = freezeDirectory(path.join(target, 'files'));
+    const deployment = (readJson(path.join(bot, 'active.json')) as Record<string, BotDeployment>)[slot];
+    this.validateDeployment(bot, deployment);
+    const snapshot = freezeDirectory(target);
     if (snapshot.revision !== deployment.revision) throw new Error('Deployment integrity failure');
     return { deployment, files: snapshot.files };
   }
-  list(): BotDeployment[] {
-    return fs.readdirSync(this.root).filter(id => fs.lstatSync(path.join(this.root, id)).isDirectory()).map(id => this.read(id)?.deployment).filter((value): value is BotDeployment => !!value);
+  private validateDeployment(bot: string, value: unknown): asserts value is BotDeployment {
+    const deployment = value as BotDeployment;
+    if (!deployment || typeof deployment !== 'object' || !validSource(deployment.source) || (deployment.previous !== undefined && (typeof deployment.previous !== 'string' || !/^[a-f0-9]{64}$/.test(deployment.previous))) || (deployment.gitCommit !== undefined && (typeof deployment.gitCommit !== 'string' || !/^[a-f0-9]{40,64}$/.test(deployment.gitCommit)))) throw new Error('Invalid deployment metadata');
+    identifier(deployment.id);
+    if (this.bot(deployment.id) !== bot || !/^[a-f0-9]{64}$/.test(deployment.revision) || !['git', 'bounded'].includes(deployment.mode)) throw new Error('Invalid deployment metadata');
   }
+  list(): BotDeployment[] {
+    return fs.readdirSync(this.root).filter(id => !['runtime', 'deployments'].includes(id) && (fs.lstatSync(path.join(this.root, id)).isDirectory() || fs.lstatSync(path.join(this.root, id)).isSymbolicLink()) && exists(path.join(this.root, id, 'owner.json'))).map(id => {
+      this.checkOwner(this.bot(id), id);
+      const value = this.read(id)?.deployment;
+      if (!value) throw new Error('BOT marker without active deployment');
+      return value;
+    });
+  }
+  private checkOwner(bot: string, id: string): void {
+    const owner = readJson(path.join(bot, 'owner.json')) as {projectId?: string; id?: string};
+    if (owner.projectId !== this.options.projectId || owner.id !== id) throw new Error('BOT ownership mismatch');
+  }
+  private writeSlots(bot: string, slots: unknown): void {
+    const tmp = path.join(bot, `.active-${randomUUID()}.tmp`); noLinks(path.join(bot, 'active.json'));
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(slots), { flag: 'wx', mode: 0o600 });
+      fs.renameSync(tmp, path.join(bot, 'active.json'));
+    } finally { if (exists(tmp)) fs.unlinkSync(tmp); }
+  }
+
   private git(bot: string, args: string[], input?: string): Promise<string> {
-    const empty = path.join(bot, 'git-home');
+    const empty = path.join(bot, 'history.git', 'disabled-home');
     const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: empty, USERPROFILE: empty, XDG_CONFIG_HOME: empty, GIT_CONFIG_NOSYSTEM: '1', GIT_ATTR_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(empty, 'config'), GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 'BOT deployment', GIT_AUTHOR_EMAIL: 'bot@localhost', GIT_COMMITTER_NAME: 'BOT deployment', GIT_COMMITTER_EMAIL: 'bot@localhost' };
     return this.runner(['-c', `core.hooksPath=${path.join(empty, 'hooks')}`, '-c', 'commit.gpgSign=false', '-c', `core.attributesFile=${path.join(empty, 'attributes')}`, '-c', 'core.autocrlf=false', ...args], { cwd: bot, env, input });
   }
@@ -160,13 +185,19 @@ export class BotDeployments {
     if (frozen.revision !== input.revision) throw new Error('Approved source hash mismatch');
     await this.options.validate?.(frozen.files);
     input.signal?.throwIfAborted();
-    const bot = this.bot(input.id); fs.mkdirSync(bot, { recursive: true, mode: 0o700 });
+    const bot = this.bot(input.id); const newlyCreated = !exists(bot);
+    if (!newlyCreated) this.checkOwner(bot, input.id);
+    fs.mkdirSync(bot, { recursive: true, mode: 0o700 });
     if (!fs.lstatSync(bot).isDirectory()) throw new Error('BOT storage is not a directory');
     this.recover(bot);
     const lock = path.join(bot, '.lock'); fs.mkdirSync(lock);
     let staged: string | undefined; let committed = false;
+    let slotsBefore: unknown;
     try {
-      for (const name of ['current', 'previous', 'data', 'history.git', 'git-home']) noLinks(path.join(bot, name));
+      slotsBefore = exists(path.join(bot, 'active.json')) ? readJson(path.join(bot, 'active.json')) : {};
+      if (exists(path.join(bot, 'owner.json'))) this.checkOwner(bot, input.id);
+      else fs.writeFileSync(path.join(bot, 'owner.json'), JSON.stringify({ projectId: this.options.projectId, id: input.id }), { flag: 'wx', mode: 0o600 });
+      for (const name of ['current', 'previous', 'data', 'history.git']) noLinks(path.join(bot, name));
       const active = this.read(input.id)?.deployment;
       if (active?.revision !== input.expectedRevision) throw new Error('Active deployment changed');
       let available = true; try { await this.git(bot, ['--version']); } catch { available = false; }
@@ -175,16 +206,18 @@ export class BotDeployments {
       if (!available && (managed || active?.mode === 'git')) throw new Error('Git unavailable for Git-managed BOT');
       if (active?.revision === frozen.revision) return active;
       const deployment: BotDeployment = { id: input.id, source: { ...input.source }, revision: frozen.revision, previous: active?.revision, mode: available ? 'git' : 'bounded' };
-      staged = path.join(bot, `.staged-${randomUUID()}`); fs.mkdirSync(path.join(staged, 'files'), { recursive: true, mode: 0o700 });
+      staged = path.join(bot, `.staged-${randomUUID()}`); fs.mkdirSync(staged, { mode: 0o700 });
       fs.mkdirSync(this.dataDirectory(input.id), { recursive: true, mode: 0o700 });
       for (const [name, content] of Object.entries(frozen.files)) {
-        const target = path.join(staged, 'files', name); fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 }); fs.writeFileSync(target, content, { flag: 'wx', mode: 0o600 });
+        const target = path.join(staged, name); fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 }); fs.writeFileSync(target, content, { flag: 'wx', mode: 0o600 });
       }
       let oldCommit: string | undefined;
       if (available) {
-        fs.mkdirSync(path.join(bot, 'git-home', 'hooks'), { recursive: true, mode: 0o700 });
-        if (!managed) await this.git(bot, ['init', '--bare', '--template=', path.join(bot, 'history.git')]);
-        const flags = [`--git-dir=${path.join(bot, 'history.git')}`, `--work-tree=${path.join(staged, 'files')}`];
+        if (!managed) {
+          await this.git(bot, ['init', '--bare', '--template=', path.join(bot, 'history.git')]);
+          await this.git(bot, [`--git-dir=${path.join(bot, 'history.git')}`, 'symbolic-ref', 'HEAD', 'refs/heads/deployments']);
+        }
+        const flags = [`--git-dir=${path.join(bot, 'history.git')}`, `--work-tree=${staged}`];
         await this.git(bot, [...flags, 'read-tree', '--empty']);
         let index = '';
         for (const [name, content] of Object.entries(frozen.files)) {
@@ -195,20 +228,21 @@ export class BotDeployments {
         await this.git(bot, [...flags, 'update-index', '--index-info'], index);
         const tree = await this.git(bot, [...flags, 'write-tree']);
         try { oldCommit = await this.git(bot, [...flags, 'rev-parse', '--verify', 'refs/heads/deployments']); } catch (error) { if (active?.mode === 'git') throw error; /* First internal commit. */ }
+        if (active?.gitCommit && oldCommit !== active.gitCommit) throw new Error('Internal Git identity mismatch');
         const commit = await this.git(bot, [...flags, 'commit-tree', tree, ...(oldCommit ? ['-p', oldCommit] : [])], `Deployment ${frozen.revision}\n`);
         if (!/^[a-f0-9]{40,64}$/.test(commit)) throw new Error('Invalid internal Git commit');
         deployment.gitCommit = commit;
       }
-      fs.writeFileSync(path.join(staged, 'deployment.json'), JSON.stringify(deployment), { flag: 'wx', mode: 0o600 });
       const current = path.join(bot, 'current'); const previous = path.join(bot, 'previous'); const saved = path.join(bot, `.previous-${randomUUID()}`);
       input.signal?.throwIfAborted();
-      fs.writeFileSync(path.join(bot, 'promotion.json'), JSON.stringify({ staged: path.basename(staged), saved: path.basename(saved), oldCommit, git: available, activeRevision: active?.revision, nextRevision: deployment.revision }), { flag: 'wx', mode: 0o600 });
+      fs.writeFileSync(path.join(bot, 'promotion.json'), JSON.stringify({ slotsBefore, staged: path.basename(staged), saved: path.basename(saved), oldCommit, git: available, activeRevision: active?.revision, nextRevision: deployment.revision }), { flag: 'wx', mode: 0o600 });
       let promoted = false;
       try {
         if (exists(previous)) fs.renameSync(previous, saved);
         if (exists(current)) fs.renameSync(current, previous);
         fs.renameSync(staged, current); promoted = true;
         if (available) await this.git(bot, [`--git-dir=${path.join(bot, 'history.git')}`, 'update-ref', 'refs/heads/deployments', deployment.gitCommit!, ...(oldCommit ? [oldCommit] : ['0'.repeat(40)])]);
+        this.writeSlots(bot, { current: deployment, previous: active });
         input.signal?.throwIfAborted();
         fs.unlinkSync(path.join(bot, 'promotion.json')); // Commit point. Cleanup below cannot fail the deployment.
         staged = undefined; committed = true;
@@ -217,6 +251,7 @@ export class BotDeployments {
         if (promoted) fs.renameSync(current, staged!);
         if (!exists(current) && exists(previous)) fs.renameSync(previous, current);
         if (exists(saved)) fs.renameSync(saved, previous);
+        this.writeSlots(bot, slotsBefore);
         fs.unlinkSync(path.join(bot, 'promotion.json'));
         throw error;
       }
@@ -225,6 +260,7 @@ export class BotDeployments {
     } finally {
       if (staged && !exists(path.join(bot, 'promotion.json'))) fs.rmSync(staged, { recursive: true, force: true });
       try { fs.rmdirSync(lock); } catch (error) { if (!committed) throw error; /* Activated; stale lock needs offline recovery. */ }
+      if (newlyCreated && !exists(path.join(bot, 'promotion.json')) && !exists(path.join(bot, 'current'))) fs.rmSync(bot, { recursive: true, force: true });
     }
   }
   private async rollbackRef(bot: string, commit?: string): Promise<void> {
@@ -232,34 +268,43 @@ export class BotDeployments {
   }
   /** Offline only: caller must establish that no writer survives. Incomplete transactions roll back. */
   async recoverInterrupted(id: string): Promise<void> {
-    const bot = this.bot(id); const journal = path.join(bot, 'promotion.json');
+    const bot = this.bot(id); if (!exists(bot)) return; this.checkOwner(bot, id); const journal = path.join(bot, 'promotion.json');
     if (exists(journal)) {
-      const state = readJson(journal) as { staged: string; saved: string; oldCommit?: string; git: boolean; activeRevision?: string; nextRevision: string };
-      if (!state || typeof state.git !== 'boolean' || typeof state.nextRevision !== 'string' || !/^[a-f0-9]{64}$/.test(state.nextRevision) || (state.activeRevision !== undefined && (typeof state.activeRevision !== 'string' || !/^[a-f0-9]{64}$/.test(state.activeRevision))) || !/^\.staged-[a-f0-9-]{36}$/.test(state.staged) || !/^\.previous-[a-f0-9-]{36}$/.test(state.saved) || (state.oldCommit !== undefined && !/^[a-f0-9]{40,64}$/.test(state.oldCommit))) throw new Error('Invalid promotion journal');
+      const state = readJson(journal) as { slotsBefore: Record<string, BotDeployment>; staged: string; saved: string; oldCommit?: string; git: boolean; activeRevision?: string; nextRevision: string };
+      if (!state || !state.slotsBefore || typeof state.slotsBefore !== 'object' || typeof state.git !== 'boolean' || typeof state.nextRevision !== 'string' || !/^[a-f0-9]{64}$/.test(state.nextRevision) || (state.activeRevision !== undefined && (typeof state.activeRevision !== 'string' || !/^[a-f0-9]{64}$/.test(state.activeRevision))) || !/^\.staged-[a-f0-9-]{36}$/.test(state.staged) || !/^\.previous-[a-f0-9-]{36}$/.test(state.saved) || (state.oldCommit !== undefined && !/^[a-f0-9]{40,64}$/.test(state.oldCommit))) throw new Error('Invalid promotion journal');
+      const before = state.slotsBefore;
+      if (Object.keys(before).some(key => key !== 'current' && key !== 'previous')) throw new Error('Invalid promotion metadata');
+      if (before.current) this.validateDeployment(bot, before.current);
+      if (before.previous) this.validateDeployment(bot, before.previous);
+      if (before.current?.revision !== state.activeRevision || before.current?.gitCommit !== state.oldCommit ||
+        (before.previous && before.current?.previous !== before.previous.revision)) throw new Error('Inconsistent promotion metadata');
       const staged = path.join(bot, state.staged); const saved = path.join(bot, state.saved);
       const current = path.join(bot, 'current'); const previous = path.join(bot, 'previous');
       noLinks(staged); noLinks(saved); noLinks(current); noLinks(previous);
       if (state.git) await this.rollbackRef(bot, state.oldCommit);
       if (exists(current)) {
-        const revision = this.readSlot(bot, 'current').deployment.revision;
+        const revision = freezeDirectory(current).revision;
         if (revision !== state.activeRevision) {
           if (revision !== state.nextRevision || exists(staged)) throw new Error('Ambiguous interrupted current');
           fs.renameSync(current, staged);
         }
       }
       if (!exists(current) && state.activeRevision !== undefined) {
-        if (!exists(previous) || this.readSlot(bot, 'previous').deployment.revision !== state.activeRevision) throw new Error('Missing previous active deployment');
+        if (!exists(previous) || freezeDirectory(previous).revision !== state.activeRevision) throw new Error('Missing previous active deployment');
         fs.renameSync(previous, current);
       }
       if (exists(saved)) {
         if (exists(previous)) throw new Error('Ambiguous interrupted promotion');
         fs.renameSync(saved, previous);
       }
+      this.writeSlots(bot, state.slotsBefore);
       fs.rmSync(staged, { recursive: true, force: true });
       fs.unlinkSync(journal);
+      if (!state.activeRevision) { fs.rmSync(bot, { recursive: true, force: true }); return; }
     }
+    if (!exists(path.join(bot, 'current')) && !exists(path.join(bot, 'previous')) && !exists(path.join(bot, 'active.json'))) { fs.rmSync(bot, { recursive: true, force: true }); return; }
     fs.rmSync(path.join(bot, '.lock'), { recursive: true, force: true });
-    for (const name of fs.readdirSync(bot)) if (/^\.staged-[a-f0-9-]{36}$/.test(name)) fs.rmSync(path.join(bot, name), { recursive: true, force: true });
+    for (const name of fs.readdirSync(bot)) if (/^\.staged-[a-f0-9-]{36}$/.test(name) || /^\.active-[a-f0-9-]{36}\.tmp$/.test(name)) fs.rmSync(path.join(bot, name), { recursive: true, force: true });
   }
   async restorePrevious(id: string): Promise<BotDeployment> {
     const active = this.read(id); if (!active?.deployment.previous) throw new Error('No previous deployment');

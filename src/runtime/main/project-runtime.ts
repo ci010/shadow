@@ -1,3 +1,4 @@
+import { ProposalInboxes } from '../../sessions/proposal-inbox.ts'
 import { BotDeployments } from '../../bots/deployments.ts'
 import { parseBot, type BotDefinition } from '../../bots/sdk.ts'
 import { DirectoryBots, DirectoryBotService } from '../../agent-authoring/bot-runtime.ts'
@@ -512,7 +513,7 @@ export async function createProjectRuntime(
   const serviceDiscovery = new ServiceDiscoveryStore(project.id, resolve(workspace, 'config', 'service-discovery.json'))
   const authoringDirectory = resolve(workspace, 'authoring')
   const integrationDirectory = resolve(workspace, 'bots', 'runtime', 'discord-security')
-  const botDeployments = new BotDeployments({directory:resolve(workspace,'bots','deployments'),projectId:project.id,validate:files => {parseBot({...files})}})
+  const botDeployments = new BotDeployments({directory:resolve(workspace,'bots'),projectId:project.id,validate:files => {parseBot({...files})}})
   const directoryBots = new DirectoryBots(botDeployments)
   const memoryDomains = new MemoryDomains(project.id, resolve(integrationDirectory, 'memory'))
   const sourceResources = new SourceResources(folderRegistry)
@@ -541,6 +542,8 @@ export async function createProjectRuntime(
     resolveSecret: async ref => agentCredentials.resolve(ref),
     deliver: (id, input) => deliverInput(id, input),
     canDeliver: canDeliverAuthoredMessage,
+    resolveProposalInbox: (name, repository, pinned) => proposalInboxes.resolve(name, repository, pinned),
+    admitProposalInbox: (name, repository, target, deliver) => proposalInboxes.admit(name, repository, target, deliver),
   })
   directoryBots.setBroker(capabilityBroker)
   const authoring = new DirectoryBotService({
@@ -781,6 +784,7 @@ export async function createProjectRuntime(
     resolveAgent: name => agentTypes.resolve(name),
     changed: id => realtime.invalidateSessions(id),
   })
+  const proposalInboxes = new ProposalInboxes({ projectId: project.id, directory: resolve(authoringDirectory, 'proposal-inboxes'), topics, sessions })
   tools.register(new SessionTool(topics))
   tools.register(new TaskTool(sessions))
   importTool.registerBuiltin('watermark', new WatermarkTool(workspace, project.id))
@@ -1516,7 +1520,7 @@ export async function createProjectRuntime(
       authorize: dependencies.authorize,
       assertAccess: id => sessions.assertFolderAccess(id),
     }),
-    topicsPlugin(topics, dependencies.authorize),
+    topicsPlugin(topics, dependencies.authorize, proposalInboxes),
     sessionsApiPlugin(sessions, { backgroundTasks, cron: cronService, authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
     projectWorkPlugin(sessions, dependencies.authorize, () => github.references(), () => organizationController.status(), (signal,mode) => organizationController.organize(signal,mode)),
     githubPlugin(github, dependencies.authorize),

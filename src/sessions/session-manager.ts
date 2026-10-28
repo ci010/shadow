@@ -1811,6 +1811,8 @@ ${JSON.stringify(request)}`,
       originUser?: string
       name?: string
       description?: string
+      /** Host-authored setup record; persisted without scheduling an inference. Never guest supplied. */
+      setupInstructions?: string
       preloadTools?: Record<string, string[]>
       workspaceRoot?: string
       workdir?: WorkdirRefV1
@@ -1994,7 +1996,10 @@ ${JSON.stringify(request)}`,
     }
     try {
       await this.ensureSessionDataDirectory(state)
-      await this.store.createSessionLog(physicalSessionId, [startEvent])
+      await this.store.createSessionLog(physicalSessionId, [startEvent, ...(stateFields?.setupInstructions ? [{
+        role: 'user', name: 'host-setup', timestamp: ts,
+        content: 'Host-recorded explicit owner setup instructions (not an external proposal):\n' + stateFields.setupInstructions,
+      }] : [])])
       await this.store.saveState(sessionId, state)
       this.sessionStates[sessionId] = state
       this.deps.bus.emit('session.changed', { sessionId })
