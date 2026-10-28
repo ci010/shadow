@@ -84,6 +84,21 @@ Before editing, inspect the worktree and preserve existing edits. Coordinate
 changes to shared composition files such as `src/index.ts`, configuration
 schemas, session contracts, gateway routing, and package manifests.
 
+## Frontend and design task setup
+
+For UI/design work, read the root [DESIGN.md](DESIGN.md) and the target app's
+applicable instructions before proposing or editing visuals. Preserve the
+existing Quiet Workbench identity, semantic tokens and reusable components;
+inspect actual source rather than treating a missing product brief as greenfield.
+In Shadow, read `v:skills/impeccable` and its `reference/setup.md` for the manual
+product/design-context workflow before design edits. In another coding harness
+where `v:skills` is unavailable, do not claim the skill was loaded: follow the
+local DESIGN.md and state the skill limitation when relevant. Narrow UI fixes do
+not require creating PRODUCT.md; new product-context capture must be scoped and
+confirmed, never silently overwrite existing product/design records. Do not
+install hooks or run upstream setup as a side effect. Non-UI tasks need no design
+setup.
+
 ## Architectural rules
 
 - Keep backend code independent of Electron and Vue. Share small, validated
