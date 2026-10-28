@@ -5,6 +5,22 @@ The fragment belongs to the message DOM: no iframe, separate website, attachment
 server or Micro App is created. Use it for boundary maps, comparisons and short
 explanatory flows, not every reply. Simple prose should remain Markdown.
 
+## Chat Markdown compatibility
+
+Chat rendering uses a display-only marked token hook in
+`app/src/markdown-strong-compat.ts`. In addition to ASCII edge padding in plain
+strong labels, it tolerates punctuation-ended `**` spans immediately followed by
+CJK prose, for example `**重点。**接下来` and `建议**重点。**接下来`.
+The stored Markdown is unchanged. This is intentionally more permissive than
+CommonMark, not a change to the Markdown standard.
+
+Compatibility is limited to plain-text, single-line spans of at most 200 UTF-16
+code units. Code, escapes, links, images, inline HTML containers, math-like text,
+nested markup and longer star runs retain the existing parser behavior. Latin
+intraword delimiters are not relaxed. Streaming rendering reparses accumulated
+source; incomplete delimiters are not repaired. This hook is registered by the
+chat renderer, not globally for every Markdown consumer.
+
 ## Authoring
 
 ````markdown
