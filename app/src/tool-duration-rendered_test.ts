@@ -36,4 +36,13 @@ test('tool entry headers render duration for completed calls only, including zer
   assert.match(html, /class="tool-duration"[^>]*>≈ 0 ms<\/span>/)
   assert.match(html, /class="tool-duration"[^>]*>≈ 1\.2 s<\/span>/)
   assert.equal((html.match(/class="tool-duration"/g) ?? []).length, 2)
+  // Failures remain visible on individual calls, without opening disclosures
+  // or adding an aggregate error badge to the group header.
+  const groupSummary = html.slice(0, html.indexOf('</summary>'))
+  assert.doesNotMatch(groupSummary, /activity-failed/)
+  assert.match(html, /class="activity-failed"/)
+  assert.doesNotMatch(html, /<details[^>]*\sopen(?:[\s=>])/)
+  const openHtml = await renderToString(createSSRApp(module.exports.default, { batch, defaultOpen: true }))
+  assert.match(openHtml, /^<details[^>]*\sopen(?:[\s=>])/)
+  assert.doesNotMatch(openHtml, /<details[^>]*class="tool-entry"[^>]*\sopen(?:[\s=>])/)
 })
