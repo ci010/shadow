@@ -258,7 +258,7 @@ export function isContextSizeError(error: unknown): boolean {
     || error instanceof ProviderHttpError && error.status === 413
 }
 
-export const providerFailureKinds = ['authentication', 'network', 'proxy', 'rate-limit', 'unavailable', 'storage', 'request'] as const
+export const providerFailureKinds = ['authentication', 'credentials-missing', 'credentials-expired', 'authorization', 'network', 'proxy', 'rate-limit', 'unavailable', 'storage', 'request'] as const
 export type ProviderFailureKind = typeof providerFailureKinds[number]
 
 /** Public failure categories never carry response bodies, credentials or proxy addresses. */
@@ -269,10 +269,14 @@ export function providerFailureKind(error: unknown): ProviderFailureKind {
     if (code === 'SYSTEM_PROXY_UNAVAILABLE') return 'proxy'
     if (cause.name === 'CopilotAuthError') {
       if (code === 'proxy' || code === 'network' || code === 'storage') return code
-      if (code === 'missing' || code === 'denied' || code === 'expired') return 'authentication'
+      if (code === 'missing') return 'credentials-missing'
+      if (code === 'expired') return 'credentials-expired'
+      if (code === 'scope_missing') return 'authorization'
+      if (code === 'denied') return 'httpStatus' in cause && cause.httpStatus === 401 ? 'authentication' : 'authorization'
     }
     if (cause instanceof ProviderHttpError) {
-      if (cause.status === 401 || cause.status === 403) return 'authentication'
+      if (cause.status === 401) return 'authentication'
+      if (cause.status === 403) return 'authorization'
       if (cause.status === 429) return 'rate-limit'
       if (cause.status >= 500) return 'unavailable'
     }

@@ -89,7 +89,12 @@ async function seed(store: SessionStore, id: string, state: Partial<SessionState
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: provider failure remains actionable after restart without persisting private errors`, async () => {
+  for (const [failure, category] of [
+    [new CopilotAuthError('proxy'), 'proxy'],
+    [new CopilotAuthError('missing'), 'credentials-missing'],
+    [new CopilotAuthError('expired'), 'credentials-expired'],
+    [new CopilotAuthError('denied', 'copilot_access', 403), 'authorization'],
+  ] as const) test(`${Store.name}: ${category} provider failure remains actionable after restart without persisting private errors`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -100,15 +105,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.start()
         await f.sessions.deliver(id, input('original'))
         await waitFor(() => f.calls.length === 1)
-        f.calls[0].reject(new CopilotAuthError('proxy'))
+        f.calls[0].reject(failure)
         await waitFor(() => !!f.sessions.getSessionRecovery(id))
-        assert.equal(f.sessions.getSessionRecovery(id)?.providerFailure, 'proxy')
+        assert.equal(f.sessions.getSessionRecovery(id)?.providerFailure, category)
         await f.sessions.stop()
         restarted = fixture(workspace, store)
         await restarted.sessions.start()
         const recovery = restarted.sessions.getSessionRecovery(id)
-        assert.equal(recovery?.providerFailure, 'proxy')
-        assert.equal(parseSessionRecovery(recovery)?.providerFailure, 'proxy')
+        assert.equal(recovery?.providerFailure, category)
+        assert.equal(parseSessionRecovery(recovery)?.providerFailure, category)
         assert.throws(() => parseSessionRecovery({ ...recovery, providerFailure: 'private-upstream-body' }))
         assert.equal(restarted.calls.length, 0)
       } finally { await f.sessions.stop(); await restarted?.sessions.stop(); store.close?.() }

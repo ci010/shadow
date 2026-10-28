@@ -387,3 +387,13 @@ test('server HTTP errors preserve safe status and phase rather than being called
   assert.match(copilotFailureMessage('expired', 'copilot_access'), /authorization has expired/)
   assert.match(copilotFailureMessage('denied', 'copilot_access'), /access check was rejected/)
 })
+
+
+test('provider recovery copy distinguishes missing, expired and denied access from invalid credentials', () => {
+  assert.match(providerFailureMessage('credentials-missing'), /No provider credentials/)
+  assert.match(providerFailureMessage('credentials-expired'), /expired/)
+  assert.match(providerFailureMessage('authorization'), /model access.*subscription/i)
+  assert.match(providerFailureMessage('authorization'), /Signing in again may not resolve/)
+  assert.match(providerFailureMessage('authentication'), /only if.*invalid or expired/)
+  assert.match(providerFailureMessage('unknown-old-kind'), /could not complete/)
+})

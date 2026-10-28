@@ -4082,5 +4082,13 @@
   "BOT deployment status unavailable.": "BOT 部署状态不可用。",
   "Source:": "来源：",
   "History:": "历史：",
-  "Previous:": "上一版："
+  "Previous:": "上一版：",
+  "The provider could not verify the credentials. Check the selected account, API key and endpoint in provider settings. Sign in again only if the credentials are invalid or expired.": "服务商无法验证凭证。请在服务商设置中检查所选账号、API 密钥和接口地址。仅在凭证无效或过期时重新登录。",
+  "No provider credentials are available. Open provider settings to sign in or add an API key.": "没有可用的服务商凭证。请打开服务商设置登录或添加 API 密钥。",
+  "The saved provider authorization has expired. Open provider settings to renew it.": "已保存的服务商授权已过期。请打开服务商设置续期。",
+  "The provider denied access to this request. Check model access, subscription, account host, SSO and organization policy. Signing in again may not resolve this.": "服务商拒绝访问此请求。请检查模型权限、订阅、账号主机、SSO 和组织策略。重新登录不一定能解决此问题。",
+  "Enterprise subdomain prefix": "企业子域名前缀",
+  "Enter only your enterprise subdomain, for example octocat. The .ghe.com suffix is added automatically.": "只需输入企业子域名前缀，例如 octocat。系统会自动添加 .ghe.com 后缀。",
+  "Enter only a valid enterprise subdomain prefix, such as octocat, without .ghe.com, a URL, port or path.": "请输入有效的企业子域名前缀，例如 octocat，不要包含 .ghe.com、网址、端口或路径。",
+  "Remove provider {account} and its saved Copilot sign-in on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.": "删除提供商 {account} 及其在 {host} 上保存的 Copilot 登录信息？这将影响使用此实例的所有项目。其他实例（包括同一主机上的账号）和其他主机上的登录信息不变。此操作不会退出浏览器登录或撤销 GitHub 授权。"
 }

@@ -1,3 +1,4 @@
+import { httpFailure } from './http-failure.ts'
 import { withProviderRetry, providerRetryScope } from './retry.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { isGptModel, type ReasoningEffort, type ThinkingConfig } from '../agent/llm-config.ts'
@@ -9,7 +10,7 @@ import type {
   LLMResponse,
   ToolCall,
 } from './provider.ts'
-import { ProviderHttpError, TokenLimitExceededError, providerTransportFailure } from './provider.ts'
+import { providerTransportFailure } from './provider.ts'
 import { chatCompletionImages } from './tool-images.ts'
 
 // ---------------------------------------------------------------------------
@@ -115,37 +116,7 @@ export async function openaiChat(params: {
       })
       phase = 'response'
 
-      if (!res.ok) {
-        // A proxy may reject by size without a readable JSON error body.
-        if (res.status === 413) throw new ProviderHttpError(413,
-          `${params.providerName ?? 'LLM'} chat failed: request payload too large`)
-        const text = await res.text().catch(() => {
-          params.signal?.throwIfAborted()
-          throw new ProviderHttpError(res.status, `Provider rejected request (HTTP ${res.status})`, undefined,
-            { retryAfter: res.headers.get('retry-after'), rejectedRequest: true })
-        })
-        let code: string | undefined
-        // Detect token-limit errors so the agent loop can trigger a forced handoff
-        try {
-          const errJson = JSON.parse(text)
-          if (typeof errJson?.error?.code === 'string' && errJson.error.code) code = errJson.error.code
-          else if (typeof errJson?.error?.type === 'string') code = errJson.error.type
-          if (errJson?.error?.code === 'model_max_prompt_tokens_exceeded') {
-            throw new TokenLimitExceededError(
-              `${
-                params.providerName ?? 'LLM'
-              } chat failed: ${res.status} ${text}`,
-            )
-          }
-        } catch (e) {
-          if (e instanceof TokenLimitExceededError) throw e
-        }
-        throw new ProviderHttpError(res.status,
-          `${params.providerName ?? 'LLM'} chat failed: ${res.status} ${text}`,
-          code,
-          { retryAfter: res.headers.get('retry-after'), rejectedRequest: true },
-        )
-      }
+      if (!res.ok) throw await httpFailure(res, params.providerName ?? 'LLM', params.model, params.signal)
 
       const json = (await res.json()) as any
 

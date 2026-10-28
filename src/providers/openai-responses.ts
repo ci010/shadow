@@ -1,3 +1,4 @@
+import { httpFailure, safeProviderCode } from './http-failure.ts'
 import { withProviderRetry, providerRetryScope } from './retry.ts'
 import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
@@ -190,7 +191,7 @@ function failure(value: unknown, status?: number, retryAfter?: string | null): n
   const error = object(payload.error) ? payload.error : payload
   const incomplete = object(payload.incomplete_details) ? payload.incomplete_details : {}
   const rawCode = error.code || error.type || incomplete.reason
-  const code = typeof rawCode === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(rawCode) ? rawCode : undefined
+  const code = safeProviderCode(rawCode)
   // Never echo the server's message/body: it can contain prompt data or credentials.
   const state = ['failed', 'incomplete', 'cancelled'].includes(String(payload.status))
     ? String(payload.status) : 'failed'
@@ -407,20 +408,8 @@ export async function openaiResponses(params: {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${params.apiKey}`, ...params.headers },
       body: JSON.stringify(body), signal: params.signal,
     }).catch(error => { throw providerTransportFailure(error, 'connect', params.signal) })
-    if (!response.ok) {
-      let text = ''
-      if (response.body) {
-        try {
-          for await (const chunk of chunks(response, params.signal)) text += chunk
-        } catch {
-          params.signal?.throwIfAborted()
-          failure(undefined, response.status, response.headers.get('retry-after'))
-        }
-      }
-      let error: unknown
-      try { error = JSON.parse(text) } catch { /* HTTP status is still authoritative. */ }
-      failure(error, response.status, response.headers.get('retry-after'))
-    }
+    if (!response.ok) throw await httpFailure(response, params.providerName ?? 'LLM', params.model, params.signal)
+
     let result: unknown
     try {
       if (response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {

@@ -119,7 +119,7 @@ for (const host of ['github.com', 'octocat.ghe.com']) {
       assert.match(view.text(), new RegExp(`Current Copilot host: ${host.replaceAll('.', '\\.')}`))
       const select = () => view.nodes().find(node => node.tag === 'select')!
       assert.equal(select().props.value, host === 'github.com' ? 'github' : 'enterprise')
-      if (host !== 'github.com') assert.equal(view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'your-company.ghe.com')?.value, host)
+      if (host !== 'github.com') assert.equal(view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'octocat')?.value, host.replace('.ghe.com', ''))
       const starting = view.click('Sign in with GitHub Copilot')
       await nextTick()
       assert.equal(select().props.disabled, true, 'host is locked while POST is outstanding')
@@ -128,7 +128,7 @@ for (const host of ['github.com', 'octocat.ghe.com']) {
       await starting
       assert.equal(posts[0]?.host, host)
       assert.equal(select().props.disabled, true)
-      if (host !== 'github.com') assert.equal(view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'your-company.ghe.com')?.props.disabled, true)
+      if (host !== 'github.com') assert.equal(view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'octocat')?.props.disabled, true)
       await view.click(`Open ${host}/login/device`)
       assert.deepEqual(opened, desktop ? [[`https://${host}/login/device`]] : [[`https://${host}/login/device`, '_blank', 'noopener,noreferrer']])
       await view.click('Cancel login')
@@ -155,25 +155,25 @@ test('enterprise picker blocks invalid input, preserves it on retry, and sign-ou
   const select = view.nodes().find(node => node.tag === 'select')!
   ;(select.props.onChange as (value: string) => void)('enterprise')
   await nextTick()
-  const input = view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'your-company.ghe.com')!
+  const input = view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'octocat')!
   const setHost = async (value: string) => {
     ;(input.props['onUpdate:modelValue'] as (value: string) => void)(value)
     await nextTick()
   }
-  for (const invalid of ['', 'github.com', 'https://octocat.ghe.com', 'octocat.ghe.com/path', 'ghe.com', 'nested.octocat.ghe.com']) {
+  for (const invalid of ['', 'github.com', 'https://octocat.ghe.com', 'octocat.ghe.com/path', 'ghe.com', 'nested.octocat.ghe.com', 'octocat.ghe.com', '-octocat', 'octocat-', 'xn--test', 'octo_cat']) {
     await setHost(invalid)
     assert.equal(view.button('Sign in with GitHub Copilot').props.disabled, true)
     assert.equal(input.props['aria-invalid'], true)
   }
   assert.equal(posts.length, 0)
-  await setHost('Octocat.GHE.com')
+  await setHost('Octocat')
   await view.click('Sign in with GitHub Copilot')
   assert.equal(posts[0]?.host, 'octocat.ghe.com')
-  assert.equal(input.value, 'Octocat.GHE.com')
+  assert.equal(input.value, 'Octocat')
   await view.click('Retry GitHub Copilot login')
   assert.equal(posts[1]?.host, 'octocat.ghe.com')
   await view.click('Sign out of GitHub Copilot')
-  assert.match(view.text(), /Remove the saved Copilot sign-in for instance .* on github.com/)
+  assert.match(view.text(), /Remove provider .* and its saved Copilot sign-in on github.com/)
   assert.match(view.text(), /Other instances, including accounts on the same host/)
   await view.click('Sign out of GitHub Copilot')
   await flush()
@@ -341,7 +341,7 @@ test('named Copilot title and sign-out identify the instance and preserve same-h
   } })
   assert.match(view.text(), /Work GitHub · GitHub Copilot settings/)
   await view.click('Sign out of GitHub Copilot')
-  assert.match(view.text(), /instance Work GitHub · GitHub Copilot \(account-work\) on github.com/)
+  assert.match(view.text(), /Remove provider .* \(account-work\) and its saved Copilot sign-in on github.com/)
   assert.match(view.text(), /Other instances, including accounts on the same host/)
   await view.click('Sign out of GitHub Copilot')
   assert.match(view.text(), /Signed out of Copilot instance Work GitHub/)
