@@ -367,7 +367,7 @@
                 <img :src="attachment.previewUrl" class="attachment-thumb" :alt="attachment.file.name">
               </button>
               <span v-else class="context-icon i-lucide-paperclip" aria-hidden="true" />
-              <span class="attachment-caption"><span>{{ attachment.file.name }}</span><span v-if="attachment.sourceKey" class="attachment-reference-label">{{ t('Image reference') }}</span><span v-if="attachment.source" class="attachment-source-path">{{ attachment.source.path }}</span></span>
+              <span class="attachment-caption"><span>{{ attachment.file.name }}</span><span v-if="attachment.alignment" class="attachment-reference-label">{{ t('Region instructions') }}</span><span v-if="attachment.sourceKey" class="attachment-reference-label">{{ t('Image reference') }}</span><span v-if="attachment.source" class="attachment-source-path">{{ attachment.source.path }}</span></span>
               <HoverInfo v-if="attachment.kind === 'image'" :text="t('Insert image reference')" v-slot="{ triggerProps }">
                 <button v-bind="triggerProps" type="button" class="attachment-insert" :disabled="submissionBusy" :aria-label="t('Insert reference to {name}', { name: attachment.file.name })" @click="insertImageReference(attachment)"><span class="i-lucide-text-cursor-input w-3.5 h-3.5" aria-hidden="true" /></button>
               </HoverInfo>
@@ -1488,7 +1488,7 @@ function openImagePreview(image: ImagePreview) {
   clearSelection()
   const attachment = pendingAttachments.value.find(item => item.previewUrl === image.src)
   imagePreview.value = attachment
-    ? { ...image, attachmentKey: attachment.key, localFile: attachment.file }
+    ? { ...image, attachmentKey: attachment.key, localFile: attachment.file, alignment: attachment.alignment }
     : image
 }
 function previewImageKeydown(event: KeyboardEvent) {
@@ -1915,7 +1915,7 @@ function handleDraftImageContext(update: ImageContextUpdate): void {
     || image.attachmentKey !== update.sourceKey) return
   if (!canQuoteSelection.value || !canAttachFiles.value || submissionBusy.value) return
   try {
-    pendingAttachments.value = replaceDraftImageAttachment(pendingAttachments.value, update.sourceKey, update.file ?? image.localFile)
+    pendingAttachments.value = replaceDraftImageAttachment(pendingAttachments.value, update.sourceKey, update.file ?? image.localFile, { alignment: update.alignment })
   } catch (cause) {
     composerError.value = cause instanceof Error ? cause.message : t('Could not attach the marked image. Try again.')
   }

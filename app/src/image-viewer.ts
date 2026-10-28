@@ -1,4 +1,5 @@
 import { t } from './i18n.ts'
+import type { ImageAlignmentDocument } from './image-alignment.ts'
 export interface ImagePreview {
   src: string
   name: string
@@ -7,6 +8,7 @@ export interface ImagePreview {
   /** Draft attachment identity and stable original for the annotation dialog. */
   attachmentKey?: string
   localFile?: File
+  alignment?: ImageAlignmentDocument
 }
 
 export function isPreviewImageUrl(src: string): boolean {

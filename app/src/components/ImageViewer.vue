@@ -20,11 +20,18 @@
         </button>
       </header>
       <p v-if="downloadUrl && downloads.errors.has(downloadUrl)" class="viewer-download-error" role="alert">{{ downloads.errors.get(downloadUrl) }}</p>
+      <nav v-if="image.localFile && image.attachmentKey" class="viewer-modes" :aria-label="t('Image interaction mode')">
+        <button type="button" class="btn" :aria-pressed="mode === 'marks'" @click="mode = 'marks'">{{ t('Freehand marks') }}</button>
+        <button type="button" class="btn" :aria-pressed="mode === 'alignment'" @click="openAlignment">{{ t('Region instructions') }}</button>
+      </nav>
       <div ref="viewport" class="image-viewer-viewport" :class="{ 'actual-size': actualSize }" tabindex="0" role="region"
         :aria-label="t('Image preview')" :aria-busy="status === 'loading'">
-        <ImageAnnotationPreview v-if="image.localFile && image.attachmentKey" class="viewer-annotation"
+        <ImageAlignmentPanel v-if="alignmentOpened && image.localFile" v-show="mode === 'alignment'" ref="alignmentPanel"
+          :key="image.attachmentKey" :file="image.localFile" :initial="image.alignment" :editable="!!editable" :active="mode === 'alignment'"
+          @apply="applyAlignment" @clear="clearAlignment" />
+        <ImageAnnotationPreview v-if="image.localFile && image.attachmentKey" v-show="mode === 'marks'" class="viewer-annotation"
           :src="image.src" :name="image.name" :local-file="image.localFile"
-          :source-key="image.attachmentKey" :context-key="contextKey ?? ''" :active="true" :editable="!!editable"
+          :source-key="image.attachmentKey" :context-key="contextKey ?? ''" :active="mode === 'marks'" :editable="!!editable"
           @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
         <div v-else-if="status !== 'error'" class="image-viewer-canvas">
           <img :key="attempt" :src="resources.resolve(image.src)" :alt="image.name" :class="{ loading: status === 'loading' }" referrerpolicy="no-referrer"
@@ -42,12 +49,14 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { computed, nextTick, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue'
 import { useFileDownload } from '../composables/useFileDownload.ts'
 import type { ImagePreview } from '../image-viewer.ts'
 import { useMobileResources } from '../mobile-resources.ts'
 
 import ImageAnnotationPreview from './files/ImageAnnotationPreview.vue'
+import type { ImageAlignmentDocument } from '../image-alignment.ts'
+const ImageAlignmentPanel = defineAsyncComponent(() => import('./alignment/ImageAlignmentPanel.vue'))
 import type { ImageContextUpdate, ImageContextBusy } from '../image-context.ts'
 
 const props = defineProps<{ image: ImagePreview; contextKey?: string; editable?: boolean }>()
@@ -62,6 +71,18 @@ const titleId = useId()
 const status = ref<'loading' | 'ready' | 'error'>('loading')
 const actualSize = ref(false)
 const attempt = ref(0)
+const mode = ref<'marks' | 'alignment'>(props.image.alignment ? 'alignment' : 'marks')
+const alignmentOpened = ref(!!props.image.alignment)
+const alignmentPanel = ref<{ hasUnsavedChanges: boolean; flush: () => void }>()
+function openAlignment() { alignmentOpened.value = true; mode.value = 'alignment' }
+function applyAlignment(alignment: ImageAlignmentDocument) {
+  if (!props.editable || !props.image.localFile || !props.image.attachmentKey) return
+  emit('image-context', { contextKey: props.contextKey ?? '', sourceKey: props.image.attachmentKey, file: props.image.localFile, alignment })
+}
+function clearAlignment() {
+  if (!props.editable || !props.image.localFile || !props.image.attachmentKey) return
+  emit('image-context', { contextKey: props.contextKey ?? '', sourceKey: props.image.attachmentKey, file: props.image.localFile, alignment: null })
+}
 let trigger: HTMLElement | undefined
 let outsideStart = false
 let closing = false
@@ -76,7 +97,11 @@ function closed() {
   restoreFocus()
   emit('close')
 }
-function close() { dialog.value?.close(); closed() }
+function close() {
+  alignmentPanel.value?.flush()
+  if (alignmentPanel.value?.hasUnsavedChanges && !window.confirm(t('Discard unapplied region instructions?'))) return
+  dialog.value?.close(); closed()
+}
 function outside(event: MouseEvent) {
   if (event.target !== dialog.value) return false
   const rect = dialog.value.getBoundingClientRect()
@@ -116,6 +141,8 @@ onBeforeUnmount(() => { closing = true; dialog.value?.close(); restoreFocus() })
 .image-viewer { width: min(1200px, calc(100vw - 32px)); height: min(900px, calc(100dvh - 32px)); max-width: none; max-height: none; padding: 0; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 16px 48px var(--c-shadow); }
 .image-viewer[open] { display: flex; flex-direction: column; }
 .image-viewer::backdrop { background: rgb(0 0 0 / 65%); }
+.viewer-modes { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--c-border); }
+.viewer-modes button[aria-pressed="true"] { border-color: var(--c-blue); }
 .image-viewer-header { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-height: 52px; padding: 4px 8px 4px 16px; border-bottom: 1px solid var(--c-border); }
 .image-viewer-header h2 { flex: 1; min-width: 0; margin: 0 8px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 20px; font-weight: 500; }
 .viewer-control { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; min-width: 44px; min-height: 44px; padding: 0 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; font-size: 12px; text-decoration: none; cursor: pointer; }
