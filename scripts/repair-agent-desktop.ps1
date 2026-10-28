@@ -6,12 +6,26 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $previousToolchain = $env:RUSTUP_TOOLCHAIN
+$previousPath = $env:PATH
 
 try {
     if ($env:OS -ne 'Windows_NT') {
         throw 'Native desktop repair requires Windows.'
     }
+    if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+        $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+        if (Test-Path (Join-Path $cargoBin 'rustup.exe')) {
+            $env:PATH = "$cargoBin;$env:PATH"
+        } else {
+            throw 'Install a Windows MSVC Rust toolchain with rustup first.'
+        }
+    }
     $node = (Get-Command node -ErrorAction Stop).Source
+    $null = Get-Command git -ErrorAction Stop
+    $compiler = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+    if (-not (Test-Path $compiler)) {
+        throw 'Install .NET Framework 4 (csc.exe) for the Windows input guard first.'
+    }
     $manifest = Get-Content (Join-Path $root 'integrations\agent-desktop\Cargo.toml') -Raw
     if ($manifest -notmatch '(?m)^rust-version\s*=\s*"(\d+\.\d+(?:\.\d+)?)"') {
         throw 'Cannot read the minimum Rust version from Cargo.toml.'
@@ -65,4 +79,5 @@ try {
     exit 1
 } finally {
     $env:RUSTUP_TOOLCHAIN = $previousToolchain
+    $env:PATH = $previousPath
 }
