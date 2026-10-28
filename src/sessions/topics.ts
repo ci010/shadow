@@ -124,14 +124,14 @@ export class TopicService {
       .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? '') || a.sessionId.localeCompare(b.sessionId))
   }
 
-  async create(request: unknown, createdBySessionId?: string, signal?: AbortSignal) {
+  async create(request: unknown, createdBySessionId?: string, signal?: AbortSignal, setupInstructions?: string) {
     const parsed = createRequest.parse(request)
     if (createdBySessionId) this.assertActor(this.options.projectId, createdBySessionId, true)
     const agent = this.options.resolveAgent(parsed.agentType)
     if (!agent) throw new TopicError(`Unknown agent type "${parsed.agentType}".`)
     const requestId = parsed.requestId ?? randomUUID()
     const sessionId = `web:chat-${requestId}`
-    const topicRequestHash = createHash('sha256').update(JSON.stringify({ ...parsed, requestId, createdBySessionId })).digest('hex')
+    const topicRequestHash = createHash('sha256').update(JSON.stringify({ ...parsed, requestId, createdBySessionId, setupInstructions })).digest('hex')
     const inFlight = this.requests.get(sessionId)
     if (inFlight) {
       await inFlight
@@ -165,7 +165,7 @@ export class TopicService {
           agentType: parsed.agentType, initiativeId: parsed.initiativeId,
           folderId: folder?.id,
           workdir: folder ? folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id) : undefined,
-          description,
+          description, setupInstructions,
           workPolicy,
         })
         if (parsed.work) await alignment!.bindDelegation(sessionId, createdBySessionId!, parsed.work, signal)

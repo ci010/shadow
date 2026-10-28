@@ -25,6 +25,10 @@ export const CapabilityGrantSchema = z.discriminatedUnion('kind', [
   z.object({
     id: ResourceName, kind: z.literal('inbox'), sessionId: identifier,
   }).strict(),
+  z.object({
+    id: ResourceName, kind: z.literal('proposal-inbox'), inbox: ResourceName,
+    disclosurePolicy: z.object({ kind: z.literal('public-github-issue-proposal'), repository: z.string().regex(/^[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/) }).strict(),
+  }).strict(),
 ])
 export type CapabilityGrant = z.infer<typeof CapabilityGrantSchema>
 

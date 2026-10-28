@@ -141,14 +141,25 @@ preserve active and previous deployment content. A subsequent deployment of a Gi
 if Git later becomes unavailable; it never silently switches retention mode. Without Git, only current and previous are retained.
 A source repository's Git status does not determine internal history mode.
 
-Deployment content lives below Project Home `bots/deployments/<projectId>/<botId>/`
-(`current/files`, `previous/files` and internal history); mutable tool data is below
-its separate `data/` directory, never in the frozen files. Discord mutable security,
+Deployment content lives below Project Home `bots/<botId>/`
+(`current/` and `previous/` contain `BOT.md`, `bot.json` and tool files directly;
+`history.git/` is isolated internal Git history); mutable tool data is below
+its separate `data/` directory, never in the frozen files. Store ownership is in
+`bots/.store.json`; per-BOT `owner.json` and `active.json` are outside source slots.
+The latter records current/previous revisions and Git identities. The promotion
+journal rolls back source slots, metadata and Git together after interruption.
+`runtime` and `deployments` are reserved IDs; discovery uses per-BOT ownership
+markers and rejects corrupt markers rather than treating auxiliary directories as BOTs.
+The store root is already Project-scoped: sharing one root between Projects is rejected.
+There is no old-layout fallback, migration on startup or automatic recovery. Discord mutable security,
 memory and classifier data live below `bots/runtime/discord-security/`. Interrupted
 promotion fails closed. `recoverInterrupted` is an explicit **offline** storage API;
 it must not run against active readers/writers. Filesystem/power-loss durability is
 not claimed. Editing a deployed file breaks integrity verification rather than
-silently changing the BOT.
+silently changing the BOT. A persisted Discord boundary only reuses its epoch if
+its owning conversation memory domain still exists and is not revoked. A new
+memory catalog (including a storage cutover with an unchanged BOT revision) starts
+a fresh persisted epoch/segment; old history and memory are not imported.
 
 ## SDK and controlled context
 
@@ -247,3 +258,50 @@ Agent/binding methods support isolated security fixtures only, not a production
 configuration route; gateway/tool calls reject them in directory mode. Do not restart a
 live installation onto the new model or disable its existing BOTs without a separate
 operator decision. Generic non-BOT authoring is separate and is not a BOT fallback.
+
+### Public issue proposal inboxes
+
+A reviewed `proposal-inbox` grant declares
+`{ id: 'xmcl-coordinator', kind: 'proposal-inbox', inbox: 'issue-triage',
+   disclosurePolicy: { kind: 'public-github-issue-proposal', repository: 'owner/repo' } }`.
+This is a distinct grant, not the raw session-target `inbox` service. Proposal grants
+cannot contain session IDs. Tool input is strictly `issueNumber`, `suggestedPriority`
+(`triage|normal|urgent`) and `category` (`bug|feature|investigation`), never raw prose,
+logs, history, target, admin identity or dispatch instructions. The host anonymously
+verifies the fixed public GitHub issue; PRs and mismatched identities fail closed.
+Only fixed repository/issue/URL and untrusted enum hints cross the boundary.
+
+On the first valid proposal, the Project-local logical inbox registry durably records
+a create intent, then uses ordinary TopicService/SessionManager creation without an
+initial input. Conservative host instructions are in an actual host-setup history
+record, not just metadata. It persists the binding, then admits the proposal as a
+queued untrusted session input. There is no setup inference, startup scan, second
+SessionManager or guest-controlled target creation. Restart reuses the same logical
+session ID (normal physical handoffs remain supported). A genuinely missing/deleted
+bound session is replaced on a subsequent new proposal. Ownership/policy/hash,
+Project, durable mode and folder access are checked; inaccessible/foreign/task targets
+fail closed rather than triggering replacement. Busy/running targets and delivery
+errors never trigger replacement.
+
+The host registry and broker use dedicated SQLite OS-lock files (not session or
+Project databases), atomic fsynced JSON records and process-local serialization.
+Process death releases the lock. A persisted create intent reuses its creation UUID
+and TopicService request hash after a crash. Uncertain delivery receipts pin the
+original target and input UUID before admission; retries to a deleted target fail
+closed, never replay onto a replacement. Already admitted proposals return their
+original receipt even if the target is subsequently deleted. Changed hints with the
+same issue key conflict. Keys are per binding/grant, not global deduplication:
+coordinator policy must deduplicate repository + issue across bots. Admission does
+not imply acceptance, dispatch, available capacity, permission or completion.
+
+Authenticated owner controls in the current Project:
+- `GET /api/proposal-inboxes/:name`: binding/status, no creation or inference.
+- `PATCH /api/proposal-inboxes/:name` with `{ enabled: false }` stops subsequent
+  admissions and automatic recovery. For a never-used inbox include the reviewed
+  `repository`; this reserves only a disabled create intent, not a session.
+- `{ enabled: true }` resumes lazy resolution, not immediate creation.
+
+Deleting a session alone is not the stop control. Disable the logical inbox to stop
+it. The obsolete manual proposal-coordinator setup endpoint is removed. New code
+requires ordinary authorized backend activation and exact-version review/publication
+of changed package grants; editing source is not activation or deployment.

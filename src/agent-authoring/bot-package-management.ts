@@ -35,7 +35,7 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
     const target=location(binding)
     facts.push(`${target}: ${binding.enabled ? 'enabled' : 'disabled'}`)
     for(const name of binding.tools)facts.push(`${target}: tool ${name}`)
-    for(const grant of binding.grants ?? [])facts.push(`${target}: ${grant.kind === 'http' ? grant.routes.map(route=>`${route.method} ${grant.origin}${route.path}`).join(', ') : 'inbox '+grant.sessionId}`)
+    for(const grant of binding.grants ?? [])facts.push(`${target}: ${grant.kind === 'http' ? grant.routes.map(route=>`${route.method} ${grant.origin}${route.path}`).join(', ') : 'inbox '+(grant.kind === 'inbox' ? grant.sessionId : grant.inbox)+(grant.kind === 'proposal-inbox' ? ' public-issue-proposal '+grant.disclosurePolicy.repository+' (bounded issue/enums only)' : ' (raw content)')}`)
     if(binding.platform==='discord'){
       facts.push(`${target}: participants ${binding.participants.everyone ? 'everyone' : [...binding.participants.userIds.map(id=>'user '+id),...binding.participants.roleIds.map(id=>'role '+id)].join(', ')}`)
       for(const folder of binding.sourceFolders ?? [])facts.push(`${target}: folder ${folder}`)

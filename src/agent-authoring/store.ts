@@ -280,7 +280,7 @@ function parseResources(bundle: ResourceBundle, projectId: string, allowLegacy =
           if (route.bodySchema) assertSupportedJsonSchema(route.bodySchema)
         }
         if (grant.credential) insist(!/[\r\n\x00]/.test(grant.credential.prefix), 'Unsafe credential prefix')
-      } else {
+      } else if (grant.kind === 'inbox') {
         const address = { ...binding, projectId }
         insist(!['self', 'current', binding.conversationId, `${binding.platform}:${binding.conversationId}`,
           channelSessionId(address)].includes(grant.sessionId), 'Inbox cannot target its own group session')

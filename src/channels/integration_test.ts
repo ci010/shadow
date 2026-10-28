@@ -303,6 +303,23 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     assert(!JSON.stringify(f.requests).includes('fixture-901'))
   })
 
+  test(`${Store.name}: unchanged policy with a replaced memory catalog starts a fresh persisted epoch`, async t => {
+    const f = await fixture(t, Store)
+    await f.send()
+    const before = structuredClone(f.sessions.getSessionState(f.id())!)
+    const old = before.channelBoundary!
+    f.integration.options.memory = new MemoryDomains(f.projectId, join(f.root, 'replacement-domains'))
+    f.requests.length = 0
+    await f.send()
+    const after = f.sessions.getSessionState(f.id())!
+    assert.equal(after.channelBoundary!.revision, old.revision)
+    assert.notEqual(after.channelBoundary!.epoch, old.epoch)
+    assert.notEqual(after.channelBoundary!.domainId, old.domainId)
+    assert.equal(after.segmentIndex, before.segmentIndex + 1)
+    assert.deepEqual((await f.storage.getState(f.id()))!.channelBoundary, after.channelBoundary)
+    assert.equal(f.integration.options.memory.domain(after.channelBoundary!.domainId).owner!.epoch, after.channelBoundary!.epoch)
+  })
+
   test(`${Store.name}: full provider input excludes private Project, old history, sibling memory and unsafe tools`, async t => {
     const f = await fixture(t, Store)
     await f.sessions.buildSession(f.id(), undefined, { agentType: 'general' })
@@ -1262,7 +1279,7 @@ test('directory Discord SDK tools run in the existing session loop with per-bind
   const deployments=new BotDeployments({directory:join(f.root,'directory-deployments'),projectId:f.projectId,runGit:async()=>{throw new Error('Git unavailable')}})
   const runtime=new DirectoryBots(deployments)
   const {agentId: _agent,epochRevision:_epoch,...data}=f.a
-  const files={'BOT.md':'---\nid: sdk-helper\nconfig: bot.json\n---\nSDK_DIRECTORY_PROMPT','bot.json':JSON.stringify({allowedModules:[],tools:[{name:'sdk_probe',description:'Read and save conversation value',parameters:{type:'object',properties:{},additionalProperties:false},module:'tools/probe.ts',imports:[]}],bindings:[{...data,id:randomUUID(),platform:'discord',target:{kind:'channel',guildId:'100',channelId:'205'},tools:['sdk_probe'],readDomains:[],inheritThreads:false}]}),'tools/probe.ts':`import {defineTool} from '@shadow/bot-sdk'; export default defineTool({async execute(args,ctx){await ctx.storage.set('value','SDK_SCOPED_RECEIPT');return await ctx.storage.get('value')}});`}
+  const files={'BOT.md':'---\nid: sdk-helper\nconfig: bot.json\n---\nSDK_DIRECTORY_PROMPT','bot.json':JSON.stringify({mode:'service',allowedModules:[],tools:[{name:'sdk_probe',description:'Read and save conversation value',parameters:{type:'object',properties:{},additionalProperties:false},module:'tools/probe.ts',imports:[]}],bindings:[{...data,id:randomUUID(),platform:'discord',target:{kind:'channel',guildId:'100',channelId:'205'},tools:['sdk_probe'],readDomains:[],inheritThreads:false}]}),'tools/probe.ts':`import {defineTool} from '@shadow/bot-sdk'; export default defineTool({async execute(args,ctx){await ctx.storage.set('value','SDK_SCOPED_RECEIPT');return await ctx.storage.get('value')}});`}
   const frozen=deployments.freeze(files)
   await deployments.deploy({id:'sdk-helper',source:{folderId:'fixture',directory:''},...frozen})
   f.config.setBotDeployments(()=>runtime.discord())

@@ -332,7 +332,14 @@ export class DiscordIntegration implements ConversationPolicies {
 
   boundary(policy: ResolvedConversationPolicy, sessionId: string, state: SessionState): ChannelBoundary {
     const { binding, profile, location } = this.resolved(policy)
-    if (state.channelBoundary?.revision === policy.revision) return state.channelBoundary
+    if (state.channelBoundary?.revision === policy.revision) {
+      const saved = state.channelBoundary
+      // A storage cutover can preserve the policy revision while replacing its memory catalog.
+      // Never reuse an epoch whose owning domain is missing, revoked or belongs elsewhere.
+      const domain = this.options.memory.domains().find(item => item.id === saved.domainId)
+      if (domain && !domain.revoked && domain.kind === 'conversation' &&
+        domain.owner?.sessionId === (saved.ownerSessionId ?? sessionId) && domain.owner.epoch === saved.epoch) return saved
+    }
     const epoch = randomUUID()
     const own = this.options.memory.createDomain(location.name ?? 'Discord conversation', 'conversation', { sessionId, epoch })
     return {

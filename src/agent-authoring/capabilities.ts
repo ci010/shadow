@@ -1,6 +1,7 @@
+import { acquireDurableInboxLock } from '../sessions/durable-inbox-lock.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
-import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rename, stat } from 'node:fs/promises'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import { join, resolve } from 'node:path'
@@ -67,6 +68,7 @@ const recordSchema = z.object({
     sourceSessionId: z.string(),
     sourceInputId: z.string(),
     toolCallId: z.string(),
+    targetSessionId: z.string().optional(),
   }).strict().optional(),
   result: z.unknown().optional(),
   failure: z.object({ code: z.string(), status: z.number().optional() }).strict().optional(),
@@ -344,10 +346,13 @@ interface BrokerOptions {
   resolveSecret: (ref: string) => Promise<string | undefined>
   deliver: (sessionId: string, input: DeliverInputPayload) => Promise<unknown>
   canDeliver: (sessionId: string) => boolean
+  resolveProposalInbox?: (name: string, repository: string, pinnedTarget?: string) => Promise<string>
+  admitProposalInbox?: (name: string, repository: string, target: string, deliver: () => Promise<unknown>) => Promise<unknown>
   /** Trusted host/test transport only. Production defaults to DNS-pinned node:https. */
   request?: typeof fetch
 }
 
+const stores = new Map<string, Promise<unknown>>()
 const inflight = new Map<string, Promise<unknown>>()
 
 /**
@@ -372,6 +377,7 @@ export class CapabilityBroker {
     try { serialized = canonical(input) } catch { fail('invalid_input', 'Capability input must be finite, acyclic JSON.') }
     if (Buffer.byteLength(serialized) > MAX_BYTES) fail('invalid_input', 'Capability input is too large.')
     input = JSON.parse(serialized) as Record<string, unknown>
+    if (grant.kind === 'proposal-inbox') return this.publicIssueProposal(grant, input, context)
     if (grant.kind === 'inbox') return this.inbox(grant, input, context)
     return this.http(grant, input, context)
   }
@@ -391,7 +397,7 @@ export class CapabilityBroker {
       checkpoint(context)
       return this.keyed(grant, idempotencyKey, payload, context, action)
     }
-    const operation = this.withRecord(key, hash, grant.kind, context, action)
+    const operation = this.withRecord(key, hash, grant.kind === 'proposal-inbox' ? 'inbox' : grant.kind, context, action)
     inflight.set(filename, operation)
     try { return await operation } finally { if (inflight.get(filename) === operation) inflight.delete(filename) }
   }
@@ -400,16 +406,26 @@ export class CapabilityBroker {
     key: string, hash: string, kind: OperationRecord['kind'], context: CapabilityInvocationContext,
     action: (record: OperationRecord, save: (record: OperationRecord) => Promise<void>) => Promise<unknown>,
   ): Promise<unknown> {
+    const previous = stores.get(this.directory)
+    if (previous) { await abortable(previous.catch(() => undefined), context.signal); return this.withRecord(key, hash, kind, context, action) }
+    const run = this.withLockedRecord(key, hash, kind, context, action)
+    stores.set(this.directory, run)
+    try { return await run } finally { if (stores.get(this.directory) === run) stores.delete(this.directory) }
+  }
+
+  private async withLockedRecord(
+    key: string, hash: string, kind: OperationRecord['kind'], context: CapabilityInvocationContext,
+    action: (record: OperationRecord, save: (record: OperationRecord) => Promise<void>) => Promise<unknown>,
+  ): Promise<unknown> {
     checkpoint(context)
     await mkdir(this.directory, { recursive: true })
     checkpoint(context)
-    // Cross-process exclusion is fail-closed. A crash-held lock requires explicit
-    // host recovery; never steal a lock while its former writer might still run.
-    const lock = join(this.directory, '.broker-lock')
-    try { await mkdir(lock) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') fail('store_busy', 'Capability receipt store is locked; retry after host recovery if stale.')
-      fail('store_error', 'Cannot lock capability receipt store.')
-    }
+    // Existing unknown/legacy lock entries remain fail-closed, never guessed stale.
+    try { await stat(join(this.directory, '.broker-lock')); fail('store_busy', 'Capability receipt store has a legacy lock; host recovery required.') }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    let release: () => void
+    try { release = acquireDurableInboxLock(join(this.directory, '.broker-lock.sqlite')) }
+    catch { fail('store_busy', 'Capability receipt store is locked; retry.') }
     try {
       checkpoint(context)
       const filename = join(this.directory, `${key}.json`)
@@ -453,7 +469,7 @@ export class CapabilityBroker {
       if (record.state === 'uncertain') fail('uncertain_outcome', 'A previous HTTP write may have occurred; reconcile remotely before using another key.')
       const save = async (next: OperationRecord) => {
         checkpoint(context)
-        const stage = join(lock, 'record.json')
+        const stage = join(this.directory, `.stage-${randomUUID()}`)
         const handle = await open(stage, 'w', 0o600)
         try {
           await handle.writeFile(JSON.stringify(next))
@@ -461,20 +477,49 @@ export class CapabilityBroker {
         } finally { await handle.close() }
         checkpoint(context)
         await rename(stage, filename)
+        const directory = await open(this.directory, 'r')
+        try { await directory.sync() } finally { await directory.close() }
       }
       return await action(record, save)
     } finally {
-      await rm(lock, { recursive: true, force: true })
+      release()
     }
   }
 
-  private async inbox(grant: Extract<CapabilityGrant, { kind: 'inbox' }>, raw: Record<string, unknown>, context: CapabilityInvocationContext): Promise<unknown> {
+  /** No guest prose/history crosses this boundary. Only public issue identity and bounded triage hints. */
+  private async publicIssueProposal(grant: Extract<CapabilityGrant, { kind: 'proposal-inbox' }>, raw: Record<string, unknown>, context: CapabilityInvocationContext): Promise<unknown> {
+    const repository = grant.disclosurePolicy!.repository
+    const parsed = z.object({
+      issueNumber: z.number().int().min(1).max(2147483647),
+      suggestedPriority: z.enum(['triage', 'normal', 'urgent']),
+      category: z.enum(['bug', 'feature', 'investigation']),
+    }).strict().safeParse(raw)
+    if (!parsed.success) fail('invalid_input', 'Only bounded public issue proposal fields are allowed.')
+    checkpoint(context)
+    const input = parsed.data
+    // Deliberately anonymous: successful lookup cannot rely on private-repository credentials.
+    const response = await this.http({ id: 'public-issue-verification', kind: 'http', origin: 'https://api.github.com',
+      routes: [{ method: 'GET', path: `/repos/${repository}/issues/*` }] },
+    { method: 'GET', path: `/repos/${repository}/issues/${input.issueNumber}` }, context) as HttpResult
+    const issue = response.body as Record<string, unknown> | null
+    const url = `https://github.com/${repository}/issues/${input.issueNumber}`
+    if (!issue || issue.number !== input.issueNumber || issue.html_url !== url || issue.pull_request) fail('invalid_public_issue', 'Public issue verification failed.')
+    // Do not forward title/body/comments: even public text can contain secrets or instructions.
+    return this.inbox(grant, {
+      content: JSON.stringify({ type: 'public-issue-handling-proposal', repository,
+        ...input, url, hintsAreUntrusted: true }),
+      reference: url, idempotencyKey: `public-issue-proposal:${input.issueNumber}`,
+    }, context)
+  }
+
+  private async inbox(grant: Extract<CapabilityGrant, { kind: 'inbox' | 'proposal-inbox' }>, raw: Record<string, unknown>, context: CapabilityInvocationContext): Promise<unknown> {
     const parsed = inboxInput.safeParse(raw)
     if (!parsed.success) fail('invalid_input', 'Invalid inbox input.')
     const input = parsed.data
+    let target = grant.kind === 'inbox' ? grant.sessionId : undefined
     const check = () => {
       checkpoint(context)
-      if (grant.sessionId === context.sessionId || !this.options.canDeliver(grant.sessionId)) {
+      if (target && (target === context.sessionId || !this.options.canDeliver(target))) {
         fail('invalid_target', 'Inbox target must be another durable session in the current project.')
       }
     }
@@ -482,6 +527,12 @@ export class CapabilityBroker {
     return this.keyed(grant, input.idempotencyKey, [context.sessionId, input], context, async (record, save) => {
       check()
       await save(record)
+      if (grant.kind === 'proposal-inbox') {
+        if (!this.options.resolveProposalInbox) fail('invalid_target', 'Logical inbox resolver is unavailable.')
+        target = await this.options.resolveProposalInbox(grant.inbox, grant.disclosurePolicy.repository, record.envelope?.targetSessionId)
+        record = { ...record, envelope: { ...record.envelope!, targetSessionId: target } }
+        await save(record)
+      }
       check()
       const provenance = record.envelope!
       const payload: DeliverInputPayload = {
@@ -493,11 +544,17 @@ export class CapabilityBroker {
           JSON.stringify({ sourceInputId: provenance.sourceInputId, toolCallId: provenance.toolCallId,
             reference: input.reference ?? null, content: input.content }),
       }
-      try { await abortable(this.options.deliver(grant.sessionId, payload), context.signal) } catch {
+      const deliver = () => { check(); return this.options.deliver(target!, payload) }
+      try {
+        if (grant.kind === 'proposal-inbox') {
+          if (!this.options.admitProposalInbox) fail('invalid_target', 'Logical inbox admission guard is unavailable.')
+          await abortable(this.options.admitProposalInbox(grant.inbox, grant.disclosurePolicy.repository, target!, deliver), context.signal)
+        } else await abortable(deliver(), context.signal)
+      } catch {
         fail('delivery_retryable', 'Inbox admission failed or is uncertain; repeat the same key to retry with the same input ID.')
       }
       check()
-      const receipt = { status: 'admitted', sessionId: grant.sessionId, inputId: record.inputId }
+      const receipt = { status: 'admitted', sessionId: target!, inputId: record.inputId }
       await save({ ...record, state: 'succeeded', result: receipt })
       return receipt
     })

@@ -1,6 +1,7 @@
 import { bodyLimit } from 'hono/body-limit'
 import type { Context, MiddlewareHandler } from 'hono'
-import { ZodError } from 'zod'
+import type { ProposalInboxes } from './proposal-inbox.ts'
+import { z, ZodError } from 'zod'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { FolderError } from '../folders/registry.ts'
 import { TopicError, type TopicService } from './topics.ts'
@@ -8,6 +9,7 @@ import { TopicError, type TopicService } from './topics.ts'
 export function topicsPlugin(
   topics: TopicService,
   authorize: (request: Request) => boolean | Promise<boolean>,
+  inboxes?: ProposalInboxes,
 ): GatewayPlugin {
   return app => {
     const protect: MiddlewareHandler = async (c, next) => {
@@ -32,6 +34,13 @@ export function topicsPlugin(
       offset: c.req.query('offset') === undefined ? undefined : Number(c.req.query('offset')),
     })))
     const limit = bodyLimit({ maxSize: 64 * 1024, onError: c => c.json({ error: 'body_too_large' }, 413) })
+    if (inboxes) {
+      app.get('/api/proposal-inboxes/:name', protect, handle(c => inboxes.status(c.req.param('name')!)))
+      app.patch('/api/proposal-inboxes/:name', protect, limit, handle(async c => {
+        const body = z.object({ enabled: z.boolean(), repository: z.string().regex(/^[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/).optional() }).strict().parse(await c.req.json())
+        return inboxes.setEnabled(c.req.param('name')!, body.enabled, body.repository)
+      }))
+    }
     app.post('/api/sessions', protect, limit, handle(async c => topics.create(await c.req.json(), undefined, c.req.raw.signal)))
     app.patch('/api/sessions/:key/metadata', protect, limit, handle(async c => {
       const body: unknown = await c.req.json()

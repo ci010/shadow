@@ -295,7 +295,7 @@ standalone callers fall back to `agent.workspace`. Pure helpers in
       skills/  agents/  SOUL.md       project-owned learned content
       # Former BOT resource/configuration paths are not read by directory runtime.
     authoring/                        non-BOT resources and credential provisioning
-    bots/deployments/<projectId>/     frozen BOT files, isolated Git and separate data
+    bots/<botId>/                   current/, previous/, data/, history.git/; metadata outside source
     bots/runtime/discord-security/    mutable Discord security/memory state
     memory/                          wiki, identities, events and indexes
     state/
