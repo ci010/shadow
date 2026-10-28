@@ -1,11 +1,12 @@
 import type { MarkedExtension, Token, Tokens } from 'marked'
 
-// Display-only compatibility for padded, plain-text strong labels from LLMs.
+// Display-only compatibility for padded or CJK punctuation-ended plain-text
+// strong labels from LLMs.
 // Work on already-lexed text, never on the Markdown source: code, escapes,
 // links, HTML and math are boundaries, not text to normalize. Deliberately do
 // not support nested markup, multiline spans, underscores or star runs.
 export function paddedStrongCompatibility(): MarkedExtension {
-  const pattern = /(?<![\p{L}\p{N}*\\])\*\*([^*\\`_$<>\[\]\x00\r\n]{1,200})\*\*(?!\*)/gu
+  const pattern = /(?<![*\\])\*\*([^*\\`_$<>\[\]\x00\r\n]{1,200})\*\*(?!\*)/gu
   function repair(tokens: Token[]): void {
     // Raw HTML can open a container spanning several sibling text tokens.
     // Leave the entire inline container alone rather than guess its scope.
@@ -29,9 +30,18 @@ export function paddedStrongCompatibility(): MarkedExtension {
       for (const match of token.text.matchAll(pattern)) {
         const inner = match[1]!
         const trimmed = inner.trim()
-        // Standard strong already works; only ASCII horizontal edge padding
-        // is tolerated, with at least one non-whitespace character.
-        if (!trimmed || !/^[ \t]|[ \t]$/.test(inner)) continue
+        const source: string = token.text
+        const before = source.slice(0, match.index).match(/.$/u)?.[0] ?? ''
+        const after = source.slice(match.index + match[0].length)
+        const padded = /^[ \t]|[ \t]$/.test(inner) && !/[\p{L}\p{N}]/u.test(before)
+        // CommonMark rejects punctuation-ended closers followed by a letter.
+        // Relax that boundary only for CJK prose, leaving Latin intraword
+        // delimiters and whitespace-only labels to the standard parser.
+        const cjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
+        const punctuationEnded = inner === trimmed && /\p{P}$/u.test(inner)
+          && cjk.test(Array.from(after)[0] ?? '')
+          && (!/[\p{L}\p{N}]/u.test(before) || cjk.test(before))
+        if (!trimmed || (!padded && !punctuationEnded)) continue
         if (match.index > cursor) replacements.push(textToken(token.text.slice(cursor, match.index)))
         replacements.push({ type: 'strong', raw: match[0], text: trimmed,
           tokens: [textToken(trimmed)] } as Tokens.Strong)

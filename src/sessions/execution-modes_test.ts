@@ -1815,3 +1815,48 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 }
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: subagent review contract rejects invalid fields before creating a child`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store = new Store(join(workspace, 'sessions')); await store.init()
+      const f = fixture(workspace, store, { managedReview: true })
+      try {
+        await f.sessions.start(); await f.sessions.buildSession('web:root')
+        const advertised = f.subagent.parameters.properties.review as unknown as {
+          properties: Record<string, { type: string; minimum?: number; maximum?: number; default?: unknown }>
+          additionalProperties: boolean
+        }
+        assert.equal(advertised.additionalProperties, false)
+        assert.deepEqual(Object.keys(advertised.properties).sort(), ['agent_type', 'criteria', 'max_rounds', 'mode'])
+        assert.equal(advertised.properties.max_rounds.type, 'integer')
+        assert.equal(advertised.properties.max_rounds.minimum, 1)
+        assert.equal(advertised.properties.max_rounds.maximum, 10)
+        assert.equal(advertised.properties.max_rounds.default, 3)
+        const build = f.sessions.buildSession.bind(f.sessions)
+        let creates = 0
+        f.sessions.buildSession = async (...args) => { creates++; return build(...args) }
+        for (const [review, expected] of [
+          [{ maxRounds: 3 }, /review\.maxRounds: unknown field\. Use review\.max_rounds instead/],
+          [{ agentType: 'verify' }, /Use review\.agent_type instead/],
+          [{ unexpected: true }, /review\.unexpected: unknown field/],
+          [{ max_rounds: 0 }, /review\.max_rounds/],
+          [{ max_rounds: 11 }, /review\.max_rounds/],
+          [{ max_rounds: 1.5 }, /review\.max_rounds/],
+          [{ max_rounds: '3' }, /review\.max_rounds/],
+          [{ mode: 'invalid' }, /review\.mode/],
+          [null, /review:/],
+        ] as const) {
+          const result = await f.subagent.execute({ task: 'Do not start', description: 'Invalid review', review }, sourceContext(workspace, f))
+          assert.match(result, expected)
+          assert.match(result, /No subagent was started/)
+        }
+        assert.equal(creates, 0)
+        for (const rounds of [1, 3, 10]) {
+          const { sessionId } = JSON.parse(await f.subagent.execute({ task: 'Valid review', description: 'Valid review', review: { max_rounds: rounds } }, sourceContext(workspace, f)))
+          assert.equal(f.sessions.getSessionState(sessionId)?.task?.workflow?.maxRounds, rounds)
+        }
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+}

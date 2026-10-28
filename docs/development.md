@@ -3,6 +3,43 @@
 See the [quick start](../README.md#get-started) for prerequisites and installation.
 Run `pnpm dev` from the repository root.
 
+On Windows, install a Windows MSVC Rust toolchain **1.89 or newer** through
+rustup, plus Visual Studio C++ Build Tools and the Windows SDK. Open a fresh
+terminal after installation so the tools are on PATH. `pnpm install` prepares
+the native desktop assets automatically on Windows x64/arm64:
+
+```powershell
+pnpm install --frozen-lockfile
+$env:SHADOW_DESKTOP_DEV_MAIN_DIRECTORY = Join-Path (Get-Location) '.shadow-test-dev'
+pnpm dev
+```
+
+The install hook verifies source and binary hashes before doing any work.
+It also runs through `pnpm:devPreinstall` because pnpm can skip `postinstall`
+on an otherwise up-to-date install.
+Valid cached assets require no Rust/MSVC invocation or network access. Missing,
+modified or stale assets use `pnpm desktop:repair-native`, which discovers MSVC
+and reuses Cargo's existing dependency/build cache to build the pinned Windows
+addon and input guard, including the required
+`integrations/agent-desktop/artifacts/win32-x64/build-manifest.json`.
+Git, a suitable Rust MSVC toolchain, the Windows SDK, and the .NET Framework 4
+compiler must already be installed; the hook never installs system tools.
+Initial source/dependency fetches may need network access. Offline builds work
+only when the pinned upstream checkout and Cargo dependencies are already cached.
+
+Native preparation failures warn without failing dependency installation.
+Windows startup/build still rejects missing or invalid assets; after resolving
+the reported prerequisite/network/build failure, rerun `pnpm install` or
+`pnpm desktop:repair-native` (`-Arch arm64` for ARM64).
+Non-Windows installs do not prepare these Windows-only assets. The hook uses
+Node's built-in TypeScript support, not development dependencies, so production-only
+installs can run it too. Set `SHADOW_SKIP_NATIVE_BUILD=1` to explicitly skip native
+preparation, or use `pnpm install --ignore-scripts` to disable all lifecycle hooks.
+Concurrent installers do not start a second native build. An interrupted install
+can leave the Git-ignored `integrations/agent-desktop/artifacts/.postinstall-win32-<arch>.lock`;
+remove that exact file only after confirming no repair is running, then retry.
+See the [native backend build instructions](../integrations/agent-desktop/README.md#reproduce-windows-x64).
+
 This builds the backend and desktop shell, starts Vite, and launches Electron.
 Development uses the same Main data directory as production: `~/.shadow`
 (including `workspace/` and the project index). **Development reads and writes
