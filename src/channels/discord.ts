@@ -1245,7 +1245,9 @@ export class DiscordChannel extends AbstractChannel {
       if (processedRevision !== undefined) silent = false
       // DMs (no guildId) always pass through
 
-      if (silent && this.hasStreamCollector) { if (admission) this.integration?.discard(admission.admissionId); return }
+      // Stream collection supplements conversation history; it must not replace it.
+      // Non-triggering messages continue through admission with silent=true so the
+      // session persists them without model inference or an automatic reply.
 
       // Add reaction to acknowledge receipt
       if (!silent && this.reactionEmoji) {

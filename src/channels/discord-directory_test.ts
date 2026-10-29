@@ -284,6 +284,8 @@ test('forum post events keep ingress in the child thread and preserve mention-on
     received.push(message)
     return { status: 'accepted', sessionId: `discord:${message.chatId}`, inputId: message.messageId }
   })
+  const collected: unknown[] = []
+  adapter.setStreamCollector(async event => { collected.push(event) })
   // No gateway connection: the READY identity and subsequent events are synthetic.
   await dispatch(adapter, 'READY', { user: { id: '900', username: 'helper', bot: true }, application: { id: '900' }, session_id: 'synthetic' })
   await dispatch(adapter, 'THREAD_CREATE', { id: '303', parent_id: '203', type: 11, name: 'One question' })
@@ -293,6 +295,8 @@ test('forum post events keep ingress in the child thread and preserve mention-on
   await dispatch(adapter, 'MESSAGE_CREATE', { ...message, id: '401', content: '<@900> Help with this post', mentions: [{ id: '900' }] })
   assert.deepEqual(received.map(message => message.chatId), ['303', '303'], 'Never route posts into their forum parent')
   assert.deepEqual(received.map(message => message.silent), [true, false])
+  assert.equal(collected.length, 3, 'Thread discovery and both messages remain available to stream consumers')
+  assert.deepEqual(received.map(message => message.channelAdmissionId), ['proof-400', 'proof-401'])
   assert(received.every(message => message.channelLocation?.parentId === '203' && message.channelLocation.type === 11))
 })
 

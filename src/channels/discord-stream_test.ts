@@ -17,18 +17,21 @@ test('history pagination is bounded, deduped and separate from consumer; malform
  const stream=new ChannelMessageStream(home,'p');assert.equal(stream.snapshot().events.length,201);assert.equal(stream.snapshot().events[0].kind,'gap')
  await assert.rejects(collectDiscordHistory(home,'p','bot','10',async()=>[{id:'1',channel_id:'wrong'}],signal))
 })
-test('gateway passive collection is separate from mention trigger, own messages never trigger; changes recorded',async t=>{
+test('gateway collection also admits ordinary messages silently to conversation history; own messages never trigger',async t=>{
  const channel=new DiscordChannel(new Bus(),{token:'synthetic',triggerMode:'mention',reactionEmoji:''});t.after(()=>channel.stop());Object.assign(channel,{botUserId:'900'})
- const collected:unknown[]=[],received:unknown[]=[]
+ const collected:unknown[]=[],received:{silent?:boolean;content:string}[]=[]
  channel.setStreamCollector(async e=>{collected.push(e)})
  channel.setReceiver(async m=>{received.push(m);return {status:'accepted',sessionId:'discord:10',inputId:m.messageId}})
  const dispatch=(event:string,data:Record<string,unknown>)=>(channel as unknown as {handleDispatch:(e:string,d:Record<string,unknown>)=>Promise<void>}).handleDispatch(event,data)
  const msg={id:'1',channel_id:'10',guild_id:'100',author:{id:'8',username:'human'},content:'ordinary',mentions:[]}
- await dispatch('MESSAGE_CREATE',msg);assert.equal(collected.length,1);assert.equal(received.length,0)
  // No REST channel-name lookup in this synthetic fixture.
  Object.assign(channel,{channelNameCache:new Map([['10','test']])})
- await dispatch('MESSAGE_CREATE',{...msg,id:'2',content:'<@900> hello',mentions:[{id:'900'}]});assert.equal(received.length,1)
- await dispatch('MESSAGE_CREATE',{...msg,id:'3',author:{id:'900',bot:true}});assert.equal(received.length,1)
+ await dispatch('MESSAGE_CREATE',msg);assert.equal(collected.length,1);assert.equal(received.length,1)
+ assert.equal(received[0]!.content,'ordinary')
+ assert.equal(received[0]!.silent,true,'Non-mentions must reach the session for persistence without waking the model')
+ await dispatch('MESSAGE_CREATE',{...msg,id:'2',content:'<@900> hello',mentions:[{id:'900'}]});assert.equal(received.length,2)
+ assert.deepEqual(received.map(message=>message.silent),[true,false])
+ await dispatch('MESSAGE_CREATE',{...msg,id:'3',author:{id:'900',bot:true}});assert.equal(received.length,2)
  await dispatch('MESSAGE_UPDATE',{...msg,content:'edit',edited_timestamp:'2026-01-01T00:00:00Z'})
  await dispatch('MESSAGE_DELETE',{id:'1',channel_id:'10',guild_id:'100'})
  assert.equal(collected.length,4)
