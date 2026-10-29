@@ -115,14 +115,21 @@ export function installFrontendLog(target: Window & { console: Console }, send: 
   }
 }
 
-/** Install synchronously before scoped child components render. Capability discovery
- * gates transmission, not capture; transient failures retry from the bounded queue. */
-export function startFrontendLog(base: string, signal: AbortSignal): () => void {
+/** Discover diagnostics for the explicit visible Project. Capability discovery
+ * is authoritative even for production-built Child assets. Only a Vite development
+ * caller may opt into bounded early capture before the authenticated capability responds. */
+export function startFrontendLog(base: string, signal: AbortSignal, captureEarly = false): () => void {
   if (signal.aborted) return () => {}
   const endpoint = `${base.replace(/\/$/, '')}/api/runtime/frontend-logs`
   const tabId = createUuid()
+  // Coarse, unverified diagnostic labels only; never identifiers or authorization.
+  const platformHint = typeof navigator === 'undefined' ? '' : navigator.platform
+  const client = { platform: /Win/i.test(platformHint) ? 'windows' : /Mac/i.test(platformHint) ? 'macos' : /Linux/i.test(platformHint) ? 'linux' : 'other',
+    renderer: captureEarly ? 'vite-development' : 'built' }
   let active = true
   let enabled = false
+  let uninstall = () => {}
+  let retry: number | undefined
   let checking: Promise<void> | undefined
   const check = (): Promise<void> => {
     if (enabled) return Promise.resolve()
@@ -135,15 +142,19 @@ export function startFrontendLog(base: string, signal: AbortSignal): () => void 
       if (response.status === 404) { stop(); return }
       if (!response.ok) throw new Error('Frontend diagnostics capability unavailable')
       if ((await response.json()).enabled !== true) { stop(); return }
-      if (active && !signal.aborted) enabled = true
+      if (active && !signal.aborted) {
+        enabled = true
+        if (retry !== undefined) { window.clearInterval(retry); retry = undefined }
+        if (!captureEarly) install()
+      }
     })().finally(() => { checking = undefined })
     return checking
   }
-  const uninstall = installFrontendLog(window, async events => {
+  const install = () => { uninstall = installFrontendLog(window, async events => {
     await check()
     if (!active || signal.aborted || !enabled) return
     const response = await fetch(endpoint, {
-      method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabId, events }),
+      method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabId, client, events }),
     })
     // Temporary authentication loss retries without uninstalling hooks; invalid/oversized batches are
     // dropped rather than starving all future logs with a permanent retry.
@@ -151,12 +162,15 @@ export function startFrontendLog(base: string, signal: AbortSignal): () => void 
     if (!response.ok && ([401, 403, 429].includes(response.status) || response.status >= 500)) {
       throw new Error('Frontend diagnostics batch not accepted')
     }
-  }, base)
+  }, base) }
   function stop() {
     active = false
     signal.removeEventListener('abort', stop)
     uninstall()
+    if (retry !== undefined) window.clearInterval(retry)
   }
+  if (captureEarly) install()
+  else retry = window.setInterval(() => { void check().catch(() => {}) }, 5000)
   signal.addEventListener('abort', stop, { once: true })
   void check().catch(() => {})
   return stop

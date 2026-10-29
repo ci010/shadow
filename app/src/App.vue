@@ -97,6 +97,7 @@ import IoHost from './components/io/IoHost.vue'
 import { createIoBridge, ioBridgeKey } from './io/bridge.ts'
 import { projectChatLocation } from './projects.ts'
 import { projectBase } from './api-url.ts'
+import { startFrontendLog } from './frontend-log.ts'
 import { watchFrontendLogScope } from './frontend-log-scope.ts'
 import { useLiveClientPool } from './composables/useLiveClient.ts'
 import type { LiveStatus } from './live-client.ts'
@@ -137,9 +138,10 @@ const liveError = computed(() => liveStatuses.value.find(status => status.error)
 const resolvedBase = computed(() => installationContext.value.apiBase)
 // Dev diagnostics follow only an explicit visible Project; never infer ownership
 // from a log payload or silently attribute host/unscoped logs to a default Project.
-if (import.meta.env.DEV) {
+{
   const stopWatch = watchFrontendLogScope(() => typeof route.params.projectId === 'string'
-    ? projectBase(resolvedBase.value, route.params.projectId) : undefined)
+    ? projectBase(resolvedBase.value, route.params.projectId) : undefined,
+    (base, signal) => startFrontendLog(base, signal, import.meta.env.DEV))
   onUnmounted(stopWatch)
   if (import.meta.hot) import.meta.hot.dispose(stopWatch)
 }

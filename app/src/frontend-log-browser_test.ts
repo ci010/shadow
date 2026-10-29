@@ -10,13 +10,21 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { Hono } from 'hono'
 import { registerGatewayRoutes, serveGateway } from '../../src/gateway/server.ts'
+import { MainDeviceUi } from '../../src/cluster/device-ui.ts'
+import { DeviceChallengeAuthority, devicePublicKeyFingerprint, encodeBase64Url } from '../../src/cluster/device-challenge.ts'
+import { InMemoryPairingNodeRegistry } from '../../src/cluster/registry.ts'
+import { DeviceCredentialProof } from '../../src/cluster/device-credentials.ts'
+import { requestDeviceChallengeProtocol } from '../../src/cluster/device-challenge-client.ts'
+import { childWorkspacePlugin } from '../../src/runtime/child-workspace.ts'
+import { GatewayClientAddressRegistry } from '../../src/gateway/server.ts'
+import type { MainCluster } from '../../src/cluster/main-cluster.ts'
 import { FrontendLog, registerFrontendLogRoutes } from '../../src/runtime/frontend-log.ts'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('real cross-port renderer sends frontend logs with native auth and noncredentialed CORS', {
+test('production-built Electron Child renderer sends logs through authenticated Child→Main device tunnel', {
   timeout: 60_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -34,6 +42,7 @@ test('real cross-port renderer sends frontend logs with native auth and noncrede
   const rendererOrigin = `http://127.0.0.1:${address.port}`
   const credential = 'synthetic-frontend-log-credential'
   const log = new FrontendLog('development')
+  const otherLog = new FrontendLog('development')
   const gateway = new Hono()
   const responses: Array<{ method: string; origin: string | undefined; allowOrigin: string | null; allowCredentials: string | null; cookie: string | undefined; status: number }> = []
   gateway.use('*', async (c, next) => {
@@ -41,16 +50,41 @@ test('real cross-port renderer sends frontend logs with native auth and noncrede
     responses.push({ method: c.req.method, origin: c.req.header('Origin'), allowOrigin: c.res.headers.get('Access-Control-Allow-Origin'),
       allowCredentials: c.res.headers.get('Access-Control-Allow-Credentials'), cookie: c.req.header('Cookie'), status: c.res.status })
   })
-  registerGatewayRoutes(gateway, [app => {
+  // Distinct Main and Child applications: native renderer admission is NOT a Main credential.
+  const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey))
+  const fingerprint = await devicePublicKeyFingerprint(publicKey)
+  const registry = new InMemoryPairingNodeRegistry()
+  const now = new Date()
+  registry.createOffer('offer', now, new Date(now.getTime() + 60_000))
+  registry.presentOffer({ offerId: 'offer', pendingId: 'pending', deviceId: 'device', nodeId: 'windows-child',
+    deviceIdentityFingerprint: fingerprint, displayName: 'Synthetic Windows Child' }, now)
+  const identity = registry.approve({ pendingId: 'pending', expectedDeviceIdentityFingerprint: fingerprint, credentialId: 'credential' }, now)
+  const authority = new DeviceChallengeAuthority(registry)
+  await authority.registerCredential(identity, encodeBase64Url(publicKey))
+  const addresses = new GatewayClientAddressRegistry()
+  const main = new Hono(), ingress = new Hono()
+  const bridge = new MainDeviceUi({ registry, authority } as MainCluster, addresses, request => Promise.resolve(main.fetch(request)))
+  t.after(() => bridge.close())
+  bridge.plugin()(ingress)
+  registerGatewayRoutes(main, [app => {
     app.get('/api/live', () => new Response(new ReadableStream({ start(controller) {
       controller.enqueue(new TextEncoder().encode(': connected\n\n'))
       setTimeout(() => controller.error(new Error('synthetic interrupted stream')), 40)
     } }), { headers: { 'Content-Type': 'text/event-stream' } }))
-    app.get('/api/agent-types', c => c.json({ error: 'synthetic' }, 503))
+    app.get('/api/projects', c => c.json({ error: 'synthetic' }, 503))
     const project = new Hono()
-    registerFrontendLogRoutes(project, log, request => request.headers.get('Authorization') === `Bearer ${credential}`)
+    registerFrontendLogRoutes(project, log, request => bridge.authorize(request))
     app.route('/projects/fixture', project)
-  }], { allowedOrigins: [rendererOrigin], launchCredential: credential })
+    const other = new Hono()
+    registerFrontendLogRoutes(other, otherLog, request => bridge.authorize(request))
+    app.route('/projects/other', other)
+  }], { launchCredential: 'main-only', clientAddresses: addresses, authorizeClient: request => bridge.authorize(request) })
+  const networkFetch = ((input: string | URL | Request, init?: RequestInit) => ingress.fetch(new Request(input, init))) as typeof fetch
+  const proof = (signal: AbortSignal, path: string) => requestDeviceChallengeProtocol('http://main.test', { deviceId: identity.deviceId, nodeId: identity.nodeId, credentialId: identity.credentialId },
+    new DeviceCredentialProof(async bytes => new Uint8Array(await crypto.subtle.sign('Ed25519', keys.privateKey, new Uint8Array(bytes)))), networkFetch, signal, path)
+  registerGatewayRoutes(gateway, [], { allowedOrigins: [rendererOrigin], launchCredential: credential })
+  childWorkspacePlugin({ endpoint: 'http://main.test', proof, fetch: networkFetch })(gateway)
   const server = serveGateway(gateway, { host: '127.0.0.1', port: 0 })
   await server.ready
   t.after(() => server.shutdown())
@@ -69,14 +103,16 @@ test('real cross-port renderer sends frontend logs with native auth and noncrede
         let blocked = false;
         try { await fetch(${JSON.stringify(endpoint)}, {credentials:'include'}); } catch { blocked = true; }
         if (!blocked) throw Error('credentialed CORS unexpectedly allowed');
-        const stop = startFrontendLog(${JSON.stringify(`${apiBase}/projects/fixture`)}, new AbortController().signal);
+        const stop = startFrontendLog(${JSON.stringify(`${apiBase}/projects/fixture`)}, new AbortController().signal, import.meta.env.DEV);
+        await new Promise(resolve => setTimeout(resolve, 300));
         console.warn('synthetic frontend transport regression');
         console.error('Failed to load agent types', new Error('HTTP 503'));
-        await fetch(${JSON.stringify(`${apiBase}/api/agent-types`)});
+        window.dispatchEvent(new ErrorEvent('error', {error: new Error('synthetic window error')}));
+        await fetch(${JSON.stringify(`${apiBase}/api/projects`)});
         const live = new EventSource(${JSON.stringify(`${apiBase}/api/live`)});
         await new Promise(resolve => setTimeout(resolve, 2200)); live.close(); stop();
       };`, resolveDir: root, loader: 'ts',
-  }, bundle: true, write: false, platform: 'browser', format: 'iife', logLevel: 'silent' })
+  }, bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'import.meta.env.DEV': 'false' }, logLevel: 'silent' })
   const source = resolve(directory, 'main.ts')
   await writeFile(source, `import { app, BrowserWindow, session } from 'electron';
     import { installRuntimeRequestAuthorization } from ${JSON.stringify(resolve(root, 'desktop/src/runtime-authorization.ts'))};
@@ -110,9 +146,13 @@ test('real cross-port renderer sends frontend logs with native auth and noncrede
   assert.equal(code, 0, output)
   assert.match(output, /FRONTEND_LOG_CORS_OK/)
   assert.match(log.read(), /synthetic frontend transport regression/)
+  assert.match(log.read(), /"renderer":"built"/)
+  assert.equal((await main.request('/projects/fixture/api/runtime/frontend-logs', { headers: { Authorization: `Bearer ${credential}` } })).status, 401, 'Child launch token never authorizes Main directly')
   assert.match(log.read(), /Failed to load agent types/)
+  assert.match(log.read(), /synthetic window error/)
+  assert.match(otherLog.read(), /No retained frontend events/)
   assert.match(log.read(), /HTTP 503/)
-  assert.match(log.read(), /API agent-types: HTTP 503/)
+  assert.match(log.read(), /API projects: HTTP 503/)
   assert.match(log.read(), /API live: EventSource error/)
   const cors = responses.filter(response => response.origin === rendererOrigin)
   assert.ok(cors.some(response => response.method === 'OPTIONS' && response.status === 204), 'Real JSON POST preflight')

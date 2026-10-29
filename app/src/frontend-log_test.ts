@@ -86,7 +86,7 @@ test('startup capture precedes capability GET; failures retry, abort discards, e
   })
   const controller = new AbortController()
   const original = fake.target.console.warn
-  const stop = startFrontendLog('https://fixture.test/projects/a/', controller.signal)
+  const stop = startFrontendLog('https://fixture.test/projects/a/', controller.signal, true)
   assert.notEqual(fake.target.console.warn, original)
   fake.target.console.warn('first render')
   fake.tick(); await settle()
@@ -119,14 +119,14 @@ test('transient capability error recovers without route change; disabled backend
     if (++gets === 1) throw Error('temporarily offline')
     return new Response('{"enabled":true}')
   })
-  const stop = startFrontendLog('https://fixture.test/projects/a', new AbortController().signal)
+  const stop = startFrontendLog('https://fixture.test/projects/a', new AbortController().signal, true)
   fake.target.console.warn('queued'); await settle()
   fake.tick(); await settle()
   assert.equal(gets, 2); assert.equal(posts, 1)
   stop()
   const original = fake.target.console.warn
   t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 404 }))
-  startFrontendLog('https://fixture.test/projects/a', new AbortController().signal)
+  startFrontendLog('https://fixture.test/projects/a', new AbortController().signal, true)
   await settle()
   assert.equal(fake.target.console.warn, original)
 })
@@ -163,7 +163,7 @@ test('wire batches respect UTF-8 byte limit; permanent POST failures do not star
     bodies.push(String(options.body))
     return new Response('{}', { status: bodies.length === 1 ? 413 : 200 })
   })
-  const stop = startFrontendLog('https://fixture.test/projects/a', new AbortController().signal)
+  const stop = startFrontendLog('https://fixture.test/projects/a', new AbortController().signal, true)
   // Twenty valid summaries would exceed the backend's 96 KiB byte limit.
   for (let i = 0; i < 20; i++) fake.target.console.warn('汉'.repeat(2048))
   fake.tick(); await settle()
@@ -189,7 +189,8 @@ test('late capability completion cannot resurrect a collector after a Project sw
     return new Response('{"enabled":true}')
   })
   const project = ref<string | undefined>('a')
-  const stop = watchFrontendLogScope(() => project.value ? projectBase('https://fixture.test', project.value) : undefined)
+  const stop = watchFrontendLogScope(() => project.value ? projectBase('https://fixture.test', project.value) : undefined,
+    (base, signal) => startFrontendLog(base, signal, true))
   fake.target.console.warn('old project warning')
   fake.tick(); await settle()
   project.value = 'b'
@@ -223,7 +224,7 @@ test('frontend log starts and sends a UUID tab ID on HTTP without crypto.randomU
     if (options?.method === 'POST') batches.push(JSON.parse(options.body as string))
     return Response.json({ enabled: true })
   })
-  const stop = startFrontendLog('http://192.168.1.50/projects/default', new AbortController().signal)
+  const stop = startFrontendLog('http://192.168.1.50/projects/default', new AbortController().signal, true)
   t.after(stop)
   await settle()
   fake.target.console.warn('HTTP startup works')
@@ -245,7 +246,7 @@ test('temporary POST authentication failures recover without route changes', asy
     return new Response('{}', { status: ++posts === 1 ? 401 : posts === 2 ? 403 : 200 })
   })
   const original = fake.target.console.error
-  const stop = startFrontendLog('http://fixture.test/projects/default', new AbortController().signal)
+  const stop = startFrontendLog('http://fixture.test/projects/default', new AbortController().signal, true)
   fake.target.console.error('Failed to load agent types', new Error('HTTP 503'))
   for (let i = 0; i < 3; i++) { fake.tick(); await settle() }
   assert.equal(posts, 3)
@@ -260,4 +261,36 @@ test('application Error remains useful after backend redaction', async () => {
   assert.match(log.read(), /Failed to load agent types/)
   assert.match(log.read(), /HTTP 503/)
   assert.doesNotMatch(log.read(), /credential, header or payload-bearing message/)
+})
+
+
+test('production-built renderer has no hooks until capability; production Main 404 stops polling', async t => {
+  const fake = fakeWindow()
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: fake.target })
+  t.after(() => { if (previous) Object.defineProperty(globalThis, 'window', previous); else Reflect.deleteProperty(globalThis, 'window') })
+  const original = fake.target.console.warn
+  let gets = 0, posts = 0
+  let capability!: (response: Response) => void
+  t.mock.method(globalThis, 'fetch', async (_url: string, options?: RequestInit) => {
+    if (options?.method === 'POST') { posts++; return new Response('{}') }
+    gets++
+    return new Promise<Response>(resolve => { capability = resolve })
+  })
+  const stop = startFrontendLog('https://child.test/projects/default', new AbortController().signal)
+  assert.equal(fake.target.console.warn, original)
+  fake.target.console.warn('not collected before capability')
+  capability(new Response('{}', { status: 503 })); await settle()
+  assert.equal(fake.target.console.warn, original)
+  fake.tick(); await settle(); assert.equal(gets, 2)
+  capability(new Response('{"enabled":true}')); await settle()
+  assert.notEqual(fake.target.console.warn, original)
+  fake.target.console.warn('collected after dev Main capability')
+  fake.tick(); await settle(); assert.equal(posts, 1)
+  stop(); assert.equal(fake.target.console.warn, original)
+  startFrontendLog('https://child.test/projects/production', new AbortController().signal)
+  capability(new Response('{}', { status: 404 })); await settle()
+  assert.equal(fake.target.console.warn, original)
+  const before = gets
+  fake.tick(); await settle(); assert.equal(gets, before)
 })
