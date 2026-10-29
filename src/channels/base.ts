@@ -110,7 +110,6 @@ export abstract class AbstractChannel implements BaseChannel {
   }
   private streamCollector?: (event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean) => Promise<void>
   setStreamCollector(collector: NonNullable<AbstractChannel['streamCollector']>): void { this.streamCollector = collector }
-  protected get hasStreamCollector(): boolean { return !!this.streamCollector }
   protected async collectStream(event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean): Promise<void> { this.assertConnection(); await this.streamCollector?.(event, isGroup) }
   private receiver?: ReceiveChannelMessage
   private botScope?: Omit<ChannelAddress, 'conversationId'>

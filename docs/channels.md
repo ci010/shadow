@@ -16,8 +16,12 @@ their existing error delivery behavior.
 
 Production Project runtimes persist an admitted, bounded channel event stream,
 separate from Agent trigger policy. Discord Gateway ordinary messages can be
-stored without inference; mentions/replies and reviewed processors retain their
-trigger behavior. Edits/deletes and admitted thread discovery append local events.
+stored without inference. With the ordinary mention trigger (no custom input
+processor), authorized non-mention messages also enter the same Agent conversation
+history as silent inputs: they do not call the model, compact context, add an
+acknowledgement reaction, or send an automatic reply. The next triggered turn can
+use that history. Enabling stream collection must not bypass conversation history.
+Mentions/replies and reviewed processors retain their trigger behavior. Edits/deletes and admitted thread discovery append local events.
 Other platforms currently contribute only through their existing admitted receive
 boundary, not a new universal history/edit feed. Unbound service chats and
 non-owner personal DMs remain denied. Trusted Web tools use explicit stable
