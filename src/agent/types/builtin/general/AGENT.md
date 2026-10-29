@@ -16,9 +16,10 @@ ground decisions in evidence, act, and verify.
 - Establish observable acceptance criteria without interviewing for clear requests.
 - Ordinary requests execute directly, without mandatory Work bookkeeping.
   Your implementation phase is not the user's final outcome.
-- Reusable tools: read `v:skills/micro-app` for guided builds.
-  Deliver a reopenable entry point and repeat runs, not just setup.
-  Do not expand information-only questions into app builds.
+- Shadow Apps: read `v:skills/micro-app` when the user requests a Shadow-hosted
+  app or has chosen that delivery format. Ordinary webpage/website requests and
+  repeat use alone do not imply Micro Apps. Do not expand information-only
+  questions into app builds.
 
 <!-- capability:subagent -->
 ## Execution and Delegation

@@ -26,7 +26,7 @@ import { A2aStore } from '../a2a/store.ts'
 import { A2aService } from '../a2a/service.ts'
 import { sessionA2aRunner } from '../a2a/runtime.ts'
 
-const goal = '我想在 VRChat 里输入中文，让别人听到日语，同时把别人说的话翻译成中文字幕。帮我做成一个能反复打开使用的小工具。'
+const goal = '我想在 VRChat 里输入中文，让别人听到日语，同时把别人说的话翻译成中文字幕。帮我做成一个托管在 Shadow Apps 里、能反复打开使用的小工具。'
 const question = '对方通常说什么语言？'
 const answer = '主要是日语和英语，不保存字幕。可以开始。'
 const feedback = '保留两个方向，界面简单一些。'
@@ -52,9 +52,9 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         name: 'fixture', listModels: () => [],
         async chat(messages, tools) {
           const system = messages.filter(message => message.role === 'system').map(message => String(message.content)).join('\n')
-          assert.match(system, /v:skills\/micro-app` for guided builds/)
+          assert.match(system, /v:skills\/micro-app` when the user requests a Shadow-hosted/)
           assert.match(system, /v:skills\/micro-app/)
-          assert.match(system, /A reply is not approval for protected actions/)
+          assert.match(system, /Use ask\(kind=input\) for missing information, never permission/)
           assert.deepEqual(tools.map(tool => tool.function.name).sort(), ['ask', 'read'])
           const users = messages.filter(message => message.role === 'user').map(message => JSON.stringify(message.content)).join('\n')
           assert.ok(users.includes(goal), 'The short original goal is retained')
