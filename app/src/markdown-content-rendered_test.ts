@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { compileTemplate, parse } from 'vue/compiler-sfc'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,7 +21,15 @@ test('MarkdownContent caches long history while preserving reactive rendering an
   const directory = resolve(root, '.test-artifacts', `markdown-content-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
+  const { descriptor } = parse(await readFile(resolve(root, 'app/src/components/ChatTab.vue'), 'utf8'))
+  const streamingMarkdown = descriptor.template!.content.match(/<MarkdownContent v-if="streamContent"[^>]+\/>/)?.[0]
+  assert.ok(streamingMarkdown, 'Streaming responses must use the shared Markdown renderer')
+  const compiledStream = compileTemplate({ source: streamingMarkdown, filename: 'StreamingMarkdown.vue', id: 'stream-markdown' })
+  assert.deepEqual(compiledStream.errors, [])
   const script = `import {createApp,h,ref,reactive,nextTick} from 'vue';
+import {render as renderStream} from '/streaming-markdown.js';
+import {marked} from 'marked';
+import DOMPurify from 'dompurify';
 import MarkdownContent from '/src/components/MarkdownContent.vue';
 import {renderAnswerHtml} from '/src/answer-html.ts';
 const check=(ok,message)=>{if(!ok)throw Error(message)};
@@ -62,6 +71,19 @@ try {
   check(nodes().every(node=>node.classList.contains('prose') && node.classList.contains('refreshed') && !node.classList.contains('initial') && node.title==='Updated history' && node.getAttribute('aria-label')==='updated-history'),'attribute/class updates did not fall through');
   check(nodes()[42].querySelector('p strong')?.textContent==='updated-message','attribute update lost HTML');
   app.unmount();
+  // Use the actual ChatTab streaming markup: waiting for ask must not leave raw Markdown.
+  const live=reactive({streamContent:'**Regional prices**\\n\\n| Region | Cost |\\n| --- | --- |\\n| Tokyo | $11 |',renderMarkdown:text=>DOMPurify.sanitize(marked.parse(text))});
+  const streamApp=createApp({components:{MarkdownContent},setup:()=>live,render:renderStream});
+  streamApp.mount('#app');await nextTick();
+  check(document.querySelector('#app strong')?.textContent==='Regional prices','streaming bold was rendered as plain text');
+  check(document.querySelectorAll('#app table tbody tr').length===1,'streaming table missing while ask is pending');
+  live.streamContent+='\\n| Singapore | $10 |';await nextTick();
+  check(document.querySelectorAll('#app table tbody tr').length===2,'streaming table did not update');
+  live.streamContent+='\\n\\n<script>window.unsafe=true</'+'script>';await nextTick();
+  check(!document.querySelector('#app script') && !window.unsafe,'streaming Markdown bypassed sanitization');
+  live.streamContent='';await nextTick();
+  check(!document.querySelector('#app table'),'flushed streaming content remained mounted');
+  streamApp.unmount();
   window.result='MARKDOWN_CONTENT_OK';
 } catch(error) {window.result=error.stack || String(error)}
 `
@@ -70,8 +92,8 @@ try {
     optimizeDeps: { noDiscovery: true, include: [] },
     plugins: [{
       name: 'markdown-content-fixture',
-      resolveId: id => id === '/markdown-content-fixture.ts' ? '\0markdown-content-fixture' : undefined,
-      load: id => id === '\0markdown-content-fixture' ? script : undefined,
+      resolveId: id => id === '/markdown-content-fixture.ts' ? '\0markdown-content-fixture' : id === '/streaming-markdown.js' ? '\0streaming-markdown' : undefined,
+      load: id => id === '\0markdown-content-fixture' ? script : id === '\0streaming-markdown' ? compiledStream.code : undefined,
       configureServer(server) {
         server.middlewares.use((request, response, next) => {
           if (request.url !== '/__markdown-content') return next()
