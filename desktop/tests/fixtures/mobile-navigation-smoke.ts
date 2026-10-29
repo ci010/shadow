@@ -298,7 +298,13 @@ async function main() {
     await wait(`${visible('[role="dialog"][aria-label="Session details"]')}.contains(document.activeElement)`)
     await escape()
     await wait(`!${visible('[role="dialog"][aria-label="Session details"]')}`)
+    // Exercise a reader away from the bottom. Within 32px ChatTab deliberately
+    // follows the bottom when the composer dock is measured again after v-show.
+    // Short platform-dependent text layout previously put scrollTop=60 only 7px
+    // from the bottom on Linux, testing follow-bottom instead of scroll retention.
     await execute(`window.__retainedComposer = ${visible('textarea')}; window.__retainedHistory = ${visible('.chat-messages')}; window.__retainedHistory.scrollTop = 60; window.__retainedScroll = window.__retainedHistory.scrollTop; void 0;`)
+    assert.equal(await execute(`window.__retainedScroll === 60 && window.__retainedHistory.scrollHeight - window.__retainedScroll - window.__retainedHistory.clientHeight > 32`), true,
+      'Scroll-retention fixture must be scrollable and outside the composer follow-bottom zone')
     await click('[aria-label="Switch view"]')
     assert.equal(await execute(`[...document.querySelectorAll('.mobile-view-row button')].filter(window.__isVisible).find(el => el.textContent.trim() === 'Diagnosis').getBoundingClientRect().height >= 44`), true)
     await text('Diagnosis', '.mobile-view-row button')
