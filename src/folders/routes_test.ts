@@ -211,9 +211,11 @@ test('folder routes list/register and create a session from only the registered 
   const { app, folders, sessions } = await setup(t)
   assert.deepEqual(await (await app.request('/api/folders')).json(), { folders: [] })
   assert.equal((await post(app, '/api/folders/register', {})).status, 400)
-  const response = await post(app, '/api/folders/register', { path: folders })
+  assert.equal((await post(app, '/api/folders/register', { path: folders, description: 42 })).status, 400)
+  const response = await post(app, '/api/folders/register', { path: folders, description: 'API sources' })
   assert.equal(response.status, 200)
   const { folder } = await response.json()
+  assert.equal(folder.description, 'API sources')
   assert.deepEqual(await (await app.request('/api/folders')).json(), { folders: [folder] })
   assert.equal((await post(app, '/api/folders/missing/sessions', {})).status, 404)
   const created = await post(app, `/api/folders/${folder.id}/sessions`, {

@@ -1356,7 +1356,7 @@ export async function createProjectRuntime(
   const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
     projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery, messageStream: new ChannelMessageStream(workspace,project.id),
     // Admission checks must not invoke the throwing managed-conversation policy resolver.
-    serviceAssigned: address => !!agentResources.resolve(address)?.binding.enabled,
+    serviceAssigned: directoryBots.serviceAssigned,
   })
   const botChatSetup = new BotChatSetup(project.id)
   cleanup.push(() => botChatSetup.stop())

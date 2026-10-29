@@ -363,7 +363,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "description": {
             "type": "string",
-            "description": "Optional short discovery description, not a goal, acceptance condition or permission."
+            "description": "Optional short discovery description for create/update, or folder contents description for register_folder. Not instructions or permission."
           },
           "sessionId": {
             "type": "string",

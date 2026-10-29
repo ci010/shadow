@@ -7,7 +7,7 @@ import type { FolderRecord, RemoteFolderRecord } from '../folders/contracts.ts'
 import { parseWorkdirIdentity, workdirIdentitiesOverlap, type WorkdirIdentityV1 } from '../execution/workdir-identity.ts'
 import { isClusterIdentifier } from '../cluster/contracts.ts'
 import { parseWorkdirRefV1, type WorkdirRefV1 } from '../sessions/locality.ts'
-import { existingDirectory, FolderError } from '../folders/registry.ts'
+import { existingDirectory, folderDescription, FolderError } from '../folders/registry.ts'
 import { DEFAULT_PROJECT_ID, projectPaths, type ProjectRecord } from './contracts.ts'
 import { isManagedWorkdir } from '../execution/managed-workdir.ts'
 
@@ -15,7 +15,7 @@ function onlyFields(value: object, fields: readonly string[]): boolean {
   return !Array.isArray(value) && Object.keys(value).every(key => fields.includes(key))
 }
 
-const folderFields = ['id', 'projectId', 'name', 'path', 'createdAt', 'kind', 'workdir', 'identity']
+const folderFields = ['id', 'projectId', 'name', 'path', 'description', 'createdAt', 'kind', 'workdir', 'identity']
 const claimFields = ['projectId', 'workdir', 'identity']
 
 interface CatalogData {
@@ -125,6 +125,7 @@ export class ProjectCatalog {
         if (!folder || !onlyFields(folder, folderFields) || !ids.has(folder.projectId) || typeof folder.id !== 'string' ||
           folderIds.has(folder.id) || typeof folder.path !== 'string' ||
           (folder.kind !== 'remote' && (!isAbsolute(folder.path) || (folder.kind !== undefined && folder.kind !== 'local'))) ||
+          (folder.description !== undefined && typeof folder.description !== 'string') ||
           typeof folder.name !== 'string' || typeof folder.createdAt !== 'string') throw new Error('Invalid project folders')
         if (folder.kind === 'remote') {
           remoteRef(folder.workdir)
@@ -150,7 +151,8 @@ export class ProjectCatalog {
             remoteRef(record.workdir)
             if (record.identity !== undefined) parseWorkdirIdentity(record.identity)
           } else {
-            if (typeof record.id !== 'string' || typeof record.path !== 'string' ||
+            if ((record.description !== undefined && typeof record.description !== 'string') ||
+              typeof record.id !== 'string' || typeof record.path !== 'string' ||
               (record.kind !== 'remote' && !isAbsolute(record.path))) throw new Error('Invalid retired folder')
             if (record.kind === 'remote') {
               remoteRef(record.workdir)
@@ -416,15 +418,16 @@ export class ProjectCatalog {
     })
   }
 
-  registerFolder(projectId: string, path: string, signal?: AbortSignal): Promise<FolderRecord> {
+  registerFolder(projectId: string, path: string, signal?: AbortSignal, description?: string): Promise<FolderRecord> {
     return this.#transaction(async () => {
       signal?.throwIfAborted()
+      description = folderDescription(description)
       const canonical = await existingDirectory(path)
       await this.#assertOwnership(projectId, canonical)
       const existing = this.folders(projectId).find(folder => folder.kind !== 'remote' && overlaps(folder.path, canonical) &&
         relative(folder.path, canonical) === '')
       if (existing) return existing
-      const folder = { projectId, id: randomUUID(), name: basename(canonical) || canonical, path: canonical, createdAt: new Date().toISOString() }
+      const folder = { projectId, id: randomUUID(), name: basename(canonical) || canonical, path: canonical, ...(description !== undefined ? { description } : {}), createdAt: new Date().toISOString() }
       signal?.throwIfAborted()
       this.#commit({ ...this.#current(), folders: [...this.#current().folders, folder] })
       return { ...folder }

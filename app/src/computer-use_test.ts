@@ -279,3 +279,41 @@ test('mobile active conversations never request desktop-only computer APIs', asy
   await state.refresh()
   assert.equal(requests.length, 0)
 })
+
+for (const code of [401, 403]) test(`passive ${code} stops discovery until explicit retry or scope change`, async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const { state, requests, source } = harness(t)
+  requests[0].finish(new Response(null, { status: code }))
+  await settle()
+  t.mock.timers.tick(5000)
+  assert.equal(requests.length, 1)
+  assert.equal(state.error.value, '')
+  source.active = false
+  source.active = true
+  t.mock.timers.tick(5000)
+  assert.equal(requests.length, 1)
+  const retry = state.refresh()
+  requests[1].finish(Response.json(makeStatus()))
+  await retry
+  t.mock.timers.tick(1000)
+  assert.equal(requests.length, 3)
+  requests[2].finish(new Response(null, { status: code }))
+  await settle()
+  source.apiBase = 'http://127.0.0.1:3124/projects/project-a'
+  assert.equal(requests.length, 4)
+  requests[3].finish(new Response(null, { status: code }))
+  await settle()
+  source.sessionId = 'web:other'
+  assert.equal(requests.length, 5)
+})
+
+test('late denied discovery cannot suppress a new identity', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const { requests, source } = harness(t)
+  source.projectId = 'project-b'
+  requests[0].finish(new Response(null, { status: 403 }))
+  requests[1].finish(Response.json({ ...makeStatus(), projectId: 'project-b' }))
+  await settle()
+  t.mock.timers.tick(1000)
+  assert.equal(requests.length, 3)
+})

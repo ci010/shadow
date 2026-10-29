@@ -230,3 +230,21 @@ test('deleted last conversation cannot be restored by resources or cross-Project
   assert.equal(registry.draft('new-project').sessionId, '')
   assert.equal(registry.draft('a'), next)
 })
+
+test('project JSON omits implicit GET Content-Type and preserves all header representations', async () => {
+  const { projectJson } = await import('./projects.ts')
+  for (const supplied of [{ Authorization: 'Bearer fixture', 'X-Test': 'yes' }, new Headers({ Authorization: 'Bearer fixture', 'X-Test': 'yes' }), [['Authorization', 'Bearer fixture'], ['X-Test', 'yes']] as [string, string][]]) {
+    await projectJson('http://fixture', '/api/projects', { headers: supplied }, async (_, init) => {
+      const headers = new Headers(init?.headers)
+      assert.equal(headers.has('Content-Type'), false)
+      assert.equal(headers.get('Authorization'), 'Bearer fixture'); assert.equal(headers.get('X-Test'), 'yes')
+      return Response.json({})
+    })
+  }
+  for (const contentType of [undefined, 'application/custom+json']) {
+    await projectJson('http://fixture', '/api/projects', { method: 'POST', body: '{}', headers: contentType ? { 'Content-Type': contentType } : undefined }, async (_, init) => {
+      assert.equal(new Headers(init?.headers).get('Content-Type'), contentType ?? 'application/json')
+      return Response.json({})
+    })
+  }
+})

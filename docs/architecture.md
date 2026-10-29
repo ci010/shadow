@@ -579,6 +579,28 @@ retry, a new event or reset; they are not presented as empty successful state.
 Not every other resource has push hooks: Nodes still use visible-only polling,
 and provider configuration uses ordinary bounded HTTP reads.
 
+Other renderer resources have bounded, resource-specific recovery rather than a
+blanket retry-on-error policy. `service-groups.ts` shares a request and polling
+lifecycle for equal API base, Project and filter keys; it pauses polling while
+the document is hidden and releases the resource with its last active consumer.
+It still uses polling because service-group invalidations are not yet published.
+Computer discovery stops passive reads after an authorization denial in the same
+connection/session scope; it does not weaken the local-owner gateway boundary.
+Session-specific background/work discovery treats a confirmed missing session as
+terminal for automatic refresh until explicit retry or identity reconciliation.
+Desktop attachment reveal obtains its signed proof on user action, not once per
+historical attachment during rendering. A displayed attachment is not a grant to
+read arbitrary local paths: SNS/private-upload and remote-workdir media limits
+remain in force.
+
+The I/O host registers a capture client only when preparing input and renews its
+client heartbeat during prepare/owned capture, including while hidden. Idle
+views use I/O live invalidations plus a 15-second list fallback (paused while
+hidden), rather than registering clients and polling every two seconds. Each
+new prepare obtains fresh credentials after preflight; expired active grants
+fail instead of silently resuming capture. A disconnected live stream therefore
+has a longer fallback discovery latency, without relaxing capture leases.
+
 `app/src/chat-request-control.ts` manages composer Stop state across preparation,
 admission, streaming and cancellation. The Send button becomes Stop in the same
 position while a request is busy, remains disabled while cancellation is pending,

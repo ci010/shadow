@@ -16,6 +16,9 @@ export interface ActiveBackgroundTasks {
   tasks: ActiveBackgroundTask[]
 }
 
+/** A typed terminal discovery failure, not a generic endpoint/upgrade 404. */
+export class BackgroundSessionNotFoundError extends Error {}
+
 export async function fetchBackgroundTasks(
   base: string, sessionId: string, signal: AbortSignal, request: typeof fetch = fetch,
 ): Promise<ActiveBackgroundTasks> {
@@ -23,9 +26,10 @@ export async function fetchBackgroundTasks(
   if (response.status === 401 || response.status === 403) throw new Error(t('Access to background tasks was denied.'))
   if (response.status === 404) {
     const detail: unknown = response.headers.get('Content-Type')?.includes('application/json') ? await response.json() : undefined
-    throw new Error(isRecord(detail) && detail.error === 'session_not_found'
-      ? t('This conversation is no longer available.')
-      : t('Background tasks are unavailable. Restart Main after updating.'))
+    if (isRecord(detail) && detail.error === 'session_not_found') {
+      throw new BackgroundSessionNotFoundError(t('This conversation is no longer available.'))
+    }
+    throw new Error(t('Background tasks are unavailable. Restart Main after updating.'))
   }
   if (!response.ok) throw new Error(t('Background task status is unavailable. Check Main and retry.'))
   const value: unknown = await response.json()

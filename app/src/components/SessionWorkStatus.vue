@@ -13,15 +13,14 @@
 import { t } from '../i18n.ts'
 import { enumLabel } from '../display-labels.ts'
 import { computed, onUnmounted, shallowRef, watch } from 'vue'
-import { createSnapshot } from '../project-live-state.ts'
-import { projectJson } from '../projects.ts'
-import { parseWorkView } from '../work-alignment.ts'
+import { createSessionWorkStatus } from '../session-work-status.ts'
+import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
 const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; revision: number }>()
 defineEmits<{ open: [key: string] }>()
+const pool = useLiveClientPool()
 function create() {
   const base = props.apiBase, id = props.sessionId
-  return createSnapshot(async signal => parseWorkView(await projectJson(base,
-    `/api/sessions/${encodeURIComponent(id)}/work?history=0`, { signal })), 50)
+  return createSessionWorkStatus(base, id)
 }
 const snapshot = shallowRef<ReturnType<typeof create>>()
 const state = computed(() => snapshot.value?.state)
@@ -30,10 +29,18 @@ const records = computed(() => state.value?.value?.records.filter(record => !['d
 const record = computed(() => records.value[0])
 watch(() => [props.apiBase, props.sessionId], () => {
   snapshot.value?.dispose(); snapshot.value = create()
-  if (props.active) void snapshot.value.refresh()
+  if (props.active) void snapshot.value.autoRefresh()
+}, { immediate: true })
+watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, id, active], _old, onCleanup) => {
+  if (!active || !id) return
+  const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
+    event: envelope => { void snapshot.value?.reconcile(envelope.payload) },
+    reset() {},
+  })
+  onCleanup(() => subscription.close())
 }, { immediate: true })
 watch(() => [props.active, props.revision], () => {
-  if (props.active) void snapshot.value?.refresh()
+  if (props.active) void snapshot.value?.autoRefresh()
   else snapshot.value?.pause()
 })
 onUnmounted(() => snapshot.value?.dispose())

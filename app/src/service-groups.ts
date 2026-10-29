@@ -26,14 +26,24 @@ export interface ServiceGroup {
 export function serviceGroupKey(group: Pick<ServiceGroup, 'botInstanceId' | 'conversationId'>): string {
   return JSON.stringify([group.botInstanceId, group.conversationId])
 }
-export function useServiceGroups(source: () => { apiBase: string; projectId: string; active: boolean; group?: string; session?: string }) {
-  const lifecycleActive = ref(true)
+type ServiceGroupSource = { apiBase: string; projectId: string; active: boolean; group?: string; session?: string }
+const serviceGroupResources = new Map<string, ReturnType<typeof createServiceGroupResource>>()
+
+// A resource exists only while at least one active component subscribes. Project ID
+// is included defensively even when callers already pass a project-scoped base.
+function createServiceGroupResource(options: ServiceGroupSource) {
+  const source = () => options
   const agentSetups = ref<AgentGroupSetup[]>([])
   const skills = ref<PublishedGroupSkill[]>([]), agentRequirements = ref<Record<string, string[]>>({})
   const groups = ref<ServiceGroup[]>([]), agents = ref<string[]>([]), revision = ref(''), error = ref('')
-  let controller: AbortController | undefined, timer: ReturnType<typeof setInterval> | undefined, generation = 0
-  async function refresh() {
-    if (!source().active || !lifecycleActive.value || controller) return
+  let controller: AbortController | undefined, generation = 0
+  let pending: Promise<void> | undefined
+  function refresh(): Promise<void> {
+    if (pending) return pending
+    pending = load().finally(() => { pending = undefined })
+    return pending
+  }
+  async function load() {
     const current = generation, request = controller = new AbortController()
     try {
       const url = apiUrl(source().apiBase, '/api/service-groups')
@@ -54,12 +64,48 @@ export function useServiceGroups(source: () => { apiBase: string; projectId: str
     } catch { if (current === generation && !request.signal.aborted) error.value = 'unavailable' }
     finally { if (controller === request) controller = undefined }
   }
-  function stop() { generation++; controller?.abort(); controller = undefined; if (timer) clearInterval(timer); timer = undefined; agentSetups.value = []; skills.value = []; agentRequirements.value = {}; groups.value = []; agents.value = []; revision.value = ''; error.value = '' }
-  watch(() => [source().apiBase, source().projectId, source().active, source().group, source().session, lifecycleActive.value], () => { stop(); if (source().active && lifecycleActive.value) { void refresh(); timer = setInterval(() => { if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void refresh() }, 3000) } }, { immediate: true })
+  const timer = setInterval(() => {
+    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void refresh()
+  }, 3000)
+  const visible = () => { if (document.visibilityState !== 'hidden') void refresh() }
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visible)
+  function dispose() {
+    generation++; controller?.abort()
+    clearInterval(timer)
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visible)
+  }
+  return { groups, agents, agentSetups, skills, agentRequirements, revision, error, refresh, dispose, subscribers: 0 }
+}
+
+export function useServiceGroups(source: () => ServiceGroupSource) {
+  const lifecycleActive = ref(true)
+  const agentSetups = ref<AgentGroupSetup[]>([])
+  const skills = ref<PublishedGroupSkill[]>([]), agentRequirements = ref<Record<string, string[]>>({})
+  const groups = ref<ServiceGroup[]>([]), agents = ref<string[]>([]), revision = ref(''), error = ref('')
+  let resource: ReturnType<typeof createServiceGroupResource> | undefined
+  const stop = watch(() => [source().apiBase, source().projectId, source().active, source().group, source().session, lifecycleActive.value], (_, __, cleanup) => {
+    agentSetups.value = []; skills.value = []; agentRequirements.value = {}; groups.value = []; agents.value = []; revision.value = ''; error.value = ''
+    const options = { ...source() }
+    if (!options.active || !lifecycleActive.value) return
+    const key = JSON.stringify([options.apiBase, options.projectId, options.group || '', options.session || ''])
+    const shared = serviceGroupResources.get(key) ?? createServiceGroupResource(options)
+    serviceGroupResources.set(key, shared)
+    resource = shared
+    shared.subscribers++
+    const stopSync = watch([shared.groups, shared.agents, shared.agentSetups, shared.skills, shared.agentRequirements, shared.revision, shared.error], () => {
+      groups.value = shared.groups.value; agents.value = shared.agents.value; agentSetups.value = shared.agentSetups.value
+      skills.value = shared.skills.value; agentRequirements.value = shared.agentRequirements.value; revision.value = shared.revision.value; error.value = shared.error.value
+    }, { immediate: true, flush: 'sync' })
+    if (shared.subscribers === 1) void shared.refresh()
+    cleanup(() => {
+      stopSync(); resource = undefined
+      if (--shared.subscribers === 0) { shared.dispose(); serviceGroupResources.delete(key) }
+    })
+  }, { immediate: true })
   onActivated(() => { lifecycleActive.value = true })
   onDeactivated(() => { lifecycleActive.value = false })
   onUnmounted(stop)
-  return { groups, agents, agentSetups, skills, agentRequirements, revision, error, refresh }
+  return { groups, agents, agentSetups, skills, agentRequirements, revision, error, refresh: () => resource?.refresh() ?? Promise.resolve() }
 }
 
 // Display-only addresses are never passed to session prepare/send APIs.

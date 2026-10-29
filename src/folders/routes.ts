@@ -209,12 +209,13 @@ export class FolderService {
       try {
         this.#assertOpen()
         const body = await objectBody(c)
-        if (Object.keys(body).some(key => key !== 'path')) {
-          throw new FolderError('invalid_request', 'Local folder registration accepts only path. Select a remote folder capability to open a remote folder.')
+        if (Object.keys(body).some(key => key !== 'path' && key !== 'description')) {
+          throw new FolderError('invalid_request', 'Local folder registration accepts only path and description. Select a remote folder capability to open a remote folder.')
         }
         const folder = await this.#options.registry.register(
           absoluteDirectoryPath(body.path),
           c.req.raw.signal,
+          body.description as string | undefined,
         )
         return c.json({ folder })
       } catch (error) {

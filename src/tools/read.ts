@@ -252,7 +252,7 @@ export class ReadTool implements Tool<ToolResult> {
           const pageArgs = args.offset === undefined && args.limit === undefined
             ? { ...args, offset: Math.max(1, entry.content.split('\n').length - 199), limit: 200 }
             : args.limit === undefined ? { ...args, limit: 200 } : args
-          const page = this.pageText(entry.content, pageArgs, showLineNumbers)
+          const page = this.pageText(entry.content, pageArgs, showLineNumbers, true)
           if (args.offset === undefined && args.limit === undefined && Number(pageArgs.offset) > 1) {
             return `[recent lines ${pageArgs.offset}–${entry.content.split('\n').length}; use offset=1 and limit to read earlier lines]\n\n${page}`
           }
@@ -267,7 +267,7 @@ export class ReadTool implements Tool<ToolResult> {
             validateContentTokens(page, '.txt')
             return page
           }
-          return this.pageText(content, /^v:sessions\/(?!remote:)/.test(rel) && args.limit === undefined ? { ...args, limit: 200 } : args, showLineNumbers)
+          return this.pageText(content, /^v:sessions\/(?!remote:)/.test(rel) && args.limit === undefined ? { ...args, limit: 200 } : args, showLineNumbers, true)
         }
       }
     }
@@ -546,8 +546,8 @@ export class ReadTool implements Tool<ToolResult> {
     return content
   }
 
-  private pageText(content: string, args: Record<string, unknown>, numbered: boolean): string {
-    if (args.offset === undefined && args.limit === undefined && !numbered) {
+  private pageText(content: string, args: Record<string, unknown>, numbered: boolean, boundedVirtual = false): string {
+    if (!boundedVirtual && args.offset === undefined && args.limit === undefined && !numbered) {
       validateContentTokens(content, '.txt')
       return content
     }
@@ -555,6 +555,20 @@ export class ReadTool implements Tool<ToolResult> {
     const start = args.offset === undefined ? 0 : Number(args.offset) - 1
     const page = lines.slice(start, args.limit === undefined ? undefined : start + Number(args.limit))
     let result = numbered ? formatWithLineNumbers(page, start) : page.join('\n')
+    if (boundedVirtual && roughTokenCountEstimation(result, '.txt') > MAX_TOKENS) {
+      // Leave room for metadata; coordinates refer to the unchanged source view.
+      let end = (MAX_TOKENS - 512) * 4
+      if (/[\uD800-\uDBFF]/.test(result[end - 1] ?? '')) end--
+      if (result[end] === '\n') end++
+      const prefix = result.slice(0, end)
+      if (prefix.endsWith('\n')) {
+        const complete = prefix.split('\n').length - 1
+        return prefix + `\n[truncated: token budget; showing complete lines ${start + 1}-${start + complete} of ${lines.length}; use offset=${start + complete + 1} to continue]`
+      }
+      const completed = prefix.split('\n').length - 1
+      const line = start + completed + 1
+      return prefix + `\n\n[truncated: token budget; ${completed} complete line(s) starting at ${start + 1}; line ${line} incomplete (prefix only), of ${lines.length} total lines. No later lines shown. Line-only offset/limit cannot retrieve this line's omitted remainder; offset=${line} restarts the same line. Inspect the source detail/attachment referenced in this view for the full payload, if available. Later lines may be read with offset=${line + 1}, but that skips the unread remainder of line ${line}.]`
+    }
     validateContentTokens(result, '.txt')
     if (start + page.length < lines.length) result += `\n\n[truncated: showing lines ${start + 1}-${start + page.length} of ${lines.length}; use offset=${start + page.length + 1} to continue]`
     return result

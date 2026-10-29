@@ -37,7 +37,7 @@
 import { t, formatDateTime } from '../i18n.ts'
 import ProcessOutput from './ProcessOutput.vue'
 import { computed, ref, useId, watch } from 'vue'
-import { fetchBackgroundTasks, type ActiveBackgroundTask } from '../background-tasks.ts'
+import { BackgroundSessionNotFoundError, fetchBackgroundTasks, type ActiveBackgroundTask } from '../background-tasks.ts'
 import { createLiveRefresh } from '../live-refresh.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
 import { isRecord } from '../folders-sidebar.ts'
@@ -63,6 +63,10 @@ const error = ref('')
 const expanded = ref(false)
 const labels = { get process() { return t('Process') }, get tool() { return t('Tool') }, get subagent() { return t('Agent') } }
 let identity = ''
+// Keep terminal absence across visibility toggles, but permit explicit retry
+// (including a draft that has since been persisted by Main).
+let sessionMissing = false
+let completedTurn = ''
 let refresh = () => {}
 watch([total, loading, error], () => emit('status', { total: total.value, loading: loading.value, error: error.value }), { immediate: true })
 
@@ -74,6 +78,8 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
   const nextIdentity = JSON.stringify([base, sessionId])
   if (identity !== nextIdentity) {
     identity = nextIdentity
+    sessionMissing = false
+    completedTurn = ''
     tasks.value = []
     selected.value = undefined
     logsOpen.value = false
@@ -85,9 +91,15 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
   loading.value = false
   if (!active || !sessionId) return
   const snapshot = createLiveRefresh({
-    load: signal => {
+    load: async signal => {
+      if (sessionMissing) throw new BackgroundSessionNotFoundError(t('This conversation is no longer available.'))
       loading.value = true
-      return fetchBackgroundTasks(base, sessionId, signal)
+      const turnAtRead = completedTurn
+      try { return await fetchBackgroundTasks(base, sessionId, signal) } catch (cause) {
+        // A completed turn may have persisted the draft while this read was in flight.
+        if (cause instanceof BackgroundSessionNotFoundError && turnAtRead !== completedTurn) throw new Error(cause.message)
+        throw cause
+      }
     },
     apply: value => {
       tasks.value = value.tasks
@@ -96,6 +108,7 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
       error.value = ''
     },
     onError: cause => {
+      if (cause instanceof BackgroundSessionNotFoundError) sessionMissing = true
       tasks.value = []
       total.value = 0
       loading.value = false
@@ -103,17 +116,23 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
         ? cause.message : t('Background task status is unavailable. Check Main and retry.')
     },
   })
-  refresh = () => { loading.value = true; snapshot.refresh() }
+  const autoRefresh = () => { if (!sessionMissing) { loading.value = true; snapshot.refresh() } }
+  refresh = () => { sessionMissing = false; autoRefresh() }
   const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
     event: envelope => {
       if (!isRecord(envelope.payload) || envelope.payload.event === 'activity'
         || (envelope.payload.sessionId !== undefined && envelope.payload.sessionId !== sessionId)) return
-      refresh()
+      if (envelope.payload.sessionId === sessionId && typeof envelope.payload.completedTurnId === 'string'
+        && envelope.payload.completedTurnId && envelope.payload.completedTurnId !== completedTurn) {
+        completedTurn = envelope.payload.completedTurnId
+        sessionMissing = false
+      }
+      autoRefresh()
     },
-    reset: () => refresh(),
+    reset: autoRefresh,
   })
-  const timer = setInterval(() => refresh(), 20_000)
-  refresh()
+  const timer = setInterval(autoRefresh, 20_000)
+  autoRefresh()
   onCleanup(() => {
     clearInterval(timer)
     subscription.close()

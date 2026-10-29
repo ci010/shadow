@@ -81,7 +81,10 @@ export function formatSessionMessage(
           ) => {
             if (part.type === 'text') return part.text ?? ''
             if (part.type === 'image_url') {
-              return `[image: ${part.image_url?.url ?? ''}]`
+              const url = part.image_url?.url ?? ''
+              // History is text, not an image transport. Never expand embedded bytes.
+              if (/^https?:\/\//i.test(url)) return `[image: ${preview(url, 480)}]`
+              return '[image attachment: inline data omitted]'
             }
             return `[${part.type}]`
           },
