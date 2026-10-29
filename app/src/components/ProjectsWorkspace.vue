@@ -15,13 +15,14 @@
               <span :class="sidebarPinned ? 'i-lucide-panel-left-close' : 'i-lucide-pin'" class="w-4 h-4" aria-hidden="true" />
             </button>
           </template></HoverInfo>
-          <button class="project-add" :aria-label="t('Add project')" :aria-expanded="creating" @click="creating = !creating"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
+          <button ref="addProjectButton" class="project-add" :aria-label="t('Add project')" :aria-expanded="creating" :disabled="saving" @click="creating ? cancelCreateProject() : openCreateProject()"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
           <button v-if="!sidebarPinned && !mobileIntegrated" ref="closeButton" class="project-add" :aria-label="t('Close projects')" @click="closeSidebar()"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button>
         </div>
       </header>
-      <form v-if="creating" class="project-create" @submit.prevent="createProject">
+      <form v-if="creating" class="project-create" @submit.prevent="createProject" @keydown.esc.stop.prevent="cancelCreateProject">
         <label>{{ t('Project name') }}<input v-model="name" required autocomplete="off" :disabled="saving" /></label>
-        <button class="btn btn-sm" :disabled="saving || !name.trim()">{{ saving ? t('Creating...') : t('Create project') }}</button>
+        <button type="button" class="btn btn-sm" :disabled="saving" @click="cancelCreateProject">{{ t('Cancel') }}</button>
+        <button type="submit" class="btn btn-sm" :disabled="saving || !name.trim()">{{ saving ? t('Creating...') : t('Create project') }}</button>
       </form>
       <p v-if="loading" class="project-note" role="status">{{ t('Loading projects...') }}</p>
       <div v-if="error" class="project-note project-error" role="alert"><p>{{ error }}</p><button class="btn btn-sm" @click="refresh">{{ t('Retry catalog') }}</button></div>
@@ -145,6 +146,7 @@ const sidebarElement = ref<HTMLElement>()
 const sidebarTrigger = ref<HTMLButtonElement>()
 const pinButton = ref<HTMLButtonElement>()
 const closeButton = ref<HTMLButtonElement>()
+const addProjectButton = ref<HTMLButtonElement>()
 const desktop = ref(false)
 const sidebarHidden = ref(false)
 const preferredWidth = ref(DEFAULT_PROJECT_SIDEBAR.width)
@@ -203,6 +205,12 @@ async function togglePinned() {
   await nextTick()
   const target = hiding ? sidebarTrigger.value : pinButton.value
   target?.focus({ preventScroll: true })
+}
+function cancelCreateProject() {
+  if (saving.value) return
+  creating.value = false
+  name.value = ''
+  void nextTick(() => addProjectButton.value?.focus({ preventScroll: true }))
 }
 async function openCreateProject() {
   creating.value = true

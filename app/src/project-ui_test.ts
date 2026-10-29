@@ -907,3 +907,29 @@ test('learning status polling cancels hidden project requests and rejects their 
   await nextTick()
   assert.equal(stateB().status, undefined)
 })
+
+
+test('project creation can be cancelled and reopened without a stale draft', async t => {
+  const state = mountScript(t, 'ProjectsWorkspace.vue', { apiBase: 'http://fixture', visible: true }, undefined, {
+    vue: { ...Vue, onMounted() {} },
+    'vue-router': { useRoute: () => reactive({ name: 'chat', fullPath: '/', params: {}, query: {} }), useRouter: () => ({}) },
+    '../composables/useInstallationContext.ts': { useInstallationContext: () => ref({ mode: 'main' }) },
+    '../projects.ts': { ...projectsModule, createProjectsClient: () => ({ list: async () => [] }) },
+  })
+  await state().openCreateProject()
+  state().name = 'Discard me'
+  state().cancelCreateProject()
+  assert.equal(state().creating, false)
+  assert.equal(state().name, '')
+  await state().openCreateProject()
+  assert.equal(state().creating, true)
+  assert.equal(state().name, '')
+  state().saving = true
+  state().name = 'Pending'
+  state().cancelCreateProject()
+  assert.equal(state().creating, true, 'An in-flight save must not pretend to be cancelled')
+  assert.equal(state().name, 'Pending')
+  state().saving = false
+  state().cancelCreateProject()
+  await nextTick()
+})
