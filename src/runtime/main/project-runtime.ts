@@ -221,7 +221,6 @@ import { createA2aRuntime } from '../../a2a/runtime.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { CoordinatorExecutionPolicy } from '../../execution/coordinator-policy.ts'
 import { ComputerService } from '../../computer/service.ts'
-import { registerComputerRoutes } from '../../computer/routes.ts'
 import { ComputerError } from '../../execution/computer/contracts.ts'
 import { createComputerDesktop } from '../../execution/computer/factory.ts'
 import { computerTools } from '../../tools/computer.ts'
@@ -617,10 +616,6 @@ export async function createProjectRuntime(
       throw new ComputerError('local_only', 'Computer use is not available in a remote or unavailable workdir.', 403)
     }
   }
-  registerComputerRoutes(app, {
-    service: computer, projectId: project.id,
-    authorize: dependencies.authorizeComputer ?? (() => false), assertSession: assertComputerSession,
-  })
   for (const tool of computerTools(computer, project.id, assertComputerSession)) importTool.registerBuiltin(tool.name, tool)
   const computerSubscriptions = [
     bus.on('session.ended', fact => releaseComputerSession(fact.sessionId)),

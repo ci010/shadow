@@ -43,7 +43,7 @@ current references from historical proposals.
 | Skills and agent types | Built-in definitions plus watched workspace overrides; progressive skill disclosure and per-type tool filtering |
 | Channels | Web plus project-owned Discord, Feishu, and QQ bot instances; legacy WeChat/iLink implementation is not started by project runtimes |
 | Browser automation | Chrome DevTools MCP with explicit session-local user-owned bindings; requires a usable browser/CDP target and MCP process |
-| Windows computer use | Agent-selected task-relevant local window; UIA first, guarded foreground keyboard/mouse without a separate switch, window-only screenshots, direct UIA operations, single-use owner approvals for foreground input and transient observations; no automatic fallback or remote desktop |
+| Windows computer use | Agent-selected task-relevant local window; UIA first, guarded foreground keyboard/mouse without a separate switch, window-only screenshots and transient observations; all actions use ordinary tools, consequential confirmations use existing agent ask; no dedicated computer HTTP/UI, automatic fallback or remote desktop |
 | Web application | Vue chat/session/files UI, agent views, logs and traces; Nodes reads device/capability inventory and provides Main desktop pairing controls; paired nodes execute without operation approvals |
 | Electron | Main/Child bootstrap, persisted launch profile, backend supervision, narrow preload API and renderer setup/recovery; separate-device/native-platform acceptance remains required |
 | Device execution | Explicit trusted-network device listener, pairing/challenge/WebSocket and bounded remote workdir operations; full remote tools, artifacts, revocation UI and release hardening remain WIP |
@@ -2756,14 +2756,16 @@ remain outside this slice.
 For operating Windows applications rather than capturing browser inputs, see
 [Windows computer use](computer-use.md). Its `src/computer/` service is shared at
 Main-host scope, so concurrent Projects cannot write to the same desktop.
-Project routes and tool adapters enforce the owning local web conversation;
-the Windows UIA helper is an isolated, lazily started stdio process, with an
+Tool adapters enforce the owning local web conversation; there are no computer
+HTTP routes, renderer grants/decisions or dedicated stop controls. All actions
+execute as ordinary tool calls, with consequential confirmations handled through
+the existing agent `ask` flow before dispatch, not a separate approval protocol.
+The Windows UIA helper is an isolated, lazily started stdio process, with an
 independent foreground-input guard that releases its own held input on
-cancellation/host loss. The existing
-Session loop consumes observations for one inference and persists only their
-summary. The renderer supplies explicit grants/decisions and stop controls,
-not another agent engine. Coordinate approval frames are short-lived,
-owner/request-scoped in-memory images, not durable chat attachments.
+cancellation/host loss. The existing Session loop consumes observations for one
+inference and persists only their summary. Window screenshots are short-lived
+in-memory images for coordinate validation, not approval frames or durable chat
+attachments. Normal turn cancellation and the release tool stop access.
 Local-executor disablement also disables this capability.
 
 `src/io/` connects first-party browser input and interaction to an agent-started

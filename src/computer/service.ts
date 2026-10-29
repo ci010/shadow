@@ -5,11 +5,10 @@ import {
   type ComputerAction, type ComputerDesktop, type ComputerObservation, type ComputerTarget,
 } from '../execution/computer/contracts.ts'
 import {
-  ComputerOwnerSchema, type ComputerApproval, type ComputerOwner, type ComputerReceipt, type ComputerStatus,
+  ComputerOwnerSchema, type ComputerOwner, type ComputerReceipt, type ComputerStatus,
 } from './contracts.ts'
 
 const GRANT_MS = 10 * 60_000
-const REVIEW_MS = 60_000
 interface Grant {
   windowId: string
   owner: ComputerOwner
@@ -20,13 +19,6 @@ interface Grant {
   timer: ReturnType<typeof setTimeout>
   observation?: { value: ComputerObservation; at: number; frame?: ComputerObservation['screenshot']; timer?: ReturnType<typeof setTimeout> }
 }
-interface Pending {
-  approval: ComputerApproval
-  frame?: ComputerObservation['screenshot']
-  settle(approved: boolean): void
-  reject(error: ComputerError): void
-  cleanup(): void
-}
 const sameOwner = (left: ComputerOwner, right: ComputerOwner) =>
   left.projectId === right.projectId && left.sessionId === right.sessionId
 
@@ -35,7 +27,6 @@ export class ComputerService {
   private grant?: Grant
   private binding?: ComputerOwner
   private listing?: { owner: ComputerOwner; ids: Set<string>; generation: number; timer: ReturnType<typeof setTimeout> }
-  private pending?: Pending
   private executing = false
   private operation = false
   private stopped = false
@@ -47,7 +38,6 @@ export class ComputerService {
     enabled?: boolean
     now?: () => number
     grantMs?: number
-    reviewMs?: number
   } = {}) {}
 
   private now(): number { return this.options.now?.() ?? Date.now() }
@@ -61,7 +51,6 @@ export class ComputerService {
       ...owner, available: this.available,
       busy: !!(this.binding || this.grant && !grant),
       grant: grant ? { target: structuredClone(grant.target), expiresAt: new Date(grant.expiresAt).toISOString() } : null,
-      pending: grant && this.pending ? structuredClone(this.pending.approval) : null,
       executing: !!grant && this.executing,
       lastAction: this.last && sameOwner(this.last.owner, owner) ? { ...this.last.receipt } : null,
     }
@@ -104,7 +93,7 @@ export class ComputerService {
     } finally { this.binding = undefined }
   }
 
-  /** Acquire a listed target. Foreground mutations require exact owner review; supported UIA actions run directly. */
+  /** Acquire a listed target. Actions execute directly after target and observation validation. */
   async share(owner: ComputerOwner, windowId: string, signal: AbortSignal): Promise<ComputerStatus> {
     this.assertAvailable(owner)
     if (this.operation) throw new ComputerError('desktop_busy', 'The previous desktop operation is still stopping.')
@@ -138,11 +127,11 @@ export class ComputerService {
     return this.status(owner)
   }
 
-  /** Idempotent owner entry: never switch targets or refresh a lease/review. */
+  /** Idempotent owner entry: never switch targets or refresh a lease. */
   async connect(owner: ComputerOwner, input: { windowId?: string; screenshot?: boolean }, signal: AbortSignal) {
     ComputerOwnerSchema.parse(owner)
     signal.throwIfAborted()
-    if (this.operation) throw new ComputerError('action_pending', 'Finish or reject the pending action before connecting again.')
+    if (this.operation) throw new ComputerError('action_pending', 'Wait for the executing action to finish before connecting again.')
     const previous = this.grant
     const invalid = previous && sameOwner(previous.owner, owner)
       && (previous.generation !== this.desktop.generation || previous.expiresAt <= this.now())
@@ -197,7 +186,7 @@ export class ComputerService {
   async observe(owner: ComputerOwner, targetId: string | undefined, screenshot: boolean, signal: AbortSignal): Promise<ComputerObservation> {
     const grant = this.requireGrant(owner, targetId)
     targetId = grant.target.id
-    if (this.operation) throw new ComputerError('action_pending', 'Finish or reject the pending action before observing again.')
+    if (this.operation) throw new ComputerError('action_pending', 'Wait for the executing action to finish before observing again.')
     const result = ComputerObservationSchema.parse(await this.desktop.request(
       { method: 'observe', targetId, screenshot }, AbortSignal.any([signal, grant.controller.signal]),
     ))
@@ -205,7 +194,7 @@ export class ComputerService {
     if (this.requireGrant(owner, targetId) !== grant || result.targetId !== targetId) {
       throw new ComputerError('stale_observation', 'The shared window changed. Observe again.')
     }
-    if (this.operation) throw new ComputerError('action_pending', 'Finish or reject the pending action before observing again.')
+    if (this.operation) throw new ComputerError('action_pending', 'Wait for the executing action to finish before observing again.')
     this.retainObservation(grant, result)
     return result
   }
@@ -234,7 +223,7 @@ export class ComputerService {
     const grant = this.requireGrant(owner, request.targetId)
     const input = { ...request, action, targetId: grant.target.id }
     signal.throwIfAborted()
-    if (this.operation) throw new ComputerError('action_pending', 'Another action is already awaiting review or executing.')
+    if (this.operation) throw new ComputerError('action_pending', 'Another action is already executing.')
     const observed = grant.observation
     if (!observed || observed.value.id !== input.observationId || this.now() - observed.at >= 120_000) {
       throw new ComputerError('stale_observation', 'Observe the window again before requesting an action.')
@@ -253,102 +242,43 @@ export class ComputerService {
         : !element.actions.includes(action.kind))) {
       throw new ComputerError('unsupported_action', 'The observed control does not support this operation.')
     }
-    const approval: ComputerApproval = {
-      id: randomUUID(), targetId: input.targetId, observationId: input.observationId, action,
-      expiresAt: new Date(Math.min(grant.expiresAt, this.now() + (this.options.reviewMs ?? REVIEW_MS))).toISOString(),
-      element: element ? { name: element.name, role: element.role } : null,
-      ...(isPointerAction(action) && observed.frame ? { frame: { width: observed.frame.width, height: observed.frame.height } } : {}),
-    }
+    const actionId = randomUUID()
     this.operation = true
     this.clearObservation(grant)
     const combined = AbortSignal.any([signal, grant.controller.signal])
     let dispatched = false
     try {
-      const approved = !isForegroundAction(action) || await this.review(approval, combined, isPointerAction(action) ? observed.frame : undefined)
       observed.frame = undefined
-      if (!approved) {
-        const receipt: ComputerReceipt = { actionId: approval.id, kind: action.kind, outcome: 'denied', verified: false }
-        this.last = { owner: { ...owner }, receipt }
-        return receipt
-      }
       combined.throwIfAborted()
       if (this.requireGrant(owner, input.targetId) !== grant) throw new ComputerError('interrupted', 'Window sharing changed.')
       this.executing = true
       dispatched = true
       const result = ComputerActionResultSchema.parse(await this.desktop.request({
-        method: 'act', ...input, action, actionId: approval.id,
+        method: 'act', ...input, action, actionId,
       }, combined))
-      if (result.actionId !== approval.id || result.observation.targetId !== input.targetId) {
+      if (result.actionId !== actionId || result.observation.targetId !== input.targetId) {
         throw new ComputerError('outcome_unknown', 'The desktop returned an inconsistent action receipt. Inspect the application.')
       }
       combined.throwIfAborted()
       this.requireGrant(owner, input.targetId)
       this.retainObservation(grant, result.observation)
-      const receipt: ComputerReceipt = { actionId: approval.id, kind: action.kind, outcome: 'executed', verified: result.verified,
+      const receipt: ComputerReceipt = { actionId, kind: action.kind, outcome: 'executed', verified: result.verified,
         ...(result.focusRestored !== undefined ? { focusRestored: result.focusRestored } : {}) }
       this.last = { owner: { ...owner }, receipt }
       return { ...receipt, observation: result.observation }
     } catch (error) {
       const unknown = dispatched && (!(error instanceof ComputerError) || error.code === 'outcome_unknown' || combined.aborted)
       this.last = { owner: { ...owner }, receipt: {
-        actionId: approval.id, kind: action.kind, outcome: unknown ? 'outcome_unknown' : combined.aborted ? 'cancelled' : 'failed', verified: false,
+        actionId, kind: action.kind, outcome: unknown ? 'outcome_unknown' : combined.aborted ? 'cancelled' : 'failed', verified: false,
       } }
       if (unknown || combined.aborted || error instanceof ComputerError && error.code === 'user_interrupted') await this.release(owner)
       if (unknown) throw new ComputerError('outcome_unknown', 'The action may have taken effect. It was not replayed. Window access was revoked; inspect the application before sharing it again.')
       throw error
     } finally {
       observed.frame = undefined
-      this.pending?.cleanup()
-      this.pending = undefined
       this.executing = false
       this.operation = false
     }
-  }
-
-  private review(approval: ComputerApproval, signal: AbortSignal, frame?: ComputerObservation['screenshot']): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-      const abort = () => {
-        pending.cleanup()
-        if (this.pending === pending) this.pending = undefined
-        reject(new ComputerError('interrupted', 'The action review was interrupted. No approval was retained.'))
-      }
-      const timer = setTimeout(() => {
-        pending.cleanup()
-        if (this.pending === pending) this.pending = undefined
-        reject(new ComputerError('review_expired', 'The action review expired. No action ran.'))
-      }, Math.max(0, Date.parse(approval.expiresAt) - this.now()))
-      timer.unref()
-      const pending: Pending = {
-        approval, frame, settle: resolve, reject,
-        cleanup: () => { pending.frame = undefined; clearTimeout(timer); signal.removeEventListener('abort', abort) },
-      }
-      this.pending = pending
-      signal.addEventListener('abort', abort, { once: true })
-      if (signal.aborted) abort()
-    })
-  }
-
-  reviewFrame(owner: ComputerOwner, requestId: string): Buffer {
-    const pending = this.pending
-    if (!pending) throw new ComputerError('stale_request', 'This review is no longer available.', 404)
-    this.requireGrant(owner, pending.approval.targetId)
-    if (pending !== this.pending || pending.approval.id !== requestId || !pending.frame
-      || Date.parse(pending.approval.expiresAt) <= this.now()) {
-      throw new ComputerError('stale_request', 'This review frame expired or changed.', 404)
-    }
-    return Buffer.from(pending.frame.base64, 'base64')
-  }
-
-  decide(owner: ComputerOwner, requestId: string, approved: boolean): void {
-    const pending = this.pending
-    if (!pending) throw new ComputerError('stale_request', 'This action is no longer awaiting approval.')
-    this.requireGrant(owner, pending.approval.targetId)
-    if (pending !== this.pending || pending.approval.id !== requestId || Date.parse(pending.approval.expiresAt) <= this.now()) {
-      throw new ComputerError('stale_request', 'This exact action review expired or changed.')
-    }
-    pending.cleanup()
-    this.pending = undefined
-    pending.settle(approved)
   }
 
   private clear(): void {
@@ -360,12 +290,6 @@ export class ComputerService {
       clearTimeout(grant.timer)
       this.clearObservation(grant)
       grant.controller.abort()
-    }
-
-    if (this.pending) {
-      this.pending.cleanup()
-      this.pending.reject(new ComputerError('interrupted', 'Desktop access was revoked.'))
-      this.pending = undefined
     }
   }
 

@@ -205,7 +205,7 @@ test('window-only screenshot results preserve the existing observation contract'
   assert.equal(result.screenshot.mime, 'image/png')
 })
 
-test('host approval gates the IPC dispatch and malformed post-effect receipts revoke the grant', { skip: process.platform !== 'win32' }, async t => {
+test('direct service dispatch with malformed post-effect receipts revokes the grant', { skip: process.platform !== 'win32' }, async t => {
   const { ComputerService } = await import('../../computer/service.ts')
   const windowId = randomUUID(), targetId = randomUUID()
   const nativeObservation = `({...${observationCode},elements:[{id:'1',parentId:null,role:'ControlType.Edit',name:'Synthetic',enabled:true,offscreen:false,protected:false,focusable:true,bounds:{x:1,y:1,width:10,height:10},actions:['invoke']}]})`
@@ -228,10 +228,6 @@ test('host approval gates the IPC dispatch and malformed post-effect receipts re
   const observed = await service.observe(owner, targetId, false, signal())
   const execution = service.act(owner, { targetId, observationId: observed.id, action: { kind: 'type_text', elementId: '1', text: 'Synthetic' } }, signal())
   const rejected = assert.rejects(execution, code('outcome_unknown'))
-  const review = service.status(owner).pending
-  assert.ok(review, 'The exact action must wait for the existing host review')
-  assert.equal(review.action.kind, 'type_text')
-  service.decide(owner, review.id, true)
   await rejected
   assert.equal(service.status(owner).grant, null, 'An uncertain executed action revokes the grant rather than enabling retry')
   assert.equal(f.launches, 1)

@@ -18,21 +18,21 @@ remains a separate verification gate.
 | IPC/build | Dedicated Node process, strict wire checks, isolated Rust owner, native release-only ABI loop | Actual Node and Electron-as-Node loading and relocation tests |
 
 Authorization still belongs to `ComputerService`: exact selected window, local
-owner/Project/session, grant expiry and immutable
-single-use per-action approval for foreground input. Supported UIA actions run directly
-within that target; applications may still activate a window in response. Loading a skill, installing Rust or selecting this
+owner/Project/session, grant expiry and fresh single-use observations. All actions
+execute as ordinary tool calls within that target; consequential actions requiring
+confirmation use the existing agent `ask` flow before dispatch; applications may still activate a window in response. Loading a skill, installing Rust or selecting this
 backend is not permission to act. Unknown outcomes revoke access and are never
 replayed. No actual UI test has been run through shell/UIA commands.
 
 ## Process boundary and implementation
 
 ```text
-Existing authorized routes/tools -> ComputerService -> backend factory
+Ordinary computer tools -> ComputerService -> backend factory
   -> private stdio Node child
      -> responsive JS main: validation / quick cancellation only
      -> JS Worker -> napi-rs -> dedicated Rust COM/DPI owner thread
         -> pinned WindowsAdapter / exact UIA patterns / window screenshot API
-        -> independent AOT input guard process for approved physical actions
+        -> independent AOT input guard process for guarded physical actions
 ```
 
 The Shadow backend and Electron main process never load `.node`. The child main
@@ -87,7 +87,7 @@ new work blocked while an abnormal owner's guard drains.
 
 No AttachThreadInput/activation trick, arbitrary window handle tool argument,
 clipboard input or persistent key/button-down API is introduced. All physical
-input still needs the owner's foreground grant and an exact action approval.
+input still needs the owner's selected target and a validated fresh observation.
 
 ## Build and packaging
 
@@ -151,12 +151,12 @@ host only:
 1. `computer_setup` connect, then connect with the exact synthetic windowId if selection is needed (bind + observe).
 2. Observe the tree; verify password content is absent, disabled/readonly/long
    fields do not advertise unsafe edits, and actual geometry/actions are present.
-3. Approve each ordinary UIA operation separately; inspect returned fresh IDs.
-4. The owner enables foreground keyboard/mouse in the Computer use panel. Observe
-   again with a screenshot; approve each physical operation using screenshot-local
+3. Execute ordinary UIA operations through the tools; inspect returned fresh IDs.
+4. There is no computer-use panel or separate foreground switch. Observe
+   again with a screenshot; execute physical operations using screenshot-local
    coordinates or the freshly observed edit control. Do not move/type concurrently
    unless deliberately testing human takeover.
-5. Exercise denial/Stop without automatic replay. Any uncertain result means stop,
+5. Exercise normal turn cancellation, tool release and human takeover without automatic replay. Any uncertain result means stop,
    inspect the application and reacquire a fresh grant, not repeat an old action.
 
 Actual provider/screenshots/input/held-input cancellation remain unverified until
@@ -167,7 +167,7 @@ checks below are only fake or metadata/idle-process checks, never desktop input.
 
 ```sh
 pnpm exec node --import tsx --test src/execution/computer/agent-desktop-actions_test.ts src/execution/computer/agent-desktop_test.ts src/execution/computer/factory_test.ts scripts/agent-desktop-input-guard_test.ts scripts/agent-desktop-fixture_test.ts
-pnpm exec node --import tsx --test scripts/agent-desktop-assets_test.ts scripts/backend-bundle_test.ts src/computer/service_test.ts src/computer/routes_test.ts src/execution/computer/contracts_test.ts
+pnpm exec node --import tsx --test scripts/agent-desktop-assets_test.ts scripts/backend-bundle_test.ts src/computer/service_test.ts src/execution/computer/contracts_test.ts
 node --test integrations/agent-desktop/scripts/source-test.mjs
 ```
 
@@ -179,11 +179,11 @@ Node/Electron-as-Node addon ABI and guard metadata without opening a target.
 No full-repository test/typecheck or production-readiness claim is made.
 
 
-### Input-review policy compatibility
+### Native protocol compatibility
 
 The current `shadow-password-first-v4` worker/addon pair removes the obsolete
 `foreground` permission command and `bind.foregroundInput` flag. The host executes
-supported UIA actions directly and reviews foreground input only. Old v3 addons
+all actions directly as ordinary tool calls; no dedicated review protocol remains. Old v3 addons
 are rejected by the v4 worker identity check; do not mix these versions.
 
 A source-pair check can be performed without deploying artifacts or touching a

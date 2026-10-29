@@ -58,18 +58,19 @@ runtime command must be updated; setup does not silently skip the connection.
 
 In a local Main conversation, ask for the application task. The assistant lists
 and selects a task-relevant existing window; no manual sharing or keyboard/mouse
-switch is needed. Access lasts up to 10 minutes. Supported UIA actions execute directly; foreground
-keyboard/mouse actions require their own **Approve once** decision. During access, the small monitor-stop button beside
-the composer (**Stop all desktop access**) revokes access without closing the app.
-No idle/ready or shared-window banner is shown. Browser work uses browser tools.
+switch is needed. Access lasts up to 10 minutes. All actions execute through
+ordinary tools; consequential actions requiring confirmation use the existing
+agent ask flow before execution. There is no dedicated computer-use UI or HTTP
+API, per-action approval panel, coordinate review or monitor-stop control. Normal
+turn cancellation and the release tool stop access. Browser work uses browser tools.
 
 This version prefers Windows accessibility controls and window-only screenshots.
 UIA usually operates in the background, though applications can react by activating
-a window. Each keyboard/mouse input still needs approval; coordinate reviews show the exact
-screenshot. Foreground input uses the real interactive desktop and may take focus
-or move the user's pointer; it is not isolated background input. Taking over stops
-further input, not input already delivered. Elevated applications and remote
-desktops remain unsupported. Window contents go to the configured model.
+a window. Screenshots remain temporarily in memory for coordinate validation,
+not approval frames. Foreground input uses the real interactive desktop and may
+take focus or move the user's pointer; it is not isolated background input.
+Taking over stops further input, not input already delivered. Elevated applications
+and remote desktops remain unsupported. Window contents go to the configured model.
 Read [computer use](computer-use.md) for privacy, recovery and compatibility limits.
 
 ## Language

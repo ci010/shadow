@@ -17,8 +17,8 @@ export const AgentDesktopRequestSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('release'), targetId: uuid }).strict(),
 ])
 
-/** The native desktop backend. Authorization and immutable
- * foreground per-action approval remain in ComputerService; native checks are additional. */
+/** Native desktop backend. Owner, target and observation validation remain in
+ * ComputerService; native checks add window identity and input takeover protection. */
 export class AgentDesktopComputerDesktop implements ComputerDesktop {
   readonly available = process.platform === 'win32' && ['x64', 'arm64'].includes(process.arch)
   private readonly transport: DesktopStdioTransport

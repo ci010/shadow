@@ -28,7 +28,6 @@ export interface ProjectRuntimeDependencies {
   realtimeHub?: RealtimeHub
   computer?: ComputerService
   /** Desktop grants require a local owner, not mobile/device credentials. */
-  authorizeComputer?: (request: Request) => boolean | Promise<boolean>
 }
 
 export interface ProjectRuntime {

@@ -5,7 +5,7 @@
 - 既有 `ComputerDesktop` 的 list/bind/observe/foreground/release，以及全部 11 种动作已有实际实现；未开放上游其余命令。
 - Windows 默认且唯一 backend 为 native agent-desktop，无 backend 环境变量开关；缺失/不兼容 addon 或 guard 直接失败，不回退。Windows 构建缺产物时给出明确的 native 构建命令。
 - 当前宿主未重启、未热切换。没有通过 exec 执行真实 UIA、截图、键鼠输入或启动交互测试应用。
-- 已完成构建、模拟和无 UI 加载验证，**不等于真实窗口截图/输入验收通过**。下一步必须由用户正常重启宿主后，通过 computer-use 选择窗口与逐动作审批测试。
+- 已完成构建、模拟和无 UI 加载验证，**不等于真实窗口截图/输入验收通过**。下一步必须由用户正常重启宿主后，通过 computer-use 普通工具选择窗口并测试动作；高后果确认使用现有 agent ask，不使用专用逐动作审批 UI。
 
 ## 实际产物
 
