@@ -230,9 +230,7 @@
           <p v-if="ioError" class="composer-error" role="alert">{{ t('Capture requests:') }} {{ ioError }}</p>
           <!-- Streaming response -->
           <div v-if="streaming && !viewingPhysicalId && (streamContent || streamMedia.length)" class="chat-bubble chat-assistant" :data-search-message-idx="displayMessages.length" role="article" :aria-label="t('Assistant message')">
-            <div class="chat-content selectable-text">
-              <span>{{ streamContent }}</span>
-            </div>
+            <MarkdownContent v-if="streamContent" class="chat-content prose selectable-text" :text="streamContent" :render-content="renderMarkdown" />
             <MessageAttachments :paths="streamMedia" :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />
             <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
