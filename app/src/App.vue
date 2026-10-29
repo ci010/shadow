@@ -104,9 +104,9 @@ import type { LiveStatus } from './live-client.ts'
 import { useAppNotificationSounds } from './composables/useAppNotificationSounds.ts'
 
 const route = useRoute()
-const workspaceRoutes: readonly string[] = ['chat', 'projects', 'project-settings', 'agents']
+const workspaceRoutes: readonly string[] = ['chat', 'projects', 'project-dashboard', 'project-settings', 'agents']
 const mobile = provideMobileChrome()
-const mobilePageTitles: Record<string, string> = { get chat() { return t('Chat') }, get projects() { return t('Projects') }, get nodes() { return t('Nodes') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get agents() { return t('Agents') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
+const mobilePageTitles: Record<string, string> = { get chat() { return t('Chat') }, get projects() { return t('Projects') }, get 'project-dashboard'() { return t('Dashboard') }, get nodes() { return t('Nodes') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get agents() { return t('Agents') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
 const mobilePageTitle = computed(() => mobilePageTitles[String(route.name)] ?? 'Shadow')
 watch(() => route.fullPath, () => { mobile.menuOpen.value = false })
 const ioBridge = createIoBridge()

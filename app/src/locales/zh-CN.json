@@ -1,4 +1,5 @@
 {
+  "{name} dashboard": "{name} 总览",
   "Signed out of Copilot instance {account} on {host}. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged.": "已退出 {host} 上的 Copilot 实例 {account}。其他实例（包括同一主机上的账号）及其他主机上的登录保持不变。",
   "Remove the saved Copilot sign-in for instance {account} on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.": "移除 {host} 上实例 {account} 保存的 Copilot 登录？这会影响使用此实例的所有项目。其他实例（包括同一主机上的账号）及其他主机上的登录保持不变。不会退出浏览器登录或撤销 GitHub 授权。",
   "Rename": "重命名",

@@ -157,8 +157,9 @@ session storage and its ancestors cannot be selected as Project folders.
 **Clone repository** still clones on Main; its parent directory is chosen through
 the same in-app browser (Main only), and existing destinations are never replaced.
 A folder's **+** starts a conversation in that folder. A new draft does not create a session until its first message is
-sent. Selecting the Project name opens its **Dashboard** as a permanent tab,
-alongside Knowledge, project settings, agents and open files. The Dashboard groups
+sent. Selecting the Project name opens its independent **Dashboard** at
+`/projects/:projectId/dashboard`. Knowledge and project settings remain available
+from the sidebar; conversations retain their document tabs. The Dashboard groups
 recent focus by inferred shared purpose, then shows separate topics with their latest
 reports and expandable evidence/decision history. Model interpretations are not
 confirmed user intent; legacy topics without inference remain unclassified.
@@ -173,8 +174,11 @@ relations and dependencies (including cross-topic links). Missing roles or causa
 relations are shown honestly, not inferred from model topic categories. The causal
 map and relation graph are expandable local sections within the Dashboard, not
 separate view entries. Native questions and decision history retain their navigation.
-Folder and conversation rows open their own views. Discuss opens an ordinary
-conversation with an editable draft; there is no separate management session. **Automations** lists scheduled tasks
+The Dashboard, its graphs and Usage are Project views, not conversations: opening
+them does not create a session or send a message. Removing dedicated coordinator
+sessions does not remove these observation views. Folder and conversation rows
+open their own views. Discuss opens an ordinary conversation with an editable
+draft; there is no separate management session. **Automations** lists scheduled tasks
 that start fresh conversations, with their run histories. Selecting an automation
 opens its latest run directly in the ordinary conversation workbench, with the
 same Conversation and document tabs and file-explorer behavior as other chats.

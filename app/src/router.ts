@@ -8,6 +8,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/chat' },
   { path: '/chat/:sessionId?', redirect: to => ({ name: 'chat', params: { projectId: 'default', sessionId: to.params.sessionId }, query: to.query }) },
   { path: '/projects/:projectId/chat/:sessionId?', name: 'chat', component: ProjectsWorkspace },
+  { path: '/projects/:projectId/dashboard', name: 'project-dashboard', component: ProjectsWorkspace },
   { path: '/projects', name: 'projects', component: ProjectsWorkspace },
   { path: '/knowledge', redirect: '/projects/default/knowledge' },
   { path: '/projects/:projectId/knowledge', name: 'knowledge', redirect: to => ({
