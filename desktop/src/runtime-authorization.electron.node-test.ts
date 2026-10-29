@@ -5,19 +5,21 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 const require = createRequire(import.meta.url)
+const repository = fileURLToPath(new URL('../..', import.meta.url))
 test('real Electron file and Vite-like main-frame fetch receives Child admission; iframe does not', {
   timeout: 60_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY,
 }, async t => {
-  const directory = resolve('.tmp', `electron-child-admission-${randomUUID()}`)
+  const directory = resolve(repository, '.tmp', `electron-child-admission-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   await writeFile(join(directory, 'index.html'), '<!doctype html><title>isolated Child admission</title>')
   const { build } = require('esbuild') as typeof import('esbuild')
-  await build({ stdin: { resolveDir: process.cwd(), contents: `
+  await build({ stdin: { resolveDir: repository, contents: `
     import assert from 'node:assert/strict';
     import {app,BrowserWindow,session} from 'electron';
     import {createServer} from 'node:http';
