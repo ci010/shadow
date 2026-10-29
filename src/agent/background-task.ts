@@ -301,6 +301,10 @@ export class BackgroundTaskManager {
       // The manager receipt is not evidence that the underlying work has stopped.
       await task.execution
       task.result = task.outcome?.status === 'completed' ? task.outcome.result : task.result
+      if (task.kind === 'process' && !task.result && task.observe) {
+        // Output collection must not turn confirmed process cleanup into cancellation failure.
+        try { task.result = await task.observe() } catch { /* observer unavailable after cleanup */ }
+      }
       task.status = 'cancelled'
       task.completedAt = new Date().toISOString()
       task.resolve('Cancelled by owner.')

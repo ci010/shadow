@@ -1,6 +1,6 @@
 <template>
-  <section v-if="embedded || tasks.length || error" v-show="active" class="background-tasks" :class="{ embedded }" :aria-label="t('Background tasks')" :aria-busy="loading">
-    <button v-if="!embedded && tasks.length" type="button" class="background-toggle" :aria-expanded="expanded" :aria-controls="listId" @click="expanded = !expanded">
+  <section v-if="embedded || visibleTasks.length || error" v-show="active" class="background-tasks" :class="{ embedded }" :aria-label="t('Background tasks')" :aria-busy="loading">
+    <button v-if="!embedded && visibleTasks.length" type="button" class="background-toggle" :aria-expanded="expanded" :aria-controls="listId" @click="expanded = !expanded">
       <span class="i-lucide-terminal task-icon" aria-hidden="true" />
       <span>{{ t('Background tasks') }}</span>
       <span class="background-count" role="status">{{ loading ? t('Checking…') : t('{total} running', { total: total }) }}</span>
@@ -9,30 +9,34 @@
     <div v-if="error" class="background-error" role="alert">
       <span>{{ error }}</span><button type="button" class="background-retry" :disabled="loading" @click="refresh">{{ t('Retry') }}</button>
     </div>
-    <p v-if="embedded && !tasks.length && !error" class="background-empty">{{ loading ? t('Checking background tasks…') : t('No background tasks running.') }}</p>
-    <div v-if="tasks.length" v-show="embedded || expanded" :id="listId" class="background-list">
+    <p v-if="embedded && !visibleTasks.length && !error" class="background-empty">{{ loading ? t('Checking background tasks…') : t('No background tasks running.') }}</p>
+    <div v-if="visibleTasks.length" v-show="embedded || expanded" :id="listId" class="background-list">
       <ul>
-        <li v-for="task in tasks" :key="task.id">
-          <span class="running-dot" aria-hidden="true" />
+        <li v-for="task in visibleTasks" :key="task.id">
+          <span v-if="tasks.some(item => item.id === task.id)" class="running-dot" aria-hidden="true" />
           <div class="background-detail">
-            <code class="background-title">{{ task.title || t('Untitled task') }}</code>
+            <button v-if="task.kind === 'process'" type="button" class="process-toggle background-title" :aria-expanded="selected?.id === task.id && logsOpen" :aria-controls="`${listId}-output`" @click="inspect(task)">{{ task.title || t('Untitled task') }} <span aria-hidden="true">{{ selected?.id === task.id && logsOpen ? '−' : '+' }}</span></button>
+            <code v-else class="background-title">{{ task.title || t('Untitled task') }}</code>
             <div class="background-meta">
               <span>{{ labels[task.kind] }}</span>
+              <span v-if="!tasks.some(item => item.id === task.id)">{{ t('Last inspected process (retained)') }}</span>
               <code>bg:{{ task.id }}</code>
               <span v-if="task.status === 'cancelling'" role="status">{{ t('Cancelling…') }}</span>
               <span>{{ t('Started') }} <time :datetime="task.createdAt">{{ started(task.createdAt) }}</time></span>
             </div>
+            <ProcessOutput v-if="selected?.id === task.id" v-show="logsOpen" :id="`${listId}-output`" :api-base="apiBase" :session-id="sessionId" :task-id="task.id" :active="active && logsOpen && (embedded || expanded)" />
           </div>
         </li>
       </ul>
-      <p v-if="total > tasks.length" class="background-limit">{{ t('Showing the latest {shown} of {total} running tasks.', { shown: tasks.length, total }) }}</p>
+      <p v-if="total > visibleTasks.length" class="background-limit">{{ t('Showing the latest {shown} of {total} running tasks.', { shown: visibleTasks.length, total }) }}</p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { t, formatDateTime } from '../i18n.ts'
-import { ref, useId, watch } from 'vue'
+import ProcessOutput from './ProcessOutput.vue'
+import { computed, ref, useId, watch } from 'vue'
 import { fetchBackgroundTasks, type ActiveBackgroundTask } from '../background-tasks.ts'
 import { createLiveRefresh } from '../live-refresh.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
@@ -43,6 +47,16 @@ const emit = defineEmits<{ status: [value: { total: number; loading: boolean; er
 const pool = useLiveClientPool()
 const listId = useId()
 const tasks = ref<ActiveBackgroundTask[]>([])
+// Retain the last inspected process even after the active inventory drops it.
+// A single bounded snapshot is kept; switching conversation disposes it.
+const selected = ref<ActiveBackgroundTask>()
+const logsOpen = ref(false)
+const visibleTasks = computed(() => selected.value && !tasks.value.some(task => task.id === selected.value!.id)
+  ? [...tasks.value, selected.value] : tasks.value)
+function inspect(task: ActiveBackgroundTask) {
+  logsOpen.value = selected.value?.id === task.id ? !logsOpen.value : true
+  selected.value = task
+}
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
@@ -61,6 +75,8 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
   if (identity !== nextIdentity) {
     identity = nextIdentity
     tasks.value = []
+    selected.value = undefined
+    logsOpen.value = false
     total.value = 0
     error.value = ''
     expanded.value = false
@@ -116,10 +132,12 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
 .background-toggle:focus-visible, .background-retry:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .task-icon { width: 16px; height: 16px; flex-shrink: 0; }
 .background-count { flex: 1; text-align: right; white-space: nowrap; }
-.background-list { max-height: 160px; overflow: auto; border: 1px solid var(--c-border); background: var(--c-bg-soft); }
+.background-list { max-height: 520px; overflow: auto; border: 1px solid var(--c-border); background: var(--c-bg-soft); }
 .background-list ul { list-style: none; padding: 4px 10px; margin: 0; }
 .background-list li { display: flex; align-items: flex-start; gap: 9px; padding: 8px 0; }
 .background-detail { flex: 1; min-width: 0; }
+.process-toggle { width: 100%; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; font-family: inherit; }
+.process-toggle:focus-visible { outline: 2px solid var(--c-blue); }
 .background-title { display: block; color: var(--c-text); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .background-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; font-size: 12px; }
 .running-dot { width: 6px; height: 6px; margin-top: 6px; background: var(--c-text-secondary); flex-shrink: 0; }
