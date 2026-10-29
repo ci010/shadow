@@ -30,10 +30,10 @@
           :data-project-id="project.id" :folder-revision="folderRevision"
           :navigation-key="`${route.fullPath}:${visible}`"
           :selected-project-id="selectedProjectId" :selected-session-id="selected?.sessionId ?? ''" :selected-automation-id="automation?.id"
-          :dashboard-selected="selected ? dashboardVisibility.get(selected.key) !== false : false"
+          :dashboard-selected="!!dashboardProject"
           :draft-folder-id="selected?.folder?.id" :remote-folders="(installation.mode === 'main' || installation.mainWorkspace === true)"
           @select="selectSession(project.id, $event)" @draft="(folder, remote) => startDraft(project.id, folder, remote)"
-          @knowledge="openKnowledge(project.id)"
+          @knowledge="openKnowledge(project.id)" @dashboard="openDashboard(project.id)"
           @deleted="deleted(project.id, $event)" @manage="(folder, action) => manageFolder(project, folder, action)"
           @automation="showAutomation(project.id, $event)" @session-automation="(session, job) => identifyAutomation(project.id, session, job)" />
       </div>
@@ -53,7 +53,11 @@
         :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible"
         :selected-session-id="selected?.sessionId"
         @open="openAutomationRun">
-      <section v-if="!selected && !automation" class="project-empty">
+      <ProjectWorkbench v-if="dashboardProject" :key="dashboardProject.id"
+        :api-base="projectBase(apiBase, dashboardProject.id)" :project-id="dashboardProject.id"
+        :project-name="dashboardProject.name" :visible="visible"
+        @navigate="navigate(dashboardProject.id, $event)" @compose="composeFromDashboard(dashboardProject.id, $event)" />
+      <section v-if="!selected && !automation && !dashboardProject" class="project-empty">
         <h1>{{ t('Where would you like to work?') }}</h1>
         <p>{{ t('Choose a folder or start a chat in a project. Each project keeps its own Home and model defaults.') }}</p>
         <button v-for="project in projects" :key="project.id" class="btn" @click="startDraft(project.id)">{{ t('Start in') }} {{ project.name }}</button>
@@ -69,7 +73,6 @@
         :child-session-id="resource.childSessionId"
         :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
         @project-navigation="tab => projectNavigation(resource, tab)"
-        @dashboard-visible="dashboardVisibility.set(resource.key, $event)"
         @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" @deleted="deleted(resource.projectId, $event)" />
       </AutomationDetail>
     </div>
@@ -82,9 +85,10 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ProjectGroup from './ProjectGroup.vue'
+import ProjectWorkbench from './ProjectWorkbench.vue'
 import ProjectConversation from './ProjectConversation.vue'
 import FolderOwnershipDialog from './FolderOwnershipDialog.vue'
 import SidebarResizer from './SidebarResizer.vue'
@@ -117,13 +121,13 @@ const projects = ref<ProjectRecord[]>([])
 const registry = createConversationResources()
 const resources = shallowRef<ConversationResource[]>([])
 const selected = shallowRef<ConversationResource>()
-const dashboardVisibility = reactive(new Map<string, boolean>())
 const { automation, syncAutomationRoute, showAutomation, openAutomationRun, identifyAutomation } = useAutomationNavigation({
   route, router, selected,
   openSession: session => publish(registry.session(session)),
   closeSidebar,
 })
-const selectedProjectId = computed(() => automation.value?.projectId ?? selected.value?.projectId ?? '')
+const dashboardProject = computed(() => route.name === 'project-dashboard' ? projects.value.find(project => project.id === route.params.projectId) : undefined)
+const selectedProjectId = computed(() => dashboardProject.value?.id ?? automation.value?.projectId ?? selected.value?.projectId ?? '')
 const selectedProjectName = computed(() => projects.value.find(project => project.id === selectedProjectId.value)?.name ?? '')
 const instances = new Map<string, InstanceType<typeof ProjectConversation>>()
 const localSidebarOpen = ref(false)
@@ -238,7 +242,7 @@ function publish(resource: ConversationResource) {
   closeSidebar()
 }
 function syncRoute() {
-  if (!props.visible || !['chat', 'project-settings', 'agents'].includes(String(route.name))) return
+  if (!props.visible || !['chat', 'project-dashboard', 'project-settings', 'agents'].includes(String(route.name))) return
   const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
   if (!projectId || !projects.value.some(org => org.id === projectId)) {
     selected.value = undefined
@@ -246,6 +250,7 @@ function syncRoute() {
     if (projectId && !loading.value) error.value = t('This project is unavailable. Refresh the catalog or choose another project.')
     return
   }
+  if (route.name === 'project-dashboard') { selected.value = undefined; automation.value = undefined; closeSidebar(); return }
   const automationId = syncAutomationRoute(projectId)
   const sessionId = typeof route.params.sessionId === 'string' ? route.params.sessionId : ''
   let resource: ConversationResource
@@ -297,17 +302,25 @@ async function createProject() {
     if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not create project. Retry.')
   } finally { saving.value = false }
 }
+function openDashboard(projectId: string) {
+  void router.push({ name: 'project-dashboard', params: { projectId } })
+}
+async function composeFromDashboard(projectId: string, text: string) {
+  await startDraft(projectId)
+  await nextTick()
+  if (selected.value?.projectId === projectId) instances.get(selected.value.key)?.appendDraft(text)
+}
 function startDraft(projectId: string, folder?: FolderRecord, remote = false) {
   automation.value = undefined
   const resource = registry.draft(projectId, folder, remote)
   publish(resource)
-  void router.push(projectChatLocation(resource))
+  return router.push(projectChatLocation(resource))
 }
 const keyboardActive = ref(true)
 const newConversationShortcut = createNewConversationShortcut({
   context() {
     if (!keyboardActive.value || !props.visible || creating.value || hasVisibleNewConversationOverlay(document.querySelectorAll('[aria-modal="true"], dialog[open], [role="menu"], [role="dialog"]'))
-      || !['chat', 'project-settings', 'agents'].includes(String(route.name))) return
+      || !['chat', 'project-dashboard', 'project-settings', 'agents'].includes(String(route.name))) return
     const projectId = selectedProjectId.value || (typeof route.params.projectId === 'string' ? route.params.projectId : '')
     if (!projects.value.some(project => project.id === projectId)) return
     // Ctrl+N matches the sidebar's explicit Start from scratch action, never inherits a workdir.
@@ -389,9 +402,6 @@ function deleted(projectId: string, sessionId: string) {
   if (selected.value?.projectId === projectId && selected.value.sessionId === sessionId) startDraft(projectId)
 }
 function forgetProject(projectId: string) {
-  for (const resource of registry.resources) {
-    if (resource.projectId === projectId) dashboardVisibility.delete(resource.key)
-  }
   registry.removeProject(projectId)
   resources.value = [...registry.resources]
   if (folderOperation.value?.project.id === projectId) folderOperation.value = undefined

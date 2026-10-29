@@ -9,7 +9,7 @@
     @toggle="toggle" @reload="refresh" @scratch="$emit('draft')" @remote="$emit('draft', undefined, true)" @draft="$emit('draft', $event)"
     @manage="(folder, action) => $emit('manage', folder, action)" @automation="$emit('automation', $event)">
     <template #project-name>
-      <button type="button" class="project-entry" @click="$emit('draft')">{{ project.name }}</button>
+      <button type="button" class="project-entry" :class="{ selected: selectedProjectId === project.id && dashboardSelected }" :aria-current="selectedProjectId === project.id && dashboardSelected ? 'page' : undefined" :title="t('{name} dashboard', { name: project.name })" @click="$emit('dashboard')">{{ project.name }}</button>
     </template>
     <template #project-actions>
       <button class="project-settings" :aria-label="t('{name} knowledge', { name: project.name })" :title="t('{name} knowledge', { name: project.name })"
@@ -51,7 +51,7 @@ const props = withDefaults(defineProps<{
   folderRevision?: number
   selectedAutomationId?: string
 }>(), { dashboardSelected: true })
-const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; knowledge: []; 'session-automation': [sessionId: string, jobId?: string] }>()
+const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; knowledge: []; dashboard: []; 'session-automation': [sessionId: string, jobId?: string] }>()
 const scope = computed(() => projectBase(props.apiBase, props.project.id))
 const liveState = useProjectLiveState()
 const homeCache = inject(HomeTreeCacheKey, undefined)
@@ -212,6 +212,7 @@ onUnmounted(() => { disposed = true; stop(); lifetime.abort() })
 
 <style scoped>
 .project-entry { display: block; width: 100%; min-width: 0; min-height: var(--sidebar-row-height); padding: 0; border: 0; background: transparent; color: var(--c-text); text-align: left; font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.project-entry.selected { color: var(--c-primary); text-decoration: underline; text-underline-offset: 4px; }
 .project-entry:hover { color: var(--c-primary); }
 .project-entry:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .project-settings { display: grid; place-items: center; flex-shrink: 0; width: var(--sidebar-action-size); height: var(--sidebar-action-size); padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); }

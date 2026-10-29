@@ -77,7 +77,7 @@ onUnmounted(() => {
   request?.abort()
   window.removeEventListener('shadow:config-changed', defaultsChanged)
 })
-defineExpose({ requestSession: (id: string) => workspace.value?.requestSession(id) })
+defineExpose({ appendDraft: (text: string) => workspace.value?.appendDraft(text), requestSession: (id: string) => workspace.value?.requestSession(id) })
 </script>
 
 <style scoped>
