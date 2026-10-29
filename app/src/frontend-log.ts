@@ -1,3 +1,4 @@
+import { installFrontendNetworkLog } from './frontend-network-log.ts'
 import { createUuid } from './uuid.ts'
 import { redactDiagnosticUrls } from '../../src/runtime/module-diagnostic.ts'
 
@@ -27,7 +28,7 @@ export function summarizeFrontendArgs(args: unknown[]): string {
         const result: Record<string, string> = { name: 'Error' }
         for (const key of ['name', 'message', 'stack']) {
           const descriptor = Object.getOwnPropertyDescriptor(value, key)
-          if (descriptor && 'value' in descriptor && typeof descriptor.value === 'string') result[key] = redactFrontendText(descriptor.value).slice(0, 2048)
+          if (descriptor && 'value' in descriptor && typeof descriptor.value === 'string') result[key === 'message' ? 'detail' : key] = redactFrontendText(descriptor.value).slice(0, 2048)
         }
         return result
       }
@@ -46,7 +47,7 @@ export function summarizeFrontendArgs(args: unknown[]): string {
 }
 
 /** Transport is silent: no console use on any diagnostic failure. */
-export function installFrontendLog(target: Window & { console: Console }, send: (events: Array<{ level: string; message: string }>) => Promise<unknown>): () => void {
+export function installFrontendLog(target: Window & { console: Console }, send: (events: Array<{ level: string; message: string }>) => Promise<unknown>, networkBase?: string): () => void {
   const logger = target.console
   let active = true
   let inside = false
@@ -73,9 +74,13 @@ export function installFrontendLog(target: Window & { console: Console }, send: 
     logger[level] = wrapper
     return wrapper
   })
-  const error = (event: ErrorEvent) => capture('window.error', [event.error ?? event.message])
+  const stopNetwork = networkBase ? installFrontendNetworkLog(target as Window & typeof globalThis, networkBase, message => capture('error', [message])) : () => {}
+  const error = (event: ErrorEvent) => {
+    if (event.error || event.message) capture('window.error', [event.error ?? event.message])
+    else capture('window.error', ['Resource failed to load (URL omitted; native status unavailable)'])
+  }
   const rejection = (event: PromiseRejectionEvent) => capture('unhandledrejection', [event.reason])
-  target.addEventListener('error', error)
+  target.addEventListener('error', error, true)
   target.addEventListener('unhandledrejection', rejection)
   const timer = target.setInterval(() => {
     if (!queue.length || sending) return
@@ -102,8 +107,9 @@ export function installFrontendLog(target: Window & { console: Console }, send: 
   }, 1000)
   return () => {
     active = false; queue = []
+    stopNetwork()
     target.clearInterval(timer)
-    target.removeEventListener('error', error)
+    target.removeEventListener('error', error, true)
     target.removeEventListener('unhandledrejection', rejection)
     levels.forEach((level, index) => { if (logger[level] === wrappers[index]) logger[level] = originals[index]! })
   }
@@ -139,13 +145,13 @@ export function startFrontendLog(base: string, signal: AbortSignal): () => void 
     const response = await fetch(endpoint, {
       method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabId, events }),
     })
-    // Authentication/scope loss ends capture; invalid/oversized batches are
+    // Temporary authentication loss retries without uninstalling hooks; invalid/oversized batches are
     // dropped rather than starving all future logs with a permanent retry.
-    if ([401, 403, 404].includes(response.status)) { stop(); return }
-    if (!response.ok && (response.status === 429 || response.status >= 500)) {
+    if (response.status === 404) { stop(); return }
+    if (!response.ok && ([401, 403, 429].includes(response.status) || response.status >= 500)) {
       throw new Error('Frontend diagnostics batch not accepted')
     }
-  })
+  }, base)
   function stop() {
     active = false
     signal.removeEventListener('abort', stop)

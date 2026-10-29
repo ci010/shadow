@@ -118,3 +118,24 @@ test('host and live topic resolution recognize only canonical project scopes', (
   assert.equal(hostBase(unsupported), unsupported, 'An unsupported suffix is not stripped as a Project scope')
   assert.equal(liveProjectId(unsupported), 'default', 'An unsupported suffix never supplies a Project owner')
 })
+
+test('dev collector observes initial default redirect but never invents Project for unscoped pages', async () => {
+  const { watchFrontendLogScope } = await import('./frontend-log-scope.ts')
+  const router = applicationRouter('http:')
+  const starts: string[] = []
+  const signals: AbortSignal[] = []
+  const stop = watchFrontendLogScope(() => {
+    const id = router.currentRoute.value.params.projectId
+    return typeof id === 'string' ? projectBase('http://fixture.test', id) : undefined
+  }, (base, signal) => { starts.push(base); signals.push(signal); return () => {} })
+  assert.deepEqual(starts, [])
+  await router.push('/')
+  assert.deepEqual(starts, ['http://fixture.test/projects/default/'])
+  await router.push('/projects/other/chat')
+  assert.equal(signals[0]!.aborted, true)
+  assert.equal(starts.at(-1), 'http://fixture.test/projects/other/')
+  await router.push('/projects')
+  assert.equal(signals.at(-1)!.aborted, true)
+  assert.equal(starts.length, 2)
+  stop()
+})
