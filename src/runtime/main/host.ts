@@ -15,7 +15,7 @@ import { createAggregatedProvider } from '../../providers/factory.ts'
 import { providerPlugin } from '../../providers/routes.ts'
 import { createMainCluster, MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS } from '../../cluster/main-cluster.ts'
 import { AtomicFileRegistrySnapshotAdapter } from '../../cluster/persistence.ts'
-import { GatewayClientAddressRegistry, isLoopbackGatewayRequest, registerGatewayRoutes, resolveLaunchCredential, serveGateway, validateLaunchCredential } from '../../gateway/server.ts'
+import { GatewayClientAddressRegistry, registerGatewayRoutes, resolveLaunchCredential, serveGateway, validateLaunchCredential } from '../../gateway/server.ts'
 import { authorizeMainNodeInventory, mainLocalNodeInventory } from '../node-inventory.ts'
 import { LocalRuntimeControl } from '../local-control.ts'
 import { devProxyPlugin } from '../../gateway/dev-proxy.ts'
@@ -134,8 +134,6 @@ export async function startProjectHost(
   const copilotAuth = new CopilotAuthenticatorV2()
   const computer = new ComputerService(createComputerDesktop(), { enabled: options.localExecutor !== false })
   cleanup.push(() => computer.close())
-  const authorizeComputer = async (request: Request) => isLoopbackGatewayRequest(request, clientAddresses)
-    && !mobileAccess?.authorizeMain(request) && !!await authorize(request)
   let provider = createAggregatedProvider(config, copilotAuth)
   const mainCluster = await startup.measure('cluster', () => createMainCluster({
     authorizeInventory: authorize,
@@ -223,7 +221,7 @@ export async function startProjectHost(
         runtime = await scope.run(() => factory(projectConfig, {
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
-          mainCluster, copilotAuth, authorize, realtimeHub, computer, authorizeComputer,
+          mainCluster, copilotAuth, authorize, realtimeHub, computer,
           localExecutor: options.localExecutor !== false,
         }))
         await runtime.ready

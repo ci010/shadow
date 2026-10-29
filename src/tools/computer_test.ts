@@ -54,7 +54,6 @@ test('computer tools use lazy discovery, preserve transient observations through
     assert.equal(f.desktop.calls.length, before)
     assert.match(toolResultText(await invoke('computer_setup', { action: 'approve' })), /invalid arguments/)
     await assert.rejects(invoke('computer_act', f.input(), { recoveringToolCall: true }), ToolOutcomeUnknownError)
-    assert.equal(f.service.status(owner).pending, null)
     await tools.resetDynamicAndWait()
   })
 })
@@ -87,7 +86,7 @@ test('disabled Main policy denies computer tool import and already imported exec
 })
 
 
-test('agent lists and selects without manual sharing; selection does not approve mutations', async t => {
+test('agent lists, selects and executes through ordinary tools without manual sharing', async t => {
   await withTempWorkspace(async workspace => {
     const f = await fixture(t)
     await f.service.release(owner)
@@ -126,10 +125,7 @@ test('agent lists and selects without manual sharing; selection does not approve
     await tools.execute('invoke_tool', { name: 'computer_observe', args: { targetId: f.desktop.target.id } }, context)
     const action = tools.execute('invoke_tool', { name: 'computer_act', args: f.input() }, context)
     await new Promise(resolve => setImmediate(resolve))
-    assert.equal(f.desktop.calls.some(call => call.method === 'act'), false)
-    const pending = f.service.status(owner).pending!
-    assert.ok(pending)
-    f.service.decide(owner, pending.id, false)
+    assert.equal(f.desktop.calls.some(call => call.method === 'act'), true)
     await action
     await invoke({ action: 'release' })
     assert.equal(f.service.status(owner).grant, null)

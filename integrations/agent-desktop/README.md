@@ -49,8 +49,8 @@ dependency-license review and distribution remain unverified.
 - `release {targetId}` -> `{released:true}`; removes target and snapshot.
 - Internal `shutdown` joins the owner thread, irreversible for that addon load.
 - Keyboard/mouse actions use the bound target without a separate foreground toggle.
-  The host requires exact review for foreground input; supported UIA actions run
-  directly. Native focus, protected-target,
+  All actions execute through ordinary computer tools without a dedicated review
+  protocol. Consequential confirmations use the existing agent ask flow. Native focus, protected-target,
   geometry and input-interference checks remain mandatory.
 - `cancelInput(): void` is independent of the owner request queue. A permanent atomic
   latch plus Arc-owned named manual-reset event stop the guard even during blocked UIA.
@@ -431,7 +431,7 @@ The earlier client-only exclusion in both Rust `input_point` and C#
 `InputEnvironment.CheckPoint` disagreed with the already full-window screenshot.
 It is replaced by half-open outer bounds plus selected-root/occlusion checks and
 an explicit timed nonclient hit-test allowlist; UIA password/ancestry checks and
-immutable per-action owner review are unchanged. No desktop-wide input route or
+fresh-observation validation remain enforced. No desktop-wide input route or
 popup authorization is introduced. The bundled computer-use skill source is
 updated with the same boundary (not a runtime shared-skill override).
 

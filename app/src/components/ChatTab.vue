@@ -288,10 +288,6 @@
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="true" />
-        <ComputerControl v-if="canUseComputer" :api-base="apiBase" :actions-target="computerAccessActions"
-          :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
-          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :stage="sessionStage" :can-submit="true" />
         <PublicationRequest :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
@@ -411,7 +407,6 @@
           </div>
           <div class="composer-toolbar">
             <div class="composer-controls">
-              <span ref="computerAccessActions" class="contents" />
               <ComposerPopover ref="composerOptions" :label="mobileLayout ? t('Message options') : t('Add attachments or context')" :sheet="mobileLayout" :title="composerPopoverTitle" :disabled="mobileLayout ? pickingContext || submissionBusy : !canOpenComposerPopover || pickingContext || submissionBusy" :width="220">
                 <template #trigger><span class="i-lucide-plus w-5 h-5" aria-hidden="true" /></template>
                 <template #default="{ close }">
@@ -547,7 +542,6 @@ import { isInputRequest, MAX_YIELD_CUSTOM_TEXT_LENGTH, type AskRequest } from '.
 import { MAX_ANSWER_ATTACHMENTS } from '../../../src/sessions/answer-media.ts'
 import CredentialRequest from './CredentialRequest.vue'
 import BotChatSetup from './BotChatSetup.vue'
-import ComputerControl from './ComputerControl.vue'
 import PublicationRequest from './PublicationRequest.vue'
 import ChannelGroupContext from './ChannelGroupContext.vue'
 import { serviceGroupKey } from '../service-groups.ts'
@@ -751,9 +745,6 @@ const pastingFiles = ref(false)
 const attachmentInput = ref<HTMLInputElement>()
 const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && typeof File === 'function' && typeof FormData === 'function')
 const canPickContext = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
-const computerAccessActions = ref<HTMLElement>()
-const canUseComputer = computed(() => installation.value.mode !== 'client' && isDirectChat.value && !isCall.value && !remoteConversation.value && !props.embedded
-  && !!activeSessionId.value)
 const canOpenComposerPopover = computed(() => canAttachFiles.value || canPickContext.value)
 const composerPopoverTitle = computed(() =>
   remoteConversation.value ? t('Local attachments are not transferred to remote workspaces')

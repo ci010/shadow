@@ -232,18 +232,6 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const sessionB = await json<{ sessionId: string }>(b + `/api/folders/${folderB.id}/sessions`, 'POST', {})
       const aSession = a + `/api/sessions/${encodeURIComponent(sessionA.sessionId)}`
       const bSession = b + `/api/sessions/${encodeURIComponent(sessionB.sessionId)}`
-      const computerPath = a + `/api/computer/${encodeURIComponent(sessionA.sessionId)}`
-      assert.equal((await fetch(base + computerPath)).status, 401)
-      const computer = await json<{ projectId: string; sessionId: string; available: boolean; grant: unknown }>(computerPath)
-      assert.equal(computer.projectId, 'default')
-      assert.equal(computer.sessionId, sessionA.sessionId)
-      assert.equal(computer.available, process.platform === 'win32')
-      assert.equal(computer.grant, null)
-      assert.equal((await request(computerPath)).headers.get('cache-control'), 'no-store')
-      assert.equal((await fetch(base + computerPath, { headers: browserHeaders })).status, 200)
-      assert.equal((await request(b + `/api/computer/${encodeURIComponent(sessionA.sessionId)}`)).status, 403)
-      assert.equal((await fetch(base + a + '/api/computer/stop', { method: 'POST' })).status, 401)
-      assert.deepEqual(await json(a + '/api/computer/stop', 'POST'), { stopped: true })
       const mobileOffer = await json<{ code: string }>('/local/v1/mobile-pairing', 'POST')
       const mobileLogin = await fetch(`http://127.0.0.1:${mobilePort}/mobile/v1/pair`, {
         method: 'POST', headers: { origin: 'capacitor://localhost', 'content-type': 'application/json' },
@@ -253,10 +241,6 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const mobileToken = (await mobileLogin.json()).accessToken
       const mobileHeaders = { origin: 'capacitor://localhost', authorization: `Bearer ${mobileToken}` }
       assert.equal((await fetch(`http://127.0.0.1:${mobilePort}/api/projects`, { headers: mobileHeaders })).status, 200)
-      for (const [path, method] of [[computerPath, 'GET'], [a + '/api/computer/stop', 'POST'],
-        [computerPath + '/windows', 'POST'], [computerPath + '/share', 'POST']]) {
-        assert.equal((await fetch(`http://127.0.0.1:${mobilePort}${path}`, { method, headers: mobileHeaders })).status, 401)
-      }
       assert.equal((await fetch(base + aSession + '/context', { headers: browserHeaders })).status, 200)
       assert.equal((await fetch(base + b + '/api/config/model-defaults', {
         method: 'PATCH', headers: browserHeaders, body: JSON.stringify({ model: null }),
