@@ -17,6 +17,17 @@ async function fixture(root: string): Promise<void> {
     for (const path of [`artifacts/win32-${process.arch}`, 'LICENSE', 'NOTICE']) {
       await cp(join(source, path), join(target, path), { recursive: true })
     }
+    // Preserve the real receipt and all fingerprint inputs, rather than minting
+    // a new receipt or bypassing verification for this isolated build fixture.
+    for (const path of ['integrations/agent-desktop/src', 'integrations/agent-desktop/patches',
+      'integrations/agent-desktop/scripts', 'integrations/agent-desktop/Cargo.toml',
+      'integrations/agent-desktop/Cargo.lock', 'integrations/agent-desktop/build.rs',
+      'src/execution/computer/agent-desktop-worker.js', 'src/execution/computer/agent-desktop-errors.js',
+      'src/execution/computer/stdio-transport.ts', 'src/execution/computer/windows-input.cs',
+      'scripts/agent-desktop-input-guard.ts', 'scripts/agent-desktop-integrity.ts']) {
+      await mkdir(join(root, path, '..'), { recursive: true })
+      await cp(join(repository, path), join(root, path), { recursive: true })
+    }
   }
   await mkdir(join(root, 'src'), { recursive: true })
   await writeFile(join(root, 'package.json'), '{"type":"module"}')

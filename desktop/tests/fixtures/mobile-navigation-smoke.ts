@@ -34,10 +34,10 @@ async function main() {
     })
     await frame()
   }
-  const wait = async (code: string) => {
+  const wait = async (code: string, diagnostics?: string) => {
     const deadline = Date.now() + 12_000
     while (Date.now() < deadline) { if (await execute(code)) return; await delay(40) }
-    throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}\nConsole: ${errors.join('\n')}`)
+    throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}\nConsole: ${errors.join('\n')}${diagnostics ? `\nState: ${JSON.stringify(await execute(diagnostics))}` : ''}`)
   }
   const visible = (selector: string) => `window.__visible(${JSON.stringify(selector)})`
   const click = async (selector: string) => {
@@ -313,7 +313,12 @@ async function main() {
     await escape()
     await view('Renamed on phone')
     await wait(`!!${visible('.chat-history')}`)
-    assert.equal(await execute(`${visible('textarea')} === window.__retainedComposer && ${visible('.chat-messages')} === window.__retainedHistory && window.__retainedHistory.scrollTop === window.__retainedScroll`), true)
+    // Showing the retained v-show panel precedes completion of Chromium layout.
+    // Require the same DOM nodes AND exact saved scroll position, not visibility alone.
+    await wait(`${visible('textarea')} === window.__retainedComposer && ${visible('.chat-messages')} === window.__retainedHistory && window.__retainedHistory.scrollTop === window.__retainedScroll`,
+      `({ composerRetained: ${visible('textarea')} === window.__retainedComposer, historyRetained: ${visible('.chat-messages')} === window.__retainedHistory,
+        scrollTop: window.__retainedHistory.scrollTop, expectedScrollTop: window.__retainedScroll,
+        scrollHeight: window.__retainedHistory.scrollHeight, clientHeight: window.__retainedHistory.clientHeight })`)
     await click('[aria-label="Message options"]')
     await wait(`!!${visible('[role="dialog"][aria-label="Message options"]')}`)
     assert.equal(await execute(`!!${visible('.mobile-message-settings')} && [...document.querySelectorAll('.context-action')].some(el => window.__isVisible(el) && el.textContent.includes('Add file') && !el.disabled)`), true)
