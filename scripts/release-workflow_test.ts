@@ -69,3 +69,15 @@ test('caches separate native downloads by OS/arch and do not retain signing mate
   const signingSwift = mobile.jobs['ios-signed'].steps.find((step: { uses?: string }) => step.uses === 'actions/cache/restore@v4')
   assert.equal(signingSwift.with.path, 'mobile/ios/SourcePackages')
 })
+
+test('Windows native gate accepts postinstall preparation but retains pinned source validation', async () => {
+  const workflow = await yaml('../.github/workflows/release-check.yml')
+  const step = workflow.jobs['windows-release'].steps.find((step: { name?: string }) => step.name === 'Build pinned Windows desktop native resources')
+  assert.match(step.run, /if \(-not \(Test-Path integrations\/agent-desktop\/\.upstream\)\) \{\s+node integrations\/agent-desktop\/scripts\/fetch\.mjs\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}\s+\}/)
+  assert.match(step.run, /node integrations\/agent-desktop\/scripts\/build\.mjs x86_64-pc-windows-msvc\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/)
+  const build = await readFile(new URL('../integrations/agent-desktop/scripts/build.mjs', import.meta.url), 'utf8')
+  assert.match(build, /\['scripts\/fetch\.mjs', '--sync'\]/)
+  assert.match(build, /'--locked'/)
+  const fetch = await readFile(new URL('../integrations/agent-desktop/scripts/fetch.mjs', import.meta.url), 'utf8')
+  assert.match(fetch, /if \(git\(\['rev-parse', 'HEAD'\], upstream\) !== revision\) throw new Error\('Upstream revision mismatch'\)/)
+})

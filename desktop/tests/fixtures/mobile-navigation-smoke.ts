@@ -134,8 +134,11 @@ async function main() {
         assert.equal(layout.input.font, '16px')
         assert.equal(layout.input.rows, 1)
         assert.ok(layout.plus.width >= 44 && layout.plus.height >= 44 && layout.send.width >= 44 && layout.send.height >= 44, JSON.stringify(layout))
-        assert.ok(layout.plus.top < layout.inputBottom && layout.send.bottom > layout.inputTop, 'Plus, message and send share one row')
-        assert.ok(layout.composer <= 76, JSON.stringify(layout))
+        // The action toolbar intentionally occupies a separate row (ccbf101),
+        // keeping a full-width input clear of stop/send/queue actions.
+        assert.ok(layout.plus.top >= layout.inputBottom && layout.send.top >= layout.inputBottom, JSON.stringify(layout))
+        assert.ok(Math.abs(layout.plus.top - layout.send.top) <= 1, 'Message options and send share the action row')
+        assert.ok(layout.composer <= 112, JSON.stringify(layout))
         const chat = await execute(`(() => {
           const list = ${visible('.chat-message-list')}.getBoundingClientRect();
           const bubble = ${visible('.chat-assistant')}.getBoundingClientRect();
@@ -205,7 +208,7 @@ async function main() {
     await resize(390)
     await execute(`{ const input = ${visible('textarea')}; input.value=''; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
     await frame()
-    assert.ok(await execute(`${visible('.composer-box')}.getBoundingClientRect().height <= 76`), 'Clearing multiline text returns to compact geometry')
+    assert.ok(await execute(`${visible('.composer-box')}.getBoundingClientRect().height <= 112`), 'Clearing multiline text returns to compact two-row geometry')
     for (const gesture of [
       { selector: '.chat-history', x: 220, y: 200, endX: 320, endY: 202 },
       { selector: '.chat-history', x: 12, y: 200, endX: 100, endY: 350 },

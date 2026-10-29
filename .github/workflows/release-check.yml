@@ -110,8 +110,12 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Build pinned Windows desktop native resources
         run: |
-          node integrations/agent-desktop/scripts/fetch.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # postinstall may already have fetched the pinned sources.
+          # build.mjs revalidates the revision and synchronizes owned patches.
+          if (-not (Test-Path integrations/agent-desktop/.upstream)) {
+            node integrations/agent-desktop/scripts/fetch.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           node integrations/agent-desktop/scripts/build.mjs x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native Windows release tests
