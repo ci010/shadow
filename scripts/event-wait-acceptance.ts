@@ -21,7 +21,7 @@ import { EventService } from '../src/events/service.ts'
 import { PollingSources } from '../src/events/polling-sources.ts'
 import { ProcessManager } from '../src/execution/processes/manager.ts'
 import { defaultManagedShell } from '../src/execution/processes/shells.ts'
-import { CopilotProvider } from '../src/providers/copilot.ts'
+import { CopilotProviderV2 } from '../src/providers/copilot-v2.ts'
 import { createProjectScope } from '../src/projects/scope.ts'
 import { resolveContextWindow } from '../src/providers/model-registry.ts'
 import { EvalBridgeRuntime } from '../src/script-runtime/bridge.ts'
@@ -453,7 +453,7 @@ async function main() {
   const holdMs = z.coerce.number().int().min(30).max(180).parse(values['hold-seconds']) * 1000
   const timeoutMs = z.coerce.number().int().min(60).max(900).parse(values['timeout-seconds']) * 1000
   if (timeoutMs <= holdMs + 30_000) throw new Error('Timeout must leave more than 30 seconds after run completion')
-  const provider = new CopilotProvider()
+  const provider = new CopilotProviderV2()
   if (!(await provider.listModels()).includes(values.model)) throw new Error(`Copilot model ${values.model} is unavailable`)
   const result = await runEventWait({
     output: values.out, scenario: scenarioSchema.parse(values.scenario), model: values.model,

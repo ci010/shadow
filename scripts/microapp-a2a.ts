@@ -16,7 +16,7 @@ import { DEFAULT_COPILOT_MODEL } from '../src/config/defaults.ts'
 import { projectPaths } from '../src/projects/contracts.ts'
 import { startMainRuntime } from '../src/runtime/main/start.ts'
 import { providerPlugin } from '../src/providers/routes.ts'
-import { CopilotProvider } from '../src/providers/copilot.ts'
+import { CopilotProviderV2 } from '../src/providers/copilot-v2.ts'
 import { writePrivateFile } from '../src/config/store.ts'
 import { terminateProcessTree, type ManagedProcessStatus } from '../src/execution/processes/manager.ts'
 import { reserveAppPort } from '../src/microapps/ports.ts'
@@ -199,7 +199,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
   const directory = acceptanceRuntimeDirectory(output, runtimeRoot)
   await mkdir(output)
   await mkdir(directory)
-  const provider = new CopilotProvider()
+  const provider = new CopilotProviderV2()
   const model = process.env.SHADOW_MICROAPP_MODEL ?? DEFAULT_COPILOT_MODEL
   try {
     const models = await provider.listModels()

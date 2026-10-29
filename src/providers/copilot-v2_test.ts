@@ -79,8 +79,8 @@ for (const api of ['https://attacker.example', 'https://copilot-api.other.ghe.co
 test('legacy cache is not treated as OAuth; rollback restores full profile; signout cannot revive', async () => {
   const f = fixture()
   const grant = await f.login()
-  const legacy = f.auth.forLegacyInstance('copilot')
-  legacy.persistGrant({ accessToken: 'old-identity', apiKey: { token: 'old-short-key', expires_at: 999999 } })
+  f.files.set('synthetic/access-token', 'old-identity')
+  f.files.set('synthetic/api-key.json', JSON.stringify({ token: 'old-short-key', expires_at: 999999 }))
   assert.equal(f.auth.hasAccessToken(), false)
   await assert.rejects(f.auth.getApiKey())
   const before = new Map(f.files)
@@ -91,7 +91,7 @@ test('legacy cache is not treated as OAuth; rollback restores full profile; sign
   f.auth.signOut()
   undo()
   await assert.rejects(f.auth.getApiKey())
-  assert.equal(legacy.hasAccessToken(), true) // Other host legacy files are preserved.
+  assert.equal(f.files.get('synthetic/access-token'), 'old-identity') // Other host legacy files are preserved.
 })
 test('late authorization response is fenced by signout', async () => {
   const f = fixture()
@@ -157,18 +157,30 @@ test('direct OAuth models request uses App header and retains Responses capabili
   } finally { globalThis.fetch = previous }
 })
 
-test('v1 rejects direct OAuth cache without inference reuse or legacy token exchange', async () => {
-  const f = fixture()
-  f.auth.persistGrant(await f.login())
-  // Construct the rollback view AFTER the enterprise host selection was committed.
-  const legacy = f.auth.forLegacyInstance('copilot')
-  assert.equal(legacy.getHost(), 'msft.ghe.com')
-  assert.equal(legacy.hasValidApiKey(), false)
-  assert.equal(legacy.hasAccessToken(), false)
-  const snapshot = new Map(f.files)
-  await assert.rejects(legacy.getApiKey(), (e: unknown) => e instanceof CopilotAuthError && e.code === 'missing')
-  await assert.rejects(legacy.getApiKey(undefined, true), (e: unknown) => e instanceof CopilotAuthError && e.code === 'missing')
-  assert.deepEqual(f.files, snapshot)
-  assert.equal(f.urls.length, 3, 'rollback must not exchange the App OAuth as a legacy identity token')
-  assert.equal(await f.auth.getApiKey(), 'synthetic-oauth')
+test('current device polling preserves slow_down intervals, cancellation and closed host validation', async () => {
+  let now = 1_000_000
+  const waits: number[] = []
+  const urls: string[] = []
+  const replies: unknown[] = [
+    { device_code: 'synthetic-device', user_code: 'ABCD-1234', verification_uri: 'https://github.com/login/device', expires_in: 60, interval: 2 },
+    { error: 'slow_down' }, { error: 'authorization_pending' },
+    { access_token: 'synthetic-oauth', scope: 'copilot' }, { copilot_plan: 'individual' },
+  ]
+  const auth = new CopilotAuthenticatorV2('synthetic-poll', {
+    isolated: true, now: () => now,
+    storage: { read: () => undefined, write: () => assert.fail('Polling must not persist'), remove: () => assert.fail('Polling must not remove credentials') },
+    wait: async (ms, signal) => { signal?.throwIfAborted(); waits.push(ms); now += ms },
+    fetch: async url => { urls.push(String(url)); assert.ok(replies.length); return Response.json(replies.shift()) },
+  })
+  await assert.rejects(auth.startDeviceLogin(undefined, 'attacker.example'))
+  assert.equal(urls.length, 0)
+  const device = await auth.startDeviceLogin()
+  const grant = await auth.completeDeviceLogin(device)
+  assert.equal(grant.accessToken, 'synthetic-oauth')
+  assert.deepEqual(waits, [2000, 7000, 7000])
+  assert.equal(urls.at(-1), 'https://api.github.com/copilot_internal/user')
+  const controller = new AbortController(); controller.abort()
+  const count = urls.length
+  await assert.rejects(auth.completeDeviceLogin(device, controller.signal))
+  assert.equal(urls.length, count)
 })

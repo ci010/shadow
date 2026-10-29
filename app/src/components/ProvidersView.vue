@@ -27,8 +27,8 @@
             <p v-if="item.baseUrl" class="provider-endpoint" :title="item.baseUrl">{{ item.baseUrl }}</p>
             <p v-else class="provider-endpoint">{{ item.authMode === 'copilot' ? t('GitHub account') : t('Provider endpoint') }}</p>
             <div class="provider-card-footer">
-              <span class="provider-state" :class="{ 'needs-attention': item.selected && !status?.ready }">
-                {{ item.selected ? status?.ready ? t('Ready') : t('Needs attention') : t('Configured') }}
+              <span class="provider-state" :class="{ 'needs-attention': item.reason || (item.selected && !status?.ready) }">
+                {{ item.reason ? t('Needs attention') : item.selected ? status?.ready ? t('Ready') : t('Needs attention') : t('Configured') }}
               </span>
               <button :aria-label="t('Configure {value1}', { value1: item.name || providerDisplayName(item.type ?? item.provider) })" :aria-pressed="editing === item.provider" :disabled="saving" @click="editProvider(item.provider)">
                 <span class="i-lucide-settings-2" aria-hidden="true" /> {{ t('Configure') }}
@@ -99,7 +99,7 @@ const formStatus = computed<ProviderSetupStatus | null>(() => {
   if (item.selected && props.status?.provider === item.provider) return { ...props.status, type: item.type, name: item.name }
   return {
     provider: item.provider, type: item.type, name: item.name, authMode: item.authMode, hasApiKey: item.hasApiKey,
-    baseUrl: item.baseUrl, host: item.host, ready: false,
+    baseUrl: item.baseUrl, host: item.host, reason: item.reason, ready: false,
     model: item.model ?? providerPresets.find(preset => preset.id === (item.type ?? item.provider))?.model ?? '',
   }
 })

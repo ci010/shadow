@@ -86,8 +86,7 @@ and hosted GHE (`*.ghe.com`): client `Ov23ctr1Udn5GokVCVJf`, requested scope exa
 `copilot`. The client was traced from the local GitHub Copilot App's native request
 construction; the minimal scope subset is an explicit operator choice, not a claim
 that the App itself only requests this permission. See [native evidence and boundaries](copilot-app-auth-evidence.md).
-The old VS Code-client / GHE `user:email` profile is no longer used by v2.
-V1 retains its existing client and `read:user` behavior for rollback.
+The old VS Code-client / GHE authentication profiles and token exchange are removed.
 
 New v2 login responses must include a string `scope` containing the standalone
 `copilot` token (comma/ASCII-whitespace separated). Missing, malformed or insufficient
@@ -105,8 +104,8 @@ it does not preserve a second archived copy of the old v1 credential.
 
 Storage remains private-file based. This change does not implement Windows Credential
 Manager, extract credentials from the official App, or claim to reproduce its complete
-runtime token protocol. Existing Chat/Responses serialization and billing remain shared
-with v1; credential acquisition and integration headers are version-specific.
+runtime token protocol. Existing Chat/Responses serialization and billing remain in the shared Copilot
+base; v2 supplies credential acquisition and integration headers.
 Real operator-assisted verification on `msft.ghe.com` passed onboarding, readiness
 recheck, 17 selectable models and one `gpt-5-mini` Chat-completions request using the
 production classes with isolated in-memory storage. It did not sign the running
@@ -120,15 +119,20 @@ tokens and arbitrary diagnostics are never returned. A rejected check is not by 
 proof of an absent license: verify the host/account that owns the subscription.
 Onboarding requires the access check to succeed before committing credentials.
 
-For an explicit rollback, stop/restart Main with the same instance ID configured as
-`type: "copilot-v1"` (for the legacy identity: `"copilot": { "type": "copilot-v1" }`).
-Qualified model IDs do not change. Because the direct OAuth profile and old short-key
-profile are not interchangeable, rollback can require a fresh v1 sign-in. To return,
-restore `type: "copilot"` or `"copilot-v2"` and restart, then sign in if needed. Do not run
-v1 and v2 brokers concurrently for the same instance: their in-memory generations
-are not synchronized. The settings UI keeps types immutable and is not a live
-version-switch control. No live process restart or real-account login is performed
-by the synthetic regression tests.
+The old `copilot-v1` authentication flow is no longer available. Explicit v1
+configurations remain registered as retired placeholders: Main and settings can
+start, but every request addressed to a retired connection fails explicitly without
+falling back to another account. Nonselected retired records do not block valid v2
+connections. Select another configured connection in settings to continue, or add
+a new Copilot connection and sign in. To reuse the retired connection ID, change
+its configured type to `copilot` or `copilot-v2`, then sign in again if required. Stop Main before manually changing an existing
+instance's type; settings do not switch connection types live. Credentials are not
+deleted or rewritten by this removal, and valid v2 sign-ins remain usable. Do not
+clear the shared credential directory: it also contains v2 accounts and caches.
+To remove an unused retired record, stop Main and remove only that provider entry
+from configuration; update any active model/quick-model/agent overrides that still
+reference it. Do not remove credential files as part of this configuration cleanup.
+Historical sessions remain readable; their old provider references are not migrated.
 
 ## Failures and removal
 

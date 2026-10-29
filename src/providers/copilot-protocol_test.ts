@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { basename, join } from 'node:path'
 import { Hono } from 'hono'
-import { CopilotAuthenticator, CopilotProvider, copilotModelEndpoint } from './copilot.ts'
+import { CopilotAuthenticatorV2, CopilotProviderV2 } from './copilot-v2.ts'
+import { copilotModelEndpoint } from './copilot.ts'
 import { AggregatedProvider } from './aggregated.ts'
 import { ProviderHttpError, type ChatMessage, type ModelInfo } from './provider.ts'
 import { providerPlugin } from './routes.ts'
@@ -31,10 +32,10 @@ const chatReply = { model: dual.id, choices: [{ message: { content: 'Hello' }, f
 
 function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, cache?: ModelInfo[]) {
   const files = new Map<string, string>([
-    ['api-key.json', JSON.stringify({ token: 'synthetic-test-key', expires_at: Date.now() / 1000 + 3600 })],
+    ['api-key.json', JSON.stringify({ token: 'synthetic-test-key', expires_at: Date.now() / 1000 + 3600, directOAuth: { clientId: 'Ov23ctr1Udn5GokVCVJf', scope: 'copilot', expiryKnown: true } })],
   ])
   if (cache) files.set('models.json', JSON.stringify({ models: cache, fetchedAt: Date.now() }))
-  const auth = new CopilotAuthenticator(join(process.cwd(), '.test-data', 'virtual-protocol-auth'), {
+  const auth = new CopilotAuthenticatorV2(join(process.cwd(), '.test-data', 'virtual-protocol-auth'), {
     storage: {
       read: (path) => files.get(basename(path)),
       write: (path, value) => { files.set(basename(path), value) },
@@ -63,7 +64,7 @@ function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, ca
   })
   return {
     auth, files, posts,
-    provider: new CopilotProvider(auth),
+    provider: new CopilotProviderV2(auth),
     reads: () => modelReads,
     metadata: (value: unknown) => { modelResponse = value },
     reply: (value: Response) => { postResponse = value },
@@ -165,7 +166,7 @@ test('new model capabilities survive cache restoration and an offline model look
   const cached = JSON.parse(f.files.get('models.json')!)
   assert.deepEqual(cached.models.find((model: ModelInfo) => model.id === astra.id).supportedEndpoints, astra.supported_endpoints)
   f.metadata(new Response('offline', { status: 503 }))
-  await new CopilotProvider(f.auth).chat([{ role: 'user', content: 'hi' }], [], { model: astra.id })
+  await new CopilotProviderV2(f.auth).chat([{ role: 'user', content: 'hi' }], [], { model: astra.id })
   assert.equal(f.posts[0].path, '/responses')
 })
 
@@ -182,7 +183,7 @@ test('models hidden from the picker retain endpoint routing for saved sessions a
   await f.provider.chat([{ role: 'user', content: 'hi' }], [], { model: astra.id })
   assert.equal(f.posts[0].path, '/responses')
   f.metadata(new Response('offline', { status: 503 }))
-  await new CopilotProvider(f.auth).chat([{ role: 'user', content: 'hi' }], [], { model: astra.id })
+  await new CopilotProviderV2(f.auth).chat([{ role: 'user', content: 'hi' }], [], { model: astra.id })
   assert.equal(f.posts[1].path, '/responses')
 })
 
