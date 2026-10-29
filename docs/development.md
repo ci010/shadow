@@ -211,10 +211,15 @@ host/sidecar attestation. Development or tests must not log or persist the priva
 
 ### Frontend console diagnostics (development only)
 
-With backend `NODE_ENV=development` and a Vite development renderer, the agent can
+With backend `NODE_ENV=development`, the agent can
 use `read({ path: "v:runtime/frontend-logs" })` (or offset/limit paging). Read
 `v:runtime` for the live guide. Production does not register ingestion or advertise
-this path, and production renderers do not install hooks. Restart the dev backend
+this path. All renderer builds discover the authenticated Project capability; a
+production-built renderer (including Main-served assets loaded by a Windows Child)
+installs no console/network hooks until Main returns `enabled: true`. Production
+Main returns 404, so production defaults still do not collect. Capability failure
+retries every five seconds without hooks in a built renderer; 404 or explicit
+disabled stops polling until a new scope/reload. Restart the dev backend
 after updating backend code; reload the renderer after updating frontend code.
 No automatic restart is performed by this feature.
 
@@ -235,7 +240,8 @@ not just the event/character limits. Capture continues during an in-flight reque
 A disabled/404 capability restores hooks without sending. Project or API-base
 changes, unmount and HMR discard the local queue, abort requests and restore hooks
 synchronously. An unscoped route has no capture. A client-generated tab ID is
-unverified; there is no session association. Global console events are associated with the visible route, not
+unverified; coarse `client.platform` and `client.renderer` labels are also
+unverified diagnostic hints, never authorization. There is no session association. Global console events are associated with the visible route, not
 proven to originate in that Project (including background components).
 
 Transport uses `credentials: 'same-origin'`, matching normal API requests: web
@@ -245,7 +251,10 @@ its explicit origin allowlist and does not enable cross-origin cookie credential
 Using `include` here causes browsers to reject even HTTP 200 responses from the
 dev gateway, because it intentionally omits `Access-Control-Allow-Credentials`.
 The real-browser regression is `app/src/frontend-log-browser_test.ts` (isolated
-Electron profile, two ephemeral loopback ports, real gateway/preflight/ingestion).
+Electron profile, two ephemeral loopback ports, production-built collector,
+Child admission/CORS, signed device challenge tunnel and distinct Main Project ring).
+This exercises the cross-device protocol on one test host, not the user's live
+Windows renderer or physical Windows→Mac network.
 
 Ingestion uses existing Project gateway authentication and a Project-owned memory
 ring, never a body-supplied Project ID. `POST /projects/<id>/api/runtime/frontend-logs`
