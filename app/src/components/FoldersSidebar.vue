@@ -58,7 +58,7 @@
           </template>
         </TreeRow>
         <div v-if="!isRail && expandedFolders.has(group.folder.id) && group.sessions.length" class="folder-conversations">
-          <FolderSessionList :sessions="sortSidebarChats(group.sessions, folderNames, chatSort)" :session-metadata="sessionMetadata" :depth="1" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+          <FolderSessionList :sessions="sortSidebarChats(group.sessions, folderNames, chatSort, draftActivity)" :session-metadata="sessionMetadata" :depth="1" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
         </div>
       </section>
       </template>
@@ -137,6 +137,7 @@
 <script setup lang="ts">
 import { formatDateTime, i18n, t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, useId, watch } from 'vue'
+import { composerDraftKey, composerDraftEditedAt, composerDraftRevision } from '../composables/useComposerDraft.ts'
 import { formatSidebarActivity } from '../sidebar-chat-time.ts'
 import FolderDialog from './FolderDialog.vue'
 import FolderSessionList from './FolderSessionList.vue'
@@ -155,7 +156,7 @@ import { prominentWorkingStage } from '../session-activity.ts'
 import { activeSubagentsByOwner, summarizeSubagents } from '../subagent-executions.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { createFoldersClient, type CloneView, type FolderRecord } from '../folders-client.ts'
-import { automationSessionOwners, groupFolderSessions, sortSidebarChats, restoreChatListPreferences, saveChatListPreferences, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
+import { automationSessionOwners, groupFolderSessions, sidebarChatActivity, sortSidebarChats, restoreChatListPreferences, saveChatListPreferences, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
 import { botPlatformLabel, groupBotConversations, restoreCollapsedBots, saveCollapsedBots, type SidebarBot } from '../bot-sidebar.ts'
 
 const props = defineProps<{
@@ -209,9 +210,21 @@ watch(folderGrouped, () => {
 const folderNames = computed(() => sidebarFolderLabels(folders.value, nodes.value, t('This computer')))
 const folderTones = computed(() => sidebarFolderTones(folders.value))
 const chatGroups = computed(() => groupBotConversations(folderGrouped.value ? groups.value.chats : groups.value.unified, props.projectId, props.bots))
+const storageRevision = ref(0)
+const draftActivity = computed(() => {
+  void composerDraftRevision.value
+  void storageRevision.value
+  const activity = new Map<string, number>()
+  for (const session of props.sessions) {
+    try { activity.set(session.sessionId, composerDraftEditedAt(window.localStorage,
+      composerDraftKey(props.apiBase, props.projectId ?? '', session.sessionId))) } catch { /* Optional storage. */ }
+  }
+  return activity
+})
+const refreshDraftActivity = () => { storageRevision.value++ }
 const sortedFolders = computed(() => [...groups.value.folders].sort((a, b) =>
-  Math.max(0, ...b.sessions.map(session => Date.parse(session.lastActivityAt ?? '') || 0)) - Math.max(0, ...a.sessions.map(session => Date.parse(session.lastActivityAt ?? '') || 0))))
-const sortedChats = computed(() => sortSidebarChats(chatGroups.value.chats, folderNames.value, chatSort))
+  Math.max(0, ...b.sessions.map(session => sidebarChatActivity(session, draftActivity.value.get(session.sessionId)))) - Math.max(0, ...a.sessions.map(session => sidebarChatActivity(session, draftActivity.value.get(session.sessionId))))))
+const sortedChats = computed(() => sortSidebarChats(chatGroups.value.chats, folderNames.value, chatSort, draftActivity.value))
 const activityNow = ref(Date.now())
 let activityTimer: ReturnType<typeof setInterval> | undefined
 function startActivityClock() {
@@ -421,10 +434,10 @@ watch(() => props.folderRevision, () => {
   loading.value = false
   void loadFolders()
 })
-onMounted(() => { startActivityClock(); observeSidebar(); void loadFolders(); window.addEventListener('resize', closeOnResize) })
+onMounted(() => { window.addEventListener('storage', refreshDraftActivity); startActivityClock(); observeSidebar(); void loadFolders(); window.addEventListener('resize', closeOnResize) })
 onActivated(() => { startActivityClock(); active = true; observeSidebar(); void loadFolders() })
 onDeactivated(deactivate)
-onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnResize) })
+onUnmounted(() => { window.removeEventListener('storage', refreshDraftActivity); deactivate(); window.removeEventListener('resize', closeOnResize) })
 </script>
 
 <style scoped>

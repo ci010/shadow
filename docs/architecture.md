@@ -2411,6 +2411,14 @@ conversation mounted. Agents is reached from the project sidebar rather than
 the Diagnostics navigation, which still owns Spans and Logs. Session Diagnosis
 remains a separate permanent conversation tab.
 
+Sidebar chat recency uses the later of persisted message activity and the last
+actual edit to a nonblank local composer draft, within the existing project,
+folder, bot and automation groups. Drafts are not permanently pinned: clearing or
+sending removes their activity contribution. Opening, switching, restoring and
+migrating drafts do not refresh edit time. Browser storage preserves draft text
+and optional activity sidecars scoped by API endpoint, Project and session;
+legacy drafts without edit metadata keep message-based ordering until edited.
+
 Folder registry loading does not insert a sidebar text row. Existing folder
 icons become same-size loading indicators, with a header indicator for initial
 loads, an accessible status announcement, and reduced-motion support. Refreshes

@@ -299,11 +299,15 @@ export function restoreChatListPreferences(storage: Pick<Storage, 'getItem'>, ap
 export function saveChatListPreferences(storage: Pick<Storage, 'setItem'>, apiBase: string, projectId: string | undefined, value: ChatListPreferences) {
   try { storage.setItem(chatListKey(apiBase, projectId), JSON.stringify(value)) } catch { /* Storage is optional. */ }
 }
+export function sidebarChatActivity(session: SidebarSession, draftEditedAt = 0): number {
+  const messageTime = Date.parse(session.lastActivityAt ?? '')
+  return Math.max(Number.isFinite(messageTime) ? messageTime : 0, Number.isFinite(draftEditedAt) ? draftEditedAt : 0)
+}
+
 /** lastActivityAt is set when messages are persisted, not when a chat is merely opened. */
-export function sortSidebarChats(sessions: SidebarSession[], folders: ReadonlyMap<string, string>, sort: ChatListSort): SidebarSession[] {
+export function sortSidebarChats(sessions: SidebarSession[], folders: ReadonlyMap<string, string>, sort: ChatListSort, draftActivity: ReadonlyMap<string, number> = new Map()): SidebarSession[] {
   const timestamp = (session: SidebarSession) => {
-    const time = Date.parse(session.lastActivityAt ?? '')
-    return Number.isFinite(time) ? time : 0
+    return sidebarChatActivity(session, draftActivity.get(session.sessionId))
   }
   return [...sessions].sort((a, b) => {
     if (sort === 'folder') {
