@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { z } from 'zod'
 import { DEFAULT_COPILOT_MODEL } from '../src/config/defaults.ts'
-import { CopilotProvider } from '../src/providers/copilot.ts'
+import { CopilotProviderV2 } from '../src/providers/copilot-v2.ts'
 import { runEventWait } from './event-wait-acceptance.ts'
 import { GitHubWait } from './event-wait-github.ts'
 
@@ -21,7 +21,7 @@ async function main() {
     repository: values.repository, branch: values.branch, sha: z.string().parse(values.sha),
     requestId: z.string().parse(values.request), ciRunId: z.coerce.number().int().positive().parse(values['ci-run']),
   })
-  const provider = new CopilotProvider()
+  const provider = new CopilotProviderV2()
   if (!(await provider.listModels()).includes(values.model)) throw new Error(`Model unavailable: ${values.model}`)
   await mkdir(join(output, '..'), { recursive: true })
   const result = await runEventWait({

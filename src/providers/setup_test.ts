@@ -9,14 +9,15 @@ import { ConfigSchema, type Config } from '../config/schema.ts'
 import { AppProviderConfigStore } from '../projects/config-store.ts'
 import { ConfigStore } from '../config/store.ts'
 import { configPlugin } from '../config/routes.ts'
-import { CopilotAuthenticator, COPILOT_VERIFICATION_URI } from './copilot.ts'
+import { CopilotAuthenticatorV2 } from './copilot-v2.ts'
+import { COPILOT_VERIFICATION_URI } from './copilot.ts'
 import { ProviderSetup } from './setup.ts'
 import { providerPlugin } from './routes.ts'
 import { createProvider, resolveProviderSettings } from './factory.ts'
 import type { LLMProvider } from './provider.ts'
 
 const epoch = 1_800_000_000_000
-const key = { token: 'synthetic-copilot-token', expires_at: epoch / 1000 + 3600 }
+const key = { token: 'synthetic-copilot-token', expires_at: epoch / 1000 + 3600, directOAuth: { clientId: 'Ov23ctr1Udn5GokVCVJf', scope: 'copilot', expiryKnown: true } }
 const device = {
   device_code: 'synthetic-private-device',
   user_code: 'ABCD-1234',
@@ -34,7 +35,7 @@ function authHarness(options: { existing?: boolean; poll?: unknown; failWrite?: 
   let releaseStart!: () => void
   const startGate = new Promise<void>((resolve) => { releaseStart = resolve })
   const tokenDir = join(process.cwd(), '.test-data', 'virtual')
-  const auth = new CopilotAuthenticator(tokenDir, {
+  const auth = new CopilotAuthenticatorV2(tokenDir, {
     now: () => epoch,
     storage: {
       read: (path) => files.get(relative(tokenDir, path)),
@@ -60,8 +61,8 @@ function authHarness(options: { existing?: boolean; poll?: unknown; failWrite?: 
         if (options.blockedStart) await startGate
         return Response.json({ ...device, verification_uri: `${new URL(String(url)).origin}/login/device` })
       }
-      if (String(url).endsWith('/access_token')) return Response.json(options.poll ?? { access_token: 'synthetic-access' })
-      return Response.json(key)
+      if (String(url).endsWith('/access_token')) return Response.json(options.poll ?? { access_token: 'synthetic-access', scope: 'copilot' })
+      return Response.json({ copilot_plan: 'individual' })
     }) as typeof fetch,
   })
   return { auth, files, calls, releasePoll: () => releasePoll(), releaseStart: () => releaseStart() }
@@ -265,7 +266,7 @@ test('configured inventory includes nonselected cached Copilot without getting o
     const before = [...auth.files]
     const { providers } = await (await f.app.request('/api/provider/configured')).json()
     assert.deepEqual(providers[0], { provider: 'local', authMode: 'none', hasApiKey: false, selected: true, model: 'small@local', baseUrl: 'http://localhost:11434/v1' })
-    assert.deepEqual(providers.slice(1), cache === 'access' || cache === 'valid-key'
+    assert.deepEqual(providers.slice(1), cache === 'valid-key'
       ? [{ provider: 'copilot', authMode: 'copilot', host: 'github.com', hasApiKey: false, selected: false }]
       : [])
     assert.deepEqual([...auth.files], before)
@@ -465,7 +466,7 @@ test('existing Copilot authorization saves selected provider/model before succee
   assert.equal(result.state, 'succeeded')
   assert.equal(result.ready, true)
   assert.equal(f.active().agent.model, 'gpt-4.1@copilot')
-  assert.equal(f.auth.calls.length, 0)
+  assert.equal(f.auth.calls.length, 1, 'Current OAuth authorization is explicitly rechecked')
 })
 
 test('denied/expired flows are recoverable and token storage failures cannot mark ready', async (t) => {
@@ -601,7 +602,7 @@ test('GHE login HTTP selects its host through OAuth, persists it, and exposes no
     assert.deepEqual(f.auth.calls, [
       `https://${host}/login/device/code`,
       `https://${host}/login/oauth/access_token`,
-      `https://api.${host}/copilot_internal/v2/token`,
+      `https://api.${host}/copilot_internal/user`,
     ])
     const status = await f.setup.status()
     assert.equal(status.host, host)
@@ -874,11 +875,11 @@ test('logout removes target provider without falling back or changing other acco
 test('logout clears current profile host credentials and model cache only', async t => {
   const f = fixture(t, { providers: { work: { type: 'copilot' }, personal: { type: 'copilot' } } })
   const work = f.auth.auth.forInstance('work'), personal = f.auth.auth.forInstance('personal')
-  work.persistGrant({ host: 'octocat.ghe.com', accessToken: 'synthetic-enterprise', apiKey: key })
+  work.persistGrant({ host: 'octocat.ghe.com', accessToken: key.token, apiKey: key })
   work.writeModelsCache([{ id: 'enterprise-model' }])
-  work.persistGrant({ host: 'github.com', accessToken: 'synthetic-work', apiKey: key })
+  work.persistGrant({ host: 'github.com', accessToken: key.token, apiKey: key })
   work.writeModelsCache([{ id: 'work-model' }])
-  personal.persistGrant({ accessToken: 'synthetic-personal', apiKey: key })
+  personal.persistGrant({ accessToken: key.token, apiKey: key })
   personal.writeModelsCache([{ id: 'personal-model' }])
   const retained = new Map([...f.auth.files].filter(([name]) => name.includes('octocat.ghe.com') || name.includes(join('instances', 'personal'))))
   assert.ok(retained.size > 0)

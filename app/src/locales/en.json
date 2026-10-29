@@ -4102,5 +4102,6 @@
   "Could not copy output. Select and copy the text manually.": "Could not copy output. Select and copy the text manually.",
   "Process output is unavailable. Retry to reconnect.": "Process output is unavailable. Retry to reconnect.",
   "Main returned invalid process output.": "Main returned invalid process output.",
-  "Last inspected process (retained)": "Last inspected process (retained)"
+  "Last inspected process (retained)": "Last inspected process (retained)",
+  "This Copilot authentication version is no longer supported. Select another connection to continue. To reuse this connection ID, stop Main and change its configured type to copilot or copilot-v2, then sign in if needed. Saved credentials have not been changed.": "This Copilot authentication version is no longer supported. Select another connection to continue. To reuse this connection ID, stop Main and change its configured type to copilot or copilot-v2, then sign in if needed. Saved credentials have not been changed."
 }
