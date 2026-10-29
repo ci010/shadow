@@ -4093,5 +4093,14 @@
   "Detect the system proxy on Main, not on this browser device. Environment proxy variables take precedence over Windows or macOS system proxy settings.": "Detect the system proxy on Main, not on this browser device. Environment proxy variables take precedence over Windows or macOS system proxy settings.",
   "macOS static proxy": "macOS static proxy",
   "macOS automatic proxy": "macOS automatic proxy",
-  "macOS automatic proxy (PAC / auto-discovery) is not supported. Configure a static system proxy or environment proxy, or disable proxy use to connect directly.": "macOS automatic proxy (PAC / auto-discovery) is not supported. Configure a static system proxy or environment proxy, or disable proxy use to connect directly."
+  "macOS automatic proxy (PAC / auto-discovery) is not supported. Configure a static system proxy or environment proxy, or disable proxy use to connect directly.": "macOS automatic proxy (PAC / auto-discovery) is not supported. Configure a static system proxy or environment proxy, or disable proxy use to connect directly.",
+  "Pause following": "Pause following",
+  "Follow output": "Follow output",
+  "Output truncated: showing the last 65,536 characters.": "Output truncated: showing the last 65,536 characters.",
+  "Process output": "Process output",
+  "No output yet.": "No output yet.",
+  "Could not copy output. Select and copy the text manually.": "Could not copy output. Select and copy the text manually.",
+  "Process output is unavailable. Retry to reconnect.": "Process output is unavailable. Retry to reconnect.",
+  "Main returned invalid process output.": "Main returned invalid process output.",
+  "Last inspected process (retained)": "Last inspected process (retained)"
 }

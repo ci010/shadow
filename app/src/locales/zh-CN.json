@@ -4093,5 +4093,14 @@
   "Detect the system proxy on Main, not on this browser device. Environment proxy variables take precedence over Windows or macOS system proxy settings.": "检测的是 Main 所在设备的系统代理，而非当前浏览器设备。环境代理变量优先于 Windows 或 macOS 系统代理设置。",
   "macOS static proxy": "macOS 静态代理",
   "macOS automatic proxy": "macOS 自动代理",
-  "macOS automatic proxy (PAC / auto-discovery) is not supported. Configure a static system proxy or environment proxy, or disable proxy use to connect directly.": "暂不支持 macOS 自动代理（PAC / 自动发现）。请配置系统静态代理或环境代理，或禁用代理以直接连接。"
+  "macOS automatic proxy (PAC / auto-discovery) is not supported. Configure a static system proxy or environment proxy, or disable proxy use to connect directly.": "暂不支持 macOS 自动代理（PAC / 自动发现）。请配置系统静态代理或环境代理，或禁用代理以直接连接。",
+  "Pause following": "暂停跟随",
+  "Follow output": "跟随输出",
+  "Output truncated: showing the last 65,536 characters.": "输出已截断：仅显示最后 65,536 个字符。",
+  "Process output": "进程输出",
+  "No output yet.": "暂无输出。",
+  "Could not copy output. Select and copy the text manually.": "无法复制输出，请手动选择并复制文本。",
+  "Process output is unavailable. Retry to reconnect.": "无法获取进程输出，请重试连接。",
+  "Main returned invalid process output.": "Main 返回了无效的进程输出。",
+  "Last inspected process (retained)": "上次查看的进程（已保留）"
 }

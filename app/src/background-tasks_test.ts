@@ -48,14 +48,14 @@ test('inventory limits and explicit authorization/upgrade failures are preserved
   ] as const) await assert.rejects(fetchBackgroundTasks('http://fixture', sessionId, signal, async () => response), message)
 })
 
-function mount(t: TestContext, active = true) {
+function mount(t: TestContext, active = true, log = false) {
   const requests: Array<{ url: URL; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (input: URL, init: RequestInit) => new Promise<Response>(resolve => {
     requests.push({ url: new URL(String(input)), signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
   }))
   const subscriptions: Array<{ base: string; observer: LiveObserver; closed: boolean }> = []
-  const props = reactive({ apiBase: 'http://fixture/projects/a', sessionId, active })
-  const url = new URL('./components/BackgroundTasks.vue', import.meta.url)
+  const props = reactive({ apiBase: 'http://fixture/projects/a', sessionId, active, taskId: 'one' })
+  const url = new URL(log ? './components/ProcessOutput.vue' : './components/BackgroundTasks.vue', import.meta.url)
   const { descriptor } = parse(readFileSync(url, 'utf8'))
   const script = compileScript(descriptor, { id: 'background-tasks' })
   const template = compileTemplate({ source: descriptor.template!.content, filename: url.pathname, id: 'background-tasks',
@@ -68,6 +68,7 @@ function mount(t: TestContext, active = true) {
   const module = { exports: {} as { default: Component & { render?: () => null } } }
   const require = createRequire(url)
   new Function('require', 'module', 'exports', outputText)((id: string) => {
+    if (id === './ProcessOutput.vue') return { default: defineComponent({ render: () => null }) }
     if (id === '../composables/useLiveClient.ts') return {
       liveProjectId: (base: string) => new URL(base).pathname.split('/').at(-1),
       useLiveClientPool: () => ({ client: (base: string) => ({
@@ -186,4 +187,62 @@ test('an unadmitted draft never fetches task inventory', async t => {
   await settle()
   assert.equal(view.requests.length, 0)
   assert.equal(view.subscriptions.length, 0)
+})
+
+test('inspected process is retained when it leaves active inventory and cleared on scope change', async t => {
+  const view = mount(t)
+  await settle()
+  view.requests[0].finish(snapshot())
+  await settle()
+  view.state().inspect(view.state().tasks[0])
+  assert.equal(view.state().logsOpen, true)
+  view.invalidate()
+  await settle()
+  view.requests[1].finish(snapshot([]))
+  await settle()
+  assert.equal(view.state().total, 0)
+  assert.equal(view.state().visibleTasks.length, 1)
+  view.state().inspect(view.state().selected)
+  assert.equal(view.state().logsOpen, false)
+  assert.equal(view.state().visibleTasks.length, 1)
+  view.props.sessionId = 'other'
+  await nextTick()
+  assert.equal(view.state().selected, undefined)
+})
+
+test('expanded output polls live, follows unless paused, keeps final text and aborts when hidden', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const view = mount(t, false, true)
+  const output = (status = 'running', text = 'stdout\n[stderr]\nwarning') => ({ sessionId, id: 'one', status, output: text, truncated: false, limit: 65536 })
+  await settle()
+  assert.equal(view.requests.length, 0)
+  view.props.active = true
+  await nextTick(); await settle()
+  assert.ok(view.requests[0].url.pathname.endsWith('/one/output'))
+  const viewport = { scrollHeight: 400, scrollTop: 0, clientHeight: 100 }
+  view.state().viewport = viewport
+  view.requests[0].finish(output())
+  await settle()
+  assert.equal(viewport.scrollTop, 400)
+  viewport.scrollTop = 50
+  view.state().onScroll()
+  assert.equal(view.state().following, false)
+  t.mock.timers.tick(1500); await settle()
+  view.requests[1].finish(output('completed', 'final'))
+  await settle()
+  assert.equal(viewport.scrollTop, 50)
+  assert.equal(view.state().output, 'final')
+  t.mock.timers.tick(3000); await settle()
+  assert.equal(view.requests.length, 2)
+  view.state().following = true
+  await nextTick(); await settle()
+  assert.equal(viewport.scrollTop, 400)
+  view.props.active = false
+  await nextTick()
+  assert.equal(view.state().output, 'final')
+  view.props.active = true
+  await nextTick(); await settle()
+  view.props.active = false
+  await nextTick()
+  assert.equal(view.requests.at(-1)!.signal.aborted, true)
 })

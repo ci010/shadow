@@ -87,3 +87,33 @@ test('cancelling work remains active in HTTP inventory until cleanup is confirme
     assert.equal(finished.total, 0)
   } finally { cleanup.resolve(); await cancel }
 })
+
+test('process output is session/project owned, bounded, live and retained after exit', async t => {
+  const a = fixture(t), b = fixture(t)
+  let output = 'live stdout\n[stderr]\nwarning'
+  const process = a.tasks.createDeferredTask({ kind: 'process', title: 'server', sessionId: 'web:one', observe: () => output })
+  const tool = a.tasks.createDeferredTask({ kind: 'tool', title: 'private tool', sessionId: 'web:one' })
+  const url = `/api/sessions/web%3Aone/background-tasks/${process.taskId}/output`
+  assert.equal((await a.app.request(url)).headers.get('Cache-Control'), 'no-store')
+  assert.match((await (await a.app.request(url)).json()).output, /live stdout\n\[stderr\]\nwarning/)
+  assert.equal((await a.app.request(url.replace('web%3Aone', 'web%3Atwo'))).status, 404)
+  assert.equal((await b.app.request(url)).status, 404)
+  assert.equal((await a.app.request(url.replace(process.taskId, tool.taskId))).status, 404)
+  output = 'x'.repeat(100_000) + 'final stderr'
+  process.complete(output)
+  const final = await (await a.app.request(url)).json()
+  assert.equal(final.status, 'completed')
+  assert.equal(final.output.length, 65536)
+  assert.equal(final.truncated, true)
+  assert.ok(final.output.endsWith('final stderr'))
+})
+
+test('cancelled process retains the final observed stdout and stderr', async t => {
+  const { tasks, app } = fixture(t)
+  const process = tasks.createDeferredTask({ kind: 'process', title: 'cancel', sessionId: 'web:one',
+    observe: () => 'last stdout\n[stderr]\nlast stderr', onCancel: () => {} })
+  await tasks.cancelTask(process.taskId, { projectId: 'p', sessionId: 'web:one' })
+  const final = await (await app.request(`/api/sessions/web%3Aone/background-tasks/${process.taskId}/output`)).json()
+  assert.equal(final.status, 'cancelled')
+  assert.match(final.output, /last stdout\n\[stderr\]\nlast stderr/)
+})

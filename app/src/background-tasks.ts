@@ -46,3 +46,24 @@ export async function fetchBackgroundTasks(
   })
   return { sessionId, total: value.total, tasks }
 }
+
+export interface BackgroundOutput {
+  sessionId: string
+  id: string
+  status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled'
+  output: string
+  truncated: boolean
+  limit: number
+}
+
+export async function fetchBackgroundOutput(base: string, sessionId: string, id: string, signal: AbortSignal): Promise<BackgroundOutput> {
+  const response = await fetch(apiUrl(base, `/api/sessions/${encodeURIComponent(sessionId)}/background-tasks/${encodeURIComponent(id)}/output`), { signal, cache: 'no-store' })
+  if (!response.ok) throw new Error(t('Process output is unavailable. Retry to reconnect.'))
+  const value: unknown = await response.json()
+  if (!isRecord(value) || value.sessionId !== sessionId || value.id !== id || typeof value.output !== 'string'
+    || value.output.length > 65536 || value.limit !== 65536 || typeof value.truncated !== 'boolean'
+    || !['running', 'cancelling', 'completed', 'failed', 'cancelled'].includes(String(value.status))) {
+    throw new Error(t('Main returned invalid process output.'))
+  }
+  return value as unknown as BackgroundOutput
+}
