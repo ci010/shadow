@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { effectScope, ref } from 'vue'
-import { composerDraftKey, useComposerDraft } from './composables/useComposerDraft.ts'
+import { composerDraftKey, composerDraftEditedAt, useComposerDraft } from './composables/useComposerDraft.ts'
 
 function memoryStorage() {
   const values = new Map<string, string>()
@@ -112,4 +112,55 @@ test('submission clears immediately and failure restores without replacing newer
   draft.restoreUnsent('prepared', 'Send now')
   assert.equal(draft.text.value, '')
   scope.stop()
+})
+
+
+test('only actual nonblank edits set activity; switching, reload, migration and failed-send restoration preserve it', () => {
+  const storage = memoryStorage()
+  const a = composerDraftKey('/api', 'project', 'old')
+  const b = composerDraftKey('/api', 'project', 'other')
+  const key = ref(a)
+  const scope = effectScope()
+  const draft = scope.run(() => useComposerDraft(key, () => storage))!
+  const originalNow = Date.now
+  let now = 1000
+  Date.now = () => now
+  try {
+    draft.text.value = 'draft'
+    assert.equal(composerDraftEditedAt(storage, a), 1000)
+    now = 2000
+    key.value = b
+    key.value = a
+    draft.text.value = 'draft'
+    assert.equal(composerDraftEditedAt(storage, a), 1000)
+    const reload = effectScope()
+    reload.run(() => useComposerDraft(ref(a), () => storage))
+    reload.stop()
+    assert.equal(composerDraftEditedAt(storage, a), 1000)
+    assert.equal(composerDraftEditedAt(storage, composerDraftKey('/other', 'project', 'old')), 0)
+    assert.equal(composerDraftEditedAt(storage, composerDraftKey('/api', 'other', 'old')), 0)
+    draft.migrate(b)
+    key.value = b
+    assert.equal(composerDraftEditedAt(storage, a), 0)
+    assert.equal(composerDraftEditedAt(storage, b), 1000)
+    draft.clearSubmitting()
+    assert.equal(composerDraftEditedAt(storage, b), 0)
+    draft.restoreUnsent(b, 'draft')
+    assert.equal(composerDraftEditedAt(storage, b), 1000)
+    draft.text.value = 'edited'
+    assert.equal(composerDraftEditedAt(storage, b), 2000)
+    draft.clearSent(b, 'draft')
+    assert.equal(composerDraftEditedAt(storage, b), 2000)
+    draft.clearSent(b, 'edited')
+    assert.equal(composerDraftEditedAt(storage, b), 0)
+    draft.text.value = '  \n\t'
+    assert.equal(composerDraftEditedAt(storage, b), 0)
+    draft.text.value = 'new'
+    draft.remove(b)
+    assert.equal(composerDraftEditedAt(storage, b), 0)
+    storage.setItem(a, 'legacy plain text')
+    key.value = a
+    assert.equal(draft.text.value, 'legacy plain text')
+    assert.equal(composerDraftEditedAt(storage, a), 0, 'Legacy drafts do not gain activity on opening')
+  } finally { Date.now = originalNow; scope.stop() }
 })

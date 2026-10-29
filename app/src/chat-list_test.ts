@@ -125,3 +125,18 @@ test('committed folder changes drive sidebar selection and file workbench withou
   assert.match(workbench, /watch\(\(\) => \[props.contextKey, props.folderId\]/)
   assert.doesNotMatch(sidebar + workbench, /use_project|switchProjectFolder/)
 })
+
+
+test('draft activity competes with message recency rather than permanently pinning drafts', () => {
+  const chats = groupFolderSessions(folders, sessions).unified.filter(session => session.sessionId !== 'chat-admin')
+  const drafts = new Map([['web:old', Date.parse('2026-01-03T12:00:00Z')]])
+  assert.deepEqual(ids(sortSidebarChats(chats, names, 'time', drafts)),
+    ['web:new', 'web:old', 'web:scratch', 'web:beta', 'web:unknown'])
+  drafts.set('web:old', Date.parse('2026-01-05T00:00:00Z'))
+  assert.equal(sortSidebarChats(chats, names, 'time', drafts)[0].sessionId, 'web:old')
+  assert.deepEqual(ids(sortSidebarChats(chats, names, 'folder', drafts)),
+    ['web:scratch', 'web:old', 'web:new', 'web:beta', 'web:unknown'])
+  drafts.clear()
+  assert.deepEqual(ids(sortSidebarChats(chats, names, 'time', drafts)),
+    ['web:new', 'web:scratch', 'web:beta', 'web:old', 'web:unknown'])
+})
