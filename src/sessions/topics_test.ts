@@ -171,6 +171,11 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     } }
     assert.match(await search.execute({ handler: 'grep', path: 'v:sessions', query: 'MCP' }, remoteContext), /\/brief/)
     const tool = new SessionTool(service)
+    const describedPath = join(folderPath, 'described-folder')
+    await mkdir(describedPath)
+    const registered = JSON.parse(await tool.execute({ action: 'register_folder', path: describedPath, description: 'Tool registration metadata' }, context))
+    assert.equal(registered.folder.description, 'Tool registration metadata')
+    await assert.rejects(tool.execute({ action: 'register_folder', path: describedPath, description: 42 }, context), /description must be a string/)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath }, { ...context, sessionId: worker.sessionId }), /Temporary/)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath, extra: 1 }, context), /only path/)
     await assert.rejects(tool.execute({ action: 'create', title: 'x', goal: 'y', scope: 'z', projectId: 'other' }, context))

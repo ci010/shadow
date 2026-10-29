@@ -33,7 +33,7 @@ test('live project-scoped registry provides complete read/search discovery and c
     for (let i = 0; i < 11; i++) {
       const path = join(root, `folder-${i}`)
       await mkdir(path)
-      await registry.register(path)
+      await registry.register(path, undefined, i === 10 ? 'API <service>\n**metadata**' : undefined)
     }
     const hiddenPath = join(root, 'hidden-folder')
     await mkdir(hiddenPath)
@@ -54,14 +54,21 @@ test('live project-scoped registry provides complete read/search discovery and c
     assert.equal(all.split('\n').filter(line => line.startsWith('- **')).length, 11)
     assert.equal((await handlers.list(context))[0].content, all)
     assert.doesNotMatch(all, /unavailable:/)
+    assert(all.includes('API &lt;service&gt; \\*\\*metadata\\*\\*'))
     assert(!JSON.stringify(all).includes('hidden-folder'))
     const last = registry.list().at(-1)!
+    const reloaded = new ProjectCatalog(workspace)
+    await reloaded.init()
+    assert.equal(reloaded.folders(DEFAULT_PROJECT_ID).at(-1)?.description, last.description)
+    assert.equal(reloaded.folders(DEFAULT_PROJECT_ID)[0].description, undefined)
     const glob = await new GlobTool(workspace, vfs).execute({ path: 'v:project', pattern: 'folders/*' }, context)
     assert.equal(glob.split('\n').length, 11)
     assert(glob.includes(`v:project/folders/${last.id}`))
     const grep = await new GrepTool(workspace, vfs).execute({ path: 'v:project', pattern: 'folder-10' }, context)
     assert(grep.includes(`v:project/folders/${last.id}`))
-    assert.equal(JSON.parse(requireToolText(await read.execute({ path: `v:project/folders/${last.id}` }, context))).folder.id, last.id)
+    const detail = JSON.parse(requireToolText(await read.execute({ path: `v:project/folders/${last.id}` }, context))).folder
+    assert.equal(detail.id, last.id)
+    assert.equal(detail.description, last.description)
     await assert.rejects(read.execute({ path: `v:project/folders/${hidden.id}` }, context), /Unknown current-project/)
     await assert.rejects(read.execute({ path: 'v:project/folders' }, executionContext(other.id)), /current Project context/)
     assert.throws(() => handlers.list(executionContext(other.id)), /current Project context/)

@@ -246,3 +246,93 @@ test('expanded output polls live, follows unless paused, keeps final text and ab
   await nextTick()
   assert.equal(view.requests.at(-1)!.signal.aborted, true)
 })
+
+test('missing sessions stop automatic inventory retries, including queued invalidations and visibility changes', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const view = mount(t)
+  await settle()
+  view.invalidate()
+  view.requests[0].finish({ error: 'session_not_found' }, 404)
+  await settle(); await settle()
+  assert.match(view.state().error, /conversation is no longer/)
+  view.invalidate()
+  view.subscriptions[0].observer.reset('reconnect')
+  t.mock.timers.tick(60_000)
+  await settle()
+  assert.equal(view.requests.length, 1)
+  view.props.active = false
+  await nextTick()
+  view.props.active = true
+  await nextTick(); await settle()
+  assert.equal(view.requests.length, 1)
+  view.state().refresh()
+  await settle()
+  view.requests[1].finish(snapshot([]))
+  await settle()
+  assert.equal(view.state().error, '')
+  view.invalidate()
+  await settle()
+  assert.equal(view.requests.length, 3)
+  view.requests[2].finish({ error: 'session_not_found' }, 404)
+  await settle()
+  view.props.sessionId = 'web:other'
+  await nextTick(); await settle()
+  assert.equal(view.requests.length, 4)
+  view.requests[3].finish({ error: 'session_not_found' }, 404)
+  await settle()
+  view.props.apiBase = 'http://fixture/projects/b'
+  await nextTick(); await settle()
+  assert.equal(view.requests.length, 5)
+})
+
+for (const [status, payload] of [[404, { error: 'unknown_route' }], [403, {}], [503, {}]] as const) {
+  test(`non-session-not-found ${status} errors remain visible and automatically retryable`, async t => {
+    const view = mount(t)
+    await settle()
+    view.requests[0].finish(payload, status)
+    await settle()
+    assert.notEqual(view.state().error, '')
+    view.invalidate()
+    await settle()
+    assert.equal(view.requests.length, 2)
+    view.requests[1].finish(snapshot([]))
+    await settle()
+    assert.equal(view.state().error, '')
+  })
+}
+
+test('a completed turn reconciles a previously unpersisted draft without resuming generic reset retries', async t => {
+  const view = mount(t)
+  await settle()
+  view.requests[0].finish({ error: 'session_not_found' }, 404)
+  await settle()
+  const completed = (id: string, turn: string) => view.subscriptions.at(-1)!.observer.event({
+    type: 'event', cursor: 'fixture:3', topic: { kind: 'sessions', projectId: 'a' },
+    payload: { event: 'invalidate', sessionId: id, completedTurnId: turn },
+  })
+  completed('other', 'turn-1')
+  completed(sessionId, '')
+  await settle()
+  assert.equal(view.requests.length, 1)
+  completed(sessionId, 'turn-1')
+  await settle()
+  assert.equal(view.requests.length, 2)
+  view.requests[1].finish(snapshot([]))
+  await settle()
+  assert.equal(view.state().error, '')
+})
+
+test('a completed turn during a pending draft read supersedes its stale 404', async t => {
+  const view = mount(t)
+  await settle()
+  view.subscriptions[0].observer.event({
+    type: 'event', cursor: 'fixture:4', topic: { kind: 'sessions', projectId: 'a' },
+    payload: { event: 'invalidate', sessionId, completedTurnId: 'turn-new' },
+  })
+  view.requests[0].finish({ error: 'session_not_found' }, 404)
+  await settle(); await settle()
+  assert.equal(view.requests.length, 2)
+  view.requests[1].finish(snapshot([]))
+  await settle()
+  assert.equal(view.state().error, '')
+})

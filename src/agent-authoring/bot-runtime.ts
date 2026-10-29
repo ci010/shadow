@@ -54,6 +54,8 @@ export class DirectoryBots {
     if (matches.length > 1) throw new Error('Conversation is owned by multiple BOT deployments.')
     return matches[0]
   }
+  /** Channel preflight must use the same deployed bindings as DirectoryBotService. */
+  readonly serviceAssigned = (address: ChannelAddress): boolean => !!this.resolve(address)?.binding.enabled
   discord(candidates = this.definitions()): { agents: IntegrationAgent[]; bindings: DiscordBinding[] } {
     const agents: IntegrationAgent[] = [], bindings: DiscordBinding[] = []
     for (const {bot,deployment} of candidates) {

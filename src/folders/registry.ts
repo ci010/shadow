@@ -37,6 +37,13 @@ export function absoluteDirectoryPath(value: unknown): string {
   return normalize(value)
 }
 
+/** Optional registration metadata; existing folders are never backfilled. */
+export function folderDescription(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw new FolderError('invalid_description', 'Folder description must be a string.')
+  return value
+}
+
 function pathKey(value: string): string {
   return process.platform === 'win32' ? value.toLowerCase() : value
 }
@@ -75,6 +82,7 @@ function parseRecords(value: unknown): FolderRecord[] {
     if (
       typeof item.id !== 'string' || !UUID_PATTERN.test(item.id) ||
       typeof item.name !== 'string' || !item.name.trim() ||
+      (item.description !== undefined && typeof item.description !== 'string') ||
       typeof item.createdAt !== 'string' ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(item.createdAt) ||
       !Number.isFinite(Date.parse(item.createdAt)) ||
@@ -89,7 +97,8 @@ function parseRecords(value: unknown): FolderRecord[] {
     if (ids.has(item.id.toLowerCase()) || paths.has(pathKey(path))) throw invalid()
     ids.add(item.id.toLowerCase())
     paths.add(pathKey(path))
-    return { id: item.id, name: item.name, path, createdAt: item.createdAt }
+    return { id: item.id, name: item.name, path, createdAt: item.createdAt,
+      ...(item.description !== undefined ? { description: item.description as string } : {}) }
   })
 }
 
@@ -145,9 +154,10 @@ export class FolderRegistry {
     return record ? { ...record } : undefined
   }
 
-  async register(path: string, signal?: AbortSignal): Promise<FolderRecord> {
+  async register(path: string, signal?: AbortSignal, description?: string): Promise<FolderRecord> {
     this.#assertReady()
-    if (this.scope) return this.scope.catalog.registerFolder(this.scope.projectId, path, signal)
+    description = folderDescription(description)
+    if (this.scope) return this.scope.catalog.registerFolder(this.scope.projectId, path, signal, description)
     const pending = this.#writes.then(async () => {
       signal?.throwIfAborted()
       const canonical = await existingDirectory(path)
@@ -158,6 +168,7 @@ export class FolderRegistry {
         id: randomUUID(),
         name: basename(canonical) || canonical,
         path: canonical,
+        ...(description !== undefined ? { description } : {}),
         createdAt: new Date().toISOString(),
       }
 

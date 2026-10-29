@@ -103,3 +103,20 @@ test('collaboration event previews are bounded display data, not authority', () 
   assert.doesNotMatch(text, /z{481}|type=\\"tick/)
   assert.match(view([event('tick')], false), /tick/)
 })
+
+test('history image attachments never inline data and external references are bounded', () => {
+  const messages: ChatMessage[] = [{ role: 'user', content: [
+    { type: 'text', text: 'image question' },
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,' + 'A'.repeat(800_000) } },
+    { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+    { type: 'image_url', image_url: { url: 'https://example.test/' + 'B'.repeat(800_000) } },
+  ] }]
+  for (const overview of [true, false]) {
+    const text = view(messages, overview)
+    assert.match(text, /image question/)
+    assert.match(text, /image attachment: inline data omitted/)
+    assert.match(text, /https:\/\/example.test\/image.png/)
+    assert.doesNotMatch(text, /base64|A{100}|B{481}/)
+    assert.ok(text.length < 1000)
+  }
+})

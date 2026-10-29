@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
@@ -27,6 +27,8 @@ import { sessionWorkspacePath } from '../utils/paths.ts'
 import { createProjectScope, getProjectScope, type ProjectScope } from '../projects/scope.ts'
 import { WebChannel } from './web.ts'
 import { QQChannel } from './qq.ts'
+import { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
+import { BotDeployments } from '../bots/deployments.ts'
 
 function directory(t: TestContext): string {
   const path = join(process.cwd(), '.test-data', `bot-instances-${randomUUID()}`)
@@ -665,4 +667,54 @@ test('service bot inference failures remain observable but are not delivered to 
   assert.equal(f.created.flatMap(channel => channel.sent).length, 0)
   await f.manager.deliver({ ...failure, inferenceError: undefined, content: 'Normal response' })
   assert.equal(f.created.flatMap(channel => channel.sent).length, 1)
+})
+
+// Uses the production preflight callback, not an independently reimplemented predicate.
+test('directory-deployed QQ service assignment gates real ingress independently of mention eligibility', async t => {
+  const root = directory(t), projectId = 'directory-qq'
+  const store = new BotInstanceStore({ projectId, path: join(root, 'bots.json') })
+  const credentials = { appId: 'synthetic-app', secret: 'synthetic-secret', enabled: true }
+  const bot = store.create('qq', 'Service', credentials)
+  const other = store.create('qq', 'Other connection', credentials)
+  const deployments = new BotDeployments({ directory: join(root, 'deployments'), projectId,
+    runGit: async () => { throw new Error('No git in synthetic deployment') } })
+  const frozen = deployments.freeze({
+    'BOT.md': '---\nid: qq-service\nconfig: bot.json\n---\nSynthetic service prompt.',
+    'bot.json': JSON.stringify({ mode: 'service', allowedModules: [], tools: [], bindings: [
+      { botInstanceId: bot.id, platform: 'qq', conversationId: 'group:bound', enabled: true, tools: [] },
+      { botInstanceId: bot.id, platform: 'qq', conversationId: 'group:disabled', enabled: false, tools: [] },
+    ] }),
+  })
+  await deployments.deploy({ id: 'qq-service', source: { folderId: 'fixture', directory: 'fixture' }, ...frozen })
+  const directoryBots = new DirectoryBots(deployments)
+  assert.equal(existsSync(join(root, 'authoring', 'resources.json')), false)
+  const address = { projectId, botInstanceId: bot.id, platform: 'qq', conversationId: 'group:bound' }
+  assert.equal(directoryBots.serviceAssigned(address), true)
+  for (const mismatch of [{ conversationId: 'group:other' }, { conversationId: 'group:disabled' },
+    { botInstanceId: other.id }, { platform: 'feishu' }]) {
+    assert.equal(directoryBots.serviceAssigned({ ...address, ...mismatch }), false)
+  }
+  const received: InboundMessage[] = []
+  const discovery = new ServiceDiscoveryStore(projectId, join(root, 'discovery.json'))
+  const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: root } }), new Bus(), {} as SessionManager,
+    async message => { received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } },
+    { projectId, instanceStore: store, serviceAssigned: directoryBots.serviceAssigned, serviceDiscovery: discovery })
+  await manager.init()
+  t.after(() => manager.stopAll())
+  const incoming = async (id: string, group: string, mention = true) => {
+    const channel = manager['channels'].get(id)
+    assert.ok(channel instanceof QQChannel)
+    await channel['handleDispatch'](mention ? 'GROUP_AT_MESSAGE_CREATE' : 'GROUP_MESSAGE_CREATE', {
+      id: `${id}-${group}-${mention}`, content: 'Synthetic incoming message', group_openid: group,
+      author: { member_openid: 'sender' }, timestamp: new Date().toISOString(),
+    })
+  }
+  await incoming(bot.id, 'bound')
+  await incoming(bot.id, 'bound', false)
+  assert.deepEqual(received.map(message => message.silent), [false, true])
+  await incoming(bot.id, 'other')
+  await incoming(bot.id, 'disabled')
+  await incoming(other.id, 'bound')
+  assert.equal(received.length, 2)
+  assert.equal(existsSync(join(root, 'authoring', 'resources.json')), false)
 })

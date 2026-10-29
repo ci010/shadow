@@ -26,11 +26,16 @@ test('registers empty folders, normalizes aliases, serializes writes, and preser
   await registry.init()
   assert.deepEqual(registry.list(), [])
   const [folder, duplicate, other] = await Promise.all([
-    registry.register(first),
+    registry.register(first, undefined, 'Backend service and API'),
     registry.register(join(first, '..', 'An Empty Folder', '.')),
     registry.register(second),
   ])
   assert.deepEqual(folder, duplicate)
+  assert.equal(folder.description, 'Backend service and API')
+  assert.equal(other.description, undefined)
+  assert.equal(Object.hasOwn(other, 'description'), false)
+  assert.deepEqual(await registry.register(first, undefined, 'Do not overwrite'), folder)
+  await assert.rejects(registry.register(second, undefined, 42 as unknown as string), /description must be a string/)
   assert.equal(folder.name, 'An Empty Folder')
   assert.equal(folder.path, await realpath(first))
   assert.notEqual(other.id, folder.id)

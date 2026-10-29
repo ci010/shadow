@@ -9,6 +9,13 @@ import { createIoBridge } from './io/bridge.ts'
 import { IoExecution } from './io/execution.ts'
 import { parseIoDefinition } from '../../src/io/contracts.ts'
 
+const run = {
+  version: 1 as const, id: 'run', projectId: 'default', sessionId: 'web:test', revision: 'a'.repeat(64),
+  definition: parseIoDefinition({ version: 1, title: 'Synthetic input', purpose: 'Host test', endpoint: 'ws://127.0.0.1:1/test',
+    sources: [{ id: 'mic', kind: 'microphone' }], limits: { durationMs: 10000, maxBytes: 8192 } }),
+  status: 'awaiting_consent' as const, createdAt: new Date().toISOString(), bytes: 0, artifacts: [],
+}
+
 const base = 'http://fixture/projects/default/'
 const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
 interface RenderNode { children: RenderNode[]; parent?: RenderNode }
@@ -23,12 +30,18 @@ function fixture(t: TestContext) {
     Object.defineProperty(globalThis, key, { configurable: true, value })
     restore.push(() => { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key) })
   }
+  t.mock.method(IoExecution.prototype, 'connect', () => {})
+  let live!: { event: () => void; reset: () => void }
   const calls: { path: string; init: RequestInit }[] = []
   let register = async () => Response.json({ clientToken: 'synthetic-client' })
+  let prepareResponse = async () => Response.json({ leaseToken: 'synthetic-lease', run: { ...run, status: 'running' } })
   let heartbeat = async () => Response.json({ ok: true })
   t.mock.method(globalThis, 'fetch', async (input: URL, init: RequestInit) => {
     const path = new URL(input).pathname
     calls.push({ path, init })
+    if (path.endsWith('/details')) return Response.json({ sessionId: run.sessionId, name: null, workdir: { kind: 'local', displayPath: '/synthetic' }, usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
+    if (path.endsWith('/prepare')) return prepareResponse()
+    if (path.endsWith('/runs/run')) return Response.json(run)
     if (path.endsWith('/clients')) return register()
     if (path.endsWith('/heartbeat')) return heartbeat()
     if (path.endsWith('/stop')) return Response.json({ run: { status: 'failed' } })
@@ -43,6 +56,7 @@ function fixture(t: TestContext) {
   const require = createRequire(url)
   new Function('require', 'module', 'exports', outputText)((id: string) => {
     if (id.endsWith('.vue')) return { default: defineComponent({ setup: () => () => null }) }
+    if (id.endsWith('/io/execution.ts')) return { IoExecution }
     if (id.endsWith('/io/adapters.ts')) return { browserIoCapabilities: () => [] }
     return require(id)
   }, module, module.exports)
@@ -69,7 +83,7 @@ function fixture(t: TestContext) {
   })
   const app = renderer.createApp(module.exports.default, { bridge })
   app.provide(Symbol.for('shadow.live-client-pool'), {
-    client: () => ({ subscribe: () => ({ close() {}, ready: async () => {} }) }),
+    client: () => ({ subscribe: (_topic: unknown, observer: typeof live) => { live = observer; return { close() {}, ready: async () => {} } } }),
   })
   let mounted = true
   const unmount = () => { if (mounted) { app.unmount(); mounted = false } }
@@ -80,6 +94,10 @@ function fixture(t: TestContext) {
   })
   return {
     bridge, calls, errors, document, unmount,
+    live: () => live,
+    prepare: () => bridge.actions.value!.prepare(run, base),
+    polls: () => calls.filter(call => call.path.endsWith('/runs')),
+    prepareResponse: (next: typeof prepareResponse) => { prepareResponse = next },
     heartbeat: (next: typeof heartbeat) => { heartbeat = next },
     register: (next: typeof register) => { register = next },
     registrations: () => calls.filter(call => call.path.endsWith('/clients')),
@@ -90,142 +108,124 @@ const expired = () => Promise.resolve(Response.json({
   error: 'client_expired', message: 'The I/O client expired; reconnect explicitly',
 }, { status: 403 }))
 
-test('idle client expiry renews registration without flashing an error or starting capture', async t => {
+test('idle discovery uses live invalidation and a slower fallback without registering or heartbeating', async t => {
   const f = fixture(t)
   await settle()
-  assert.equal(f.registrations().length, 1)
-  f.heartbeat(expired)
+  assert.equal(f.polls().length, 1)
+  t.mock.timers.tick(10_000)
+  await settle()
+  assert.equal(f.polls().length, 1)
+  f.live().event()
+  await settle()
+  assert.equal(f.polls().length, 2)
+  f.live().reset()
+  await settle()
+  assert.equal(f.polls().length, 3)
   t.mock.timers.tick(5000)
   await settle()
-  assert.equal(f.registrations().length, 2)
-  assert.notEqual(JSON.parse(String(f.registrations()[0]!.init.body)).id, JSON.parse(String(f.registrations()[1]!.init.body)).id)
-  assert.deepEqual(f.errors, [])
-  assert.equal(f.bridge.execution.value, undefined)
-  assert.ok(f.calls.every(call => !/prepare|start|events/.test(call.path)))
-})
-
-test('authorization failures and failed re-registration remain visible rather than being mistaken for expiry', async t => {
-  const f = fixture(t)
-  await settle()
-  f.heartbeat(async () => Response.json({ error: 'forbidden', message: 'Access denied' }, { status: 403 }))
-  t.mock.timers.tick(5000)
-  await settle()
-  assert.ok(f.errors.includes('Access denied'))
-  assert.equal(f.registrations().length, 1)
-  f.heartbeat(expired)
-  t.mock.timers.tick(2000)
-  await settle()
-  assert.equal(f.registrations().length, 2)
-  f.register(async () => Response.json({ error: 'unavailable', message: 'Main unavailable' }, { status: 503 }))
-  t.mock.timers.tick(3000)
-  await settle()
-  assert.ok(f.errors.includes('Main unavailable'))
-})
-
-test('an active capture fails on expiry and never silently gets replacement credentials', async t => {
-  const f = fixture(t)
-  await settle()
-  const execution = new IoExecution({
-    base,
-    run: {
-      version: 1, id: 'run', projectId: 'default', sessionId: 'web:test', revision: 'a'.repeat(64),
-      definition: parseIoDefinition({
-        version: 1, title: 'Synthetic input', purpose: 'Expiry test', endpoint: 'ws://127.0.0.1:1/test',
-        sources: [{ id: 'mic', kind: 'microphone' }], limits: { durationMs: 10000, maxBytes: 8192 },
-      }),
-      status: 'running', createdAt: new Date().toISOString(), bytes: 0, artifacts: [],
-    },
-    grant: { clientId: 'synthetic-client', clientToken: 'synthetic-token', leaseToken: 'synthetic-lease' },
-    change() {},
-  })
-  let failure: Error | undefined
-  const fail = execution.fail.bind(execution)
-  t.mock.method(execution, 'fail', async (error: Error) => { failure = error; await fail(error) })
-  f.bridge.executionBase.value = base
-  f.bridge.execution.value = execution
-  f.heartbeat(expired)
-  t.mock.timers.tick(5000)
-  await settle()
-  assert.match(failure!.message, /Capture connection lost:.*client expired/)
-  assert.equal(f.registrations().length, 1)
-  assert.equal(execution.phase, 'closed')
-})
-
-test('leaving a Project discards its cached client and returning obtains a fresh identity', async t => {
-  const f = fixture(t)
-  await settle()
-  f.bridge.views.value = new Map()
-  await settle()
-  t.mock.timers.tick(20_000)
-  await settle()
+  assert.equal(f.polls().length, 4)
+  assert.equal(f.registrations().length, 0)
   assert.equal(f.calls.filter(call => call.path.endsWith('/heartbeat')).length, 0)
-  f.bridge.views.value = new Map([['chat', { apiBase: base, sessionId: 'web:test', remote: false }]])
-  await settle()
-  assert.equal(f.registrations().length, 2)
-  assert.deepEqual(f.errors, [])
 })
 
-test('late registration cannot survive navigation and unmount aborts its replacement', async t => {
+test('hidden idle views do not poll; becoming visible immediately refreshes without registration', async t => {
+  const f = fixture(t)
+  await settle()
+  f.document.hidden = true
+  t.mock.timers.tick(30_000)
+  f.live().event()
+  await settle()
+  assert.equal(f.polls().length, 1)
+  f.document.hidden = false
+  f.document.dispatchEvent(new Event('visibilitychange'))
+  await settle()
+  assert.equal(f.polls().length, 2)
+  assert.equal(f.registrations().length, 0)
+})
+
+test('prepare registers on demand and active hidden capture still heartbeats', async t => {
+  const f = fixture(t)
+  await settle()
+  await f.prepare()
+  assert.deepEqual(f.errors, [])
+  assert.equal(f.registrations().length, 1)
+  assert.ok(f.bridge.execution.value)
+  f.document.hidden = true
+  t.mock.timers.tick(5000)
+  await settle()
+  assert.equal(f.calls.filter(call => call.path.endsWith('/heartbeat')).length, 1)
+})
+
+test('expired active credentials fail capture and never silently register replacements on wake', async t => {
+  const f = fixture(t)
+  await settle()
+  await f.prepare()
+  const execution = f.bridge.execution.value!
+  f.heartbeat(expired)
+  f.document.dispatchEvent(new Event('visibilitychange'))
+  await settle()
+  assert.equal(execution.phase, 'closed')
+  assert.match(execution.error!, /Capture connection lost:.*client expired/)
+  t.mock.timers.tick(30_000)
+  f.document.dispatchEvent(new Event('visibilitychange'))
+  await settle()
+  assert.equal(f.registrations().length, 1)
+  assert.equal(f.calls.filter(call => call.path.endsWith('/prepare')).length, 1)
+})
+
+test('malformed on-demand credentials are reported without preparing capture', async t => {
+  const f = fixture(t)
+  await settle()
+  f.register(async () => Response.json({ clientToken: null }))
+  await f.prepare()
+  assert.ok(f.errors.includes('Invalid capture client registration'))
+  assert.equal(f.bridge.execution.value, undefined)
+})
+
+test('navigation aborts pending on-demand registration and discards late credentials', async t => {
   const f = fixture(t)
   await settle()
   let release!: (value: Response) => void
   f.register(() => new Promise(resolve => { release = resolve }))
-  f.bridge.views.value = new Map()
+  const preparing = f.prepare()
   await settle()
-  f.bridge.views.value = new Map([['chat', { apiBase: base, sessionId: 'web:test', remote: false }]])
-  await settle()
-  const pending = f.registrations()[1]!
+  const pending = f.registrations()[0]!
   f.bridge.views.value = new Map()
   await settle()
   assert.equal(pending.init.signal!.aborted, true)
   release(Response.json({ clientToken: 'obsolete' }))
-  await settle()
-  assert.deepEqual(f.errors, [])
-  f.bridge.views.value = new Map([['chat', { apiBase: base, sessionId: 'web:test', remote: false }]])
-  await settle()
-  assert.equal(f.registrations().length, 3)
-  f.unmount()
-  assert.equal(f.registrations()[2]!.init.signal!.aborted, true)
-  release(Response.json({ clientToken: 'also-obsolete' }))
-  await settle()
-  assert.deepEqual(f.errors, [])
-})
-
-test('returning to a visible window renews expired idle registration before refreshing requests', async t => {
-  const f = fixture(t)
-  await settle()
-  f.heartbeat(expired)
-  f.document.dispatchEvent(new Event('visibilitychange'))
-  await settle()
-  assert.equal(f.registrations().length, 2)
-  assert.deepEqual(f.errors, [])
-})
-
-test('a late heartbeat rejection cannot discard a newly registered client after navigation', async t => {
-  const f = fixture(t)
-  await settle()
-  let release!: (value: Response) => void
-  f.heartbeat(() => new Promise(resolve => { release = resolve }))
-  t.mock.timers.tick(5000)
-  await settle()
-  f.bridge.views.value = new Map()
-  await settle()
-  f.bridge.views.value = new Map([['chat', { apiBase: base, sessionId: 'web:test', remote: false }]])
-  await settle()
-  assert.equal(f.registrations().length, 2)
-  release(await expired())
-  await settle()
-  assert.equal(f.registrations().length, 2)
-  assert.deepEqual(f.errors, [])
-})
-
-test('malformed replacement credentials are reported instead of pretending recovery succeeded', async t => {
-  const f = fixture(t)
-  await settle()
-  f.heartbeat(expired)
-  f.register(async () => Response.json({ clientToken: null }))
-  t.mock.timers.tick(5000)
-  await settle()
-  assert.ok(f.errors.includes('Invalid capture client registration'))
+  await preparing
   assert.equal(f.bridge.execution.value, undefined)
+  assert.equal(f.calls.filter(call => call.path.endsWith('/prepare')).length, 0)
+})
+
+test('a new prepare after an idle gap obtains a fresh identity, not expired cached credentials', async t => {
+  const f = fixture(t)
+  await settle()
+  await f.prepare()
+  await f.bridge.execution.value!.cancel()
+  t.mock.timers.tick(60_000)
+  await settle()
+  const pulses = f.calls.filter(call => call.path.endsWith('/heartbeat')).length
+  assert.equal(pulses, 0)
+  await f.prepare()
+  assert.equal(f.registrations().length, 2)
+  assert.notEqual(JSON.parse(String(f.registrations()[0]!.init.body)).id, JSON.parse(String(f.registrations()[1]!.init.body)).id)
+  assert.deepEqual(f.errors, [])
+})
+
+test('a slow prepare retains client heartbeats without registering another identity', async t => {
+  const f = fixture(t)
+  await settle()
+  let release!: (response: Response) => void
+  f.prepareResponse(() => new Promise(resolve => { release = resolve }))
+  const preparing = f.prepare()
+  await settle()
+  t.mock.timers.tick(16_000)
+  await settle()
+  assert.ok(f.calls.some(call => call.path.endsWith('/heartbeat')))
+  assert.equal(f.registrations().length, 1)
+  release(Response.json({ leaseToken: 'synthetic-lease', run: { ...run, status: 'running' } }))
+  await preparing
+  assert.deepEqual(f.errors, [])
 })

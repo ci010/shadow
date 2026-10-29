@@ -6,6 +6,7 @@ interface FolderBase {
   id: string
   name: string
   path: string
+  description?: string
   createdAt: string
 }
 

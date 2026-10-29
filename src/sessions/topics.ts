@@ -211,8 +211,8 @@ export class TopicService {
     return this.requireSummary(sessionId)
   }
 
-  async registerFolder(path: unknown, signal?: AbortSignal) {
-    const folder = await this.options.folders.register(absoluteDirectoryPath(path), signal)
+  async registerFolder(path: unknown, signal?: AbortSignal, description?: string) {
+    const folder = await this.options.folders.register(absoluteDirectoryPath(path), signal, description)
     this.options.changed()
     return { folder }
   }

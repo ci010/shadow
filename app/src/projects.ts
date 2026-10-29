@@ -38,8 +38,10 @@ export function parseProjects(value: unknown): ProjectRecord[] {
 }
 
 export async function projectJson(base: string, path: string, init?: RequestInit, request: typeof fetch = fetch): Promise<unknown> {
+  const headers = new Headers(init?.headers)
+  if (init?.body != null && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const response = await request(apiUrl(base, path), {
-    ...init, headers: { 'Content-Type': 'application/json', ...init?.headers },
+    ...init, headers,
     signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
   })
   if (!response.ok) {

@@ -21,7 +21,7 @@ import type { LiveSubscription } from '../../live-client.ts'
 import { browserIoCapabilities } from '../../io/adapters.ts'
 import { IoExecution } from '../../io/execution.ts'
 import { ioRunKey, type IoBridge } from '../../io/bridge.ts'
-import { IoRequestError, ioRequest } from '../../io/transport.ts'
+import { ioRequest } from '../../io/transport.ts'
 import { desktopIoIssue } from '../../io/desktop.ts'
 import { mobileCaptureIssue } from '../../io/mobile-policy.ts'
 import DisplaySourcePicker from './DisplaySourcePicker.vue'
@@ -45,6 +45,7 @@ let disposed = false
 let polling = false
 let leaseBusy = false
 let generation = 0
+let preparingBase: string | undefined
 let pollTimer: ReturnType<typeof setInterval>
 let leaseTimer: ReturnType<typeof setInterval>
 let clockTimer: ReturnType<typeof setInterval>
@@ -101,7 +102,6 @@ async function poll() {
   try {
     await Promise.all([...bases.value].map(async base => {
       try {
-        await client(base)
         const result = await ioRequest<{ runs: IoRun[] }>(base, '/runs')
         if (disposed || !bases.value.has(base)) return
         const sessions = new Set([...bridge.views.value.values()].filter(view => view.apiBase === base).map(view => view.sessionId))
@@ -121,7 +121,7 @@ async function poll() {
         setError(base, cause instanceof Error ? cause.message : t('Could not load capture requests.'))
       }
     }))
-    if (!owned.value && !bridge.busy.value) {
+    if (!disposed && !document.hidden && !owned.value && !bridge.busy.value) {
       const views = [...bridge.views.value.values()]
       const current = views.find(view => view === bridge.context.value) ?? views[0]
       const requested = current && !current.remote && bridge.runs.value.get(current.apiBase)?.find(run =>
@@ -147,7 +147,11 @@ async function prepare(run: IoRun, base: string) {
     const response = await fetch(apiUrl(base, `/api/sessions/${encodeURIComponent(snapshot.sessionId)}/details`), { signal: AbortSignal.timeout(10_000) })
     if (!response.ok) throw new Error(t('Could not check the conversation workdir. Retry the connection.'))
     if (parseSessionDetails(await response.json(), snapshot.sessionId).workdir.kind === 'remote') throw new Error(t('Device capture needs a local conversation.'))
+    // A previous capture identity may have expired while idle. Register only
+    // after preflight, immediately before prepare; never replace an owned grant.
+    forgetClient(base)
     const credentials = await client(base)
+    preparingBase = base
     const result = await ioRequest<{ leaseToken: string; run: IoRun }>(base, `/runs/${encodeURIComponent(run.id)}/prepare`, { ...credentials, revision: snapshot.revision }, AbortSignal.timeout(20_000))
     if (token !== generation || disposed) {
       await ioRequest(base, `/runs/${encodeURIComponent(run.id)}/stop`, { status: 'cancelled' })
@@ -163,7 +167,10 @@ async function prepare(run: IoRun, base: string) {
     putRun(base, current.run)
     current.connect()
   } catch (cause) { setError(key, cause instanceof Error ? cause.message : t('Could not prepare input. Retry the connection.')) }
-  finally { if (token === generation) bridge.busy.value = undefined }
+  finally {
+    preparingBase = undefined
+    if (token === generation) bridge.busy.value = undefined
+  }
 }
 function current(id: string, base: string) {
   return execution.value?.run.id === id && bridge.executionBase.value === base ? execution.value : undefined
@@ -193,6 +200,10 @@ async function pulseClients() {
   leaseBusy = true
   try {
     await Promise.all([...bases.value].map(async base => {
+      // Idle views need no registered capture identity or heartbeat. Keep the
+      // active owner's heartbeat running even while hidden; leases must expire
+      // normally after sleep rather than silently acquiring new credentials.
+      if (preparingBase !== base && (!owned.value || bridge.executionBase.value !== base)) return
       const credentials = clients.get(base)
       if (!credentials) return
       try { await ioRequest(base, `/clients/${credentials.clientId}/heartbeat`, { clientToken: credentials.clientToken }, AbortSignal.timeout(5000)) }
@@ -201,15 +212,6 @@ async function pulseClients() {
         clients.delete(base)
         const detail = cause instanceof Error ? cause.message : t('Client disconnected')
         if (owned.value && bridge.executionBase.value === base) await execution.value!.fail(new Error(t('Capture connection lost: {detail}', { detail: detail })))
-        else if (cause instanceof IoRequestError && cause.status === 403 && cause.code === 'client_expired') {
-          try {
-            await client(base)
-            if (!disposed && bases.value.has(base)) setError(base)
-          } catch (error) {
-            if (disposed || !bases.value.has(base) || (error instanceof DOMException && error.name === 'AbortError')) return
-            setError(base, error instanceof Error ? error.message : t('Could not reconnect the capture client.'))
-          }
-        }
         else setError(base, detail)
       }
     }))
@@ -235,7 +237,10 @@ const visibilityChanged = () => {
   if (!document.hidden) void pulseClients().then(() => poll())
 }
 onMounted(() => {
-  pollTimer = setInterval(() => { void poll() }, 2000)
+  // Live I/O events/reset are the primary invalidation path. This bounded
+  // fallback also works when live updates are unavailable. Execution's own
+  // heartbeat, lease checks and update loop are deliberately unchanged.
+  pollTimer = setInterval(() => { void poll() }, 15_000)
   leaseTimer = setInterval(() => { void pulseClients() }, 5000)
   clockTimer = setInterval(() => { bridge.clock.value = Date.now(); triggerRef(execution) }, 250)
   window.addEventListener('pagehide', pageHide)

@@ -48,7 +48,9 @@ test('virtual text paging is applied and invalid ranges are rejected', async () 
     await assert.rejects(reader.execute({ path: 'v:fixture', ...range }, context), /positive safe integer/)
   }
   vfs.mount('v:large', 'Large', () => 'very large text '.repeat(100_000))
-  await assert.rejects(reader.execute({ path: 'v:large' }, context), /too large|tokens|limit/i)
+  const large = requireToolText(await reader.execute({ path: 'v:large' }, context))
+  assert.ok(large.length <= 100_000)
+  assert.match(large, /token budget.*line 1 incomplete/s)
 }))
 
 test('URL paging preserves non-HTML line structure and raw HTML, and supports cancellation', async t => {

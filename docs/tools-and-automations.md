@@ -35,6 +35,23 @@ evidence / revalidate when**. Inferred motivations remain hypotheses, not facts
 about a person's identity. Easily recomputed environment facts and temporary
 task state usually stay in source history. No durable change is a valid result.
 
+Reflector actively looks for user corrections, repeated failed approaches,
+promise/execution gaps, overturned assumptions, and successful reusable methods.
+A candidate connects the situation, actual choice, observed result, supported
+explanation, next-time adjustment and exceptions. It should identify which future
+decision or action changes, rather than only retelling the conversation. Durable
+stated requirements can still be scoped facts; they need not become universal
+behavioral principles. There is no quota of new memories.
+
+When assigned evidence shows an existing memory used or contradicted, reflection
+evaluates that outcome to support, narrow, correct or retire the guidance. It does
+not expand source scope to manufacture follow-up evidence. Receipts explain
+learning signals and concrete changes separately from unread/truncated evidence
+and unobserved future usefulness. Attachment markers are not image understanding;
+relevant inaccessible evidence requires Partial/Blocked, not No change.
+These are model instructions, not a semantic-quality validator or proof that later
+behavior improved. The existing batch, retry and cursor semantics are unchanged.
+
 The local Project learning roles use `learning_memory` to read a revision and save a scoped
 decision. Existing general sessions retain normal `write` access to wiki memory;
 there is no new approval step. Repeated evidence can support, correct or retire
@@ -423,7 +440,16 @@ remain omitted. Malformed collaboration arguments are marked, never expanded.
 System messages, runtime-context and internal event envelopes are hidden, except
 bounded collaboration completion/review/message event previews. This is display
 filtering only: event-looking content never establishes provenance or permission.
-`/full` retains complete messages and payloads. Status `requested` records an
+`/full` retains message text and tool payloads, but image content blocks are
+represented as attachment markers rather than embedded image bytes in both views.
+HTTP(S) image references are bounded previews, not fetched image content.
+Virtual text pages exceeding the inline token budget return a bounded prefix with
+explicit truncation metadata instead of rejecting the whole page. Complete-line
+cuts give a continuation offset. Mid-line cuts identify the incomplete line and
+warn that line-only paging cannot retrieve its omitted remainder; skipping to the
+next line does not count as reviewing that remainder. Source coordinates do not
+change. This fallback does not alter local-file or URL token-limit behavior.
+Status `requested` records an
 attempt, not success; `result-recorded` only records a result's presence.
 Interrupted calls remain indexed without a result or final response.
 Formatting never looks ahead to future results, keeping prefix line coordinates stable.

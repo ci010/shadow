@@ -75,6 +75,25 @@ test('verified no-change advances bounded cursors; legacy history is not replaye
   })
 })
 
+test('reflection guidance asks for evidence-backed behavioral learning without forcing lessons', async () => {
+  await withTempWorkspace(async workspace => {
+    const f = fixture(workspace)
+    const batch = f.runtime.ledger.create('reflector', [], [])
+    const task = learningTask(batch)
+    assert.match(task, /explicit user corrections/)
+    assert.match(task, /observed result or correction/)
+    assert.match(task, /which future decision or action would this change/)
+    assert.match(task, /support, narrow, correct or retire/)
+    assert.match(task, /No quota of new memories/)
+    assert.match(task, /A truncated source is not fully reviewed/)
+    assert.match(task, /attachment marker as image understanding/)
+    assert.match(task, /downstream usefulness is not yet observed/)
+    const downstream = learningTask({ ...batch, pipeline: 'encapsulator' })
+    assert.doesNotMatch(downstream, /Look for learning signals/)
+    assert.match(downstream, /Use learning_memory for decisions and learned_skill/)
+  })
+})
+
 test('missing, blocked and unverified receipts do not acknowledge source ranges', async () => {
   await withTempWorkspace(async workspace => {
     const f = fixture(workspace)

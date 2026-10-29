@@ -11,7 +11,7 @@ export class SessionTool implements Tool {
     properties: {
       action: { type: 'string', enum: ['create', 'update', 'register_folder'] },
       title: { type: 'string', description: 'Required for create/update: session name, max 120 characters.' },
-      description: { type: 'string', description: 'Optional short discovery description, not a goal, acceptance condition or permission.' },
+      description: { type: 'string', description: 'Optional short discovery description for create/update, or folder contents description for register_folder. Not instructions or permission.' },
       sessionId: { type: 'string', description: 'Update only: this session.' },
       requestId: { type: 'string', description: 'Create only: optional UUID; reuse exactly the same request on retry. Initial messages are never replayed.' },
       folderId: { type: 'string', description: 'Create only: current Project folder shortName, name-ID selector or full UUID. Uses the registered folder and its node. Omit for a discussion-only session; never a path.' },
@@ -35,8 +35,8 @@ export class SessionTool implements Tool {
     if (action === 'update') return JSON.stringify(await this.topics.update(request, context.sessionId))
     if (action === 'register_folder') {
       if (context.remoteWorkdir) throw new Error('A remote session cannot register its display path on Main. Use a Main-local Project session to register a Main-local folder or select an existing remote capability.')
-      if (Object.keys(request).some(key => key !== 'path')) throw new TypeError('register_folder accepts only path.')
-      return JSON.stringify(await this.topics.registerFolder(request.path, context.signal))
+      if (Object.keys(request).some(key => key !== 'path' && key !== 'description')) throw new TypeError('register_folder accepts only path and description.')
+      return JSON.stringify(await this.topics.registerFolder(request.path, context.signal, request.description as string | undefined))
     }
     throw new TypeError('Unknown session action.')
   }

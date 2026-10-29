@@ -44,6 +44,9 @@ export function useComputer(source: () => ComputerSource) {
   const frameState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const canApprove = computed(() => !!status.value?.pending && !needsReload.value && !busy.value && remaining.value > 0
     && (!isPointerAction(status.value.pending.action) || frameState.value === 'ready' && !!frameUrl.value && frameRequestId === status.value.pending.id))
+  // Authorization failures are terminal for passive discovery in this scope.
+  let discoveryIdentity = ''
+  let discoveryDenied = false
   let generation = 0
   let read: AbortController | undefined
   let write: AbortController | undefined
@@ -113,7 +116,8 @@ export function useComputer(source: () => ComputerSource) {
     operation.value = null
   }
   async function refresh(manual = false) {
-    if (!enabled.value || read || write) return
+    if (!enabled.value || read || write || discoveryDenied && !manual) return
+    if (manual) discoveryDenied = false
     const current = generation
     const controller = new AbortController()
     read = controller
@@ -123,6 +127,8 @@ export function useComputer(source: () => ComputerSource) {
         cache: 'no-store', redirect: 'error',
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
       })
+      if (current !== generation || controller.signal.aborted) return
+      if (response.status === 401 || response.status === 403) discoveryDenied = true
       if (!response.ok) throw new Error('Status unavailable')
       const next = parseComputerStatus(await response.json(), source())
       if (current !== generation || controller.signal.aborted) return
@@ -203,6 +209,8 @@ export function useComputer(source: () => ComputerSource) {
     }, true)
   }
   watch([() => source().apiBase, () => source().projectId, () => source().sessionId, enabled], () => {
+    const identity = JSON.stringify([source().apiBase, source().projectId, source().sessionId])
+    if (identity !== discoveryIdentity) { discoveryIdentity = identity; discoveryDenied = false }
     clear()
     if (!enabled.value) return
     void refresh()
