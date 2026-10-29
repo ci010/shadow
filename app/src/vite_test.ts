@@ -24,8 +24,10 @@ async function isolatedCache(t: TestContext): Promise<string> {
   return directory
 }
 
-for (const desktop of [false, true]) {
-  test(`LAN Vite preserves PIN, pairing, API and WebSocket authentication (${desktop ? 'desktop' : 'standalone'})`, async t => {
+assert.equal(config.server!.host, process.env.VITE_DEV_HOST ?? '127.0.0.1', 'Development defaults to loopback; LAN binding requires explicit opt-in')
+
+for (const desktop of [false, true]) for (const host of ['127.0.0.1', '0.0.0.0']) {
+  test(`Vite ${host} preserves PIN, pairing, API and WebSocket authentication (${desktop ? 'desktop' : 'standalone'})`, async t => {
     const credential = 'synthetic-lan-management-credential'
     const pin = 'synthetic-lan-pin'
     const clientAddresses = new GatewayClientAddressRegistry()
@@ -53,7 +55,7 @@ for (const desktop of [false, true]) {
       optimizeDeps: { noDiscovery: true, include: [] },
       plugins: [routing.plugin],
       server: {
-        host: config.server!.host, port: 0, strictPort: false, watch: null,
+        host, port: 0, strictPort: false, watch: null,
         proxy: desktop ? routing.proxy : Object.fromEntries(Object.entries(routing.proxy).map(([path, options]) => [
           path, { ...options, target },
         ])),
@@ -64,11 +66,11 @@ for (const desktop of [false, true]) {
     messages.emit('message', { type: 'shadow:runtime-ready', apiBase: target })
     const address = vite.httpServer?.address()
     assert.ok(address && typeof address !== 'string')
-    assert.equal(address.address, process.env.VITE_DEV_HOST ?? '0.0.0.0')
+    assert.equal(address.address, host)
     const lan = Object.values(networkInterfaces()).flat()
       .find(value => value?.family === 'IPv4' && !value.internal)?.address
-    const host = process.env.VITE_DEV_HOST === '127.0.0.1' ? '127.0.0.1' : lan ?? '127.0.0.1'
-    const base = `http://${host}:${address.port}`
+    const clientHost = host === '127.0.0.1' ? '127.0.0.1' : lan ?? '127.0.0.1'
+    const base = `http://${clientHost}:${address.port}`
     const request = (path: string, init: RequestInit = {}) =>
       fetch(new URL(path, base), { ...init, signal: AbortSignal.timeout(5000) })
     const login = (body: object, headers: Record<string, string> = {}) => request('/api/web-auth/pair', {
@@ -151,8 +153,11 @@ test('Vite 8 transforms Vue and proxies inventory without intercepting the Nodes
   assert.ok(address && typeof address !== 'string')
   assert.ok(config.server?.proxy?.['/nodes/v1'])
   const target = `http://127.0.0.1:${address.port}`
+  // Do not inherit the running desktop development process's IPC mode.
+  const routing = desktopBackendRouting(false)
   const vite = await createServer({
     ...config,
+    plugins: [...config.plugins!.filter(plugin => (plugin as { name?: string })?.name !== 'shadow-desktop-backend'), routing.plugin],
     root: fileURLToPath(new URL('..', import.meta.url)),
     configFile: false,
     envFile: false,
@@ -165,7 +170,7 @@ test('Vite 8 transforms Vue and proxies inventory without intercepting the Nodes
       port: 0,
       strictPort: false,
       watch: null,
-      proxy: Object.fromEntries(Object.entries(config.server.proxy).map(([path, proxy]) => [
+      proxy: Object.fromEntries(Object.entries(routing.proxy).map(([path, proxy]) => [
         path, { ...(typeof proxy === 'string' ? {} : proxy), target },
       ])),
     },
