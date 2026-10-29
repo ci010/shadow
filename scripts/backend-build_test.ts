@@ -23,7 +23,9 @@ async function fixture(root: string): Promise<void> {
       'integrations/agent-desktop/scripts', 'integrations/agent-desktop/Cargo.toml',
       'integrations/agent-desktop/Cargo.lock', 'integrations/agent-desktop/build.rs',
       'src/execution/computer/agent-desktop-worker.js', 'src/execution/computer/agent-desktop-errors.js',
-      'src/execution/computer/stdio-transport.ts', 'src/execution/computer/windows-input.cs',
+      'src/execution/computer/agent-desktop-errors.d.ts',
+      'src/execution/computer/stdio-transport.ts', 'src/execution/computer/contracts.ts',
+      'src/execution/computer/windows-input.cs',
       'scripts/agent-desktop-input-guard.ts', 'scripts/agent-desktop-integrity.ts']) {
       await mkdir(join(root, path, '..'), { recursive: true })
       await cp(join(repository, path), join(root, path), { recursive: true })
@@ -39,7 +41,8 @@ async function fixture(root: string): Promise<void> {
   await writeFile(join(root, 'tsconfig.build.json'), JSON.stringify({
     compilerOptions: {
       target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', types: ['node'],
-      allowImportingTsExtensions: true, noEmit: true,
+      // Match the production checker: Zod discriminated unions require strict null checks.
+      strict: true, allowImportingTsExtensions: true, noEmit: true,
     },
     include: ['src/**/*.ts'], exclude: ['src/**/*_test.ts', 'src/testing/**'],
   }))

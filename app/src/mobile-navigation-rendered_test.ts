@@ -26,7 +26,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
   const unexpected: string[] = []
   const requests: string[] = []
   const names = new Map([['web:chat-one', 'First investigation'], ['web:chat-two', 'Second investigation']])
-  const history = [{ role: 'user', content: 'Investigate the mobile layout.' }, { role: 'assistant', content: 'Synthetic reply: ready to continue. ' + 'Long replies should use the available phone width without reserving desktop navigation gutters. '.repeat(8) }]
+  const history = [{ role: 'user', content: 'Investigate the mobile layout.' }, { role: 'assistant', content: 'Synthetic reply: ready to continue. ' + 'Long replies should use the available phone width without reserving desktop navigation gutters. '.repeat(24) }]
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     optimizeDeps: { include: ['vue', 'vue-router', 'vue-i18n'], entries: [], noDiscovery: true },
