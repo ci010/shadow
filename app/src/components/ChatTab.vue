@@ -253,10 +253,10 @@
     <template #composer>
       <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible }">
         <div class="session-status-row">
-          <SessionWorkStatus v-if="activeSessionId && !isExecution && !viewingPhysicalId"
+          <SessionWorkStatus v-if="sessionReadable && !isExecution && !viewingPhysicalId"
             :key="`work-status:${activeSessionId}`" :api-base="apiBase" :session-id="activeSessionId" :revision="workRevision"
             :active="paneActive && composerVisible && route.name === 'chat'" @open="openProjectWork" />
-          <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="`work-controls:${activeSessionId}`"
+          <SessionWorkControls v-if="sessionReadable && !isCall && !viewingPhysicalId" :key="`work-controls:${activeSessionId}`"
             :api-base="apiBase" :session-id="activeSessionId" :can-write="true" :active="paneActive && composerVisible && route.name === 'chat'"
             :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
           <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" :class="{ 'work-chip-active': composerWorking }" role="status" aria-live="polite">
@@ -777,6 +777,11 @@ const { activeSessionId, selectedMode, requestSession, selectSession, inspectExe
   mounted: () => mounted,
   newDraft: () => createNewWebChat(undefined, false),
 })
+// Allocating a scratch ID is not persistence: upload/live setup and the first
+// POST can still fail before Main creates the session. Only graph discovery
+// releases these reads; once discovered, later deletion remains a real error.
+const unpersistedDrafts = ref(new Set<string>())
+const sessionReadable = computed(() => !!activeSessionId.value && !unpersistedDrafts.value.has(activeSessionId.value))
 const homeCache = inject(HomeTreeCacheKey, createHomeTreeCache, true)
 provide(HomeTreeCacheKey, homeCache)
 const expectedHome = computed(() => homeCache.expectsHome({ apiBase: props.apiBase, sessionId: activeSessionId.value }))
@@ -1618,6 +1623,7 @@ watch(() => [props.apiBase, props.projectId, paneActive.value] as const, ([base,
     const selected = sessions.find(session => session.sessionId === activeSessionId.value)
     if (activeSession.value && !selected) composerError.value = t('This conversation or execution is no longer available. Close it and refresh the conversation list.')
     if (selected) selectedMode.value = selected.mode
+    for (const session of sessions) unpersistedDrafts.value.delete(session.sessionId)
     allSessions.value = sessions.map(session => ({
       ...session,
       ...(sessionStages.value[session.sessionId] ? { waitingForCall: sessionStages.value[session.sessionId] === 'waiting-for-call' } : {}),
@@ -2596,6 +2602,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     loadingHistory.value = false
     if (startingDraft && draftRemote.value) currentWorkdir.value = { kind: 'remote', displayPath: draftRemote.value.displayPath ?? null }
     if (startingDraft) composerDraft.migrate(composerDraftKey(props.apiBase, props.projectId ?? '', sessionId))
+    if (startingDraft) unpersistedDrafts.value.add(sessionId)
     activeSessionId.value = sessionId
     if (props.managed) emit('prepared', sessionId)
     else if (!props.embedded) void router.replace({ name: 'chat', params: { projectId: props.projectId, sessionId }, query: startingDraft || opts?.parentSessionId ? {} : route.query })

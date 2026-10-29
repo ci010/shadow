@@ -581,3 +581,43 @@ test('deleting the current last conversation clears its active identity and navi
   assert.deepEqual(state.messages, [])
   assert.ok(view.navigation.includes(''))
 })
+
+test('scratch draft status reads wait for persistence, not ID allocation or failed first sends', async t => {
+  const f = fixture(t, true)
+  const view = f.mount('a', '')
+  const state = view.state()
+  assert.equal(state.sessionReadable, false)
+  assert.equal(f.requests.length, 0)
+  const first = state.sendMessage()
+  await settle()
+  const id = state.activeSessionId
+  assert.match(id, /^web:chat-/)
+  assert.equal(state.sessionReadable, false, 'a prepared ID is not a backend session')
+  const send = f.requests.find(request => request.path.endsWith('/send'))!
+  assert.ok(send)
+  send.finish({ error: 'synthetic rejection' }, 503)
+  await first
+  assert.equal(state.activeSessionId, id, 'retry keeps the allocated identity')
+  assert.equal(state.sessionReadable, false, 'rejection cannot enable persisted-session consumers')
+  const retry = state.sendMessage()
+  await settle()
+  const sends = f.requests.filter(request => request.path.endsWith('/send'))
+  assert.equal(sends.length, 2)
+  sends[1].finish({ chatId: id.slice(4), requestId: 'first-turn' })
+  await retry
+  assert.equal(state.sessionReadable, false, 'admission may precede session creation')
+  await settle()
+  const graph = f.requests.find(request => request.path.endsWith('/graph'))!
+  assert.ok(graph)
+  graph.finish({ sessions: [{ sessionId: id, mode: 'session' }], nodes: [] })
+  await settle()
+  assert.equal(state.sessionReadable, true, 'graph discovery enables both status surfaces')
+  // Discovering the session is monotonic. A later deleted/missing session must
+  // still reach the readers and display their real 404, never become a draft.
+  state.allSessions = []
+  await Vue.nextTick()
+  assert.equal(state.sessionReadable, true)
+  const source = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
+  assert.match(source, /SessionWorkStatus v-if="sessionReadable /)
+  assert.match(source, /SessionWorkControls v-if="sessionReadable /)
+})
