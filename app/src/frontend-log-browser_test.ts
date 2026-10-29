@@ -42,6 +42,11 @@ test('real cross-port renderer sends frontend logs with native auth and noncrede
       allowCredentials: c.res.headers.get('Access-Control-Allow-Credentials'), cookie: c.req.header('Cookie'), status: c.res.status })
   })
   registerGatewayRoutes(gateway, [app => {
+    app.get('/api/live', () => new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(': connected\n\n'))
+      setTimeout(() => controller.error(new Error('synthetic interrupted stream')), 40)
+    } }), { headers: { 'Content-Type': 'text/event-stream' } }))
+    app.get('/api/agent-types', c => c.json({ error: 'synthetic' }, 503))
     const project = new Hono()
     registerFrontendLogRoutes(project, log, request => request.headers.get('Authorization') === `Bearer ${credential}`)
     app.route('/projects/fixture', project)
@@ -66,7 +71,10 @@ test('real cross-port renderer sends frontend logs with native auth and noncrede
         if (!blocked) throw Error('credentialed CORS unexpectedly allowed');
         const stop = startFrontendLog(${JSON.stringify(`${apiBase}/projects/fixture`)}, new AbortController().signal);
         console.warn('synthetic frontend transport regression');
-        await new Promise(resolve => setTimeout(resolve, 2200)); stop();
+        console.error('Failed to load agent types', new Error('HTTP 503'));
+        await fetch(${JSON.stringify(`${apiBase}/api/agent-types`)});
+        const live = new EventSource(${JSON.stringify(`${apiBase}/api/live`)});
+        await new Promise(resolve => setTimeout(resolve, 2200)); live.close(); stop();
       };`, resolveDir: root, loader: 'ts',
   }, bundle: true, write: false, platform: 'browser', format: 'iife', logLevel: 'silent' })
   const source = resolve(directory, 'main.ts')
@@ -102,6 +110,10 @@ test('real cross-port renderer sends frontend logs with native auth and noncrede
   assert.equal(code, 0, output)
   assert.match(output, /FRONTEND_LOG_CORS_OK/)
   assert.match(log.read(), /synthetic frontend transport regression/)
+  assert.match(log.read(), /Failed to load agent types/)
+  assert.match(log.read(), /HTTP 503/)
+  assert.match(log.read(), /API agent-types: HTTP 503/)
+  assert.match(log.read(), /API live: EventSource error/)
   const cors = responses.filter(response => response.origin === rendererOrigin)
   assert.ok(cors.some(response => response.method === 'OPTIONS' && response.status === 204), 'Real JSON POST preflight')
   assert.ok(cors.some(response => response.method === 'GET' && response.status === 200))

@@ -222,12 +222,15 @@ In a development renderer, the hook is installed synchronously for an explicit
 Project in the visible route, before its child components render. An authenticated
 capability GET gates transmission (not capture), so initial render warnings are
 buffered while it is pending. It captures `console.log`, `info`, `warn`, `error`,
-`window.error` and `unhandledrejection`; not output before the scoped App setup,
-DOM/user inputs or network payloads. It preserves the original console behavior.
+`window.error` (including capture-phase resource load errors) and
+`unhandledrejection`; not output before the scoped App setup or DOM/user inputs.
+Error summaries use a `detail` field so the backend's conservative payload-key
+redaction does not discard an ordinary `Error.message`. Sensitive text is still
+redacted. It preserves the original console behavior.
 Capability/network failures and transient POST failures (429/5xx) retry on
 subsequent one-second flushes while there are queued events; queues remain bounded
 and delivery is best-effort, not exactly-once. Permanent invalid POST batches are
-dropped; POST 401/403/404 stops capture. Batches also respect the UTF-8 byte limit,
+dropped; POST 401/403 retries (temporary authentication loss), while 404 stops capture. Batches also respect the UTF-8 byte limit,
 not just the event/character limits. Capture continues during an in-flight request.
 A disabled/404 capability restores hooks without sending. Project or API-base
 changes, unmount and HMR discard the local queue, abort requests and restore hooks
@@ -258,8 +261,40 @@ and sensitive field names omitted. URLs and recognizable credentials/header/body
 text are redacted both before sending and on ingestion. Arbitrary freeform logs
 may still contain unlabeled secrets: avoid logging private data. Log text,
 including HTML, newlines and apparent instructions, remains untrusted JSONL data;
-reads do not render HTML or execute browser JavaScript. Failed diagnostic requests
-are silent, are not retried, and cannot recursively log through the hook.
+reads do not render HTML or execute browser JavaScript. Diagnostic requests are
+silent and excluded from network capture, including their retries.
+
+This is **not a complete or verbatim DevTools Console mirror**. While scoped,
+fetch failures/HTTP errors and EventSource errors are also captured as fixed
+endpoint metadata for `live`, `projects`, `service-groups`, `agent-types`,
+`work/history`, and `background-tasks`. Only the API origin and either the visible
+Project prefix or host endpoints qualify; another Project's requests are excluded.
+No query, arbitrary path segments, headers or request/response bodies are collected.
+Fetch returns the original response and rejection; intentional aborts are quiet.
+The `/api/live` EventSource error covers stream interruptions after connection,
+including the failure category behind `ERR_INCOMPLETE_CHUNKED_ENCODING`, but the
+web API exposes neither that Chromium code nor the HTTP status. A fetch body
+read failing after headers is **not** intercepted; a subsequent application
+console/error/rejection is captured normally. Resource errors have no native
+status. XHR, pre-hook requests, other origins and non-allowlisted endpoints are
+not network-instrumented.
+
+Electron currently has child-renderer recovery hooks (`desktop/src/main.ts`) for
+`did-fail-load` and loopback `webRequest` failures. They write role-scoped startup
+diagnostics, not Project frontend rings, exclude local Main renderer requests,
+and do not provide a general Console/Project attribution bridge. There is no
+existing production `console-message`/CDP-to-frontend-log pipeline to reuse. A
+true native Console mirror would require a separately designed privileged
+Electron/CDP collector and explicit Project/lifecycle/redaction controls; this
+feature does not attach a debugger, open profiles or broaden gateway access.
+
+For empty output, check the active visible Project and renderer/backend version
+first. `/` and legacy `/chat` redirect to explicit `default` Project routes (covered
+by routing/collector regression tests), so they are not inherently unscoped. The
+Project list `/projects` and host Settings remain intentionally unscoped. An empty
+ring alone cannot distinguish no events, an old renderer, disabled/404 capability,
+a failed transport or a different Project; inspect DevTools request status without
+copying private headers. Existing Console entries are never replayed retroactively.
 
 ### Vite lazy syntax-highlighting dependencies
 

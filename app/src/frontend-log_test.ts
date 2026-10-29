@@ -233,3 +233,31 @@ test('frontend log starts and sends a UUID tab ID on HTTP without crypto.randomU
   assert.match(batches[0]!.tabId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
   assert.equal(batches[0]!.events.length, 1)
 })
+
+test('temporary POST authentication failures recover without route changes', async t => {
+  const fake = fakeWindow()
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: fake.target })
+  t.after(() => { if (previous) Object.defineProperty(globalThis, 'window', previous); else Reflect.deleteProperty(globalThis, 'window') })
+  let posts = 0
+  t.mock.method(globalThis, 'fetch', async (_url: string, options?: RequestInit) => {
+    if (options?.method !== 'POST') return Response.json({ enabled: true })
+    return new Response('{}', { status: ++posts === 1 ? 401 : posts === 2 ? 403 : 200 })
+  })
+  const original = fake.target.console.error
+  const stop = startFrontendLog('http://fixture.test/projects/default', new AbortController().signal)
+  fake.target.console.error('Failed to load agent types', new Error('HTTP 503'))
+  for (let i = 0; i < 3; i++) { fake.tick(); await settle() }
+  assert.equal(posts, 3)
+  assert.notEqual(fake.target.console.error, original)
+  stop(); assert.equal(fake.target.console.error, original)
+})
+
+test('application Error remains useful after backend redaction', async () => {
+  const { FrontendLog } = await import('../../src/runtime/frontend-log.ts')
+  const log = new FrontendLog('development')
+  log.append('fixture', [{ level: 'error', message: summarizeFrontendArgs(['Failed to load agent types', new Error('HTTP 503')]) }])
+  assert.match(log.read(), /Failed to load agent types/)
+  assert.match(log.read(), /HTTP 503/)
+  assert.doesNotMatch(log.read(), /credential, header or payload-bearing message/)
+})
