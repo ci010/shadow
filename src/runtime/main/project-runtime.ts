@@ -1362,6 +1362,7 @@ export async function createProjectRuntime(
       activeConfig = newConfig
       if (automationsChanged) realtime.invalidateResource?.('automations')
       channels.updateConfig(newConfig)
+      realtime.invalidateResource?.('config')
   }
   const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
     projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery, messageStream: new ChannelMessageStream(workspace,project.id),

@@ -1,3 +1,6 @@
+import { coalescedRead, configResource } from './settings-resource.ts'
+import { apiUrl } from './api-url.ts'
+import type { ResourceLivePool } from './live-resource-refresh.ts'
 import type { ProviderInstanceLabel } from './model-selection.ts'
 import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
@@ -45,19 +48,23 @@ export function mergeProjectSettings(config: ProjectConfig, section: 'agent' | '
   return parseProjectConfig({ ...next, [section]: target })
 }
 
-export function createProjectSettingsClient(base: string, request: typeof fetch = fetch) {
+export function createProjectSettingsClient(base: string, request: typeof fetch = fetch, pool?: ResourceLivePool) {
   const load = async (signal?: AbortSignal) => parseProjectConfig(await projectJson(base, '/api/config', { signal }, request))
+  const shared = pool ? configResource(pool, base, request, load) : undefined
   return {
-    load,
+    invalidate: () => shared?.invalidate(),
+    load: (signal?: AbortSignal) => shared ? shared.read(signal).then(parseProjectConfig) : load(signal),
     async save(section: 'agent' | 'learning', patch: Record<string, unknown>, signal?: AbortSignal) {
       // The config endpoint replaces the document. Read immediately before merging
       // so a Models edit does not overwrite an earlier Bots/Learning edit.
       const current = await load(signal)
       const next = mergeProjectSettings(current, section, patch)
-      return parseProjectConfig(await projectJson(base, '/api/config', { method: 'PATCH', body: JSON.stringify(next), signal }, request))
+      try {
+        return parseProjectConfig(await projectJson(base, '/api/config', { method: 'PATCH', body: JSON.stringify(next), signal }, request))
+      } finally { shared?.invalidate() }
     },
     async catalog(signal?: AbortSignal): Promise<{ models: string[]; providers: ProviderInstanceLabel[] }> {
-      const result = await projectJson(base, '/api/models', { signal }, request)
+      const result = await coalescedRead(request, apiUrl(base, '/api/models').toString(), signal => projectJson(base, '/api/models', { signal }, request), signal)
       if (!isRecord(result) || !Array.isArray(result.models) || !result.models.every(model => typeof model === 'string')
         || (result.providers !== undefined && (!Array.isArray(result.providers) || !result.providers.every(item =>
           isRecord(item) && typeof item.id === 'string' && typeof item.type === 'string' && (item.name === undefined || typeof item.name === 'string'))))) {

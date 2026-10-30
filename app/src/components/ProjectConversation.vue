@@ -15,6 +15,7 @@
 </template>
 
 <script setup lang="ts">
+import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import ChatWorkspace from './ChatWorkspace.vue'
@@ -24,6 +25,7 @@ import { provideModelSelection, type ProviderInstanceLabel } from '../model-sele
 import type { FolderRecord } from '../folders-client.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
+const livePool = useLiveClientPool()
 const props = defineProps<{
   apiBase: string; projectId: string; projectName: string; sessionId: string
   initialFolder?: FolderRecord; openRemote?: boolean; visible: boolean; childSessionId?: string
@@ -54,7 +56,7 @@ async function load() {
   request = controller
   loading.value = true
   error.value = ''
-  const client = createProjectSettingsClient(props.apiBase)
+  const client = createProjectSettingsClient(props.apiBase, fetch, livePool)
   try {
     const [config, models] = await Promise.all([client.load(controller.signal), client.catalog(controller.signal)])
     if (controller.signal.aborted) return
@@ -70,7 +72,10 @@ async function load() {
 onMounted(load)
 function defaultsChanged(event: Event) {
   const id = (event as CustomEvent<{ projectId?: string }>).detail?.projectId
-  if (!id || id === props.projectId) void load()
+  if (!id || id === props.projectId) {
+    createProjectSettingsClient(props.apiBase, fetch, livePool).invalidate()
+    void load()
+  }
 }
 onMounted(() => window.addEventListener('shadow:config-changed', defaultsChanged))
 onUnmounted(() => {

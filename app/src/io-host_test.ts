@@ -264,18 +264,19 @@ test('same-base duplicate view registrations do not enqueue another read during 
   assert.equal(f.polls().length, 1)
 })
 
-test('a genuinely new visible session discovers and prepares its request', async t => {
+test('switching visible sessions projects the shared Project inventory without another GET', async t => {
   const f = fixture(t)
-  await settle()
   f.bridge.views.value = new Map([['other', { apiBase: base, sessionId: 'other', remote: false }]])
-  await settle()
   f.inventory(async () => Response.json({ runs: [run] }))
+  await settle()
+  assert.equal(f.polls().length, 1)
+  assert.equal(f.registrations().length, 0, 'hidden session never acquires capture consent')
   const view = { apiBase: base, sessionId: run.sessionId, remote: false }
   f.bridge.context.value = view
   f.bridge.views.value = new Map([...f.bridge.views.value, ['new-session', view]])
   await settle()
   await settle()
-  assert.equal(f.polls().length, 3)
+  assert.equal(f.polls().length, 1, 'same Project session switch reuses inventory')
   assert.equal(f.registrations().length, 1)
   assert.equal(f.bridge.execution.value?.run.sessionId, run.sessionId)
 })
