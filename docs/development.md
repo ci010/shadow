@@ -386,7 +386,14 @@ The client also sends its cached `historyCount` and, when available, a
 session ID and segment index. Main verifies the entire cached block against the
 current history, trying offsets 0 through at most 16 (bounded work, not an
 unbounded search). A match returns a `delta` with leading/trailing messages,
-complete current metadata, the old revision/hash/count and the new history hash.
+the old revision/hash/count and the new history hash. Full responses and block
+deltas also carry `metadataRevision`, SHA-256 of complete metadata (including
+chat/physical/segment identity). New clients send their cached metadata revision.
+Only an exact match lets Main omit metadata and send `baseMetadataRevision`
+instead. The client requires that reference to equal both its cached validator
+and the response validator; references cannot coexist with inline metadata.
+Otherwise Main sends complete current metadata, including metadata-only changes.
+Older clients omit the validator and always receive inline metadata.
 This supports append, prepend-plus-append, and metadata-only updates without
 retransmitting the old block. The client validates base, counts, bounded offset
 and identity before merging; metadata replaces rather than overlays old fields.

@@ -731,7 +731,18 @@ test('history block reuse requires exact hash/count and bounded offset', async (
   try {
     const base = await read({ snapshot: '' })
     const params = { snapshot: base.revision, historyRevision: base.historyRevision, historyCount: '1' }
+    assert.match(base.metadataRevision, /^[a-f0-9]{64}$/)
+    history.push({ role: 'assistant', content: 'small append' })
+    const omitted = await read({ ...params, metadataRevision: base.metadataRevision })
+    assert.equal('metadata' in omitted.delta, false)
+    assert.equal(omitted.delta.baseMetadataRevision, base.metadataRevision)
+    assert.equal(omitted.metadataRevision, base.metadataRevision)
+    assert.ok((await read(params)).delta.metadata, 'old clients still receive metadata')
+    assert.ok((await read({ ...params, metadataRevision: 'invalid' })).delta.metadata)
     systemPrompt = 'new'
+    const changed = await read({ ...params, metadataRevision: base.metadataRevision })
+    assert.equal(changed.delta.metadata.systemPrompt, 'new')
+    assert.notEqual(changed.metadataRevision, base.metadataRevision)
     history = [...Array.from({ length: 16 }, () => ({ role: 'system', content: 'leading' })), ...original, { role: 'assistant', content: 'suffix' }]
     const delta = await read(params)
     assert.equal(delta.delta.historyOffset, 16)

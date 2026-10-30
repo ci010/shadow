@@ -494,6 +494,12 @@ export class WebChannel extends AbstractChannel {
             chatId, currentPhysicalId: data.currentPhysicalId, segmentIndex, history: prefix,
           })).digest('hex')
           const historyRevision = historyHash(messages)
+          // Metadata includes logical/physical identity, so a segment rollover can
+          // never authorize reuse of the preceding segment's context.
+          const metadataRevision = createHash('sha256').update(JSON.stringify(metadata)).digest('hex')
+          const baseMetadataRevision = c.req.query('metadataRevision')
+          const metadataPayload = baseMetadataRevision === metadataRevision
+            ? { baseMetadataRevision } : { metadata }
           const countText = c.req.query('historyCount')
           const count = countText !== undefined && /^(0|[1-9]\d*)$/.test(countText) ? Number(countText) : NaN
           if (c.req.query('snapshot') === revision && (countText === undefined || count === data.history.length)) {
@@ -508,10 +514,10 @@ export class WebChannel extends AbstractChannel {
             // Never reuse a partially matching or rewritten middle block.
             for (let offset = 0; offset <= Math.min(16, messages.length - count); offset++) {
               if (historyHash(messages.slice(offset, offset + count)) !== baseHistoryRevision) continue
-              return c.json({ revision, historyRevision, delta: {
+              return c.json({ revision, historyRevision, metadataRevision, delta: {
                 baseRevision: baseSnapshot, baseHistoryRevision, baseCount: count,
                 historyOffset: offset, leadingHistory: messages.slice(0, offset),
-                history: messages.slice(offset + count), count: messages.length, metadata,
+                history: messages.slice(offset + count), count: messages.length, ...metadataPayload,
               } })
             }
           }
@@ -526,7 +532,7 @@ export class WebChannel extends AbstractChannel {
                 history: data.history.slice(count), count: data.history.length } })
             }
           }
-          return c.body(`{"revision":"${revision}","historyRevision":"${historyRevision}","data":${body}}`, 200, { 'Content-Type': 'application/json; charset=UTF-8' })
+          return c.body(`{"revision":"${revision}","historyRevision":"${historyRevision}","metadataRevision":"${metadataRevision}","data":${body}}`, 200, { 'Content-Type': 'application/json; charset=UTF-8' })
         }
         c.header('ETag', etag)
         c.header('Cache-Control', 'private, no-cache')

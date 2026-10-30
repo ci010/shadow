@@ -1,4 +1,4 @@
-interface Snapshot { revision: string; historyRevision?: string; body: Record<string, unknown>; bytes: number }
+interface Snapshot { revision: string; historyRevision?: string; metadataRevision?: string; body: Record<string, unknown>; bytes: number }
 interface Pool { onDispose(callback: () => void): () => void }
 const pools = new WeakMap<Pool, ReturnType<typeof createChatHistorySnapshots>>()
 
@@ -21,12 +21,14 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
       target.searchParams.set('snapshot', cached?.revision ?? '')
       target.searchParams.delete('historyCount')
       target.searchParams.delete('historyRevision')
+      target.searchParams.delete('metadataRevision')
+      if (cached?.metadataRevision) target.searchParams.set('metadataRevision', cached.metadataRevision)
       if (cached?.historyRevision) target.searchParams.set('historyRevision', cached.historyRevision)
       if (cached && Array.isArray(cached.body.history)) target.searchParams.set('historyCount', String(cached.body.history.length))
-      const response = await request(target.toString(), { signal, cache: 'no-store' })
+      const response = await request(target.toString(), { signal, cache: 'no-store' }).catch(error => { remove(key); throw error })
       if (signal.aborted || disposed) throw new Error('History read cancelled')
       if (!response.ok) { remove(key); return response }
-      const envelope: unknown = await response.json()
+      const envelope: unknown = await response.json().catch(error => { remove(key); throw error })
       if (signal.aborted || disposed) throw new Error('History read cancelled')
       if (!envelope || typeof envelope !== 'object' || !('revision' in envelope)
         || typeof envelope.revision !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.revision)) {
@@ -45,13 +47,26 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
         remove(key)
         throw new Error('Invalid history revision')
       }
+      const metadataRevision = 'metadataRevision' in envelope ? envelope.metadataRevision : undefined
+      if (metadataRevision !== undefined && (typeof metadataRevision !== 'string' || !/^[a-f0-9]{64}$/.test(metadataRevision))) {
+        remove(key)
+        throw new Error('Invalid metadata revision')
+      }
       let body: Record<string, unknown>
       if ('delta' in envelope) {
         const delta = envelope.delta
-        const metadata = delta && typeof delta === 'object' && 'metadata' in delta ? delta.metadata : undefined
+        const reference = delta && typeof delta === 'object' && 'baseMetadataRevision' in delta ? delta.baseMetadataRevision : undefined
+        const hasReference = !!delta && typeof delta === 'object' && 'baseMetadataRevision' in delta
+        const hasMetadata = !!delta && typeof delta === 'object' && 'metadata' in delta
+        const { history: _history, ...cachedMetadata } = cached?.body ?? {}
+        const metadata = hasReference ? cachedMetadata
+          : delta && typeof delta === 'object' && 'metadata' in delta ? delta.metadata : undefined
         const leading = delta && typeof delta === 'object' && 'leadingHistory' in delta ? delta.leadingHistory : []
-        const historyOnly = metadata !== undefined || (delta && typeof delta === 'object' && 'baseHistoryRevision' in delta)
-        if (!cached || !Array.isArray(cached.body.history) || !delta || typeof delta !== 'object'
+        const historyOnly = hasMetadata || hasReference || (delta && typeof delta === 'object' && 'baseHistoryRevision' in delta)
+        if ((hasReference && (hasMetadata || !metadataRevision || reference !== metadataRevision
+            || reference !== cached?.metadataRevision))
+          || (metadataRevision !== undefined && !hasReference && !hasMetadata)
+          || !cached || !Array.isArray(cached.body.history) || !delta || typeof delta !== 'object' || Array.isArray(delta)
           || !('baseRevision' in delta) || delta.baseRevision !== cached.revision
           || !('baseCount' in delta) || delta.baseCount !== cached.body.history.length
           || !('history' in delta) || !Array.isArray(delta.history) || (!historyOnly && delta.history.length === 0)
@@ -81,18 +96,26 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
           remove(key)
           throw new Error('Invalid history delta')
         }
-        body = { ...(historyOnly ? metadata : cached.body), history: [...(leading as unknown[]), ...cached.body.history, ...delta.history] }
+        body = { ...(historyOnly ? metadata as Record<string, unknown> : cached.body), history: [...(leading as unknown[]), ...cached.body.history, ...delta.history] }
       } else {
-        if (!('data' in envelope) || !envelope.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)) {
+        if ('unchanged' in envelope || !('data' in envelope) || !envelope.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)) {
           remove(key)
           throw new Error('Invalid history snapshot')
         }
         body = envelope.data as Record<string, unknown>
       }
+      if (metadataRevision !== undefined && (!historyRevision || !Array.isArray(body.history)
+        || typeof body.chatId !== 'string'
+        || (target.searchParams.has('chatId') && body.chatId !== target.searchParams.get('chatId'))
+        || typeof body.currentPhysicalId !== 'string' || !body.currentPhysicalId
+        || !Number.isSafeInteger(body.segmentIndex) || (body.segmentIndex as number) < 0)) {
+        remove(key)
+        throw new Error('Invalid history identity')
+      }
       const size = new TextEncoder().encode(JSON.stringify(body)).byteLength
       remove(key)
       if (size <= maxBytes && maxEntries > 0) {
-        entries.set(key, { revision: envelope.revision, historyRevision, body, bytes: size })
+        entries.set(key, { revision: envelope.revision, historyRevision, metadataRevision, body, bytes: size })
         bytes += size
         while (entries.size > maxEntries || bytes > maxBytes) remove(entries.keys().next().value!)
       }
