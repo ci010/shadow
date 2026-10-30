@@ -106,7 +106,9 @@ In Electron, a successfully completed conversation turn produces a native system
 notification when the Shadow window is not focused (including when minimized).
 It names the conversation and Project; clicking it restores the window and opens
 that conversation. Focused windows, failed/cancelled turns, internal task/call
-agents and replayed history do not produce completion notifications. System
+agents and replayed history do not produce completion notifications. Bot-channel
+conversations (including QQ, Discord and legacy channel sessions) do not trigger
+app completion notifications or notification sounds. System
 notifications work even when app sounds are muted or have not been unlocked.
 Notification sounds remain governed by the app's sound settings; the system toast
 itself is silent. Windows notification settings and Do Not Disturb may suppress

@@ -46,8 +46,10 @@ test('yield identities suppress repeats but allow the next question without an i
 
 test('app monitor isolates Projects, confirms human yield recipients, ignores replay, and cleans up subscriptions', async t => {
   const observers = new Map<string, LiveObserver>()
+  const botIds = ['qq:group:one', 'discord:room', 'telegram:chat', 'custom-bot:room', 'bot:a:instance:discord:room']
   const stages: Record<string, string> = { a: 'idle', b: 'idle' }
   const questionIds: Record<string, string> = { a: 'a1', b: 'b1' }
+  let botStage = 'idle'
   let parent = false
   let invalid = false
   let liveReady = true
@@ -61,13 +63,14 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
     if (path.endsWith('/graph')) return Response.json({ sessions: [
       { sessionId: 'web:root', mode: 'session', name: 'Review release' },
       { sessionId: 'sub:task', mode: 'task', parentSessionId: 'web:root', name: 'Internal check' },
+      ...botIds.filter(sessionId => id === 'a' || !sessionId.startsWith('bot:')).map(sessionId => ({ sessionId, mode: 'session' })),
     ], nodes: [] })
-    if (path.endsWith('/stages')) return Response.json(invalid ? { stages: { 'web:root': 123 } } : { stages: { 'web:root': stages[id] } })
-    if (path.endsWith('/ask')) return Response.json({ request: {
+    if (path.endsWith('/stages')) return Response.json(invalid ? { stages: { 'web:root': 123 } } : { stages: { 'web:root': stages[id], ...Object.fromEntries(botIds.map(id => [id, botStage])) } })
+    if (path.endsWith('/ask')) { assert.ok(path.includes('/web%3Aroot/'), 'Bot questions must not be fetched'); return Response.json({ request: {
       id: questionIds[id], sessionId: 'web:root', question: 'Continue?', options: ['Yes', 'No'], defaultOption: 'No',
       recipient: { kind: parent ? 'parent' : 'user', sessionId: parent ? 'web:owner' : 'web:root' },
       createdAt: new Date().toISOString(), deadline: null,
-    } })
+    } }) }
     throw new Error(`Unexpected ${path}`)
   }
   const live: Pick<LiveClient, 'subscribe' | 'isLive'> = {
@@ -94,6 +97,17 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
   await settle()
   assert.equal(observers.size, 3)
   assert.deepEqual(emitted, [])
+  for (const stage of ['llm', 'idle', 'waiting', 'idle']) {
+    botStage = stage
+    await update('a', 'idle')
+  }
+  for (const sessionId of botIds) {
+    observers.get('a')!.event({ type: 'event', cursor: 'epoch:bot', topic: { kind: 'sessions', projectId: 'a' },
+      payload: { event: 'invalidate', sessionId, completedTurnId: 'bot-turn' } })
+  }
+  await settle()
+  assert.deepEqual(emitted, [], 'Bot work, yields and completion events never play app sounds')
+  assert.deepEqual(completions, [], 'Bot completions never request system notifications')
   await update('a', 'llm')
   await update('a', 'idle')
   assert.deepEqual(emitted, ['idle'])
