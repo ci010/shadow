@@ -480,6 +480,14 @@ export class WebChannel extends AbstractChannel {
         // Validate the complete representation, not just message count: context,
         // decisions, command receipts and segment navigation can change alone.
         const etag = `"${createHash('sha256').update(body).digest('hex')}"`
+        // Explicit memory-snapshot protocol works through no-store gateways and
+        // cross-origin clients without exposing or adding custom HTTP headers.
+        if (c.req.query('snapshot') !== undefined) {
+          c.header('Cache-Control', 'no-store')
+          const revision = etag.slice(1, -1)
+          if (c.req.query('snapshot') === revision) return c.json({ revision, unchanged: true })
+          return c.body(`{"revision":"${revision}","data":${body}}`, 200, { 'Content-Type': 'application/json; charset=UTF-8' })
+        }
         c.header('ETag', etag)
         c.header('Cache-Control', 'private, no-cache')
         const validators = c.req.header('If-None-Match')?.split(',').map(value => value.trim().replace(/^W\//, ''))
