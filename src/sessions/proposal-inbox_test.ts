@@ -12,6 +12,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const states = new Map<string, SessionState>()
   let builds = 0, denied = false, crash = false
   const sessions = {
+    async validateExecutionInference() {},
     getSessionState: (id: string) => states.get(id) ?? null,
     assertFolderAccess() { if (denied) throw Error('Inaccessible') }, assertInitiativeAccess() {}, updateConversationMetadata: async () => {},
     buildSession: async (id: string, _: unknown, fields: Partial<SessionState>) => {

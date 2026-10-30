@@ -889,6 +889,30 @@ restricted conversation agent. Script execution is **not an OS sandbox**. See
 [conversation agent authoring](agent-authoring.md) for the separate,
 owner-reviewed publication workflow.
 
+## Durable peer conversations
+
+Basic task/call delegation is covered by system guidance; it does not require
+loading a general orchestration skill. Load collaboration guidance directly by
+scenario: `v:skills/peer-sessions` for reusable conversations,
+`v:skills/work-coordination` for shared goals, owners and dependencies, and
+`v:skills/orchestration` for designing complex parallel work. Load only the
+scenarios needed; none is a mandatory parent entry point for the others.
+
+`session` is an on-demand builtin, not a base tool. Read `v:tools/session` for
+its current contract and call it through `invoke_tool` with `name: "session"`.
+Use `action: "create"` for a reusable peer conversation; temporary assignments
+still use `subagent`. Creation accepts optional `model` (an exact `v:models` ID)
+and `effort` (`low`, `medium`, `high`, `xhigh`, `max`), validated against the
+selected model's capabilities before creation. Omitted values retain agent/Project
+defaults rather than inheriting the creator's current inference overrides.
+Reuse the same `requestId` and arguments for retries; inference choices are part
+of that request identity, and an accepted kickoff is not replayed.
+
+The dynamic tool also supports own metadata `update` and `register_folder`.
+For own metadata/completion, prefer `v:session/self.json`. Remote workdir sessions
+can create peers and update themselves, but cannot register Main-local folders.
+Task/call execution and agent tool restrictions still apply to lazy invocation.
+
 ## Scheduled conversations
 
 Discover `cron_add`, `cron_list`, and `cron_remove` under `v:tools/cron`;

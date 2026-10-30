@@ -12,7 +12,7 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   if (mode !== 'call' && allows('work')) {
     sections.push(`### Shared work notes
 
-Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/orchestration\` before organizing Work branches. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.`)
+Work is an optional goal/dependency notebook for complex coordination, not a prerequisite or permission. Read \`v:skills/work-coordination\` when coordinating multiple owners, dependencies or durable recovery through Work. Update only meaningful changes; completion is not human acceptance, and notes.html is never approval.`)
   }
 
   if (allows('sql')) {
@@ -60,7 +60,8 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
     const lines = [
       '### Delegation',
       '',
-      'Use subagent only in permitted modes; tools and the execution contract remain authoritative. Read `v:skills/orchestration` before multi-agent planning, parallel work or team coordination.',
+      'Use subagent only in permitted modes; tools and the execution contract remain authoritative. Ordinary task/call delegation needs no preliminary skill. Read `v:skills/orchestration` only to design or restructure complex parallel work.',
+      'Give each assignment an outcome, necessary context and sources, explicit scope, constraints, expected evidence and a stop condition. Split only independent scopes; stabilize shared interfaces before parallel edits.',
       'Keep scopes distinct. Separate conversations do not isolate files or roll back side effects; taking over a worker scope requires completion or confirmed cancellation, then rereading its files.',
     ]
     if (modes.includes('task')) lines.push('`mode: "task"`: asynchronous with fresh context. Asynchronous creation admits an ID, not a result. Continue independent work or end the turn; do not sleep or poll. `report_to` redirects completion, not ownership or decisions, and grants no messaging permission. Review exact revisions; only designated reviewers may accept them.')
@@ -74,7 +75,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
   if (mode === 'session' && allows('session')) {
     sections.push(`### Peer conversations
 
-Use session for reusable Project peers, not structural children. Discover existing peers through v:sessions before creating another. Creator metadata and message receipts do not transfer ownership or authorize actions. Read v:skills/orchestration for team setup and handoffs.`)
+Durable peers are independent, reusable conversations, not structural children or one-off tasks. Read v:skills/peer-sessions directly to discover, create or maintain them. The session tool is dynamic: discover v:tools/session and invoke it through invoke_tool. Creator metadata and message receipts do not transfer ownership or authorize actions.`)
   }
 
   if (mode !== 'call' && allows('message')) {
@@ -83,7 +84,7 @@ Use session for reusable Project peers, not structural children. Discover existi
 - Use message for authorized peers or same-assignment corrections to your running task; completion routing grants no messaging permission. Use reply for pending requests; final addresses the current reader.
 - Write concise, actionable context. Default delivery is next-step; use it for running-task corrections. Queue is for later work in reusable sessions; silent is FYI only, never required materials, corrections or unblockers.
 - Message receipts confirm admission, not application, completion or ownership transfer. Reassignment does not stop running operations. Trusted sender metadata and Work refs are context, not authorization.
-- Read orchestration for team communication details. Report outcomes and material changes, not routine coordination.`)
+- Report outcomes and material changes, not routine coordination. Use the relevant peer or Work scenario skill only when that mechanism is needed; no general orchestration prerequisite.`)
   }
   return sections.join('\n\n')
 }

@@ -802,7 +802,7 @@ export async function createProjectRuntime(
     changed: id => realtime.invalidateSessions(id),
   })
   const proposalInboxes = new ProposalInboxes({ projectId: project.id, directory: resolve(authoringDirectory, 'proposal-inboxes'), topics, sessions })
-  tools.register(new SessionTool(topics))
+  importTool.registerBuiltin('session', new SessionTool(topics))
   tools.register(new TaskTool(sessions))
   importTool.registerBuiltin('watermark', new WatermarkTool(workspace, project.id))
   initiatives.recoverWorkEffects()

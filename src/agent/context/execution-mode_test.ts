@@ -108,7 +108,7 @@ test('durable peers delegate task/call independently of context ancestry', async
   const child = await guidelineProvider().getPromptSection({ ...context, parentSessionId: 'fixture:root' })
   assert(root?.includes('Allowed delegation modes:\ntask, call'))
   assert(child?.includes('Allowed delegation modes:\ntask, call'))
-  assert(root?.includes('Use session for reusable Project peers'))
+  assert(root?.includes('Durable peers are independent, reusable conversations'))
   assert(child?.includes('Creator metadata and message receipts do not transfer ownership'))
   assert.equal(general.root, true)
 })

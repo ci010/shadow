@@ -9,6 +9,7 @@ import type { InputSource } from './input.ts'
 import { parseSessionName } from './session-name.ts'
 import { workBindingSchema } from './work-policy.ts'
 import { selectFolder } from '../folders/identifier.ts'
+import { REASONING_EFFORTS, type InferenceSettings } from '../agent/llm-config.ts'
 
 const briefFields = {
   title: z.string().transform(parseSessionName),
@@ -19,6 +20,8 @@ const createRequest = z.object({
   requestId: z.string().uuid().transform(value => value.toLowerCase()).optional(),
   folderId: z.string().trim().min(1).max(512).optional(),
   agentType: z.string().trim().min(1).max(100).default('general'),
+  model: z.string().trim().min(1).max(512).optional(),
+  effort: z.enum(REASONING_EFFORTS).optional(),
   initiativeId: z.string().trim().min(1).max(600).optional(),
   initialMessage: z.string().trim().min(1).max(32_000).optional(),
   work: workBindingSchema.optional(),
@@ -55,11 +58,11 @@ export interface TopicSummary {
 export interface TopicServiceOptions {
   projectId: string
   sessions: Pick<SessionManager, 'getSessionState' | 'buildSession' | 'assertFolderAccess' |
-    'assertInitiativeAccess' | 'updateConversationMetadata' | 'deliver' | 'alignment'>
+    'assertInitiativeAccess' | 'updateConversationMetadata' | 'deliver' | 'alignment' | 'validateExecutionInference'>
   listStates: () => Promise<SessionState[]>
   firstMessage?: (sessionId: string) => Promise<string | null>
   folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess' | 'list'>
-  resolveAgent: (name: string) => { defaultMode: string } | undefined
+  resolveAgent: (name: string) => ({ defaultMode: string } & InferenceSettings) | undefined
   changed: (sessionId?: string) => void
 }
 
@@ -144,6 +147,18 @@ export class TopicService {
         if (this.options.sessions.getSessionState(sessionId)) {
           return this.existing(sessionId, topicRequestHash, parsed.initialMessage !== undefined)
         }
+        const inference: InferenceSettings = {
+          ...(parsed.model === undefined ? {} : { model: parsed.model }),
+          ...(parsed.effort === undefined ? {} : { reasoningEffort: parsed.effort }),
+        }
+        if (parsed.model !== undefined || parsed.effort !== undefined) {
+          await this.options.sessions.validateExecutionInference({
+            ...(agent.model ? { model: agent.model } : {}),
+            ...(agent.reasoningEffort ? { reasoningEffort: agent.reasoningEffort } : {}),
+            ...inference,
+          })
+          signal?.throwIfAborted()
+        }
         if (parsed.initiativeId) this.options.sessions.assertInitiativeAccess(parsed.initiativeId)
         // Hash the submitted selector, not its current resolution. Check persisted retries
         // first so a rename, collision or reassignment cannot redirect an existing request.
@@ -166,6 +181,7 @@ export class TopicService {
           folderId: folder?.id,
           workdir: folder ? folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id) : undefined,
           description, setupInstructions,
+          ...(Object.keys(inference).length ? { config: inference } : {}),
           workPolicy,
         })
         if (parsed.work) await alignment!.bindDelegation(sessionId, createdBySessionId!, parsed.work, signal)

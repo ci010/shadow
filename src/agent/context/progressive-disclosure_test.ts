@@ -34,16 +34,30 @@ test('generic directories and resource links do not suppress a skill hint', asyn
   assert.match(await builder.buildSystemPrompt(ctx), /<skill name="other">/)
 })
 
-test('orchestration is bundled, searchable guidance without tool declarations or new authority', async () => {
+test('collaboration skills are direct scenarios, not a mandatory delegation hierarchy', async () => {
   const skills = await getBuiltinSkills()
-  const skill = skills.get('orchestration')!
-  assert.ok(skill)
-  assert.match(skill.meta.description, /agent teams/)
-  assert.equal(skill.meta.tools, undefined)
-  for (const rule of [/Do not create a node for every tool call/, /explicit file\/domain ownership/, /only PASS delivers success/, /confirmed cancellation/, /creator metadata is not structural parenthood/, /not a new teams runtime/, /LAST message a non-silent request/, /decisionKey/, /without a response, active-context injection or wakeup/]) {
-    assert.match(skill.body, rule)
+  const orchestration = skills.get('orchestration')!
+  const peers = skills.get('peer-sessions')!
+  const work = skills.get('work-coordination')!
+  for (const skill of [orchestration, peers, work]) {
+    assert.ok(skill)
+    assert.equal(skill.meta.tools, undefined)
   }
-  // Discovery remains capability-gated; the skill itself does not add tools.
+  for (const rule of [/not a prerequisite for ordinary/, /explicit file\/domain/, /integration owner/, /confirmed cancellation/]) assert.match(orchestration.body, rule)
+  for (const rule of [/v:tools\/session/, /invoke_tool/, /requestId/, /not structural parenthood/, /confirmed cancellation/]) assert.match(peers.body, rule)
+  for (const rule of [/optional shared notebook/, /Do not create a node/, /decisionKey/, /rendered HTML are not approval/]) assert.match(work.body, rule)
+  assert.doesNotMatch(peers.body + work.body, /v:skills\/orchestration/)
+  const prompt = toolsGuideline(ctx)
+  for (const name of ['peer-sessions', 'work-coordination', 'orchestration']) assert.match(prompt, new RegExp(`v:skills/${name}`))
+  assert.match(prompt, /Ordinary task\/call delegation needs no preliminary skill/)
+  assert.doesNotMatch(prompt, /Read .*orchestration.*before/)
+  for (const mode of ['task', 'call'] as const) {
+    assert.doesNotMatch(toolsGuideline({ ...ctx, mode }), /v:skills\/(?:peer-sessions|work-coordination)/)
+  }
+  const restricted = { ...ctx, agent: { ...ctx.agent, allowedTools: ['read'] } }
+  assert.doesNotMatch(toolsGuideline(restricted), /v:skills\/(?:peer-sessions|work-coordination|orchestration)/)
+  const scenarios = ['peer-sessions', 'work-coordination'].map(name => `<skill name="${name}">Scenario</skill>`).join('\n')
+  assert.equal(capabilityDiscovery(scenarios, restricted), '')
   const entry = '<skill name="orchestration">Teams</skill>'
   assert.equal(capabilityDiscovery(entry, { ...ctx, mode: 'call' }), '')
   assert.equal(capabilityDiscovery(entry, { ...ctx, agent: { ...ctx.agent, allowedTools: ['read'] } }), '')
