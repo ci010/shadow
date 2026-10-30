@@ -7,7 +7,7 @@ import { projectProvider } from '../agent/context/project.ts'
 import type { SessionPromptContext } from '../agent/context/builder.ts'
 import { ProjectCatalog } from '../projects/catalog.ts'
 import { DEFAULT_PROJECT_ID } from '../projects/contracts.ts'
-import type { WorkdirCapabilityState } from '../sessions/locality.ts'
+import type { WorkdirState } from '../sessions/locality.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { ReadTool } from '../tools/read.ts'
@@ -43,7 +43,7 @@ test('live project-scoped registry provides complete read/search discovery and c
       workspace,
       getProject: () => catalog.get(DEFAULT_PROJECT_ID),
       registry,
-      workdirCapabilityLookup: ref => registry.lookupWorkdir(ref) ?? { node: 'missing' },
+      workdirLookup: ref => registry.lookupWorkdir(ref) ?? { node: 'missing' },
     })
     const handlers = discovery.handlers()
     const vfs = new VirtualFs()
@@ -78,7 +78,7 @@ test('live project-scoped registry provides complete read/search discovery and c
     await rm(last.path, { recursive: true })
     const updated = requireToolText(await read.execute({ path: 'v:project/folders' }, context))
     assert.match(updated, /^# Renamed live project/)
-    assert.match(updated, /unavailable: capability-offline/)
+    assert.match(updated, /unavailable: workdir-offline/)
     const promptContext = { projectId: DEFAULT_PROJECT_ID } as SessionPromptContext
     const prompt = projectProvider(discovery).getPromptSection(promptContext) as string
     assert.match(prompt, /Renamed live project/)
@@ -104,18 +104,18 @@ test('remote discovery uses only capability state, preserves display metadata, a
     name: 'Remote <display>',
     kind: 'remote',
     path: 'Z:\\not-a-main-path\\remote',
-    workdir: { version: 1, nodeId: 'child', capabilityId: 'remote-cap', displayPathSnapshot: 'Z:\\not-a-main-path\\remote' },
+    workdir: { version: 2, nodeId: 'child', workdirId: 'remote-cap', displayPathSnapshot: 'Z:\\not-a-main-path\\remote' },
     identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
     createdAt: '2026-01-01T00:00:00.000Z',
   }
-  let state: WorkdirCapabilityState = { node: 'offline' }
+  let state: WorkdirState = { node: 'offline' }
   const discovery = new ProjectFolderDiscovery({
     projectId: DEFAULT_PROJECT_ID,
     workspace: resolve('.test-data'),
     getProject: () => ({ id: DEFAULT_PROJECT_ID, name: 'Remote project', createdAt: remote.createdAt }),
     registry: { list: () => [remote] },
-    workdirCapabilityLookup: ref => {
-      assert.equal(ref, remote.workdir)
+    workdirLookup: ref => {
+      assert.deepEqual(ref, remote.workdir)
       return state
     },
   })
@@ -127,7 +127,7 @@ test('remote discovery uses only capability state, preserves display metadata, a
   assert.deepEqual(offline.workdir, remote.workdir)
   const prompt = projectProvider(discovery).getPromptSection({ projectId: DEFAULT_PROJECT_ID, folderId: remote.id } as SessionPromptContext) as string
   assert.doesNotMatch(prompt, /Selected Project folder|kind=remote/)
-  state = { node: 'online', capability: { kind: 'workdir', online: true, path: resolve('.must-not-be-used') } }
+  state = { node: 'online', workdir: { online: true, path: resolve('.must-not-be-used') } }
   const online = JSON.parse(await read(`folders/${remote.id}`, executionContext())).folder
   assert.deepEqual(online.availability, { available: true, locality: 'remote' })
   assert(!JSON.stringify(online).includes('.must-not-be-used'))
@@ -139,7 +139,7 @@ test('missing project context, wrong live project, and mixed-project registry fa
     workspace: resolve('.test-data'),
     getProject: () => ({ id: DEFAULT_PROJECT_ID, name: 'Project', createdAt: '' }),
     registry: { list: () => [] },
-    workdirCapabilityLookup: () => ({ node: 'missing' as const }),
+    workdirLookup: () => ({ node: 'missing' as const }),
   }
   assert.throws(() => new ProjectFolderDiscovery(options).snapshot(undefined), /current Project context/)
   assert.throws(() => new ProjectFolderDiscovery({ ...options, getProject: () => undefined }).snapshot(DEFAULT_PROJECT_ID), /unavailable/)
@@ -158,7 +158,7 @@ test('empty discovery returns current project metadata without creating or selec
     workspace: resolve('.test-data'),
     getProject: () => project,
     registry: { list: () => [] },
-    workdirCapabilityLookup: () => { throw new Error('Empty discovery must not probe the filesystem') },
+    workdirLookup: () => { throw new Error('Empty discovery must not probe the filesystem') },
   })
   const handlers = discovery.handlers()
   const result = await handlers.read('folders', executionContext())
@@ -173,7 +173,7 @@ test('Markdown groups by node identity, renders live names, unique selectors and
   const base = { projectId: DEFAULT_PROJECT_ID, createdAt: '' }
   const remote = (id: string, nodeId: string, name = 'app'): RemoteFolderRecord => ({
     ...base, id, name, kind: 'remote', path: 'Z:\\remote',
-    workdir: { version: 1, nodeId, capabilityId: id, displayPathSnapshot: 'Z:\\remote' },
+    workdir: { version: 2, nodeId, workdirId: id, displayPathSnapshot: 'Z:\\remote' },
     identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
   })
   const folders = [
@@ -190,10 +190,10 @@ test('Markdown groups by node identity, renders live names, unique selectors and
     getProject: () => ({ ...base, id: DEFAULT_PROJECT_ID, name: 'Project\n# <img> [bad](url)' }),
     registry: { list: () => folders },
     getNodeInventory: () => ({ version: 1, nodes: [
-      { nodeId: 'main-id', displayName: 'Host', role: 'main', connection: 'connected', capabilities: [] },
-      ...['child-a', 'child-b'].map(nodeId => ({ nodeId, displayName, role: 'child' as const, connection: 'offline' as const, capabilities: [] })),
+      { nodeId: 'main-id', displayName: 'Host', role: 'main', connection: 'connected', executionProtocol: 'compatible' as const, workdirs: [], support: { operations: [] } },
+      ...['child-a', 'child-b'].map(nodeId => ({ nodeId, displayName, role: 'child' as const, connection: 'offline' as const, executionProtocol: 'compatible' as const, workdirs: [], support: { operations: [] } })),
     ] }),
-    workdirCapabilityLookup: () => ({ node: 'offline' }),
+    workdirLookup: () => ({ node: 'offline' }),
   })
   const handlers = discovery.handlers()
   const text = await handlers.read('folders', executionContext())
@@ -231,7 +231,7 @@ test('displayed selectors reject collisions with other slugs and authoritative f
   const discovery = new ProjectFolderDiscovery({
     projectId: DEFAULT_PROJECT_ID, workspace: resolve('.test-data'),
     getProject: () => ({ id: DEFAULT_PROJECT_ID, name: 'Project', createdAt: '' }),
-    registry: { list: () => folders }, workdirCapabilityLookup: () => ({ node: 'offline' }),
+    registry: { list: () => folders }, workdirLookup: () => ({ node: 'offline' }),
   })
   const handlers = discovery.handlers()
   const text = await handlers.read('folders', executionContext())

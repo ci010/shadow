@@ -472,7 +472,7 @@ test('folder/session routes share validated read-only Git access and remote rout
     workspace, getSessionState: (sessionId: string) => ({
       sessionId, workdir: { version: 1, nodeId: sessionId === 'remote' ? 'child' : 'local', capabilityId: 'workdir' },
     }),
-    workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true, path: folders } }),
+    workdirLookup: () => ({ node: 'online', resource: { kind: 'directory', online: true, path: folders } }),
   } as unknown as SessionManager)(app)
   for (const base of [`/api/folders/${folder.id}`, '/api/sessions/local']) {
     assert.equal((await app.request(`${base}/git/status`)).status, 200)

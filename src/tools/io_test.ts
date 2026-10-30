@@ -78,7 +78,7 @@ test('every I/O entry requires the project, logical session, local workdir and l
       { ...context, projectId: undefined }, { ...context, projectId: 'beta' },
       { ...context, sessionId: '' }, { ...context, sessionId: 'web:missing' },
       { ...context, signal: AbortSignal.abort(new Error('aborted')) },
-      { ...context, remoteWorkdir: { nodeId: 'remote', capabilityId: 'opaque', executor: {} } },
+      { ...context, remoteWorkdir: { nodeId: 'remote', workdirId: 'opaque', executor: {} } },
     ]) await assert.rejects(tool.execute(args, invalid as typeof context))
   }
 })

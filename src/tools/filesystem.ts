@@ -193,7 +193,7 @@ export class WriteTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
-    context = executionTargetContext(args, context)
+    context = await executionTargetContext(args, context, 'filesystem.write')
     context.signal.throwIfAborted()
     const rawPath = String(args.path)
     const virtualPath = isAbsolute(rawPath) ? relative(this.workspace, rawPath) : rawPath

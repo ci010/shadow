@@ -118,7 +118,8 @@ computer/capture helpers are not made remotely available by this feature.
    fingerprint** with Child. Check both the fingerprint and execution-consent
    boxes, then choose **Approve device**. Do not approve a mismatched or
    unexpected request.
-5. Wait for a real **Connected** state and workdir capability advertisement.
+5. Wait for a real **Connected** state, a compatible execution protocol, and
+   workdir advertisements with support for the required operations.
    A submitted request, a locally ready Child backend and an approved registry
    record are not, by themselves, evidence of a connected Child.
 

@@ -72,7 +72,7 @@ test('Git offline retry and reconnection do not leak results across projects or 
   }))
   app.mount({})
   t.after(() => app.unmount())
-  const offline = () => Response.json({ error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder' }, { status: 503 })
+  const offline = () => Response.json({ error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', workdirId: 'folder' }, { status: 503 })
   requests[0]!.finish(offline())
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(state.offline.value, true)

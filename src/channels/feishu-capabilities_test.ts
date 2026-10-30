@@ -250,7 +250,7 @@ test('Feishu topic media never falls back to Main for a remote workdir', async t
   const f = await fixture(t)
   f.states['feishu:om_remote'] = {
     sessionId: 'feishu:om_remote', segmentIndex: 0, parentSessionId: 'feishu:oc_group',
-    workdir: { version: 1, nodeId: 'remote-node', capabilityId: 'remote-capability', displayPathSnapshot: 'C:\\not-a-local-path' },
+    workdir: { version: 2, nodeId: 'remote-node', workdirId: 'remote-capability', displayPathSnapshot: 'C:\\not-a-local-path' },
   }
   assert.deepEqual((await f.channel.getCapabilities('om_remote')).outboundMedia, [])
   await f.incoming({

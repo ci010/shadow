@@ -7,13 +7,13 @@ import type { NodeInventoryEntry } from './node-inventory.ts'
 const local: FolderRecord = { projectId: 'a', id: 'local', name: 'Local code', path: 'C:\\fixture\\code', createdAt: '2026-09-17' }
 const remote: FolderRecord = {
   projectId: 'a', id: 'remote', name: 'Remote code', path: '/display/code', createdAt: '2026-09-17', kind: 'remote',
-  workdir: { version: 1, nodeId: 'child', capabilityId: 'code' },
+  workdir: { version: 2, nodeId: 'child', workdirId: 'code' },
   identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
 }
-const node: NodeInventoryEntry = { nodeId: 'child', displayName: 'Laptop', role: 'child', connection: 'connected', capabilities: [
-  { capabilityId: 'code', kind: 'workdir', displayName: 'Code', online: true },
-  { capabilityId: 'foreign', kind: 'workdir', displayName: 'Other project folder', online: true },
-] }
+const node: NodeInventoryEntry = { nodeId: 'child', displayName: 'Laptop', role: 'child', connection: 'connected', executionProtocol: 'compatible', workdirs: [
+  { version: 2 as const, nodeId: 'child', workdirId: 'code', displayName: 'Code', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } },
+  { version: 2 as const, nodeId: 'child', workdirId: 'foreign', displayName: 'Other project folder', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } },
+], support: { operations: [] } }
 
 test('project execution options include all local and remote folders in that project, never global capabilities', () => {
   const targets = projectFolderTargets('a', [local, remote, { ...remote, id: 'foreign', projectId: 'b' }], [node])
@@ -25,8 +25,10 @@ test('project execution options include all local and remote folders in that pro
 })
 
 test('unavailable remote folders remain visible but never become local execution choices', () => {
-  for (const nodes of [[], [{ ...node, connection: 'offline' as const }], [{ ...node, capabilities: [] }],
-    [{ ...node, capabilities: node.capabilities.map(cap => ({ ...cap, online: false })) }]]) {
+  for (const nodes of [[], [{ ...node, connection: 'offline' as const }], [{ ...node, workdirs: node.workdirs.map(w => ({ ...w, support: { operations: [] } })) }],
+    [{ ...node, executionProtocol: 'upgrade-required' as const }], [{ ...node, workdirs: [] }],
+    [{ ...node, workdirs: node.workdirs.map(resource => ({ ...resource, online: false })) }],
+    [{ ...node, workdirs: node.workdirs.map(w => ({ ...w, support: { operations: [] } })) }]]) {
     const targets = projectFolderTargets('a', [local, remote], nodes)
     assert.equal(targets.length, 2)
     assert.equal(targets[0].available, true)

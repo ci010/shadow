@@ -30,11 +30,11 @@
         <button v-for="target in targets" :key="target.nodeId"
           class="location-option" :disabled="!target.available || loading || !!error"
           :aria-label="t('Start from scratch on {nodeName}', { nodeName: target.nodeName })"
-          :aria-pressed="!folder && selected?.nodeId === target.nodeId && !selected?.capabilityId"
+          :aria-pressed="!folder && selected?.nodeId === target.nodeId && selected?.workdirId === undefined"
           @click="emit('select', { kind: 'node', node: target }); close()">
           <span class="i-lucide-monitor" aria-hidden="true" />
           <span><strong>{{ target.nodeName }}</strong><small>{{ target.unavailableReason || t('New managed conversation folder') }}</small></span>
-          <span v-if="!folder && selected?.nodeId === target.nodeId && !selected?.capabilityId" class="i-lucide-check" aria-hidden="true" />
+          <span v-if="!folder && selected?.nodeId === target.nodeId && selected?.workdirId === undefined" class="i-lucide-check" aria-hidden="true" />
         </button>
       </template>
       <p class="location-note">{{ t('Conversations and managed folders are created on first send.') }}</p>

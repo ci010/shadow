@@ -15,11 +15,17 @@ export class UseProjectTool implements Tool {
   }
   constructor(private readonly options: {
     projectId: string
-    folders: Pick<FolderRegistry, 'list' | 'requireAvailable' | 'acquireAccess'>
+    folders: Pick<FolderRegistry, 'list' | 'requireAvailable' | 'requireExecutionAvailable' | 'acquireAccess'>
     switched?: (context: ExecutionContext) => void
   }) {}
 
   selectedFolder(id: string) { return this.options.folders.list().find(folder => folder.id === id) }
+
+  async executionTargetFolder(identifier: string, signal: AbortSignal) {
+    signal.throwIfAborted()
+    const selected = selectFolder(this.options.folders.list(), identifier)
+    return this.options.folders.requireExecutionAvailable(selected.id, signal)
+  }
 
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
     if (context.projectId !== this.options.projectId) throw new Error('Project context mismatch.')

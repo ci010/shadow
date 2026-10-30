@@ -10,7 +10,7 @@ import { SubagentTool } from './subagent.ts'
 import type { InferenceSettings } from '../agent/llm-config.ts'
 
 test('subagent only creates temporary work, preserving explicit workdir and ignoring reusable role defaults', async () => {
-  const workdir = { version: 1 as const, nodeId: 'node-a', capabilityId: 'folder-a' }
+  const workdir = { version: 2 as const, nodeId: 'node-a', workdirId: 'folder-a' }
   const parent: SessionState = {
     sessionId: 'discord:parent', segmentIndex: 3, mode: 'session',
     workspaceRoot: 'discord:root', workdir, folderId: 'folder-a',

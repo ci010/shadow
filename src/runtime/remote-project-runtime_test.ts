@@ -1,16 +1,14 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import type { Executor } from '../execution/executor.ts'
 import { join } from 'node:path'
 import test from 'node:test'
 import { ProcessManager } from '../execution/processes/manager.ts'
 import type { MainCluster } from '../cluster/main-cluster.ts'
-import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
 import { ConfigSchema } from '../config/schema.ts'
 import { ManagedChildWorkdirs } from '../execution/managed-child-workdirs.ts'
-import { MANAGED_SESSION_CAPABILITY } from '../execution/managed-workdir.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
-import { WORKDIR_IDENTITY_OPERATION } from '../execution/workdir-identity.ts'
 import { createProjectRuntime } from './main/project-runtime.ts'
 import { ProjectCatalog } from '../projects/catalog.ts'
 import { ProjectConfigStore } from '../projects/config-store.ts'
@@ -26,20 +24,36 @@ for (const localExecutor of [undefined, false]) test(`production project composi
   const catalog = new ProjectCatalog(join(root, 'catalog'))
   await catalog.init()
   const project = catalog.get('default')!
-  const bindings = [{ capabilityId: 'folder', rootPath: folders }]
+  const bindings = [{ workdirId: 'folder', rootPath: folders }]
   const workdirs = new ManagedChildWorkdirs(join(root, 'child-managed'), 'child', bindings)
   await workdirs.init()
-  const child = new LocalExecutor(new ProcessManager(), 'child', workdirs.operationHandlers)
-  const descriptor: CapabilityDescriptorV1 = {
-    version: 1, nodeId: 'child', capabilityId: 'folder', kind: 'workdir', displayName: 'Remote folder',
-    displayPath: home, online: true, permissions: [WORKDIR_IDENTITY_OPERATION],
+  const child = new LocalExecutor(new ProcessManager(), 'child', workdirs.operationHandlers, (request, signal) => workdirs.assertCanExecute(request, signal))
+  const resources = () => workdirs.workdirs.map(resource => resource.workdirId === 'folder' ? { ...resource, displayName: 'Remote folder', displayPath: home } : resource)
+  let loseNextIdentity = false
+  const identityQueries: string[] = []
+  const transport: Executor = {
+    getStatus: child.getStatus.bind(child), cancel: child.cancel.bind(child),
+    async *execute(request, signal) {
+      if (request.operation === 'workdir.identity' && request.workdirId !== undefined) {
+        identityQueries.push(request.workdirId)
+        if (loseNextIdentity) {
+          loseNextIdentity = false
+          yield { version: 1, jobId: request.jobId, sequence: 0, timestamp: request.createdAt, type: 'failed',
+            receipt: { version: 1, jobId: request.jobId, nodeId: request.nodeId, state: 'failed', finishedAt: request.createdAt,
+              reason: { code: 'remote-node-unavailable', message: 'Synthetic identity disconnect', retryable: true } } }
+          return
+        }
+      }
+      yield* child.execute(request, signal)
+    },
   }
   const cluster = {
-    remoteExecutor: child,
-    workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true } }),
-    registry: { listCapabilities: () => [descriptor, ...workdirs.capabilities.filter(capability => capability.capabilityId !== 'folder')] },
+    remoteExecutor: transport,
+    observeInventory: () => () => {},
+    workdirLookup: () => ({ node: 'online', workdir: { online: true } }),
+    registry: { listWorkdirs: resources, nodeSupport: () => workdirs.support },
     getNodeInventory: () => ({ version: 1, nodes: [{ nodeId: 'child', role: 'child', displayName: 'Child',
-      connection: 'connected', supportsManagedSessions: true, capabilities: [descriptor, ...workdirs.capabilities.filter(capability => capability.capabilityId !== 'folder')] }] }),
+      connection: 'connected', executionProtocol: 'compatible', supportsManagedSessions: true, workdirs: resources(), support: workdirs.support }] }),
   } as unknown as MainCluster
   const config = ConfigSchema.parse({ agent: { workspace: home, model: 'fixture@openai' },
     providers: { openai: { apiKey: 'fixture-not-used', baseUrl: 'http://127.0.0.1:1' } }, channels: {}, mcp: {} })
@@ -57,7 +71,7 @@ for (const localExecutor of [undefined, false]) test(`production project composi
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     })
     assert.deepEqual(await (await request('/api/folders')).json(), { folders: [] })
-    const body = { nodeId: 'child', capabilityId: 'folder', requestId: randomUUID() }
+    const body = { nodeId: 'child', workdirId: 'folder', requestId: randomUUID() }
     const created = await request('/api/sessions/remote', body)
     assert.equal(created.status, 201, await created.clone().text())
     const session = await created.json()
@@ -72,6 +86,16 @@ for (const localExecutor of [undefined, false]) test(`production project composi
     const files = await request(`/api/sessions/${encodeURIComponent(session.sessionId)}/preview?path=child.txt`)
     assert.equal(files.status, 200)
     assert.equal((await files.json()).content, 'Child runtime fixture')
+    for (const suffix of ['preview?path=child.txt', 'files', 'files/search?query=child', 'git/status']) {
+      loseNextIdentity = true
+      const failedIdentity = await request(`/api/sessions/${encodeURIComponent(session.sessionId)}/${suffix}`)
+      assert.equal(failedIdentity.status, 503)
+      assert.equal((await failedIdentity.json()).error, 'remote_workdir_identity_unavailable')
+    }
+    const healthyRetry = await request(`/api/sessions/${encodeURIComponent(session.sessionId)}/preview?path=child.txt`)
+    assert.equal(healthyRetry.status, 200)
+    // The ownership transfer below must still succeed: read-only lost queries
+    // have no process/journal lifecycle and must not persist an orphan pending.
     const retry = await (await request('/api/sessions/remote', body)).json()
     assert.equal(retry.sessionId, session.sessionId)
     const second = await request(`/api/folders/${session.folderId}/sessions`, {})
@@ -104,7 +128,9 @@ for (const localExecutor of [undefined, false]) test(`production project composi
     const returned = await catalog.changeFolderProject(other.id, transferred.id, 'default')
     assert(returned)
     assert.equal((await request(`/api/sessions/${encodeURIComponent(session.sessionId)}/preview?path=child.txt`)).status, 409)
-    const fresh = await (await request(`/api/folders/${returned.id}/sessions`, {})).json()
+    const freshResponse = await request(`/api/folders/${returned.id}/sessions`, {})
+    assert.equal(freshResponse.status, 200, await freshResponse.clone().text())
+    const fresh = await freshResponse.json()
     const freshFiles = await request(`/api/sessions/${encodeURIComponent(fresh.sessionId)}/preview?path=child.txt`)
     assert.equal(freshFiles.status, 200, await freshFiles.clone().text())
     assert.equal((await freshFiles.json()).content, 'Child runtime fixture')
@@ -141,9 +167,9 @@ for (const localExecutor of [undefined, false]) test(`production project composi
     const scratch = await scratchResponse.json()
     assert.equal(scratch.folderId, undefined)
     assert.equal(catalog.folders().length, folderCount)
-    const allocated = workdirs.capabilities.find(capability => capability.capabilityId === scratch.workdir.capabilityId)!
+    const allocated = workdirs.workdirs.find(resource => resource.workdirId === scratch.workdir.workdirId)!
     assert(allocated)
-    assert.notEqual(allocated.capabilityId, MANAGED_SESSION_CAPABILITY)
+    assert(allocated.support.operations.includes('filesystem.read'))
     await writeFile(join(allocated.displayPath!, 'scratch.txt'), 'Independent Child session')
     const scratchPreview = await request(`/api/sessions/${encodeURIComponent(scratch.sessionId)}/preview?path=scratch.txt`)
     assert.equal(scratchPreview.status, 200, await scratchPreview.clone().text())
@@ -164,7 +190,7 @@ for (const localExecutor of [undefined, false]) test(`production project composi
     assert.deepEqual(await (await request('/api/sessions/remote', scratchBody)).json(), scratch)
     assert.equal(catalog.folders().length, folderCount)
     assert(!catalog.folders().some(folder => folder.kind === 'remote' &&
-      folder.workdir.capabilityId === scratch.workdir.capabilityId))
+      folder.workdir.workdirId === scratch.workdir.workdirId))
     const deleted = await runtime.app.request(`/api/sessions/${encodeURIComponent(scratch.sessionId)}`, { method: 'DELETE' })
     assert.equal(deleted.status, 200, await deleted.clone().text())
     assert.equal(await readFile(join(allocated.displayPath!, 'scratch.txt'), 'utf8'), 'Independent Child session')
@@ -179,7 +205,26 @@ for (const localExecutor of [undefined, false]) test(`production project composi
     assert.equal(picked.kind, 'remote')
     assert.equal(picked.projectId, 'default')
     assert.equal(picked.workdir.nodeId, 'child')
-    assert.ok(workdirs.capabilities.some(c => c.capabilityId === picked.workdir.capabilityId))
+    assert.ok(workdirs.workdirs.some(resource => resource.workdirId === picked.workdir.workdirId))
+    await writeFile(join(pickedPath, 'stable.txt'), 'Independent target')
+    const stableResponse = await request(`/api/folders/${picked.id}/sessions`, {})
+    assert.equal(stableResponse.status, 200)
+    const stable = await stableResponse.json()
+    const missingOriginal = join(root, 'temporarily-missing-original')
+    await rename(bindings[0].rootPath, missingOriginal)
+    identityQueries.length = 0
+    const independent = await request(`/api/sessions/${encodeURIComponent(stable.sessionId)}/preview?path=stable.txt`)
+    assert.equal(independent.status, 200, await independent.clone().text())
+    assert.equal((await independent.json()).content, 'Independent target')
+    assert.deepEqual(identityQueries, [picked.workdir.workdirId])
+    await rename(missingOriginal, bindings[0].rootPath)
+    // An unavailable folder in another Project is not a dependency either.
+    await catalog.changeFolderProject('default', picked.id, other.id)
+    await rename(pickedPath, join(root, 'temporarily-missing-other-project'))
+    identityQueries.length = 0
+    const selectedOnly = await request(`/api/sessions/${encodeURIComponent(topic.sessionId)}/preview?path=child.txt`)
+    assert.equal(selectedOnly.status, 200, await selectedOnly.clone().text())
+    assert.deepEqual(identityQueries, ['folder'])
 
   } finally {
     await scope.run(() => runtime.shutdown())

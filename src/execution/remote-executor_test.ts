@@ -1,21 +1,21 @@
 import { deepEqual as assertEquals, rejects as assertRejects } from 'node:assert/strict'
 import { test } from 'node:test'
-import type { JobEventV1, JobRequestV1 } from './contracts.ts'
+import type { JobEventV1, ExecutionRequestV2 } from './contracts.ts'
 import {
   RemoteExecutor,
   type RemoteNodeJobDispatcher,
 } from './remote-executor.ts'
 
-function request(jobId = 'remote-job'): JobRequestV1 {
+function request(jobId = 'remote-job'): ExecutionRequestV2 {
   const createdAt = new Date()
   return {
-    version: 1,
+    version: 2,
     jobId,
     idempotencyKey: `${jobId}-key`,
     sessionId: 'session-1',
     turnId: 'turn-1',
-    nodeId: 'child-1',
-    capabilityId: 'workdir-1',
+    nodeId: 'child-1', workdirId: 'workdir-1',
+    projectScope: '0123456789abcdef0123456789abcdef',
     operation: 'filesystem.read',
     args: { path: 'README.md' },
     createdAt: createdAt.toISOString(),
@@ -29,7 +29,7 @@ class FakeDispatcher implements RemoteNodeJobDispatcher {
   callbacks?: Parameters<RemoteNodeJobDispatcher['dispatchJob']>[1]
 
   dispatchJob(
-    _request: JobRequestV1,
+    _request: ExecutionRequestV2,
     callbacks: Parameters<RemoteNodeJobDispatcher['dispatchJob']>[1],
   ): void {
     this.dispatches++
@@ -76,7 +76,7 @@ test('RemoteExecutor dispatches once and replays one ordered event stream', asyn
     async () => {
       for await (
         const _event of executor.execute(
-          { ...job, capabilityId: 'different' },
+          { ...job, nodeId: job.nodeId, workdirId: 'different' },
           new AbortController().signal,
         )
       ) { /* consume */ }
@@ -133,7 +133,7 @@ test('RemoteExecutor forwards cancellation and terminates disconnected jobs', as
 })
 
 function event(
-  job: JobRequestV1,
+  job: ExecutionRequestV2,
   sequence: number,
   type: 'accepted' | 'stdout',
   extra: { chunk: string } | Record<string, never> = {},
@@ -149,7 +149,7 @@ function event(
 }
 
 function terminal(
-  job: JobRequestV1,
+  job: ExecutionRequestV2,
   sequence: number,
   type: 'completed' | 'cancel-acknowledged',
   state: 'completed' | 'cancelled' = 'completed',

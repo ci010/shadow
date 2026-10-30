@@ -1327,7 +1327,7 @@ test('report_to observes domain facts once, not outbound done, and reports failu
 
 test('unavailable workdir fails before provider and still emits a failed domain fact', async () => {
   const f = await fixture({
-    state: { workdir: { version: 1, nodeId: 'missing', capabilityId: 'missing' } },
+    state: { workdir: { version: 2, nodeId: 'missing', workdirId: 'missing' } },
   })
   try {
     f.session.dispatch(input('unavailable'), llm)
@@ -1370,7 +1370,7 @@ test('ephemeral pre-provider failure emits accepted before finished and ended', 
   const f = await fixture({
     manager: true,
     ephemeral: true,
-    state: { workdir: { version: 1, nodeId: 'missing', capabilityId: 'missing' } },
+    state: { workdir: { version: 2, nodeId: 'missing', workdirId: 'missing' } },
   })
   const order: string[] = []
   f.bus.on('session.input.accepted', () => { order.push('accepted') })

@@ -10,7 +10,7 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
 import { WebChannel } from './web.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
-import { localFolderWorkdirRef, type WorkdirCapabilityLookup } from '../sessions/locality.ts'
+import { localFolderWorkdirRef, type WorkdirLookup } from '../sessions/locality.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import { RealtimeHub } from '../realtime/hub.ts'
 import { FolderError } from '../folders/registry.ts'
@@ -159,12 +159,12 @@ test('peer progress is projected once with its persisted author envelope, not as
 async function createWebApp(
   workspace: string,
   getSessionState: (sessionId: string) => unknown = () => null,
-  workdirCapabilityLookup?: WorkdirCapabilityLookup,
+  workdirLookup?: WorkdirLookup,
 ) {
   const app = new Hono()
   const sessionManager = {
     getSessionState,
-    workdirCapabilityLookup,
+    workdirLookup,
   } as unknown as SessionManager
   const channel = new WebChannel(new Bus(), { workspace, sessionManager })
   await channel.start(app)
@@ -261,7 +261,7 @@ test('folder media uses capability cwd while uploads stay in inherited private s
     }),
     (ref) => ({
       node: 'online',
-      capability: { kind: 'workdir', online: true, path: ref.capabilityId.endsWith(':other') ? otherFolder : folder },
+      workdir: { online: true, path: ref.workdirId.endsWith(':other') ? otherFolder : folder },
     }),
   )
   try {
@@ -320,7 +320,7 @@ test('folder upload and media reject unavailable and remote workdirs without loc
     }),
     (ref) => ({
       node: 'online',
-      capability: { kind: 'workdir', online: ref.nodeId === 'remote', path: workspace },
+      workdir: { online: ref.nodeId === 'remote', path: workspace },
     }),
   )
   try {
@@ -451,7 +451,7 @@ test('SNS logical session media uses inherited private uploads, not capability w
     [sessionId, 'qq:legacy'].includes(id) ? {
       sessionId: id, workspaceRoot: 'qq:owner', workdir: localFolderWorkdirRef('folder'),
     } : null, () => ({
-      node: 'online', capability: { kind: 'workdir', online: true, path: folder },
+      node: 'online', workdir: { online: true, path: folder },
     }))
   const url = (path: string, id = sessionId) =>
     `/api/media?sessionId=${encodeURIComponent(id)}&path=${encodeURIComponent(path)}`
@@ -549,7 +549,7 @@ test('explicit session media refuses remote and unavailable workdirs even when p
     sessionId,
     workdir: { ...localFolderWorkdirRef('missing'), nodeId: sessionId === 'qq:remote' ? 'remote' : 'local' },
   }), ref => ({
-    node: 'online', capability: { kind: 'workdir', online: ref.nodeId === 'remote', path: workspace },
+    node: 'online', workdir: { online: ref.nodeId === 'remote', path: workspace },
   }))
   try {
     for (const sessionId of ['qq:remote', 'qq:missing']) {

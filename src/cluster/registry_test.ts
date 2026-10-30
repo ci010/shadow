@@ -1,6 +1,6 @@
 import { deepEqual as assertEquals, throws as assertThrows } from 'node:assert/strict'
 import { test } from 'node:test'
-import type { CapabilityDescriptorV1, VersionHelloV1 } from './contracts.ts'
+import type { ExecutionSupport, VersionHelloV1 } from './contracts.ts'
 import {
   InMemoryPairingNodeRegistry,
   RegistryError,
@@ -17,17 +17,9 @@ const hello: VersionHelloV1 = {
   protocolMajor: 1,
   protocolMinor: 2,
   implementationVersion: '0.1.0',
-  features: ['jobs-v1', 'capabilities-v1'],
+  features: ['workdir-execution-v2'],
 }
-const capability: CapabilityDescriptorV1 = {
-  version: 1,
-  capabilityId: 'shell-1',
-  nodeId: 'node-1',
-  kind: 'shell',
-  displayName: 'Folder shell',
-  permissions: ['process.execute'],
-  online: true,
-}
+const capability: ExecutionSupport = { operations: ['process.execute'] }
 
 function expectCode(code: RegistryErrorCode, action: () => unknown): void {
   assertThrows(
@@ -106,7 +98,7 @@ test('pending pairing denies capabilities and fingerprint mismatch cannot approv
   assertEquals(registry.getPending().length, 1)
   expectCode(
     'node-not-approved',
-    () => registry.advertiseCapability(auth, capability),
+    () => registry.advertiseNodeSupport(auth, auth.nodeId, capability),
   )
   expectCode('fingerprint-mismatch', () =>
     registry.approve({
@@ -150,9 +142,9 @@ test('approval establishes device trust and reconnect preserves all identity bin
     registry.reconnect(auth, hello, {
       ...hello,
       protocolMinor: 1,
-      features: ['jobs-v1'],
+      features: ['workdir-execution-v2'],
     }),
-    { protocolMajor: 1, protocolMinor: 1, features: ['jobs-v1'] },
+    { protocolMajor: 1, protocolMinor: 1, features: ['workdir-execution-v2'] },
   )
   expectCode('protocol-major-mismatch', () =>
     registry.reconnect(auth, hello, {
@@ -164,27 +156,12 @@ test('approval establishes device trust and reconnect preserves all identity bin
 test('approved node advertises only its capabilities and revocation blocks reconnect', () => {
   const registry = new InMemoryPairingNodeRegistry()
   approve(registry)
-  registry.advertiseCapability(auth, capability)
-  assertEquals(registry.listCapabilities('node-1'), [capability])
-  expectCode('capability-denied', () =>
-    registry.advertiseCapability(auth, {
-      ...capability,
-      nodeId: 'node-other',
-    }))
-  expectCode(
-    'capability-denied',
-    () =>
-      registry.withdrawCapability(auth, 'node-other', capability.capabilityId),
-  )
-  assertEquals(
-    registry.withdrawCapability(auth, auth.nodeId, capability.capabilityId),
-    true,
-  )
-  assertEquals(
-    registry.withdrawCapability(auth, auth.nodeId, capability.capabilityId),
-    false,
-  )
-  registry.advertiseCapability(auth, capability)
+  registry.advertiseNodeSupport(auth, auth.nodeId, capability)
+  assertEquals(registry.nodeSupport('node-1'), capability)
+  expectCode('capability-denied', () => registry.advertiseNodeSupport(auth, 'node-other', capability))
+  registry.advertiseNodeSupport(auth, auth.nodeId, { operations: [] })
+  assertEquals(registry.nodeSupport(auth.nodeId), { operations: [] })
+  registry.advertiseNodeSupport(auth, auth.nodeId, capability)
 
   const revoked = registry.revoke(
     auth,
@@ -192,14 +169,14 @@ test('approved node advertises only its capabilities and revocation blocks recon
     new Date(baseTime.getTime() + 3_000),
   )
   assertEquals(revoked.state, 'revoked')
-  assertEquals(registry.listCapabilities('node-1'), [])
+  assertEquals(registry.nodeSupport('node-1'), { operations: [] })
   expectCode('node-revoked', () => registry.reconnect(auth, hello, hello))
 })
 
 test('registry snapshot restores pairing, authorization, replay, and capability state', () => {
   const source = new InMemoryPairingNodeRegistry()
   approve(source)
-  source.advertiseCapability(auth, capability)
+  source.advertiseNodeSupport(auth, auth.nodeId, capability)
 
   source.createOffer(
     'active-offer',
@@ -250,11 +227,7 @@ test('registry snapshot restores pairing, authorization, replay, and capability 
   )
 
   const snapshot = source.exportSnapshot(new Date(baseTime.getTime() + 4_000))
-  snapshot.capabilities.push({
-    ...capability,
-    capabilityId: 'revoked-shell',
-    nodeId: 'node-3',
-  })
+  snapshot.nodeSupport.push({ nodeId: 'node-3', support: capability })
   const restored = new InMemoryPairingNodeRegistry()
   restored.restoreSnapshot(snapshot, new Date(baseTime.getTime() + 10_000))
 
@@ -270,8 +243,8 @@ test('registry snapshot restores pairing, authorization, replay, and capability 
     requestedAt: '2026-08-26T00:00:03.000Z',
   }])
   restored.authenticate(auth)
-  assertEquals(restored.listCapabilities('node-1'), [capability])
-  assertEquals(restored.listCapabilities('node-3'), [])
+  assertEquals(restored.nodeSupport('node-1'), capability)
+  assertEquals(restored.nodeSupport('node-3'), { operations: [] })
   expectCode('node-revoked', () =>
     restored.authenticate({
       deviceId: 'device-3',
@@ -309,13 +282,14 @@ test('registry snapshot restores pairing, authorization, replay, and capability 
 test('legacy registry policies are retired without changing pairing or capability ownership', () => {
   const source = new InMemoryPairingNodeRegistry()
   approve(source)
-  source.advertiseCapability(auth, capability)
+  source.advertiseNodeSupport(auth, auth.nodeId, capability)
   const snapshot = source.exportSnapshot(baseTime)
 
   for (const approvalPolicy of ['none', 'always', 'session', 'grant']) {
+    const { workdirs, nodeSupport, ...base } = snapshot
     const legacy = {
-      ...snapshot,
-      capabilities: snapshot.capabilities.map(entry => ({ ...entry, approvalPolicy })),
+      ...base, version: 1,
+      capabilities: snapshot.nodeSupport.map(entry => ({ version: 1, nodeId: entry.nodeId, capabilityId: 'legacy-shell', kind: 'shell', displayName: 'Shell', permissions: entry.support.operations, online: true, approvalPolicy })),
     }
     const restored = new InMemoryPairingNodeRegistry()
     restored.restoreSnapshot(legacy, baseTime)
@@ -339,7 +313,7 @@ test('registry snapshot restore rejects invalid state atomically', () => {
 
   expectCode(
     'invalid-contract',
-    () => registry.restoreSnapshot({ ...snapshot, version: 2 }, baseTime),
+    () => registry.restoreSnapshot({ ...snapshot, version: 99 }, baseTime),
   )
   registry.authenticate(auth)
 

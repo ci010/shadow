@@ -1,4 +1,4 @@
-import type { RegistrySnapshotV1 } from './contracts.ts'
+import type { RegistrySnapshotV2 } from './contracts.ts'
 import { dirname, join } from 'node:path'
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { isNotFoundError } from '../utils/runtime.ts'
@@ -6,17 +6,17 @@ import type { InMemoryPairingNodeRegistry } from './registry.ts'
 
 export interface RegistrySnapshotAdapter {
   load(): Promise<unknown | null>
-  save(snapshot: RegistrySnapshotV1): Promise<void>
+  save(snapshot: RegistrySnapshotV2): Promise<void>
 }
 
 export class InMemoryRegistrySnapshotAdapter implements RegistrySnapshotAdapter {
-  #snapshot: RegistrySnapshotV1 | null = null
+  #snapshot: RegistrySnapshotV2 | null = null
 
-  load(): Promise<RegistrySnapshotV1 | null> {
+  load(): Promise<RegistrySnapshotV2 | null> {
     return Promise.resolve(this.#snapshot === null ? null : structuredClone(this.#snapshot))
   }
 
-  save(snapshot: RegistrySnapshotV1): Promise<void> {
+  save(snapshot: RegistrySnapshotV2): Promise<void> {
     this.#snapshot = structuredClone(snapshot)
     return Promise.resolve()
   }
@@ -37,7 +37,7 @@ export class AtomicFileRegistrySnapshotAdapter
     return JSON.parse(contents)
   }
 
-  async save(snapshot: RegistrySnapshotV1): Promise<void> {
+  async save(snapshot: RegistrySnapshotV2): Promise<void> {
     const directory = dirname(this.filePath)
     await mkdir(directory, { recursive: true })
     const temporaryPath = join(directory, `.${crypto.randomUUID()}.tmp`)

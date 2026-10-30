@@ -46,7 +46,7 @@ test('remote reservations reject a foreign persistence format before committing 
     await jsonl.init()
     await jsonl.saveState('web:owned', {
       sessionId: 'web:owned', segmentIndex: 0, projectId: 'default',
-      workdir: { version: 1, nodeId: 'child', capabilityId: 'grant' },
+      workdir: { version: 2, nodeId: 'child', workdirId: 'grant' },
     })
 
     test('remote reservations validate and collect each persistence snapshot only once', async t => {
@@ -77,5 +77,29 @@ test('remote reservations reject a foreign persistence format before committing 
     } finally { sqlite.close() }
     await assert.rejects(reserveRemoteSessionWorkdirs(home, catalog, 'default'), /does not belong/)
     assert.deepEqual(catalog.remoteClaims(), [])
+  })
+})
+
+test('cron-only persisted V1 targets reserve ownership without sessions; invalid targets and foreign owners fail closed', async () => {
+  await withTempWorkspace(async root => {
+    const { mkdir, writeFile, readFile } = await import('node:fs/promises')
+    const home = join(root, 'home')
+    const cronPath = projectStoragePath(home, '.cron/jobs.json')
+    await mkdir(projectStoragePath(home, '.cron'), { recursive: true })
+    const old = { version: 1, nodeId: 'child', capabilityId: 'cron-only' }
+    const data = { version: 1, ownershipVersion: 2, jobs: [{ id: 'job', session: 'fresh', enabled: false,
+      schedule: 'every 1h', createdAt: '2026-01-01T00:00:00.000Z', workdir: old }] }
+    const original = JSON.stringify(data)
+    await writeFile(cronPath, original)
+    const catalog = new ProjectCatalog(join(root, 'host')); await catalog.init()
+    await reserveRemoteSessionWorkdirs(home, catalog, 'default')
+    assert.deepEqual(catalog.remoteClaims().map(c => c.workdir), [{ version: 2, nodeId: 'child', workdirId: 'cron-only' }])
+    assert.equal(await readFile(cronPath, 'utf8'), original, 'ownership scanning never rewrites job configuration')
+    for (const workdir of [null, {}, { version: 3, nodeId: 'child', workdirId: 'unknown' }]) {
+      await writeFile(cronPath, JSON.stringify({ ...data, jobs: [{ ...data.jobs[0], workdir }] }))
+      await assert.rejects(reserveRemoteSessionWorkdirs(home, catalog, 'default'), /workdir/)
+    }
+    await writeFile(cronPath, JSON.stringify({ ...data, jobs: [{ ...data.jobs[0], projectId: 'foreign' }] }))
+    await assert.rejects(reserveRemoteSessionWorkdirs(home, catalog, 'default'), /another project/)
   })
 })

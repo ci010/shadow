@@ -30,7 +30,7 @@ import {
   InMemoryPairingNodeRegistry,
 } from './registry.ts'
 import { RemoteExecutor } from '../execution/remote-executor.ts'
-import type { WorkdirCapabilityLookup } from '../sessions/locality.ts'
+import type { WorkdirLookup } from '../sessions/locality.ts'
 
 export const MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS = [
   { method: 'POST', path: '/pair/v1/present' },
@@ -58,7 +58,7 @@ export interface MainCluster {
   readonly plugins: readonly GatewayPlugin[]
   readonly activeSessionCount: number
   readonly remoteExecutor: RemoteExecutor
-  readonly workdirCapabilityLookup: WorkdirCapabilityLookup
+  readonly workdirLookup: WorkdirLookup
   observeInventory(observer: () => void): () => void
   getNodeInventory(): NodeInventoryResponse
   approve(approval: ApprovalV1, now?: Date): Promise<DeviceAuthenticationV1>
@@ -108,21 +108,21 @@ export async function createMainCluster(
   const remoteExecutor = new RemoteExecutor(nodeApi)
   const getNodeInventory = (): NodeInventoryResponse =>
     mainNodeInventory(options.localNodeInventory?.(), registry, nodeApi)
-  const workdirCapabilityLookup: WorkdirCapabilityLookup = (workdir) => {
-    const nodeState = registry.getNodeState(workdir.nodeId)
+  const workdirLookup: WorkdirLookup = (ref) => {
+    const nodeState = registry.getNodeState(ref.nodeId)
     if (nodeState === 'missing') return { node: 'missing' }
     if (nodeState === 'revoked') return { node: 'revoked' }
-    if (!nodeApi.isNodeConnected(workdir.nodeId)) return { node: 'offline' }
-    const capability = registry.listCapabilities(workdir.nodeId).find((value) =>
-      value.capabilityId === workdir.capabilityId
+    if (!nodeApi.isNodeConnected(ref.nodeId)) return { node: 'offline' }
+    if (!nodeApi.supportsExecutionProtocol(ref.nodeId)) return { node: 'online', incompatible: true }
+    const workdir = registry.listWorkdirs(ref.nodeId).find((value) =>
+      value.workdirId === ref.workdirId
     )
     return {
       node: 'online',
-      ...(capability
-        ? { capability: {
-          kind: capability.kind,
-          online: capability.online &&
-            nodeApi.hasAdvertisedCapability(workdir.nodeId, workdir.capabilityId),
+      ...(workdir
+        ? { workdir: {
+          online: workdir.online &&
+            nodeApi.hasAdvertisedWorkdir(workdir.nodeId, workdir.workdirId),
         } }
         : {}),
     }
@@ -216,7 +216,7 @@ export async function createMainCluster(
       return nodeApi.activeSessionCount
     },
     remoteExecutor,
-    workdirCapabilityLookup,
+    workdirLookup,
     getNodeInventory,
     observeInventory(observer) {
       inventoryObservers.add(observer)

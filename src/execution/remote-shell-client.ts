@@ -24,14 +24,14 @@ export async function executeRemoteShell(
   const stderr: string[] = []
   let terminal: ExecutionReceiptV1 | undefined
   let terminalType: string | undefined
+  try {
   for await (const event of target.executor.execute({
-    version: 1,
+    version: 2,
     jobId,
     idempotencyKey: target.executionKey ?? jobId,
     sessionId: target.sessionId,
     turnId: target.executionKey ?? target.turnId,
-    nodeId: target.nodeId,
-    capabilityId: target.capabilityId,
+    nodeId: target.nodeId, workdirId: target.workdirId,
     operation: target.recovering ? RECONCILE_SHELL_OPERATION : DURABLE_SHELL_OPERATION,
     args: parsed,
     createdAt: createdAt.toISOString(),
@@ -48,9 +48,16 @@ export async function executeRemoteShell(
       terminalType = event.type
     }
   }
+  } catch (error) {
+    if (!target.recovering || error instanceof ToolOutcomeUnknownError) throw error
+    throw new ToolOutcomeUnknownError(
+      `The reconciliation query failed without a verified original execution receipt: ${error instanceof Error ? error.message : String(error)}. ` +
+      'The original execution outcome remains unknown; the command was not re-executed.',
+    )
+  }
   const output = stdout.join('') + (stderr.length ? `\n[stderr]\n${stderr.join('')}` : '')
   const state = terminal?.state
-  if (!terminal || isUnknownShellReceipt(terminal)) {
+  if (!terminal || isUnknownShellReceipt(terminal) || (target.recovering && !terminal.reconciledJobId)) {
     throw new ToolOutcomeUnknownError(
       `Remote execution outcome is unknown: ${terminal?.reason?.message ?? 'No terminal receipt was received'}. ` +
       'Continue checks the original Child execution record; it does not re-execute this command. Partial side effects may remain.',

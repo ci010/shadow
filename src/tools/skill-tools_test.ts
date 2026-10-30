@@ -275,7 +275,7 @@ test('admin, agent-role and remote restrictions cannot be bypassed by skill regi
     const restricted = new SessionTools(f.base, home, ['read', 'search'])
     assert.match(requireToolText(await f.read('v:skills/private', { ...admin, tools: restricted })), /not available/)
     const remote = { ...admin, remoteWorkdir: {
-      nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not access remote executor') },
+      nodeId: 'remote', workdirId: 'opaque', get executor(): never { throw new Error('Must not access remote executor') },
     } }
     assert.match(requireToolText(await f.read('v:skills/private', remote)), /local workdir/)
     assert.match(requireToolText(await f.invoke('secret_tool', {}, remote)), /remote workdirs/)

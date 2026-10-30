@@ -1,3 +1,4 @@
+import { normalizeStoredWorkdirIdentity } from '../execution/workdir-storage.ts'
 import { z } from 'zod'
 import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
@@ -26,7 +27,9 @@ export class ViewEditTool implements Tool {
     if (!change) throw new Error('Edit not found in this session.')
     if (change.sessionId !== context.sessionId || change.id !== edit_id) throw new Error('Historical edit identity mismatch.')
     if (change.unavailable) throw new Error(`Recorded diff unavailable: ${change.unavailable}`)
-    const location = change.target ? `Recorded on node ${JSON.stringify(change.target.nodeId)}, capability ${JSON.stringify(change.target.capabilityId)}, path ${JSON.stringify(change.path)}.\n` : ''
+    const stored = change.target && normalizeStoredWorkdirIdentity(change.target)
+    if (change.target && !stored) throw new Error('Invalid historical directory identity.')
+    const location = stored ? `Recorded on node ${JSON.stringify(stored.nodeId)}, workdir ${JSON.stringify(stored.workdirId)}, path ${JSON.stringify(change.path)}.\n` : ''
     return location + (change.patch || 'No content changes.')
   }
 }

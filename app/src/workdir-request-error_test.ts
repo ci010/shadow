@@ -4,16 +4,17 @@ import { useSessionFiles } from './composables/useSessionFiles.ts'
 import { createGitFilesClient } from './git-files.ts'
 import { isNodeOfflineError, nodeOfflineError } from './workdir-request-error.ts'
 
-const offline = { error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder' }
+const offline = { error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', workdirId: 'folder' }
 
 test('only a validated locality node-offline response is classified as offline', () => {
   assert.equal(nodeOfflineError(503, offline)?.nodeId, 'child')
   assert.ok(nodeOfflineError(503, { ...offline, error: 'remote_workdir_unavailable' }))
   for (const value of [
     null, [], 'Node offline', { error: 'workdir_unavailable' },
-    { ...offline, nodeId: '' }, { ...offline, capabilityId: 12 },
-    { ...offline, reason: 'node-missing' }, { ...offline, reason: 'capability-offline' },
-    { ...offline, reason: 'capability-revoked' }, { ...offline, reason: 'capability-missing' },
+    { ...offline, nodeId: '' }, { ...offline, workdirId: 12 },
+    { error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder' },
+    { ...offline, reason: 'node-missing' }, { ...offline, reason: 'workdir-offline' },
+    { ...offline, reason: 'workdir-revoked' }, { ...offline, reason: 'workdir-missing' },
     { ...offline, reason: 'incompatible' },
     { ...offline, error: 'remote_filesystem_failed', code: 'remote-node-unavailable' },
     { ...offline, error: 'remote_git_failed' },
@@ -44,10 +45,11 @@ test('file and Git clients preserve project routes, true offline status and genu
       await assert.rejects(operation(), isNodeOfflineError)
       for (const [data, httpStatus, message] of [
         [{ error: 'folder_unavailable', message: 'The folder changed.' }, 409, /folder/i],
-        [{ ...offline, reason: 'capability-revoked' }, 503, /revoked/],
-        [{ ...offline, reason: 'capability-missing' }, 503, /capability/],
-        [{ ...offline, reason: 'capability-offline' }, 503, /capability/],
-        [{ ...offline, reason: 'incompatible' }, 503, /incompatible/],
+        [{ ...offline, reason: 'workdir-revoked' }, 503, /revoked/],
+        [{ ...offline, reason: 'workdir-missing' }, 503, /resource/],
+        [{ ...offline, reason: 'workdir-offline' }, 503, /resource/],
+        [{ ...offline, reason: 'incompatible' }, 503, /Update Main and the device/],
+        [{ error: 'execution-upgrade-required' }, 409, /Update Main and the device/],
         [{ ...offline, reason: 'node-missing' }, 503, /registered/],
         [{ error: 'remote_filesystem_failed', code: 'remote-node-unavailable' }, 503, /unavailable|Could not load/],
         [{ error: 'remote_workdir_requires_executor' }, 501, /support|Could not load/],

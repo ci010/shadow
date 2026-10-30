@@ -1,3 +1,4 @@
+import { fixtureDirectoryAdmission } from '../execution/test-fixtures.ts'
 import { join } from 'node:path'
 import { LocalExecutor } from '../execution/local-executor.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
@@ -15,12 +16,12 @@ class ReportingProcessManager extends ProcessManager {
 }
 const manager = new ReportingProcessManager()
 const executor = new JournaledShellExecutor(new LocalExecutor(manager, 'child', [
-  new CapabilityShell([{ capabilityId: 'root', rootPath: root }]),
-], [], request => journal.processResultPath(request)), journal)
+  new CapabilityShell([{ workdirId: 'root', rootPath: root }]),
+], fixtureDirectoryAdmission('child', [{ workdirId: 'root', rootPath: root }]), request => journal.processResultPath(request)), journal)
 const deadline = Date.now() + Number(lifetime)
 const request = {
-  version: 1 as const, jobId, idempotencyKey: jobId, nodeId: 'child', sessionId: 'session', turnId: 'turn',
-  capabilityId: 'root', operation: DURABLE_SHELL_OPERATION,
+  version: 2 as const, jobId, idempotencyKey: jobId, sessionId: 'session', turnId: 'turn',
+  nodeId: 'child', workdirId: 'root' , operation: DURABLE_SHELL_OPERATION,
   args: { script: `"${process.execPath}" "command with spaces.cjs"` },
   createdAt: new Date().toISOString(), deadlineAt: new Date(deadline).toISOString(),
 }

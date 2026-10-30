@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import type {
   ExecutionReceiptV1,
   JobEventV1,
-  JobRequestV1,
+  ExecutionRequestV2,
 } from '../execution/contracts.ts'
 import {
   InMemoryJobAuditSink,
@@ -13,15 +13,14 @@ import {
 
 const timestamp = '2026-08-26T10:00:00.000Z'
 
-function request(): JobRequestV1 {
+function request(): ExecutionRequestV2 {
   return {
-    version: 1,
+    version: 2,
     jobId: 'job-1',
     idempotencyKey: 'idempotency-1',
     sessionId: 'session-1',
     turnId: 'turn-1',
     nodeId: 'node-1',
-    capabilityId: 'shell-1',
     operation: 'process.execute',
     args: { command: 'secret-command', token: 'secret-token' },
     createdAt: timestamp,
@@ -96,7 +95,6 @@ test('job audit records carry complete request and event correlation', async () 
     sessionId: 'session-1',
     turnId: 'turn-1',
     nodeId: 'node-1',
-    capabilityId: 'shell-1',
     protocolMajor: 1,
     protocolMinor: 3,
     implementationVersion: '0.8.0',

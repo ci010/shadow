@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { Executor } from './executor.ts'
 import type { ExecutionReceiptV1 } from './contracts.ts'
-import { MANAGED_SESSION_CAPABILITY, MANAGED_SESSION_OPERATION, managedSessionCapability } from './managed-workdir.ts'
-import { parseWorkdirRefV1, type WorkdirRefV1 } from '../sessions/locality.ts'
+import { MANAGED_SESSION_OPERATION, managedSessionWorkdirId } from './managed-workdir.ts'
+import { parseLiveWorkdirRef, type WorkdirRefV2 } from '../sessions/locality.ts'
 import { FolderError } from '../folders/registry.ts'
 
 export async function allocateRemoteSessionWorkdir(options: {
@@ -11,7 +11,7 @@ export async function allocateRemoteSessionWorkdir(options: {
   sessionId: string
   nodeId: string
   signal: AbortSignal
-}): Promise<WorkdirRefV1> {
+}): Promise<WorkdirRefV2> {
   options.signal.throwIfAborted()
   const id = randomUUID()
   const now = Date.now()
@@ -21,8 +21,8 @@ export async function allocateRemoteSessionWorkdir(options: {
   let bytes = 0
   let terminal: ExecutionReceiptV1 | undefined
   for await (const event of options.executor.execute({
-    version: 1, jobId: id, idempotencyKey: id, sessionId: options.sessionId, turnId: id,
-    nodeId: options.nodeId, capabilityId: MANAGED_SESSION_CAPABILITY, operation: MANAGED_SESSION_OPERATION,
+    version: 2, jobId: id, idempotencyKey: id, sessionId: options.sessionId, turnId: id,
+    nodeId: options.nodeId, operation: MANAGED_SESSION_OPERATION,
     args: {}, createdAt: new Date(now).toISOString(), deadlineAt: new Date(now + 30_000).toISOString(),
   }, signal)) {
     if (event.type === 'stderr' || (event.type === 'stdout' && (bytes += Buffer.byteLength(event.chunk)) > 16_384)) {
@@ -38,10 +38,10 @@ export async function allocateRemoteSessionWorkdir(options: {
   }
   let value: unknown
   try { value = JSON.parse(output) } catch { /* Rejected by the wire validation below. */ }
-  const ref = parseWorkdirRefV1(value)
+  const ref = parseLiveWorkdirRef(value)
   if (!ref || Object.keys(value as object).some(key =>
-    !['version', 'nodeId', 'capabilityId', 'displayName', 'displayPathSnapshot'].includes(key)) ||
-    ref.nodeId !== options.nodeId || ref.capabilityId !== managedSessionCapability(options.projectId, options.sessionId)) {
+    !['version', 'nodeId', 'workdirId', 'displayName', 'displayPathSnapshot'].includes(key)) ||
+    ref.nodeId !== options.nodeId || ref.workdirId !== managedSessionWorkdirId(options.projectId, options.sessionId)) {
     throw new FolderError('invalid_managed_workdir', 'The node returned an unowned session workdir.', 503)
   }
   return ref

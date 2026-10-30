@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { mkdir, rename, symlink, unlink, writeFile } from 'node:fs/promises'
@@ -7,7 +8,7 @@ import { promisify } from 'node:util'
 import test, { type TestContext } from 'node:test'
 import { Hono } from 'hono'
 import { ProcessManager } from '../execution/processes/manager.ts'
-import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
+import type { ExecutionSupport, WorkdirAdvertisement } from '../execution/workdir-contracts.ts'
 import { CapabilityFilesystem } from '../execution/capability-filesystem.ts'
 import { CapabilityWorkdirIdentity } from '../execution/capability-workdir-identity.ts'
 import { CapabilityGit } from '../execution/capability-git.ts'
@@ -15,14 +16,14 @@ import { LocalExecutor } from '../execution/local-executor.ts'
 import { WORKDIR_IDENTITY_OPERATION } from '../execution/workdir-identity.ts'
 import { ProjectCatalog } from '../projects/catalog.ts'
 import { DEFAULT_PROJECT_ID } from '../projects/contracts.ts'
-import { ProjectExecutor } from '../projects/executor.ts'
+import { ProjectExecutor, DIRECTORY_OPERATIONS } from '../projects/executor.ts'
 import { reserveRemoteSessionWorkdirs } from '../projects/session-ownership.ts'
 import { remoteSessionPlugin } from '../sessions/remote-session-routes.ts'
 import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
 import type { SessionState, SessionStore } from '../sessions/session-store.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
-import type { WorkdirCapabilityState, WorkdirRefV1 } from '../sessions/locality.ts'
+import type { WorkdirState, WorkdirRefV2 } from '../sessions/locality.ts'
 import { FolderRegistry } from './registry.ts'
 import { RemoteFolderOwnership } from './remote-ownership.ts'
 import { FolderService } from './routes.ts'
@@ -38,43 +39,49 @@ async function fixture(t: TestContext) {
   await symlink(a, alias, process.platform === 'win32' ? 'junction' : 'dir')
   await writeFile(join(a, 'remote.txt'), 'CHILD content')
   await writeFile(join(workspace, 'remote.txt'), 'MAIN secret')
-  const bindings = [{ capabilityId: 'a', rootPath: a }, { capabilityId: 'b', rootPath: b },
-    { capabilityId: 'nested', rootPath: nested }, { capabilityId: 'alias', rootPath: alias },
-    { capabilityId: 'parent', rootPath: folders }]
+  const bindings = [{ workdirId: 'a', rootPath: a }, { workdirId: 'b', rootPath: b },
+    { workdirId: 'nested', rootPath: nested }, { workdirId: 'alias', rootPath: alias },
+    { workdirId: 'parent', rootPath: folders }]
   const local = new LocalExecutor(new ProcessManager(), 'child', [
     new CapabilityWorkdirIdentity(bindings), new CapabilityFilesystem(bindings), new CapabilityGit(bindings),
-  ])
+  ], request => {
+    assert.equal(request.workdirId !== undefined, true)
+    assert.ok(bindings.some(binding => request.workdirId !== undefined && binding.workdirId === request.workdirId))
+    assert.ok(DIRECTORY_OPERATIONS.includes(request.operation))
+  })
   const catalog = new ProjectCatalog(join(root, 'host'))
   await catalog.init()
   const other = await catalog.create('Other')
   let online = true
   let supported = true
-  let capabilityState: WorkdirCapabilityState | undefined
-  const capability = (ref: WorkdirRefV1): CapabilityDescriptorV1 | undefined => bindings.some(item => item.capabilityId === ref.capabilityId) ? {
-    version: 1, nodeId: 'child', capabilityId: ref.capabilityId, kind: 'workdir', online, displayName: ref.capabilityId,
-    displayPath: workspace, permissions: supported ? [WORKDIR_IDENTITY_OPERATION] : [],
+  let capabilityState: WorkdirState | undefined
+  const resource = (ref: WorkdirRefV2): WorkdirAdvertisement | undefined => bindings.some(item => item.workdirId === ref.workdirId) ? {
+    version: 2, nodeId: 'child', workdirId: ref.workdirId, online, displayName: ref.workdirId, support: { operations: supported ? [WORKDIR_IDENTITY_OPERATION] : [] },
+    displayPath: workspace,
   } : undefined
-  const lookup = (ref: WorkdirRefV1) => capabilityState ?? ({ node: online ? 'online' as const : 'offline' as const,
-    ...(capability(ref) ? { capability: { kind: 'workdir', online } } : {}) })
+  const lookup = (ref: WorkdirRefV2) => capabilityState ?? ({ node: online ? 'online' as const : 'offline' as const,
+    ...(resource(ref) ? { workdir: { online } } : {}) })
   const registry = async (projectId: string) => {
     const result = new FolderRegistry(workspace, { catalog, projectId })
     await result.init()
-    const executor = new ProjectExecutor(projectId, local)
-    result.configureRemote(new RemoteFolderOwnership({ projectId, catalog, executor, capability, lookup }))
+    const executor = new ProjectExecutor(projectId, local, request => {
+      assert.ok(DIRECTORY_OPERATIONS.includes(request.operation))
+    })
+    result.configureRemote(new RemoteFolderOwnership({ projectId, catalog, executor, workdir: resource, lookup }))
     return { registry: result, executor }
   }
   return { root, workspace, catalog, other, one: await registry(DEFAULT_PROJECT_ID), two: await registry(other.id),
     lookup, setOnline: (value: boolean) => { online = value }, setSupported: (value: boolean) => { supported = value },
-    setCapabilityState: (value: WorkdirCapabilityState | undefined) => { capabilityState = value } }
+    setCapabilityState: (value: WorkdirState | undefined) => { capabilityState = value } }
 }
 
-const ref = (capabilityId: string): WorkdirRefV1 => ({ version: 1, nodeId: 'child', capabilityId })
+const ref = (workdirId: string): WorkdirRefV2 => ({ version: 2, nodeId: 'child', workdirId })
 const signal = () => new AbortController().signal
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: remote moves retire legacy capability claims and histories without restoring source access`, async t => {
     const f = await fixture(t)
-    const store: SessionStore = new Store(join(f.workspace, '.sessions'))
+    const store: SessionStore = new Store(projectStoragePath(f.workspace, '.sessions'))
     await store.init()
     const legacy: SessionState = { sessionId: 'web:legacy', segmentIndex: 0, projectId: 'default', workdir: ref('alias') }
     await store.saveState(legacy.sessionId, legacy)
@@ -108,7 +115,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const old = new FolderRegistry(f.workspace, { catalog: restarted, projectId: 'default' })
     await old.init()
     assert.throws(() => old.assertSessionFolder(legacy), { code: 'folder_access_revoked' })
-    const history: SessionStore = new Store(join(f.workspace, '.sessions'))
+    const history: SessionStore = new Store(projectStoragePath(f.workspace, '.sessions'))
     try {
       await history.init()
       assert.deepEqual(JSON.parse(JSON.stringify(await history.getState(legacy.sessionId))), { ...legacy, ownershipVersion: 2 })
@@ -173,15 +180,15 @@ test('remote folder resources branch to Child only and reject foreign folder acc
     assert.equal(body.error, 'remote_workdir_unavailable')
     assert.equal(body.reason, 'node-offline')
     assert.equal(body.nodeId, 'child')
-    assert.equal(body.capabilityId, 'a')
+    assert.equal(body.workdirId, 'a')
     assert.equal(JSON.stringify(body).includes('MAIN secret'), false)
   }
   for (const [state, reason] of [
     [{ node: 'missing' }, 'node-missing'],
-    [{ node: 'revoked' }, 'capability-revoked'],
-    [{ node: 'online' }, 'capability-missing'],
-    [{ node: 'online', capability: { kind: 'workdir', online: false } }, 'capability-offline'],
-    [{ node: 'online', capability: { kind: 'shell', online: true } }, 'incompatible'],
+    [{ node: 'revoked' }, 'workdir-revoked'],
+    [{ node: 'online' }, 'workdir-missing'],
+    [{ node: 'online', workdir: { online: false } }, 'workdir-offline'],
+    [{ node: 'online', incompatible: true }, 'incompatible'],
   ] as const) {
     f.setCapabilityState(state)
     for (const suffix of ['files', 'git/status']) {
@@ -200,8 +207,8 @@ test('remote first-send registers once, allocates only on POST, and retries reus
   const f = await fixture(t)
   const states = new Map<string, SessionState>()
   let created = 0
-  const sessions: Pick<SessionManager, 'workspace' | 'remoteExecutor' | 'workdirCapabilityLookup' | 'buildSession' | 'getSessionState'> = {
-    workspace: f.workspace, remoteExecutor: f.one.executor, workdirCapabilityLookup: f.lookup,
+  const sessions: Pick<SessionManager, 'workspace' | 'remoteExecutor' | 'workdirLookup' | 'buildSession' | 'getSessionState'> = {
+    workspace: f.workspace, remoteExecutor: f.one.executor, workdirLookup: f.lookup,
     getSessionState: id => states.get(id) ?? null,
     buildSession: async (id, _parent, fields) => {
       created++
@@ -214,7 +221,7 @@ test('remote first-send registers once, allocates only on POST, and retries reus
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   assert.equal(created, 0)
   assert.equal(f.one.registry.list().length, 0)
-  const body = { nodeId: 'child', capabilityId: 'a', requestId: randomUUID() }
+  const body = { nodeId: 'child', workdirId: 'a', requestId: randomUUID() }
   const responses = await Promise.all([request(body), request(body)])
   assert(responses.every(response => response.status === 201))
   const results = await Promise.all(responses.map(response => response.json()))
@@ -224,7 +231,7 @@ test('remote first-send registers once, allocates only on POST, and retries reus
   f.setOnline(false)
   assert.equal((await request(body)).status, 201)
   assert.equal(created, 1)
-  assert.equal((await request({ ...body, capabilityId: 'b' })).status, 409)
+  assert.equal((await request({ ...body, workdirId: 'b' })).status, 409)
   assert.equal(f.one.registry.list().length, 1)
 })
 
@@ -251,7 +258,7 @@ test('registration refreshes authoritative ancestry after a registered directory
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: migrated default remote sessions reserve aliases and overlapping roots`, async t => {
     const f = await fixture(t)
-    const directory = join(f.workspace, '.sessions')
+    const directory = projectStoragePath(f.workspace, '.sessions')
     const store: SessionStore = new Store(directory)
     await store.init()
     await store.saveState('legacy', { sessionId: 'legacy', segmentIndex: 0, projectId: DEFAULT_PROJECT_ID, workdir: ref('a') })
@@ -268,3 +275,20 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     assert(f.catalog.remoteClaims('child')[0].identity)
   })
 }
+
+
+test('existing-target verification ignores unrelated offline folders but keeps binding and overlap checks', async t => {
+  const f = await fixture(t)
+  const a = await f.one.registry.registerRemote(ref('a'), signal())
+  const b = await f.two.registry.registerRemote(ref('b'), signal())
+  const aPath = join(f.root, 'folders', 'a')
+  const moved = join(f.root, 'folders', 'a-moved')
+  await rename(aPath, moved)
+  assert.equal((await f.two.registry.requireExecutionAvailable(b.id, signal())).id, b.id)
+  // Registration and ownership changes still require a full device refresh.
+  await assert.rejects(f.two.registry.requireAvailable(b.id, signal()))
+  await mkdir(aPath)
+  await assert.rejects(f.one.registry.requireExecutionAvailable(a.id, signal()), { code: 'remote_workdir_changed' })
+  assert.equal((await f.two.registry.requireExecutionAvailable(b.id, signal())).id, b.id)
+  await assert.rejects(f.two.registry.requireExecutionAvailable(a.id, signal()), { code: 'folder_not_found' })
+})

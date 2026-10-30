@@ -60,10 +60,10 @@ test('direct picker loads scoped folders and node inventory, preserves offline t
   state().popover = { show: () => { state().menuOpened() } }
   await state().openRemote()
   assert.equal(state().loading, true)
-  const capability = { capabilityId: 'code', kind: 'workdir', displayName: 'Code', online: true }
+  const resource = { version: 2 as const, workdirId: 'code', displayName: 'Code', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } }
   requests[0]!.finish({ version: 1, nodes: [
-    { nodeId: 'main', displayName: 'Main', role: 'main', connection: 'connected', capabilities: [capability] },
-    { nodeId: 'child', displayName: 'Laptop', role: 'child', connection: 'offline', capabilities: [capability] },
+    { nodeId: 'main', displayName: 'Main', role: 'main', connection: 'connected', executionProtocol: 'compatible', workdirs: [{ ...resource, nodeId: 'main' }], support: { operations: [] } },
+    { nodeId: 'child', displayName: 'Laptop', role: 'child', connection: 'offline', executionProtocol: 'compatible', workdirs: [{ ...resource, nodeId: 'child' }], support: { operations: [] } },
   ] })
   const local = { id: 'local', projectId: 'a', name: 'Local', path: 'C:\\fixture\\local', createdAt: '2026-09-17' }
   requests[1]!.finish({ folders: [local] })

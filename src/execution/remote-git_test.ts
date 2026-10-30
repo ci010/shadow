@@ -1,3 +1,5 @@
+import { fixtureDirectoryAdmission } from './test-fixtures.ts'
+import { workdirIdOf } from './workdir-contracts.ts'
 import assert from 'node:assert/strict'
 import childProcess, { execFile, type SpawnOptions } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -12,15 +14,15 @@ import { CapabilityGit, GIT_STATUS_OPERATION, GIT_DIFF_OPERATION, MAX_GIT_RESULT
 import { LocalExecutor } from './local-executor.ts'
 import { executeRemoteGit } from './remote-git-client.ts'
 import type { Executor } from './executor.ts'
-import type { JobRequestV1, JobEventV1 } from './contracts.ts'
+import type { ExecutionRequestV2, JobEventV1 } from './contracts.ts'
 
 const exec = promisify(execFile)
 const signal = () => new AbortController().signal
 function target(executor: Executor) {
-  return { executor, nodeId: 'child', capabilityId: 'workdir', sessionId: 'remote-session', turnId: 'git-test', signal: signal() }
+  return { executor, nodeId: 'child', workdirId: 'workdir', sessionId: 'remote-session', turnId: 'git-test', signal: signal() }
 }
 function fake(output: string, completed = true) {
-  const requests: JobRequestV1[] = []
+  const requests: ExecutionRequestV2[] = []
   const executor: Executor = {
     async *execute(request) {
       requests.push(request)
@@ -50,8 +52,8 @@ test('remote Git uses the Child workdir for status and HEAD diff, with no prompt
   await writeFile(join(folders, 'inside', 'file.txt'), 'after\n')
   await writeFile(join(folders, 'outside.txt'), 'do not expose\n')
   const index = await readFile(join(folders, '.git', 'index'))
-  const local = new LocalExecutor(new ProcessManager(), 'child', [new CapabilityGit([{ capabilityId: 'workdir', rootPath: join(folders, 'inside') }])], [])
-  const requests: JobRequestV1[] = []
+  const local = new LocalExecutor(new ProcessManager(), 'child', [new CapabilityGit([{ workdirId: 'workdir', rootPath: join(folders, 'inside') }])], fixtureDirectoryAdmission('child', [{ workdirId: 'workdir', rootPath: folders }]))
+  const requests: ExecutionRequestV2[] = []
   const executor: Executor = {
     execute(request, signal) { requests.push(request); return local.execute(request, signal) },
     getStatus: id => local.getStatus(id), cancel: id => local.cancel(id),
@@ -65,7 +67,7 @@ test('remote Git uses the Child workdir for status and HEAD diff, with no prompt
   assert.equal(diff.body.oldContent, 'before\n')
   assert.equal(diff.body.newContent, 'after\n')
   assert(!JSON.stringify(requests).includes(root))
-  assert.deepEqual(requests.map(request => [request.nodeId, request.capabilityId, request.operation, request.args]),
+  assert.deepEqual(requests.map(request => [request.nodeId, workdirIdOf(request), request.operation, request.args]),
     [['child', 'workdir', GIT_STATUS_OPERATION, {}], ['child', 'workdir', GIT_DIFF_OPERATION, { path: 'file.txt' }]])
   assert.deepEqual(await readFile(join(folders, '.git', 'index')), index)
   assert.equal((await executeRemoteGit(target(executor), 'diff', 'missing.txt')).status, 404)
@@ -78,8 +80,8 @@ test('remote Git reports non-repositories, invalid arguments and unknown binding
     spawn(command, args, { ...options, env: { ...options.env, GIT_CEILING_DIRECTORIES: root } }))
   syncBuiltinESMExports()
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
-  const handler = new CapabilityGit([{ capabilityId: 'workdir', rootPath: folders }])
-  const local = new LocalExecutor(new ProcessManager(), 'child', [handler])
+  const handler = new CapabilityGit([{ workdirId: 'workdir', rootPath: folders }])
+  const local = new LocalExecutor(new ProcessManager(), 'child', [handler], fixtureDirectoryAdmission('child', [{ workdirId: 'workdir', rootPath: folders }]))
   assert.deepEqual(await executeRemoteGit(target(local), 'status'), { status: 200, body: { available: false, reason: 'not_repository', entries: [] } })
   assert.equal((await executeRemoteGit(target(local), 'diff', 'file.txt')).status, 409)
   for (const path of ['../outside', '/etc/passwd', 'C:\\Main', '.git/config', 'x\0y']) {
@@ -87,7 +89,7 @@ test('remote Git reports non-repositories, invalid arguments and unknown binding
     assert.equal((await executeRemoteGit(target(fixture.executor), 'diff', path)).status, 400)
     assert.equal(fixture.requests.length, 0)
   }
-  assert.equal((await executeRemoteGit({ ...target(local), capabilityId: 'unknown' }, 'status')).status, 503)
+  assert.equal((await executeRemoteGit({ ...target(local), workdirId: 'unknown' }, 'status')).status, 503)
   const captured = fake('{}')
   await assert.rejects(executeRemoteGit(target(captured.executor), 'status'))
   const request = captured.requests[0]!
@@ -123,7 +125,7 @@ test('large Git responses are split into bounded job frames and reconstruct exac
   const body = { path: 'file.txt', status: 'modified', base: 'HEAD', binary: false, truncated: false, hunks: [], oldContent: 'x'.repeat(260_000), newContent: 'y'.repeat(260_000) }
   const output = JSON.stringify({ status: 200, body })
   const frames: JobEventV1[] = []
-  const local = new LocalExecutor(new ProcessManager(), 'child', [{ handles: () => true, execute: async () => output }])
+  const local = new LocalExecutor(new ProcessManager(), 'child', [{ handles: () => true, execute: async () => output }], fixtureDirectoryAdmission('child', [{ workdirId: 'workdir', rootPath: '/' }]))
   const executor: Executor = {
     async *execute(request, signal) {
       for await (const event of local.execute(request, signal)) { frames.push(event); yield event }

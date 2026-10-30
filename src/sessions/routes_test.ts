@@ -6,6 +6,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { folderFixture } from '../folders/test-fixtures.ts'
 import { FolderError } from '../folders/registry.ts'
+import { RemoteWorkdirIdentityError } from '../execution/remote-workdir-identity-client.ts'
 import type { SessionState } from './session-store.ts'
 import { LEARNING_AUTOMATIONS } from '../cron/contracts.ts'
 import { Hono } from 'hono'
@@ -13,7 +14,7 @@ import { channelSessionId } from '../bus/events.ts'
 import type {
   CancelReceiptV1,
   JobEventV1,
-  JobRequestV1,
+  ExecutionRequestV2,
   JobStatusV1,
 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
@@ -26,9 +27,9 @@ import {
 } from './routes.ts'
 
 class RouteFilesystemExecutor implements Executor {
-  readonly requests: JobRequestV1[] = []
+  readonly requests: ExecutionRequestV2[] = []
 
-  async *execute(request: JobRequestV1): AsyncIterable<JobEventV1> {
+  async *execute(request: ExecutionRequestV2): AsyncIterable<JobEventV1> {
     this.requests.push(request)
     const path = (request.args as { path: string }).path
     const chunk = request.operation === 'filesystem.read' && 'query' in (request.args as object)
@@ -76,35 +77,35 @@ class RouteFilesystemExecutor implements Executor {
 test('file and Git routes distinguish offline nodes from unavailable capabilities without Main fallback', async () => {
   const executor = new RouteFilesystemExecutor()
   let node: 'online' | 'offline' | 'missing' | 'revoked' = 'offline'
-  let capability: { kind: string; online: boolean } | undefined = { kind: 'workdir', online: true }
+  let resource: { kind: string; online: boolean } | undefined = { kind: 'directory', online: true }
   const app = new Hono()
   testSessionsApiPlugin({
     workspace: 'C:\\synthetic-main-must-not-be-read',
     remoteExecutor: executor,
-    getSessionState: () => ({ sessionId: 'remote', workdir: { version: 1, nodeId: 'child', capabilityId: 'folder' } }),
-    workdirCapabilityLookup: () => ({ node, capability }),
+    getSessionState: () => ({ sessionId: 'remote', workdir: { version: 2, nodeId: 'child', workdirId: 'folder' } }),
+    workdirLookup: () => ({ node, workdir: resource ? { online: resource.online } : undefined, ...(resource?.kind === 'shell' ? { incompatible: true } : {}) }),
   } as unknown as SessionManager)(app)
   for (const [state, folder, reason] of [
-    ['offline', capability, 'node-offline'],
-    ['missing', capability, 'node-missing'],
-    ['revoked', capability, 'capability-revoked'],
-    ['online', undefined, 'capability-missing'],
-    ['online', { kind: 'workdir', online: false }, 'capability-offline'],
+    ['offline', resource, 'node-offline'],
+    ['missing', resource, 'node-missing'],
+    ['revoked', resource, 'workdir-revoked'],
+    ['online', undefined, 'workdir-missing'],
+    ['online', { kind: 'directory', online: false }, 'workdir-offline'],
     ['online', { kind: 'shell', online: true }, 'incompatible'],
   ] as const) {
     node = state
-    capability = folder
+    resource = folder
     for (const suffix of ['files', 'files/search?query=notes', 'files?path=child', 'preview?path=notes.txt', 'raw?path=notes.txt', 'git/status', 'git/diff?path=notes.txt']) {
       const response = await app.request(`/api/sessions/remote/${suffix}`)
       assert.equal(response.status, 503)
       assert.deepEqual(await response.json(), workdirUnavailableApiResult('remote', {
-        available: false, workdir: { version: 1, nodeId: 'child', capabilityId: 'folder' }, reason,
+        available: false, workdir: { version: 2, nodeId: 'child', workdirId: 'folder' }, reason,
       }))
     }
   }
   assert.equal(executor.requests.length, 0)
   node = 'online'
-  capability = { kind: 'workdir', online: true }
+  resource = { kind: 'directory', online: true }
   assert.equal((await app.request('/api/sessions/remote/files')).status, 200)
   assert.equal((await app.request('/api/sessions/remote/git/status')).status, 200)
   assert.equal(executor.requests.length, 2)
@@ -197,7 +198,7 @@ test('learning automation browsing uses Home while ordinary sessions keep execut
   const folder = join(root, 'folder')
   await mkdir(folder)
   await writeFile(join(folder, 'folder.txt'), 'from effective folder\n')
-  const folderWorkdir = { version: 1 as const, nodeId: 'local', capabilityId: 'fixture-folder' }
+  const folderWorkdir = { version: 2 as const, nodeId: 'local', workdirId: 'fixture-folder' }
   const states: Record<string, SessionState> = {
     'web:chat-admin': { sessionId: 'web:chat-admin', segmentIndex: 0, sessionKind: 'topic', mode: 'session', parentSessionId: null },
     'web:coordinator-topic': {
@@ -239,8 +240,8 @@ test('learning automation browsing uses Home while ordinary sessions keep execut
   const app = new Hono()
   const manager = {
     workspace, getSessionState: (id: string) => states[id] ?? null,
-    workdirCapabilityLookup: (ref: { capabilityId: string }) => ref.capabilityId === 'fixture-folder'
-      ? { node: 'online', capability: { kind: 'workdir', online: true, path: folder } } : { node: 'missing' },
+    workdirLookup: (ref: { workdirId: string }) => ref.workdirId === 'fixture-folder'
+      ? { node: 'online', workdir: { online: true, path: folder } } : { node: 'missing' },
   }
   testSessionsApiPlugin(manager as unknown as SessionManager)(app)
   for (const id of homeIds) {
@@ -283,12 +284,12 @@ test('learning automation browsing uses Home while ordinary sessions keep execut
     assertEquals((await app.request(`${base}/preview?path=home.txt`)).status, 404)
   }
   assertEquals(states, original)
-  states['cron:fresh-reflector']!.workdir = { version: 1, nodeId: 'child', capabilityId: 'remote-workdir' }
+  states['cron:fresh-reflector']!.workdir = { version: 2, nodeId: 'child', workdirId: 'remote-workdir' }
   assertEquals((await app.request('/api/sessions/cron%3Afresh-reflector/files')).status, 503)
   const remoteApp = new Hono()
   testSessionsApiPlugin({
     ...manager,
-    workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true } }),
+    workdirLookup: () => ({ node: 'online', workdir: { online: true } }),
   } as unknown as SessionManager)(remoteApp)
   assertEquals((await remoteApp.request('/api/sessions/cron%3Afresh-reflector/files')).status, 501)
   assertEquals(await (await remoteApp.request('/api/sessions/cron%3Afresh-reflector/git/status')).json(),
@@ -316,9 +317,9 @@ test('session file base returns actionable unavailable capability details', () =
     {
       sessionId: 'discord:top',
       workdir: {
-        version: 1,
+        version: 2,
         nodeId: 'child-node',
-        capabilityId: 'folder-capability',
+        workdirId: 'folder-capability',
       },
     },
   )
@@ -329,7 +330,7 @@ test('session file base returns actionable unavailable capability details', () =
     error: 'workdir_unavailable',
     key: 'discord:top',
     nodeId: 'child-node',
-    capabilityId: 'folder-capability',
+    workdirId: 'folder-capability',
     reason: 'node-missing',
     action: 'connect_node',
   })
@@ -352,18 +353,18 @@ test('session file routes dispatch remote listings and previews but not raw byte
     workspace: resolve('workspace'),
     remoteExecutor: executor,
     getNodeInventory: () => ({
-      nodes: [{ nodeId: 'child-1', capabilities: [{ capabilityId: 'workdir-1', kind: 'workdir', displayPath: '/srv/folder' }] }],
+      nodes: [{ nodeId: 'child-1', workdirs: [{ workdirId: 'workdir-1', kind: 'directory', displayPath: '/srv/folder' }] }],
     }),
-    workdirCapabilityLookup: () => ({
+    workdirLookup: () => ({
       node: 'online' as const,
-      capability: { kind: 'workdir', online: true },
+      workdir: { online: true },
     }),
     getSessionState: (sessionId: string) => ({
       sessionId,
       workdir: {
-        version: 1 as const,
+        version: 2 as const,
         nodeId: 'child-1',
-        capabilityId: 'workdir-1',
+        workdirId: 'workdir-1',
         displayPathSnapshot: '/untrusted-old-snapshot',
       },
     }),
@@ -415,7 +416,7 @@ test('session file routes dispatch remote listings and previews but not raw byte
   const gitStatus = await remoteGitRequest('status')
   assertEquals(gitStatus, { available: true, entries: [{ path: 'a.md', status: 'modified' }] })
   assertEquals((await remoteGitRequest('diff?path=a.md')).path, 'a.md')
-  assertEquals(executor.requests.slice(-2).map(request => [request.nodeId, request.capabilityId, request.operation]),
+  assertEquals(executor.requests.slice(-2).map(request => [request.nodeId, request.workdirId !== undefined ? request.workdirId : undefined, request.operation]),
     [['child-1', 'workdir-1', 'workdir.git.status'], ['child-1', 'workdir-1', 'workdir.git.diff']])
   async function remoteGitRequest(operation: string) {
     const response = await app.request(`/api/sessions/remote/git/${operation}`)
@@ -447,13 +448,13 @@ test('explicit session storage never aliases Project Home or execution folders, 
   await writeFile(join(storage, 'same.txt'), 'session')
   await writeFile(join(storage, 'index.html'), '<p>session</p>')
   execFileSync('git', ['init', '--quiet', storage])
-  const state: SessionState = { sessionId: key, segmentIndex: 0, sessionKind: 'topic', workdir: { version: 1, nodeId: 'local', capabilityId: 'folder' } }
+  const state: SessionState = { sessionId: key, segmentIndex: 0, sessionKind: 'topic', workdir: { version: 2, nodeId: 'local', workdirId: 'folder' } }
   let denied = false
   const manager = {
     workspace, projectId: 'fixture', getSessionState: () => state,
     readSessionState: async (id: string) => id === key ? state : null,
     assertHistoricalFolderAccess: async () => { if (denied) throw new FolderError('folder_not_found', 'Forbidden', 404) },
-    workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true, path: folder } }),
+    workdirLookup: () => ({ node: 'online', workdir: { online: true, path: folder } }),
   }
   const app = new Hono()
   sessionsApiPlugin(manager as unknown as SessionManager)(app)
@@ -471,7 +472,7 @@ test('explicit session storage never aliases Project Home or execution folders, 
     assertEquals((await app.request(`${base}/${route}?path=../private.txt`)).status, 400)
   }
   assertEquals((await app.request(`${base}/preview?path=private.txt`)).status, 404)
-  state.workdir = { version: 1, nodeId: 'remote-offline', capabilityId: 'opaque' }
+  state.workdir = { version: 2, nodeId: 'remote-offline', workdirId: 'opaque' }
   assertEquals(await (await app.request(`${base}/raw?path=same.txt`)).text(), 'session', 'Explicit Main storage is independent of remote execution')
   assertEquals((await app.request('/api/sessions/unknown/workspace/files')).status, 404)
   denied = true
@@ -641,4 +642,29 @@ test('session graph partial reads are bounded and enrich only selected Project-o
   const full = await (await app.request('/api/sessions/graph')).json()
   assert.equal(full.partial, undefined)
   assert.equal(full.sessions.length, 2)
+})
+
+
+test('remote file and Git routes retain registered and legacy identity admission errors', async t => {
+  const { workspace } = await folderFixture(t)
+  const state: SessionState = { sessionId: 'web:legacy', segmentIndex: 0, projectId: 'default',
+    workdir: { version: 2, nodeId: 'child', workdirId: 'legacy-directory' } }
+  for (const error of [
+    new FolderError('remote_workdir_changed', 'Saved Folder identity changed', 409),
+    new RemoteWorkdirIdentityError('remote_workdir_identity_unavailable', 'Identity query disconnected', 503),
+  ]) {
+    const app = new Hono()
+    sessionsApiPlugin({
+      projectId: 'default', workspace, readSessionState: async () => state,
+      assertHistoricalFolderAccess: async () => {},
+      workdirLookup: () => ({ node: 'online', workdir: { online: true } }),
+      remoteExecutor: { async *execute() { throw error } },
+    } as unknown as SessionManager)(app)
+    // /workspace/* is explicitly Main-local session storage, not the execution target.
+    for (const suffix of ['preview?path=a.txt', 'files', 'files/search?query=a', 'git/status', 'git/diff?path=a.txt']) {
+      const response = await app.request(`/api/sessions/web%3Alegacy/${suffix}`)
+      assertEquals(response.status, error.status, `${suffix}: ${await response.clone().text()}`)
+      assertEquals(await response.json(), { error: error.code, message: error.message })
+    }
+  }
 })

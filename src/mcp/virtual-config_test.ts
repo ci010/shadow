@@ -306,7 +306,7 @@ test('Project, call-mode, remote and unsupported virtual writes fail before exec
   let remoteCalls = 0
   const remote = {
     ...f.context, remoteWorkdir: {
-      nodeId: 'node', capabilityId: 'capability',
+      nodeId: 'node', workdirId: 'capability',
       executor: { execute: () => { remoteCalls++; throw new Error('must not execute') } } as never,
     },
   }

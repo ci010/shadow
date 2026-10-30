@@ -1,16 +1,17 @@
+import { workdirIdOf } from './workdir-contracts.ts'
 import { isUtf8 } from 'node:buffer'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { lstat, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { isNotFoundError } from '../utils/runtime.ts'
-import type { JobRequestV1 } from './contracts.ts'
+import type { ExecutionRequestV2 } from './contracts.ts'
 import type { LocalJobOperationHandler } from './local-executor.ts'
 import { searchWorkspaceFiles, validFileSearchQuery } from './filesystem/search-files.ts'
 
 export const FILESYSTEM_READ_OPERATION = 'filesystem.read'
 export const FILESYSTEM_WRITE_OPERATION = 'filesystem.write'
 
-export interface WorkdirCapabilityBinding {
-  readonly capabilityId: string
+export interface WorkdirBinding {
+  readonly workdirId: string
   readonly rootPath: string
 }
 
@@ -48,7 +49,7 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
   readonly #maxWriteBytes: number
 
   constructor(
-    bindings: readonly WorkdirCapabilityBinding[],
+    bindings: readonly WorkdirBinding[],
     options: CapabilityFilesystemOptions = {},
   ) {
     this.#maxReadBytes = positiveInteger(
@@ -60,7 +61,7 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
       'maxWriteBytes',
     )
     for (const binding of bindings) {
-      if (!binding.capabilityId || this.#roots.has(binding.capabilityId)) {
+      if (!binding.workdirId || this.#roots.has(binding.workdirId)) {
         throw new TypeError(
           'Workdir capability IDs must be unique and non-empty',
         )
@@ -68,7 +69,7 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
       if (!isAbsolute(binding.rootPath)) {
         throw new TypeError('Workdir capability roots must be absolute paths')
       }
-      this.#roots.set(binding.capabilityId, resolve(binding.rootPath))
+      this.#roots.set(binding.workdirId, resolve(binding.rootPath))
     }
   }
 
@@ -77,8 +78,8 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
       operation === FILESYSTEM_WRITE_OPERATION
   }
 
-  async execute(request: JobRequestV1, signal: AbortSignal): Promise<string> {
-    const root = this.#roots.get(request.capabilityId)
+  async execute(request: ExecutionRequestV2, signal: AbortSignal): Promise<string> {
+    const root = this.#roots.get(workdirIdOf(request))
     if (!root) {
       throw new CapabilityFilesystemError(
         'capability-denied',

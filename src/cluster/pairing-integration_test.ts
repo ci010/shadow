@@ -47,7 +47,7 @@ async function main(adapter: InMemoryRegistrySnapshotAdapter) {
       protocolMajor: 1,
       protocolMinor: 0,
       implementationVersion: 'integration-main',
-      features: ['jobs-v1', 'capabilities-v1'],
+      features: ['workdir-execution-v2'],
     },
     authorizeOfferCreation: (request) =>
       request.headers.get('Authorization') === `Bearer ${launchCredential}`,

@@ -785,7 +785,9 @@ const draftRequest = shallowRef<ChatRequestControl>()
 const currentRequest = computed(() => activeSessionId.value ? requestControls.get(activeSessionId.value) : draftRequest.value)
 const submissionBusy = computed(() => preparingSend.value || submittingMessage.value
   || currentRequest.value?.state.phase === 'preparing' || currentRequest.value?.state.phase === 'submitting' || !!yieldQuestion.value?.busy)
-const fileContextKey = computed(() => JSON.stringify([props.apiBase, activeSessionId.value || (draftRemote.value ? `remote:${draftRemote.value.nodeId}:${draftRemote.value.capabilityId}` : `folder:${draft.value.folder?.id ?? 'scratch'}`)]))
+const fileContextKey = computed(() => JSON.stringify([props.apiBase, activeSessionId.value || (draftRemote.value
+  ? ['remote', draftRemote.value.nodeId, draftRemote.value.workdirId ?? null]
+  : ['folder', draft.value.folder?.id ?? null])]))
 let sessionSelectionGeneration = 0
 const isDirectChat = computed(() => {
   const id = activeSessionId.value

@@ -1,30 +1,13 @@
 import { t } from './i18n.ts'
-import type { NodeInventoryCapability, NodeInventoryEntry, NodeInventoryResponse } from '../../src/cluster/node-inventory.ts'
+import type { NodeInventoryEntry, NodeInventoryResponse } from '../../src/cluster/node-inventory.ts'
+import { validateExecutionSupport, validateWorkdirAdvertisement, type WorkdirAdvertisement } from '../../src/execution/workdir-contracts.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { apiUrl, hostBase } from './api-url.ts'
 
 export type { NodeInventoryEntry }
 
-export const CAPABILITY_LABELS: Record<NodeInventoryCapability['kind'], string> = {
-  get workdir() { return t('Workdir') },
-  get shell() { return t('Shell') },
-  get browser() { return t('Browser') },
-  get 'windows-ui'() { return t('Desktop control') },
-  gpu: 'GPU',
-}
-
-export function capabilitySummary(capabilities: readonly NodeInventoryCapability[]): string {
-  const counts = new Map<NodeInventoryCapability['kind'], number>()
-  for (const capability of capabilities) counts.set(capability.kind, (counts.get(capability.kind) ?? 0) + 1)
-  return Array.from(counts, ([kind, count]) => `${CAPABILITY_LABELS[kind]} (${count})`).join(' · ')
-}
-
 function nonempty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
-}
-
-function isCapabilityKind(value: unknown): value is NodeInventoryCapability['kind'] {
-  return typeof value === 'string' && Object.hasOwn(CAPABILITY_LABELS, value)
 }
 
 export function parseNodeInventory(value: unknown): NodeInventoryResponse {
@@ -34,28 +17,28 @@ export function parseNodeInventory(value: unknown): NodeInventoryResponse {
   const nodes: NodeInventoryEntry[] = value.nodes.map((node: unknown) => {
     if (!isRecord(node) || !nonempty(node.nodeId) || nodeIds.has(node.nodeId)
       || !nonempty(node.displayName) || (node.role !== 'main' && node.role !== 'child')
-      || (node.connection !== 'connected' && node.connection !== 'offline' && node.connection !== 'revoked')
-      || !Array.isArray(node.capabilities)
+      || (node.connection !== 'connected' && node.connection !== 'offline' && node.connection !== 'revoked')) throw invalid()
+    if (node.executionProtocol === undefined || !Array.isArray(node.workdirs)) {
+      throw new Error(t('This device uses an incompatible execution protocol. Update Main and the device, then retry. No local folder was used.'))
+    }
+    if ((node.executionProtocol !== 'compatible' && node.executionProtocol !== 'upgrade-required' && node.executionProtocol !== 'unknown')
+      || Object.hasOwn(node, 'capabilities') || Object.hasOwn(node, 'resources')
       || (node.supportsManagedSessions !== undefined && typeof node.supportsManagedSessions !== 'boolean')
       || (node.implementationVersion !== undefined && !nonempty(node.implementationVersion))
       || (node.lastSeen !== undefined && (!nonempty(node.lastSeen) || !Number.isFinite(Date.parse(node.lastSeen))))) throw invalid()
     nodeIds.add(node.nodeId)
-    const ids = new Set<string>()
-    const capabilities: NodeInventoryCapability[] = node.capabilities.map((capability: unknown) => {
-      if (!isRecord(capability) || !nonempty(capability.capabilityId) || ids.has(capability.capabilityId)
-        || !isCapabilityKind(capability.kind) || !nonempty(capability.displayName)
-        || typeof capability.online !== 'boolean'
-        || (capability.displayPath !== undefined && !nonempty(capability.displayPath))) throw invalid()
-      ids.add(capability.capabilityId)
-      return {
-        capabilityId: capability.capabilityId, kind: capability.kind,
-        displayName: capability.displayName, online: capability.online,
-        ...(capability.displayPath === undefined ? {} : { displayPath: capability.displayPath }),
-      }
+    const workdirIds = new Set<string>()
+    const workdirs: WorkdirAdvertisement[] = node.workdirs.map((value: unknown) => {
+      const result = validateWorkdirAdvertisement(value)
+      if (!result.success || result.value.nodeId !== node.nodeId || workdirIds.has(result.value.workdirId)) throw invalid()
+      workdirIds.add(result.value.workdirId)
+      return result.value
     })
+    const support = validateExecutionSupport(node.support, 'node')
+    if (!support.success) throw invalid()
     return {
       nodeId: node.nodeId, displayName: node.displayName, role: node.role,
-      connection: node.connection, capabilities,
+      connection: node.connection, executionProtocol: node.executionProtocol, workdirs, support: support.value,
       ...(node.supportsManagedSessions === undefined ? {} : { supportsManagedSessions: node.supportsManagedSessions }),
       ...(node.implementationVersion === undefined ? {} : { implementationVersion: node.implementationVersion }),
       ...(node.lastSeen === undefined ? {} : { lastSeen: node.lastSeen }),
@@ -94,7 +77,13 @@ export async function fetchNodeInventory(
   return parseNodeInventory(data)
 }
 
-export function capabilityAvailability(node: NodeInventoryEntry, capability: NodeInventoryCapability): 'online' | 'unavailable' | 'revoked' {
+export function workdirAvailability(node: NodeInventoryEntry, workdir: WorkdirAdvertisement): 'online' | 'unavailable' | 'revoked' {
   if (node.connection === 'revoked') return 'revoked'
-  return node.connection === 'connected' && capability.online ? 'online' : 'unavailable'
+  return node.executionProtocol === 'compatible' && node.connection === 'connected'
+    && workdir.nodeId === node.nodeId && workdir.online ? 'online' : 'unavailable'
+}
+
+/** Availability hint only; the backend still checks current Project access. */
+export function workdirSupportsOperations(node: NodeInventoryEntry, workdirId: string): boolean {
+  return node.workdirs.some(workdir => workdir.workdirId === workdirId && workdir.support.operations.length > 0 && workdirAvailability(node, workdir) === 'online')
 }

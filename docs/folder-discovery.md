@@ -4,7 +4,9 @@ Read `v:project/folders` for a compact Markdown inventory of the current Project
 The VFS list entry has the same content as the read response. The overview has a
 Project heading, one section per owning node, and `**selector**: path` entries.
 Only unavailable entries carry a status/reason; availability describes the live
-workdir capability, not authorization or support for every operation.
+directory, not authorization or support for every operation. The device and
+workdir report supported operations; existing Project/Folder access rules are
+checked separately. There are no independent Resource or Grant entities.
 
 Node sections are grouped by identity, not display name. Runtime node inventory
 supplies real display names: local folders are explicitly under Main; remote
@@ -17,7 +19,8 @@ the same name on different nodes. Discovery tries a unique short name, then a
 name-ID selector, then the full folder UUID. Each candidate is checked with the
 same `selectFolder` resolver used by selection; short UUID prefix collisions or
 names resembling another selector cannot silently select the wrong folder.
-Use the listed selector with `use_project(folder)` or `session.create(folderId)`.
+Use the listed selector with per-call `read`/`write`/`exec`/`search` `folder`,
+`use_project(folder)`, or `session.create(folderId)`.
 The registered folder determines the node; there is no independent node override.
 `use_project` changes an existing session's folder context, not its node, and does
 not currently implement remote-folder switching. Creating a session still applies

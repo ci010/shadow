@@ -78,7 +78,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         ownershipVersion: 2 as const, projectId: 'default', sessionId: 'web:orchestrator', segmentIndex: 2,
         mode: 'session' as const, agentType: 'general', physicalIdVersion: 2 as const,
         name: 'Saved conversation', generatedTitle: 'Original title', config: { model: 'fixture' },
-        folderId: 'folder', workdir: { version: 1 as const, nodeId: 'local', capabilityId: 'folder' },
+        folderId: 'folder', workdir: { version: 2 as const, nodeId: 'local', workdirId: 'folder' },
         parent: { id: 'web:parent', physicalId: 'parent-segment', index: 1 }, children: ['task:child'],
       }
       const legacy = { ...state, sessionKind: 'orchestrator', agentType: 'orchestrator', futureMetadata: { preserved: true } }

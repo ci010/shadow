@@ -4,17 +4,17 @@ import type { ExecutionContext } from './context.ts'
 import type {
   CancelReceiptV1,
   JobEventV1,
-  JobRequestV1,
+  ExecutionRequestV2,
   JobStatusV1,
 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
 import { WriteTool } from './filesystem.ts'
 
 class FilesystemExecutor implements Executor {
-  readonly requests: JobRequestV1[] = []
+  readonly requests: ExecutionRequestV2[] = []
   constructor(readonly readFailure?: string, readonly writeFailure?: string, readonly before = 'before value after') {}
 
-  async *execute(request: JobRequestV1): AsyncIterable<JobEventV1> {
+  async *execute(request: ExecutionRequestV2): AsyncIterable<JobEventV1> {
     this.requests.push(request)
     const timestamp = new Date().toISOString()
     let sequence = 0
@@ -74,7 +74,7 @@ function context(executor: Executor): ExecutionContext {
     signal: new AbortController().signal,
     remoteWorkdir: {
       nodeId: 'child-1',
-      capabilityId: 'workdir-1',
+      workdirId: 'workdir-1',
       executor,
     },
   }

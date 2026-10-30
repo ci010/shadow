@@ -79,9 +79,9 @@ test('SqliteSessionStore round-trips complete SessionState metadata', async () =
     parent: { id: 'discord:parent', physicalId: 'parent-2', index: 17 },
     workspaceRoot: 'discord:root',
     workdir: {
-      version: 1,
+      version: 2,
       nodeId: 'local',
-      capabilityId: 'managed-session-v1:discord%3Aroot',
+      workdirId: 'managed-session-v1:discord%3Aroot',
       displayName: 'Managed session folder',
     },
     agentType: 'researcher',

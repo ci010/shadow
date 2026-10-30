@@ -228,7 +228,7 @@ export class ReadTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
-    context = executionTargetContext(args, context)
+    context = await executionTargetContext(args, context, 'filesystem.read')
     const raw = String(args.path)
     if (args.encoding !== undefined && !isTextEncoding(args.encoding)) throw new TypeError('Unsupported read encoding.')
     const encoding: TextEncoding = isTextEncoding(args.encoding) ? args.encoding : 'auto'

@@ -1,3 +1,4 @@
+import { normalizeStoredWorkdirIdentity } from '../execution/workdir-storage.ts'
 import { isAbsolute } from 'node:path'
 
 export type InstallationMode = 'main' | 'child'
@@ -16,11 +17,11 @@ export interface ChildBootstrapConfigV1 extends BootstrapConfigBaseV1 {
   mode: 'child'
   mainEndpoint: string
   allowInsecureLocalTransport?: boolean
-  workdirs?: ChildWorkdirCapabilityV1[]
+  workdirs?: ChildWorkdirBinding[]
 }
 
-export interface ChildWorkdirCapabilityV1 {
-  capabilityId: string
+export interface ChildWorkdirBinding {
+  workdirId: string
   rootPath: string
   displayName: string
 }
@@ -76,7 +77,7 @@ export function parseBootstrapConfigV1(input: unknown): BootstrapConfigV1 {
   }
 
   let mainEndpoint: string | undefined
-  let workdirs: ChildWorkdirCapabilityV1[] | undefined
+  let workdirs: ChildWorkdirBinding[] | undefined
   if (mode === 'child') {
     const rawEndpoint = readNonEmptyString(input, 'mainEndpoint', issues)
     if (rawEndpoint !== undefined) {
@@ -115,50 +116,52 @@ export function parseBootstrapConfigV1(input: unknown): BootstrapConfigV1 {
 function readWorkdirs(
   value: unknown,
   issues: string[],
-): ChildWorkdirCapabilityV1[] | undefined {
+): ChildWorkdirBinding[] | undefined {
   if (!Array.isArray(value)) {
     issues.push('workdirs must be an array')
     return undefined
   }
-  const result: ChildWorkdirCapabilityV1[] = []
-  const capabilityIds = new Set<string>()
-  for (const [index, item] of value.entries()) {
+  const result: ChildWorkdirBinding[] = []
+  const workdirIds = new Set<string>()
+  for (const [index, saved] of value.entries()) {
     const prefix = `workdirs[${index}]`
+    // Only the persisted bootstrap reader knows the retired capability address.
+    const item = normalizeStoredWorkdirIdentity(saved)
     if (!isRecord(item)) {
       issues.push(`${prefix} must be a JSON object`)
       continue
     }
     for (const field of Object.keys(item)) {
-      if (!['capabilityId', 'rootPath', 'displayName'].includes(field)) {
+      if (!['workdirId', 'rootPath', 'displayName'].includes(field)) {
         issues.push(`${prefix} has unknown field "${field}"`)
       }
     }
-    const capabilityId = readNestedString(item, 'capabilityId', prefix, issues)
+    const workdirId = readNestedString(item, 'workdirId', prefix, issues)
     const rootPath = readNestedString(item, 'rootPath', prefix, issues)
     const displayName = readNestedString(item, 'displayName', prefix, issues)
-    if (capabilityId !== undefined) {
-      if (capabilityId === 'process-execute') {
-        issues.push(`${prefix}.capabilityId is reserved`)
-      } else if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(capabilityId)) {
-        issues.push(`${prefix}.capabilityId is invalid`)
-      } else if (capabilityIds.has(capabilityId)) {
-        issues.push(`${prefix}.capabilityId must be unique`)
+    if (workdirId !== undefined) {
+      if (workdirId === 'process-execute') {
+        issues.push(`${prefix}.workdirId is reserved`)
+      } else if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(workdirId)) {
+        issues.push(`${prefix}.workdirId is invalid`)
+      } else if (workdirIds.has(workdirId)) {
+        issues.push(`${prefix}.workdirId must be unique`)
       } else {
-        capabilityIds.add(capabilityId)
+        workdirIds.add(workdirId)
       }
     }
     if (rootPath !== undefined && !isAbsolute(rootPath)) {
       issues.push(`${prefix}.rootPath must be absolute`)
     }
     if (
-      capabilityId !== undefined && rootPath !== undefined &&
+      workdirId !== undefined && rootPath !== undefined &&
       displayName !== undefined && isAbsolute(rootPath) &&
-      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(capabilityId) &&
-      capabilityId !== 'process-execute' &&
-      capabilityIds.has(capabilityId) &&
-      !result.some((entry) => entry.capabilityId === capabilityId)
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(workdirId) &&
+      workdirId !== 'process-execute' &&
+      workdirIds.has(workdirId) &&
+      !result.some((entry) => entry.workdirId === workdirId)
     ) {
-      result.push({ capabilityId, rootPath, displayName })
+      result.push({ workdirId, rootPath, displayName })
     }
   }
   return result

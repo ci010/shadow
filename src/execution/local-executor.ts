@@ -10,10 +10,10 @@ import {
   type CancelReceiptV1,
   type ExecutionReceiptV1,
   type JobEventV1,
-  type JobRequestV1,
+  type ExecutionRequestV2,
   type JobStateV1,
   type JobStatusV1,
-  validateJobRequestV1,
+  validateExecutionRequestV2,
 } from './contracts.ts'
 import type {
   Executor,
@@ -25,12 +25,12 @@ export const PROCESS_EXECUTE_OPERATION = 'process.execute'
 
 export interface LocalJobOperationHandler {
   handles(operation: string): boolean
-  execute(request: JobRequestV1, signal: AbortSignal): Promise<string>
+  execute(request: ExecutionRequestV2, signal: AbortSignal): Promise<string>
 }
 
 export interface LocalProcessOperationHandler {
   handles(operation: string): boolean
-  prepareProcess(request: JobRequestV1, signal: AbortSignal): Promise<ProcessExecuteArgsV1>
+  prepareProcess(request: ExecutionRequestV2, signal: AbortSignal): Promise<ProcessExecuteArgsV1>
 }
 
 type ProcessSpawner = Pick<ProcessManager, 'spawn'>
@@ -41,7 +41,7 @@ type JobEventPayload = JobEventV1 extends infer Event
   : never
 
 interface JobRecord {
-  request: JobRequestV1
+  request: ExecutionRequestV2
   events: JobEventV1[]
   status: JobStatusV1
   process?: ManagedProcess
@@ -70,11 +70,11 @@ function now(): string {
   return new Date().toISOString()
 }
 
-function createRecord(request: JobRequestV1): JobRecord {
+function createRecord(request: ExecutionRequestV2): JobRecord {
   let notify = () => {}
   const changed = new Promise<void>((resolve) => notify = resolve)
   return {
-    request,
+    request: structuredClone(request),
     events: [],
     status: {
       version: 1,
@@ -128,8 +128,8 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     private processManager: ProcessSpawner,
     private localNodeId = 'local',
     private operationHandlers: readonly (LocalJobOperationHandler | LocalProcessOperationHandler)[] = [],
-    private processCapabilityIds?: readonly string[],
-    private processResultPath?: (request: JobRequestV1) => string | undefined,
+    private admission?: (request: ExecutionRequestV2, signal: AbortSignal) => void | Promise<void>,
+    private processResultPath?: (request: ExecutionRequestV2) => string | undefined,
   ) {}
 
   async startProcess(args: ProcessExecuteArgsV1, options?: { isolated?: boolean; signal?: AbortSignal; supervision?: ProcessSupervision }): Promise<ManagedProcess> {
@@ -147,18 +147,28 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     )
   }
 
+  async assertCanExecute(request: ExecutionRequestV2, signal: AbortSignal): Promise<void> {
+    const validation = validateExecutionRequestV2(request)
+    if (!validation.success) throw Object.assign(new TypeError(validation.errors.join('; ')), { code: 'invalid-request' })
+    signal.throwIfAborted()
+    if (request.nodeId !== this.localNodeId) throw Object.assign(new Error('Request targets a different node'), { code: 'wrong-node' })
+    if (this.admission) await this.admission(request, signal)
+    else if (request.workdirId !== undefined || request.operation !== PROCESS_EXECUTE_OPERATION) throw Object.assign(new Error('Resource execution requires explicit local admission'), { code: 'workdir-unavailable' })
+  }
+
   execute(
-    request: JobRequestV1,
+    request: ExecutionRequestV2,
     signal: AbortSignal,
   ): AsyncIterable<JobEventV1> {
-    const validation = validateJobRequestV1(request)
+    const validation = validateExecutionRequestV2(request)
     if (!validation.success) {
       throw new TypeError(
-        `Invalid JobRequestV1: ${validation.errors.join('; ')}`,
+        `Invalid ExecutionRequestV2: ${validation.errors.join('; ')}`,
       )
     }
 
     let record = this.jobs.get(request.jobId)
+    if (record && JSON.stringify(record.request) !== JSON.stringify(request)) throw new TypeError('jobId is already bound to a different request')
     if (!record) {
       record = createRecord(request)
       this.jobs.set(request.jobId, record)
@@ -222,6 +232,14 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
 
   private async run(record: JobRecord): Promise<void> {
     const request = record.request
+    try { await this.assertCanExecute(request, new AbortController().signal) }
+    catch (error) {
+      this.finish(record, 'rejected', 'rejected', {
+        code: error instanceof Error && 'code' in error ? String(error.code) : 'admission-denied',
+        message: error instanceof Error ? error.message : 'Execution admission denied', retryable: false,
+      })
+      return
+    }
     if (Date.parse(request.deadlineAt) <= Date.now()) {
       this.finish(record, 'expired', 'expired', {
         code: 'deadline-expired',
@@ -318,17 +336,6 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       this.finish(record, 'rejected', 'rejected', {
         code: 'unsupported-operation',
         message: `Unsupported operation: ${request.operation}`,
-        retryable: false,
-      })
-      return
-    }
-    if (
-      this.processCapabilityIds !== undefined &&
-      !this.processCapabilityIds.includes(request.capabilityId)
-    ) {
-      this.finish(record, 'rejected', 'rejected', {
-        code: 'capability-denied',
-        message: 'Process execution capability is not granted',
         retryable: false,
       })
       return

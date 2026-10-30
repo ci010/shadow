@@ -248,7 +248,7 @@ test('every operation requires current project, bot root, admitted human and loc
     { ...own, channel: 'qq' }, { ...own, chatId: '101' },
     { ...own, inputSource: 'session' }, { ...own, inputSource: 'event' }, { ...own, inputSource: undefined },
     { ...own, senderId: 'mallory', admin: true }, { ...own, senderId: '' },
-    { ...own, remoteWorkdir: { nodeId: 'remote', capabilityId: 'opaque', executor: {} } },
+    { ...own, remoteWorkdir: { nodeId: 'remote', workdirId: 'opaque', executor: {} } },
     { ...own, signal: AbortSignal.abort(new Error('cancelled')) },
   ]
   for (const context of invalid) {

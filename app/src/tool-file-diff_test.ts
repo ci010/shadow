@@ -101,3 +101,15 @@ test('Markdown tool diffs highlight frontmatter and incomplete fenced code witho
   assert.ok(flat.some(token => token.text === 'title' && token.light === '#22863A'))
   assert.ok(flat.some(token => token.text === 'const' && token.light === '#D73A49'))
 })
+
+
+test('historical file-change provenance retains its original V1 or resource target without inferring a current device', async () => {
+  for (const target of [undefined, { nodeId: 'old-child', capabilityId: 'old-folder' },
+    { nodeId: 'resource-child', workdirId: 'folder-resource', folderId: 'project-folder' }]) {
+    const row = { ...change, ...(target ? { target } : {}) }
+    const [result] = await loadToolFileChanges('http://fixture/projects/p', 'web:writer', change.toolCallId, signal,
+      async () => Response.json({ changes: [row], total: 1, offset: 0 }))
+    assert.deepEqual(result.target, target)
+    if (!target) assert.equal(Object.hasOwn(result, 'target'), false)
+  }
+})

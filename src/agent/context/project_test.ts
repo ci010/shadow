@@ -8,7 +8,7 @@ import { projectProvider } from './project.ts'
 import { ContextBuilder } from './builder.ts'
 import { workspaceProvider } from './workspace.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
-import { localFolderWorkdirRef, resolveSessionLocations, type WorkdirCapabilityLookup } from '../../sessions/locality.ts'
+import { localFolderWorkdirRef, resolveSessionLocations, type WorkdirLookup } from '../../sessions/locality.ts'
 
 const project = { id: 'project-a', name: 'Current project', createdAt: '2026-01-01T00:00:00.000Z' }
 const context: SessionPromptContext = {
@@ -36,7 +36,7 @@ function discovery(folders: FolderRecord[]) {
     workspace: resolve('.test-data'),
     getProject: () => project,
     registry: { list: () => folders },
-    workdirCapabilityLookup: () => { throw new Error('Prompt summary must not probe folders') },
+    workdirLookup: () => { throw new Error('Prompt summary must not probe folders') },
   })
 }
 const provider = (folders: FolderRecord[]) => projectProvider(discovery(folders))
@@ -86,13 +86,13 @@ test('one environment section owns the effective working directory regardless of
       ...(kind === 'inherited' ? { workspaceRoot: 'web:owner' } : {}),
       ...(kind === 'folder' ? { folderId: registered.id, workdir: localFolderWorkdirRef(registered.id) } : {}),
       ...(['remote', 'unavailable'].includes(kind) ? { workdir: {
-        version: 1 as const, nodeId: 'child', capabilityId: 'remote-work',
+        version: 2 as const, nodeId: 'child', workdirId: 'remote-work',
         displayPathSnapshot: 'C:\\DisplayOnly\\remote-work',
       } } : {}),
     }
-    const lookup: WorkdirCapabilityLookup = () => ({
+    const lookup: WorkdirLookup = () => ({
       node: kind === 'unavailable' ? 'offline' : 'online',
-      capability: { kind: 'workdir', online: true, path: registered.path },
+      workdir: { online: true, path: registered.path },
     })
     const builder = new ContextBuilder(home)
     builder.register(workspaceProvider(home, new VirtualFs(), lookup, discovery([registered])))

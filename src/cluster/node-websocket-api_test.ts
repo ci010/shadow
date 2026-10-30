@@ -1,7 +1,7 @@
 import { deepEqual as assertEquals, throws as assertThrows } from 'node:assert/strict'
 import { test } from 'node:test'
 import { Hono } from 'hono'
-import type { JobRequestV1 } from '../execution/contracts.ts'
+import type { JobRequestV2 } from '../execution/contracts.ts'
 import type { NodeMessageDuplex } from './node-transport.ts'
 import {
   createNodeWebSocketApi,
@@ -30,11 +30,12 @@ class FakeWebSocket extends EventTarget {
 }
 
 class FakeSession implements MainNodeSession {
+  supportsExecutionProtocol() { return true }
   readonly running = Promise.withResolvers<void>()
   readonly state = 'authenticated'
   runCount = 0
   closes: Array<{ code: string; reason: string; clean: boolean }> = []
-  jobs: JobRequestV1[] = []
+  jobs: JobRequestV2[] = []
   cancellations: string[] = []
 
   run(): Promise<void> {
@@ -48,7 +49,7 @@ class FakeSession implements MainNodeSession {
     return Promise.resolve()
   }
 
-  dispatchJob(request: JobRequestV1): JobRequestV1 {
+  dispatchJob(request: JobRequestV2): JobRequestV2 {
     this.jobs.push(structuredClone(request))
     return request
   }
@@ -194,14 +195,14 @@ test('node WebSocket owner routes jobs by node and disconnects owned work', asyn
     headers: { Upgrade: 'websocket', Authorization: 'Proof valid' },
   })
   const createdAt = new Date()
-  const request: JobRequestV1 = {
-    version: 1,
+  const request: JobRequestV2 = {
+    version: 2,
     jobId: 'remote-job-1',
     idempotencyKey: 'remote-job-key-1',
     sessionId: 'session-1',
     turnId: 'turn-1',
-    nodeId: 'node-1',
-    capabilityId: 'workdir-1',
+    nodeId: 'node-1', workdirId: 'workdir-1',
+    projectScope: '0123456789abcdef0123456789abcdef',
     operation: 'filesystem.read',
     args: { path: 'README.md' },
     createdAt: createdAt.toISOString(),

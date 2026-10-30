@@ -3,7 +3,7 @@
     <header class="page-header">
       <div class="min-w-0">
         <component :is="embedded ? 'h2' : 'h1'" ref="heading" tabindex="-1">{{ t('Nodes') }}</component>
-        <p class="page-summary">{{ t('Devices and the capabilities they provide.') }}</p>
+        <p class="page-summary">{{ t('Devices, directories, and supported operations.') }}</p>
       </div>
       <div class="context-strip" :aria-label="t('Administration access')">
         <span class="role-mark">{{ context.mode === 'main' ? t('Main') : t('Child') }}</span>
@@ -19,7 +19,7 @@
     <p v-if="error" class="inventory-error" role="alert">{{ error }}</p>
     <p v-else-if="loading && !loaded" class="inventory-status" role="status">{{ t('Loading devices…') }}</p>
     <p v-else-if="loaded" class="inventory-status">
-      {{ context.mode === 'child' && !context.mainWorkspace ? t('Capabilities provided by this Child.') : t('Main and registered Child devices.') }}
+      {{ context.mode === 'child' && !context.mainWorkspace ? t('Directories and supported operations on this Child.') : t('Main and registered Child devices.') }}
       {{ t('Updated') }} {{ updatedAt }}{{ t('. Refreshes automatically while visible.') }}
     </p>
 
@@ -55,25 +55,24 @@
           <div v-if="node.lastSeen"><dt>{{ t('Last seen') }}</dt><dd>{{ formatDateTime(new Date(node.lastSeen)) }}</dd></div>
         </dl>
 
-        <details v-if="node.capabilities.length" class="node-capabilities">
-          <summary>
-            <span>{{ t('Capabilities') }}</span>
-            <span class="capability-overview">{{ capabilitySummary(node.capabilities) }}</span>
-          </summary>
+        <p v-if="node.executionProtocol === 'upgrade-required'" class="inventory-error">{{ t('This device uses an incompatible execution protocol. Update Main and the device, then retry. No local folder was used.') }}</p>
+        <details v-if="node.workdirs.length" class="node-capabilities">
+          <summary><span>{{ t('Directories') }}</span><span class="capability-overview">{{ node.workdirs.length }}</span></summary>
           <ul class="capability-list">
-            <li v-for="capability in node.capabilities" :key="capability.capabilityId" class="capability-row">
+            <li v-for="resource in node.workdirs" :key="resource.workdirId" class="capability-row">
               <div class="capability-top">
-                <div class="min-w-0">
-                  <span class="capability-kind">{{ CAPABILITY_LABELS[capability.kind] }}</span>
-                  <h3>{{ capability.displayName }}</h3>
-                </div>
-                <span class="availability" :class="capabilityAvailability(node, capability)">{{ availabilityLabel(capabilityAvailability(node, capability)) }}</span>
+                <div class="min-w-0"><h3>{{ resource.displayName }}</h3><p class="mono break-value">{{ resource.workdirId }}</p></div>
+                <span class="availability" :class="workdirAvailability(node, resource)">{{ availabilityLabel(workdirAvailability(node, resource)) }}</span>
               </div>
-              <p v-if="capability.displayPath" class="path mono">{{ capability.displayPath }}</p>
+              <p v-if="resource.displayPath" class="path mono">{{ resource.displayPath }}</p>
+              <p class="path"><strong>{{ t('Supported operations') }}</strong> <span class="mono break-value">{{ resource.support.operations.join(' · ') }}</span></p>
+              <p v-if="resource.support.shell" class="path"><strong>{{ t('Available shells') }}</strong> <span class="mono break-value">{{ resource.support.shell.shells.join(' · ') }}</span></p>
             </li>
           </ul>
         </details>
-        <p v-else class="node-capabilities-empty">{{ t('No capabilities advertised.') }}</p>
+        <p v-else class="node-capabilities-empty">{{ t('No directories advertised.') }}</p>
+        <p v-if="node.support.operations.length" class="path"><strong>{{ t('Device operations') }}</strong> <span class="mono break-value">{{ node.support.operations.join(' · ') }}</span></p>
+        <p class="node-capabilities-empty">{{ t('Support is not project permission. Select a registered project folder to use a directory.') }}</p>
         <div v-if="canAdministerDevices(context) && node.role === 'child' && node.nodeId !== context.localNodeId" class="node-removal-actions">
           <button type="button" class="inventory-refresh" :disabled="!!removingNode || !!error" :aria-label="t('Remove {displayName}', { displayName: node.displayName })" @click="confirmRemoval(node)">{{ t('Remove device…') }}</button>
         </div>
@@ -97,7 +96,7 @@
 import { t, formatDateTime } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
-import { CAPABILITY_LABELS, capabilityAvailability, capabilitySummary, fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
+import { workdirAvailability, fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
 import DesktopRoleSettings from './DesktopRoleSettings.vue'
 import DeviceAdministration from './DeviceAdministration.vue'
 import { canAdministerDevices, revokeDevice } from './device-administration.ts'
@@ -147,7 +146,7 @@ async function removeDevice() {
   try {
     await revokeDevice(props.apiBase, node.nodeId, AbortSignal.any([current.signal, AbortSignal.timeout(15_000)]))
     if (removalController !== current) return
-    nodes.value = nodes.value.map(value => value.nodeId === node.nodeId ? { ...value, connection: 'revoked', capabilities: [] } : value)
+    nodes.value = nodes.value.map(value => value.nodeId === node.nodeId ? { ...value, connection: 'revoked', workdirs: [], capabilities: [] } : value)
     removalStatus.value = t('{displayName} removed. History and Child files were kept.', { displayName: node.displayName })
     cancelRemoval()
   } catch (cause) {
@@ -232,7 +231,7 @@ function connectionLabel(connection: NodeInventoryEntry['connection']): string {
   return t('Connected')
 }
 
-function availabilityLabel(availability: ReturnType<typeof capabilityAvailability>): string {
+function availabilityLabel(availability: ReturnType<typeof workdirAvailability>): string {
   if (availability === 'online') return t('Online')
   if (availability === 'revoked') return t('Revoked')
   return t('Unavailable')

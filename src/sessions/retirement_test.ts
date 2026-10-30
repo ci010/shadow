@@ -124,7 +124,7 @@ test('active/waiting/recovery/lineage/system/remote sessions and unknown legacy 
         { recovery: { id: 'pending', reason: 'interrupted' } }, { initiativeId: 'work' },
         { parentSessionId: 'web:other' }, { sessionKind: 'topic' }, { lastUserMessageAt: undefined },
         { sessionId: 'system:fixture' },
-        { workdir: { version: 1, nodeId: 'remote', capabilityId: 'opaque' } },
+        { workdir: { version: 2, nodeId: 'remote', workdirId: 'opaque' } },
       ]) {
         const original = structuredClone(f.state)
         Object.assign(f.state, patch)

@@ -35,7 +35,7 @@ for (const remote of [false, true]) {
         channel: 'web', chatId: 'actor', senderId: 'user', messageId: 'message',
         tools, signal: new AbortController().signal,
         ...(remote ? { remoteWorkdir: {
-          nodeId: 'child', capabilityId: 'folder',
+          nodeId: 'child', workdirId: 'folder',
           executor: {
             execute() { throw new Error('Must not execute against remote files') },
             async getStatus() { throw new Error('Must not inspect remote execution') },
