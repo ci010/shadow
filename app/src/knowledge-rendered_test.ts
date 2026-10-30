@@ -252,6 +252,22 @@ test('knowledge navigation moves to the explorer while details and filters stay 
   assert(view.nodes().some(node => node.props['aria-label'] === 'Knowledge entries'))
 })
 
+test('knowledge catalog 503 stays explicit until manual Refresh recovers', async t => {
+  let requests = 0
+  t.mock.method(globalThis, 'fetch', async () => ++requests === 1
+    ? new Response('', { status: 503 }) : Response.json(catalog))
+  const view = mount(t, 'KnowledgeView.vue', { apiBase: 'http://fixture/projects/a', projectId: 'a' })
+  await settle()
+  assert.match(view.text(), /could not complete.*503/)
+  assert.equal(requests, 1, 'No automatic retry is introduced')
+  assert(!view.nodes().some(node => node.tag === 'template'), 'An unconditional native template hides content in browsers')
+  ;(view.button('Refresh').props.onClick as () => void)()
+  await settle()
+  assert.equal(requests, 2)
+  assert(!view.nodes().some(node => node.props.role === 'alert'))
+  assert.match(view.text(), /Node wiki/)
+})
+
 test('knowledge entry tabs restore their own reading positions', async t => {
   t.mock.method(globalThis, 'fetch', async (input: URL) => {
     const id = new URL(String(input)).searchParams.get('id')

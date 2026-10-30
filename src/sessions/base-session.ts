@@ -1,3 +1,4 @@
+import { resolveAutomationSession } from '../cron/contracts.ts'
 import { prepareWorkingContext } from '../agent/context/working-context.ts'
 import { withRateLimitWaiting, type RateLimitWait } from '../providers/retry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
@@ -339,7 +340,8 @@ export abstract class BaseSession {
             turnId,
             iteration: i,
             provider: this.provider.name,
-          }, durableMessages, toolDefs, { model, maxTokens, temperature, thinking, reasoningEffort })
+          }, inferenceMessages, toolDefs, { model, maxTokens, temperature, thinking, reasoningEffort },
+          !this.state.channelBoundary && resolveAutomationSession(this.state)?.config?.source === 'learning')
           if (captureId) chatSpan.setAttribute('prompt.capture.request_id', captureId)
           budget.take()
           this.providerFailure = undefined

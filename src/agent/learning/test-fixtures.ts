@@ -20,9 +20,11 @@ export function fakeSessions(workspace: string, states: FakeState[]) {
         sessionId: s.sessionId,
         segmentIndex: s.segmentIndex,
       })),
-    getHistory: (sessionId: string) => {
+    getHistory: (sessionId: string, query?: { offset?: number; pageSize?: number }) => {
       const s = states.find((x) => x.sessionId === sessionId)
-      return Promise.resolve({ messages: [], total: s?.total ?? 0 })
+      const all = Array.from({ length: s?.total ?? 0 }, () => ({ role: 'user' as const, content: 'hello' }))
+      const offset = query?.offset ?? 0
+      return Promise.resolve({ messages: all.slice(offset, offset + (query?.pageSize ?? all.length)), total: all.length })
     },
     getSessionState: (id: string) => records.get(id),
     isManagedConversation: () => false,
