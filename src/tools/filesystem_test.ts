@@ -187,7 +187,7 @@ test('remote append previews and disk writes use only the capability workdir', a
   await mkdir(child)
   await writeFile(join(root, 'notes.txt'), 'main sentinel')
   await writeFile(join(child, 'notes.txt'), 'remote seam')
-  const filesystem = new CapabilityFilesystem([{ capabilityId: 'child-root', rootPath: child }])
+  const filesystem = new CapabilityFilesystem([{ workdirId: 'child-root', rootPath: child }])
   const executor: Executor = {
     async *execute(request, signal) {
       const text = await filesystem.execute(request, signal ?? AbortSignal.timeout(5000))
@@ -200,14 +200,14 @@ test('remote append previews and disk writes use only the capability workdir', a
     async cancel() { throw new Error('Not used') },
   }
   const result = await tool.execute({ path: 'notes.txt', content: '+next', flag: 'a' }, {
-    ...context, remoteWorkdir: { executor, nodeId: 'child', capabilityId: 'child-root' },
+    ...context, remoteWorkdir: { executor, nodeId: 'child', workdirId: 'child-root' },
   })
   assert.doesNotMatch(result, /remote seam/)
   assert.match(result, /^OK append \+1 -1/)
   assert.equal(await readFile(join(child, 'notes.txt'), 'utf8'), 'remote seam+next')
   assert.equal(await readFile(join(root, 'notes.txt'), 'utf8'), 'main sentinel')
   const overwritten = await tool.execute({ path: 'notes.txt', content: 'different\ntext\n' }, {
-    ...context, remoteWorkdir: { executor, nodeId: 'child', capabilityId: 'child-root' },
+    ...context, remoteWorkdir: { executor, nodeId: 'child', workdirId: 'child-root' },
   })
   assert.match(overwritten, /^OK write \+2 -1/)
   assert.equal(await readFile(join(child, 'notes.txt'), 'utf8'), 'different\ntext\n')

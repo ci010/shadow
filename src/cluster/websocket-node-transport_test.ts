@@ -78,7 +78,7 @@ const hello: VersionHelloV1 = {
   protocolMajor: 1,
   protocolMinor: 2,
   implementationVersion: 'main-0.1.0',
-  features: ['jobs-v1', 'capabilities-v1'],
+  features: ['workdir-execution-v2'],
 }
 
 function approvedRegistry(): InMemoryPairingNodeRegistry {

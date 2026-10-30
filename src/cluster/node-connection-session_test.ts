@@ -1,7 +1,7 @@
 import { deepEqual as assertEquals, rejects as assertRejects, throws as assertThrows } from 'node:assert/strict'
 import { test } from 'node:test'
-import type { JobEventV1, JobRequestV1 } from '../execution/contracts.ts'
-import type { CapabilityDescriptorV1, VersionHelloV1 } from './contracts.ts'
+import type { JobEventV1, ExecutionRequestV2 } from '../execution/contracts.ts'
+import type { ExecutionSupport, VersionHelloV1 } from './contracts.ts'
 import { createInMemoryNodeDuplexPair } from './in-memory-node-duplex.ts'
 import {
   NodeConnectionSession,
@@ -21,26 +21,18 @@ const hello: VersionHelloV1 = {
   protocolMajor: 1,
   protocolMinor: 2,
   implementationVersion: 'main-0.1.0',
-  features: ['jobs-v1', 'capabilities-v1'],
+  features: ['workdir-execution-v2'],
 }
-const capability: CapabilityDescriptorV1 = {
-  version: 1,
-  capabilityId: 'shell-1',
-  nodeId: 'node-1',
-  kind: 'shell',
-  displayName: 'Folder shell',
-  permissions: ['process.execute'],
-  online: true,
-}
-const request: JobRequestV1 = {
-  version: 1,
+const capability: ExecutionSupport = { operations: ['process.execute'] }
+const request: ExecutionRequestV2 = {
+  version: 2,
   jobId: 'job-1',
   idempotencyKey: 'idempotency-1',
   sessionId: 'session-1',
   turnId: 'turn-1',
   nodeId: 'node-1',
-  capabilityId: 'shell-1',
-  operation: 'shell.execute',
+  projectScope: '0123456789abcdef0123456789abcdef',
+  operation: 'process.execute',
   args: { command: 'echo hello' },
   createdAt: baseTime.toISOString(),
   deadlineAt: new Date(baseTime.getTime() + 60_000).toISOString(),
@@ -258,34 +250,30 @@ test('node session gates capability advertise and withdrawal on authentication',
       unauthenticated.handleIncoming({
         version: 1,
         sequence: 1,
-        type: 'capability-advertise',
-        capability,
+        type: 'node-support', nodeId: auth.nodeId, support: capability,
       }),
   )
-  assertEquals(registry.listCapabilities(auth.nodeId), [])
+  assertEquals(registry.nodeSupport(auth.nodeId), { operations: [] })
 
   const authenticated = session(registry)
   await authenticate(authenticated)
   await authenticated.handleIncoming({
     version: 1,
     sequence: 2,
-    type: 'capability-advertise',
-    capability,
+    type: 'node-support', nodeId: auth.nodeId, support: capability,
   })
-  assertEquals(registry.listCapabilities(auth.nodeId), [capability])
+  assertEquals(registry.nodeSupport(auth.nodeId), capability)
   await authenticated.handleIncoming({
     version: 1,
     sequence: 3,
-    type: 'capability-withdraw',
-    nodeId: auth.nodeId,
-    capabilityId: capability.capabilityId,
+    type: 'node-support', nodeId: auth.nodeId, support: { operations: [] },
   })
-  assertEquals(registry.listCapabilities(auth.nodeId), [])
+  assertEquals(registry.nodeSupport(auth.nodeId), { operations: [] })
 })
 
 test('node session validates jobs and enforces frame, event, and receipt correlation', async () => {
   const registry = approvedRegistry()
-  registry.advertiseCapability(auth, capability)
+  registry.advertiseNodeSupport(auth, auth.nodeId, capability)
   const received: JobEventV1[] = []
   const transport = new RecordingDuplex()
   const connection = new NodeConnectionSession(registry, transport, hello, {
@@ -295,7 +283,7 @@ test('node session validates jobs and enforces frame, event, and receipt correla
       received.push(event)
     },
   })
-  await authenticate(connection)
+  await authenticateLive(connection)
   assertThrows(
     () => connection.dispatchJob({ ...request, deadlineAt: 'invalid' }),
     NodeSessionError,
@@ -311,7 +299,7 @@ test('node session validates jobs and enforces frame, event, and receipt correla
   }
   await connection.handleIncoming({
     version: 1,
-    sequence: 2,
+    sequence: 3,
     type: 'job-event',
     event: accepted,
   })
@@ -321,14 +309,14 @@ test('node session validates jobs and enforces frame, event, and receipt correla
     () =>
       connection.handleIncoming({
         version: 1,
-        sequence: 2,
+        sequence: 3,
         type: 'job-event',
         event: { ...accepted, sequence: 1 },
       }),
   )
 
   const correlation = session(registry)
-  await authenticate(correlation)
+  await authenticateLive(correlation)
   correlation.dispatchJob({
     ...request,
     jobId: 'job-2',
@@ -339,14 +327,14 @@ test('node session validates jobs and enforces frame, event, and receipt correla
     () =>
       correlation.handleIncoming({
         version: 1,
-        sequence: 2,
+        sequence: 3,
         type: 'job-event',
         event: { ...accepted, jobId: 'unknown-job' },
       }),
   )
 
   const eventOrder = session(registry)
-  await authenticate(eventOrder)
+  await authenticateLive(eventOrder)
   eventOrder.dispatchJob({
     ...request,
     jobId: 'job-3',
@@ -357,7 +345,7 @@ test('node session validates jobs and enforces frame, event, and receipt correla
     () =>
       eventOrder.handleIncoming({
         version: 1,
-        sequence: 2,
+        sequence: 3,
         type: 'job-event',
         event: { ...accepted, jobId: 'job-3', sequence: 1 },
       }),
@@ -366,10 +354,10 @@ test('node session validates jobs and enforces frame, event, and receipt correla
 
 test('node session dispatches cancellation only for an active tracked job', async () => {
   const registry = approvedRegistry()
-  registry.advertiseCapability(auth, capability)
+  registry.advertiseNodeSupport(auth, auth.nodeId, capability)
   const transport = new RecordingDuplex()
   const connection = session(registry, transport)
-  await authenticate(connection)
+  await authenticateLive(connection)
   connection.dispatchJob(request)
   connection.dispatchCancellation(request.jobId)
   await Promise.resolve()
@@ -389,10 +377,10 @@ test('node session dispatches cancellation only for an active tracked job', asyn
 
 test('node session applies an explicit bound to queued outbound work', async () => {
   const registry = approvedRegistry()
-  registry.advertiseCapability(auth, capability)
+  registry.advertiseNodeSupport(auth, auth.nodeId, capability)
   const transport = new BlockingDuplex()
   const connection = session(registry, transport, { maxOutboundQueue: 1 })
-  await authenticate(connection)
+  await authenticateLive(connection)
   await Promise.resolve()
   await Promise.resolve()
   assertEquals(connection.outboundInFlight, true)
@@ -422,7 +410,7 @@ test('node session heartbeat timeout closes a stale connection', async () => {
     heartbeatTimeoutMs: 1_000,
     now: () => now,
   })
-  await authenticate(connection)
+  await authenticateLive(connection)
   now = new Date(baseTime.getTime() + 1_001)
   assertEquals(await connection.checkLiveness(), false)
   assertEquals(await connection.closed, {
@@ -434,10 +422,10 @@ test('node session heartbeat timeout closes a stale connection', async () => {
 
 test('node session revocation removes capabilities and cleanly closes the duplex', async () => {
   const registry = approvedRegistry()
-  registry.advertiseCapability(auth, capability)
+  registry.advertiseNodeSupport(auth, auth.nodeId, capability)
   const transport = new RecordingDuplex()
   const connection = session(registry, transport)
-  await authenticate(connection)
+  await authenticateLive(connection)
   await connection.revoke(
     'operator revoked device',
     new Date(baseTime.getTime() + 3_000),
@@ -448,7 +436,7 @@ test('node session revocation removes capabilities and cleanly closes the duplex
     reason: 'operator revoked device',
     clean: true,
   })
-  assertEquals(registry.listCapabilities(auth.nodeId), [])
+  assertEquals(registry.nodeSupport(auth.nodeId), { operations: [] })
   assertThrows(
     () => registry.authenticate(auth),
     (error) => error instanceof RegistryError && error.code === 'node-revoked',
@@ -457,10 +445,10 @@ test('node session revocation removes capabilities and cleanly closes the duplex
 
 test('retiring node privileges preserves fresh revocation checks for job dispatch and results', async () => {
   const registry = approvedRegistry()
-  registry.advertiseCapability(auth, capability)
+  registry.advertiseNodeSupport(auth, auth.nodeId, capability)
   const connection = session(registry)
   try {
-    await authenticate(connection)
+    await authenticateLive(connection)
     connection.dispatchJob(request)
     registry.revoke(auth, 'revoked outside this connection', baseTime)
     assertThrows(
@@ -468,7 +456,7 @@ test('retiring node privileges preserves fresh revocation checks for job dispatc
       (error) => error instanceof RegistryError && error.code === 'node-revoked',
     )
     await expectSessionError('authorization-failed', () => connection.handleIncoming({
-      version: 1, sequence: 2, type: 'job-event',
+      version: 1, sequence: 3, type: 'job-event',
       event: { version: 1, jobId: request.jobId, sequence: 0, timestamp: baseTime.toISOString(), type: 'accepted' },
     }))
   } finally {
@@ -482,7 +470,7 @@ test('inventory connection notifications expose authenticated and closed state o
     maxOutboundQueue: 128, heartbeatTimeoutMs: 90_000, now: () => baseTime,
     onConnectionChange: () => { states.push(connection.state); throw new Error('test observer failure') },
   })
-  await authenticate(connection)
+  await authenticateLive(connection)
   assertEquals(states, ['authenticated'])
   await connection.close({ code: 'peer-going-away', reason: 'test', clean: true })
   await connection.close({ code: 'peer-going-away', reason: 'test', clean: true })
@@ -493,4 +481,39 @@ test('inventory connection notifications expose authenticated and closed state o
   })
   await unauthenticated.close({ code: 'peer-going-away', reason: 'test', clean: true })
   assertEquals(states, ['authenticated', 'closed'])
+})
+
+async function authenticateLive(connection: NodeConnectionSession): Promise<void> {
+  await authenticate(connection)
+  await connection.handleIncoming({ version: 1, sequence: 2, type: 'node-support', nodeId: auth.nodeId, support: capability })
+}
+
+
+test('Main refuses legacy execution peers and missing, offline or withdrawn workdirs before transport, including reconcile', async () => {
+  const registry = approvedRegistry()
+  const transport = new RecordingDuplex()
+  const connection = session(registry, transport)
+  await authenticate(connection)
+  const workdir = { version: 2 as const, nodeId: auth.nodeId, workdirId: 'directory', displayName: 'Directory', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } }
+  const descriptor = { ...workdir, support: { operations: ['workdir.process.execute-once', 'workdir.process.reconcile'], shell: { shells: ['sh'], maxInputBytes: 32768, maxDeadlineMs: 120000 } } }
+  const job = { ...request, nodeId: auth.nodeId, workdirId: 'directory', operation: 'workdir.process.reconcile', args: { script: 'echo no' } }
+  assertThrows(() => connection.dispatchJob(job), /workdir.*missing|workdir is missing/)
+  await connection.handleIncoming({ version: 1, sequence: 2, type: 'workdir-advertise', workdir: { ...descriptor, online: false } })
+  assertThrows(() => connection.dispatchJob(job), /workdir.*missing|workdir is missing/)
+  await connection.handleIncoming({ version: 1, sequence: 3, type: 'workdir-advertise', workdir: descriptor })
+  assertThrows(() => connection.dispatchJob({ ...job, args: { script: 'x'.repeat(40000) } }), /shell support limits/)
+  await connection.handleIncoming({ version: 1, sequence: 4, type: 'workdir-advertise', workdir: { ...descriptor, support: { operations: [] } } })
+  assertThrows(() => connection.dispatchJob(job), /No live support/)
+  await connection.handleIncoming({ version: 1, sequence: 5, type: 'workdir-advertise', workdir: descriptor })
+  await connection.handleIncoming({ version: 1, sequence: 6, type: 'workdir-withdraw', nodeId: auth.nodeId, workdirId: 'directory' })
+  assertThrows(() => connection.dispatchJob(job), /workdir.*missing|workdir is missing/)
+  assertEquals(transport.sent.some((frame: any) => frame.type === 'job-request'), false)
+  await connection.close({ code: 'test-complete', reason: 'test', clean: true })
+
+  const old = session(registry)
+  await old.handleIncoming({ version: 1, sequence: 0, type: 'hello', hello: { ...hello, features: ['jobs-v1'] } })
+  await old.handleIncoming({ version: 1, sequence: 1, type: 'authenticate', authentication: auth })
+  assertEquals(old.supportsExecutionProtocol(), false)
+  assertThrows(() => old.dispatchJob(job), /Upgrade both Main and Child/)
+  await old.close({ code: 'test-complete', reason: 'test', clean: true })
 })

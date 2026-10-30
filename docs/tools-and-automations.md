@@ -220,54 +220,55 @@ another Bot or expand its own authority. The exact human confirmation flow and
 audience implications are documented in [Messaging channels](channels.md).
 Use `authoring_change` for QQ/Feishu managed deployment, not Discord.
 
-## Per-call execution device selection
+## Per-call Folder selection
 
-`read`, `write`, `exec` and `search` accept optional `nodeId` **and**
-`capabilityId` together. Omitting both preserves the committed session locality.
-The selection applies only to that call: it does not switch the selected Folder,
-change session cwd, or affect concurrent calls. `nodeId` identifies a device;
-`exec.shell: "node"` still means the inline TypeScript runtime, not a device.
-
-Use the exact workdir reference from a registered remote Folder's
-`read("v:project/folders/<folder-uuid>")` details. For example:
+`read`, `write`, `exec` and `search` accept an optional `folder`: the unique short
+name, name-ID selector or full UUID of a registered Folder in the current
+Project. Read `v:project/folders` for selectors. The Folder fixes its device and
+directory; tools do not accept raw node/workdir addresses. Omission
+preserves the committed session target. Per-call selection does not change
+session cwd, scoped instructions or already-running calls. `exec.shell: "node"`
+still means inline TypeScript, not a device.
 
 ```json
-{"nodeId":"child-device-id","capabilityId":"approved-workdir-id","path":"notes.txt"}
+{"folder":"child-source","path":"notes.txt"}
 ```
 
 Pass this to `read`, or add `content` for `write`. For an OS command:
 
 ```json
-{"nodeId":"child-device-id","capabilityId":"approved-workdir-id","script":"pwd","shell":"sh","cwd":"subdirectory"}
+{"folder":"child-source","script":"pwd","shell":"sh","cwd":"subdirectory"}
 ```
 
-Relative file paths and remote `exec.cwd` are interpreted by the Child within
-that capability, **never** relative to Main or a remote display path. Existing
-Child path/symlink and operation-permission checks still apply. Merely pairing a
-Child does not grant every Project access to all of its folders: the workdir
-must also belong to the current Project (for example through a registered
-remote Folder). The Project-scoped lookup and executor remain authoritative;
-unknown, offline, revoked, unauthorized or incompatible targets fail without a
-Main fallback. An execution context without host target lookup also fails closed.
+The owning device resolves relative paths from the selected workdir,
+**never** from a remote display path on Main. Directory identity, supported
+operations and existing Project/Folder access rules are checked separately.
+Pairing or advertised operation support alone does not authorize directory use.
+No independent Grant or generic Resource entity is introduced.
+Unknown, ambiguous, offline, revoked, unauthorized or incompatible targets fail
+without Main fallback or selection of another device. A missing host resolver
+also fails closed. Both Main and Child must support `workdir-execution-v2`;
+older peers require an upgrade rather than a V1 execution downgrade. See the
+[execution model](execution-model.md) for persistence and recovery compatibility.
 
 Current remote support is deliberately limited:
 
 - UTF-8 text and directory `read`, and the existing text overwrite/edit/append
-  `write`, use the existing capability filesystem operations.
+  `write`, use the existing workdir filesystem operations.
 - OS `exec` uses the existing bounded remote process protocol. Its existing
   lifecycle/time-limit/permission restrictions are unchanged. Inline
   `shell: "node"`, Node-only exec policy, call-mode remote foreground execution,
   and remote background execution remain unsupported.
 - Remote filesystem `search` (glob/grep) remains unsupported and explicitly
   rejects the route; it does not run Main's ripgrep. Use Child OS `exec` within
-  its granted workdir when that process capability is authorized. Local explicit
+  its selected workdir when the Project permits shell execution. Local explicit
   targets retain ordinary filesystem search behavior.
 - Explicit targeting does not route virtual resources, URLs, web search, remote
   images or legacy `search.space`. Omit the selection for control-plane virtual
   resources. Remote image reads and explicit remote encoding overrides reject
   without opening a Main file.
 
-`write` records the selected node/capability with its historical edit, including
+`write` records the selected node/workdir and Folder ID with its historical edit, including
 remote writes from an ordinary local session. `view_edit` continues to read the
 session's persisted patch (not a current file on either device) and displays
 that recorded identity. Old records without identity remain readable; their
@@ -1066,7 +1067,7 @@ evidence, not an automatic observer or background model goal guess. Conversation
 metadata/completion changes invalidate organization source versions. Lightweight
 topics are never materialized as Work just to make organization possible.
 
-Current session metadata is available at `v:session/self.json` via read/write. Writes accept nonempty partial JSON objects or the full read result, with only title (string, max 120), description (string, max 4000), completed (boolean). Exact match edits validate the full resulting JSON; append is unsupported. Identity is runtime-bound, not a JSON target. Tasks must preserve parent-owned title/description unchanged or omit them; reviewable task completion changes require review, not self-acceptance. Calls/automations cannot write. Ordinary new sessions set accurate title and description after understanding the first request, and update only for meaningful goal changes.
+Current session metadata is available at `v:session/self.json` via read/write, including when the session selects a remote workdir: it is a Main control-plane resource, not a file in that directory. Likewise, `search` with `handler: "web"` uses the configured Main search provider regardless of session workdir locality; this does not provide remote-device network execution or allow filesystem fallback. Explicit Folder targeting remains restricted to ordinary filesystem operations and OS shells. Writes accept nonempty partial JSON objects or the full read result, with only title (string, max 120), description (string, max 4000), completed (boolean). Exact match edits validate the full resulting JSON; append is unsupported. Identity is runtime-bound, not a JSON target. Tasks must preserve parent-owned title/description unchanged or omit them; reviewable task completion changes require review, not self-acceptance. Calls/automations cannot write. Ordinary new sessions set accurate title and description after understanding the first request, and update only for meaningful goal changes.
 
 ### Conversation schedule chip
 

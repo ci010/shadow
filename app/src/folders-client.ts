@@ -5,6 +5,7 @@ import { isRecord } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
 import { parseWorkdirIdentity } from '../../src/execution/workdir-identity.ts'
 import { createUuid } from './uuid.ts'
+import { workdirUnavailableMessage } from './workdir-request-error.ts'
 
 export type { CloneOperation, FolderRecord }
 
@@ -28,14 +29,18 @@ export function parseFolder(value: unknown): FolderRecord {
   }
   if (value.kind === 'remote') {
     const workdir = value.workdir
-    if (!isRecord(workdir) || workdir.version !== 1 || typeof workdir.nodeId !== 'string' || !workdir.nodeId
-      || typeof workdir.capabilityId !== 'string' || !workdir.capabilityId
+    if (isRecord(workdir) && workdir.version === 1) {
+      throw new Error(t('This device uses an incompatible execution protocol. Update Main and the device, then retry. No local folder was used.'))
+    }
+    if (!isRecord(workdir) || workdir.version !== 2 || workdir.capabilityId !== undefined || workdir.resourceId !== undefined || Object.keys(workdir).some(key => !['version','nodeId','workdirId','displayName','displayPathSnapshot'].includes(key))
+      || typeof workdir.nodeId !== 'string' || !workdir.nodeId.trim()
+      || typeof workdir.workdirId !== 'string' || !workdir.workdirId.trim()
       || (workdir.displayName !== undefined && typeof workdir.displayName !== 'string')
       || (workdir.displayPathSnapshot !== undefined && typeof workdir.displayPathSnapshot !== 'string')) throw invalidResponse()
     return {
       ...base, kind: 'remote', identity: parseWorkdirIdentity(value.identity),
       workdir: {
-        version: 1, nodeId: workdir.nodeId, capabilityId: workdir.capabilityId,
+        version: 2, nodeId: workdir.nodeId, workdirId: workdir.workdirId,
         ...(typeof workdir.displayName === 'string' ? { displayName: workdir.displayName } : {}),
         ...(typeof workdir.displayPathSnapshot === 'string' ? { displayPathSnapshot: workdir.displayPathSnapshot } : {}),
       },
@@ -85,7 +90,7 @@ export function createFoldersClient(apiBase: string, request: typeof fetch = fet
       let data: unknown
       try { data = await response.json() } catch { data = undefined }
       const message = isRecord(data) && typeof data.error === 'string' ? safeFolderMessage(data.message) : undefined
-      throw new Error(message ?? (response.status === 401 || response.status === 403
+      throw new Error(workdirUnavailableMessage(data) ?? message ?? (response.status === 401 || response.status === 403
         ? t('Main did not authorize this request. Reconnect and retry.')
         : response.status === 400 || response.status === 409
           ? t('Check the folder path and repository details. The destination must not already exist.')

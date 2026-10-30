@@ -24,7 +24,7 @@ test('virtual glob and grep scope subdirectories, exact files, patterns and pagi
   ])
   vfs.mount('v:config', 'Read-only config', () => '')
   const search = new SearchTool('.', undefined, vfs)
-  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   assert.equal(await search.execute({ handler: 'glob', path: 'v:memory', query: '**/*.md' }, context), 'v:memory/nested/a.md\nv:memory/root.md')
   assert.equal(await search.execute({ handler: 'glob', path: 'v:memory/nested', query: '**/*.{md,txt}' }, context), 'v:memory/nested/a.md\nv:memory/nested/deeper/b.txt')
   assert.equal(await search.execute({ handler: 'glob', query: 'v:memory/nested/*.md' }, context), 'v:memory/nested/a.md')
@@ -51,7 +51,7 @@ test('virtual memory search reads the Project Home, not the session or registere
     const handlers = createMemoryHandler(home)
     const vfs = new VirtualFs()
     vfs.mount('v:memory', 'Memory', handlers.read, handlers.list)
-    const context = { tools: new SessionTools(new Tools(home), home), cwd: resolve(home, 'workdir'), signal: new AbortController().signal } as ExecutionContext
+    const context = { tools: new SessionTools(new Tools(home), home), cwd: resolve(home, 'workdir'), signal: new AbortController().signal } as unknown as ExecutionContext
     const search = new SearchTool(home, undefined, vfs)
     assert.match(await search.execute({ handler: 'grep', path: 'v:memory', query: 'useful' }, context), /v:memory\/nested\/lesson.md/)
     assert.equal(await search.execute({ handler: 'grep', path: 'v:memory', query: 'wrong' }, context), 'No matches found')
@@ -73,7 +73,7 @@ test('virtual session search includes earlier history while glob avoids loading 
   })
   const vfs = new VirtualFs()
   vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
-  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   const search = new SearchTool('.', undefined, vfs)
   assert.equal(await search.execute({ handler: 'glob', path: 'v:sessions', query: '*' }, context), 'v:sessions/web:one')
   assert.equal(historyReads, 0)
@@ -110,7 +110,7 @@ for (const version of [1, 2] as const) {
     })
     const vfs = new VirtualFs()
     vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
-    const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+    const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
     const read = new ReadTool('.', vfs)
     const search = new SearchTool('.', undefined, vfs)
     const path = `v:sessions/${physicalId}`
@@ -144,7 +144,7 @@ test('physical session line views preserve missing-history, storage-error and ab
   const vfs = new VirtualFs()
   vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
   const controller = new AbortController()
-  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: controller.signal } as ExecutionContext
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: controller.signal } as unknown as ExecutionContext
   const read = new ReadTool('.', vfs)
   const args = { path: 'v:sessions/web_missing-0', limit: 35 }
   await assert.rejects(read.execute(args, context), /Session search view not found/)
@@ -163,7 +163,7 @@ test('file searches still use real paths and can match literal virtual-path text
   await writeFile(resolve(home, 'memory', 'lesson.md'), 'Read v:tools for metadata.\n')
   const search = new SearchTool(home)
   const tools = new SessionTools(new Tools(home), home)
-  const context = { tools, cwd: home, signal: new AbortController().signal } as ExecutionContext
+  const context = { tools, cwd: home, signal: new AbortController().signal } as unknown as ExecutionContext
   assert.match(await search.execute({ handler: 'glob', path: 'memory', query: '*.md' }, context), /lesson\.md/)
   assert.match(await search.execute({ handler: 'grep', include: '*.md', query: 'v:tools' }, context), /Read v:tools for metadata/)
   assert.match(await search.execute({ handler: 'grep', path: resolve(home, 'memory'), query: 'v:tools' }, context), /Read v:tools for metadata/)
@@ -192,9 +192,9 @@ test('search advertises the handler contract and concise virtual-path boundary',
 
 test('explicit roots cannot bypass remote scope or silently override another root', async () => {
   const search = new SearchTool('.')
-  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   const remote = { ...context, remoteWorkdir: {
-    nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not execute') },
+    nodeId: 'remote', workdirId: 'opaque', get executor(): never { throw new Error('Must not execute') },
   } }
   for (const args of [
     { handler: 'grep', path: 'src', query: 'x' },
@@ -217,7 +217,7 @@ test('virtual search preserves continuation and warnings while physical search k
     const base = new Tools(home, 40)
     base.register(search)
     const tools = new SessionTools(base, home)
-    const context = { tools, cwd: home, signal: new AbortController().signal } as ExecutionContext
+    const context = { tools, cwd: home, signal: new AbortController().signal } as unknown as ExecutionContext
     for (const args of [
       { handler: 'grep', path: 'v:memory', query: 'x' },
       { handler: 'glob', path: 'v:memory', query: '**' },
@@ -248,7 +248,7 @@ test('unified search keeps web dispatch, file/web query validation and source er
   const base = new Tools(home)
   base.register(new SearchTool(home, web))
   const tools = new SessionTools(base, home)
-  const context = { tools, signal: new AbortController().signal } as ExecutionContext
+  const context = { tools, signal: new AbortController().signal } as unknown as ExecutionContext
   const result = await tools.execute('search', { handler: 'web', domain: 'example.com', query: 'docs' }, context)
   assert.deepEqual(calls, [{ query: 'docs site:example.com' }])
   assert.match(requireToolText(result), /\[truncated:/)
@@ -274,7 +274,7 @@ test('file, web and virtual searches are parallel reads', () => {
 
 test('web search reports missing providers and request failures without local setup instructions', async () => {
   const tools = new SessionTools(new Tools('.'), '.')
-  const context = { tools, signal: new AbortController().signal } as ExecutionContext
+  const context = { tools, signal: new AbortController().signal } as unknown as ExecutionContext
   assert.equal(
     await new SearchTool('.').execute({ handler: 'web', query: 'docs' }, context),
     'Error: web search is not configured for this search tool.',
@@ -293,7 +293,7 @@ test('web search reports missing providers and request failures without local se
 test('web search preserves cancellation rather than suggesting provider repairs', async () => {
   const controller = new AbortController()
   const tools = new SessionTools(new Tools('.'), '.')
-  const context = { tools, signal: controller.signal } as ExecutionContext
+  const context = { tools, signal: controller.signal } as unknown as ExecutionContext
   const web: Tool = {
     name: 'web', description: '', parameters: { type: 'object', properties: {} },
     execute: async () => {
@@ -319,7 +319,7 @@ test('physical searches exclude OS artifacts even with explicit include globs', 
     }
     await writeFile(resolve(home, 'nested', 'normal.txt'), 'normal needle')
     await writeFile(resolve(home, 'nested', 'null.txt'), 'normal needle')
-    const context = { tools: new SessionTools(new Tools(home), home), cwd: home, signal: new AbortController().signal } as ExecutionContext
+    const context = { tools: new SessionTools(new Tools(home), home), cwd: home, signal: new AbortController().signal } as unknown as ExecutionContext
     const search = new SearchTool(home)
     const matches = await search.execute({ handler: 'grep', query: 'needle', include: '*' }, context)
     assert.match(matches, /normal\.txt/)
@@ -339,7 +339,7 @@ test('web search ignores file-only options with a warning and still dispatches t
     execute: async args => { calls.push(args); return 'search results' },
   }
   const search = new SearchTool('.', web)
-  const context = { signal: new AbortController().signal } as ExecutionContext
+  const context = { signal: new AbortController().signal } as unknown as ExecutionContext
   for (const options of [{ offset: 10 }, { limit: 5 }, { path: 'src', include: '*.ts', limit: 5, offset: 10 }]) {
     const args = { handler: 'web', domain: 'example.com', query: 'docs', ...options }
     const result = await search.execute(args, context)
@@ -359,7 +359,7 @@ test('web search ignores file-only options with a warning and still dispatches t
 
 test('handler rejects overloaded selectors and exposes only unambiguous scope fields', async () => {
   const search = new SearchTool('.')
-  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   assert.equal('space' in search.parameters.properties, false)
   assert.deepEqual(search.parameters.properties.handler.enum, ['grep', 'glob', 'web'])
   assert.ok(search.parameters.properties.domain)
@@ -378,7 +378,7 @@ test('web domain is independent of handler and path, validates before invoking t
     execute: async args => { queries.push(args.query); return 'results' },
   }
   const search = new SearchTool('.', web)
-  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   for (const domain of ['', 'https://example.com', 'example.com/path', 'site:example.com', 'example.com other.com', '-example.com', 'example..com', 123]) {
     assert.match(await search.execute({ handler: 'web', domain, query: 'docs' }, context), /domain must be a DNS domain/)
   }
@@ -393,7 +393,7 @@ test('legacy space remains runtime-only for stored calls, with conflicting new s
   const vfs = new VirtualFs()
   vfs.mount('v:tools', 'Tools', () => 'needle', () => [{ name: 'contract', content: 'needle' }])
   const search = new SearchTool('.', undefined, vfs)
-  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   for (const handler of ['grep', 'glob']) {
     const query = handler === 'grep' ? 'needle' : '**'
     assert.equal(await search.execute({ space: `${handler}:v:tools`, query }, context), await search.execute({ handler, path: 'v:tools', query }, context))
@@ -406,10 +406,10 @@ test('remote workdir virtual sessions stay on the control plane for handler/path
   const vfs = new VirtualFs()
   vfs.mount('v:sessions', 'Sessions', () => 'needle', () => [{ name: 'web:one', content: 'needle' }])
   const search = new SearchTool('.', undefined, vfs)
-  const local = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const local = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   const context = {
     ...local,
-    remoteWorkdir: { nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not forward virtual search to remote filesystem') } },
+    remoteWorkdir: { nodeId: 'remote', workdirId: 'opaque', get executor(): never { throw new Error('Must not forward virtual search to remote filesystem') } },
   }
   assert.equal(await search.execute({ handler: 'glob', path: 'v:sessions', query: '*' }, context), 'v:sessions/web:one')
   assert.match(await search.execute({ handler: 'grep', path: 'v:sessions', query: 'needle' }, context), /v:sessions\/web:one.*needle/)
@@ -436,7 +436,7 @@ test('session overview/full paths share read and grep coordinates for logical an
   })
   const vfs = new VirtualFs()
   vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
-  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   const read = new ReadTool('.', vfs)
   const search = new SearchTool('.', undefined, vfs)
   for (const id of [logical, physical]) {
@@ -484,7 +484,7 @@ test('overview drill-down targets isolate encoded tool-call IDs and survive logi
   })
   const vfs = new VirtualFs()
   vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
-  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as unknown as ExecutionContext
   const read = new ReadTool('.', vfs)
   const search = new SearchTool('.', undefined, vfs)
   const overview = requireToolText(await read.execute({ path: `v:sessions/${logical}/overview`, offset: 1, limit: 100 }, context))
@@ -509,4 +509,25 @@ test('overview drill-down targets isolate encoded tool-call IDs and survive logi
   assert.equal(requireToolText(await read.execute({ path: shortTarget, offset: line, limit: 1 }, context)), 'second result line')
   await assert.rejects(read.execute({ path: `v:sessions/${physical}/calls/missing` }, context), /Unknown tool call/)
   await assert.rejects(read.execute({ path: `v:sessions/${logical}/calls/other`, offset: 1, limit: 1 }, context), /physical session ID/)
+})
+
+
+test('remote workdir web search uses the configured provider without remote filesystem access', async () => {
+  const context = {
+    tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal,
+    remoteWorkdir: { nodeId: 'remote', workdirId: 'opaque',
+      get executor(): never { throw new Error('Web search must not access the remote executor') },
+    },
+  } as unknown as ExecutionContext
+  const queries: unknown[] = []
+  const provider: Tool = {
+    name: 'web', description: '', parameters: { type: 'object', properties: {} },
+    execute: async args => { queries.push(args); return 'web results' },
+  }
+  const search = new SearchTool('.', provider)
+  assert.equal(await search.execute({ handler: 'web', query: 'docs', domain: 'example.com' }, context), 'web results')
+  assert.equal(await search.execute({ space: 'web', query: 'legacy' }, context), 'web results')
+  assert.deepEqual(queries, [{ query: 'docs site:example.com' }, { query: 'legacy' }])
+  assert.match(await new SearchTool('.').execute({ handler: 'web', query: 'docs' }, context), /web search is not configured/)
+  await assert.rejects(search.execute({ handler: 'web', query: 'docs', folder: 'remote' }, context), /Explicit Folder selection/)
 })

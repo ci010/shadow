@@ -1,7 +1,8 @@
-import type { JobEventV1, JobRequestV1 } from '../execution/contracts.ts'
+import { assertExecutionSupported, assertExecutionProtocol, EXECUTION_PROTOCOL_FEATURE } from '../execution/workdir-contracts.ts'
+import type { JobEventV1, JobRequestV2 } from '../execution/contracts.ts'
 import {
   validateJobEventV1,
-  validateJobRequestV1,
+  validateJobRequestV2,
 } from '../execution/contracts.ts'
 import type { VersionHelloV1 } from './contracts.ts'
 import type {
@@ -25,6 +26,7 @@ export type NodeConnectionState =
   | 'closed'
 
 export type NodeSessionErrorCode =
+  | 'execution-upgrade-required'
   | 'invalid-frame'
   | 'unexpected-message'
   | 'sequence-mismatch'
@@ -50,21 +52,21 @@ export interface NodeConnectionSessionOptions {
   now?: () => Date
   onJobEvent?: (
     event: JobEventV1,
-    request: JobRequestV1,
+    request: JobRequestV2,
   ) => void | Promise<void>
   onConnectionChange?: () => void
   onRegistryMutation?: (now: Date) => void | Promise<void>
 }
 
 interface TrackedJob {
-  request: JobRequestV1
+  request: JobRequestV2
   lastSequence: number
   terminal: boolean
 }
 
 type OutboundPayloadV1 =
   | { type: 'authenticated'; negotiated: NegotiatedVersionV1 }
-  | { type: 'job-request'; request: JobRequestV1 }
+  | { type: 'job-request'; request: JobRequestV2 }
   | { type: 'job-cancel'; jobId: string }
   | { type: 'heartbeat'; sentAt: string }
 
@@ -82,7 +84,8 @@ export class NodeConnectionSession {
   readonly #localHello: VersionHelloV1
   readonly #options: NodeConnectionSessionOptions
   readonly #jobs = new Map<string, TrackedJob>()
-  readonly #advertisedCapabilities = new Set<string>()
+  #advertisedNodeSupport = false
+  readonly #advertisedWorkdirs = new Set<string>()
   readonly #outbound: NodeSessionOutboundFrameV1[] = []
   readonly #closedResolver = Promise.withResolvers<DuplexCloseInfo>()
   #writerWake: (() => void) | undefined
@@ -128,9 +131,14 @@ export class NodeConnectionSession {
     return this.#state
   }
 
-  hasAdvertisedCapability(capabilityId: string): boolean {
-    return this.#state === 'authenticated' &&
-      this.#advertisedCapabilities.has(capabilityId)
+  hasAdvertisedNodeSupport(): boolean { return this.#state === 'authenticated' && this.#advertisedNodeSupport }
+
+  hasAdvertisedWorkdir(workdirId: string): boolean {
+    return this.#state === 'authenticated' && this.#advertisedWorkdirs.has(workdirId)
+  }
+
+  supportsExecutionProtocol(): boolean {
+    return this.#negotiated?.features.includes(EXECUTION_PROTOCOL_FEATURE) === true
   }
 
   get authentication(): DeviceAuthenticationV1 | undefined {
@@ -209,10 +217,10 @@ export class NodeConnectionSession {
     this.#lastSeenAt = this.#now()
   }
 
-  dispatchJob(value: unknown): JobRequestV1 {
+  dispatchJob(value: unknown): JobRequestV2 {
     const auth = this.#requireAuthenticated()
     this.#registry.authenticate(auth)
-    const validation = validateJobRequestV1(value)
+    const validation = validateJobRequestV2(value)
     if (!validation.success) {
       throw new NodeSessionError('invalid-frame', validation.errors.join('; '))
     }
@@ -223,16 +231,11 @@ export class NodeConnectionSession {
         'job nodeId does not match the connection',
       )
     }
-    if (
-      !this.#registry.listCapabilities(auth.nodeId).some((capability) =>
-        capability.capabilityId === request.capabilityId && capability.online
-      )
-    ) {
-      throw new NodeSessionError(
-        'job-correlation-failed',
-        'job capability is not advertised and online',
-      )
-    }
+    assertExecutionProtocol(this.#negotiated?.features)
+    assertExecutionSupported(request,
+      this.#registry.listWorkdirs(auth.nodeId).filter(r => this.#advertisedWorkdirs.has(r.workdirId)),
+      this.#advertisedNodeSupport ? this.#registry.nodeSupport(auth.nodeId) : { operations: [] },
+    )
     if (this.#jobs.has(request.jobId)) {
       throw new NodeSessionError(
         'job-correlation-failed',
@@ -365,17 +368,20 @@ export class NodeConnectionSession {
   async #handleAuthenticated(frame: NodeSessionInboundFrameV1): Promise<void> {
     const auth = this.#requireAuthenticated()
     try {
-      if (frame.type === 'capability-advertise') {
-        this.#registry.advertiseCapability(auth, frame.capability)
-        this.#advertisedCapabilities.add(frame.capability.capabilityId)
+      if (frame.type === 'workdir-advertise') {
+        assertExecutionProtocol(this.#negotiated?.features)
+        this.#registry.advertiseWorkdir(auth, frame.workdir)
+        this.#advertisedWorkdirs.add(frame.workdir.workdirId)
         await this.#options.onRegistryMutation?.(this.#now())
-      } else if (frame.type === 'capability-withdraw') {
-        this.#registry.withdrawCapability(
-          auth,
-          frame.nodeId,
-          frame.capabilityId,
-        )
-        this.#advertisedCapabilities.delete(frame.capabilityId)
+      } else if (frame.type === 'workdir-withdraw') {
+        assertExecutionProtocol(this.#negotiated?.features)
+        this.#registry.withdrawWorkdir(auth, frame.nodeId, frame.workdirId)
+        this.#advertisedWorkdirs.delete(frame.workdirId)
+        await this.#options.onRegistryMutation?.(this.#now())
+      } else if (frame.type === 'node-support') {
+        assertExecutionProtocol(this.#negotiated?.features)
+        this.#registry.advertiseNodeSupport(auth, frame.nodeId, frame.support)
+        this.#advertisedNodeSupport = true
         await this.#options.onRegistryMutation?.(this.#now())
       } else if (frame.type === 'job-event') {
         this.#registry.authenticate(auth)

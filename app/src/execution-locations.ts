@@ -1,6 +1,6 @@
 import { t } from './i18n.ts'
 import type { FolderRecord, FoldersClient } from './folders-client.ts'
-import { capabilityAvailability, type NodeInventoryEntry } from './node-inventory.ts'
+import { workdirAvailability, workdirSupportsOperations, type NodeInventoryEntry } from './node-inventory.ts'
 import { createFolderChatDraft, createRemoteChatDraft, type RemoteNodeTarget } from './remote-conversations.ts'
 
 export type ExecutionLocation =
@@ -18,12 +18,14 @@ export function projectFolderTargets(projectId: string, folders: readonly Folder
   return folders.filter(folder => folder.projectId === projectId).map(folder => {
     if (folder.kind !== 'remote') return { folder, available: true, detail: folder.path }
     const node = nodes.find(node => node.role === 'child' && node.nodeId === folder.workdir.nodeId)
-    const capability = node?.capabilities.find(capability => capability.kind === 'workdir' && capability.capabilityId === folder.workdir.capabilityId)
-    const available = !!node && !!capability && capabilityAvailability(node, capability) === 'online'
+    const resource = node?.workdirs.find(resource => resource.workdirId === folder.workdir.workdirId)
+    const available = !!node && !!resource && workdirAvailability(node, resource) === 'online'
+      && workdirSupportsOperations(node, resource.workdirId)
     return {
       folder, available,
       detail: `${node?.displayName ?? folder.workdir.nodeId} · ${folder.path}`,
-      ...(!available ? { unavailableReason: node?.connection === 'revoked' ? t('Revoked') : t('Unavailable') } : {}),
+      ...(!available ? { unavailableReason: node?.connection === 'revoked' ? t('Revoked')
+        : node?.executionProtocol === 'upgrade-required' ? t('Update Main and this device') : t('Unavailable') } : {}),
     }
   })
 }

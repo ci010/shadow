@@ -504,7 +504,7 @@ test('unified remote access preserves ownership, grants and local-only argument 
       await assert.rejects(f.remote.read(first.sessionId, { ...ctx, projectId: 'foreign' }), /Project/)
       await assert.rejects(f.remote.read(first.sessionId, {
         ...ctx, remoteWorkdir: {
-          nodeId: 'child', capabilityId: 'folder',
+          nodeId: 'child', workdirId: 'folder',
           executor: {
             async *execute() { throw new Error('Remote execution must not be reached') },
             async getStatus() { throw new Error('Remote status must not be reached') },

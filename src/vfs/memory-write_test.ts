@@ -97,7 +97,7 @@ test('memory stays Project-bound and keeps cancellation, tool filtering and exec
   t.mock.getter(callTools, 'executionMode', () => 'call')
   await assert.rejects(tool.execute(args, { ...context, tools: callTools }), /call mode/)
   await assert.rejects(tool.execute(args, { ...context, remoteWorkdir: {
-    nodeId: 'other-node', capabilityId: 'workdir', executor: {
+    nodeId: 'other-node', workdirId: 'workdir', executor: {
       async *execute() { throw new Error('No remote execution expected') },
       async getStatus() { throw new Error('No remote query expected') },
       async cancel() { throw new Error('No remote cancellation expected') },

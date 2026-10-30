@@ -2,16 +2,17 @@ import type {
   CancelReceiptV1,
   ExecutionReceiptV1,
   JobEventV1,
-  JobRequestV1,
+  ExecutionRequestV2,
+  JobRequestV2,
   JobStateV1,
   JobStatusV1,
 } from './contracts.ts'
-import { validateJobEventV1, validateJobRequestV1 } from './contracts.ts'
+import { validateJobEventV1, validateJobRequestV2 } from './contracts.ts'
 import type { Executor } from './executor.ts'
 
 export interface RemoteNodeJobDispatcher {
   dispatchJob(
-    request: JobRequestV1,
+    request: JobRequestV2,
     callbacks: {
       readonly onEvent: (event: JobEventV1) => void
       readonly onDisconnect: (reason: string) => void
@@ -21,7 +22,7 @@ export interface RemoteNodeJobDispatcher {
 }
 
 interface RemoteJobRecord {
-  readonly request: JobRequestV1
+  readonly request: ExecutionRequestV2
   readonly events: JobEventV1[]
   status: JobStatusV1
   changed: Promise<void>
@@ -42,13 +43,13 @@ export class RemoteExecutor implements Executor {
   constructor(readonly dispatcher: RemoteNodeJobDispatcher) {}
 
   execute(
-    request: JobRequestV1,
+    request: ExecutionRequestV2,
     signal: AbortSignal,
   ): AsyncIterable<JobEventV1> {
-    const validation = validateJobRequestV1(request)
+    const validation = validateJobRequestV2(request)
     if (!validation.success) {
       throw new TypeError(
-        `Invalid JobRequestV1: ${validation.errors.join('; ')}`,
+        `Invalid ExecutionRequestV2: ${validation.errors.join('; ')}`,
       )
     }
     let record = this.#jobs.get(request.jobId)
@@ -83,10 +84,7 @@ export class RemoteExecutor implements Executor {
             onDisconnect: (reason) => this.#disconnect(record!, reason),
           })
         } catch (error) {
-          this.#disconnect(
-            record,
-            error instanceof Error ? error.message : 'Remote node is unavailable',
-          )
+          this.#reject(record, error)
         }
       }
     } else if (!sameRequest(record.request, validation.value)) {
@@ -178,6 +176,18 @@ export class RemoteExecutor implements Executor {
     wake(record)
   }
 
+  #reject(record: RemoteJobRecord, error: unknown): void {
+    const timestamp = now()
+    this.#acceptEvent(record, {
+      version: 1, jobId: record.request.jobId, sequence: 0, timestamp, type: 'rejected',
+      receipt: { version: 1, jobId: record.request.jobId, nodeId: record.request.nodeId,
+        state: 'rejected', finishedAt: timestamp, reason: {
+          code: error instanceof Error && 'code' in error ? String(error.code) : 'remote-dispatch-rejected',
+          message: sanitizeReason(error instanceof Error ? error.message : 'Remote dispatch was refused before sending'), retryable: false,
+        } },
+    })
+  }
+
   #disconnect(record: RemoteJobRecord, message: string): void {
     if (TERMINAL_STATES.has(record.status.state)) return
     const sequence = record.events.length
@@ -214,7 +224,7 @@ export class RemoteExecutor implements Executor {
   }
 }
 
-function createRecord(request: JobRequestV1): RemoteJobRecord {
+function createRecord(request: ExecutionRequestV2): RemoteJobRecord {
   let notify = () => {}
   const changed = new Promise<void>((resolve) => notify = resolve)
   return {
@@ -246,7 +256,7 @@ function eventState(event: JobEventV1): JobStateV1 {
   return 'accepted'
 }
 
-function sameRequest(left: JobRequestV1, right: JobRequestV1): boolean {
+function sameRequest(left: ExecutionRequestV2, right: ExecutionRequestV2): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 

@@ -49,7 +49,7 @@ import { EphemeralSession } from './ephemeral-session.ts'
 import { evaluateAuthoringScenario } from './authoring-evaluation.ts'
 import { runBoundedSession } from './bounded-session.ts'
 import type { ChannelBoundary } from '../channels/integration-contract.ts'
-import { LOCAL_NODE_ID, normalizeSessionLocality, resolveSessionLocations, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
+import { LOCAL_NODE_ID, normalizeSessionLocality, resolveSessionLocations, type WorkdirLookup, type WorkdirRefV2 } from './locality.ts'
 import { parseTopicSessionFields, type TopicMetadata } from './topic-contract.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
 import { isConfigObject, type SessionConfigPatch } from './config-patch.ts'
@@ -137,7 +137,7 @@ export interface SessionManagerDeps {
   scope?: ProjectScope
   evalBridge?: ToolBridgeFactory
   ownsFolder?: (folderId: string) => boolean
-  ownsWorkdir?: (workdir: WorkdirRefV1) => boolean
+  ownsWorkdir?: (workdir: WorkdirRefV2) => boolean
   assertSessionFolder?: (state: SessionState) => void
   acquireFolderAccess?: () => () => void
   /** Host/test deadline override: integer 1–120000 ms; default 120000 ms. */
@@ -159,7 +159,7 @@ export interface SessionManagerDeps {
   backgroundTasks: BackgroundTaskManager
   agentTypes: AgentTypesManager
   events: EventService
-  workdirCapabilityLookup?: WorkdirCapabilityLookup
+  workdirLookup?: WorkdirLookup
   getNodeInventory?: () => NodeInventoryResponse
   remoteExecutor?: Executor
   getLlmRuntimeConfig?: () => LlmRuntimeConfig
@@ -257,7 +257,7 @@ export class SessionManager {
   private readonly stateCreations = new Map<string, Promise<unknown>>()
   private readonly automationFinalizers = new Set<Promise<void>>()
   private archivedWorkdirs = new Set<string>()
-  hasHistoricalWorkdir(ref: WorkdirRefV1): boolean { return this.archivedWorkdirs.has(JSON.stringify([ref.nodeId, ref.capabilityId])) }
+  hasHistoricalWorkdir(ref: WorkdirRefV2): boolean { return this.archivedWorkdirs.has(JSON.stringify([ref.nodeId, ref.workdirId])) }
 
   private readonly ownedCreations = new Map<string, Set<Promise<void>>>()
 
@@ -292,11 +292,11 @@ export class SessionManager {
     }
   }
 
-  folderDependentSessions(folderId: string, workdirs: readonly WorkdirRefV1[]): string[] {
+  folderDependentSessions(folderId: string, workdirs: readonly WorkdirRefV2[]): string[] {
     const affected = new Set<string>()
     for (const [id, state] of Object.entries(this.sessionStates)) {
       if (state.folderId === folderId || state.workdir && workdirs.some(ref =>
-        ref.nodeId === state.workdir!.nodeId && ref.capabilityId === state.workdir!.capabilityId)) affected.add(id)
+        ref.nodeId === state.workdir!.nodeId && ref.workdirId === state.workdir!.workdirId)) affected.add(id)
     }
     let previous = -1
     while (previous !== affected.size) {
@@ -982,8 +982,8 @@ ${JSON.stringify(request)}`,
   get projectId(): string | undefined {
     return this.deps.projectId
   }
-  get workdirCapabilityLookup(): WorkdirCapabilityLookup | undefined {
-    return this.deps.workdirCapabilityLookup
+  get workdirLookup(): WorkdirLookup | undefined {
+    return this.deps.workdirLookup
   }
   getNodeInventory(): NodeInventoryResponse | undefined {
     return this.deps.getNodeInventory?.()
@@ -1040,7 +1040,7 @@ ${JSON.stringify(request)}`,
     this.yieldDiscussions.startRuntime()
     this.archivedWorkdirs = new Set((await this.store.listArchiveReferences?.() ?? []).flatMap(ref => {
       if (ref.projectId !== this.deps.projectId) throw new Error('Archived ownership project mismatch')
-      return ref.workdir ? [JSON.stringify([ref.workdir.nodeId, ref.workdir.capabilityId])] : []
+      return ref.workdir ? [JSON.stringify([ref.workdir.nodeId, ref.workdir.workdirId])] : []
     }))
     // Load all session states into memory cache
     this.sessionStates = await startup.measure('session-load', () => this.store.listAllStates())
@@ -1734,7 +1734,7 @@ ${JSON.stringify(request)}`,
         ctx.sessionTools,
         this.deps.bus,
         this.deps.store,
-        this.deps.workdirCapabilityLookup,
+        this.deps.workdirLookup,
         this.deps.remoteExecutor,
         this.deps.evalBridge,
         this.deps.promptCaptures,
@@ -1758,7 +1758,7 @@ ${JSON.stringify(request)}`,
         onStopped,
         this.deps.quickModel,
         this.sleepInactivityMs,
-        this.deps.workdirCapabilityLookup,
+        this.deps.workdirLookup,
         this.deps.remoteExecutor,
         this.deps.evalBridge,
         this.deps.promptCaptures,
@@ -1819,7 +1819,7 @@ ${JSON.stringify(request)}`,
       setupInstructions?: string
       preloadTools?: Record<string, string[]>
       workspaceRoot?: string
-      workdir?: WorkdirRefV1
+      workdir?: WorkdirRefV2
       mode?: ExecutionMode
       parentSessionId?: string | null
       executionKey?: string
@@ -1947,7 +1947,7 @@ ${JSON.stringify(request)}`,
     const parentWorkdir = parentState?.workdir
     const inheritedWorkdir = parentWorkdir &&
         !(parentWorkdir.nodeId === LOCAL_NODE_ID &&
-          parentWorkdir.capabilityId.startsWith('managed-session-v1:'))
+          parentWorkdir.workdirId.startsWith('managed-session-v1:'))
       ? parentWorkdir
       : undefined
     const state: SessionState = {
@@ -2197,7 +2197,7 @@ ${JSON.stringify(request)}`,
   getSelfWorkingPaths(sessionId: string): { projectDir: string | null; cwd: string | null } {
     const state = this.getSessionState(sessionId)
     if (!state) throw new Error('Session unavailable')
-    const workdir = resolveSessionLocations(this.deps.workspace, state, undefined, this.deps.workdirCapabilityLookup).workdir
+    const workdir = resolveSessionLocations(this.deps.workspace, state, undefined, this.deps.workdirLookup).workdir
     const cwd = workdir.available && workdir.locality === 'local' ? workdir.path : null
     return { projectDir: state.folderId ? cwd : null, cwd }
   }
@@ -2383,13 +2383,13 @@ ${JSON.stringify(request)}`,
   async retirementSnapshot(sessionId: string, inactivityDays: number, locked = false) {
     const state = this.sessionStates[sessionId]
     if (!state || this.retirementProtected(state) || !locked && this.preparations.has(sessionId)) return null
-    const locations = resolveSessionLocations(this.deps.workspace, state, LOCAL_NODE_ID, this.deps.workdirCapabilityLookup)
+    const locations = resolveSessionLocations(this.deps.workspace, state, LOCAL_NODE_ID, this.deps.workdirLookup)
     if (!locations.workdir.available || locations.workdir.locality !== 'local') return null
     for (const other of await this.listHistoryStates()) {
       if (other.sessionId === sessionId) continue
       if (other.parent?.id === sessionId || other.parentSessionId === sessionId ||
         other.workspaceRoot === sessionId || other.reportTo === sessionId ||
-        resolveSessionLocations(this.deps.workspace, other, LOCAL_NODE_ID, this.deps.workdirCapabilityLookup).sessionDataDir === locations.sessionDataDir) return null
+        resolveSessionLocations(this.deps.workspace, other, LOCAL_NODE_ID, this.deps.workdirLookup).sessionDataDir === locations.sessionDataDir) return null
     }
     const records: Record<string, unknown>[] = []
     const hash = createHash('sha256').update(JSON.stringify(state))
@@ -2675,7 +2675,7 @@ ${JSON.stringify(request)}`,
             || child.reportTo && !child.completionReported || child.recovery))) return false
       if (this.deps.backgroundTasks.listTasks(sessionId).some(task => task.status === 'running' || task.status === 'cancelling')) return false
       await this.store.archiveState!(state)
-      if (state.workdir) this.archivedWorkdirs.add(JSON.stringify([state.workdir.nodeId, state.workdir.capabilityId]))
+      if (state.workdir) this.archivedWorkdirs.add(JSON.stringify([state.workdir.nodeId, state.workdir.workdirId]))
       delete this.sessionStates[sessionId]
       this.acceptedInputs.delete(sessionId)
       this.deps.bus.emit('session.changed', { sessionId })
@@ -2734,15 +2734,15 @@ ${JSON.stringify(request)}`,
       usageIncomplete ||= result.incomplete
     }
     let workdir = resolveSessionLocations(
-      this.workspace, state, undefined, this.workdirCapabilityLookup,
+      this.workspace, state, undefined, this.workdirLookup,
     ).workdir
     try { await this.assertHistoricalFolderAccess(sessionId) }
-    catch { workdir = { available: false, workdir: workdir.workdir, reason: 'capability-revoked' } }
+    catch { workdir = { available: false, workdir: workdir.workdir, reason: 'workdir-revoked' } }
     const remote = workdir.workdir.nodeId !== LOCAL_NODE_ID
     const node = this.getNodeInventory()?.nodes.find(node =>
       remote ? node.nodeId === workdir.workdir.nodeId : node.role === 'main')
-    const capability = node?.capabilities.find(capability =>
-      capability.capabilityId === workdir.workdir.capabilityId && capability.kind === 'workdir')
+    const resource = node?.workdirs.find(resource =>
+      resource.workdirId === workdir.workdir.workdirId)
     const model = state.config?.model ?? this.deps.conversationPolicies?.resolve(sessionId)?.agent.model
       ?? this.deps.getLlmRuntimeConfig?.().model
     // Inference overrides inherit the Project runtime context budget; model
@@ -2760,11 +2760,11 @@ ${JSON.stringify(request)}`,
       workdir: {
         kind: remote ? 'remote' as const : 'local' as const,
         displayPath: remote
-          ? capability?.displayPath ?? null
+          ? resource?.displayPath ?? null
           : workdir.available && workdir.locality === 'local' ? workdir.path : null,
         nodeId: node?.nodeId ?? workdir.workdir.nodeId,
         ...(node ? { nodeName: node.displayName } : {}),
-        ...(capability ? { displayName: capability.displayName } : {}),
+        ...(resource ? { displayName: resource.displayName } : {}),
         available: workdir.available,
         availability: workdir.available ? 'available' as const : workdir.reason,
       },
@@ -3388,7 +3388,7 @@ ${JSON.stringify(request)}`,
 
   private async ensureSessionDataDirectory(state: SessionState): Promise<void> {
     const { sessionDataDir } = resolveSessionLocations(
-      this.workspace, state, undefined, this.workdirCapabilityLookup,
+      this.workspace, state, undefined, this.workdirLookup,
     )
     // Only Main-owned session data; never create a folder or remote display path.
     await mkdir(sessionDataDir, { recursive: true })
@@ -3535,7 +3535,7 @@ ${JSON.stringify(request)}`,
             ? this.deps.toolLoader ?? sessionTools.get('import_tool') as ImportTool | undefined
             : undefined
           if (importTool) {
-            const { workdir } = resolveSessionLocations(this.workspace, state, undefined, this.workdirCapabilityLookup)
+            const { workdir } = resolveSessionLocations(this.workspace, state, undefined, this.workdirLookup)
             if (toolName === 'chrome-devtools' && (!workdir.available || workdir.locality !== 'local')) {
               throw new Error('Browser preload requires an available local session workdir')
             }

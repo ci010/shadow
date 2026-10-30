@@ -73,6 +73,13 @@ export class Tools {
     return selector instanceof UseProjectTool ? selector.selectedFolder(id) : undefined
   }
 
+  /** Per-call selection does not commit a new working context or import Folder instructions. */
+  async executionTargetFolder(identifier: string, signal: AbortSignal) {
+    const selector = this.tools.get('use_project')
+    if (!(selector instanceof UseProjectTool)) throw new Error('Project Folder targeting is unavailable; no fallback is allowed.')
+    return selector.executionTargetFolder(identifier, signal)
+  }
+
   get(name: string): Tool | undefined {
     return this.tools.get(name)
   }

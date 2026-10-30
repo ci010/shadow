@@ -1,6 +1,6 @@
 import type { SessionConfig } from '../../sessions/session-store.ts'
 import type { SessionInput } from '../../sessions/input.ts'
-import type { WorkdirRefV1 } from '../../sessions/locality.ts'
+import type { WorkdirRefV2 } from '../../sessions/locality.ts'
 import type { AgentTypeDefinition } from '../types/types.ts'
 import type { ExecShell } from '../../tools/shell.ts'
 import { resolve } from 'node:path'
@@ -46,7 +46,7 @@ export interface SessionPromptContext {
   /** Session id owning the shared working directory (subagents inherit the spawner's). */
   workspaceRoot?: string
   /** Node-bound capability selecting the session's effective working directory. */
-  workdir?: WorkdirRefV1
+  workdir?: WorkdirRefV2
 }
 
 // ── System prompt provider registry ─────────────────────────────────────

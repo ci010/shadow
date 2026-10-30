@@ -144,14 +144,14 @@ export async function startProjectHost(
         lookupWorkdir: ref => {
           for (const runtime of runtimes.values()) {
             const result = runtime.folders.lookupWorkdir(ref)
-            if (result?.capability) return result
+            if (result?.workdir) return result
           }
           return { node: 'online' }
         },
       },
     }),
     snapshotAdapter: new AtomicFileRegistrySnapshotAdapter(options.clusterSnapshotPath ?? resolve(appPaths.devices, 'registry.v1.json')),
-    localHello: { protocolMajor: 1, protocolMinor: 0, implementationVersion: '0.1.0', features: ['jobs-v1', 'capabilities-v1', 'workdir-display-v1'] },
+    localHello: { protocolMajor: 1, protocolMinor: 0, implementationVersion: '0.1.0', features: ['workdir-execution-v2'] },
     authorizeOfferCreation: request => launchCredential ? validateLaunchCredential(request.headers.get('Authorization') ?? undefined, launchCredential) : false,
     clientKey: request => clientAddresses.resolve(request),
   }))

@@ -1,7 +1,7 @@
 import type { SystemPromptProvider } from './builder.ts'
 import type { VirtualFs } from '../../vfs/virtual-fs.ts'
 import {
-  type WorkdirCapabilityLookup,
+  type WorkdirLookup,
 } from '../../sessions/locality.ts'
 import { readFileIfExists, workspacePath } from '../../utils/paths.ts'
 import type { ProjectFolderDiscovery } from '../../folders/discovery.ts'
@@ -10,7 +10,7 @@ import { projectProvider } from './project.ts'
 export function workspaceProvider(
   workspace: string,
   virtualFs: VirtualFs,
-  workdirCapabilityLookup?: WorkdirCapabilityLookup,
+  workdirLookup?: WorkdirLookup,
   project?: ProjectFolderDiscovery,
 ): SystemPromptProvider {
   return {

@@ -657,7 +657,7 @@ test('agent publication and owner approval use different authenticated surfaces'
     await assert.rejects(tool.execute(check, { ...context, projectId: 'other' }), /owning local Project/)
     await assert.rejects(tool.execute({ ...check, directory: '..' }, { ...context, cwd: f.directory }), /effective local workdir/)
     await assert.rejects(tool.execute(check, { ...context, remoteWorkdir: {
-      nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not interpret remote paths on Main') },
+      nodeId: 'remote', workdirId: 'opaque', get executor(): never { throw new Error('Must not interpret remote paths on Main') },
     } }), /owning local Project/)
     assert.equal((await host.request('/api/microapps')).status, 401)
     assert.equal((await host.request(`/api/microapps/${app.id}/approve`, { method: 'POST', body: JSON.stringify({ revision: app.revision, confirm: true }) })).status, 401)

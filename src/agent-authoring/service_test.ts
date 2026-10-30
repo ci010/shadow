@@ -31,7 +31,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import type { ChatMessage, LLMProvider, LLMResponse } from '../providers/provider.ts'
 import type { RemoteFolderRecord } from '../folders/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
-import type { JobRequestV1 } from '../execution/contracts.ts'
+import type { ExecutionRequestV2 } from '../execution/contracts.ts'
 import { ResourceBundleSchema, type ResourceBundle } from './contracts.ts'
 import { AgentResourceStore } from './store.ts'
 import { AgentAuthoringService } from './service.ts'
@@ -558,10 +558,10 @@ test('remote reads route through the granted capability and never open its local
     await f.publish()
     const folder: RemoteFolderRecord = {
       ...f.folder, kind: 'remote',
-      workdir: { version: 1, nodeId: 'child', capabilityId: 'public-docs' },
+      workdir: { version: 2, nodeId: 'child', workdirId: 'public-docs' },
       identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
     }
-    const jobs: JobRequestV1[] = []
+    const jobs: ExecutionRequestV2[] = []
     const executor: Executor = {
       execute: async function* (request) {
         jobs.push(request)
@@ -585,7 +585,7 @@ test('remote reads route through the granted capability and never open its local
     const context = { ...f.ownerContext, ...message(), sessionId: id, tools }
     assert.equal(await tools.execute('read', { path: `folder:${folder.id}/guide.txt` }, context), 'Remote-only documentation')
     assert.equal(jobs[0].nodeId, 'child')
-    assert.equal(jobs[0].capabilityId, 'public-docs')
+    assert.equal(jobs[0].workdirId, 'public-docs')
     assert.deepEqual(jobs[0].args, { path: 'guide.txt' })
     assert.equal(jobs[0].sessionId, id)
     const unavailable = new AgentAuthoringService({ ...options, remoteExecutor: undefined }).tools(policy, id)
@@ -649,7 +649,7 @@ test('explicit native filesystem imports run in Project Home, never synthetic te
       cancel: async () => { throw new Error('Unexpected remote cancellation') },
     }
     assert.match(requireToolText(await tools.execute('record', {}, {
-      ...context, remoteWorkdir: { nodeId: 'child', capabilityId: 'remote-folder', executor },
+      ...context, remoteWorkdir: { nodeId: 'child', workdirId: 'remote-folder', executor },
     })), /does not support remote workdirs/)
     await assert.rejects(readFile(output), { code: 'ENOENT' })
     assert.equal(JSON.parse(requireToolText(await tools.execute('record', {}, context))), 'fixed fixture')

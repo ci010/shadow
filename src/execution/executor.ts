@@ -1,7 +1,7 @@
 import type {
   CancelReceiptV1,
   JobEventV1,
-  JobRequestV1,
+  ExecutionRequestV2,
   JobStatusV1,
 } from './contracts.ts'
 import type { ManagedProcess } from './processes/manager.ts'
@@ -21,8 +21,10 @@ export interface LocalProcessExecutor {
 }
 
 export interface Executor {
+  /** Side-effect-free admission; durable wrappers invoke this before claiming a journal slot. */
+  assertCanExecute?(request: ExecutionRequestV2, signal: AbortSignal): void | Promise<void>
   execute(
-    request: JobRequestV1,
+    request: ExecutionRequestV2,
     signal: AbortSignal,
   ): AsyncIterable<JobEventV1>
   getStatus(jobId: string): Promise<JobStatusV1 | null>

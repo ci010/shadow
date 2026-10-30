@@ -17,7 +17,7 @@ import type { SessionTools } from '../tools/registry.ts'
 import { BaseSession } from './base-session.ts'
 import {
   resolveSessionLocations,
-  type WorkdirCapabilityLookup,
+  type WorkdirLookup,
 } from './locality.ts'
 import { SessionResumeError } from './recovery.ts'
 import type { PromptCaptureStore } from './prompt-capture.ts'
@@ -70,7 +70,7 @@ export class Session extends BaseSession {
     private readonly onStopped: (sessionId: string) => void,
     private readonly quickModel?: string,
     private readonly sleepInactivityMs?: number,
-    workdirCapabilityLookup?: WorkdirCapabilityLookup,
+    workdirLookup?: WorkdirLookup,
     remoteExecutor?: Executor,
     evalBridge?: ToolBridgeFactory,
     promptCaptures?: PromptCaptureStore,
@@ -84,7 +84,7 @@ export class Session extends BaseSession {
       tools,
       bus,
       store,
-      workdirCapabilityLookup,
+      workdirLookup,
       remoteExecutor,
       evalBridge,
       promptCaptures,
@@ -433,7 +433,7 @@ export class Session extends BaseSession {
       this.workspace,
       this.state,
       undefined,
-      this.workdirCapabilityLookup,
+      this.workdirLookup,
     )
     if (!locations.workdir.available) {
       throw new Error(

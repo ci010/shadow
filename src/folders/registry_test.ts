@@ -66,22 +66,22 @@ test('unavailable registered folders remain in the registry without recreation o
   await registry.init()
   const folder = await registry.register(path)
   const ref = {
-    version: 1 as const,
+    version: 2 as const,
     nodeId: 'local',
-    capabilityId: `local-project-v1:${folder.id}`,
+    workdirId: `local-project-v1:${folder.id}`,
     displayPathSnapshot: workspace,
   }
   assert.deepEqual(registry.lookupWorkdir(ref), {
-    node: 'online', capability: { kind: 'workdir', online: true, path: folder.path },
+    node: 'online', workdir: { online: true, path: folder.path },
   })
   assert.equal(registry.lookupWorkdir({ ...ref, nodeId: 'other' }), undefined)
-  assert.equal(registry.lookupWorkdir({ ...ref, capabilityId: 'managed-session-v1:a' }), undefined)
-  assert.deepEqual(registry.lookupWorkdir({ ...ref, capabilityId: `local-project-v1:${randomUUID()}` }), { node: 'online' })
+  assert.equal(registry.lookupWorkdir({ ...ref, workdirId: 'managed-session-v1:a' }), undefined)
+  assert.deepEqual(registry.lookupWorkdir({ ...ref, workdirId: `local-project-v1:${randomUUID()}` }), { node: 'online' })
   await rm(path, { recursive: true })
   await assert.rejects(registry.requireAvailable(folder.id), /unavailable/)
   await assert.rejects(registry.requireAvailable(randomUUID()), /not found/)
   assert.deepEqual(registry.lookupWorkdir(ref), {
-    node: 'online', capability: { kind: 'workdir', online: false },
+    node: 'online', workdir: { online: false },
   })
   const restarted = new FolderRegistry(workspace)
   await restarted.init()
@@ -143,4 +143,16 @@ test('rejects relative, missing, and file paths; abort and failed persistence do
   await assert.rejects(inaccessible.init())
   await rm(registry.filePath, { recursive: true })
   assert.equal((await registry.register(folders)).path, await realpath(folders))
+})
+
+test('folder identity must match the saved session resource; separate project ownership is not sufficient', async t => {
+  const f = await folderFixture(t)
+  const registry = new FolderRegistry(f.workspace)
+  await registry.init()
+  const one = await registry.register(f.folders)
+  const workdir = { version: 2 as const, nodeId: 'local', workdirId: `local-project-v1:${one.id}` }
+  registry.assertSessionFolder({ folderId: one.id, workdir })
+  for (const selected of [undefined, { ...workdir, nodeId: 'other' }, { ...workdir, workdirId: 'another' }]) {
+    assert.throws(() => registry.assertSessionFolder({ folderId: one.id, workdir: selected }), { code: 'folder_workdir_mismatch' })
+  }
 })

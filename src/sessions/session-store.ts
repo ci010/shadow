@@ -3,7 +3,7 @@ import type { ChatMessage } from '../providers/provider.ts'
 import { providerFailureKinds, type ProviderFailureKind } from '../providers/provider.ts'
 import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ExecShell } from '../tools/shell.ts'
-import type { WorkdirRefV1 } from './locality.ts'
+import type { WorkdirRefV2 } from './locality.ts'
 import type { YieldPolicy } from './yield-contract.ts'
 import type { ExecutionMode } from './execution-mode.ts'
 import type { AutomationSessionRef } from '../cron/contracts.ts'
@@ -105,7 +105,7 @@ export interface ArchivedStateQuery {
   offset?: number
   limit?: number
 }
-export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV1 }
+export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV2 }
 
 export interface SessionState {
   /** Human input admission time, independent of assistant/event activity. Legacy unknown is protected. */
@@ -184,7 +184,7 @@ export interface SessionState {
    */
   workspaceRoot?: string
   /** Node-bound capability selecting the session's effective working directory. */
-  workdir?: WorkdirRefV1
+  workdir?: WorkdirRefV2
   /** Agent type name (e.g. 'general', 'reflector'). Set once at creation. */
   agentType?: string
   /** Stable Initiative ID for shared work context; legacy projectName is migrated. */

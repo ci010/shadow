@@ -12,7 +12,7 @@ import type {
   SessionStore,
   StoredMessage,
 } from './session-store.ts'
-import { parseWorkdirRefV1 } from './locality.ts'
+import { parseWorkdirRef } from './locality.ts'
 import { isExecutionMode } from './execution-mode.ts'
 import { parseSessionRecovery, parseContextResetAt, ContextResetMetadataError, parseDecisionOwner, DecisionOwnerMetadataError } from './session-store.ts'
 import { parseAutomationSessionRef } from '../cron/contracts.ts'
@@ -128,7 +128,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   }
   if (isRecord(value.config)) metadata.config = value.config as SessionConfig
   if (isSessionParent(value.parent)) metadata.parent = value.parent
-  const workdir = parseWorkdirRefV1(value.workdir)
+  const workdir = parseWorkdirRef(value.workdir)
   if (workdir) metadata.workdir = workdir
 
   for (
@@ -394,7 +394,7 @@ export class SqliteSessionStore implements SessionStore {
       return this.fresh.save(state)
     }
     if (await this.fresh.has(sessionKey)) throw new Error('Fresh automation policy cannot be removed')
-    validateOwnership({ ...state, ownershipVersion: state.ownershipVersion ?? 2 })
+    state = validateOwnership({ ...state, ownershipVersion: state.ownershipVersion ?? 2 }) as unknown as SessionState
     const prototype: SessionPrototypeV1 = {
       version: PROTOTYPE_VERSION,
       metadata: {

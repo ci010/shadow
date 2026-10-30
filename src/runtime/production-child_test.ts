@@ -126,7 +126,7 @@ test('production Child starts with a correlated protected key and shuts down', a
       dataDir: './data',
       localNodeId: 'node-1',
       mainEndpoint: 'https://main.example.test',
-      workdirs: [{ capabilityId: 'folder-root', displayName: 'Child folder', rootPath: folders }],
+      workdirs: [{ workdirId: 'folder-root', displayName: 'Child folder', rootPath: folders }],
     },
     { ...paths, dataDir: workspace },
     {
@@ -169,16 +169,16 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals(body.nodes[0].nodeId, 'node-1')
   assertEquals(body.nodes[0].role, 'child')
   assertEquals(body.nodes[0].connection, 'offline')
-  assertEquals(body.nodes[0].supportsManagedSessions, true)
-  assertEquals(body.nodes[0].capabilities, [{
-    capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,
-  }, {
-    capabilityId: 'owner-folder-picker-v1', kind: 'shell', displayName: 'Owner folder picker', online: true,
-  }, {
-    capabilityId: 'managed-sessions-v1', kind: 'shell', displayName: 'Managed session allocation', online: true,
-  }, {
-    capabilityId: 'folder-root', kind: 'workdir', displayName: 'Child folder', online: true, displayPath: folders,
-  }])
+  assertEquals(body.nodes[0].supportsManagedSessions, false)
+  assertEquals(body.nodes[0].executionProtocol, 'unknown')
+  assertEquals(body.nodes[0].workdirs.map((w: { workdirId: string; online: boolean }) => ({ workdirId: w.workdirId, online: w.online })), [{ workdirId: 'folder-root', online: false }])
+  assertEquals(body.nodes[0].workdirs[0].displayPath, folders)
+  assertEquals(new Set(body.nodes[0].workdirs[0].support.operations), new Set(['filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity', 'workdir.process.execute', 'workdir.process.execute-once', 'workdir.process.reconcile']))
+  assertEquals(body.nodes[0].workdirs[0].support.shell.maxInputBytes, 32768)
+  assertEquals(body.nodes[0].workdirs[0].support.shell.maxDeadlineMs, 120000)
+  assertEquals(body.nodes[0].workdirs[0].support.shell.shells.includes('sh'), true)
+  assertEquals(body.nodes[0].support, { operations: [] })
+  assertEquals('capabilities' in body.nodes[0], false)
   assertEquals(JSON.stringify(body).includes('credential'), false)
   assertEquals(JSON.stringify(body).includes('fingerprint'), false)
   assertEquals((await fetch(

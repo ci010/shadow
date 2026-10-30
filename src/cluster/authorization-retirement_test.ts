@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Hono } from 'hono'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import { validatePairingNodeStateV1, validateRegistrySnapshotV1 } from './contracts.ts'
+import { validatePairingNodeStateV1, validateRegistrySnapshot } from './contracts.ts'
 import { nodeAdministrationApiPlugin } from './node-administration-api.ts'
 import { AtomicFileRegistrySnapshotAdapter, RegistrySnapshotCoordinator } from './persistence.ts'
 import { InMemoryPairingNodeRegistry, RegistryError } from './registry.ts'
@@ -42,11 +42,8 @@ test('old authorization metadata is discarded on snapshot restore and stays abse
     const revoked = approve(source, 'revoked')
     source.revoke(revoked, 'retired device', now)
     present(source, 'pending')
-    const capability = {
-      version: 1 as const, capabilityId: 'shell', nodeId: active.nodeId,
-      kind: 'shell' as const, displayName: 'Shell', permissions: ['process.execute'], online: true,
-    }
-    source.advertiseCapability(active, capability)
+    const capability = { operations: ['process.execute'] }
+    source.advertiseNodeSupport(active, active.nodeId, capability)
     const canonical = source.exportSnapshot(now)
     const legacy = {
       ...canonical,
@@ -61,10 +58,10 @@ test('old authorization metadata is discarded on snapshot restore and stays abse
     assert.deepEqual(restored.exportSnapshot(now), canonical)
     assert.deepEqual(legacy.nodes[0].nodePrivileges, [])
     assert.deepEqual(restored.authenticate(active), canonical.nodes[0])
-    restored.advertiseCapability(active, capability)
+    restored.advertiseNodeSupport(active, active.nodeId, capability)
     assert.throws(() => restored.authenticate(revoked),
       (error: unknown) => error instanceof RegistryError && error.code === 'node-revoked')
-    assert.throws(() => restored.advertiseCapability(active, { ...capability, nodeId: revoked.nodeId }),
+    assert.throws(() => restored.advertiseNodeSupport(active, revoked.nodeId, capability),
       (error: unknown) => error instanceof RegistryError && error.code === 'capability-denied')
     await coordinator.save(now)
     await coordinator.flush()
@@ -86,7 +83,7 @@ test('snapshot compatibility does not admit old authorization on the wire or hid
   ]) {
     const legacyNode = { ...node, ...metadata }
     assert.equal(validatePairingNodeStateV1(legacyNode).success, false)
-    const normalized = validateRegistrySnapshotV1({ ...canonical, nodes: [legacyNode] })
+    const normalized = validateRegistrySnapshot({ ...canonical, nodes: [legacyNode] })
     assert.equal(normalized.success, true)
     if (normalized.success) assert.deepEqual(normalized.value, canonical)
     for (const invalid of [
@@ -94,10 +91,10 @@ test('snapshot compatibility does not admit old authorization on the wire or hid
       { ...legacyNode, credentialId: '../foreign' },
       { ...legacyNode, unexpected: true },
     ]) {
-      assert.equal(validateRegistrySnapshotV1({ ...canonical, nodes: [invalid] }).success, false)
+      assert.equal(validateRegistrySnapshot({ ...canonical, nodes: [invalid] }).success, false)
     }
   }
-  assert.equal(validateRegistrySnapshotV1({ ...canonical, version: 2 }).success, false)
+  assert.equal(validateRegistrySnapshot({ ...canonical, version: 99 }).success, false)
 })
 
 test('device approval needs owner authentication and identity confirmation, not permission lists', async () => {

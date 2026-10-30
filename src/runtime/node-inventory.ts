@@ -1,9 +1,9 @@
 import { hostname } from 'node:os'
 import { stat } from 'node:fs/promises'
-import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
-import { MANAGED_SESSION_CAPABILITY, MANAGED_SESSION_OPERATION } from '../execution/managed-workdir.ts'
+import type { ExecutionSupport, WorkdirAdvertisement } from '../execution/workdir-contracts.ts'
+import { MANAGED_SESSION_OPERATION } from '../execution/managed-workdir.ts'
 import {
-  inventoryCapability,
+  inventoryWorkdir,
   type NodeInventoryEntry,
 } from '../cluster/node-inventory.ts'
 import type { FolderRegistry } from '../folders/registry.ts'
@@ -41,30 +41,21 @@ export function mainLocalNodeInventory(options: {
     role: 'main',
     connection: 'connected',
     implementationVersion: options.implementationVersion,
-    capabilities: [
-      ...(options.shellAvailable ? [{
-        capabilityId: 'process-execute',
-        kind: 'shell' as const,
-        displayName: 'Local shell',
-        online: true,
-      }] : []),
-      ...options.folders.list().filter(folder => folder.kind !== 'remote').map((folder) => {
-        const ref = localFolderWorkdirRef(folder.id)
-        return {
-          capabilityId: ref.capabilityId,
-          kind: 'workdir' as const,
-          displayName: folder.name,
-          displayPath: folder.path,
-          online: options.folders.lookupWorkdir(ref)?.capability?.online === true,
-        }
-      }),
-    ],
+    executionProtocol: 'compatible',
+    support: { operations: options.shellAvailable ? ['process.execute'] : [] },
+    workdirs: options.folders.list().filter(folder => folder.kind !== 'remote').map(folder => {
+      const ref = localFolderWorkdirRef(folder.id)
+      return { version: 2, nodeId: options.localNodeId, workdirId: ref.workdirId, displayName: folder.name,
+        support: { operations: ['filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity', ...(options.shellAvailable ? ['workdir.process.execute'] : [])] },
+        displayPath: folder.path, online: options.folders.lookupWorkdir(ref)?.workdir?.online === true }
+    }),
   }
 }
 
 export async function childLocalNodeInventory(
   config: ChildBootstrapConfigV1,
-  capabilities: readonly CapabilityDescriptorV1[],
+  workdirs: readonly WorkdirAdvertisement[],
+  support: ExecutionSupport,
   implementationVersion: string,
   connection: 'connected' | 'offline' = 'connected',
 ): Promise<NodeInventoryEntry> {
@@ -73,20 +64,15 @@ export async function childLocalNodeInventory(
     displayName: hostname(),
     role: 'child',
     connection,
-    supportsManagedSessions: capabilities.some(capability => capability.capabilityId === MANAGED_SESSION_CAPABILITY &&
-      capability.kind === 'shell' && capability.online && capability.permissions.includes(MANAGED_SESSION_OPERATION)),
+    executionProtocol: connection === 'connected' ? 'compatible' : 'unknown',
+    supportsManagedSessions: connection === 'connected' && support.operations.includes(MANAGED_SESSION_OPERATION),
     implementationVersion,
-    capabilities: await Promise.all(capabilities.map(async (capability) => {
-      const projected = inventoryCapability(capability, true)
-      const workdir = capability.kind === 'workdir'
-        ? config.workdirs?.find((value) => value.capabilityId === capability.capabilityId)
-        : undefined
-      if (!workdir) return projected
-      return {
-        ...projected,
-        displayPath: workdir.rootPath,
-        online: projected.online && await directoryAvailable(workdir.rootPath),
-      }
+    support: connection === 'connected' ? structuredClone(support) : { operations: [] },
+    workdirs: await Promise.all(workdirs.map(async workdir => {
+      const projected = inventoryWorkdir(workdir, connection === 'connected')
+      const binding = config.workdirs?.find(value => value.workdirId === workdir.workdirId)
+      if (!binding) return projected
+      return { ...projected, displayPath: binding.rootPath, online: projected.online && await directoryAvailable(binding.rootPath) }
     })),
   }
 }

@@ -129,7 +129,8 @@ buttons a localized `aria-label`; keep hints available on keyboard focus too.
 - Distinguish shared Home, session data, and effective workdir. Use the locality
   resolver and path helpers rather than rebuilding paths in each feature.
   `workspaceRoot` is an owning **session ID**, not a filesystem path.
-- A remote workdir is an opaque node/capability reference. Never interpret its
+- A remote workdir is an opaque node/workdir reference; directory tools select
+  registered Project Folders, not Capability IDs. Never interpret its
   display path on Main, silently fall back to Main's filesystem, or mark a tool
   remote-capable without implementing and testing that execution route.
 - Keep base tool schemas small. Session-imported tools are invoked through

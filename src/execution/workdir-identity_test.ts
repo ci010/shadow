@@ -1,3 +1,4 @@
+import { fixtureDirectoryAdmission } from './test-fixtures.ts'
 import assert from 'node:assert/strict'
 import { mkdir, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -18,12 +19,12 @@ test('Child identity follows aliases, ancestry and filesystem case semantics acr
   const alias = join(folders, 'alias')
   await Promise.all([mkdir(child, { recursive: true }), mkdir(b)])
   await symlink(a, alias, process.platform === 'win32' ? 'junction' : 'dir')
-  const bindings = [{ capabilityId: 'a', rootPath: a }, { capabilityId: 'b', rootPath: b },
-    { capabilityId: 'alias', rootPath: alias }, { capabilityId: 'child', rootPath: child }]
-  const read = (executor: Executor, capabilityId: string) => executeRemoteWorkdirIdentity({
-    executor, nodeId: 'child', capabilityId, sessionId: 'identity-test', turnId: 'identity-test', signal: new AbortController().signal,
+  const bindings = [{ workdirId: 'a', rootPath: a }, { workdirId: 'b', rootPath: b },
+    { workdirId: 'alias', rootPath: alias }, { workdirId: 'child', rootPath: child }]
+  const read = (executor: Executor, workdirId: string) => executeRemoteWorkdirIdentity({
+    executor, nodeId: 'child', workdirId, sessionId: 'identity-test', turnId: 'identity-test', signal: new AbortController().signal,
   })
-  const executor = () => new LocalExecutor(new ProcessManager(), 'child', [new CapabilityWorkdirIdentity(bindings)])
+  const executor = () => new LocalExecutor(new ProcessManager(), 'child', [new CapabilityWorkdirIdentity(bindings)], fixtureDirectoryAdmission('child', bindings))
   const first = executor()
   const [one, two, linked, nested] = await Promise.all(['a', 'b', 'alias', 'child'].map(id => read(first, id)))
   assert.deepEqual(one, linked)
@@ -34,8 +35,8 @@ test('Child identity follows aliases, ancestry and filesystem case semantics acr
   assert(!JSON.stringify(one).includes(folders))
   if (process.platform === 'win32') {
     const alternate = new LocalExecutor(new ProcessManager(), 'child', [
-      new CapabilityWorkdirIdentity([{ capabilityId: 'a', rootPath: a.toUpperCase() }]),
-    ])
+      new CapabilityWorkdirIdentity([{ workdirId: 'a', rootPath: a.toUpperCase() }]),
+    ], fixtureDirectoryAdmission('child', [{ workdirId: 'a', rootPath: a.toUpperCase() }]))
     assert.deepEqual(one, await read(alternate, 'a'))
   }
   await assert.rejects(read(first, 'unknown'))
@@ -68,7 +69,7 @@ test('identity client rejects malformed, oversized and incomplete replies withou
       cancel: async () => { throw new Error('Unused') },
     }
     await assert.rejects(executeRemoteWorkdirIdentity({
-      executor, nodeId: 'child', capabilityId: 'workdir', sessionId: 'identity-test', turnId: 'identity-test',
+      executor, nodeId: 'child', workdirId: 'workdir', sessionId: 'identity-test', turnId: 'identity-test',
       signal: new AbortController().signal,
     }))
     assert.equal(calls, 1)

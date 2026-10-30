@@ -1,7 +1,7 @@
 import { deepEqual as assertEquals, rejects as assertRejects } from 'node:assert/strict'
 import { test } from 'node:test'
 import type {
-  CapabilityDescriptorV1,
+  ExecutionSupport,
   VersionHelloV1,
 } from '../cluster/contracts.ts'
 import { acceptAuthenticatedNodeWebSocket } from '../cluster/websocket-node-transport.ts'
@@ -10,7 +10,7 @@ import { InMemoryPairingNodeRegistry } from '../cluster/registry.ts'
 import type {
   CancelReceiptV1,
   JobEventV1,
-  JobRequestV1,
+  ExecutionRequestV2,
   JobStatusV1,
 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
@@ -61,7 +61,7 @@ class FakeWebSocket extends EventTarget {
 }
 
 class IdleExecutor implements Executor {
-  async *execute(_request: JobRequestV1): AsyncIterable<JobEventV1> {
+  async *execute(_request: ExecutionRequestV2): AsyncIterable<JobEventV1> {
     return
   }
 
@@ -90,17 +90,9 @@ const hello: VersionHelloV1 = {
   protocolMajor: 1,
   protocolMinor: 2,
   implementationVersion: 'child-0.1.0',
-  features: ['jobs-v1', 'capabilities-v1'],
+  features: ['workdir-execution-v2'],
 }
-const capability: CapabilityDescriptorV1 = {
-  version: 1,
-  capabilityId: 'shell-1',
-  nodeId: authentication.nodeId,
-  kind: 'shell',
-  displayName: 'Folder shell',
-  permissions: ['process.execute'],
-  online: true,
-}
+const capability: ExecutionSupport = { operations: ['process.execute'] }
 
 function socketPair(): { server: FakeWebSocket; client: FakeWebSocket } {
   const server = new FakeWebSocket()
@@ -139,13 +131,14 @@ function approvedRegistry(): InMemoryPairingNodeRegistry {
 
 function connector(
   client: FakeWebSocket,
-  capabilities: CapabilityDescriptorV1[] = [capability],
+  capabilities: ExecutionSupport[] = [capability],
 ): ChildMainConnector {
   return new ChildMainConnector({
     localHello: hello,
     authentication,
     executor: new IdleExecutor(),
-    capabilities: () => capabilities,
+    workdirs: () => [],
+    support: () => ({ operations: [...new Set(capabilities.flatMap(s => s.operations))] }),
     webSocketFactory: () => asWebSocket(client),
     transport: { maxPendingSends: 8 },
     session: { maxOutboundQueue: 8, heartbeatTimeoutMs: 30_000 },
@@ -194,9 +187,9 @@ test('ChildMainConnector authenticates and advertises online capabilities', asyn
     })
 
   await waitFor(() =>
-    registry.listCapabilities(authentication.nodeId).length === 1
+    registry.nodeSupport(authentication.nodeId).operations.length === 1
   )
-  assertEquals(registry.listCapabilities(authentication.nodeId), [capability])
+  assertEquals(registry.nodeSupport(authentication.nodeId), capability)
   await connection.close()
   await mainRun
 })
@@ -217,7 +210,8 @@ test('ChildMainConnector obtains and forwards the one-time authentication protoc
     localHello: hello,
     authentication,
     executor: new IdleExecutor(),
-    capabilities: () => [],
+    workdirs: () => [],
+    support: () => ({ operations: [] }),
     authenticationProtocol: (context) => {
       requestedContext = { ...context, signal: context.signal.aborted }
       return Promise.resolve('shadow-node-v1.signed-proof')
@@ -286,7 +280,8 @@ test('ChildMainConnector rejects a credential node mismatch before dialing', asy
     localHello: hello,
     authentication,
     executor: new IdleExecutor(),
-    capabilities: () => [],
+    workdirs: () => [],
+    support: () => ({ operations: [] }),
     webSocketFactory: () => {
       dialed = true
       return asWebSocket(pair.client)

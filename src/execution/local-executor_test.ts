@@ -1,3 +1,4 @@
+import { fixtureDirectoryAdmission } from './test-fixtures.ts'
 import assert, { deepEqual as assertEquals, rejects as assertRejects } from 'node:assert/strict'
 import { test } from 'node:test'
 import { cwd } from 'node:process'
@@ -9,11 +10,11 @@ import type {
   ManagedProcessStatus,
   ProcessManager,
 } from './processes/manager.ts'
-import type { JobEventV1, JobRequestV1 } from './contracts.ts'
+import type { JobEventV1, ExecutionRequestV2 } from './contracts.ts'
 import {
   validateCancelReceiptV1,
   validateJobEventV1,
-  validateJobRequestV1,
+  validateExecutionRequestV2,
   validateJobStatusV1,
 } from './contracts.ts'
 import { LocalExecutor } from './local-executor.ts'
@@ -25,17 +26,17 @@ import {
 
 function request(
   jobId: string,
-  overrides: Partial<JobRequestV1> = {},
-): JobRequestV1 {
+  overrides: Partial<ExecutionRequestV2> = {},
+): ExecutionRequestV2 {
   const createdAt = new Date()
   return {
-    version: 1,
+    version: 2,
     jobId,
     idempotencyKey: `key-${jobId}`,
     sessionId: 'session-1',
     turnId: 'turn-1',
     nodeId: 'local',
-    capabilityId: 'shell-1',
+    projectScope: '0123456789abcdef0123456789abcdef',
     operation: 'process.execute',
     args: { script: 'ignored', cwd: cwd() },
     createdAt: createdAt.toISOString(),
@@ -135,14 +136,14 @@ async function collect(
 
 test('execution contracts validate versions, malformed data, and unknown fields', () => {
   const valid = request('validation')
-  assert(validateJobRequestV1(valid).success)
-  assertEquals(validateJobRequestV1({ ...valid, version: 2 }).success, false)
-  assertEquals(validateJobRequestV1({ ...valid, surprise: true }).success, false)
+  assert(validateExecutionRequestV2(valid).success)
+  assertEquals(validateExecutionRequestV2({ ...valid, version: 1 }).success, false)
+  assertEquals(validateExecutionRequestV2({ ...valid, surprise: true }).success, false)
   for (const approval of ['none', 'local-required']) {
-    assertEquals(validateJobRequestV1({ ...valid, approval }).success, false)
+    assertEquals(validateExecutionRequestV2({ ...valid, approval }).success, false)
   }
   assertEquals(
-    validateJobRequestV1({ ...valid, deadlineAt: 'not-a-date' }).success,
+    validateExecutionRequestV2({ ...valid, deadlineAt: 'not-a-date' }).success,
     false,
   )
 
@@ -236,12 +237,12 @@ test('LocalExecutor expires stale and over-deadline jobs without duplicate termi
     async () => {
       for await (
         const _event of executor.execute(
-          { ...request('invalid'), version: 2 } as unknown as JobRequestV1,
+          { ...request('invalid'), version: 1 } as unknown as ExecutionRequestV2,
           new AbortController().signal,
         )
       ) { /* consume */ }
     },
-    { name: 'TypeError', message: /Invalid JobRequestV1/ },
+    { name: 'TypeError', message: /Invalid ExecutionRequestV2/ },
   )
 })
 
@@ -261,18 +262,18 @@ test('LocalExecutor confines capability filesystem reads and writes to the physi
   try {
     const manager = new FakeProcessManager()
     const filesystem = new CapabilityFilesystem([{
-      capabilityId: 'workdir-1',
+      workdirId: 'workdir-1',
       rootPath: root,
     }])
     const executor = new LocalExecutor(
       manager as unknown as Pick<ProcessManager, 'spawn'>,
       'local',
       [filesystem],
-      ['shell-1'],
+      fixtureDirectoryAdmission('local', [{ workdirId: 'workdir-1', rootPath: root }]),
     )
     const readEvents = await collect(executor.execute(
       request('fs-read', {
-        capabilityId: 'workdir-1',
+        nodeId: 'local', workdirId: 'workdir-1',
         operation: FILESYSTEM_READ_OPERATION,
         args: { path: 'nested/input.txt' },
       }),
@@ -280,7 +281,7 @@ test('LocalExecutor confines capability filesystem reads and writes to the physi
     ))
     const writeEvents = await collect(executor.execute(
       request('fs-write', {
-        capabilityId: 'workdir-1',
+        nodeId: 'local', workdirId: 'workdir-1',
         operation: FILESYSTEM_WRITE_OPERATION,
         args: { path: 'nested/output.txt', content: 'written' },
       }),
@@ -288,7 +289,7 @@ test('LocalExecutor confines capability filesystem reads and writes to the physi
     ))
     const listEvents = await collect(executor.execute(
       request('fs-list', {
-        capabilityId: 'workdir-1',
+        nodeId: 'local', workdirId: 'workdir-1',
         operation: FILESYSTEM_READ_OPERATION,
         args: { path: 'nested' },
       }),
@@ -296,7 +297,7 @@ test('LocalExecutor confines capability filesystem reads and writes to the physi
     ))
     const searchEvents = await collect(executor.execute(
       request('fs-search', {
-        capabilityId: 'workdir-1',
+        nodeId: 'local', workdirId: 'workdir-1',
         operation: FILESYSTEM_READ_OPERATION,
         args: { path: '.', query: 'nested/input' },
       }),
@@ -306,7 +307,7 @@ test('LocalExecutor confines capability filesystem reads and writes to the physi
       { paths: ['nested/input.txt'], truncated: false })
     const escapeEvents = await collect(executor.execute(
       request('fs-escape', {
-        capabilityId: 'workdir-1',
+        nodeId: 'local', workdirId: 'workdir-1',
         operation: FILESYSTEM_READ_OPERATION,
         args: { path: 'escape/secret.txt' },
       }),
@@ -314,7 +315,7 @@ test('LocalExecutor confines capability filesystem reads and writes to the physi
     ))
     const unknownEvents = await collect(executor.execute(
       request('fs-unknown', {
-        capabilityId: 'workdir-unknown',
+        nodeId: 'local', workdirId: 'workdir-unknown',
         operation: FILESYSTEM_READ_OPERATION,
         args: { path: 'nested/input.txt' },
       }),
@@ -323,7 +324,7 @@ test('LocalExecutor confines capability filesystem reads and writes to the physi
     const confusedDeputyEvents = await collect(
       executor.execute(
         request('fs-shell', {
-          capabilityId: 'workdir-1',
+          nodeId: 'local', workdirId: 'workdir-1', operation: 'workdir.process.execute',
         }),
         new AbortController().signal,
       ),
@@ -365,7 +366,7 @@ test('LocalExecutor runs registered process capabilities directly', async () => 
     manager as unknown as Pick<ProcessManager, 'spawn'>,
     'local',
     [],
-    ['shell-1'],
+    undefined,
   )
   const firstEvents = collect(executor.execute(
     request('direct-first'),
@@ -397,7 +398,7 @@ test('LocalExecutor never spawns a pre-cancelled or expired job', async () => {
     manager as unknown as Pick<ProcessManager, 'spawn'>,
     'local',
     [],
-    ['shell-1'],
+    undefined,
   )
   const cancelledEvents = await collect(executor.execute(
     request('pre-cancelled'),

@@ -45,8 +45,8 @@ test('project becomes locally ready while QQ connects, and shutdown cancels pend
     throw new Error('Startup must not probe optional network services')
   })
   const cluster = {
-    workdirCapabilityLookup: () => undefined,
-    registry: { listCapabilities: () => [] },
+    workdirLookup: () => undefined,
+    registry: { listWorkdirs: () => [] },
     getNodeInventory: () => ({ version: 1, nodes: [] }),
   } as unknown as MainCluster
   const starting = scope.run(() => createProjectRuntime(effective, {
@@ -100,7 +100,7 @@ for (const primaryRetired of [true, false]) {
       fetch: async () => assert.fail('Startup must not contact an account'),
     })
     const cluster = {
-      workdirCapabilityLookup: () => undefined, registry: { listCapabilities: () => [] },
+      workdirLookup: () => undefined, registry: { listWorkdirs: () => [] },
       getNodeInventory: () => ({ version: 1, nodes: [] }),
     } as unknown as MainCluster
     const runtime = await scope.run(() => createProjectRuntime(effective, {

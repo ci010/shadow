@@ -6,7 +6,7 @@ import { folderFixture } from '../folders/test-fixtures.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionManager } from './session-manager.ts'
-import type { WorkdirCapabilityState } from './locality.ts'
+import type { WorkdirState } from './locality.ts'
 import { remoteSessionPlugin } from './remote-session-routes.ts'
 import type { Executor } from '../execution/executor.ts'
 import type { SessionStore } from './session-store.ts'
@@ -20,16 +20,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     await store.init()
     let created = 0
     let authority = false
-    let capability: WorkdirCapabilityState = { node: 'online', capability: { kind: 'workdir', online: true } }
+    let capability: WorkdirState = { node: 'online', workdir: { online: true } }
     const executor: Executor = {
       execute: () => { throw new Error('Creation must not execute a job') },
       getStatus: async () => null,
       cancel: async () => { throw new Error('Creation must not cancel a job') },
     }
 
-    const sessions: Pick<SessionManager, 'workspace' | 'workdirCapabilityLookup' | 'remoteExecutor' | 'buildSession'> = {
+    const sessions: Pick<SessionManager, 'workspace' | 'workdirLookup' | 'remoteExecutor' | 'buildSession'> = {
       workspace, remoteExecutor: executor,
-      workdirCapabilityLookup: ref => ref.nodeId === 'wsl' && ref.capabilityId === 'test-dir' ? capability : { node: 'missing' },
+      workdirLookup: ref => ref.nodeId === 'wsl' && ref.workdirId === 'test-dir' ? capability : { node: 'missing' },
       buildSession: async (sessionId, _parent, fields) => {
         created++
         await store.saveState(sessionId, { sessionId, segmentIndex: 0, mode: fields?.mode, workdir: fields?.workdir })
@@ -40,19 +40,19 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const request = (body: unknown) => app.request('/api/sessions/remote', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })
-    const selection = { nodeId: 'wsl', capabilityId: 'test-dir' }
+    const selection = { nodeId: 'wsl', workdirId: 'test-dir' }
     try {
       assert.equal((await request(selection)).status, 401)
       authority = true
       for (const bad of [null, [], {}, { ...selection, nodeId: 'local' }, { ...selection, path: '/etc' },
-        { ...selection, displayPathSnapshot: '/home/user' }, { ...selection, capabilityId: '' }]) {
+        { ...selection, displayPathSnapshot: '/home/user' }, { ...selection, workdirId: '' }]) {
         assert.equal((await request(bad)).status, 400)
       }
       capability = { node: 'offline' }
       assert.equal((await request(selection)).status, 409)
-      capability = { node: 'online', capability: { kind: 'shell', online: true } }
+      capability = { node: 'online', incompatible: true, workdir: { online: true } }
       assert.equal((await request(selection)).status, 409)
-      capability = { node: 'online', capability: { kind: 'workdir', online: true } }
+      capability = { node: 'online', workdir: { online: true } }
       assert.equal((await request({ ...selection, nodeId: 'unpaired' })).status, 409)
       assert.equal(created, 0)
       const response = await request(selection)
@@ -60,7 +60,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const result = await response.json()
       assert.match(result.sessionId, /^web:chat-/)
       assert.equal(result.sessionId, `web:${result.chatId}`)
-      assert.deepEqual((await store.getState(result.sessionId))?.workdir, { version: 1, ...selection })
+      assert.deepEqual((await store.getState(result.sessionId))?.workdir, { version: 2, ...selection })
       assert.equal(created, 1)
       assert.equal((await request({ ...selection, extra: 'x'.repeat(4100) })).status, 413)
     } finally { store.close?.() }
@@ -71,7 +71,7 @@ test('rootless creation requires a live allocation grant and never falls back to
   let executed = 0
   let node: NodeInventoryEntry = {
     nodeId: 'child', displayName: 'Old Child', role: 'child', connection: 'connected',
-    capabilities: [{ capabilityId: 'arbitrary-folder', kind: 'workdir', displayName: 'Existing folder', online: true }],
+    executionProtocol: 'compatible', support: { operations: [] }, workdirs: [{ version: 2 as const, nodeId: 'child', workdirId: 'arbitrary-folder', displayName: 'Existing folder', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } }],
   }
   const executor: Executor = {
     execute: () => { executed++; throw new Error('Must not execute') },
@@ -81,10 +81,10 @@ test('rootless creation requires a live allocation grant and never falls back to
   remoteSessionPlugin({
     authorize: () => true,
     sessions: {
-      workspace: process.cwd(), remoteExecutor: executor, workdirCapabilityLookup: undefined,
+      workspace: process.cwd(), remoteExecutor: executor, workdirLookup: undefined,
       buildSession: async () => { throw new Error('Must not create') },
     },
-    managedSessions: { projectId: 'default', inventory: () => ({ version: 1, nodes: [node] }) },
+    managedSessions: { executor, projectId: 'default', inventory: () => ({ version: 1, nodes: [node] }) },
   })(app)
   const request = () => app.request('/api/sessions/remote', {
     method: 'POST', headers: { 'content-type': 'application/json' },

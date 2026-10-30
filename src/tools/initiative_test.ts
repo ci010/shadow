@@ -54,7 +54,7 @@ test('initiative data stays Home-scoped when the caller has a remote working dir
   const remoteContext = {
     ...context,
     cwd: 'not-a-local-path',
-    remoteWorkdir: { nodeId: 'child', capabilityId: 'folder', executor: {
+    remoteWorkdir: { nodeId: 'child', workdirId: 'folder', executor: {
       execute() { throw new Error('Initiative records must not execute against remote files') },
     } },
   }

@@ -200,8 +200,8 @@ behavior and remote-execution limitations.
 The Child lifecycle starts credential validation, local executor lifecycle
 management, the Main connector, and an optional authenticated loopback control
 listener in that order; shutdown and partial-start rollback reverse the
-successfully started services. Capability descriptors are supplied directly to
-the connector, not hosted in an empty registry service. No placeholder service
+successfully started services. Workdir and node operation support is supplied
+directly to the connector, not hosted in an empty registry service. No placeholder service
 is created for artifact staging or for an absent local control listener.
 
 ## Projects: ownership, storage, and routing
@@ -395,17 +395,17 @@ Project composition wires
 [`RemoteFolderOwnership`](../src/folders/remote-ownership.ts) into the folder
 registry and [`remote-session-routes.ts`](../src/sessions/remote-session-routes.ts).
 New remote-session creation registers or reuses a project-owned remote
-folder, then persists its `folderId` and opaque node/capability workdir
+folder, then persists its `folderId` and opaque node/workdir workdir
 reference. `POST /projects/<id>/api/sessions/remote` accepts `nodeId`,
-`capabilityId`, and an optional UUID `requestId` for retry-stable session
+`workdirId`, and an optional UUID `requestId` for retry-stable session
 creation; it does not accept an execution path. A reused request ID targeting a
-different capability is a conflict.
+different resource is a conflict.
 
 For a reopened registered-folder draft,
 `POST /projects/<id>/api/folders/<folder-id>/sessions` accepts an optional
 `{requestId: UUID}` object; an empty body remains compatible. It verifies the
 saved remote folder identity before creating a session, rather than reselecting
-its node/capability. Concurrent requests and retries after a lost response reuse
+its node/workdir. Concurrent requests and retries after a lost response reuse
 the same persisted conversation; a request ID already bound to another folder
 returns a conflict.
 
@@ -422,17 +422,24 @@ identity fails explicitly rather than guessing ownership from its path.
 Startup reserves legacy remote workdirs from **both JSONL and SQLite** for
 Default. Both direct registration and registered-folder `requireAvailable`
 revalidate every saved claim and folder on that device. An unavailable or
-retargeted **other** saved capability can block not only new registration but
+retargeted **other** saved resource can block not only new registration but
 also opening a new session in an existing folder or accessing its
-resources. These ownership checks intentionally fail closed until the affected
-capability is restored and revalidated; they never fall back to Main.
-Existing session records remain preserved.
-Migrated existing sessions retain their references and supported execution
-paths. An older Child without `workdir.identity` returns
-`409 remote_workdir_identity_unsupported` / `upgrade_node` for new folder
-actions, not a blanket prohibition on existing remote sessions. Deploy updated
-Main and Child and reconnect; Mac/WSL SSH test fixtures need this rollout too,
-and are not a portable/autostart release. An unavailable device/workdir returns
+resources through those registration/ownership-refresh paths. These checks
+intentionally fail closed until the affected resource is restored and revalidated;
+they never fall back to Main. Ordinary existing-session and per-call Folder
+execution instead verifies only the selected target against retained ownership
+facts, so an unrelated offline resource does not suspend a healthy target.
+Read-only identity queries do not leave durable process reservations after a
+connection failure. Existing session records remain preserved.
+Migrated existing sessions retain their exact references and historical records.
+Remote execution now requires `workdir-execution-v2` on **both** Main and Child;
+an older peer explicitly requires an upgrade for all remote operations, including
+existing sessions and reconciliation. There is no executable V1 downgrade.
+A compatible Child still needs the operation-specific capability (for example
+`workdir.identity` for registration). Deploy updated Main and Child and reconnect;
+this code migration does not restart running instances or establish release readiness.
+The [execution model](execution-model.md) describes Device/Folder/session workdirs,
+lightweight operation support, direct access checks and storage-only legacy adapters. An unavailable device/workdir returns
 `503 remote_workdir_unavailable`. Native test execution is not an upgrade or
 restart of already-running Child processes.
 
@@ -908,7 +915,7 @@ Registered folders have a project-filtered registry backed by the host
 catalog's ownership index.
 Their stable `folderId` is distinct from the `initiativeId` used for coordinated
 work and shared context. Creating a folder conversation stores the folder ID
-and a local workdir capability reference. The locality resolver obtains its
+and a local workdir reference. The locality resolver obtains its
 absolute directory from the backend registry, never from a display-path snapshot.
 Managed scratch directories and old unassociated sessions keep their previous
 behavior. Session data and uploads remain under their owning session directory
@@ -916,10 +923,10 @@ even when filesystem tools execute in an external registered folder.
 
 `src/folders/` owns registration, canonical-path deduplication, and cancellable
 Git clone operations; `src/runtime/main/` composes these with session creation and the
-existing capability lookup. Electron only exposes a Main-window-validated native
+existing workdir lookup. Electron only exposes a Main-window-validated native
 directory picker. Folder HTTP routes use the existing gateway authorization
 boundary. The Main sidebar also offers Open remote folder, which opens the
-existing remote-capability draft picker rather than registering a Main-local
+existing remote-resource draft picker rather than registering a Main-local
 path. Git worktree/branch management is not implemented.
 
 `subagent` requires the initial `task` for task/call execution. Legacy
@@ -2376,7 +2383,7 @@ archive, new webhook subscription or live-API deployment certification.
 These changes do not select an execution node. A new external-channel root without
 an explicit workdir uses Main's `<workspace>/<safeSessionId>` managed directory;
 session storage stays under Main's `<workspace>/.sessions`. Remote execution
-requires a workdir capability; automatic per-channel/group node selection remains
+requires a workdir; automatic per-channel/group node selection remains
 unimplemented.
 
 Uploads are normally placed under the session's `uploads` directory. Message
@@ -2800,19 +2807,21 @@ An authenticated connection grants management access; the renderer does not appl
 additional UI roles or scope checks. Connection availability, Child-local recovery,
 mobile backend route restrictions, and device/browser authentication remain in
 place. Client-side presentation rules are not server authorization.
-The former Workspaces page is consolidated into each node's capability details;
-`/workspaces` redirects to `/nodes`. Nodes consumes a versioned, allowlisted
-read-only inventory alongside separate Main desktop administration commands,
-not product fixtures. The renderer validates responses,
-polls every five seconds while visible, aborts requests on navigation, and
-displays errors without stale online statuses or synthetic fallback devices.
-Unsupported fields (including remote filesystem paths) are omitted.
-Node/capability IDs are identifiers, not capability kinds.
+The former Workspaces page is consolidated into each node's workdirs and supported
+operations; `/workspaces` redirects to `/nodes`. Nodes consumes a versioned,
+allowlisted read-only inventory alongside separate Main desktop administration
+commands, not product fixtures. The renderer validates responses, polls every
+five seconds while visible, aborts requests on navigation, and displays errors
+without stale online statuses or synthetic fallback devices. Unsupported fields
+are omitted. Workdir IDs identify device-local directory bindings; operation
+support has no independent Capability IDs or registration hierarchy.
 
 Main's `GET /nodes/v1` combines its configured identity, registered local shell
 and project workdirs, and approved/revoked Child records. Remote availability
-requires an authenticated connection and a capability advertisement from that
-connection, not a persisted `online` flag. Remote versions and last-seen times
+requires a compatible authenticated connection and fresh workdir/operation
+support from that connection, not persisted `online` flags. Inventory reports
+workdirs, lightweight node/workdir support and `executionProtocol`; advertisements
+do not bypass existing Project/Folder access checks. Remote versions and last-seen times
 are not currently reported. The route requires the launch credential when
 configured; credentialless development permits only a verified loopback TCP
 peer with a loopback request hostname, under the gateway's origin policy.
@@ -2826,11 +2835,12 @@ offline or waiting for approval. Local workdir availability also reflects the
 current directory state. The separate authenticated `/local/v1/child` status
 supports the Child-only desktop shell and fingerprint comparison without
 pretending Main chat/API proxying exists. Inventory endpoints remain read-only
-and expose no device credentials, public keys, or permission lists.
+and expose no device credentials or public keys; operation support is not authorization.
 
 The application no longer installs approval fixtures or displays an Approvals
 tab. The legacy `/approvals` route redirects to Nodes. Paired nodes are trusted
-to run supported operations without extra prompts or grants. Main's Nodes
+to run supported operations without extra per-operation prompts; existing
+Project/Folder/session rules still authorize directory access and operations. Main's Nodes
 pairing flow confirms device identity and execution trust, not per-operation
 approval. Device revocation UI and complete multi-device release acceptance
 remain outside this slice.
@@ -3023,7 +3033,7 @@ session's execution locality are distinct concepts.
   snapshot and a `RemoteExecutor` bound to connected node sessions.
 - Production Child composition with Ed25519 credential references, protected
   key-store adapters, challenge-based connection/reconnection, advertised shell
-  and configured workdir capabilities.
+  and configured workdirs and lightweight operation support.
 - Electron Child first-run pairing and role-aware restart, plus Main Nodes
   invitation/fingerprint-approval controls. See the
   [two-device setup guide](desktop-pairing.md) for the trusted-network test path
@@ -3039,7 +3049,7 @@ session's execution locality are distinct concepts.
   attached transports without revoking identities. HTTP remains unencrypted
   and requires explicit trusted-LAN/VPN consent, not public exposure.
 - Versioned jobs with acceptance/status/events, cancellation/deadline handling,
-  and node/capability/job ownership checks.
+  and exact node/workdir/job ownership checks.
 - Cluster owns device trust and routing, not session permission policy.
   Approved, non-revoked devices no longer carry `uiScopes` or
   `nodePrivileges`; session-specific restrictions belong at session/execution
@@ -3057,15 +3067,17 @@ session's execution locality are distinct concepts.
   intact. Old empty permission lists no longer restrict a trusted device.
   Back up before upgrading: compatibility reads old snapshots, but does not
   promise that older builds can read newly saved snapshots.
-- Supported Child operations execute directly after authenticated pairing.
-  Execution approval policies, grants, queues, APIs, and the `awaiting-approval`
-  job state have been removed; cancellation, deadlines, capability operations,
-  and workdir boundaries remain enforced. Upgrade Main and Child together:
-  wire validators reject retired approval fields, including requests that used
-  to require approval. Registry snapshot restoration strips recognized legacy
-  policy metadata without changing paired identities or capability ownership.
-  Jobs are in-memory and are not resumed from old approval waits after restart.
-- Workdir capability operations for bounded UTF-8 file reads/writes; higher
+- Supported Child operations require authenticated pairing, a compatible
+  `workdir-execution-v2` connection, current Project/Folder/session access,
+  and live workdir/operation support. Retired per-operation approval policies,
+  queues, APIs and `awaiting-approval` job states are not restored. There is no
+  replacement Grant/token system or generic Resource hierarchy. Cancellation,
+  deadlines and directory bindings remain enforced; shell execution is not an
+  OS sandbox. Registry readers preserve paired identities and normalize supported
+  old directory metadata, but never
+  enable old wire execution. Transport jobs are in-memory; durable shell
+  reconciliation separately reads old journal records without re-executing.
+- Workdir operations for bounded UTF-8 file reads/writes; higher
   layers provide listing, edit, and text-preview paths without giving Main the
   Child's physical root.
 
@@ -3082,34 +3094,34 @@ on every deployment.
 
 ### Locality contract
 
-`WorkdirRefV1` contains a node ID and opaque capability ID. Display names/paths
+`WorkdirRefV2` contains a node ID and opaque workdir ID. Display names/paths
 are presentation snapshots, not authority. The resolver returns one of:
 
 - managed local workdir with an actual local path;
 - available remote workdir with no Main-local path;
 - explicit missing/offline/revoked/incompatible status.
 
-Legacy local sessions normalize to managed capabilities derived from the owning
+Legacy local sessions normalize to managed workdir references derived from the owning
 session. The current local resolver does not turn an arbitrary display path into
-an external local-folder capability.
+an external local Folder.
 
 Tools reject remote contexts unless they explicitly opt in.
 `read`/`write` have remote filesystem implementations. Session/task `exec` supports
 bounded foreground OS-shell commands through the separate
-`workdir.process.execute` operation on a configured workdir capability. The Child
+`workdir.process.execute-once` operation on a selected workdir. The Child
 resolves cwd, validates the supported operation, and owns
 deadline/cancellation cleanup. Main's platform and detected shells are not
 advertised as the remote target's capabilities. A generic `process.execute`
-advertisement alone does not authorize capability-bound workdir execution.
+advertisement alone does not authorize directory-bound execution.
 Remote inline Node/TypeScript, background processes, call-mode exec, search,
 dynamic/MCP imports and browser operations remain unsupported; a shell workdir is
 not an OS sandbox.
 
 The Main-admin-only `POST /projects/<id>/api/sessions/remote` route creates
-a fresh web root from an online node/workdir capability reference after
+a fresh web root from an online node/workdir reference after
 [verified project folder registration](#remote-folder-ownership-and-upgrade-boundary).
-Older Children must be updated for new project actions; existing remote sessions
-retain their supported paths. The route uses ordinary session construction
+Both peers must support the new execution protocol; incompatible peers suspend
+remote operations while preserving existing sessions and directory identities. The route uses ordinary session construction
 and JSONL/SQLite persistence, without accepting paths or rebinding an active
 conversation. Subsequent messages still go through the web channel and
 `SessionManager`. No raw job-submission endpoint or second agent loop is added.
@@ -3134,8 +3146,8 @@ do not clone, stage, commit or switch branches.
 The explorer combines file/Git failures into a neutral **Node offline** state
 only for HTTP 503 `workdir_unavailable` (sessions) or
 `remote_workdir_unavailable` (projects), with the validated locality reason
-`node-offline` and non-empty `nodeId`/`capabilityId`. Project resource responses
-include these additive fields from the ownership resolver's node/capability
+`node-offline` and non-empty `nodeId`/`workdirId`. Project resource responses
+include these fields from the ownership resolver's node/workdir
 lookup. Other reasons, authorization failures, unsupported operations, generic
 503s, and ambiguous `remote-node-unavailable` execution receipts remain errors,
 not evidence that a node is offline. **Check again** retries the same scoped
@@ -3260,7 +3272,7 @@ roundtrip is accepted; modifying these fields is rejected. The committed
 folder selection and file workbench. Browsing alone does not mutate execution.
 
 Remote folder switching currently fails closed: remote instruction preparation
-is not implemented, even if the remote workdir capability is online. Existing
+is not implemented, even if the remote workdir is online. Existing
 remote session initialization is unchanged; remote display paths are never
 resolved on Main and there is no silent local fallback. A validation, preparation
 or state-save failure leaves the previous working context intact.
@@ -3468,7 +3480,7 @@ To extend the system:
 6. **Gateway feature:** add a plugin and runtime validation; keep renderer-only
    state out of authority decisions and mount before the SPA fallback.
 7. **Persistence/locality:** update both stores and migration fixtures; keep
-   node/capability references opaque and unavailable states explicit.
+   node/workdir references opaque and unavailable states explicit.
 8. **Device capability:** extend validated contracts, Child handling,
    Main routing, tool locality, and UI only as each slice is
    genuinely integrated. Do not relabel an incomplete protocol as released.

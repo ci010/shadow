@@ -1,3 +1,4 @@
+import { fixtureDirectoryAdmission } from '../execution/test-fixtures.ts'
 import { deepEqual as assertEquals, rejects as assertRejects, throws as assertThrows } from 'node:assert/strict'
 import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -6,7 +7,7 @@ import { createTempWorkspace } from '../testing/workspace.ts'
 import type {
   CancelReceiptV1,
   JobEventV1,
-  JobRequestV1,
+  ExecutionRequestV2,
   JobStatusV1,
 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
@@ -16,7 +17,7 @@ import {
   FILESYSTEM_READ_OPERATION,
 } from '../execution/capability-filesystem.ts'
 import { ChildNodeConnectionSession } from './child-node-connection-session.ts'
-import type { CapabilityDescriptorV1, VersionHelloV1 } from './contracts.ts'
+import type { ExecutionSupport, VersionHelloV1 } from './contracts.ts'
 import { createInMemoryNodeDuplexPair } from './in-memory-node-duplex.ts'
 import {
   NodeConnectionSession,
@@ -35,39 +36,31 @@ const mainHello: VersionHelloV1 = {
   protocolMajor: 1,
   protocolMinor: 2,
   implementationVersion: 'main-0.1.0',
-  features: ['jobs-v1', 'capabilities-v1'],
+  features: ['workdir-execution-v2'],
 }
 const childHello: VersionHelloV1 = {
   ...mainHello,
   implementationVersion: 'child-0.1.0',
 }
-const capability: CapabilityDescriptorV1 = {
-  version: 1,
-  capabilityId: 'shell-1',
-  nodeId: auth.nodeId,
-  kind: 'shell',
-  displayName: 'Folder shell',
-  permissions: ['process.execute'],
-  online: true,
-}
-const request: JobRequestV1 = {
-  version: 1,
+const capability: ExecutionSupport = { operations: ['process.execute'] }
+const request: ExecutionRequestV2 = {
+  version: 2,
   jobId: 'job-1',
   idempotencyKey: 'idempotency-1',
   sessionId: 'session-1',
   turnId: 'turn-1',
   nodeId: auth.nodeId,
-  capabilityId: capability.capabilityId,
-  operation: 'shell.execute',
+  projectScope: '0123456789abcdef0123456789abcdef',
+  operation: 'process.execute',
   args: { command: 'echo hello' },
   createdAt: baseTime.toISOString(),
   deadlineAt: new Date(baseTime.getTime() + 60_000).toISOString(),
 }
 
 class SuccessfulExecutor implements Executor {
-  readonly requests: JobRequestV1[] = []
+  readonly requests: ExecutionRequestV2[] = []
 
-  async *execute(request: JobRequestV1): AsyncIterable<JobEventV1> {
+  async *execute(request: ExecutionRequestV2): AsyncIterable<JobEventV1> {
     this.requests.push(structuredClone(request))
     yield event(request.jobId, 0, 'accepted')
     yield event(request.jobId, 1, 'stdout', { chunk: 'hello\n' })
@@ -87,7 +80,7 @@ class CancellableExecutor implements Executor {
   readonly cancelled: string[] = []
   readonly #cancelled = Promise.withResolvers<void>()
 
-  async *execute(request: JobRequestV1): AsyncIterable<JobEventV1> {
+  async *execute(request: ExecutionRequestV2): AsyncIterable<JobEventV1> {
     yield event(request.jobId, 0, 'accepted')
     await this.#cancelled.promise
     yield terminalEvent(
@@ -276,8 +269,8 @@ test('child node session handshakes, advertises, executes, streams, and withdraw
     protocolMinor: 2,
     features: childHello.features,
   })
-  child.advertiseCapability(capability)
-  await waitFor(() => registry.listCapabilities(auth.nodeId).length === 1)
+  child.advertiseNodeSupport(capability)
+  await waitFor(() => registry.nodeSupport(auth.nodeId).operations.length === 1)
   main.dispatchJob(request)
   await terminal.promise
 
@@ -288,8 +281,8 @@ test('child node session handshakes, advertises, executes, streams, and withdraw
     'stdout',
     'completed',
   ])
-  assertEquals(child.withdrawCapability(capability.capabilityId), true)
-  await waitFor(() => registry.listCapabilities(auth.nodeId).length === 0)
+  assertEquals(child.advertiseNodeSupport({ operations: [] }), { operations: [] })
+  await waitFor(() => registry.nodeSupport(auth.nodeId).operations.length === 0)
   await closePair(child, childRun, mainRun)
 })
 
@@ -319,8 +312,8 @@ test('chunked job output waits for transport capacity instead of disconnecting a
   const childRun = child.run()
   try {
     await child.authenticated
-    child.advertiseCapability(capability)
-    while (!registry.listCapabilities(auth.nodeId).length) await delay(1)
+    child.advertiseNodeSupport(capability)
+    while (!registry.nodeSupport(auth.nodeId).operations.length) await delay(1)
     main.dispatchJob(request)
     await terminal.promise
     assertEquals(received.map(event => event.sequence), Array.from({ length: 34 }, (_, i) => i))
@@ -328,38 +321,22 @@ test('chunked job output waits for transport capacity instead of disconnecting a
   } finally { await closePair(child, childRun, mainRun) }
 })
 
-test('workdir display metadata is advertised only when negotiated with Main', async () => {
-  for (const supported of [false, true]) {
-    const registry = approvedRegistry()
-    const pair = createInMemoryNodeDuplexPair()
-    const displayHello = { ...mainHello, features: [...mainHello.features, 'workdir-display-v1'] }
-    const main = new NodeConnectionSession(registry, pair.server, supported ? displayHello : mainHello, {
-      maxOutboundQueue: 8, heartbeatTimeoutMs: 30_000,
-    })
-    const child = new ChildNodeConnectionSession(
-      pair.client, displayHello, auth, new SuccessfulExecutor(),
-      { maxOutboundQueue: 8, heartbeatTimeoutMs: 30_000 },
-    )
-    const mainRun = main.run()
-    const childRun = child.run()
-    try {
-      await child.authenticated
-      child.advertiseCapability({
-        ...capability, kind: 'workdir', displayPath: '/child/folder',
-      })
-      await waitFor(() => registry.listCapabilities(auth.nodeId).length === 1)
-      const advertised = registry.listCapabilities(auth.nodeId)[0]
-      assertEquals(advertised.displayPath, supported ? '/child/folder' : undefined)
-      assertThrows(() => child.advertiseCapability({
-        ...capability, kind: 'workdir', displayPath: '/child\nforged',
-      }), NodeSessionError)
-      assertThrows(() => child.advertiseCapability({
-        ...capability, nodeId: 'another-node', kind: 'workdir', displayPath: '/child/folder',
-      }), NodeSessionError)
-    } finally {
-      await closePair(child, childRun, mainRun)
-    }
-  }
+test('workdir display metadata is advertised by new protocol only and never becomes a capability path', async () => {
+  const registry = approvedRegistry()
+  const pair = createInMemoryNodeDuplexPair()
+  const main = new NodeConnectionSession(registry, pair.server, mainHello, { maxOutboundQueue: 8, heartbeatTimeoutMs: 30_000 })
+  const child = childSession(pair.client, new SuccessfulExecutor())
+  const mainRun = main.run(); const childRun = child.run()
+  try {
+    await child.authenticated
+    const workdir = { version: 2 as const, nodeId: auth.nodeId, workdirId: 'folder', displayName: 'Folder', displayPath: '/child/folder', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } }
+    child.advertiseWorkdir(workdir)
+    await waitFor(() => registry.listWorkdirs(auth.nodeId).length === 1)
+    assertEquals(registry.listWorkdirs(auth.nodeId)[0].displayPath, '/child/folder')
+    assertThrows(() => child.advertiseWorkdir({ ...workdir, displayPath: '/child\nforged' }), NodeSessionError)
+    assertThrows(() => child.advertiseWorkdir({ ...workdir, nodeId: 'another-node' }), NodeSessionError)
+    assertThrows(() => child.advertiseNodeSupport({ ...capability, displayPath: '/child/folder' }), NodeSessionError)
+  } finally { await closePair(child, childRun, mainRun) }
 })
 
 test('child node session executes a confined workdir read and rejects shell capability confusion', async () => {
@@ -394,51 +371,43 @@ test('child node session executes a confined workdir read and rejects shell capa
       auth.nodeId,
       [
         new CapabilityFilesystem([{
-          capabilityId: 'workdir-1',
+          workdirId: 'workdir-1',
           rootPath: directory,
         }]),
       ],
-      ['shell-1'],
+      fixtureDirectoryAdmission(auth.nodeId, [{ workdirId: 'workdir-1', rootPath: directory }]),
     )
     const child = childSession(pair.client, executor)
     const mainRun = main.run()
     const childRun = child.run()
-    const workdirCapability: CapabilityDescriptorV1 = {
-      version: 1,
-      capabilityId: 'workdir-1',
-      nodeId: auth.nodeId,
-      kind: 'workdir',
-      displayName: 'Test workdir',
-      permissions: ['filesystem.read', 'filesystem.write'],
-      online: true,
-    }
+    const workdirCapability = { version: 2, nodeId: auth.nodeId, workdirId: 'workdir-1', displayName: 'Test workdir', online: true, support: { operations: ['filesystem.read', 'filesystem.write'] } }
 
     await child.authenticated
-    child.advertiseCapability(workdirCapability)
-    await waitFor(() => registry.listCapabilities(auth.nodeId).length === 1)
+    child.advertiseWorkdir({ version: 2 as const, nodeId: auth.nodeId, workdirId: 'workdir-1', displayName: 'Folder', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } })
+    child.advertiseWorkdir(workdirCapability as import('../execution/workdir-contracts.ts').WorkdirAdvertisement)
+    await waitFor(() => registry.listWorkdirs(auth.nodeId)[0]?.support.operations.length === 2)
     const createdAt = new Date()
     main.dispatchJob({
       ...request,
       jobId: 'workdir-read',
       idempotencyKey: 'workdir-read-key',
-      capabilityId: workdirCapability.capabilityId,
+      nodeId: auth.nodeId, workdirId: 'workdir-1',
       operation: FILESYSTEM_READ_OPERATION,
       args: { path: 'message.txt' },
       createdAt: createdAt.toISOString(),
       deadlineAt: new Date(createdAt.getTime() + 10_000).toISOString(),
     })
     await completed.get('workdir-read')?.promise
-    main.dispatchJob({
+    assertThrows(() => main.dispatchJob({
       ...request,
       jobId: 'workdir-shell',
       idempotencyKey: 'workdir-shell-key',
-      capabilityId: workdirCapability.capabilityId,
+      nodeId: auth.nodeId, workdirId: 'workdir-1',
       operation: 'process.execute',
       args: { script: 'echo denied', cwd: directory },
       createdAt: createdAt.toISOString(),
       deadlineAt: new Date(createdAt.getTime() + 10_000).toISOString(),
-    })
-    await completed.get('workdir-shell')?.promise
+    }), /directory operations require workdirId/)
 
     assertEquals(received.get('workdir-read')?.map((event) => event.type), [
       'accepted',
@@ -452,12 +421,7 @@ test('child node session executes a confined workdir read and rejects shell capa
       readOutput?.type === 'stdout' ? readOutput.chunk : undefined,
       'remote workdir',
     )
-    const denied = received.get('workdir-shell')?.at(-1)
-    assertEquals(denied?.type, 'rejected')
-    assertEquals(
-      denied && 'receipt' in denied ? denied.receipt.reason?.code : undefined,
-      'capability-denied',
-    )
+    assertEquals(received.has('workdir-shell'), false)
     assertEquals(spawnCount, 0)
     await closePair(child, childRun, mainRun)
   } finally {
@@ -506,8 +470,8 @@ test('child node session forwards Main cancellation to Executor', async () => {
   const childRun = child.run()
 
   await waitFor(() => child.state === 'authenticated')
-  child.advertiseCapability(capability)
-  await waitFor(() => registry.listCapabilities(auth.nodeId).length === 1)
+  child.advertiseNodeSupport(capability)
+  await waitFor(() => registry.nodeSupport(auth.nodeId).operations.length === 1)
   main.dispatchJob(request)
   await accepted.promise
   main.dispatchCancellation(request.jobId)
@@ -604,15 +568,14 @@ test('child node session bounds queued outbound frames behind a blocked send', a
   })
   await waitFor(() => child.state === 'authenticated')
 
-  child.advertiseCapability(capability)
+  child.advertiseNodeSupport(capability)
   await waitFor(() => child.outboundInFlight)
-  child.advertiseCapability({ ...capability, capabilityId: 'shell-2' })
+  child.advertiseNodeSupport({ operations: [] })
   assertEquals(child.outboundQueueSize, 1)
   assertThrows(
     () =>
-      child.advertiseCapability({
-        ...capability,
-        capabilityId: 'shell-3',
+      child.advertiseNodeSupport({
+        operations: ['process.execute'],
       }),
     (error) => error instanceof NodeSessionError &&
       error.message.includes('child node outbound queue is full'),
@@ -625,4 +588,18 @@ test('child node session bounds queued outbound frames behind a blocked send', a
     clean: true,
   })
   await running
+})
+
+
+test('new Child explicitly refuses an authenticated old Main rather than downgrading execution', async () => {
+  const registry = approvedRegistry()
+  const pair = createInMemoryNodeDuplexPair()
+  const main = new NodeConnectionSession(registry, pair.server, { ...mainHello, features: ['jobs-v1'] }, { maxOutboundQueue: 8, heartbeatTimeoutMs: 30000 })
+  const executor = new SuccessfulExecutor()
+  const child = childSession(pair.client, executor)
+  const mainRun = main.run(); const childRun = child.run()
+  mainRun.catch(() => {}); childRun.catch(() => {})
+  await assertRejects(child.authenticated, /Upgrade both Main and Child/)
+  assertEquals(executor.requests.length, 0)
+  await Promise.allSettled([mainRun, childRun])
 })

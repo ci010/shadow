@@ -2,7 +2,7 @@ import { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import { readdir, rm, writeFile } from 'node:fs/promises'
 import { createTempWorkspace } from '../testing/workspace.ts'
-import type { RegistrySnapshotV1 } from './contracts.ts'
+import type { RegistrySnapshotV2 } from './contracts.ts'
 import {
   AtomicFileRegistrySnapshotAdapter,
   InMemoryRegistrySnapshotAdapter,
@@ -11,14 +11,15 @@ import {
 } from './persistence.ts'
 import { InMemoryPairingNodeRegistry } from './registry.ts'
 
-const snapshot: RegistrySnapshotV1 = {
-  version: 1,
+const snapshot: RegistrySnapshotV2 = {
+  version: 2,
+  workdirs: [],
   createdAt: '2026-08-26T00:00:00.000Z',
   offers: [],
   consumedOfferIds: ['offer-1'],
   pending: [],
   nodes: [],
-  capabilities: [],
+  nodeSupport: [],
 }
 
 function registrySnapshotAdapterConformance(
@@ -31,10 +32,10 @@ function registrySnapshotAdapterConformance(
     await adapter.save(snapshot)
     snapshot.consumedOfferIds.push('caller-mutation')
 
-    const firstLoad = await adapter.load() as RegistrySnapshotV1
+    const firstLoad = await adapter.load() as RegistrySnapshotV2
     assertEquals(firstLoad.consumedOfferIds, ['offer-1'])
     firstLoad.consumedOfferIds.push('loaded-mutation')
-    assertEquals((await adapter.load() as RegistrySnapshotV1).consumedOfferIds, ['offer-1'])
+    assertEquals((await adapter.load() as RegistrySnapshotV2).consumedOfferIds, ['offer-1'])
   })
 }
 
@@ -57,7 +58,7 @@ test('file registry snapshot adapter round-trips and atomically overwrites', asy
     })
 
     assertEquals(
-      (await adapter.load() as RegistrySnapshotV1).consumedOfferIds,
+      (await adapter.load() as RegistrySnapshotV2).consumedOfferIds,
       ['offer-2'],
     )
     assertEquals(

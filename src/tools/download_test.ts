@@ -30,7 +30,7 @@ test('download tool requires owning local Project and human-approved hash-bound 
     }
     await assert.rejects(() => tool.execute(request, { ...context, projectId: 'other' }), /owning Project/)
     await assert.rejects(() => tool.execute(request, { ...context, remoteWorkdir: {
-      nodeId: 'remote', capabilityId: 'remote', executor: {} as Executor,
+      nodeId: 'remote', workdirId: 'remote', executor: {} as Executor,
     } }), /local workdir/)
     await assert.rejects(() => tool.execute({ ...request, approved: false }, context))
     await assert.rejects(() => tool.execute({ action: 'status', extra: true }, context))

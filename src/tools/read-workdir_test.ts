@@ -22,7 +22,7 @@ test('read directory and relative files use the same capability-backed cwd despi
     const home = join(root, 'home')
     const repo = join(root, 'repo')
     const locations = resolveSessionLocations(home, { sessionId: 'test', workdir: localFolderWorkdirRef('repo') },
-      'local', () => ({ node: 'online', capability: { kind: 'workdir', online: true, path: repo } }))
+      'local', () => ({ node: 'online', workdir: { online: true, path: repo } }))
     assert.ok(locations.workdir.available && locations.workdir.locality === 'local')
     const context = { cwd: locations.workdir.path, sessionId: 'test', physicalSessionId: 'physical',
       signal: new AbortController().signal } as ExecutionContext

@@ -16,7 +16,7 @@ resolution. An additional **file-scoped** fallback supports durable output files
   browsing, grant neighboring files, or allow arbitrary absolute paths.
 - Both lexical and canonical paths must remain within the selected output root.
   A symlink/junction redirecting the `Shadow` root itself is rejected as well.
-- Existing gateway authentication, Project/session resolution, workdir capability
+- Existing gateway authentication, Project/session resolution, workdir access
   checks, range handling, GET/HEAD behavior and download headers remain in force.
   Remote/unavailable workdirs never fall back to Main's user folders. Explicit
   `sessionId` (SNS) media requests remain private-upload-only.

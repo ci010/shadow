@@ -20,7 +20,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
 import type { LLMProvider } from '../providers/provider.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
-import type { WorkdirCapabilityState } from './locality.ts'
+import type { WorkdirState } from './locality.ts'
 
 function makeManager(workspace: string, store: SessionStore, overrides: Partial<SessionManagerDeps> = {}) {
   return new SessionManager({
@@ -28,9 +28,9 @@ function makeManager(workspace: string, store: SessionStore, overrides: Partial<
     agentTypes: { resolve: () => ({ name: 'general' }) },
     getLlmRuntimeConfig: () => ({ model: 'fixture', contextWindow: 999, temperature: 0 }),
     getKnownContextWindow: (model: string) => model === 'fixture' ? 8000 : null,
-    workdirCapabilityLookup: (ref: { capabilityId: string }) => ref.capabilityId === 'offline'
+    workdirLookup: (ref: { workdirId: string }) => ref.workdirId === 'offline'
       ? { node: 'offline' }
-      : { node: 'online', capability: { kind: 'workdir', online: true, path: join(workspace, 'folder') } },
+      : { node: 'online', workdir: { online: true, path: join(workspace, 'folder') } },
     ...overrides,
   } as unknown as SessionManagerDeps)
 }
@@ -384,22 +384,19 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
-      let availability: WorkdirCapabilityState = { node: 'online', capability: { kind: 'workdir', online: true } }
+      let availability: WorkdirState = { node: 'online', workdir: { online: true } }
       let inventory: NodeInventoryResponse = { version: 1, nodes: [{
         nodeId: 'child', displayName: 'Registered Child', role: 'child', connection: 'connected',
-        capabilities: [{
-          capabilityId: 'folder', kind: 'workdir', displayName: 'Registered Folder',
-          displayPath: '/child/not-a-main-path', online: true,
-        }],
+        executionProtocol: 'compatible', support: { operations: [] }, workdirs: [{ version: 2 as const, nodeId: 'child', workdirId: 'folder', displayName: 'Registered Folder', displayPath: '/child/not-a-main-path', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } }],
       }] }
       try {
         const sessions = makeManager(workspace, store, {
-          workdirCapabilityLookup: () => availability,
+          workdirLookup: () => availability,
           getNodeInventory: () => inventory,
         })
         await sessions.start()
         await sessions.buildSession('web:remote', undefined, { workdir: {
-          version: 1, nodeId: 'child', capabilityId: 'folder',
+          version: 2, nodeId: 'child', workdirId: 'folder',
           displayName: 'Untrusted renderer label', displayPathSnapshot: 'Z:\\untrusted',
         } })
         deepEqual((await sessions.getSessionDetails('web:remote'))?.workdir, {
@@ -408,11 +405,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         })
         inventory = { version: 1, nodes: [{
           ...inventory.nodes[0], displayName: 'Renamed Child', connection: 'offline',
-          capabilities: [{ ...inventory.nodes[0].capabilities[0], displayPath: '/child/moved', online: false }],
+          workdirs: [{ ...inventory.nodes[0].workdirs[0], displayPath: '/child/moved', online: false }],
         }] }
         availability = { node: 'offline' }
         const restarted = makeManager(workspace, store, {
-          workdirCapabilityLookup: () => availability,
+          workdirLookup: () => availability,
           getNodeInventory: () => inventory,
         })
         await restarted.start()
@@ -420,17 +417,17 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           kind: 'remote', nodeId: 'child', nodeName: 'Renamed Child', displayName: 'Registered Folder',
           displayPath: '/child/moved', available: false, availability: 'node-offline',
         })
-        inventory = { version: 1, nodes: [{ ...inventory.nodes[0], connection: 'revoked', capabilities: [] }] }
+        inventory = { version: 1, nodes: [{ ...inventory.nodes[0], connection: 'revoked', workdirs: [] }] }
         availability = { node: 'revoked' }
         deepEqual((await restarted.getSessionDetails('web:remote'))?.workdir, {
           kind: 'remote', nodeId: 'child', nodeName: 'Renamed Child', displayPath: null,
-          available: false, availability: 'capability-revoked',
+          available: false, availability: 'workdir-revoked',
         })
         for (const [state, reason] of [
           [{ node: 'missing' }, 'node-missing'],
-          [{ node: 'online' }, 'capability-missing'],
-          [{ node: 'online', capability: { kind: 'workdir', online: false } }, 'capability-offline'],
-          [{ node: 'online', capability: { kind: 'shell', online: true } }, 'incompatible'],
+          [{ node: 'online' }, 'workdir-missing'],
+          [{ node: 'online', workdir: { online: false } }, 'workdir-offline'],
+          [{ node: 'online', incompatible: true, workdir: { online: true } }, 'incompatible'],
         ] as const) {
           availability = state
           inventory = { version: 1, nodes: [] }
@@ -597,13 +594,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         equal(segment?.context.usedTokens, 40)
         for (const [id, workdir, expected] of [
           ['folder', localFolderWorkdirRef('p'), { kind: 'local', displayPath: join(workspace, 'folder'), nodeId: 'local', available: true, availability: 'available' }],
-          ['remote', { version: 1 as const, nodeId: 'child', capabilityId: 'p', displayPathSnapshot: '/opaque/child/path' },
+          ['remote', { version: 2 as const, nodeId: 'child', workdirId: 'p', displayPathSnapshot: '/opaque/child/path' },
             { kind: 'remote', displayPath: null, nodeId: 'child', available: true, availability: 'available' }],
-          ['unknown-remote', { version: 1 as const, nodeId: 'child', capabilityId: 'p' },
+          ['unknown-remote', { version: 2 as const, nodeId: 'child', workdirId: 'p' },
             { kind: 'remote', displayPath: null, nodeId: 'child', available: true, availability: 'available' }],
-          ['offline-remote', { version: 1 as const, nodeId: 'child', capabilityId: 'offline', displayPathSnapshot: 'Z:\\offline' },
+          ['offline-remote', { version: 2 as const, nodeId: 'child', workdirId: 'offline', displayPathSnapshot: 'Z:\\offline' },
             { kind: 'remote', displayPath: null, nodeId: 'child', available: false, availability: 'node-offline' }],
-          ['offline-local', { version: 1 as const, nodeId: 'local', capabilityId: 'offline', displayPathSnapshot: 'Z:\\untrusted' },
+          ['offline-local', { version: 2 as const, nodeId: 'local', workdirId: 'offline', displayPathSnapshot: 'Z:\\untrusted' },
             { kind: 'local', displayPath: null, nodeId: 'local', available: false, availability: 'node-offline' }],
         ] as const) {
           await sessions.buildSession(id, undefined, { workdir })

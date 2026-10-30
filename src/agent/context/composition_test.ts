@@ -38,7 +38,7 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     const discovery = new ProjectFolderDiscovery({
       projectId: 'fixture', workspace: home,
       getProject: () => ({ id: 'fixture', name: 'Fixture', createdAt: '2026-09-21T00:00:00Z' }),
-      registry: { list: () => [] }, workdirCapabilityLookup: () => ({ node: 'missing' }),
+      registry: { list: () => [] }, workdirLookup: () => ({ node: 'missing' }),
     })
     const builder = new ContextBuilder(home)
     builder.register(runtimeIdentityProvider(runtime))

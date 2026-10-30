@@ -1,6 +1,6 @@
 import { t } from './i18n.ts'
 export class NodeOfflineError extends Error {
-  constructor(readonly nodeId: string, readonly capabilityId: string) {
+  constructor(readonly nodeId: string, readonly workdirId: string) {
     super(t('Node offline'))
     this.name = 'NodeOfflineError'
   }
@@ -12,9 +12,10 @@ export function nodeOfflineError(status: number, value: unknown): NodeOfflineErr
   const data = value as Record<string, unknown>
   if ((data.error === 'workdir_unavailable' || data.error === 'remote_workdir_unavailable')
     && data.reason === 'node-offline'
+    && data.capabilityId === undefined
     && typeof data.nodeId === 'string' && data.nodeId.trim()
-    && typeof data.capabilityId === 'string' && data.capabilityId.trim()) {
-    return new NodeOfflineError(data.nodeId, data.capabilityId)
+    && typeof data.workdirId === 'string' && data.workdirId.trim()) {
+    return new NodeOfflineError(data.nodeId, data.workdirId)
   }
 }
 
@@ -25,12 +26,15 @@ export function isNodeOfflineError(error: unknown): error is NodeOfflineError {
 export function workdirUnavailableMessage(value: unknown): string | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return
   const data = value as Record<string, unknown>
+  if (data.error === 'execution-upgrade-required' || data.code === 'execution-upgrade-required') {
+    return t('This device uses an incompatible execution protocol. Update Main and the device, then retry. No local folder was used.')
+  }
   if (data.error !== 'workdir_unavailable' && data.error !== 'remote_workdir_unavailable') return
   switch (data.reason) {
-    case 'capability-revoked': return t('Access to this workdir was revoked. Select an available folder capability.')
-    case 'capability-missing': return t('This folder capability is no longer available on the owning node.')
-    case 'capability-offline': return t('The folder capability is unavailable on the owning node. Restore the folder and check again.')
-    case 'incompatible': return t('This workdir capability is incompatible. Update the owning node or select another folder.')
+    case 'workdir-revoked': return t('Access to this folder resource was revoked. Select an authorized project folder.')
+    case 'workdir-missing': return t('This folder resource is no longer available on the owning device.')
+    case 'workdir-offline': return t('The folder resource is unavailable on the owning device. Restore the folder and check again.')
+    case 'incompatible': return t('This device uses an incompatible execution protocol. Update Main and the device, then retry. No local folder was used.')
     case 'node-missing': return t('The owning node is no longer registered. Select an available node and folder.')
   }
 }

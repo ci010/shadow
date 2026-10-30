@@ -1,5 +1,5 @@
 /** Only the owner UI service may dispatch these operations; never a chat tool. */
-export const FOLDER_PICKER_CAPABILITY = 'owner-folder-picker-v1'
+export const LEGACY_FOLDER_PICKER_ID = 'owner-folder-picker-v1'
 export const FOLDER_BROWSE_OPERATION = 'owner.folder.browse'
 export const FOLDER_SELECT_OPERATION = 'owner.folder.select'
 export interface DirectoryListing {

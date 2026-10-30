@@ -11,7 +11,7 @@ import { Hono } from 'hono'
 import { createMainCluster } from '../cluster/main-cluster.ts'
 import { InMemoryRegistrySnapshotAdapter } from '../cluster/persistence.ts'
 import type { ChildBootstrapConfigV1 } from './bootstrap-config.ts'
-import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
+import type { ExecutionSupport } from '../cluster/contracts.ts'
 
 test('credentialless Main inventory requires a captured loopback peer and local hostname', async () => {
   const addresses = new GatewayClientAddressRegistry()
@@ -55,11 +55,11 @@ test('local Main inventory works without a credential while pairing and admin re
     clientKey: (request) => addresses.resolve(request),
     localNodeInventory: () => ({
       nodeId: 'local', displayName: hostname(), role: 'main',
-      connection: 'connected', capabilities: [],
+      connection: 'connected', support: { operations: [] }, workdirs: [], executionProtocol: 'compatible',
     }),
   })
   const app = new Hono()
-  registerGatewayRoutes(app, [...cluster.plugins])
+  registerGatewayRoutes(app, [...cluster.plugins], { clientAddresses: addresses })
   const server = serveGateway(app, {
     host: '127.0.0.1', port: 0, clientAddresses: addresses,
   })
@@ -98,25 +98,24 @@ test('Main inventory uses configured identity and live registered folder availab
       role: 'main',
       connection: 'connected',
       implementationVersion: 'test-build',
-      capabilities: [],
+      support: { operations: [] }, workdirs: [], executionProtocol: 'compatible',
     })
     const directory = join(root, 'actual-folder')
     await mkdir(directory)
     const folder = await folders.register(directory)
     const inventory = () => mainLocalNodeInventory({ ...options, shellAvailable: true })
-    assert.deepEqual(inventory().capabilities, [
-      { capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true },
-      {
-        capabilityId: `local-project-v1:${folder.id}`,
-        kind: 'workdir',
-        displayName: folder.name,
-        displayPath: folder.path,
-        online: true,
-      },
-    ])
+    assert.deepEqual(inventory().support, { operations: ['process.execute'] })
+    assert.deepEqual(inventory().workdirs, [{ version: 2 as const, nodeId: 'installation-main', workdirId: `local-project-v1:${folder.id}`, displayName: folder.name, displayPath: folder.path, online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute'] } }])
+    assert.equal(inventory().workdirs[0].workdirId, `local-project-v1:${folder.id}`)
+    assert.equal(inventory().workdirs[0].support.operations.includes('workdir.process.execute'), true)
+    assert.equal(inventory().workdirs[0].support.operations.includes('workdir.process.execute-once'), false)
+    const coordinator = mainLocalNodeInventory({ ...options, shellAvailable: false })
+    assert.equal(coordinator.workdirs.some(w => w.support.operations.some(op => op.includes('process.'))), false)
+    assert.equal(coordinator.workdirs[0].support.operations.includes('filesystem.read'), true)
     await rm(directory, { recursive: true })
-    assert.equal(inventory().capabilities[1].online, false)
-    assert.equal(inventory().capabilities[1].displayPath, folder.path)
+    assert.equal(inventory().workdirs[0].online, false)
+    assert.equal(inventory().workdirs[0].online, false)
+    assert.equal(inventory().workdirs[0].displayPath, folder.path)
     assert.ok(!('lastSeen' in inventory()))
   })
 })
@@ -130,28 +129,38 @@ test('Child inventory exposes only executor descriptors and configured local wor
       localNodeId: 'configured-child',
       mainEndpoint: 'https://private-main.example.invalid',
       workdirs: [
-        { capabilityId: 'workdir-1', displayName: 'Available folder', rootPath: root },
-        { capabilityId: 'workdir-2', displayName: 'Missing folder', rootPath: join(root, 'missing') },
+        { workdirId: 'workdir-1', displayName: 'Available folder', rootPath: root },
+        { workdirId: 'workdir-2', displayName: 'Missing folder', rootPath: join(root, 'missing') },
       ],
     }
-    const capabilities: CapabilityDescriptorV1[] = config.workdirs!.map((workdir) => ({
-      version: 1,
-      nodeId: config.localNodeId,
-      kind: 'workdir',
-      capabilityId: workdir.capabilityId,
-      displayName: workdir.displayName,
-      online: true,
-      permissions: ['private-operation'],
-    }))
-    const inventory = await childLocalNodeInventory(config, capabilities, 'test-build')
+    const workdirs: import('../execution/workdir-contracts.ts').WorkdirAdvertisement[] = config.workdirs!.map((workdir) => ({ version: 2 as const, nodeId: config.localNodeId, workdirId: workdir.workdirId, displayName: workdir.displayName, online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute'] } }))
+    const inventory = await childLocalNodeInventory(config, workdirs, { operations: [] }, 'test-build')
     assert.equal(inventory.nodeId, config.localNodeId)
     assert.equal(inventory.role, 'child')
     assert.equal(inventory.displayName, hostname())
-    assert.equal(inventory.capabilities[0].displayPath, root)
-    assert.equal(inventory.capabilities[0].online, true)
-    assert.equal(inventory.capabilities[1].online, false)
+    assert.equal(inventory.workdirs[0].displayPath, root)
+    assert.equal(inventory.workdirs[0].online, true)
+    assert.equal(inventory.workdirs[1].online, false)
     assert.ok(!JSON.stringify(inventory).includes('private'))
     assert.ok(!JSON.stringify(inventory).includes('approvalPolicy'))
     assert.ok(!('lastSeen' in inventory))
+  })
+})
+
+test('offline Child inventory cannot advertise execution or report an unnegotiated upgrade requirement', async () => {
+  await withTempWorkspace(async root => {
+    const config: ChildBootstrapConfigV1 = { version: 1, mode: 'child', dataDir: root, localNodeId: 'child', mainEndpoint: 'https://example.invalid' }
+    const workdirs = [{ version: 2 as const, nodeId: 'child', workdirId: 'folder', support: { operations: ['filesystem.read'] }, displayName: 'Folder', displayPath: root, online: true }]
+    const support: ExecutionSupport = { operations: ['workdir.session.allocate'] }
+    const offline = await childLocalNodeInventory(config, workdirs, support, 'fixture', 'offline')
+    assert.equal(offline.executionProtocol, 'unknown')
+    assert.equal(offline.supportsManagedSessions, false)
+    assert(offline.workdirs.every(r => !r.online))
+    assert(offline.support.operations.length === 0)
+    const connected = await childLocalNodeInventory(config, workdirs, support, 'fixture', 'connected')
+    assert.equal(connected.executionProtocol, 'compatible')
+    assert.equal(connected.supportsManagedSessions, true)
+    assert(connected.workdirs.every(r => r.online))
+    assert(connected.support.operations.includes('workdir.session.allocate'))
   })
 })

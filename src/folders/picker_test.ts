@@ -9,13 +9,13 @@ import { FolderRegistry } from './registry.ts'
 import { FolderService } from './routes.ts'
 import { RemoteFolderOwnership } from './remote-ownership.ts'
 import { ProjectCatalog } from '../projects/catalog.ts'
-import { ProjectExecutor } from '../projects/executor.ts'
+import { ProjectExecutor, DIRECTORY_OPERATIONS } from '../projects/executor.ts'
 import { ManagedChildWorkdirs } from '../execution/managed-child-workdirs.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
-import { browseDirectories, FOLDER_PICKER_CAPABILITY, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from './picker.ts'
+import { browseDirectories, LEGACY_FOLDER_PICKER_ID, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from './picker.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
-import type { JobRequestV1 } from '../execution/contracts.ts'
+import type { ExecutionRequestV2 } from '../execution/contracts.ts'
 
 const signal = () => new AbortController().signal
 function post(app: Hono, action: string, nodeId: string, path: string, extras = {}) {
@@ -30,26 +30,28 @@ test('owner picker browses and registers Main and Child without creating a chat;
   const child = new ManagedChildWorkdirs(join(f.root, 'child-managed'), 'other-child', [])
   await child.init()
   const advertised: string[] = []
-  child.onCapability = cap => { advertised.push(cap.capabilityId) }
-  const executor = new LocalExecutor(new ProcessManager(), 'other-child', child.operationHandlers)
+  child.onWorkdir = resource => { advertised.push(resource.workdirId) }
+  const executor = new LocalExecutor(new ProcessManager(), 'other-child', child.operationHandlers, (request, signal) => child.assertCanExecute(request, signal))
   const catalog = new ProjectCatalog(join(f.root, 'host'))
   await catalog.init()
   const other = await catalog.create('Other')
   let online = true
   const inventory = (): NodeInventoryResponse => ({ version: 1, nodes: [
-    { nodeId: 'main-identity', displayName: 'Main', role: 'main', connection: 'connected', capabilities: [] },
-    { nodeId: 'other-child', displayName: 'Other Child', role: 'child', connection: online ? 'connected' : 'offline',
-      capabilities: child.capabilities.map(c => ({ ...c, online: online && c.online })) },
-    { nodeId: 'old-child', displayName: 'Old Child', role: 'child', connection: 'connected', capabilities: [] },
+    { nodeId: 'main-identity', displayName: 'Main', role: 'main', connection: 'connected', executionProtocol: 'compatible', workdirs: [], support: { operations: [] } },
+    { nodeId: 'other-child', displayName: 'Other Child', role: 'child', connection: online ? 'connected' : 'offline', executionProtocol: 'compatible',
+      workdirs: child.workdirs, support: online ? child.support : { operations: [] } },
+    { nodeId: 'old-child', displayName: 'Old Child', role: 'child', connection: 'connected', executionProtocol: 'compatible', workdirs: [], support: { operations: [] } },
   ] })
   let sessions = 0
   async function service(projectId: string) {
     const registry = new FolderRegistry(f.workspace, { catalog, projectId })
     await registry.init()
-    const scoped = new ProjectExecutor(projectId, executor)
+    const scoped = new ProjectExecutor(projectId, executor, request => {
+      assert.ok([...DIRECTORY_OPERATIONS, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation))
+    })
     registry.configureRemote(new RemoteFolderOwnership({ projectId, catalog, executor: scoped,
-      lookup: ref => ({ node: online ? 'online' : 'offline', capability: { kind: 'workdir', online: advertised.includes(ref.capabilityId) } }),
-      capability: ref => child.capabilities.find(c => c.capabilityId === ref.capabilityId),
+      lookup: ref => ({ node: online ? 'online' : 'offline', workdir: { online: advertised.includes(ref.workdirId) } }),
+      workdir: ref => child.workdirs.find(r => r.workdirId === ref.workdirId),
     }))
     const folders = new FolderService({ registry, picker: { inventory, executor: scoped }, createSession: async () => {
       sessions++; return { sessionId: 'unused', chatId: 'unused' }
@@ -76,7 +78,7 @@ test('owner picker browses and registers Main and Child without creating a chat;
   const remote = (await selected.json()).folder
   assert.equal(remote.kind, 'remote')
   assert.equal(remote.workdir.nodeId, 'other-child')
-  assert.ok(advertised.includes(remote.workdir.capabilityId))
+  assert.ok(advertised.includes(remote.workdir.workdirId))
   assert.equal((await (await post(one.app, 'select', 'other-child', childPath)).json()).folder.id, remote.id)
   assert.equal((await post(two.app, 'select', 'other-child', childPath)).status, 409)
   assert.equal((await post(two.app, 'select', 'other-child', join(childPath, 'nested'))).status, 409)
@@ -84,12 +86,12 @@ test('owner picker browses and registers Main and Child without creating a chat;
   assert.equal(sessions, 0)
   const restored = new ManagedChildWorkdirs(child.rootPath, 'other-child', [])
   await restored.init()
-  assert.ok(restored.capabilities.some(c => c.capabilityId === remote.workdir.capabilityId))
+  assert.ok(restored.workdirs.some(c => c.workdirId === remote.workdir.workdirId))
   online = false
   assert.equal((await post(one.app, 'browse', 'other-child', childPath)).status, 503)
   assert.equal((await post(one.app, 'select', 'unknown', mainPath)).status, 503)
   assert.equal((await post(one.app, 'browse', 'old-child', '')).status, 409)
-  assert.equal((await post(one.app, 'select', 'main-identity', mainPath, { capabilityId: 'spoof' })).status, 400)
+  assert.equal((await post(one.app, 'select', 'main-identity', mainPath, { workdirId: 'spoof' })).status, 400)
 })
 
 test('picker directory browsing handles Unicode, symlinks, parent, invalid paths and aborts', async t => {
@@ -113,9 +115,9 @@ test('Child picker operations reject use through a different capability and malf
   await child.init()
   const handler = child.operationHandlers.find(h => h.handles(FOLDER_BROWSE_OPERATION))!
   assert.ok('execute' in handler)
-  const request = { nodeId: 'child', capabilityId: FOLDER_PICKER_CAPABILITY, operation: FOLDER_BROWSE_OPERATION, args: { path: f.folders } } as JobRequestV1
+  const request = { nodeId: 'child', operation: FOLDER_BROWSE_OPERATION, args: { path: f.folders } } as ExecutionRequestV2
   if (!('execute' in handler)) return
-  for (const override of [{ capabilityId: 'process-execute' }, { nodeId: 'foreign' }, { args: { path: f.folders, extra: true } }, { args: { path: 'relative' } }]) {
+  for (const override of [{ nodeId: 'child', workdirId: LEGACY_FOLDER_PICKER_ID  }, { nodeId: 'foreign' }, { args: { path: f.folders, extra: true } }, { args: { path: 'relative' } }]) {
     await assert.rejects(handler.execute({ ...request, ...override }, signal()))
   }
   const result = await handler.execute({ ...request, operation: FOLDER_SELECT_OPERATION }, signal())
@@ -136,10 +138,13 @@ test('picker APIs require owner UI admission and preserve opaque foreign filesys
       assert.deepEqual(request.args, { path: opaque })
       return JSON.stringify({ path: opaque, parent: 'Z:\\远端', directories: [], truncated: false })
     },
-  }])
+  }], request => {
+    assert.equal(request.nodeId, 'foreign-child'); assert.equal(request.workdirId, undefined)
+    assert.equal(request.operation, FOLDER_BROWSE_OPERATION)
+  })
   const service = new FolderService({ registry, picker: { executor, inventory: () => ({ version: 1, nodes: [{
-    nodeId: 'foreign-child', displayName: 'Foreign filesystem', role: 'child', connection: 'connected',
-    capabilities: [{ capabilityId: FOLDER_PICKER_CAPABILITY, displayName: 'Picker', kind: 'shell', online: true }],
+    nodeId: 'foreign-child', displayName: 'Foreign filesystem', role: 'child', connection: 'connected', executionProtocol: 'compatible', workdirs: [],
+    support: { operations: [FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION] },
   }] }) }, createSession: async () => { throw new Error('Must not create a chat') } })
   t.after(() => service.dispose())
   const app = new Hono()

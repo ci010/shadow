@@ -104,7 +104,7 @@ test('editing rejects project, role, remote, temporary, malformed and aborted re
     await assert.rejects(f.editing.save(args, { ...current, projectId: 'other' }), /durable local/)
     await assert.rejects(f.editing.save(args, { ...current, sessionId: 'managed:bot' }), /durable local/)
     await assert.rejects(f.editing.save(args, {
-      ...current, remoteWorkdir: { nodeId: 'remote', capabilityId: 'folder',
+      ...current, remoteWorkdir: { nodeId: 'remote', workdirId: 'folder',
         get executor(): never { throw new Error('Must not access remote executor') } },
     }), /durable local/)
     const call = f.context('web:call')

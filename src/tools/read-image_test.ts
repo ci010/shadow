@@ -63,7 +63,7 @@ test('unsupported, corrupted, oversized and remote images fail explicitly withou
     assert.match(requireToolText(await tools.execute('read', { path: name }, context)), error)
   }
   const remote: ExecutionContext = { ...context, remoteWorkdir: {
-    nodeId: 'child', capabilityId: 'remote',
+    nodeId: 'child', workdirId: 'remote',
     executor: {
       async *execute() { throw new Error('Must not execute remote text read') },
       getStatus: async () => null,

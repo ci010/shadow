@@ -233,14 +233,14 @@ export class AgentAuthoringService implements ConversationPolicies {
       if (folder.kind === 'remote') {
         if (!this.options.remoteExecutor) throw new Error('Remote reading is unavailable; no local path was used.')
         return executeRemoteFilesystemText({
-          executor: this.options.remoteExecutor, nodeId: folder.workdir.nodeId, capabilityId: folder.workdir.capabilityId,
+          executor: this.options.remoteExecutor, nodeId: folder.workdir.nodeId, workdirId: folder.workdir.workdirId,
           sessionId, turnId: context.messageId, signal: context.signal,
         }, FILESYSTEM_READ_OPERATION, { path: relative })
       }
-      const filesystem = new CapabilityFilesystem([{ capabilityId: folder.id, rootPath: folder.path }])
+      const filesystem = new CapabilityFilesystem([{ workdirId: folder.id, rootPath: folder.path }])
       return filesystem.execute({
-        version: 1, jobId: randomUUID(), idempotencyKey: randomUUID(), sessionId, turnId: context.messageId,
-        nodeId: 'local', capabilityId: folder.id, operation: FILESYSTEM_READ_OPERATION, args: { path: relative },
+        version: 2, jobId: randomUUID(), idempotencyKey: randomUUID(), sessionId, turnId: context.messageId,
+        nodeId: 'local', workdirId: folder.id, operation: FILESYSTEM_READ_OPERATION, args: { path: relative },
         createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 15_000).toISOString(),
       }, context.signal)
     } finally { release() }
