@@ -291,12 +291,16 @@ export async function createProjectRuntime(
     if (!dependencies.realtimeHub) realtimeHub.close()
   }
   cleanup.push(closeRealtime)
+  cleanup.push(dependencies.catalog.observeFolders(project.id, () => realtime.invalidateResource?.('folders')))
+  cleanup.push(mainCluster.observeInventory(() => realtime.invalidateResource?.('nodes')))
   for (const topic of ['session.input.accepted', 'session.message.appended', 'session.handoff', 'session.ended', 'session.renamed', 'session.changed', 'background.task.changed'] as const) {
-    const subscription = bus.on(topic, fact => realtime.invalidateSessions(fact.sessionId))
+    const subscription = bus.on(topic, fact => realtime.invalidateSessions(fact.sessionId, undefined,
+      topic === 'background.task.changed' ? ['background-tasks'] :
+        topic === 'session.input.accepted' || topic === 'session.message.appended' ? ['history'] : undefined))
     cleanup.push(() => bus.off(subscription))
   }
   const finishedSubscription = bus.on('session.turn.finished', fact =>
-    realtime.invalidateSessions(fact.sessionId, fact.status === 'completed' ? fact.turnId : undefined))
+    realtime.invalidateSessions(fact.sessionId, fact.status === 'completed' ? fact.turnId : undefined, ['history', 'work']))
   cleanup.push(() => bus.off(finishedSubscription))
   const activitySubscription = bus.on('session.activity.changed', fact => realtime.invalidateActivity(fact.sessionId))
   cleanup.push(() => bus.off(activitySubscription))
@@ -507,7 +511,7 @@ export async function createProjectRuntime(
 
   const context = new ContextBuilder(workspace)
   const botStore = new BotInstanceStore({
-    changed: () => realtime.invalidateResource?.('service-groups'),
+    changed: () => { realtime.invalidateResource?.('service-groups'); realtime.invalidateResource?.('channels') },
     projectId: project.id,
     path: resolve(workspace, 'config', 'bots.v1.json'),
     ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
@@ -1363,6 +1367,7 @@ export async function createProjectRuntime(
       if (automationsChanged) realtime.invalidateResource?.('automations')
       channels.updateConfig(newConfig)
       realtime.invalidateResource?.('config')
+      realtime.invalidateResource?.('channels')
   }
   const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
     projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery, messageStream: new ChannelMessageStream(workspace,project.id),

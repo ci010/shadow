@@ -12,6 +12,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import { affectsSessionResource } from '../session-invalidation.ts'
 import { ref, watch } from 'vue'
 import { t, formatDateTime } from '../i18n.ts'
 import { apiUrl } from '../api-url.ts'
@@ -58,16 +59,23 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
   const initial = createInitialLiveSnapshot({ refresh: autoRefresh })
   const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
     event: envelope => {
-      if (!isRecord(envelope.payload) || envelope.payload.event === 'activity'
-        || (envelope.payload.sessionId !== undefined && envelope.payload.sessionId !== sessionId)) return
-      initial.invalidate()
+      if (affectsSessionResource(envelope.payload, sessionId, 'scheduled-tasks')) initial.invalidate()
     },
     reset: initial.reset,
     reconnected: initial.reconnected,
   })
-  initial.attach(subscription)
+  const resources = pool.client(base).subscribe({ kind: 'resources', projectId: liveProjectId(base) }, {
+    event: envelope => {
+      if (isRecord(envelope.payload) && envelope.payload.event === 'invalidate' && envelope.payload.resource === 'automations') initial.invalidate()
+    },
+    reset: initial.reset,
+    reconnected: initial.reconnected,
+  })
+  initial.attach({ ready: async signal => { await Promise.all([subscription.ready(signal), resources.ready(signal)]) } })
+  let phase = 'connecting'
+  const stopHost = pool.observeHost(base, status => { phase = status.phase })
   const timer = setInterval(() => {
-    autoRefresh()
+    if (phase === 'connecting' || phase === 'reconnecting' || phase === 'error') autoRefresh()
   }, 30_000)
   const visibilityChanged = () => { if (!document.hidden) initial.invalidate() }
   document.addEventListener('visibilitychange', visibilityChanged)
@@ -76,6 +84,8 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
     clearInterval(timer)
     document.removeEventListener('visibilitychange', visibilityChanged)
     subscription.close()
+    resources.close()
+    stopHost()
     snapshot.dispose()
   })
 }, { immediate: true })

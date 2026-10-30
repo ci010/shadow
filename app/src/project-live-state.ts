@@ -1,3 +1,4 @@
+import { affectsSessionResource } from './session-invalidation.ts'
 import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import { t } from './i18n.ts'
 import { shallowReactive, shallowReadonly } from 'vue'
@@ -139,7 +140,8 @@ export function createProjectLiveState(
         if (!started) return
         if (!isRecord(event.payload) || event.payload.event !== 'activity') graph.invalidate()
         activity.invalidate()
-        if (usage.work) work.invalidate()
+        if (usage.work && (isRecord(event.payload) && event.payload.event === 'activity'
+          || affectsSessionResource(event.payload, undefined, 'work'))) work.invalidate()
       },
       reset,
       reconnected: () => reset('reconnect'),

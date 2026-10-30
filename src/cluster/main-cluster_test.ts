@@ -35,6 +35,9 @@ async function createCluster(adapter: InMemoryRegistrySnapshotAdapter) {
 test('Main cluster pairs, approves, persists, and restores challenge credentials', async () => {
   const adapter = new InMemoryRegistrySnapshotAdapter()
   const cluster = await createCluster(adapter)
+  let inventoryChanges = 0
+  const stopThrowing = cluster.observeInventory(() => { throw new Error('test observer failure') })
+  const stopInventory = cluster.observeInventory(() => { inventoryChanges++ })
   const app = new Hono()
   registerGatewayRoutes(app, [...cluster.plugins], {
     launchCredential,
@@ -105,6 +108,8 @@ test('Main cluster pairs, approves, persists, and restores challenge credentials
   assertEquals(presentationResponse.status, 202)
   assertEquals(pendingResponse.status, 200)
   assertEquals(approvalResponse.status, 200)
+  assertEquals(inventoryChanges, 1)
+  stopInventory(); stopThrowing()
   assertEquals(challengeResponse.status, 201)
 
   cluster.registry.advertiseCapability(authentication, {

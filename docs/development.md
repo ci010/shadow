@@ -425,3 +425,20 @@ reconnections. Real disconnect/retry discards warm topics before reconnecting. C
 messages, and returning observers still take an authoritative snapshot. Project
 exit, disposal and failures clean up warm topics. This is bounded subscription
 reuse, not Project-wide chat-body broadcasting or a dynamic subscription protocol.
+
+Session invalidations can carry optional `changes` hints. Ordinary history
+persistence does not invalidate Work, background-task or scheduled-task views;
+completed turns still reconcile Work, and genuine task notifications refresh
+background inventory. Missing-session recovery remains conservative. Legacy or
+unknown hints retain broad invalidation behavior. Scheduled-task views listen to
+`automations` resource changes and use periodic reads only when live updates are
+disconnected, not while the connection is healthy.
+
+Session graph revisions do not imply catalog changes. Folder catalog commits
+publish Project-scoped `folders` invalidations after successful persistence;
+node connection/registry transitions publish `nodes` invalidations. These readers
+are independent, so folder changes do not reload device inventory. Bot/config
+updates publish `channels` invalidations. Initial reads, manual retries and live
+recovery remain available. Channel-manager spontaneous connection transitions do
+not yet have a complete notification source; silently changed channel connection
+status may require manual refresh or live recovery rather than being real-time.
