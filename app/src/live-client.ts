@@ -1,6 +1,6 @@
 import { t } from './i18n.ts'
 import {
-  isRealtimeEnvelope, isRealtimeTopic, realtimeTopicKey,
+  isRealtimeEnvelope, isRealtimeTopic, realtimeTopicKey, REALTIME_MAX_TOPICS, REALTIME_MAX_TOPICS_BYTES,
   type RealtimeEnvelope, type RealtimeTopic,
 } from '../../src/realtime/protocol.ts'
 import { apiUrl, hostBase } from './api-url.ts'
@@ -37,6 +37,16 @@ export function createLiveClient(base: string, options: {
 } = {}) {
   const subscribers = new Set<Subscriber>()
   const waiters = new Set<Waiter>()
+  // Only previously requested chat topics are kept warm. This is not a cache of
+  // chat bodies: closed observers receive nothing and new observers snapshot.
+  const retained = new Map<string, { topic: RealtimeTopic; timer: ReturnType<typeof setTimeout> }>()
+  function forget(key: string) {
+    clearTimeout(retained.get(key)?.timer)
+    retained.delete(key)
+  }
+  function clearRetained() {
+    for (const key of retained.keys()) forget(key)
+  }
   let source: Source | undefined
   let connectedTopics = new Set<string>()
   let unavailableTopics = new Set<string>()
@@ -61,6 +71,7 @@ export function createLiveClient(base: string, options: {
     source = undefined
   }
   function fail(error: Error) {
+    clearRetained()
     clearTimeout(timer)
     timer = undefined
     stopSource()
@@ -70,6 +81,7 @@ export function createLiveClient(base: string, options: {
   function topics() {
     const unique = new Map<string, RealtimeTopic>()
     for (const subscriber of subscribers) unique.set(realtimeTopicKey(subscriber.topic), subscriber.topic)
+    for (const [key, entry] of retained) unique.set(key, entry.topic)
     return [...unique.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, topic]) => topic)
   }
   function heartbeat() {
@@ -174,6 +186,15 @@ export function createLiveClient(base: string, options: {
   }
   function changed() {
     if (disposed) return
+    // Never carry warm chat subscriptions into an unrelated project, or let
+    // them consume the wire budget needed by active subscriptions.
+    for (const [key, entry] of retained) {
+      if (![...subscribers].some(subscriber => subscriber.topic.projectId === entry.topic.projectId)) forget(key)
+    }
+    while (retained.size && (retained.size > 4 || topics().length > REALTIME_MAX_TOPICS
+      || new TextEncoder().encode(JSON.stringify(topics())).byteLength > REALTIME_MAX_TOPICS_BYTES)) {
+      forget(retained.keys().next().value!)
+    }
     const desired = new Set(topics().map(realtimeTopicKey))
     if (source && desired.size === connectedTopics.size && [...desired].every(key => connectedTopics.has(key))) {
       clearTimeout(timer)
@@ -186,6 +207,7 @@ export function createLiveClient(base: string, options: {
     // unsubscribe and resubscribe to the same topic in one synchronous update.
     // connect() closes it if a different topic set is still needed next tick.
     if (!subscribers.size) {
+      clearRetained()
       stopSource()
       connectedTopics.clear()
       update({ phase: 'idle' })
@@ -195,6 +217,7 @@ export function createLiveClient(base: string, options: {
     if (disposed) throw new Error(t('Live updates have been disposed.'))
     if (!isRealtimeTopic(topic)) throw new Error(t('Invalid live subscription.'))
     const subscriber: Subscriber = { topic, observer, closed: false, initialized: false }
+    forget(realtimeTopicKey(topic))
     subscribers.add(subscriber)
     changed()
     if (ready && connectedTopics.has(realtimeTopicKey(topic)) && !unavailableTopics.has(realtimeTopicKey(topic))) {
@@ -231,6 +254,12 @@ export function createLiveClient(base: string, options: {
         if (subscriber.closed) return
         subscriber.closed = true
         subscribers.delete(subscriber)
+        const key = realtimeTopicKey(topic)
+        if (topic.kind === 'chat' && connectedTopics.has(key)
+          && ![...subscribers].some(other => realtimeTopicKey(other.topic) === key)) {
+          forget(key)
+          retained.set(key, { topic, timer: setTimeout(() => { forget(key); changed() }, 30_000) })
+        }
         for (const waiter of [...waiters]) if (waiter.owner === subscriber) waiter.reject(new DOMException(t('Live subscription closed'), 'AbortError'))
         changed()
       },
@@ -250,6 +279,7 @@ export function createLiveClient(base: string, options: {
     },
     dispose() {
       disposed = true
+      clearRetained()
       clearTimeout(timer)
       stopSource()
       for (const waiter of [...waiters]) waiter.reject(new DOMException(t('Live updates closed'), 'AbortError'))

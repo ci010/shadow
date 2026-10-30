@@ -25,7 +25,7 @@ test('Private chat setup transport rejects nonloopback cleartext', () => {
 test('setup card mounts editor only for bound requests and refreshes from live invalidation, not idle polling', async t => {
   const { parse, compileScript } = await import('vue/compiler-sfc')
   const { default: ts } = await import('typescript')
-  const { createRenderer, defineComponent, h } = await import('vue')
+  const { createRenderer, defineComponent, h, ref, nextTick } = await import('vue')
   const { mkdir, writeFile, rm } = await import('node:fs/promises')
   const { randomUUID } = await import('node:crypto')
   const { resolve, dirname } = await import('node:path')
@@ -47,7 +47,9 @@ test('setup card mounts editor only for bound requests and refreshes from live i
   let calls = 0
   let pending: unknown = null
   t.mock.method(globalThis, 'fetch', async () => { calls++; return Response.json({ request: pending }) })
+  const disposers: Array<() => void> = []
   const pool = {
+    onDispose: (callback: () => void) => { disposers.push(callback); return () => {} },
     client: () => ({ subscribe: (_topic: unknown, value: typeof observer) => { observer = value; return { ready: async () => {}, close() { closes++ } } } }),
     observeHost: (_base: string, notify: (value: unknown) => void) => { notify({ phase: 'live' }); return () => {} },
   }
@@ -57,7 +59,8 @@ test('setup card mounts editor only for bound requests and refreshes from live i
     insert() {}, remove() {}, setText(node, text) { Object.assign(node, { text }) }, setElementText(node, text) { Object.assign(node, { text }) }, patchProp() {},
     parentNode: () => null, nextSibling: () => null,
   })
-  const app = renderer.createApp(defineComponent({ render: () => h(Component, { apiBase: 'http://127.0.0.1/projects/a', projectId: 'a', sessionId: 'web:topic', active: true, canSubmit: true }) }))
+  const sessionId = ref('web:topic')
+  const app = renderer.createApp(defineComponent({ render: () => h(Component, { apiBase: 'http://127.0.0.1/projects/a', projectId: 'a', sessionId: sessionId.value, active: true, canSubmit: true }) }))
   app.provide(Symbol.for('shadow.live-client-pool'), pool)
   app.mount({})
   let mounted = true
@@ -73,7 +76,15 @@ test('setup card mounts editor only for bound requests and refreshes from live i
   await new Promise(resolve => setTimeout(resolve, 80))
   assert.equal(calls, 2)
   assert.equal(nodes.some(node => node.text === 'trusted-editor'), true)
+  sessionId.value = 'web:other'
+  await nextTick(); await settle()
+  assert.equal(calls, 3)
+  sessionId.value = 'web:topic'
+  await nextTick(); await settle()
+  assert.equal(calls, 3, 'returning to a session reuses its live-invalidated envelope')
   app.unmount()
   mounted = false
-  assert.equal(closes, 1)
+  assert.equal(closes, 0, 'idle cache retains only its invalidation subscription')
+  for (const dispose of disposers) dispose()
+  assert.equal(closes, 2, 'pool cleanup releases both cached session subscriptions')
 })

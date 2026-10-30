@@ -51,6 +51,7 @@
 </template>
 
 <script setup lang="ts">
+import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -63,6 +64,7 @@ import { createProjectsClient, type ProjectRecord } from '../projects.ts'
 import { createProjectSettingsClient, type ProjectConfig } from '../project-settings.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 
+const livePool = useLiveClientPool()
 const props = defineProps<{ apiBase: string; hostApiBase: string; projectId: string }>()
 defineOptions({ name: 'ProjectSettings' })
 const route = useRoute()
@@ -109,7 +111,7 @@ async function load() {
   request = controller
   loading.value = true
   error.value = ''
-  const client = createProjectSettingsClient(props.apiBase)
+  const client = createProjectSettingsClient(props.apiBase, fetch, livePool)
   try {
     const [catalog, next] = await Promise.all([
       createProjectsClient(props.hostApiBase).list(controller.signal), client.load(controller.signal),
@@ -155,7 +157,7 @@ async function saveLearning() {
       patch[item.key] = minutes * 60_000
     }
     if (typeof config.value?.learning?.enabled === 'boolean') patch.enabled = learningEnabled.value
-    const result = await createProjectSettingsClient(props.apiBase).save('learning', patch, signal)
+    const result = await createProjectSettingsClient(props.apiBase, fetch, livePool).save('learning', patch, signal)
     if (signal.aborted) return
     accept(result, 'learning')
     learningRevision.value++
