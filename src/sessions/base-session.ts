@@ -570,7 +570,7 @@ export abstract class BaseSession {
               await this.store.saveState(this.id, { ...next, workingContext: content })
               Object.assign(this.state, next, { workingContext: content })
               this.clearReadCache()
-              this.bus.emit('session.changed', { sessionId: this.id })
+              this.bus.emit('session.changed', { sessionId: this.id, metadataOnly: true })
               return `Working context committed: folder=${JSON.stringify(prepared.folderId)}. Canonical runtime-context-working-context snapshot follows this tool result before inference.`
             } : undefined,
             afterToolResultPublished: callback => {

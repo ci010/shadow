@@ -469,6 +469,12 @@ updates. Pure history persistence no longer invalidates activity snapshots;
 admission, completion, genuine activity changes, broad legacy notifications and
 recovery still do. Known session metadata changes can use targeted graph reads;
 unknown/new sessions, handoff/end and broad Project events retain full recovery.
+Pure title/description/completion edits, existing-session configuration edits and
+working-folder switches publish `session.changed` with `metadataOnly: true`.
+They still refresh metadata readers, but do not invalidate stages, work or task
+lists. Creation (including config-on-first-send), deletion and unhinted lifecycle
+changes retain broad invalidation. Topic-set changes on the shared live stream
+reuse existing Project snapshots; actual transport recovery still repairs them.
 
 The waiting-question view's 1.5-second clock is local only. Healthy live updates
 drive `/ask` snapshots; disconnected connections use a 30-second fallback.

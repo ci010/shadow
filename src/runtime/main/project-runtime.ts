@@ -302,7 +302,8 @@ export async function createProjectRuntime(
         topic === 'session.input.accepted' ? ['history', 'activity'] :
         topic === 'session.message.appended' ? ['history'] :
         topic === 'session.renamed' ? ['metadata'] :
-        topic === 'session.changed' ? ['metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks'] : undefined))
+        topic === 'session.changed' ? ('metadataOnly' in fact && fact.metadataOnly
+          ? ['metadata'] : ['metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks']) : undefined))
     cleanup.push(() => bus.off(subscription))
   }
   const finishedSubscription = bus.on('session.turn.finished', fact =>

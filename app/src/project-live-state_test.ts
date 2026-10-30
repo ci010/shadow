@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { createProjectLiveState, createSnapshot } from './project-live-state.ts'
-import type { LiveObserver } from './live-client.ts'
+import { createLiveClient, type LiveObserver } from './live-client.ts'
 import { realtimeTopicKey, type RealtimeTopic } from '../../src/realtime/protocol.ts'
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve))
@@ -352,4 +352,77 @@ test('history persistence does not reread stages; admission, completion and lega
   await f.tick()
   assert.equal(f.requests.filter(request => request.path.endsWith('/stages')).length, 3)
   lease.release()
+})
+
+
+test('metadata-only invalidations update the graph without rereading activity or work', async t => {
+  const f = fixture(t)
+  const lease = f.store.acquireProject('http://fixture', 'a', undefined, true)
+  await f.tick()
+  f.requests.find(r => r.path.endsWith('/graph'))!.finish(graph('Before'))
+  f.requests.find(r => r.path.endsWith('/stages'))!.finish({ stages: {} })
+  f.requests.find(r => r.path.endsWith('/work'))!.finish(emptyWork)
+  await flush()
+  f.event({ kind: 'sessions', projectId: 'a' }, {
+    event: 'invalidate', sessionId: 'web:one', changes: ['metadata'],
+  })
+  await f.tick()
+  assert.equal(f.requests.length, 4)
+  assert.ok(f.requests[3].path.endsWith('/graph'))
+  f.requests[3].finish(graph('Renamed'))
+  await flush()
+  assert.equal(lease.graph.state.value?.[0].label, 'Renamed')
+  assert.equal(f.requests.filter(r => r.path.endsWith('/stages')).length, 1)
+  assert.equal(f.requests.filter(r => r.path.endsWith('/work')).length, 1)
+})
+
+test('real live topic changes reuse project snapshots; transport recovery still refreshes them', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  class Source extends EventTarget {
+    close() {}
+    ready() {
+      this.dispatchEvent(new MessageEvent('realtime', { data: JSON.stringify({
+        type: 'ready', cursor: '00000000-0000-4000-8000-000000000000:0',
+      }) }))
+    }
+  }
+  const sources: Source[] = []
+  const requests: string[] = []
+  const client = createLiveClient('http://fixture', {
+    source: () => { const source = new Source(); sources.push(source); return source },
+    heartbeatTimeoutMs: 60_000,
+  })
+  const store = createProjectLiveState({ client: () => client }, {
+    request: async url => {
+      const path = new URL(String(url)).pathname
+      requests.push(path)
+      return Response.json(path.endsWith('/graph') ? graph('One') : { stages: {} })
+    },
+  })
+  t.after(() => { store.dispose(); client.dispose() })
+  const lease = store.acquireProject('http://fixture', 'a')
+  async function ready() {
+    t.mock.timers.tick(0)
+    sources.at(-1)!.ready()
+    await flush()
+    t.mock.timers.tick(50)
+    await flush()
+  }
+  await ready()
+  await lease.read()
+  assert.equal(requests.length, 2)
+  const chat = client.subscribe({ kind: 'chat', projectId: 'a', sessionId: 'web:one' }, {
+    event() {}, reset() {},
+  })
+  await ready()
+  assert.equal(sources.length, 2)
+  assert.equal(requests.length, 2, 'adding a chat topic does not reset existing project snapshots')
+  chat.close()
+  t.mock.timers.tick(35_000)
+  await ready()
+  assert.equal(requests.length, 2, 'warm topic cleanup does not refresh project snapshots')
+  sources.at(-1)!.dispatchEvent(new Event('error'))
+  t.mock.timers.tick(500)
+  await ready()
+  assert.equal(requests.length, 4, 'actual transport recovery repairs snapshots even without replay events')
 })
