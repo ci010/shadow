@@ -57,8 +57,8 @@ watch(() => props.apiBase, () => { state.value = null; void run() })
 h2 { margin-top: 0; font-size: 20px; }
 p { color: var(--c-text-secondary); font-size: 14px; line-height: 1.6; }
 label { display: flex; align-items: center; gap: 12px; margin: 16px 0; font-size: 14px; }
-input[readonly] { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--c-border); background: var(--c-bg-muted); color: var(--c-text); border-radius: 6px; }
-button { padding: 10px 16px; border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-bg-muted); color: var(--c-text); cursor: pointer; }
+input[readonly] { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--c-border); background: var(--c-bg-muted); color: var(--c-text); border-radius: var(--radius-control); }
+button { padding: 10px 16px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-muted); color: var(--c-text); cursor: pointer; }
 button:disabled { opacity: .6; cursor: default; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .error { color: var(--c-red); }
