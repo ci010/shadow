@@ -556,3 +556,39 @@ test('session graph reflects active background owners and clears terminal tasks'
     assert.deepEqual(await marked(), status === 'running' || status === 'cancelling' ? ['web:owner'] : [])
   }
 })
+
+test('history HTTP pagination defaults offset and validates both logical and physical requests', async () => {
+  const calls: Array<{ key: string; query: unknown }> = []
+  const app = new Hono()
+  testSessionsApiPlugin({
+    listHistorySessions: async () => [{ sessionId: 'logical' }],
+    readSessionState: async () => ({ sessionId: 'logical', segmentIndex: 0 }),
+    getHistory: async (key: string, query: { offset?: number; pageSize?: number }) => {
+      calls.push({ key, query })
+      const history = ['a', 'b', 'c']
+      const start = query.offset! < 0 ? Math.max(0, history.length + query.offset!) : query.offset
+      return { messages: query.pageSize == null ? history : history.slice(start, start! + query.pageSize), total: 3 }
+    },
+    getCommandResults: async () => ['command'], getYieldRecords: async () => ['decision'],
+    readFirstRecord: async () => ({ previous_physical_id: 'prior' }), listHistoryStates: async () => [],
+  } as unknown as SessionManager)(app)
+  for (const key of ['logical', 'physical']) {
+    for (const [query, expected] of [['pageSize=1', ['a']], ['pageSize=2&offset=-2', ['b', 'c']], ['', ['a', 'b', 'c']]] as const) {
+      const response = await app.request(`/api/sessions/${key}?${query}`)
+      assert.equal(response.status, 200)
+      const body = await response.json()
+      assert.deepEqual(body.messages, expected)
+      assert.equal(body.total, 3)
+      assert.deepEqual(body.commandResults, ['command'])
+      if (query === 'pageSize=1') assert.equal(body.offset, 0)
+      if (key === 'physical') assert.equal(body.previousPhysicalId, 'prior')
+    }
+    const count = calls.length
+    for (const query of ['offset=0', 'pageSize=0', 'pageSize=-1', 'pageSize=', 'pageSize=1x', 'pageSize=1.5', 'pageSize=Infinity', 'pageSize=9007199254740992', 'pageSize=1&offset=NaN', 'pageSize=1&offset=2x']) {
+      assert.equal((await app.request(`/api/sessions/${key}?${query}`)).status, 400, query)
+    }
+    assert.equal(calls.length, count, 'invalid queries must not read history')
+  }
+  assert.deepEqual(calls[0], { key: 'logical', query: { offset: 0, pageSize: 1, shallow: false } })
+  assert.deepEqual(calls[3], { key: 'physical', query: { physicalId: 'physical', offset: 0, pageSize: 1 } })
+})

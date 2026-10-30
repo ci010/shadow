@@ -1,3 +1,4 @@
+import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import type { LiveObserver, LiveStatus, LiveSubscription } from './live-client.ts'
 
 export interface ResourceLivePool {
@@ -7,7 +8,7 @@ export interface ResourceLivePool {
 
 /** Notifications carry no data or authority. HTTP snapshots remain authoritative.
  * Healthy live connections need no recurring snapshot reads; bounded polling is
- * only a disconnected fallback. Callers own initial reads, visibility and
+ * only a disconnected fallback. The helper owns initial reads; callers own visibility and
  * snapshot serialization, including invalidations received during a read.
  */
 export function createLiveResourceRefresh(pool: ResourceLivePool, options: {
@@ -16,6 +17,7 @@ export function createLiveResourceRefresh(pool: ResourceLivePool, options: {
   resource: 'interactions' | 'service-groups'
   refresh: () => void
   fallbackMs?: number
+  initialFallbackMs?: number
   delayMs?: number
 }) {
   let disposed = false
@@ -36,6 +38,11 @@ export function createLiveResourceRefresh(pool: ResourceLivePool, options: {
       if (!disposed && !live) { invalidate(); scheduleFallback() }
     }, options.fallbackMs ?? 30_000)
   }
+  let initialized = false
+  const initial = createInitialLiveSnapshot({ refresh: () => {
+    if (initialized) invalidate()
+    else { initialized = true; if (!disposed) options.refresh() }
+  }, fallbackMs: options.initialFallbackMs })
   const unobserve = pool.observeHost?.(options.base, status => {
     live = status.phase === 'live'
     if (live) { clearTimeout(fallback); fallback = undefined }
@@ -45,16 +52,19 @@ export function createLiveResourceRefresh(pool: ResourceLivePool, options: {
     event: envelope => {
       const payload = envelope.payload
       if (payload && typeof payload === 'object' && 'event' in payload && payload.event === 'invalidate'
-        && 'resource' in payload && payload.resource === options.resource) invalidate()
+        && 'resource' in payload && payload.resource === options.resource) initial.invalidate()
     },
-    reset: invalidate,
-    reconnected: invalidate,
+    reset: () => initial.reset(),
+    reconnected: () => initial.reconnected(),
   })
+  initial.attach(subscription)
   scheduleFallback()
   return {
+    getPromise: initial.getPromise,
     dispose() {
       if (disposed) return
       disposed = true
+      initial.dispose()
       clearTimeout(pending); clearTimeout(fallback)
       pending = fallback = undefined
       unobserve?.()

@@ -591,8 +591,14 @@ changes, avoiding read/notification loops.
 
 `live-resource-refresh.ts` coalesces notifications and uses host-qualified live
 health: healthy connections have no periodic resource reads; disconnected hosts
-use a 30-second fallback, with reset/reconnect resnapshotting. Callers own initial
-reads and visibility. `interaction-resource.ts` shares non-secret publication and
+use a 30-second fallback, with reset/reconnect resnapshotting. The shared
+`initial-live-snapshot.ts` gate registers subscriptions before the initial HTTP
+read: readiness opens one initial snapshot, covering pre-ready invalidations.
+If readiness is delayed or fails, a 750ms fallback opens HTTP discovery without
+waiting indefinitely; later readiness triggers a catch-up read. Real changes
+during a read and later resets/reconnects still refresh rather than being hidden
+by a time-based cache. Disposal cancels readiness/timers; callers own visibility
+and HTTP cancellation. `interaction-resource.ts` shares non-secret publication and
 probe GET envelopes per pool, API base and Project, while writes and credential
 inputs stay local to each pane. An in-flight invalidation queues a catch-up read.
 `service-groups.ts` similarly shares one resource for equal pool, API base,
@@ -626,6 +632,15 @@ The Child workspace gate performs its initial authenticated Project probe before
 mounting the application, then reuses host live health to stop automatic probes
 while connected. Disconnection uses a 30-second fallback whose deadline is not
 postponed by repeated SSE reconnect attempts; explicit retry remains available.
+
+The direct-chat snapshot (`GET /api/chat/session`) includes segment navigation
+metadata (`segmentIndex`, `currentPhysicalId`, `previousPhysicalId`) alongside
+history/context, so opening a chat does not download the same history again just
+to find its previous segment. `GET /api/sessions/:key` history pagination requires
+a positive integer `pageSize`; omitted `offset` defaults to zero, negative offsets
+count from the end, and offset-only or malformed numeric queries return 400.
+`shallow=true` selects the current physical segment; it is not a metadata-only
+or automatically small response.
 
 `app/src/chat-request-control.ts` manages composer Stop state across preparation,
 admission, streaming and cancellation. The Send button becomes Stop in the same

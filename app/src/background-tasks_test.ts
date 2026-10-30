@@ -48,7 +48,10 @@ test('inventory limits and explicit authorization/upgrade failures are preserved
   ] as const) await assert.rejects(fetchBackgroundTasks('http://fixture', sessionId, signal, async () => response), message)
 })
 
-function mount(t: TestContext, active = true, log = false) {
+function mount(t: TestContext, active = true, log = false, waitForReady = false) {
+  let ready!: () => void
+  const readiness = waitForReady ? new Promise<void>(resolve => { ready = resolve }) : Promise.resolve()
+  let readySignal: AbortSignal | undefined
   const page = Object.assign(new EventTarget(), { hidden: false })
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'document')
   Object.defineProperty(globalThis, 'document', { configurable: true, value: page })
@@ -79,7 +82,7 @@ function mount(t: TestContext, active = true, log = false) {
         subscribe: (_topic: unknown, observer: LiveObserver) => {
           const entry = { base, observer, closed: false }
           subscriptions.push(entry)
-          return { ready: async () => {}, close: () => { entry.closed = true } }
+          return { ready: (signal: AbortSignal) => { readySignal = signal; return readiness }, close: () => { entry.closed = true } }
         },
       }) }),
     }
@@ -106,7 +109,7 @@ function mount(t: TestContext, active = true, log = false) {
   const invalidate = (id = sessionId) => subscriptions.at(-1)!.observer.event({
     type: 'event', cursor: 'fixture:1', topic: { kind: 'sessions', projectId: 'a' }, payload: { event: 'invalidate', sessionId: id },
   })
-  return { props, requests, subscriptions, state, invalidate, page, phase: (value: LiveStatus['phase']) => phase({ phase: value }) }
+  return { props, requests, subscriptions, state, invalidate, page, ready, readySignal: () => readySignal, phase: (value: LiveStatus['phase']) => phase({ phase: value }) }
 }
 
 test('running tasks update through shared invalidations and disappear after completion', async t => {
@@ -367,4 +370,45 @@ test('a completed turn during a pending draft read supersedes its stale 404', as
   view.page.dispatchEvent(new Event('visibilitychange')); await settle()
   assert.equal(view.requests.length, 4)
   view.requests[3].finish(snapshot([])); await settle()
+})
+
+
+test('background inventory waits for subscription ready instead of reading again on initial reset', async t => {
+  const view = mount(t, true, false, true)
+  view.subscriptions[0].observer.reset('subscription')
+  view.invalidate()
+  view.page.dispatchEvent(new Event('visibilitychange'))
+  await settle()
+  assert.equal(view.requests.length, 0)
+  view.ready()
+  await settle()
+  assert.equal(view.requests.length, 1)
+  view.requests[0].finish(snapshot())
+  await settle()
+  assert.equal(view.requests.length, 1)
+})
+
+test('background initialization cleanup aborts ready and prevents a late initial read', async t => {
+  const view = mount(t, true, false, true)
+  view.props.active = false
+  await nextTick()
+  assert.equal(view.readySignal()!.aborted, true)
+  assert.equal(view.subscriptions[0].closed, true)
+  view.ready()
+  await settle()
+  assert.equal(view.requests.length, 0)
+})
+
+test('background inventory has bounded HTTP fallback and catches up after late readiness', async t => {
+  const view = mount(t, true, false, true)
+  await new Promise(resolve => setTimeout(resolve, 820))
+  assert.equal(view.requests.length, 1)
+  view.ready()
+  await settle()
+  assert.equal(view.requests.length, 1, 'ready catchup serializes behind the fallback read')
+  view.requests[0].finish(snapshot())
+  await settle()
+  assert.equal(view.requests.length, 2)
+  view.requests[1].finish(snapshot())
+  await settle()
 })

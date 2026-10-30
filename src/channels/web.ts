@@ -5,6 +5,7 @@ import { realpath } from 'node:fs/promises'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
+import { physicalSessionId } from '../sessions/session-identity.ts'
 import type { Hono } from 'hono'
 import { saveToUploads, sessionWorkspacePath } from '../utils/paths.ts'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -469,7 +470,13 @@ export class WebChannel extends AbstractChannel {
         const commandResults = await this.sessionManager!.getCommandResults(sessionId)
         const decisionRecords = this.sessionManager!.getSessionState(sessionId)
           ? await this.sessionManager!.getYieldRecords(sessionId) : []
-        return c.json({ chatId, systemPrompt, history: history || [], commandResults, decisionRecords, tools })
+        const state = this.sessionManager!.getSessionState(sessionId)
+        const segmentIndex = state?.segmentIndex ?? 0
+        const identity = state ?? { sessionId, segmentIndex }
+        return c.json({ chatId, systemPrompt, history: history || [], commandResults, decisionRecords, tools,
+          segmentIndex, currentPhysicalId: physicalSessionId(identity),
+          previousPhysicalId: segmentIndex > 0 ? physicalSessionId(identity, segmentIndex - 1) : null,
+        })
       } catch (error) {
         console.error('[web] Failed to retrieve session:', error)
         return c.json({ error: 'Failed to retrieve session' }, 500)

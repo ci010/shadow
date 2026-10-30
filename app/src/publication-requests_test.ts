@@ -13,7 +13,7 @@ const proposal = (projectId = 'a', requestId = id) => ({
   previousBindings: [], bindings: [],
 })
 const settle = () => new Promise(resolve => setImmediate(resolve))
-function harness(t: TestContext, initial: Partial<PublicationSource> = {}) {
+async function harness(t: TestContext, initial: Partial<PublicationSource> = {}) {
   const calls: Array<{ url: string; init: RequestInit; finish: (response: Response) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: string, init: RequestInit) =>
     new Promise<Response>(finish => calls.push({ url, init, finish })))
@@ -30,7 +30,9 @@ function harness(t: TestContext, initial: Partial<PublicationSource> = {}) {
   const app = renderer.createApp(defineComponent({
     setup() { state = usePublicationRequest(() => source); return () => null },
   }))
+  app.provide(Symbol.for('shadow.live-client-pool'), { client: () => ({ subscribe: () => ({ ready: async () => {}, close() {} }) }), observeHost: (_base: string, callback: (status: { phase: string }) => void) => { callback({ phase: 'live' }); return () => {} } })
   app.mount({})
+  await settle()
   t.after(() => app.unmount())
   return { source, state, calls }
 }
@@ -46,18 +48,22 @@ test('publication reviews enforce Project/session ownership and validate the exa
 })
 
 test('only active owners fetch, including topics and idle after propose, without ever auto-approving', async t => {
-  const { source, state, calls } = harness(t, { canSubmit: false })
+  const { source, state, calls } = await harness(t, { canSubmit: false })
   assert.equal(calls.length, 0)
   source.canSubmit = true
+  await settle()
   assert.equal(calls.length, 1)
   calls[0]!.finish(Response.json({ request: proposal() }))
   await settle()
   assert.equal(state.request.value?.id, id)
   assert.equal(calls.length, 1)
   source.active = false
+  await settle()
   assert.equal(state.request.value, null)
   source.sessionId = 'web:chat-ordinary'
+  await settle()
   source.active = true
+  await settle()
   assert.equal(calls.length, 2)
   calls[1]!.finish(Response.json({ request: proposal() }))
   await settle()
@@ -77,7 +83,7 @@ test('multi-review envelope rejects duplicate IDs and legacy mismatch; topics se
 })
 
 test('topic approves its own change in place and a waiting receipt cannot be approved again', async t => {
-  const { state, calls } = harness(t, { sessionId: 'web:topic' })
+  const { state, calls } = await harness(t, { sessionId: 'web:topic' })
   const own = { ...proposal(), change: { id: 'change-a', title: 'Support prompts', sourceSessionId: 'web:topic' } }
   const other = { ...proposal('a', 'other'), change: { id: 'change-b', title: 'Other', sourceSessionId: 'web:other' } }
   calls[0]!.finish(Response.json({ request: own, requests: [own, other] }))
@@ -96,7 +102,7 @@ test('topic approves its own change in place and a waiting receipt cannot be app
 })
 
 test('a passive read overlapping a decision cannot resurrect the old review', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ request: proposal() }))
   await settle()
   const refresh = state.refresh()
@@ -113,7 +119,7 @@ test('a passive read overlapping a decision cannot resurrect the old review', as
 })
 
 test('confirmation is dedicated, revision-bound, explicit and single-flight', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ request: proposal() }))
   await settle()
   const answer = state.confirm()
@@ -136,7 +142,7 @@ test('confirmation is dedicated, revision-bound, explicit and single-flight', as
 })
 
 test('cancellation returns a matching receipt and never invokes chat or a generic yield answer', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ request: proposal() }))
   await settle()
   const answer = state.cancel()
@@ -149,7 +155,7 @@ test('cancellation returns a matching receipt and never invokes chat or a generi
 })
 
 test('stale revisions and uncertain results require explicit reload instead of repeating authorization', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ request: proposal() }))
   await settle()
   const answer = state.confirm()
@@ -172,15 +178,19 @@ test('stale revisions and uncertain results require explicit reload instead of r
 })
 
 test('permission loss and Project switches abort pending writes and ignore late results', async t => {
-  const { source, state, calls } = harness(t)
+  const { source, state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ request: proposal() }))
   await settle()
   const write = state.confirm()
   source.canSubmit = false
+  await settle()
   assert.equal(calls[1]!.init.signal!.aborted, true)
   source.projectId = 'b'
+  await settle()
   source.apiBase = 'http://127.0.0.1/projects/b'
+  await settle()
   source.canSubmit = true
+  await settle()
   calls[2]!.finish(Response.json({ request: proposal('b') }))
   await settle()
   calls[1]!.finish(Response.json({ result: { requestId: id, revision, status: 'published' } }))
@@ -190,7 +200,7 @@ test('permission loss and Project switches abort pending writes and ignore late 
 })
 
 test('mismatched success receipts are errors, never publication confirmations', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ request: proposal() }))
   await settle()
   const write = state.confirm()
@@ -202,13 +212,14 @@ test('mismatched success receipts are errors, never publication confirmations', 
 
 test('group approval surface selects only affected exact Bot/platform/conversation and resets stale reads on target changes', async t => {
   const conversation = { botInstanceId: 'bot-a', platform: 'qq', conversationId: 'group:1' }
-  const { source, state, calls } = harness(t, { conversation })
+  const { source, state, calls } = await harness(t, { conversation })
   const affected = { ...proposal(), impact: { affectedBindings: [JSON.stringify(['bot-a', 'qq', 'group:1'])], permissionsChanged: true, promptsChanged: true, toolsChanged: true } }
   const sibling = { ...proposal('a', 'sibling'), impact: { affectedBindings: [JSON.stringify(['bot-b', 'qq', 'group:1'])], permissionsChanged: true, promptsChanged: false, toolsChanged: false } }
   calls[0].finish(Response.json({ request: affected, requests: [affected, sibling] }))
   await settle()
   assert.deepEqual(state.requests.value.map(item => item.id), [id])
   source.conversation = { botInstanceId: 'bot-b', platform: 'qq', conversationId: 'group:1' }
+  await settle()
   assert.equal(state.request.value, null)
   calls[1].finish(Response.json({ request: affected, requests: [affected, sibling] }))
   await settle()

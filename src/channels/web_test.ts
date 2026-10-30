@@ -9,6 +9,7 @@ import { Bus } from '../bus/bus.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
 import { WebChannel } from './web.ts'
+import { physicalSessionId } from '../sessions/session-identity.ts'
 import { localFolderWorkdirRef, type WorkdirCapabilityLookup } from '../sessions/locality.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import { RealtimeHub } from '../realtime/hub.ts'
@@ -216,18 +217,10 @@ test('media-only sends are admitted and preserve uploaded media refs', async () 
   const workspace = await createTempWorkspace()
   const { app, channel } = await createWebApp(workspace)
   const deliveries: Array<{ chatId: string; content: string; media?: string[] }> = []
-  ;(channel as unknown as {
-    handleIncoming: (
-      senderId: string,
-      chatId: string,
-      content: string,
-      messageId: string,
-      fields?: unknown,
-      media?: string[],
-    ) => Promise<void>
-  }).handleIncoming = async (_senderId, chatId, content, _messageId, _fields, media) => {
-    deliveries.push({ chatId, content, media })
-  }
+  channel.setReceiver(async message => {
+    deliveries.push({ chatId: message.chatId, content: message.content, media: message.media })
+    return { status: 'accepted', sessionId: `web:${message.chatId}`, inputId: message.messageId }
+  })
   try {
     const response = await app.request('/api/chat/send', {
       method: 'POST',
@@ -595,5 +588,34 @@ test('web chat context rejects missing IDs before reading context and preserves 
     assert.equal(response.status, 200)
     assert.equal((await response.json()).systemPrompt, 'Existing prompt')
     assert.deepEqual(reads, ['web:existing'])
+  } finally { await channel.stop() }
+})
+
+
+test('chat session response includes segment navigation without another history read', async () => {
+  const app = new Hono()
+  let historyReads = 0
+  let state = { sessionId: 'web:segmented', segmentIndex: 2 }
+  const history = [{ role: 'user', content: 'History' }]
+  const tools = [{ name: 'read', description: 'Read' }]
+  const channel = new WebChannel(new Bus(), { sessionManager: {
+    getSessionState: () => state,
+    getContext: async () => ({ systemPrompt: 'Prompt', tools }),
+    getHistory: async () => { historyReads++; return { messages: history } },
+    getCommandResults: async () => ['command'], getYieldRecords: async () => ['decision'],
+  } as unknown as SessionManager })
+  await channel.start(app)
+  try {
+    for (const index of [2, 0]) {
+      state = { ...state, segmentIndex: index }
+      const response = await app.request('/api/chat/session?chatId=segmented')
+      assert.equal(response.status, 200)
+      const body = await response.json()
+      assert.deepEqual(body, { chatId: 'segmented', systemPrompt: 'Prompt', history, tools,
+        commandResults: ['command'], decisionRecords: ['decision'], segmentIndex: index,
+        currentPhysicalId: physicalSessionId(state),
+        previousPhysicalId: index ? physicalSessionId(state, index - 1) : null })
+    }
+    assert.equal(historyReads, 2)
   } finally { await channel.stop() }
 })

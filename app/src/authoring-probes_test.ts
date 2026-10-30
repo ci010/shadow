@@ -25,7 +25,7 @@ const probe = (projectId = 'a', id = 'probe-a') => ({
   maxCalls: 1, status: 'pending',
 })
 const settle = () => new Promise(resolve => setImmediate(resolve))
-function harness(t: TestContext, initial: Partial<PublicationSource> = {}) {
+async function harness(t: TestContext, initial: Partial<PublicationSource> = {}) {
   const calls: Array<{ url: string; init: RequestInit; finish: (response: Response) => void; fail: (error: Error) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: string, init: RequestInit) =>
     new Promise<Response>((finish, fail) => calls.push({ url, init, finish, fail })))
@@ -42,7 +42,9 @@ function harness(t: TestContext, initial: Partial<PublicationSource> = {}) {
   const app = renderer.createApp(defineComponent({
     setup() { state = useAuthoringProbes(() => source); return () => null },
   }))
+  app.provide(Symbol.for('shadow.live-client-pool'), { client: () => ({ subscribe: () => ({ ready: async () => {}, close() {} }) }), observeHost: (_base: string, callback: (status: { phase: string }) => void) => { callback({ phase: 'live' }); return () => {} } })
   app.mount({})
+  await settle()
   t.after(() => app.unmount())
   return { source, state, calls }
 }
@@ -65,21 +67,23 @@ test('probe parser uses the shared schema, rejects duplicate IDs and validates n
 })
 
 test('read-only and hidden surfaces do not fetch or approve; topic renders only its own test', async t => {
-  const { source, state, calls } = harness(t, { canSubmit: false })
+  const { source, state, calls } = await harness(t, { canSubmit: false })
   assert.equal(calls.length, 0)
   assert.equal(await state.approve(), false)
   source.canSubmit = true
+  await settle()
   calls[0]!.finish(Response.json({ requests: [probe(), { ...probe('a', 'other'), sourceSessionId: 'web:other' }] }))
   await settle()
   assert.equal(state.requests.value.length, 1)
   assert.equal(calls.length, 1, 'Loading does not approve')
   source.active = false
+  await settle()
   assert.equal(state.request.value, null)
   assert.equal(await state.cancel(), false)
 })
 
 test('explicit approval is single flight and pinned; completed receipts retain their run ID across passive stale reads', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ requests: [probe()] }))
   await settle()
   const write = state.approve()
@@ -101,7 +105,7 @@ test('explicit approval is single flight and pinned; completed receipts retain t
 })
 
 test('cancel sends DELETE without executing the tool', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ requests: [probe()] }))
   await settle()
   const write = state.cancel()
@@ -113,7 +117,7 @@ test('cancel sends DELETE without executing the tool', async t => {
 })
 
 test('failed runs are final receipts, not invitations to repeat approval', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ requests: [probe()] }))
   await settle()
   const write = state.approve()
@@ -125,7 +129,7 @@ test('failed runs are final receipts, not invitations to repeat approval', async
 })
 
 test('completed receipts can carry notification warnings without authorizing another run', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ requests: [probe()] }))
   await settle()
   const write = state.approve()
@@ -142,7 +146,7 @@ test('completed receipts can carry notification warnings without authorizing ano
 test('stale, unauthorized, mismatched and uncertain decisions require explicit reload; polling never unlocks them', async t => {
   for (const failure of ['stale', 'unauthorized', 'mismatch', 'network']) {
     await t.test(failure, async t => {
-      const { state, calls } = harness(t)
+      const { state, calls } = await harness(t)
       calls[0]!.finish(Response.json({ requests: [probe()] }))
       await settle()
       const write = state.approve()
@@ -170,7 +174,7 @@ test('stale, unauthorized, mismatched and uncertain decisions require explicit r
 test('navigation, Project change and permission loss abort writes and discard late results', async t => {
   for (const reason of ['navigation', 'project', 'permission']) {
     await t.test(reason, async t => {
-      const { source, state, calls } = harness(t)
+      const { source, state, calls } = await harness(t)
       calls[0]!.finish(Response.json({ requests: [probe()] }))
       await settle()
       const write = state.approve()
@@ -187,8 +191,9 @@ test('navigation, Project change and permission loss abort writes and discard la
 })
 
 test('late polling and old navigation responses cannot replace current state', async t => {
-  const { source, state, calls } = harness(t)
+  const { source, state, calls } = await harness(t)
   source.sessionId = 'web:chat-admin'
+  await settle()
   calls[1]!.finish(Response.json({ requests: [{ ...probe(), sourceSessionId: source.sessionId }] }))
   await settle()
   calls[0]!.finish(Response.json({ requests: [] }))
@@ -208,7 +213,7 @@ test('late polling and old navigation responses cannot replace current state', a
 })
 
 test('expired approvals and restored running requests cannot execute again', async t => {
-  const { state, calls } = harness(t)
+  const { state, calls } = await harness(t)
   calls[0]!.finish(Response.json({ requests: [{ ...probe(), expiresAt: '2026-09-19T01:01:00.000Z' }] }))
   await settle()
   assert.equal(await state.approve(), false)

@@ -3,8 +3,8 @@ import { createLiveResourceRefresh, type ResourceLivePool } from './live-resourc
 type Pool = ResourceLivePool
 
 /** Visibility is a read boundary, not a credential/state boundary. */
-export function observeInteractions(pool: Pool, base: string, projectId: string, refresh: () => void) {
-  let live: { dispose(): void } | undefined
+export function observeInteractions(pool: Pool, base: string, projectId: string, refresh: () => void, hidden?: () => void) {
+  let live: ReturnType<typeof createLiveResourceRefresh> | undefined
   let disposed = false
   const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
   function resume() {
@@ -12,11 +12,12 @@ export function observeInteractions(pool: Pool, base: string, projectId: string,
     live = undefined
     if (!disposed && visible()) live = createLiveResourceRefresh(pool, { base, projectId, resource: 'interactions', refresh })
   }
-  function visibility() { resume(); if (visible()) refresh() }
+  function visibility() { if (!visible()) hidden?.(); resume() }
   resume()
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility)
   return {
     visible,
+    getPromise: () => live?.getPromise() ?? Promise.resolve(),
     dispose() {
       disposed = true
       live?.dispose()
@@ -26,6 +27,7 @@ export function observeInteractions(pool: Pool, base: string, projectId: string,
 }
 
 interface SharedRead {
+  started(): boolean
   load(fresh?: boolean): Promise<unknown>
   invalidate(): void
   dispose(): void
@@ -33,6 +35,7 @@ interface SharedRead {
 interface Entry {
   listeners: Set<() => void>
   value?: unknown
+  started: boolean
   valid: boolean
   version: number
   pending?: Promise<unknown>
@@ -53,17 +56,22 @@ export function acquireInteractionRead(pool: Pool, base: string, projectId: stri
     if (!target.pending) for (const listener of target.listeners) listener()
   }
   if (!entry) {
-    entry = { listeners: new Set(), valid: false, version: 0, observer: undefined! }
+    entry = { listeners: new Set(), valid: false, started: false, version: 0, observer: undefined! }
     const target = entry
-    entry.observer = observeInteractions(pool, base, projectId, () => invalidate(target))
+    entry.observer = observeInteractions(pool, base, projectId, () => invalidate(target), () => { target.valid = false; target.version++; target.controller?.abort() })
     entries.set(key, entry)
   }
   const target = entry
   target.listeners.add(refresh)
+  let released = false
   return {
-    load(fresh = false) {
-      if (target.pending) return target.pending
+    started: () => target.started,
+    async load(fresh = false) {
+      if (!fresh) await target.observer.getPromise()
+      if (released || !target.listeners.size || !target.observer.visible()) throw new Error('Interaction read cancelled')
+      target.started = true
       if (fresh) { target.valid = false; target.version++ }
+      if (target.pending) return target.pending
       if (target.valid) return Promise.resolve(target.value)
       const controller = new AbortController()
       target.controller = controller
@@ -89,6 +97,7 @@ export function acquireInteractionRead(pool: Pool, base: string, projectId: stri
     },
     invalidate() { invalidate(target) },
     dispose() {
+      released = true
       target.listeners.delete(refresh)
       if (!target.listeners.size) {
         target.observer.dispose()
