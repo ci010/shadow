@@ -487,10 +487,33 @@ export class WebChannel extends AbstractChannel {
         if (c.req.query('snapshot') !== undefined) {
           c.header('Cache-Control', 'no-store')
           const revision = etag.slice(1, -1)
+          // Bind the history validator to its logical and physical identity, not
+          // mutable context/tools/receipts. Hash the exact serialized prefix.
+          const { history: messages, ...metadata } = data
+          const historyHash = (prefix: typeof messages) => createHash('sha256').update(JSON.stringify({
+            chatId, currentPhysicalId: data.currentPhysicalId, segmentIndex, history: prefix,
+          })).digest('hex')
+          const historyRevision = historyHash(messages)
           const countText = c.req.query('historyCount')
           const count = countText !== undefined && /^(0|[1-9]\d*)$/.test(countText) ? Number(countText) : NaN
           if (c.req.query('snapshot') === revision && (countText === undefined || count === data.history.length)) {
             return c.json({ revision, unchanged: true })
+          }
+          const baseHistoryRevision = c.req.query('historyRevision')
+          const baseSnapshot = c.req.query('snapshot')
+          if (baseSnapshot && /^[a-f0-9]{64}$/.test(baseSnapshot)
+            && baseHistoryRevision && /^[a-f0-9]{64}$/.test(baseHistoryRevision)
+            && Number.isSafeInteger(count) && count > 0 && count <= messages.length) {
+            // Bounded contiguous reuse: context may be prepended as well as appended.
+            // Never reuse a partially matching or rewritten middle block.
+            for (let offset = 0; offset <= Math.min(16, messages.length - count); offset++) {
+              if (historyHash(messages.slice(offset, offset + count)) !== baseHistoryRevision) continue
+              return c.json({ revision, historyRevision, delta: {
+                baseRevision: baseSnapshot, baseHistoryRevision, baseCount: count,
+                historyOffset: offset, leadingHistory: messages.slice(0, offset),
+                history: messages.slice(offset + count), count: messages.length, metadata,
+              } })
+            }
           }
           // Reconstruct the old complete representation without retaining server snapshots.
           // Only an exact prefix AND unchanged metadata may authorize an append.
@@ -503,7 +526,7 @@ export class WebChannel extends AbstractChannel {
                 history: data.history.slice(count), count: data.history.length } })
             }
           }
-          return c.body(`{"revision":"${revision}","data":${body}}`, 200, { 'Content-Type': 'application/json; charset=UTF-8' })
+          return c.body(`{"revision":"${revision}","historyRevision":"${historyRevision}","data":${body}}`, 200, { 'Content-Type': 'application/json; charset=UTF-8' })
         }
         c.header('ETag', etag)
         c.header('Cache-Control', 'private, no-cache')

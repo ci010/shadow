@@ -381,13 +381,21 @@ The chat view uses an explicit, memory-only snapshot protocol for
 the history/context data. Subsequent requests send that revision; unchanged
 responses contain only `{ revision, unchanged: true }` (HTTP 200), not history.
 Every read still validates against Main, including access and session existence.
-The client also sends its cached `historyCount`. For append-only history,
-Main reconstructs the old complete representation from the current prefix plus
-all current metadata and verifies its SHA-256 against the old revision. Only a
-match permits a `delta` response with the suffix and its base revision/count;
-the client validates that base and the final count before merging. Changes to
-old messages, context, tools, decisions, receipts or segment navigation fall back
-to the full snapshot. Malformed deltas clear the cache and surface an error,
+The client also sends its cached `historyCount` and, when available, a
+`historyRevision`: SHA-256 of the exact serialized history plus chat ID, physical
+session ID and segment index. Main verifies the entire cached block against the
+current history, trying offsets 0 through at most 16 (bounded work, not an
+unbounded search). A match returns a `delta` with leading/trailing messages,
+complete current metadata, the old revision/hash/count and the new history hash.
+This supports append, prepend-plus-append, and metadata-only updates without
+retransmitting the old block. The client validates base, counts, bounded offset
+and identity before merging; metadata replaces rather than overlays old fields.
+Rewritten messages, segment rollover and blocks outside the offset bound fall
+back to full data. Empty cached histories also fall back to full data.
+Older snapshot clients without a history hash retain exact complete-prefix
+validation and append-only deltas, requiring unchanged metadata. Clients talking
+to an older server continue to accept its full snapshots and legacy deltas.
+Malformed deltas clear the cache and surface an error,
 so a later read starts full rather than guessing a merge. Network/access errors
 never serve a cached snapshot as a successful read.
 
