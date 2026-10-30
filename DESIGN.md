@@ -401,6 +401,11 @@ appropriate state; the toolbar does not grant backend access.
 
 ### Connection and recovery
 
+Sidebar conversation rows use a (200ms) ease-out transform transition when keyed
+items reorder within a list. Initial rendering and entry/removal stay immediate;
+reduced-motion preferences disable the reorder transition. Sorting and selection
+behavior remain unchanged.
+
 Sidebar hover details distinguish identity, state and technical metadata.
 Bot names lead at (14px) semibold, followed by a labeled connection icon, then
 Platform and Bot ID below a quiet divider. Conversation details show a

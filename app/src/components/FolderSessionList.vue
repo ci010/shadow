@@ -1,5 +1,5 @@
 <template>
-  <ul class="folder-session-list">
+  <TransitionGroup tag="ul" name="sidebar-session" class="folder-session-list">
     <TreeRow
       v-for="session in displayedSessions"
       :key="session.sessionId"
@@ -66,7 +66,7 @@
         </div>
       </template>
     </TreeRow>
-  </ul>
+  </TransitionGroup>
 </template>
 
 <script setup lang="ts">
@@ -138,6 +138,11 @@ function isWorking(session: SidebarSession) { return isWorkingStage(activityStag
 .session-metadata time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .session-working-wave { color: var(--c-text-secondary); }
 .folder-session-list { list-style: none; padding: 0; margin: 0; }
+/* Animate keyed reordering only; initial rendering and enter/leave stay immediate. */
+.sidebar-session-move { transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-session-move { transition: none; }
+}
 .folder-session-row.needs-reply { box-shadow: inset 3px 0 var(--c-warn); background: var(--c-warn-bg); }
 .folder-session-row.needs-reply.active { background: var(--c-selection-bg); }
 .session-delete { border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
