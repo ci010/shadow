@@ -1,3 +1,13 @@
+import type { SessionActivityReadModel } from '../sessions/activity-read-model.ts'
+
+/** Optional for older publishers. A present activity is a complete replacement,
+ * not a patch; consumers validate it before using it instead of HTTP recovery. */
+export interface RealtimeSessionActivityPayload {
+  event: 'activity'
+  sessionId: string
+  activity?: SessionActivityReadModel
+}
+
 export type RealtimeSessionChange = 'history' | 'metadata' | 'activity' | 'work' | 'background-tasks' | 'scheduled-tasks'
 
 export type RealtimeResource = 'interactions' | 'service-groups' | 'automations' | 'config' | 'folders' | 'nodes' | 'channels'

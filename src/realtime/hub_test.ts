@@ -91,6 +91,16 @@ test('session invalidations optionally carry a completed turn identity without c
     const activity = await stream.next()
     assert(activity.type === 'event')
     assert.deepEqual(activity.payload, { event: 'activity', sessionId: 'web:chat' })
+    const model = { stage: 'tool' as const, waitingForCall: false, activeRequestId: 'turn', recovery: null }
+    publisher.invalidateActivity('web:chat', model)
+    const replacement = await stream.next()
+    assert(replacement.type === 'event')
+    assert.deepEqual(replacement.payload, { event: 'activity', sessionId: 'web:chat', activity: model })
+    assert.deepEqual(replacement.topic, { kind: 'sessions', projectId: 'one' })
+    publisher.invalidateActivity('web:chat', { ...model, recovery: { id: 'bad' } } as never)
+    const invalid = await stream.next()
+    assert(invalid.type === 'event')
+    assert.deepEqual(invalid.payload, { event: 'activity', sessionId: 'web:chat' }, 'malformed internal data retains HTTP fallback')
   } finally { await stream.cancel(); hub.close() }
 })
 

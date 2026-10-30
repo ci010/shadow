@@ -9,11 +9,12 @@ import { createProjectsClient, projectJson } from './projects.ts'
 import { parseActiveRequestIds, parseSessionRecoveries, parseSessionStages } from './session-activity.ts'
 import type { LiveClient, LiveObserver } from './live-client.ts'
 import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
+import { parseSessionActivityReadModel, type SessionActivityReadModel } from '../../src/sessions/activity-read-model.ts'
 
 /** A snapshot has one serialized reader, regardless of how many views use it.
  * initialLoading represents an external readiness gate; its owner must invalidate
  * when ready (or dispose to settle readers), without starting HTTP early. */
-export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: number, options: { initialLoading?: boolean } = {}) {
+export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: number, options: { initialLoading?: boolean; reconcile?: (value: T) => T } = {}) {
   const state = shallowReactive({ value: undefined as T | undefined, loading: options.initialLoading ?? false, error: '', revision: 0, readRevision: 0 })
   let controller: AbortController | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -34,7 +35,7 @@ export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, del
     try {
       const value = await load(current.signal)
       if (closed || current.signal.aborted || controller !== current) return
-      state.value = value
+      state.value = options.reconcile ? options.reconcile(value) : value
       state.error = ''
       state.revision++
     } catch (cause) {
@@ -63,6 +64,12 @@ export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, del
   }
   return {
     state: shallowReadonly(state), read, invalidate,
+    update(transform: (value: T) => T) {
+      if (closed || state.value === undefined) return false
+      state.value = transform(state.value)
+      state.revision++
+      return true
+    },
     refresh() { invalidate(); return read() },
     reset() {
       controller?.abort()
@@ -116,14 +123,39 @@ export function createProjectLiveState(
       reset() { graphLoader.reset(); graphSnapshot.reset() },
       refresh() { graphLoader.reset(); return graphSnapshot.refresh() },
     }
-    const activity = createSnapshot(async signal => {
+    type Activity = { stages: ReturnType<typeof parseSessionStages>; activeRequestIds: Record<string, string>; recoveries: ReturnType<typeof parseSessionRecoveries> }
+    // Each read owns its overlay. Events arriving after HTTP started must win,
+    // even if the response was captured before a fast tool finished.
+    let overlay = new Map<string, SessionActivityReadModel>()
+    function applyActivity(value: Activity, id: string, model: SessionActivityReadModel): Activity {
+      if (!Object.hasOwn(value.stages, id)) return value
+      const next = { stages: { ...value.stages, [id]: model.waitingForCall ? 'waiting-for-call' as const : model.stage },
+        activeRequestIds: { ...value.activeRequestIds }, recoveries: { ...value.recoveries } }
+      delete next.activeRequestIds[id]
+      delete next.recoveries[id]
+      if (model.activeRequestId !== null) next.activeRequestIds[id] = model.activeRequestId
+      if (model.recovery !== null) next.recoveries[id] = model.recovery
+      return next
+    }
+    const activity = createSnapshot<Activity>(async signal => {
+      overlay = new Map()
       const value = await projectJson(scope, '/api/sessions/stages', { signal }, request)
       return {
         stages: parseSessionStages(value),
         activeRequestIds: parseActiveRequestIds(value),
         recoveries: parseSessionRecoveries(value),
       }
-    }, delay, { initialLoading: true })
+    }, delay, { initialLoading: true, reconcile(result: Activity) {
+      let unknownSession = false
+      for (const [id, model] of overlay) {
+        if (!Object.hasOwn(result.stages, id)) unknownSession = true
+        result = applyActivity(result, id, model)
+      }
+      overlay.clear()
+      // A new session may have appeared after the initial inventory was captured.
+      if (unknownSession) activity.invalidate()
+      return result
+    } })
     const work = createSnapshot(async signal =>
       projectWorkOverviewSchema.parse(await projectJson(scope, '/api/work', { signal }, request)), delay)
     const usage = { work: 0 }
@@ -147,8 +179,22 @@ export function createProjectLiveState(
           graphLoader.invalidate(event.payload)
           graph.invalidate()
         }
-        if (!isRecord(event.payload) || event.payload.event !== 'invalidate'
-          || affectsSessionResource(event.payload, undefined, 'activity')) activity.invalidate()
+        const payload = event.payload
+        const model = isRecord(payload) && payload.event === 'activity'
+          && typeof payload.sessionId === 'string' && payload.sessionId.length > 0
+          ? parseSessionActivityReadModel(payload.activity) : undefined
+        if (model && isRecord(payload) && typeof payload.sessionId === 'string') {
+          const id = payload.sessionId
+          if (activity.state.loading) overlay.set(id, model)
+          if (activity.state.value && Object.hasOwn(activity.state.value.stages, id)) {
+            activity.update(value => applyActivity(value, id, model))
+          } else if (activity.state.value !== undefined || !activity.state.loading) {
+            // Unknown sessions (including after a failed initial read) require
+            // an inventory read; never invent inventory or resurrect a delete.
+            activity.invalidate()
+          }
+        } else if (!isRecord(payload) || payload.event !== 'invalidate'
+          || affectsSessionResource(payload, undefined, 'activity')) activity.invalidate()
         if (usage.work && (isRecord(event.payload) && event.payload.event === 'activity'
           || affectsSessionResource(event.payload, undefined, 'work')
           || affectsSessionResource(event.payload, undefined, 'activity'))) work.invalidate()

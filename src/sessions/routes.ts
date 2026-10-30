@@ -1,4 +1,5 @@
 import { projectUsagePageQuerySchema } from '../projects/usage-contract.ts'
+import { sessionActivityReadModel } from './activity-invalidation.ts'
 import { SessionProfileService } from './profile.ts'
 import type { Hono } from 'hono'
 import { channelAddressFromSessionId } from '../bus/events.ts'
@@ -975,14 +976,11 @@ export function sessionsApiPlugin(
       const activeRequestIds: Record<string, string> = {}
       const recoveries: Record<string, SessionRecovery> = {}
       for (const s of list) {
-        const active = sessions.getActiveSession(s.sessionId)
-        waitingForCalls[s.sessionId] = !!sessions.isWaitingForCall?.(s.sessionId)
-        stages[s.sessionId] = waitingForCalls[s.sessionId] || sessions.yields.get(s.sessionId) || sessions.inputs.get(s.sessionId) ? 'waiting' : active?.rateLimitWait ? 'rate-limit' : active ? active.phase : 'inactive'
-        if (active && active.phase !== 'idle' && 'activeRequestId' in active && typeof active.activeRequestId === 'string') {
-          activeRequestIds[s.sessionId] = active.activeRequestId
-        }
-        const recovery = sessions.getSessionRecovery?.(s.sessionId)
-        if (recovery) recoveries[s.sessionId] = recovery
+        const model = sessionActivityReadModel(sessions, s.sessionId)
+        waitingForCalls[s.sessionId] = model.waitingForCall
+        stages[s.sessionId] = model.stage
+        if (model.activeRequestId !== null) activeRequestIds[s.sessionId] = model.activeRequestId
+        if (model.recovery !== null) recoveries[s.sessionId] = model.recovery
       }
       return c.json({ stages, waitingForCalls, activeRequestIds, recoveries })
     })

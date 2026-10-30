@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { parseSessionActivityReadModel, type SessionActivityReadModel } from '../sessions/activity-read-model.ts'
 import type { Hono } from 'hono'
-import { isRealtimeCursor, isRealtimeTopic, parseRealtimeTopics, realtimeTopicKey, type RealtimeEnvelope, type RealtimeTopic, type RealtimeResource, type RealtimeSessionChange } from './protocol.ts'
+import { isRealtimeCursor, isRealtimeTopic, parseRealtimeTopics, realtimeTopicKey, type RealtimeEnvelope, type RealtimeTopic, type RealtimeResource, type RealtimeSessionChange, type RealtimeSessionActivityPayload } from './protocol.ts'
 
 type EventEnvelope = Extract<RealtimeEnvelope, { type: 'event' }>
 type ResetReason = Extract<RealtimeEnvelope, { type: 'reset' }>['reason']
@@ -12,7 +13,7 @@ export interface RealtimeTelemetry {
 export interface RealtimePublisher {
   chat(sessionId: string, payload: unknown, requestId?: string): void
   invalidateSessions(sessionId?: string, completedTurnId?: string, changes?: readonly RealtimeSessionChange[]): void
-  invalidateActivity(sessionId: string): void
+  invalidateActivity(sessionId: string, activity?: SessionActivityReadModel): void
   invalidateIo?(runId: string): void
   invalidateIntegrations?(): void
   invalidateResource?(resource: RealtimeResource): void
@@ -87,8 +88,10 @@ export class RealtimeHub {
       invalidateSessions: (sessionId, completedTurnId, changes) => {
         if (active()) this.publish({ kind: 'sessions', projectId }, { event: 'invalidate', sessionId, ...(completedTurnId ? { completedTurnId } : {}), ...(changes ? { changes } : {}) })
       },
-      invalidateActivity: sessionId => {
-        if (active()) this.publish({ kind: 'sessions', projectId }, { event: 'activity', sessionId })
+      invalidateActivity: (sessionId, activity) => {
+        const snapshot = parseSessionActivityReadModel(activity)
+        if (active()) this.publish({ kind: 'sessions', projectId }, { event: 'activity', sessionId,
+          ...(snapshot ? { activity: snapshot } : {}) } satisfies RealtimeSessionActivityPayload)
       },
       invalidateIo: runId => {
         if (active()) this.publish({ kind: 'io', projectId }, { event: 'invalidate', runId })

@@ -1,20 +1,29 @@
 import { createHash } from 'node:crypto'
 import type { SessionManager } from './session-manager.ts'
+import { parseSessionActivityReadModel, type SessionActivityReadModel } from './activity-read-model.ts'
+
+type ActivitySource = Pick<SessionManager, 'getActiveSession' | 'isWaitingForCall' | 'getSessionRecovery' | 'yields' | 'inputs'>
+
+export function sessionActivityReadModel(sessions: ActivitySource, sessionId: string): SessionActivityReadModel {
+  const active = sessions.getActiveSession(sessionId)
+  const waitingForCall = !!sessions.isWaitingForCall?.(sessionId)
+  const stage = waitingForCall || sessions.yields.get(sessionId) || sessions.inputs?.get(sessionId)
+    ? 'waiting' : active?.rateLimitWait ? 'rate-limit' : active ? active.phase : 'inactive'
+  const activeRequestId = active && active.phase !== 'idle' && 'activeRequestId' in active && typeof active.activeRequestId === 'string'
+    ? active.activeRequestId : null
+  const model = parseSessionActivityReadModel({ stage, waitingForCall, activeRequestId,
+    recovery: sessions.getSessionRecovery?.(sessionId) ?? null })
+  if (!model) throw new TypeError('Invalid session activity read model')
+  return model
+}
 
 /** Fingerprint visible activity and pending question metadata. Questions can
  * change while the stage remains waiting, so they must still notify /ask views.
  * Tool progress/internal wakeups need not trigger identical snapshot reads. */
 export function sessionActivityFingerprint(sessions: Pick<SessionManager,
   'getActiveSession' | 'isWaitingForCall' | 'getSessionRecovery' | 'yields' | 'inputs'>, sessionId: string): string {
-  const active = sessions.getActiveSession(sessionId)
-  const waitingForCall = !!sessions.isWaitingForCall?.(sessionId)
-  const question = sessions.yields.get(sessionId), input = sessions.inputs.get(sessionId)
-  const stage = waitingForCall || question || input
-    ? 'waiting' : active?.rateLimitWait ? 'rate-limit' : active ? active.phase : 'inactive'
-  const requestId = active && active.phase !== 'idle' && 'activeRequestId' in active && typeof active.activeRequestId === 'string'
-    ? active.activeRequestId : undefined
-  return createHash('sha256').update(JSON.stringify({ stage, waitingForCall, requestId,
-    recovery: sessions.getSessionRecovery?.(sessionId), question, input })).digest('hex')
+  return createHash('sha256').update(JSON.stringify({ ...sessionActivityReadModel(sessions, sessionId),
+    question: sessions.yields.get(sessionId), input: sessions.inputs?.get(sessionId) })).digest('hex')
 }
 
 /** Bounded, Project-local notification deduplication, never an authority/cache
