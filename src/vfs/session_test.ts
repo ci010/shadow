@@ -31,7 +31,14 @@ test('current session JSON uses dedicated virtual write routing and validates ex
   await assert.rejects(vfs.write('v:session/other.json', { content: '{}' }, context)!, /self.json/)
   assert.throws(() => vfs.write('v:unknown/self.json', { content: '{}' }, context), /Unknown/)
   assert.throws(() => vfs.write('v:session/self.json', { content: '{}' }, { ...context, tools: { executionMode: 'call' } } as ExecutionContext), /call mode/)
-  assert.throws(() => vfs.write('v:session/self.json', { content: '{}' }, { ...context, remoteWorkdir: {} } as ExecutionContext), /local workdir/)
+  const remoteContext = { ...context, remoteWorkdir: {
+    nodeId: 'remote', capabilityId: 'opaque',
+    get executor(): never { throw new Error('Self metadata must not access the remote executor') },
+  } } as ExecutionContext
+  const remoteResult = await writer.execute({ path: 'v:session/self.json', match: 'true', content: 'false' }, remoteContext)
+  assert.equal(JSON.parse(remoteResult).completed, false)
+  assert.equal(writes.length, 2)
+  assert.throws(() => vfs.write('v:session/self.json', { content: '{}' }, { ...remoteContext, tools: { executionMode: 'call' } } as ExecutionContext), /call mode/)
   await assert.rejects(writer.execute({ path: 'v:session/self.json', match: '"', content: 'x' }, context), /Multiple matches/)
-  assert.equal(writes.length, 1)
+  assert.equal(writes.length, 2)
 })

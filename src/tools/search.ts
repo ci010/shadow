@@ -129,9 +129,9 @@ export class SearchTool implements Tool {
     }
     const virtualPath = ['grep', 'glob'].includes(scheme) && root && isVirtualPath(root) ? root
       : scheme === 'glob' && !root && isVirtualPath(query) ? query.split(/[\\/]/)[0] : undefined
-    if (context.remoteWorkdir && scheme === 'web') return 'Error: web search is not supported with a remote workdir; no remote network capability exists.'
+    // Web search uses the configured Main provider, independently of file locality.
     if (context.remoteWorkdir && args.nodeId !== undefined) return 'Error: remote filesystem glob/grep search is not supported by this executor; no Main ripgrep or filesystem fallback is allowed.'
-    if (context.remoteWorkdir && (!virtualPath || !/^v:sessions(?:[\\/]|$)/.test(virtualPath))) {
+    if (context.remoteWorkdir && scheme !== 'web' && (!virtualPath || !/^v:sessions(?:[\\/]|$)/.test(virtualPath))) {
       return 'Error: only v:sessions searches are supported with a remote workdir.'
     }
 

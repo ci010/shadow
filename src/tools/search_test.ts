@@ -510,3 +510,24 @@ test('overview drill-down targets isolate encoded tool-call IDs and survive logi
   await assert.rejects(read.execute({ path: `v:sessions/${physical}/calls/missing` }, context), /Unknown tool call/)
   await assert.rejects(read.execute({ path: `v:sessions/${logical}/calls/other`, offset: 1, limit: 1 }, context), /physical session ID/)
 })
+
+
+test('remote workdir web search uses the configured provider without remote filesystem access', async () => {
+  const context = {
+    tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal,
+    remoteWorkdir: { nodeId: 'remote', capabilityId: 'opaque',
+      get executor(): never { throw new Error('Web search must not access the remote executor') },
+    },
+  } as unknown as ExecutionContext
+  const queries: unknown[] = []
+  const provider: Tool = {
+    name: 'web', description: '', parameters: { type: 'object', properties: {} },
+    execute: async args => { queries.push(args); return 'web results' },
+  }
+  const search = new SearchTool('.', provider)
+  assert.equal(await search.execute({ handler: 'web', query: 'docs', domain: 'example.com' }, context), 'web results')
+  assert.equal(await search.execute({ space: 'web', query: 'legacy' }, context), 'web results')
+  assert.deepEqual(queries, [{ query: 'docs site:example.com' }, { query: 'legacy' }])
+  assert.match(await new SearchTool('.').execute({ handler: 'web', query: 'docs' }, context), /web search is not configured/)
+  await assert.rejects(search.execute({ handler: 'web', query: 'docs', nodeId: 'remote', capabilityId: 'opaque' }, context), /Explicit device selection/)
+})
