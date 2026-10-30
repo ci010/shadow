@@ -23,13 +23,14 @@
         <button type="button" :disabled="disabled || setupDisabled" @click="request('local')">{{ t('Local · assess this computer with Agent') }}</button>
         <button type="button" :disabled="disabled || setupDisabled" @click="request('remote')">{{ t('Remote · configure API with Agent') }}</button>
       </template>
-      <button type="button" @click="refresh">{{ t('Refresh audio status') }}</button>
+      <button type="button" @click="refresh(true, true)">{{ t('Refresh audio status') }}</button>
       </template>
     </div>
   </div>
 </template>
 <script setup lang="ts">
-import { coalescedRead } from '../settings-resource.ts'
+import { audioStatusResource } from '../audio-status-resource.ts'
+import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { computed, onMounted, onActivated, onDeactivated, onUnmounted, ref, watch, useId } from 'vue'
 import { audioSetupRequest } from '../audio-setup'
 import { audioEntry, recognizedTranscript, recordMicrophone, prepareMicrophone, type MicrophonePreparation, type AudioStatus, NoAudioSignalError } from '../audio-input'
@@ -38,6 +39,7 @@ import { openAudioStream } from '../audio-stream.ts'
 import { apiUrl } from '../api-url'
 import { t } from '../i18n.ts'
 const props = withDefaults(defineProps<{ disabled: boolean; setupDisabled?: boolean; visible?: boolean; keyboardActive?: boolean; apiBase: string; draftKey: string; sessionId?: string }>(), { visible: true, keyboardActive: true })
+const livePool = useLiveClientPool()
 const emit = defineEmits<{ request: [text: string]; transcript: [text: string] }>()
 const status = ref<AudioStatus>(), loading = ref(false), error = ref(''), notice = ref(''), panel = ref(false)
 const root = ref<HTMLElement>(), popup = ref(false), popupId = useId()
@@ -56,7 +58,7 @@ function hoverLeave() {
 }
 function focusIn() { clearTimeout(closeTimer); if (canPopup()) { popup.value = true; if (entry.value !== 'local-ready') panel.value = true } }
 function focusOut(e: FocusEvent) { if (!root.value?.contains(e.relatedTarget as Node)) closePopup() }
-function openSettings() { if (!canPopup() || props.setupDisabled) return; clearTimeout(hoverTimer); popup.value = false; panel.value = true }
+function openSettings() { if (!canPopup() || props.setupDisabled) return; clearTimeout(hoverTimer); popup.value = false; panel.value = true; void refresh(true, true) }
 const level = ref(0), provisional = ref('')
 let stream: Awaited<ReturnType<typeof openAudioStream>> | undefined
 let streaming: Promise<void> | undefined
@@ -75,17 +77,14 @@ function cancel() {
   clearTimeout(limit); clearTimeout(arm); clearTimeout(hold); arm = hold = undefined
   owner = undefined; pendingStop = false; pointerId = undefined; suppressClick = false; blockedChord = false; phase.value = 'idle'; loading.value = false
 }
-async function refresh() {
-  cancel(); status.value = undefined; error.value = ''; loading.value = true
+async function refresh(fresh = false, preservePopup = false) {
+  const previousPopup = popup.value, previousPanel = panel.value
+  cancel()
+  if (preservePopup) { popup.value = previousPopup; panel.value = previousPanel }
+  status.value = undefined; error.value = ''; loading.value = true
   const own = generation; controller = new AbortController()
   try {
-    const url = apiUrl(props.apiBase, '/api/audio/status').toString()
-    const value = await coalescedRead(fetch, url, async signal => {
-      const response = await fetch(url, { signal })
-      if (!response.ok) throw new Error(t('Unable to read Project audio status. Retry before setup.'))
-      return response.json()
-    }, controller.signal)
-    if (!value.asr || !value.tts || typeof value.asr.ready !== 'boolean' || typeof value.tts.ready !== 'boolean' || !['local', 'remote'].includes(value.asr.route) || !['local', 'remote'].includes(value.tts.route)) throw new Error(t('Invalid audio status response.'))
+    const value = await audioStatusResource(livePool, props.apiBase).read(controller.signal, fresh)
     if (own === generation) status.value = value
   } catch (e) { if (own === generation) error.value = e instanceof Error ? e.message : String(e) }
   finally { if (own === generation) loading.value = false }
@@ -152,7 +151,7 @@ function click() {
   if (suppressClick) { suppressClick = false; return }
   if (props.disabled || loading.value) return
   if (phase.value === 'acquiring' || phase.value === 'recording') { void stop(); return }
-  if (entry.value === 'local-ready') void start('click'); else { popup.value = false; panel.value = !panel.value }
+  if (entry.value === 'local-ready') void start('click'); else { popup.value = false; panel.value = !panel.value; if (panel.value) void refresh(true, true) }
 }
 function reserve() {
   try { preparation?.cancel(); preparation = prepareMicrophone(); return true }
