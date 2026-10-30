@@ -1,5 +1,8 @@
 import { stat } from 'node:fs/promises'
-import { isAbsolute, win32, posix } from 'node:path'
+import { isAbsolute, win32, posix, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { localExecSafegitEnv } from './git/safegit.ts'
+import { localExecSafegitAliasEnv } from './git/safegit-alias.ts'
 import type { JobRequestV1 } from './contracts.ts'
 import type { ProcessExecuteArgsV1 } from './executor.ts'
 import type { LocalProcessOperationHandler } from './local-executor.ts'
@@ -73,6 +76,12 @@ export class CapabilityShell implements LocalProcessOperationHandler {
     const cwd = await resolveExistingTarget(root, args.cwd ?? '.')
     if (!(await stat(cwd)).isDirectory()) throw invalidArgs()
     signal.throwIfAborted()
-    return { ...args, cwd }
+    // Resolve only on the executing Child. Wire args cannot provide env or a
+    // Main-side binary path. Keep the alias cache outside the granted worktree.
+    const env = await localExecSafegitAliasEnv(
+      await localExecSafegitEnv({}), join(tmpdir(), 'shadow-exec'),
+    )
+    signal.throwIfAborted()
+    return { ...args, cwd, env }
   }
 }
