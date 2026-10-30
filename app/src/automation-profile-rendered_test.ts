@@ -47,3 +47,15 @@ test('selected automation renders actual metrics, unknown usage, frequency and r
   assert.equal(requests.length, 2)
   assert.ok(requests.every(url => url === 'https://example.test/projects/current/api/automations/system%3Awork-organizer/profile'))
 })
+
+// Keep the panel height bounded without creating a second scroll target inside it.
+test('automation statistics uses one scroll container for metrics and expanded limitations', () => {
+  const { descriptor } = parse(readFileSync(new URL('./components/AutomationProfile.vue', import.meta.url), 'utf8'))
+  const css = descriptor.styles.map(style => style.content).join('\n')
+  const panel = css.match(/\.automation-profile\s*\{([^}]+)\}/)?.[1] ?? ''
+  const details = css.match(/\.measurement-body\s*\{([^}]+)\}/)?.[1] ?? ''
+  assert.match(panel, /max-height:\s*180px/)
+  assert.match(panel, /overflow:\s*auto/)
+  assert.match(details, /overflow-wrap:\s*anywhere/)
+  assert.doesNotMatch(details, /(?:max-height|overflow(?:-y)?)\s*:/)
+})

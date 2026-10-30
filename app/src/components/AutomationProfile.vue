@@ -60,6 +60,6 @@ header button { flex: 0 0 auto; white-space: nowrap; min-width: 48px; }
 .automation-profile :deep(.profile-metrics dd) { margin-top: 4px; font-size: 18px; line-height: 1.3; font-weight: 600; }
 .automation-profile :deep(.profile-coverage) { font-size: 11px; line-height: 1.6; }
 p { margin: 4px 0; color: var(--c-text-secondary); } .profile-error { color: var(--c-error); overflow-wrap: anywhere; }
-.measurement summary { cursor: pointer; color: var(--c-text-secondary); padding: 4px 0; } .measurement-body { max-height: 160px; overflow: auto; overflow-wrap: anywhere; }
+.measurement summary { cursor: pointer; color: var(--c-text-secondary); padding: 4px 0; } .measurement-body { overflow-wrap: anywhere; }
 @media (max-width: 700px) { .automation-profile { padding-inline: 12px; max-height: 220px; } .automation-profile :deep(.profile-metrics) { gap: 12px 16px; } }
 </style>
