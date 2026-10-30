@@ -9,7 +9,7 @@ function fixture(t: TestContext, manualReady = false) {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const observers = new Map<string, LiveObserver>()
   const ready = new Map<string, () => void>()
-  const requests: Array<{ path: string; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
+  const requests: Array<{ path: string; url: URL; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
   const store = createProjectLiveState({ client: () => ({
     subscribe(topic, observer) {
       const key = realtimeTopicKey(topic)
@@ -21,7 +21,7 @@ function fixture(t: TestContext, manualReady = false) {
     },
   }) }, {
     request: async (url, init) => new Promise(resolve => requests.push({
-      path: new URL(String(url)).pathname, signal: init!.signal!,
+      path: new URL(String(url)).pathname, url: new URL(String(url)), signal: init!.signal!,
       finish: (value, status = 200) => resolve(Response.json(value, { status })),
     })),
   })
@@ -115,8 +115,9 @@ test('bursts coalesce and changes during a read get one serialized follow-up', a
   f.requests[3].finish({ stages: { 'web:one': 'llm' } })
   await f.tick()
   assert.equal(f.requests.length, 6)
-  f.requests[4].finish(graph('After'))
-  f.requests[5].finish({ stages: { 'web:one': 'idle' } })
+  const followup = f.requests.slice(4)
+  followup.find(request => request.path.endsWith('/graph'))!.finish(graph('After'))
+  followup.find(request => request.path.endsWith('/stages'))!.finish({ stages: { 'web:one': 'idle' } })
   await lease.graph.read()
   assert.equal(lease.graph.state.value?.[0].label, 'After')
 })
@@ -304,5 +305,29 @@ test('history hints do not refresh Work overview; actual activity and Work chang
   f.event({ kind: 'sessions', projectId: 'a' }, { event: 'activity', sessionId: 'web:one' })
   await f.tick()
   assert.equal(f.requests.filter(request => request.path.endsWith('/work')).length, 2, 'overview retains live execution activity')
+  lease.release()
+})
+
+
+test('scoped session events use summary reads through the shared store and reconnect restores full graph', async t => {
+  const f = fixture(t)
+  const lease = f.store.acquireProject('http://fixture', 'a')
+  await f.tick()
+  const node = { physicalId: 'physical-one', logicalId: 'web:one', parentPhysicalId: null }
+  f.requests[0].finish({ ...graph('Before'), nodes: [node] })
+  f.requests[1].finish({ stages: {} })
+  await lease.graph.read()
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one', changes: ['history'] })
+  await f.tick()
+  const summary = f.requests.slice(2).find(request => request.path.endsWith('/graph'))!
+  assert.deepEqual(JSON.parse(summary.url.searchParams.get('sessionIds')!), ['web:one'])
+  summary.finish({ ...graph('After'), nodes: [node], partial: true, sessionIds: ['web:one'] })
+  f.requests.slice(2).find(request => request.path.endsWith('/stages'))!.finish({ stages: {} })
+  await lease.graph.read()
+  assert.equal(lease.graph.state.value?.[0].title, 'After')
+  f.observers.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!.reconnected()
+  await f.tick()
+  const recovery = f.requests.slice(4).find(request => request.path.endsWith('/graph'))!
+  assert.equal(recovery.url.searchParams.has('sessionIds'), false)
   lease.release()
 })

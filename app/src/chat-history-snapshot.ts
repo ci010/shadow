@@ -19,6 +19,8 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
       const key = target.toString()
       const cached = entries.get(key)
       target.searchParams.set('snapshot', cached?.revision ?? '')
+      target.searchParams.delete('historyCount')
+      if (cached && Array.isArray(cached.body.history)) target.searchParams.set('historyCount', String(cached.body.history.length))
       const response = await request(target.toString(), { signal, cache: 'no-store' })
       if (signal.aborted || disposed) throw new Error('History read cancelled')
       if (!response.ok) { remove(key); return response }
@@ -30,14 +32,35 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
         throw new Error('Invalid history snapshot')
       }
       if ('unchanged' in envelope && envelope.unchanged === true) {
-        if (!cached || cached.revision !== envelope.revision) throw new Error('History snapshot unavailable')
+        if (!cached || cached.revision !== envelope.revision || 'delta' in envelope || 'data' in envelope) {
+          remove(key)
+          throw new Error('History snapshot unavailable')
+        }
         return Response.json(cached.body)
       }
-      if (!('data' in envelope) || !envelope.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)) {
-        remove(key)
-        throw new Error('Invalid history snapshot')
+      let body: Record<string, unknown>
+      if ('delta' in envelope) {
+        const delta = envelope.delta
+        if (!cached || !Array.isArray(cached.body.history) || !delta || typeof delta !== 'object'
+          || !('baseRevision' in delta) || delta.baseRevision !== cached.revision
+          || !('baseCount' in delta) || delta.baseCount !== cached.body.history.length
+          || !('history' in delta) || !Array.isArray(delta.history) || delta.history.length === 0
+          || !delta.history.every(message => message && typeof message === 'object' && !Array.isArray(message)
+            && typeof message.role === 'string')
+          || !('count' in delta) || !Number.isSafeInteger(delta.count)
+          || delta.count !== cached.body.history.length + delta.history.length
+          || 'data' in envelope || 'unchanged' in envelope) {
+          remove(key)
+          throw new Error('Invalid history delta')
+        }
+        body = { ...cached.body, history: [...cached.body.history, ...delta.history] }
+      } else {
+        if (!('data' in envelope) || !envelope.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)) {
+          remove(key)
+          throw new Error('Invalid history snapshot')
+        }
+        body = envelope.data as Record<string, unknown>
       }
-      const body = envelope.data as Record<string, unknown>
       const size = new TextEncoder().encode(JSON.stringify(body)).byteLength
       remove(key)
       if (size <= maxBytes && maxEntries > 0) {

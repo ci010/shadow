@@ -669,3 +669,48 @@ test('chat history conditional reads validate all response fields and never hide
     assert.equal((await read(etag)).status, 404)
   } finally { await channel.stop() }
 })
+
+
+test('history append validates complete old prefix and metadata, not client counts', async () => {
+  const app = new Hono()
+  let history = [{ role: 'user', content: 'x'.repeat(100_000) }]
+  let systemPrompt = 'prompt'
+  let segmentIndex = 0
+  let commands: string[] = []
+  let decisions: string[] = []
+  const channel = new WebChannel(new Bus(), { sessionManager: {
+    getSessionState: () => ({ sessionId: 'web:delta', segmentIndex }),
+    getContext: async () => ({ systemPrompt, tools: [] }),
+    getHistory: async () => ({ messages: history }),
+    getCommandResults: async () => commands, getYieldRecords: async () => decisions,
+  } as unknown as SessionManager })
+  await channel.start(app)
+  const read = (revision = '', count = '1') => app.request(`/api/chat/session?chatId=delta&snapshot=${revision}&historyCount=${count}`)
+  try {
+    const initial = await (await read()).json()
+    assert.ok((await (await read(initial.revision, '999')).json()).data, 'unchanged revision does not excuse a mismatched count')
+    history.push({ role: 'system', content: 'inserted context' }, { role: 'assistant', content: 'answer' })
+    const response = await read(initial.revision)
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    const wire = await response.text()
+    const append = JSON.parse(wire)
+    assert.deepEqual(append.delta.history, history.slice(1))
+    assert.ok(wire.length < JSON.stringify(initial).length / 100, 'growing history sends only suffix')
+    for (const count of ['-1', '1.0', '01', '9007199254740992', '999', '0']) {
+      assert.ok((await (await read(initial.revision, count)).json()).data)
+    }
+    for (const change of [
+      () => { history[0] = { role: 'user', content: 'edited' } },
+      () => { systemPrompt = 'changed' },
+      () => { commands = ['command'] },
+      () => { decisions = ['decision'] },
+      () => { segmentIndex++ },
+      () => { history = [] },
+    ]) {
+      const base = await (await read()).json()
+      const count = String(history.length)
+      change()
+      assert.ok((await (await read(base.revision, count)).json()).data, 'changed base falls back to full')
+    }
+  } finally { await channel.stop() }
+})

@@ -381,9 +381,15 @@ The chat view uses an explicit, memory-only snapshot protocol for
 the history/context data. Subsequent requests send that revision; unchanged
 responses contain only `{ revision, unchanged: true }` (HTTP 200), not history.
 Every read still validates against Main, including access and session existence.
-Changes to history, context, tools, decisions, receipts or segment navigation
-produce a new revision and full response. Network/access errors never serve a
-cached snapshot as a successful read.
+The client also sends its cached `historyCount`. For append-only history,
+Main reconstructs the old complete representation from the current prefix plus
+all current metadata and verifies its SHA-256 against the old revision. Only a
+match permits a `delta` response with the suffix and its base revision/count;
+the client validates that base and the final count before merging. Changes to
+old messages, context, tools, decisions, receipts or segment navigation fall back
+to the full snapshot. Malformed deltas clear the cache and surface an error,
+so a later read starts full rather than guessing a merge. Network/access errors
+never serve a cached snapshot as a successful read.
 
 Snapshots are scoped to the live-client pool and full request URL (including
 Project and chat), capped at eight entries and 16 MiB per pool, and cleared on
@@ -442,3 +448,14 @@ updates publish `channels` invalidations. Initial reads, manual retries and live
 recovery remain available. Channel-manager spontaneous connection transitions do
 not yet have a complete notification source; silently changed channel connection
 status may require manual refresh or live recovery rather than being real-time.
+
+Known session invalidations with supported change hints can request
+`GET /api/sessions/graph?sessionIds=<JSON array>` instead of the full graph.
+Requests are bounded to 32 distinct IDs and remain Project-scoped. The response
+contains complete summaries and physical nodes for only those sessions; the
+client merges them into its retained wire graph before resolving cross-session
+parents. Initial reads, unknown/new sessions, broad or legacy invalidations,
+manual refresh and recovery use the full graph. Missing/deleted or malformed
+partial rows trigger a full read, rather than guessing membership/topology.
+This narrows transfer and per-session enrichment work; it does not eliminate
+the inventory lookup or replace authoritative reads with event payloads.

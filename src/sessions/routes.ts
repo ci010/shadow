@@ -269,7 +269,19 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const list = (await sessions.listHistorySessions()).filter(session => session.agentType !== 'work-observer')
+      const rawIds = c.req.query('sessionIds')
+      let requestedIds: string[] | undefined
+      if (rawIds !== undefined) {
+        try {
+          if (rawIds.length > 16_384) throw new Error('oversize')
+          requestedIds = z.array(z.string().min(1).max(512)).min(1).max(32).parse(JSON.parse(rawIds))
+          if (new Set(requestedIds).size !== requestedIds.length) throw new Error('duplicate')
+        } catch { return c.json({ error: 'invalid_graph_session_ids' }, 400) }
+      }
+      const selected = requestedIds ? new Set(requestedIds) : undefined
+      const list = (await sessions.listHistorySessions()).filter(session => session.agentType !== 'work-observer'
+        && (!selected || selected.has(session.sessionId)))
+      c.header('Cache-Control', 'no-store')
 
       const nodes: Array<{
         projectId?: string
@@ -355,7 +367,9 @@ export function sessionsApiPlugin(
         }
       }
 
-      return c.json({ sessions: enrichedSessions, nodes })
+      return c.json({ sessions: enrichedSessions, nodes,
+        ...(requestedIds ? { partial: true, sessionIds: requestedIds } : {}),
+      })
     })
 
     app.get('/api/sessions/:key/file-changes', async c => {

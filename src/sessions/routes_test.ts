@@ -612,3 +612,33 @@ test('scheduled inventory survives inactive sessions and exposes only existing t
   jobs.splice(0)
   assert.deepEqual((await (await app.request('/api/sessions/web%3Ainactive/scheduled-tasks')).json()).tasks, [])
 })
+
+
+test('session graph partial reads are bounded and enrich only selected Project-owned rows', async () => {
+  const reads: string[] = []
+  const manager = {
+    listHistorySessions: async () => ['web:one', 'web:two'].map(sessionId => ({ sessionId, segmentIndex: 0 })),
+    readSessionState: async (sessionId: string) => { reads.push(sessionId); return { sessionId, segmentIndex: 0 } },
+    getFirstUserMessage: async () => null,
+    getSessionInferenceDefaults: () => ({ model: 'test' }),
+    yields: new Map(), inputs: new Map(),
+  } as unknown as SessionManager
+  const app = new Hono()
+  sessionsApiPlugin(manager)(app)
+  const response = await app.request(`/api/sessions/graph?sessionIds=${encodeURIComponent(JSON.stringify(['web:one']))}`)
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.equal(body.partial, true)
+  assert.deepEqual(body.sessionIds, ['web:one'])
+  assert.deepEqual(body.sessions.map((row: { sessionId: string }) => row.sessionId), ['web:one'])
+  assert.ok(body.nodes.every((node: { logicalId: string }) => node.logicalId === 'web:one'))
+  assert.deepEqual(reads, ['web:one'])
+  const missing = await app.request(`/api/sessions/graph?sessionIds=${encodeURIComponent(JSON.stringify(['web:foreign']))}`)
+  assert.deepEqual((await missing.json()).sessions, [])
+  for (const ids of ['invalid', '[]', '["web:one","web:one"]', JSON.stringify(Array.from({ length: 33 }, (_, i) => `web:${i}`))]) {
+    assert.equal((await app.request(`/api/sessions/graph?sessionIds=${encodeURIComponent(ids)}`)).status, 400)
+  }
+  const full = await (await app.request('/api/sessions/graph')).json()
+  assert.equal(full.partial, undefined)
+  assert.equal(full.sessions.length, 2)
+})
