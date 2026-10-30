@@ -40,7 +40,7 @@ async function apply() {
 </script>
 
 <style scoped>
-.desktop-role-settings { margin: 20px 0; padding: 16px; border: 1px solid var(--c-border); border-radius: 8px; }
+.desktop-role-settings { margin: 20px 0; padding: 16px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); }
 p { color: var(--c-text-secondary); line-height: 1.5; }
 button { margin: 12px 8px 0 0; padding: 8px 12px; }
 label { display: block; line-height: 1.5; }
