@@ -48,15 +48,11 @@ export function channelCapabilityPrompt(
   const lines = [
     '## Channel Capabilities',
     '',
-    `- Output format: ${capabilities.format}.`,
-    `- Code blocks: ${capabilities.codeBlocks ? 'supported' : 'not verified; prefer plain text'}. Tables: ${capabilities.tables ? 'supported' : 'use lists instead'}.`,
+    `- Output format: ${capabilities.format}; code blocks: ${capabilities.codeBlocks ? 'supported' : 'not verified; prefer plain text'}. Tables: ${capabilities.tables ? 'supported' : 'use lists instead'}.`,
     `- Outbound media: ${capabilities.outboundMedia.join(', ') || 'none verified'}. Receiving an attachment does not imply it can be sent back.`,
-    `- Output updates: ${capabilities.updates}. The adapter handles formatting, uploads, splitting and delivery limits; do not write raw API/card JSON.`,
-    '- Normal replies are sent automatically.',
+    `- Output updates: ${capabilities.updates}. Replies are sent automatically; the adapter handles formatting, uploads, splitting and limits. Do not write raw API/card JSON.`,
     ...(canMessage ? ['- The message tool communicates with other agent sessions, not arbitrary platform recipients.'] : []),
-    '- No new native thread/topic is created by subagent. Durable Project sessions are web-visible root peers; temporary task/call executions remain internal.',
-    '- Tasks report completion to their configured recipient; calls return through their originating tool call. Neither creates a native thread.',
-    '- Platform conversations do not grant delegation permissions. A public thread/topic is not a private workspace.',
+    '- No new native thread/topic is created by subagent. Durable Project sessions are web-visible root peers; temporary task/call executions remain internal. Channel capabilities do not grant delegation permissions; public threads are not private workspaces.',
     ...(!channelSupportsAsk(channel) ? [`- ${CHAT_QUESTION_GUIDANCE}`] : canAsk ? [
       channel === 'a2a'
         ? '- Use ask(kind=input) for required text from the authenticated A2A caller. This caller cannot approve local human decisions.'
@@ -64,10 +60,7 @@ export function channelCapabilityPrompt(
     ] : []),
   ]
   if (channel === 'web') lines.push(
-    '- Native relationship diagrams: use fenced `answer-flow` declarative JSON for Vue Flow node/edge diagrams inside replies. Read `v:skills/answer-flow` for the schema and examples before authoring; no app, iframe or executable Vue code is needed.',
-    '- Native visual answers: when relationships, boundaries or comparisons benefit from layout, mix ordinary Markdown with a fenced `answer-html` HTML fragment directly in the reply. This is an inline answer, not a website, iframe, attachment or micro app; no tool/setup is needed. Prefer ordinary Markdown for simple answers.',
-    '- Inside answer-html use semantic HTML (section/div/article/h3/p/ul/li/details/summary) and themed classes answer-grid, answer-card, answer-flow, answer-callout, answer-muted, answer-badge. Put data-md on a leaf container to parse its contents as Markdown. Example: <section class="answer-grid"><article class="answer-card"><h3>Control plane</h3><div data-md>**API** owns business state.</div></article></section>. Keep surrounding explanation in Markdown.',
-    '- Visual fragments are sanitized: isolated <style> CSS and custom classes are supported, with inherited --answer-* theme variables (surfaces, text, accent, status, borders, radii and fonts). Use grid/flex and responsive media queries. No scripts, inline style, events, iframe, forms, SVG, imports, network assets, animations or host selectors. CSS stays inside the message; do not imitate interactive approval controls. Layout does not establish authority or change factual certainty; label implemented, proposed and unverified boundaries clearly. Other channels may show the fence as source, so use ordinary Markdown there.',
+    '- Advanced answering: prefer Markdown when it is clear. When more prose would obscure relationships, processes or comparisons, use an inline diagram or flexible layout instead: read `v:skills/answer-flow` for node/edge diagrams, or `v:skills/answer-html` for structured layouts/cards. Load only the relevant skill before authoring; these enhance the reply, not an app or separate deliverable.',
   )
   if (channel === 'discord') lines.push('- Avoid unsolicited mentions. Wrap links in <> when embeds are not wanted. Archived threads are not deleted agent sessions.')
   if (channel === 'feishu') lines.push('- Ordinary reply ancestry is not a topic. Topic visibility follows its containing chat; do not change the group-wide message mode.')
