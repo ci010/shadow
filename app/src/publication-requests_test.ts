@@ -64,10 +64,9 @@ test('only active owners fetch, including topics and idle after propose, without
   await settle()
   source.active = true
   await settle()
-  assert.equal(calls.length, 2)
-  calls[1]!.finish(Response.json({ request: proposal() }))
-  await settle()
+  assert.equal(calls.length, 1, 'Another topic reuses the Project envelope without a new GET')
   assert.equal(state.request.value, null, 'Topics cannot see legacy admin-only proposals')
+  assert.equal(calls.some(call => call.init.method === 'POST'), false)
 })
 
 test('multi-review envelope rejects duplicate IDs and legacy mismatch; topics see only their changes', () => {
@@ -210,7 +209,7 @@ test('mismatched success receipts are errors, never publication confirmations', 
   assert.match(state.error.value, /Could not confirm/)
 })
 
-test('group approval surface selects only affected exact Bot/platform/conversation and resets stale reads on target changes', async t => {
+test('group approval surface reuses Project cache while selecting only the exact Bot/platform/conversation', async t => {
   const conversation = { botInstanceId: 'bot-a', platform: 'qq', conversationId: 'group:1' }
   const { source, state, calls } = await harness(t, { conversation })
   const affected = { ...proposal(), impact: { affectedBindings: [JSON.stringify(['bot-a', 'qq', 'group:1'])], permissionsChanged: true, promptsChanged: true, toolsChanged: true } }
@@ -220,9 +219,8 @@ test('group approval surface selects only affected exact Bot/platform/conversati
   assert.deepEqual(state.requests.value.map(item => item.id), [id])
   source.conversation = { botInstanceId: 'bot-b', platform: 'qq', conversationId: 'group:1' }
   await settle()
-  assert.equal(state.request.value, null)
-  calls[1].finish(Response.json({ request: affected, requests: [affected, sibling] }))
-  await settle()
+  assert.equal(calls.length, 1, 'Changing the target filters cached data, not a new GET')
+  assert.equal(state.request.value?.id, 'sibling')
   assert.deepEqual(state.requests.value.map(item => item.id), ['sibling'])
   assert.equal(calls.some(call => call.init.method === 'POST'), false)
 })

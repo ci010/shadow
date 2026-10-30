@@ -2537,6 +2537,8 @@ ${JSON.stringify(request)}`,
     this.acceptedInputs.delete(sessionId)
 
     deleted.push(sessionId)
+    this.deps.bus.emit('session.deleted', { sessionId, projectId: state.projectId,
+      automationJobId: resolveAutomationSession(state)?.jobId })
     this.deps.bus.emit('session.changed', { sessionId })
   }
 

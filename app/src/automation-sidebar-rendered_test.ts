@@ -65,7 +65,8 @@ test('actual folder sidebar hover maps inactive historical system controllers to
       for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-heading')))break;await wait()}
       assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'false');
       assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),0);
-      await run(()=>document.querySelector('.automations-heading').click());await wait();
+      await run(()=>document.querySelector('.automations-heading').click());
+      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
       assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
       assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),2);
       for(const id of ['system:work-organizer','historical-organizer']){
@@ -87,7 +88,8 @@ test('actual folder sidebar hover maps inactive historical system controllers to
       for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('.automations-heading')))break;await wait()}
       assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'false');
       assert.equal(await run(()=>document.querySelectorAll('[data-automation-id]').length),0);
-      await run(()=>document.querySelector('.automations-heading').click());await wait();
+      await run(()=>document.querySelector('.automations-heading').click());
+      for(let i=0;i<100;i++){if(await run(()=>document.querySelectorAll('[data-automation-id]').length===2))break;await wait()}
       assert.equal(await run(()=>document.querySelector('.automations-heading')?.getAttribute('aria-expanded')),'true');
       await run(()=>document.querySelector('[data-automation-id]').parentElement.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'})));await wait();
       assert.equal(await run(()=>document.querySelectorAll('.shared-hover-info .automation-action').length),0);

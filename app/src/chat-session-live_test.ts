@@ -507,15 +507,16 @@ test('first history load ignores layout scroll events and opens at the latest me
   const container = { scrollTop: 0, scrollHeight: 2400, clientHeight: 500 }
   state.messagesContainer = container
   const loading = state.loadDirectChat()
+  await settle()
   const history = f.requests.find(request => request.path === '/projects/a/api/chat/session')!
   assert.ok(history)
-  history.finish({ history: [{ role: 'assistant', content: 'Latest message' }] })
+  history.finish({ history: [{ role: 'assistant', content: 'Latest message' }], previousPhysicalId: 'previous-segment' })
   await settle()
-  // The messages have rendered, but segment metadata is still loading.
+  // Inline navigation metadata must not require another session GET.
   state.trackHistoryScroll()
   const segment = f.requests.find(request => request.path === `/projects/a/api/sessions/${encodeURIComponent(root)}`)!
-  assert.ok(segment)
-  segment.finish({ previousPhysicalId: null })
+  assert.equal(segment, undefined)
+  assert.equal(state.previousPhysicalId, 'previous-segment')
   await loading
   await Vue.nextTick()
   assert.equal(container.scrollTop, 2400)
@@ -552,6 +553,7 @@ test('missing/deleted direct conversation recovers to a blank draft without load
   const view = f.mount('a')
   const state = view.state()
   const loading = state.loadDirectChat()
+  await settle()
   f.requests.find(request => request.path.endsWith('/api/chat/session'))!.finish({ error: 'session_not_found' }, 404)
   await loading
   assert.equal(state.activeSessionId, '')
@@ -620,4 +622,34 @@ test('scratch draft status reads wait for persistence, not ID allocation or fail
   const source = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
   assert.match(source, /SessionWorkStatus v-if="sessionReadable /)
   assert.match(source, /SessionWorkControls v-if="sessionReadable /)
+})
+
+
+test('navigation selection callback ensures shared snapshots while explicit reload still forces refresh', async t => {
+  const f = fixture(t)
+  const view = f.mount('a')
+  await settle()
+  const graphRead = f.requests.find(request => request.path.endsWith('/graph'))!
+  const stagesRead = f.requests.find(request => request.path.endsWith('/stages'))!
+  graphRead.finish(graph())
+  stagesRead.finish({ stages: { [root]: 'idle', [task]: 'idle' } })
+  await settle()
+  const count = (suffix: string) => f.requests.filter(request => request.path.endsWith(suffix)).length
+  assert.equal(count('/graph'), 1)
+  assert.equal(count('/stages'), 1)
+  // Exercise the real useConversationNavigation callback configured by ChatTab,
+  // rather than only testing the lease's ensure API in isolation.
+  view.state().selectSession(root, false)
+  await settle()
+  view.state().selectSession(task, false)
+  await settle()
+  assert.equal(count('/graph'), 1, 'selection must not force a graph refresh')
+  assert.equal(count('/stages'), 1, 'initial chat reset and selection reuse activity')
+  const reload = view.state().loadSessionList()
+  await settle()
+  assert.equal(count('/graph'), 2, 'explicit reload retains force semantics')
+  assert.equal(count('/stages'), 2)
+  f.requests.filter(request => request.path.endsWith('/graph')).at(-1)!.finish(graph())
+  f.requests.filter(request => request.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
+  await reload
 })

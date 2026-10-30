@@ -28,6 +28,7 @@ import type { SessionMessageInput } from '../sessions/input.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { CronService, cronContextMode } from './service.ts'
 import { CronDispatcher } from './dispatch.ts'
+import { watchAutomationSessions } from './notifications.ts'
 import { registerAutomationRoutes } from './routes.ts'
 import { LEARNING_AUTOMATIONS, resolveAutomationSession } from './contracts.ts'
 
@@ -588,3 +589,39 @@ test('manual learning returns a live run link on admission, joins an existing ru
       } finally { await learning.stop(); await f.cron.stop(); await f.manager.stop(); scope.close() }
   })
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: deletion carries automation identity even when observer has never loaded that run`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store = new Store(join(workspace, 'sessions')); await store.init()
+      const automation = { jobId: 'old-job', name: 'Old job', runId: 'older', contextMode: 'fresh' as const, startedAt: '2026-01-01T00:00:00.000Z' }
+      const legacy: SessionState = { sessionId: 'cron:legacy-older', projectId: 'org-a', ownershipVersion: 2, physicalIdVersion: 2, segmentIndex: 0, mode: 'task', executionStatus: 'completed', automation }
+      await store.saveState(legacy.sessionId, legacy)
+      for (const [index, time] of ['2026-01-02T00:00:00.000Z', '2026-01-03T00:00:00.000Z'].entries()) {
+        const state: SessionState = { ...legacy, sessionId: `cron:archived-${index}`, executionId: `execution-${index}`, automationCallerSettled: true,
+          automation: { ...automation, runId: `archived-${index}`, startedAt: time },
+          statePersistence: { version: 1, kind: 'fresh-automation', jobId: automation.jobId } }
+        await store.saveState(state.sessionId, state); await store.archiveState!(state)
+      }
+      const f = fixture(workspace, store)
+      let changes = 0, foreign = 0
+      // Deliberately omit all identities: models a pane which never read this run.
+      const stop = watchAutomationSessions(f.bus, { projectId: 'org-a', initial: [], state: id => f.manager.getSessionState(id), changed: () => { changes++ } })
+      const stopForeign = watchAutomationSessions(f.bus, { projectId: 'org-b', initial: [], state: () => null, changed: () => { foreign++ } })
+      try {
+        await f.manager.start()
+        const representatives = await f.manager.automationFeatureStates()
+        assert.equal(representatives.filter(state => state.statePersistence).length, 1)
+        const before = await f.manager.querySessionHistoryStates({ projectId: 'org-a', jobId: 'old-job' })
+        // Archive-only old/non-representative runs cannot currently be deleted through any caller.
+        await assert.rejects(f.manager.deleteSession('cron:archived-0'), /Fresh automation history deletion is not supported/)
+        assert.equal(changes, 0)
+        assert.equal((await f.manager.querySessionHistoryStates({ projectId: 'org-a', jobId: 'old-job' })).total, before.total)
+        assert.deepEqual(await f.manager.deleteSession(legacy.sessionId), [legacy.sessionId])
+        assert.equal(changes, 1, 'Precise deletion identity refreshes history without polling or cached state')
+        assert.equal(foreign, 0)
+        assert.equal((await f.manager.querySessionHistoryStates({ projectId: 'org-a', jobId: 'old-job' })).total, before.total - 1)
+      } finally { stop(); stopForeign(); await f.manager.stop(); await f.cron.stop(); store.close?.() }
+    })
+  })
+}

@@ -20,7 +20,7 @@ import { TaskTool } from '../../tools/task.ts'
 import { isLightweightTopic, sessionTopicKey, sessionTopicSequence, sessionTopicTitle, sessionTopicDescription } from '../../sessions/lightweight-topic.ts'
 import { botConversationPolicies } from '../../channels/bot-policies.ts'
 import { channelSessionId, channelAddressFromSessionId } from '../../bus/events.ts'
-import { automationModelSettings, automationDispatchModel } from '../../cron/automation-model.ts'
+import { automationModelSettings, automationDispatchModel, automationCatalogConfigChanged } from '../../cron/automation-model.ts'
 import { isLearningSourceEligible } from '../../agent/learning/source-eligibility.ts'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -164,6 +164,7 @@ import { projectActionsPlugin } from '../../projects/action-routes.ts'
 import { ProjectActionTool } from '../../tools/project-action.ts'
 import { EventService } from '../../events/service.ts'
 import { PollingSources } from '../../events/polling-sources.ts'
+import { watchAutomationSessions } from '../../cron/notifications.ts'
 import { CronService } from '../../cron/service.ts'
 import { CronDispatcher } from '../../cron/dispatch.ts'
 import { registerAutomationRoutes } from '../../cron/routes.ts'
@@ -606,6 +607,11 @@ export async function createProjectRuntime(
     hasPendingExternalExecution: id => a2a.hasPendingOwner(id),
   })
   cleanup.push(() => sessions.stop())
+  cleanup.push(watchAutomationSessions(bus, {
+    projectId: project.id, initial: await sessions.automationFeatureStates(),
+    state: id => sessions.getSessionState(id),
+    changed: () => realtime.invalidateResource?.('automations'),
+  }))
   const assertComputerSession = (sessionId: string) => {
     const state = sessions.getSessionState(sessionId)
     if (!state || !sessionId.startsWith('web:') || (state.mode ?? 'session') !== 'session'
@@ -1253,7 +1259,10 @@ export async function createProjectRuntime(
     })
   }, sessionId => realtime.invalidateSessions(sessionId))
   cronService.setHandler(async (job, signal) => { await cronDispatcher.dispatch(job, signal) })
-  cronService.setOnChanged(() => realtime.invalidateSessions())
+  cronService.setOnChanged(reason => {
+    if (reason === 'inventory') realtime.invalidateSessions()
+    realtime.invalidateResource?.('automations')
+  })
   const automationProfiles = new AutomationProfileService(cronService, sessions, project.id, id => {
     if (id === 'system:work-organizer') return { kind: 'event', scope: 'current_runtime',
       description: 'Full or delta organization starts only on explicit request. No observation subscription or periodic schedule.' }
@@ -1323,7 +1332,7 @@ export async function createProjectRuntime(
     const state = sessions.getSessionState(sessionId)
     return (!isLearningSourceEligible(state, id => sessions.getSessionState(id),
       id => sessions.isManagedConversation(id), project.id) && !state?.channelBoundary) || !!state?.channelBoundary?.learning
-  }, learningRuntime.ledger, { deferStart: true, changed: () => realtime.invalidateSessions(),
+  }, learningRuntime.ledger, { deferStart: true, changed: () => { realtime.invalidateSessions(); realtime.invalidateResource?.('automations') },
     pending: pipeline => discordLearning.hasPending(pipeline) })
   commandDispatcher.register(createLearnCommand(sessions, pipeline => learning.trigger(pipeline)))
   cleanup.push(() => learning.stop())
@@ -1349,7 +1358,9 @@ export async function createProjectRuntime(
       sessions.updateProvider(newProvider, newQuickModel)
       provider = newProvider
       llm = newLlm
+      const automationsChanged = automationCatalogConfigChanged(activeConfig, newConfig)
       activeConfig = newConfig
+      if (automationsChanged) realtime.invalidateResource?.('automations')
       channels.updateConfig(newConfig)
   }
   const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {

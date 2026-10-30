@@ -1,3 +1,4 @@
+import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import { t } from './i18n.ts'
 import { shallowReactive, shallowReadonly } from 'vue'
 import { hostBase, projectBase } from './api-url.ts'
@@ -7,9 +8,11 @@ import { parseActiveRequestIds, parseSessionRecoveries, parseSessionStages } fro
 import type { LiveClient, LiveObserver } from './live-client.ts'
 import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
 
-/** A snapshot has one serialized reader, regardless of how many views use it. */
-export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: number) {
-  const state = shallowReactive({ value: undefined as T | undefined, loading: false, error: '', revision: 0, readRevision: 0 })
+/** A snapshot has one serialized reader, regardless of how many views use it.
+ * initialLoading represents an external readiness gate; its owner must invalidate
+ * when ready (or dispose to settle readers), without starting HTTP early. */
+export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: number, options: { initialLoading?: boolean } = {}) {
+  const state = shallowReactive({ value: undefined as T | undefined, loading: options.initialLoading ?? false, error: '', revision: 0, readRevision: 0 })
   let controller: AbortController | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let pending = false
@@ -95,18 +98,18 @@ export function createProjectLiveState(
   let disposed = false
 
   function createCatalog(base: string) {
-    const snapshot = createSnapshot(signal => createProjectsClient(base, request).list(signal), delay)
+    const snapshot = createSnapshot(signal => createProjectsClient(base, request).list(signal), delay, { initialLoading: true })
+    const gate = createInitialLiveSnapshot({ refresh: () => snapshot.invalidate() })
     const subscription = pool.client(base).subscribe({ kind: 'projects' }, {
-      event: () => snapshot.invalidate(), reset: () => snapshot.reset(),
-      reconnected: () => snapshot.reset(),
+      event: () => gate.invalidate(), reset: gate.reset, reconnected: gate.reconnected,
     })
-    void snapshot.read()
-    return { snapshot, users: 0, dispose() { subscription.close(); snapshot.dispose() } }
+    gate.attach(subscription)
+    return { snapshot: { ...snapshot, read: async () => { await gate.getPromise(); await snapshot.read() } }, users: 0, dispose() { gate.dispose(); subscription.close(); snapshot.dispose() } }
   }
   function createProject(base: string, projectId: string) {
     const scope = projectBase(base, projectId)
     const graph = createSnapshot(async signal =>
-      parseSessionGraph(await projectJson(scope, '/api/sessions/graph', { signal }, request), projectId), delay)
+      parseSessionGraph(await projectJson(scope, '/api/sessions/graph', { signal }, request), projectId), delay, { initialLoading: true })
     const activity = createSnapshot(async signal => {
       const value = await projectJson(scope, '/api/sessions/stages', { signal }, request)
       return {
@@ -114,20 +117,26 @@ export function createProjectLiveState(
         activeRequestIds: parseActiveRequestIds(value),
         recoveries: parseSessionRecoveries(value),
       }
-    }, delay)
+    }, delay, { initialLoading: true })
     const work = createSnapshot(async signal =>
       projectWorkOverviewSchema.parse(await projectJson(scope, '/api/work', { signal }, request)), delay)
     const usage = { work: 0 }
     const observers = new Set<Partial<LiveObserver>>()
     function reset(reason: Parameters<LiveObserver['reset']>[0]) {
       for (const observer of observers) observer.reset?.(reason)
-      graph.reset()
-      activity.reset()
-      if (usage.work) work.reset()
+      gate.reset()
     }
+    let started = false
+    const gate = createInitialLiveSnapshot({ refresh() {
+      started = true
+      graph.reset(); activity.reset()
+      if (usage.work) work.reset()
+    } })
     const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId }, {
       event: event => {
         for (const observer of observers) observer.event?.(event)
+        // Events before readiness are covered by the initial snapshot.
+        if (!started) return
         if (!isRecord(event.payload) || event.payload.event !== 'activity') graph.invalidate()
         activity.invalidate()
         if (usage.work) work.invalidate()
@@ -135,10 +144,12 @@ export function createProjectLiveState(
       reset,
       reconnected: () => reset('reconnect'),
     })
-    void graph.read()
-    void activity.read()
-    return { graph, activity, work, usage, observers, users: 0,
-      dispose() { subscription.close(); graph.dispose(); activity.dispose(); work.dispose(); observers.clear() },
+    gate.attach(subscription)
+    const gated = <T>(snapshot: ReturnType<typeof createSnapshot<T>>) => ({ ...snapshot,
+      async read() { await gate.getPromise(); await snapshot.read() },
+    })
+    return { graph: gated(graph), activity: gated(activity), ready: gate.getPromise, work, usage, observers, users: 0,
+      dispose() { gate.dispose(); subscription.close(); graph.dispose(); activity.dispose(); work.dispose(); observers.clear() },
     }
   }
   return {
@@ -169,11 +180,12 @@ export function createProjectLiveState(
       if (!entry) { entry = createProject(host, projectId); projects.set(key, entry) }
       const current = entry
       current.users++
-      if (includeWork && current.usage.work++ === 0) void current.work.refresh()
+      if (includeWork && current.usage.work++ === 0) void current.ready().then(() => { if (current.usage.work) void current.work.refresh() })
       if (observer) current.observers.add(observer)
       let released = false
       return {
         graph: current.graph, activity: current.activity, work: current.work,
+        read: () => Promise.all([current.graph.read(), current.activity.read()]).then(() => {}),
         refresh: () => released ? Promise.resolve() : Promise.all([
           current.graph.refresh(), current.activity.refresh(), ...(includeWork ? [current.work.refresh()] : []),
         ]).then(() => {}),

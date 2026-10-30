@@ -8,6 +8,8 @@ export function createLiveClientPool() {
   const statuses = new Map<string, LiveStatus>()
   const observers = new Set<(statuses: readonly LiveStatus[]) => void>()
   const hostObservers = new Map<string, Set<(status: LiveStatus) => void>>()
+  const disposers = new Set<() => void>()
+  let disposed = false
   const notify = () => {
     const current = [...statuses.values()].filter(status => status.phase !== 'idle')
     for (const observer of observers) observer(current)
@@ -42,13 +44,28 @@ export function createLiveClientPool() {
       notify()
       return () => observers.delete(observer)
     },
+    onDispose(callback: () => void) {
+      if (disposed) { callback(); return () => {} }
+      disposers.add(callback)
+      return () => { disposers.delete(callback) }
+    },
     retry() { for (const client of clients.values()) client.retry() },
     dispose() {
+      if (disposed) return
+      disposed = true
+      const failures: unknown[] = []
       observers.clear()
       hostObservers.clear()
-      for (const client of clients.values()) client.dispose()
+      for (const callback of disposers) {
+        try { callback() } catch (error) { failures.push(error) }
+      }
+      disposers.clear()
+      for (const client of clients.values()) {
+        try { client.dispose() } catch (error) { failures.push(error) }
+      }
       clients.clear()
       statuses.clear()
+      if (failures.length) throw new AggregateError(failures, 'Live resource cleanup failed')
     },
   }
 }

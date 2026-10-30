@@ -43,6 +43,7 @@ export interface BusTopics {
   'session.provider.waiting': { sessionId: string; wait: import('../providers/retry.ts').RateLimitWait | undefined }
   'session.activity.changed': { sessionId: string }
   'session.changed': { sessionId: string }
+  'session.deleted': { sessionId: string; projectId?: string; automationJobId?: string }
   'background.task.changed': { sessionId: string; taskId: string; status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' }
 }
 

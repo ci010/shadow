@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util'
+
 export interface AutomationModelConfig {
   organization: { model?: string }
   agent: { model: string; quickModel?: string }
@@ -10,4 +12,15 @@ export function automationModelSettings(config: AutomationModelConfig, id: strin
 export function automationDispatchModel(config: AutomationModelConfig, id: string): string {
   const settings = automationModelSettings(config, id)
   return settings.model ?? settings.defaultModel
+}
+
+/** Only configuration projected into the automation catalog invalidates its snapshot. */
+export function automationCatalogConfigChanged(
+  previous: AutomationModelConfig & { learning: unknown },
+  next: AutomationModelConfig & { learning: unknown },
+): boolean {
+  return !isDeepStrictEqual(previous.learning, next.learning)
+    || !isDeepStrictEqual(previous.organization, next.organization)
+    || previous.agent.model !== next.agent.model
+    || previous.agent.quickModel !== next.agent.quickModel
 }

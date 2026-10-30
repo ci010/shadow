@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Hono } from 'hono'
-import { isRealtimeCursor, isRealtimeTopic, parseRealtimeTopics, realtimeTopicKey, type RealtimeEnvelope, type RealtimeTopic } from './protocol.ts'
+import { isRealtimeCursor, isRealtimeTopic, parseRealtimeTopics, realtimeTopicKey, type RealtimeEnvelope, type RealtimeTopic, type RealtimeResource } from './protocol.ts'
 
 type EventEnvelope = Extract<RealtimeEnvelope, { type: 'event' }>
 type ResetReason = Extract<RealtimeEnvelope, { type: 'reset' }>['reason']
@@ -15,7 +15,7 @@ export interface RealtimePublisher {
   invalidateActivity(sessionId: string): void
   invalidateIo?(runId: string): void
   invalidateIntegrations?(): void
-  invalidateResource?(resource: 'interactions' | 'service-groups'): void
+  invalidateResource?(resource: RealtimeResource): void
   close(): void
 }
 interface Project {

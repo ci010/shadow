@@ -581,12 +581,15 @@ and provider configuration uses ordinary bounded HTTP reads.
 
 Other renderer resources have bounded, resource-specific recovery rather than a
 blanket retry-on-error policy. Project-qualified `resources` live notifications
-carry only `{event:'invalidate', resource:'interactions'|'service-groups'}`;
+carry only `{event:'invalidate', resource:'interactions'|'service-groups'|'automations'}`;
 they contain no credentials or approval authority. Bot setup, credential entry,
 publication review and connection-probe transitions invalidate interactions;
 discovery observations, Bot inventory and deployment changes invalidate service
-groups. HTTP snapshots and explicit, revision-bound approval writes remain
-authoritative. Reads do not publish invalidations unless stored state actually
+groups. Automation inventory/configuration changes, execution lifecycle and
+relevant automation-session changes invalidate the automation resource. Runtime
+execution notifications do not also invalidate the entire session graph merely
+to update the automation views. HTTP snapshots and explicit, revision-bound
+approval writes remain authoritative. Reads do not publish invalidations unless stored state actually
 changes, avoiding read/notification loops.
 
 `live-resource-refresh.ts` coalesces notifications and uses host-qualified live
@@ -601,6 +604,14 @@ by a time-based cache. Disposal cancels readiness/timers; callers own visibility
 and HTTP cancellation. `interaction-resource.ts` shares non-secret publication and
 probe GET envelopes per pool, API base and Project, while writes and credential
 inputs stay local to each pane. An in-flight invalidation queues a catch-up read.
+After the last pane releases a publication/probe envelope, its Project-scoped
+cache keeps observing invalidations without issuing HTTP reads. A new pane can
+reuse a still-valid envelope; changes/reset/reconnect mark it dirty. A 60-second
+idle timer only reclaims the cache and subscription, not establishes freshness;
+pool disposal also clears caches, timers and pending HTTP work.
+`automation-catalog.ts` uses resource notifications rather than a 20-second
+poll or unrelated session changes. It shares the same readiness gate and
+connection-health fallback, preserving explicit reload and in-flight catch-up.
 `service-groups.ts` similarly shares one resource for equal pool, API base,
 Project and filter keys, pauses reads while hidden, and aborts/releases it with
 its last active consumer. Hidden-to-visible transitions resnapshot; unrelated
@@ -614,6 +625,12 @@ Computer discovery stops passive reads after an authorization denial in the same
 connection/session scope; it does not weaken the local-owner gateway boundary.
 Session-specific background/work discovery treats a confirmed missing session as
 terminal for automatic refresh until explicit retry or identity reconciliation.
+Project catalog/graph/activity readers share the readiness gate and show loading
+while waiting, rather than flashing an empty successful list. Pane activation
+ensures a cached snapshot is loaded; explicit reloads and real invalidations still
+refresh it. The session Work chip follows matching session invalidations and
+completed-turn reconciliation, not graph revision counters or pure activity
+updates.
 Desktop attachment reveal obtains its signed proof on user action, not once per
 historical attachment during rendering. A displayed attachment is not a grant to
 read arbitrary local paths: SNS/private-upload and remote-workdir media limits

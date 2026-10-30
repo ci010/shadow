@@ -107,7 +107,7 @@ export class CronService {
   private maintenance = new Map<string, { intervalMs: number; handler: (signal: AbortSignal) => Promise<void> }>()
   private intervals = new Map<string, ReturnType<typeof setInterval>>()
   private executing = new Map<string, Promise<void>>()
-  private onChanged?: () => void
+  private onChanged?: (reason: 'inventory' | 'execution') => void
   private initializedDefaults = new Set<string>()
 
   constructor(
@@ -123,7 +123,7 @@ export class CronService {
     this.handler = handler
   }
 
-  setOnChanged(callback: () => void): void { this.onChanged = callback }
+  setOnChanged(callback: (reason: 'inventory' | 'execution') => void): void { this.onChanged = callback }
 
   /** Config-owned jobs are reconstructed once per runtime, never duplicated in jobs.json. */
   registerManagedJob(id: string, def: CronJobDef, intervalMs: number, handler: CronJobHandler): void {
@@ -134,14 +134,13 @@ export class CronService {
     const previous = this.managed.get(id)
     this.managed.set(id, { job, intervalMs, handler })
     if (!previous || previous.intervalMs !== intervalMs || previous.job.enabled !== job.enabled) this.scheduleManaged(id)
-    this.onChanged?.()
+    this.onChanged?.('inventory')
   }
 
   unregisterManagedJob(id: string): void {
     clearInterval(this.intervals.get(id))
     this.intervals.delete(id)
-    this.managed.delete(id)
-    this.onChanged?.()
+    if (this.managed.delete(id)) this.onChanged?.('inventory')
   }
 
   private scheduleManaged(id: string): void {
@@ -264,7 +263,7 @@ export class CronService {
     this.jobs.set(id, job)
     this.scheduleCron(job)
     this.saveJobs().catch((error) => console.error('[cron] Failed to save jobs', error))
-    this.onChanged?.()
+    this.onChanged?.('inventory')
     console.info(
       `[cron] Added cron job: id=${id}, schedule=${def.schedule}, target=${def.target?.sessionId ?? 'fresh session per run'}`,
     )
@@ -283,7 +282,7 @@ export class CronService {
       this.saveJobs().catch((error) => console.error('[cron] Failed to save jobs', error))
       console.info(`[cron] Removed cron job: ${id}`)
       this.onJobRemovedCb?.(id)
-      this.onChanged?.()
+      this.onChanged?.('inventory')
     }
     return removed
   }
@@ -294,12 +293,13 @@ export class CronService {
     const job = this.jobs.get(id)
     if (!job) return false
     if (typeof enabled !== 'boolean') throw new TypeError('Enabled must be a boolean')
+    if ((job.enabled !== false) === enabled) return true
     job.enabled = enabled
     this.scheduledJobs.get(id)?.stop()
     this.scheduledJobs.delete(id)
     this.scheduleCron(job)
     await this.saveJobs()
-    this.onChanged?.()
+    this.onChanged?.('inventory')
     return true
   }
 
@@ -345,11 +345,13 @@ export class CronService {
     const pending = Promise.resolve().then(() => execute(controller.signal))
     this.running.set(pending, controller)
     this.executing.set(id, pending)
+    if (!this.maintenance.has(id)) this.onChanged?.('execution')
     try {
       await pending
     } finally {
       this.running.delete(pending)
       this.executing.delete(id)
+      if (!this.maintenance.has(id)) this.onChanged?.('execution')
       signal?.removeEventListener('abort', abort)
     }
   }

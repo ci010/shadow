@@ -37,3 +37,28 @@ test('pool health observers are isolated by canonical host and unsubscribe clean
   pool.observeHost('http://a/projects/other', status => current.push(status.phase))()
   assert.deepEqual(current, ['idle'])
 })
+
+
+test('pool disposal owns resource cleanup, supports unsubscribe and late registration, and is idempotent', () => {
+  const pool = createLiveClientPool()
+  const calls: string[] = []
+  pool.onDispose(() => { calls.push('resource'); pool.dispose() })
+  const remove = pool.onDispose(() => calls.push('removed'))
+  remove()
+  pool.dispose()
+  pool.dispose()
+  pool.onDispose(() => calls.push('late'))()
+  assert.deepEqual(calls, ['resource', 'late'])
+})
+
+test('one failing resource cleanup does not strand other resources or live clients', () => {
+  const pool = createLiveClientPool()
+  const client = pool.client('http://fixture')
+  let cleaned = false
+  pool.onDispose(() => { throw new Error('synthetic cleanup failure') })
+  pool.onDispose(() => { cleaned = true })
+  assert.throws(() => pool.dispose(), AggregateError)
+  assert.equal(cleaned, true)
+  assert.throws(() => client.subscribe({ kind: 'projects' }, { event() {}, reset() {} }), /disposed/)
+  assert.doesNotThrow(() => pool.dispose())
+})

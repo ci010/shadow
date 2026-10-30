@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
-import { createProjectLiveState } from './project-live-state.ts'
+import { createProjectLiveState, createSnapshot } from './project-live-state.ts'
 import type { LiveObserver } from './live-client.ts'
 import { realtimeTopicKey, type RealtimeTopic } from '../../src/realtime/protocol.ts'
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve))
-function fixture(t: TestContext) {
+function fixture(t: TestContext, manualReady = false) {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const observers = new Map<string, LiveObserver>()
+  const ready = new Map<string, () => void>()
   const requests: Array<{ path: string; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
   const store = createProjectLiveState({ client: () => ({
     subscribe(topic, observer) {
@@ -15,7 +16,8 @@ function fixture(t: TestContext) {
       assert.equal(observers.has(key), false, 'one subscription per shared resource')
       observers.set(key, observer)
       queueMicrotask(() => { if (observers.get(key) === observer) observer.reset('subscription') })
-      return { ready: async () => {}, close() { observers.delete(key) } }
+      const promise = new Promise<void>(resolve => { ready.set(key, resolve); if (!manualReady) resolve() })
+      return { ready: () => promise, close() { observers.delete(key) } }
     },
   }) }, {
     request: async (url, init) => new Promise(resolve => requests.push({
@@ -28,7 +30,7 @@ function fixture(t: TestContext) {
   function event(topic: RealtimeTopic, payload: unknown = { event: 'invalidate' }) {
     observers.get(realtimeTopicKey(topic))!.event({ type: 'event', cursor: 'fixture:1', topic, payload })
   }
-  return { store, observers, requests, tick, event }
+  return { store, observers, requests, tick, event, ready }
 }
 const graph = (name: string) => ({ sessions: [{ sessionId: 'web:one', title: name }], nodes: [] })
 const emptyWork = { items: [], sessions: [], requests: [], effects: [] }
@@ -198,4 +200,93 @@ test('reconnection retries failed snapshots even when replay has no new invalida
   assert.equal(lease.graph.state.error, '')
   assert.equal(lease.activity.state.error, '')
   assert.equal(lease.graph.state.value?.[0].label, 'Recovered')
+})
+
+
+test('project initialization waits for ready; activation reuses shared applied graph/activity without a trailing read', async t => {
+  const f = fixture(t, true)
+  const first = f.store.acquireProject('http://fixture', 'a')
+  const reading = first.read()
+  assert.equal(first.graph.state.loading, true)
+  assert.equal(first.activity.state.loading, true)
+  await f.tick()
+  assert.equal(f.requests.length, 0)
+  f.ready.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!()
+  await f.tick()
+  assert.equal(f.requests.length, 2)
+  f.requests[0].finish(graph('Initial'))
+  f.requests[1].finish({ stages: { 'web:one': 'idle' } })
+  await reading
+  const activated = f.store.acquireProject('http://fixture', 'a')
+  await activated.read()
+  await f.tick()
+  t.mock.timers.tick(1000); await flush()
+  assert.equal(f.requests.length, 2)
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'activity', sessionId: 'web:one' })
+  await f.tick()
+  assert.equal(f.requests.length, 3)
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'activity', sessionId: 'web:one' })
+  f.requests[2].finish({ stages: { 'web:one': 'tool' } })
+  await f.tick()
+  assert.equal(f.requests.length, 4, 'real inflight invalidations are not swallowed')
+  f.requests[3].finish({ stages: { 'web:one': 'idle' } })
+  await flush()
+  first.release(); activated.release()
+  assert.equal(f.observers.size, 0)
+})
+
+test('fallback snapshot is repaired on late ready, and released scopes never read', async t => {
+  const f = fixture(t, true)
+  const a = f.store.acquireProject('http://fixture', 'a')
+  const b = f.store.acquireProject('http://fixture', 'b')
+  b.release()
+  t.mock.timers.tick(750); await flush(); await f.tick()
+  assert.equal(f.requests.length, 2)
+  f.requests[0].finish(graph('Fallback'))
+  f.requests[1].finish({ stages: {} })
+  await flush()
+  f.ready.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!()
+  f.ready.get(realtimeTopicKey({ kind: 'sessions', projectId: 'b' }))!()
+  await f.tick()
+  assert.equal(f.requests.length, 4)
+  assert.ok(f.requests.every(request => request.path.includes('/projects/a/')))
+  a.release()
+  assert.ok(f.requests.slice(2).every(request => request.signal.aborted))
+})
+
+
+test('gated initial loading has no early HTTP and dispose settles readers', async t => {
+  const f = fixture(t, true)
+  const catalog = f.store.acquireCatalog('http://fixture')
+  const project = f.store.acquireProject('http://fixture', 'a')
+  const readers = [catalog.read(), project.graph.read(), project.activity.read()]
+  assert.equal(catalog.state.loading, true)
+  assert.equal(project.graph.state.loading, true)
+  assert.equal(project.activity.state.loading, true)
+  await f.tick()
+  assert.equal(f.requests.length, 0)
+  catalog.release(); project.release()
+  await Promise.all(readers)
+  assert.equal(catalog.state.loading, false)
+  assert.equal(project.graph.state.loading, false)
+  assert.equal(project.activity.state.loading, false)
+  t.mock.timers.tick(1000); await flush()
+  assert.equal(f.requests.length, 0)
+})
+
+test('snapshot initialLoading is opt-in and external-gate disposal settles a direct waiter', async () => {
+  let requests = 0
+  const load = async () => { requests++; return 'value' }
+  const ordinary = createSnapshot(load, 0)
+  assert.equal(ordinary.state.loading, false)
+  await ordinary.read()
+  assert.equal(requests, 1)
+  ordinary.dispose()
+  const gated = createSnapshot(load, 0, { initialLoading: true })
+  const waiting = gated.read()
+  assert.equal(gated.state.loading, true)
+  assert.equal(requests, 1)
+  gated.dispose()
+  await waiting
+  assert.equal(gated.state.loading, false)
 })
