@@ -22,8 +22,12 @@ const settle = async () => { await new Promise(resolve => setImmediate(resolve))
 interface RenderNode { children: RenderNode[]; parent?: RenderNode }
 const node = (): RenderNode => ({ children: [] })
 
-function fixture(t: TestContext) {
-  t.mock.timers.enable({ apis: ['setInterval'] })
+function fixture(t: TestContext, waitForReady = false) {
+  t.mock.timers.enable({ apis: waitForReady ? ['setInterval', 'setTimeout'] : ['setInterval'] })
+  let ready!: () => void
+  const readiness = waitForReady ? new Promise<void>(resolve => { ready = resolve }) : Promise.resolve()
+  let readySignal: AbortSignal | undefined
+  let closed = false
   const document = Object.assign(new EventTarget(), { hidden: false })
   const restore: Array<() => void> = []
   for (const [key, value] of [['document', document], ['window', new EventTarget()]] as const) {
@@ -38,6 +42,7 @@ function fixture(t: TestContext) {
   let register = async () => Response.json({ clientToken: 'synthetic-client' })
   let prepareResponse = async () => Response.json({ leaseToken: 'synthetic-lease', run: { ...run, status: 'running' } })
   let heartbeat = async () => Response.json({ ok: true })
+  let inventory = async () => Response.json({ runs: [] })
   t.mock.method(globalThis, 'fetch', async (input: URL, init: RequestInit) => {
     const path = new URL(input).pathname
     calls.push({ path, init })
@@ -48,7 +53,7 @@ function fixture(t: TestContext) {
     if (path.endsWith('/heartbeat')) return heartbeat()
     if (path.endsWith('/stop')) return Response.json({ run: { status: 'failed' } })
     assert.equal(path.endsWith('/runs'), true, `Unexpected capture request: ${path}`)
-    return Response.json({ runs: [] })
+    return inventory()
   })
   const url = new URL('./components/io/IoHost.vue', import.meta.url)
   const { descriptor } = parse(readFileSync(url, 'utf8'))
@@ -86,7 +91,7 @@ function fixture(t: TestContext) {
   const app = renderer.createApp(module.exports.default, { bridge })
   app.provide(Symbol.for('shadow.live-client-pool'), {
     observeHost: (_base: string, callback: typeof phase) => { phase = callback; callback({ phase: 'live' }); return () => {} },
-    client: () => ({ subscribe: (_topic: unknown, observer: typeof live) => { live = observer; return { close() {}, ready: async () => {} } } }),
+    client: () => ({ subscribe: (_topic: unknown, observer: typeof live) => { live = observer; return { close() { closed = true }, ready: (signal: AbortSignal) => { readySignal = signal; return readiness } } } }),
   })
   let mounted = true
   const unmount = () => { if (mounted) { app.unmount(); mounted = false } }
@@ -96,7 +101,9 @@ function fixture(t: TestContext) {
     finally { for (const reset of restore) reset() }
   })
   return {
-    bridge, calls, errors, document, unmount,
+    bridge, calls, errors, document, unmount, ready,
+    readySignal: () => readySignal, closed: () => closed,
+    inventory: (next: typeof inventory) => { inventory = next },
     live: () => live,
     phase: (value: LiveStatus['phase']) => phase({ phase: value }),
     prepare: () => bridge.actions.value!.prepare(run, base),
@@ -240,4 +247,102 @@ test('a slow prepare retains client heartbeats without registering another ident
   release(Response.json({ leaseToken: 'synthetic-lease', run: { ...run, status: 'running' } }))
   await preparing
   assert.deepEqual(f.errors, [])
+})
+
+
+test('same-base duplicate view registrations do not enqueue another read during discovery', async t => {
+  const f = fixture(t)
+  // Initial ready starts one inventory read; retain it while another view mounts.
+  let release!: (response: Response) => void
+  f.inventory(() => new Promise(resolve => { release = resolve }))
+  await settle()
+  f.bridge.views.value = new Map([...f.bridge.views.value, ['split', { apiBase: base, sessionId: run.sessionId, remote: false }]])
+  await settle()
+  assert.equal(f.polls().length, 1)
+  release(Response.json({ runs: [] }))
+  await settle()
+  assert.equal(f.polls().length, 1)
+})
+
+test('a genuinely new visible session discovers and prepares its request', async t => {
+  const f = fixture(t)
+  await settle()
+  f.bridge.views.value = new Map([['other', { apiBase: base, sessionId: 'other', remote: false }]])
+  await settle()
+  f.inventory(async () => Response.json({ runs: [run] }))
+  const view = { apiBase: base, sessionId: run.sessionId, remote: false }
+  f.bridge.context.value = view
+  f.bridge.views.value = new Map([...f.bridge.views.value, ['new-session', view]])
+  await settle()
+  await settle()
+  assert.equal(f.polls().length, 3)
+  assert.equal(f.registrations().length, 1)
+  assert.equal(f.bridge.execution.value?.run.sessionId, run.sessionId)
+})
+
+test('initial discovery waits for subscription ready and absorbs initial reset', async t => {
+  const f = fixture(t, true)
+  f.live().reset()
+  await settle()
+  assert.equal(f.polls().length, 0)
+  t.mock.timers.tick(749)
+  await settle()
+  assert.equal(f.polls().length, 0)
+  f.ready()
+  await settle()
+  assert.equal(f.polls().length, 1)
+  t.mock.timers.tick(1)
+  await settle()
+  assert.equal(f.polls().length, 1)
+})
+
+test('bounded initial fallback catches up at ready; real in-flight events queue a followup', async t => {
+  const f = fixture(t, true)
+  let release!: (response: Response) => void
+  f.inventory(() => new Promise(resolve => { release = resolve }))
+  t.mock.timers.tick(750)
+  await settle()
+  assert.equal(f.polls().length, 1)
+  f.ready()
+  f.live().event()
+  await settle()
+  f.inventory(async () => Response.json({ runs: [] }))
+  release(Response.json({ runs: [] }))
+  await settle()
+  assert.equal(f.polls().length, 2)
+  f.phase('reconnecting')
+  t.mock.timers.tick(30_000)
+  await settle()
+  assert.equal(f.polls().length, 3)
+  f.live().reconnected()
+  await settle()
+  assert.equal(f.polls().length, 4)
+})
+
+test('cleanup aborts readiness and inventory without disturbing capture lease paths', async t => {
+  const f = fixture(t, true)
+  f.unmount()
+  assert.equal(f.readySignal()!.aborted, true)
+  assert.equal(f.closed(), true)
+  f.ready()
+  t.mock.timers.tick(30_000)
+  await settle()
+  assert.equal(f.polls().length, 0)
+  assert.equal(f.registrations().length, 0)
+})
+
+
+test('removing a base aborts its in-flight discovery and ignores a late response', async t => {
+  const f = fixture(t)
+  let release!: (response: Response) => void
+  f.inventory(() => new Promise(resolve => { release = resolve }))
+  await settle()
+  const request = f.polls()[0]
+  f.bridge.views.value = new Map()
+  await settle()
+  assert.equal(request.init.signal!.aborted, true)
+  release(Response.json({ runs: [run] }))
+  await settle()
+  assert.equal(f.bridge.runs.value.has(base), false)
+  assert.equal(f.registrations().length, 0)
 })

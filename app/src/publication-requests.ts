@@ -80,6 +80,7 @@ export function usePublicationRequest(source: () => PublicationSource) {
   }
   async function refresh(manual = false, fresh = manual) {
     if (!enabled.value || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
+    if (fresh && read && !write && !shared?.started()) { read.abort(); read = undefined }
     if (write || read) { queued = true; return }
     const current = generation
     const controller = new AbortController()

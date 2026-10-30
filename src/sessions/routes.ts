@@ -1001,10 +1001,15 @@ export function sessionsApiPlugin(
       const url = new URL(c.req.url, 'http://localhost')
       const rawOffset = url.searchParams.get('offset')
       const rawPageSize = url.searchParams.get('pageSize')
-      const offset = rawOffset != null ? parseInt(rawOffset, 10) : undefined
-      const pageSize = rawPageSize != null
-        ? Math.max(1, parseInt(rawPageSize, 10))
-        : undefined
+      // Pagination is opt-in via pageSize. Reject partial/ambiguous numbers rather
+      // than silently returning the full history (or accepting parseInt prefixes).
+      const integer = (value: string) => /^-?\d+$/.test(value) && Number.isSafeInteger(Number(value))
+      if ((rawOffset != null && (!integer(rawOffset) || rawPageSize == null)) ||
+          (rawPageSize != null && (!integer(rawPageSize) || Number(rawPageSize) < 1))) {
+        return c.json({ error: 'invalid_history_query', message: 'Use a positive integer pageSize with an optional integer offset (default 0); negative offsets count from the end.' }, 400)
+      }
+      const pageSize = rawPageSize == null ? undefined : Number(rawPageSize)
+      const offset = pageSize == null ? undefined : rawOffset == null ? 0 : Number(rawOffset)
       const shallow = url.searchParams.get('shallow') === 'true'
 
       // Try as logical key first

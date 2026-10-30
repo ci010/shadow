@@ -12,7 +12,7 @@ const question = (projectId = 'project-a', id = requestId) => ({
 })
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
-function harness(t: TestContext, initial: Partial<CredentialRequestSource> = {}) {
+async function harness(t: TestContext, initial: Partial<CredentialRequestSource> = {}) {
   const requests: Array<{ url: string; init: RequestInit; finish: (response: Response) => void; reject: (error: Error) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: string, init: RequestInit) =>
     new Promise<Response>((finish, reject) => requests.push({ url, init, finish, reject })))
@@ -29,7 +29,9 @@ function harness(t: TestContext, initial: Partial<CredentialRequestSource> = {})
   const app = renderer.createApp(defineComponent({
     setup() { state = useCredentialRequest(() => source); return () => null },
   }))
+  app.provide(Symbol.for('shadow.live-client-pool'), { client: () => ({ subscribe: () => ({ ready: async () => {}, close() {} }) }), observeHost: (_base: string, callback: (status: { phase: string }) => void) => { callback({ phase: 'live' }); return () => {} } })
   app.mount({})
+  await settle()
   let mounted = true
   function unmount() { if (mounted) { mounted = false; app.unmount() } }
   t.after(unmount)
@@ -54,28 +56,34 @@ test('private entry validates Project identity and rejects unexpected secret-bea
 })
 
 test('only visible owner coordination tool turns fetch requests and deactivation clears secret input', async t => {
-  const { state, source, requests } = harness(t, { stage: 'idle' })
+  const { state, source, requests } = await harness(t, { stage: 'idle' })
   assert.equal(requests.length, 0)
   source.stage = 'tool'
+  await settle()
   assert.equal(requests.length, 1)
   requests[0].finish(Response.json({ request: question() }))
   await settle()
   state.secret.value = 'SYNTHETIC-SECRET'
   source.active = false
+  await settle()
   assert.equal(state.secret.value, '')
   assert.equal(state.request.value, null)
   source.sessionId = 'web:ordinary-chat'
+  await settle()
   source.active = true
+  await settle()
   assert.equal(requests.length, 2)
   source.sessionId = 'web:chat-admin'
+  await settle()
   assert.equal(requests.length, 3)
   source.canSubmit = false
+  await settle()
   assert.equal(requests[2].init.signal?.aborted, true)
   assert.equal(state.enabled.value, false)
 })
 
 test('saving uses only the dedicated Project endpoint and clears the value after a matching receipt', async t => {
-  const { state, requests } = harness(t)
+  const { state, requests } = await harness(t)
   requests[0].finish(Response.json({ request: question() }))
   await settle()
   state.secret.value = 'SYNTHETIC-SECRET'
@@ -95,7 +103,7 @@ test('saving uses only the dedicated Project endpoint and clears the value after
 })
 
 test('secret submissions never render exception text or response bodies, including misleading success bodies', async t => {
-  const { state, requests } = harness(t)
+  const { state, requests } = await harness(t)
   requests[0].finish(Response.json({ request: question() }))
   await settle()
   for (const response of [
@@ -119,7 +127,7 @@ test('secret submissions never render exception text or response bodies, includi
 })
 
 test('cancellation sends no credential value, and unmount clears pending input', async t => {
-  const { state, requests, unmount } = harness(t)
+  const { state, requests, unmount } = await harness(t)
   requests[0].finish(Response.json({ request: question() }))
   await settle()
   state.secret.value = 'UNSAVED-SYNTHETIC-SECRET'
@@ -136,14 +144,16 @@ test('cancellation sends no credential value, and unmount clears pending input',
 })
 
 test('Project switches abort old writes and stale responses cannot clear or populate another Project input', async t => {
-  const { state, source, requests } = harness(t)
+  const { state, source, requests } = await harness(t)
   requests[0].finish(Response.json({ request: question() }))
   await settle()
   state.secret.value = 'PROJECT-A-SECRET'
   const submitted = state.submit()
   const write = requests[1]
   source.apiBase = 'http://127.0.0.1:3123/projects/project-b'
+  await settle()
   source.projectId = 'project-b'
+  await settle()
   assert.equal(write.init.signal?.aborted, true)
   assert.equal(state.secret.value, '')
   requests.at(-1)!.finish(Response.json({ request: question('project-b') }))
@@ -156,7 +166,7 @@ test('Project switches abort old writes and stale responses cannot clear or popu
 })
 
 test('insecure remote transport never receives a secret submission', async t => {
-  const { state, requests } = harness(t, { apiBase: 'http://main.example/projects/project-a' })
+  const { state, requests } = await harness(t, { apiBase: 'http://main.example/projects/project-a' })
   requests[0].finish(Response.json({ request: question() }))
   await settle()
   state.secret.value = 'SYNTHETIC-SECRET'
@@ -184,7 +194,7 @@ test('private credential UI is a masked local form, not a generic chat answer', 
 })
 
 test('ordinary admin session shows only its own private credential card', async t => {
-  const { state, requests } = harness(t, { sessionId: 'web:ordinary' })
+  const { state, requests } = await harness(t, { sessionId: 'web:ordinary' })
   requests[0].finish(Response.json({ request: { ...question(), sessionId: 'web:other' } }))
   await settle()
   assert.equal(state.request.value, null)

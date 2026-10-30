@@ -48,7 +48,7 @@ test('setup card mounts editor only for bound requests and refreshes from live i
   let pending: unknown = null
   t.mock.method(globalThis, 'fetch', async () => { calls++; return Response.json({ request: pending }) })
   const pool = {
-    client: () => ({ subscribe: (_topic: unknown, value: typeof observer) => { observer = value; return { close() { closes++ } } } }),
+    client: () => ({ subscribe: (_topic: unknown, value: typeof observer) => { observer = value; return { ready: async () => {}, close() { closes++ } } } }),
     observeHost: (_base: string, notify: (value: unknown) => void) => { notify({ phase: 'live' }); return () => {} },
   }
   const nodes: Array<{ text?: string }> = []

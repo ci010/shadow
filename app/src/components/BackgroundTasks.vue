@@ -39,6 +39,7 @@ import ProcessOutput from './ProcessOutput.vue'
 import { computed, ref, useId, watch } from 'vue'
 import { BackgroundSessionNotFoundError, fetchBackgroundTasks, type ActiveBackgroundTask } from '../background-tasks.ts'
 import { createLiveRefresh } from '../live-refresh.ts'
+import { createInitialLiveSnapshot } from '../initial-live-snapshot.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
 import type { LiveStatus } from '../live-client.ts'
 import { isRecord } from '../folders-sidebar.ts'
@@ -122,6 +123,7 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
   })
   const autoRefresh = () => { if (!sessionMissing && !document.hidden) { loading.value = true; snapshot.refresh() } }
   refresh = () => { sessionMissing = false; autoRefresh() }
+  const initial = createInitialLiveSnapshot({ refresh: autoRefresh })
   const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
     event: envelope => {
       if (!isRecord(envelope.payload) || envelope.payload.event === 'activity'
@@ -131,20 +133,21 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
         completedTurn = envelope.payload.completedTurnId
         sessionMissing = false
       }
-      autoRefresh()
+      initial.invalidate()
     },
-    reset: autoRefresh,
-    reconnected: autoRefresh,
+    reset: initial.reset,
+    reconnected: initial.reconnected,
   })
+  initial.attach(subscription)
   let phase: LiveStatus['phase'] = 'connecting'
   const stopHost = pool.observeHost(base, status => { phase = status.phase })
   const timer = setInterval(() => {
     if (phase === 'connecting' || phase === 'reconnecting' || phase === 'error') autoRefresh()
   }, 30_000)
-  const visibilityChanged = () => { if (!document.hidden) autoRefresh() }
+  const visibilityChanged = () => { if (!document.hidden) initial.invalidate() }
   document.addEventListener('visibilitychange', visibilityChanged)
-  autoRefresh()
   onCleanup(() => {
+    initial.dispose()
     clearInterval(timer)
     stopHost()
     document.removeEventListener('visibilitychange', visibilityChanged)

@@ -56,7 +56,7 @@ async function close(status: 'closed' | 'cancelled') {
   } catch { if (version === generation && !write.signal.aborted) error.value = 'Could not close setup. Refresh status before retrying.' }
   finally { if (version === generation) { busy.value = false; controller = undefined; queued = false; void refresh() } }
 }
-watch([() => props.apiBase, () => props.projectId, () => props.sessionId, enabled], () => { stop(); if (enabled.value) { observer = observeInteractions(pool, props.apiBase, props.projectId, () => { void refresh() }); void refresh() } }, { immediate: true })
+watch([() => props.apiBase, () => props.projectId, () => props.sessionId, enabled], () => { stop(); if (enabled.value) { observer = observeInteractions(pool, props.apiBase, props.projectId, () => { void refresh() }, () => { if (!busy.value) { controller?.abort(); controller = undefined; queued = false } }) } }, { immediate: true })
 onBeforeUnmount(stop)
 </script>
 <style scoped>

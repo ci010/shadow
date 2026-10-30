@@ -74,16 +74,21 @@ function createServiceGroupResource(options: ServiceGroupSource, pool: LivePool)
     } catch { if (current === generation && !request.signal.aborted) error.value = 'unavailable' }
     finally { if (controller === request) controller = undefined }
   }
-  const live = createLiveResourceRefresh(pool, {
+  function subscribe() { return createLiveResourceRefresh(pool, {
     base: options.apiBase, projectId: options.projectId, resource: 'service-groups',
     refresh: () => { invalidated = true; void refresh() },
-  })
-  const visible = () => { if (document.visibilityState !== 'hidden') { invalidated = true; void refresh() } }
+  }) }
+  let live: ReturnType<typeof createLiveResourceRefresh> | undefined = (typeof document === 'undefined' || document.visibilityState !== 'hidden') ? subscribe() : undefined
+  const visible = () => {
+    live?.dispose(); live = undefined
+    if (document.visibilityState === 'hidden') { generation++; controller?.abort() }
+    else live = subscribe()
+  }
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visible)
   function dispose() {
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visible)
     disposed = true; generation++; controller?.abort()
-    live.dispose()
+    live?.dispose()
   }
   return { groups, agents, agentSetups, skills, agentRequirements, revision, error, refresh, dispose, subscribers: 0 }
 }
@@ -110,7 +115,6 @@ export function useServiceGroups(source: () => ServiceGroupSource) {
       groups.value = shared.groups.value; agents.value = shared.agents.value; agentSetups.value = shared.agentSetups.value
       skills.value = shared.skills.value; agentRequirements.value = shared.agentRequirements.value; revision.value = shared.revision.value; error.value = shared.error.value
     }, { immediate: true, flush: 'sync' })
-    if (shared.subscribers === 1) void shared.refresh()
     cleanup(() => {
       stopSync(); resource = undefined
       if (--shared.subscribers === 0) { shared.dispose(); resources!.delete(key) }

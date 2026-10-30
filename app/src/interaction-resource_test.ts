@@ -11,7 +11,7 @@ function fixture() {
   let closed = 0
   let unobserved = 0
   const pool: ResourceLivePool = {
-    client: () => ({ subscribe: (_topic, value) => { observer = value; return { close() { closed++ } } } }),
+    client: () => ({ subscribe: (_topic, value) => { observer = value; return { ready: async () => {}, close() { closed++ } } } }),
     observeHost: (_base, notify) => { notify({ phase: 'live' } as Parameters<typeof notify>[0]); return () => { unobserved++ } },
   }
   return { pool, observer: () => observer, closed: () => closed, unobserved: () => unobserved }
@@ -42,6 +42,7 @@ test('invalidation during async GET queues a fresh read; explicit write invalida
   const read = acquireInteractionRead(live.pool, 'http://localhost', 'a', 'http://localhost/list', () => { notifications++; void read.load() })
   t.after(() => read.dispose())
   const initial = read.load()
+  await settle()
   live.observer().reset?.({} as never)
   await wait()
   assert.equal(finishes.length, 1)
@@ -53,6 +54,7 @@ test('invalidation during async GET queues a fresh read; explicit write invalida
   await settle()
   assert.deepEqual(await read.load(), { requests: ['fresh'] })
   read.invalidate()
+  await settle()
   assert.equal(finishes.length, 3)
   finishes[2]!(Response.json({ requests: [] }))
   await settle()
@@ -61,7 +63,7 @@ test('invalidation during async GET queues a fresh read; explicit write invalida
   assert.equal(finishes.length, 4)
   finishes[3]!(Response.json({ requests: [] }))
   await settle()
-  assert.equal(notifications, 2)
+  assert.equal(notifications, 3)
 })
 
 test('final cleanup aborts shared GET and discards late cache for a later mount', async t => {
@@ -71,6 +73,7 @@ test('final cleanup aborts shared GET and discards late cache for a later mount'
   t.mock.method(globalThis, 'fetch', (_url, init) => { signal = init.signal; return new Promise<Response>(resolve => { finish = resolve }) })
   const read = acquireInteractionRead(live.pool, 'http://localhost', 'a', 'http://localhost/list', () => {})
   const pending = assert.rejects(read.load(), /cancelled/)
+  await settle()
   read.dispose()
   assert.equal(signal.aborted, true)
   finish(Response.json({ requests: ['late'] }))
@@ -100,5 +103,34 @@ test('hidden pages release resource observers and resume with one fresh snapshot
   document.visibilityState = 'visible'
   document.dispatchEvent(new Event('visibilitychange'))
   await settle()
+  assert.equal(count, 2)
+})
+
+test('unmount before ready cancels gated leases without HTTP; another pane remains independent', async t => {
+  let ready!: () => void, count = 0
+  const pool: ResourceLivePool = { client: () => ({ subscribe: () => ({ close() {}, ready: () => new Promise<void>(resolve => { ready = resolve }) }) }) }
+  t.mock.method(globalThis, 'fetch', async () => { count++; return Response.json({ requests: [] }) })
+  const a = acquireInteractionRead(pool, 'http://fixture', 'a', 'http://fixture/list', () => {})
+  const b = acquireInteractionRead(pool, 'http://fixture', 'a', 'http://fixture/list', () => {})
+  const first = assert.rejects(a.load(), /cancelled/)
+  const second = b.load()
+  a.dispose(); ready(); await first; await second
+  assert.equal(count, 1)
+  b.dispose()
+  const c = acquireInteractionRead(pool, 'http://fixture', 'a', 'http://fixture/list', () => {})
+  const last = assert.rejects(c.load(), /cancelled/)
+  c.dispose(); await last; ready(); await settle()
+  assert.equal(count, 1)
+})
+
+test('manual load bypasses initial gate and identical endpoints remain pool-isolated', async t => {
+  const makePool = (): ResourceLivePool => ({ client: () => ({ subscribe: () => ({ ready: () => new Promise<void>(() => {}), close() {} }) }) })
+  let count = 0
+  t.mock.method(globalThis, 'fetch', async () => { count++; return Response.json({ requests: [count] }) })
+  const a = acquireInteractionRead(makePool(), 'http://fixture', 'a', 'http://fixture/list', () => {})
+  const b = acquireInteractionRead(makePool(), 'http://fixture', 'a', 'http://fixture/list', () => {})
+  t.after(() => { a.dispose(); b.dispose() })
+  assert.deepEqual(await a.load(true), { requests: [1] })
+  assert.deepEqual(await b.load(true), { requests: [2] })
   assert.equal(count, 2)
 })

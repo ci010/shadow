@@ -159,8 +159,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
   watch([() => source().apiBase, () => source().projectId, () => source().sessionId, enabled], () => {
     stop()
     if (!enabled.value) return
-    observer = observeInteractions(pool, source().apiBase, source().projectId, () => { void refresh() })
-    void refresh()
+    observer = observeInteractions(pool, source().apiBase, source().projectId, () => { void refresh() }, () => { read?.abort(); read = undefined; loading.value = false; queued = false })
   }, { immediate: true, flush: 'sync' })
   onUnmounted(stop)
   return { request, secret, error, loading, busy, operation, enabled, secure, valid, refresh,

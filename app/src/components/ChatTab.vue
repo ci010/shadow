@@ -484,6 +484,7 @@
 </template>
 
 <script setup lang="ts">
+import { createInitialLiveSnapshot } from '../initial-live-snapshot'
 import { markdownHighlight } from '../markdown-highlight.ts'
 import { t, formatNumber } from '../i18n.ts'
 import { formatUsageCost, validCostUsage, type CostUsage } from '../usage-cost.ts'
@@ -1038,6 +1039,7 @@ function applySessionActivity(
 
 // Commands and cached panes share the application's one realtime connection.
 let eventStream: LiveSubscription | null = null
+let historySnapshot: ReturnType<typeof createInitialLiveSnapshot> | undefined
 let eventStreamKey = ''
 let bgStreamState: StreamState = { accumulated: '' }
 let streamRequestId: string | undefined
@@ -1063,23 +1065,32 @@ function refreshDirectHistory(): void {
   }, 50)
 }
 
-function connectEventStream(chatId: string): void {
+function connectEventStream(chatId: string, loadingCurrent = false): void {
   const projectId = props.projectId ?? liveProjectId(props.apiBase)
   const key = JSON.stringify([props.apiBase, projectId, chatId])
   if (eventStream && eventStreamKey === key) return
   closeEventStream()
-  if (!wantsLiveChat() || disposed || viewingPhysicalId.value) return
+  if (!wantsLiveChat() || disposed || viewingPhysicalId.value && !loadingCurrent) return
   bgStreamState = { accumulated: '' }
   streamRequestId = undefined
+  let initial = true
+  const snapshot = createInitialLiveSnapshot({ refresh() {
+    const first = initial
+    initial = false
+    // An initial load already waiting on readiness owns this snapshot.
+    if (!first || !historyRequest) refreshDirectHistory()
+  } })
+  historySnapshot = snapshot
   const subscription = livePool.client(props.apiBase).subscribe({ kind: 'chat', projectId, sessionId: `web:${chatId}` }, {
     reset() {
       if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}`) return
       bgStreamState = { accumulated: '' }
       streamRequestId = undefined
       resetStreamPresentation()
-      refreshDirectHistory()
+      snapshot.reset()
       void refreshSessionActivity()
     },
+    reconnected() { snapshot.reconnected() },
     event(envelope) {
       if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}` || viewingPhysicalId.value) return
       const payload = envelope.payload
@@ -1096,7 +1107,7 @@ function connectEventStream(chatId: string): void {
           scrollToBottom()
         }
         detailsRevision.value++
-        refreshDirectHistory()
+        snapshot.invalidate()
         void loadSessionList()
         return
       }
@@ -1131,7 +1142,7 @@ function connectEventStream(chatId: string): void {
           streamPhase.value = undefined
           streamingToolCallData.value = null
         }
-        refreshDirectHistory()
+        snapshot.invalidate()
         void refreshSessionActivity()
         return
       }
@@ -1140,22 +1151,25 @@ function connectEventStream(chatId: string): void {
           streaming.value = true
           if (applyStreamPayload(payload, bgStreamState)) streaming.value = false
         }
-        if (payload.done || payload.event === 'session_message') refreshDirectHistory()
+        if (payload.done || payload.event === 'session_message') snapshot.invalidate()
         return
       }
       if (payload.event !== 'session_message') streaming.value = true
       if (applyStreamPayload(payload, bgStreamState)) {
         streaming.value = false
-        refreshDirectHistory()
+        snapshot.invalidate()
         void loadSessionList()
       }
     },
   })
   eventStream = subscription
   eventStreamKey = key
+  snapshot.attach(subscription)
 }
 
 function closeEventStream(): void {
+  historySnapshot?.dispose()
+  historySnapshot = undefined
   if (eventStream) {
     eventStream.close()
     eventStream = null
@@ -1984,9 +1998,13 @@ async function loadDirectChat(background = false): Promise<void> {
   let followBottom = false
   if (!background) loadingHistory.value = true
   try {
+    connectEventStream(chatId, true)
+    await historySnapshot?.getPromise()
+    if (controller.signal.aborted) return
     const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal })
     if (controller.signal.aborted) return
     if (res.status === 404 && activeSessionId.value === sessionId) {
+      disconnectEventStream()
       // Stale routes/resources (including deletion from another pane) are not
       // empty persisted conversations. Release their Work/status reads too.
       if (!props.embedded) {
@@ -2013,14 +2031,7 @@ async function loadDirectChat(background = false): Promise<void> {
     }
     systemPrompt.value = data.systemPrompt ?? ''
     tools.value = data.tools ?? []
-    // Also fetch segment info for navigation
-    try {
-      const segRes = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { pageSize: '1', shallow: 'true' }), { signal: controller.signal })
-      const segData = await segRes.json()
-      if (controller.signal.aborted) return
-      previousPhysicalId.value = segData.previousPhysicalId ?? null
-    } catch { if (!controller.signal.aborted) previousPhysicalId.value = null }
-    if (controller.signal.aborted) return
+    previousPhysicalId.value = data.previousPhysicalId ?? null
     viewingPhysicalId.value = null
     physicalIdStack.value = []
   } catch (error) {
@@ -2033,9 +2044,6 @@ async function loadDirectChat(background = false): Promise<void> {
       if (directRefreshPending) refreshDirectHistory()
     }
   }
-  // Keep a live event stream open so background pushes (cron/self-awake/subagent)
-  // render without a manual refresh.
-  if (!controller.signal.aborted) connectEventStream(chatId)
 }
 
 async function loadReadonlySession(background = false): Promise<void> {

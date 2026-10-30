@@ -24,41 +24,44 @@ function fixture(phase: LiveStatus['phase'] = 'live') {
   return { resource, event, observer: () => observer, status: (phase: LiveStatus['phase']) => status({ phase }), reads: () => reads, closed: () => closed, unobserved: () => unobserved }
 }
 
-test('healthy resources have no idle polling, ignore unrelated resources and coalesce bursts', t => {
+test('healthy resources have one initial read, no idle polling and coalesce bursts', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture(); t.after(() => f.resource.dispose())
+  await f.resource.getPromise()
   t.mock.timers.tick(180_000)
-  assert.equal(f.reads(), 0)
+  assert.equal(f.reads(), 1)
   f.event('service-groups'); t.mock.timers.tick(50)
-  assert.equal(f.reads(), 0)
+  assert.equal(f.reads(), 1)
   for (let n = 0; n < 20; n++) f.event('interactions')
-  t.mock.timers.tick(49); assert.equal(f.reads(), 0)
-  t.mock.timers.tick(1); assert.equal(f.reads(), 1)
+  t.mock.timers.tick(49); assert.equal(f.reads(), 1)
+  t.mock.timers.tick(1); assert.equal(f.reads(), 2)
 })
 
-test('disconnected hosts use bounded fallback and live recovery cancels it', t => {
+test('disconnected hosts use bounded fallback and live recovery cancels it', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture('connecting'); t.after(() => f.resource.dispose())
-  t.mock.timers.tick(29_999); assert.equal(f.reads(), 0)
-  t.mock.timers.tick(1); t.mock.timers.tick(50); assert.equal(f.reads(), 1)
+  await f.resource.getPromise()
+  t.mock.timers.tick(29_999); assert.equal(f.reads(), 1)
+  t.mock.timers.tick(1); t.mock.timers.tick(50); assert.equal(f.reads(), 2)
   f.status('live')
   f.observer().reconnected?.(); t.mock.timers.tick(50)
-  assert.equal(f.reads(), 2)
-  t.mock.timers.tick(180_000); assert.equal(f.reads(), 2)
+  assert.equal(f.reads(), 3)
+  t.mock.timers.tick(180_000); assert.equal(f.reads(), 3)
   f.status('reconnecting')
   t.mock.timers.tick(30_000); t.mock.timers.tick(50)
-  assert.equal(f.reads(), 3)
+  assert.equal(f.reads(), 4)
 })
 
-test('reset/reconnect coalesce, and disposing cancels pending work plus both subscriptions', t => {
+test('reset/reconnect refresh, and disposing cancels pending work plus both subscriptions', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture()
+  await f.resource.getPromise()
   f.observer().reset('subscription'); f.observer().reconnected?.()
-  t.mock.timers.tick(50); assert.equal(f.reads(), 1)
+  t.mock.timers.tick(50); assert.equal(f.reads(), 2)
   f.event('interactions'); f.status('error')
   f.resource.dispose(); f.resource.dispose()
   f.event('interactions'); f.observer().reset('reconnect')
   t.mock.timers.tick(180_000)
-  assert.equal(f.reads(), 1)
+  assert.equal(f.reads(), 2)
   assert.equal(f.closed(), 1); assert.equal(f.unobserved(), 1)
 })

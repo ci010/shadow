@@ -11,6 +11,7 @@
 
 <script setup lang="ts">
 import { t } from '../../i18n.ts'
+import { createInitialLiveSnapshot } from '../../initial-live-snapshot.ts'
 import { computed, onBeforeUnmount, onMounted, triggerRef, watch } from 'vue'
 import { parseIoDefinition, type IoRun } from '../../../../src/io/contracts.ts'
 import { apiUrl } from '../../api-url.ts'
@@ -37,6 +38,7 @@ const statusText = computed(() => execution.value?.phase === 'recording' ? t('Re
   : execution.value?.phase === 'draining' ? t('Finishing input') : t('Preparing input'))
 const livePool = useLiveClientPool()
 const subscriptions = new Map<string, LiveSubscription>()
+const initialSnapshots = new Map<string, ReturnType<typeof createInitialLiveSnapshot>>()
 const hostObservers = new Map<string, () => void>()
 const hostPhases = new Map<string, LiveStatus['phase']>()
 const clients = new Map<string, { clientId: string; clientToken: string }>()
@@ -44,8 +46,8 @@ const registrations = new Map<string, { promise: Promise<{ clientId: string; cli
 const attempted = new Set<string>()
 const capabilities = browserIoCapabilities()
 let disposed = false
-let polling = false
-let pendingPoll = false
+const polling = new Map<string, AbortController>()
+const pendingPoll = new Set<string>()
 let leaseBusy = false
 let generation = 0
 let preparingBase: string | undefined
@@ -99,43 +101,45 @@ function forgetClient(base: string) {
   registrations.get(base)?.controller.abort()
   registrations.delete(base)
 }
-async function poll(fallback = false) {
+async function poll(fallback = false, requestedBases: Iterable<string> = bases.value) {
   if (disposed || (document.hidden && !owned.value)) return
-  if (polling) { if (!fallback) pendingPoll = true; return }
-  polling = true
-  try {
-    await Promise.all([...bases.value].map(async base => {
-      if (fallback && !['connecting', 'reconnecting', 'error'].includes(hostPhases.get(base) ?? 'connecting')) return
-      try {
-        const result = await ioRequest<{ runs: IoRun[] }>(base, '/runs')
-        if (disposed || !bases.value.has(base)) return
-        const sessions = new Set([...bridge.views.value.values()].filter(view => view.apiBase === base).map(view => view.sessionId))
-        const sorted = result.runs.filter(run => sessions.has(run.sessionId)).toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-        const runs = sorted.filter((run, index) => index < 32 || ['awaiting_consent', 'running', 'stopping'].includes(run.status))
-        const active = execution.value
-        if (active && bridge.executionBase.value === base && active.phase !== 'closed') {
-          const index = runs.findIndex(run => run.id === active.run.id)
-          if (index < 0) runs.push(active.run)
-          else runs[index] = active.run
-        }
-        const all = new Map(bridge.runs.value)
-        all.set(base, runs); bridge.runs.value = all
-        setError(base)
-      } catch (cause) {
-        if (disposed || !bases.value.has(base) || (cause instanceof DOMException && cause.name === 'AbortError')) return
-        setError(base, cause instanceof Error ? cause.message : t('Could not load capture requests.'))
+  await Promise.all([...requestedBases].map(async base => {
+    if (!bases.value.has(base)) return
+    if (polling.has(base)) { if (!fallback) pendingPoll.add(base); return }
+    if (fallback && !['connecting', 'reconnecting', 'error'].includes(hostPhases.get(base) ?? 'connecting')) return
+    const controller = new AbortController()
+    polling.set(base, controller)
+    try {
+      const result = await ioRequest<{ runs: IoRun[] }>(base, '/runs', undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))
+      if (disposed || controller.signal.aborted || !bases.value.has(base)) return
+      const sessions = new Set([...bridge.views.value.values()].filter(view => view.apiBase === base).map(view => view.sessionId))
+      const sorted = result.runs.filter(run => sessions.has(run.sessionId)).toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      const runs = sorted.filter((run, index) => index < 32 || ['awaiting_consent', 'running', 'stopping'].includes(run.status))
+      const active = execution.value
+      if (active && bridge.executionBase.value === base && active.phase !== 'closed') {
+        const index = runs.findIndex(run => run.id === active.run.id)
+        if (index < 0) runs.push(active.run)
+        else runs[index] = active.run
       }
-    }))
-    if (!disposed && !document.hidden && !owned.value && !bridge.busy.value) {
-      const views = [...bridge.views.value.values()]
-      const current = views.find(view => view === bridge.context.value) ?? views[0]
-      const requested = current && !current.remote && bridge.runs.value.get(current.apiBase)?.find(run =>
-        run.status === 'awaiting_consent' && run.sessionId === current.sessionId && !attempted.has(ioRunKey(current.apiBase, run.id)))
-      if (requested && current) void prepare(requested, current.apiBase)
+      const all = new Map(bridge.runs.value)
+      all.set(base, runs); bridge.runs.value = all
+      setError(base)
+    } catch (cause) {
+      if (disposed || controller.signal.aborted || !bases.value.has(base) || (cause instanceof DOMException && cause.name === 'AbortError')) return
+      setError(base, cause instanceof Error ? cause.message : t('Could not load capture requests.'))
+    } finally {
+      if (polling.get(base) === controller) {
+        polling.delete(base)
+        if (pendingPoll.delete(base)) void poll(false, [base])
+      }
     }
-  } finally {
-    polling = false
-    if (pendingPoll) { pendingPoll = false; void poll() }
+  }))
+  if (!disposed && !document.hidden && !owned.value && !bridge.busy.value) {
+    const views = [...bridge.views.value.values()]
+    const current = views.find(view => view === bridge.context.value) ?? views[0]
+    const requested = current && !current.remote && bridge.runs.value.get(current.apiBase)?.find(run =>
+      run.status === 'awaiting_consent' && run.sessionId === current.sessionId && !attempted.has(ioRunKey(current.apiBase, run.id)))
+    if (requested && current) void prepare(requested, current.apiBase)
   }
 }
 async function prepare(run: IoRun, base: string) {
@@ -225,25 +229,46 @@ async function pulseClients() {
     }))
   } finally { leaseBusy = false }
 }
-watch(bases, values => {
+// Registrations invalidate discovery only when the visible session set changes.
+const discovery = computed(() => {
+  const sessions = new Map<string, Set<string>>()
+  for (const base of bases.value) sessions.set(base, new Set())
+  for (const view of bridge.views.value.values()) sessions.get(view.apiBase)!.add(view.sessionId)
+  return new Map([...sessions].map(([base, ids]) => [base, JSON.stringify([...ids].sort())]))
+})
+watch(discovery, (visible, previous) => {
+  const values = new Set(visible.keys())
+  for (const [base, controller] of polling) if (!values.has(base)) { controller.abort(); polling.delete(base); pendingPoll.delete(base) }
   for (const base of new Set([...clients.keys(), ...registrations.keys()])) {
     if (!values.has(base)) { forgetClient(base); setError(base) }
   }
   const retained = new Map(bridge.runs.value)
   for (const base of retained.keys()) if (!values.has(base)) retained.delete(base)
   bridge.runs.value = retained
-  for (const [base, subscription] of subscriptions) if (!values.has(base)) { subscription.close(); subscriptions.delete(base); hostObservers.get(base)?.(); hostObservers.delete(base); hostPhases.delete(base) }
+  for (const [base, subscription] of subscriptions) if (!values.has(base)) { subscription.close(); subscriptions.delete(base); initialSnapshots.get(base)?.dispose(); initialSnapshots.delete(base); hostObservers.get(base)?.(); hostObservers.delete(base); hostPhases.delete(base) }
   for (const base of values) {
     if (subscriptions.has(base)) continue
-    const invalidate = () => { void poll(); if (bridge.executionBase.value === base) execution.value?.invalidate() }
+    const initial = createInitialLiveSnapshot({ refresh: () => { void poll(false, [base]) } })
+    initialSnapshots.set(base, initial)
+    const invalidateExecution = () => { if (bridge.executionBase.value === base) execution.value?.invalidate() }
     hostObservers.set(base, livePool.observeHost(base, status => { hostPhases.set(base, status.phase) }))
-    subscriptions.set(base, livePool.client(base).subscribe({ kind: 'io', projectId: liveProjectId(base) }, { event: invalidate, reset: invalidate, reconnected: invalidate }))
+    const subscription = livePool.client(base).subscribe({ kind: 'io', projectId: liveProjectId(base) }, {
+      event() { initial.invalidate(); invalidateExecution() },
+      reset() { initial.reset(); invalidateExecution() },
+      reconnected() { initial.reconnected(); invalidateExecution() },
+    })
+    subscriptions.set(base, subscription)
+    initial.attach(subscription)
   }
-  void poll()
+  for (const [base, sessions] of visible) {
+    if (previous?.has(base) && previous.get(base) !== sessions) initialSnapshots.get(base)?.invalidate()
+  }
 }, { immediate: true })
 const pageHide = () => { void execution.value?.cancel('cancelled', t('The capture page was closed.')); execution.value?.dispose() }
 const visibilityChanged = () => {
-  if (!document.hidden) void pulseClients().then(() => poll())
+  if (!document.hidden) void pulseClients().then(() => {
+    for (const initial of initialSnapshots.values()) initial.invalidate()
+  })
 }
 onMounted(() => {
   // Live I/O events/reset are the primary invalidation path. This bounded
@@ -257,6 +282,8 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true; generation++
+  for (const controller of polling.values()) controller.abort()
+  pendingPoll.clear()
   clearInterval(pollTimer); clearInterval(leaseTimer); clearInterval(clockTimer)
   window.removeEventListener('pagehide', pageHide)
   document.removeEventListener('visibilitychange', visibilityChanged)
@@ -264,6 +291,8 @@ onBeforeUnmount(() => {
   pageHide(); bridge.actions.value = undefined
   for (const subscription of subscriptions.values()) subscription.close()
   subscriptions.clear()
+  for (const initial of initialSnapshots.values()) initial.dispose()
+  initialSnapshots.clear()
   for (const stop of hostObservers.values()) stop()
   hostObservers.clear()
 })
