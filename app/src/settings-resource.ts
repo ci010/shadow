@@ -57,7 +57,7 @@ function createConfigResource(pool: ResourceLivePool, base: string, load: (signa
     dispose() { live.dispose(); snapshot.dispose() },
   }
 }
-export function configResource(pool: ResourceLivePool, base: string, request: typeof fetch, load: (signal: AbortSignal) => Promise<unknown>) {
+export function settingsResource(pool: ResourceLivePool, base: string, request: typeof fetch, path: string, load: (signal: AbortSignal) => Promise<unknown>) {
   let clients = pools.get(pool)
   if (!clients) {
     clients = new Map(); pools.set(pool, clients)
@@ -65,8 +65,12 @@ export function configResource(pool: ResourceLivePool, base: string, request: ty
   }
   let entries = clients.get(request)
   if (!entries) { entries = new Map(); clients.set(request, entries) }
-  const key = apiUrl(base, '/').toString()
+  const key = apiUrl(base, path).toString()
   let entry = entries.get(key)
-  if (!entry) { entry = createConfigResource(pool, key, load); entries.set(key, entry) }
+  if (!entry) { entry = createConfigResource(pool, base, load); entries.set(key, entry) }
   return entry
+}
+
+export function configResource(pool: ResourceLivePool, base: string, request: typeof fetch, load: (signal: AbortSignal) => Promise<unknown>) {
+  return settingsResource(pool, base, request, '/', load)
 }

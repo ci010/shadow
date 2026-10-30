@@ -39,10 +39,14 @@ export function createLiveClient(base: string, options: {
   const waiters = new Set<Waiter>()
   // Only previously requested chat topics are kept warm. This is not a cache of
   // chat bodies: closed observers receive nothing and new observers snapshot.
-  const retained = new Map<string, { topic: RealtimeTopic; timer: ReturnType<typeof setTimeout> }>()
+  const retained = new Map<string, { topic: RealtimeTopic }>()
+  let retentionTimer: ReturnType<typeof setTimeout> | undefined
   function forget(key: string) {
-    clearTimeout(retained.get(key)?.timer)
     retained.delete(key)
+    if (!retained.size) {
+      clearTimeout(retentionTimer)
+      retentionTimer = undefined
+    }
   }
   function clearRetained() {
     for (const key of retained.keys()) forget(key)
@@ -91,6 +95,9 @@ export function createLiveClient(base: string, options: {
   function reconnect() {
     if (disposed || !subscribers.size) return
     recovering = true
+    // A necessary reconnect also removes unused topics, without a later
+    // cleanup-only reconnect. Active observers retain the replay cursor.
+    clearRetained()
     stopSource()
     clearTimeout(timer)
     update({ phase: 'reconnecting', error: t('Live updates disconnected. Reconnecting to Main; saved history remains available.') })
@@ -258,7 +265,13 @@ export function createLiveClient(base: string, options: {
         if (topic.kind === 'chat' && connectedTopics.has(key)
           && ![...subscribers].some(other => realtimeTopicKey(other.topic) === key)) {
           forget(key)
-          retained.set(key, { topic, timer: setTimeout(() => { forget(key); changed() }, 30_000) })
+          retained.set(key, { topic })
+          // One non-sliding deadline per batch, not one reconnect per topic.
+          // Later entries have a shorter warm period; none exceed 30 seconds.
+          if (retentionTimer === undefined) retentionTimer = setTimeout(() => {
+            clearRetained()
+            changed()
+          }, 30_000)
         }
         for (const waiter of [...waiters]) if (waiter.owner === subscriber) waiter.reject(new DOMException(t('Live subscription closed'), 'AbortError'))
         changed()
@@ -270,6 +283,7 @@ export function createLiveClient(base: string, options: {
     isLive: () => ready,
     retry() {
       if (disposed) return
+      clearRetained()
       cursor = undefined
       attempt = 0
       for (const subscriber of subscribers) subscriber.initialized = false

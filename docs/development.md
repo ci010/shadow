@@ -400,11 +400,13 @@ eliminate the validation GET.
 Project configuration snapshots belong to the live-client pool, not individual
 conversation components. Successful runtime config activation emits a `config`
 resource invalidation; saves and reconnects also invalidate the shared snapshot.
-Concurrent model-catalog/audio-status reads are coalesced, but completed results
-are not cached: external provider credentials and local audio files have no
-complete change-notification source. Audio session/draft changes cancel capture
-without re-reading status; activation, visibility, base changes and explicit
-refresh still read it.
+Concurrent model-catalog reads are coalesced, but completed catalogs are not
+cached because external provider credentials have no complete notification source.
+Audio status is a pool/Project-scoped capability hint, shared across conversation
+mounts and visibility changes. Config invalidations and live recovery refresh it;
+opening audio settings or explicitly refreshing also rechecks external files.
+Actual capture/transcription still use authoritative backend endpoints and do not
+treat this hint as a recording grant. Session/draft changes still cancel capture.
 
 Credential-request metadata is shared per Project; Bot setup invitations are
 shared per session URL. Both reuse the existing interactions invalidation stream
@@ -416,8 +418,10 @@ consent, lease heartbeats, failure handling and disconnected polling are unchang
 
 The fixed-topic SSE protocol still reconnects for new chat topics. To avoid
 reconnects when returning to recently visited chats, the client retains at most
-four previously connected chat topics for 30 seconds; active topics take priority
-over these warm topics in the protocol budget. Closed observers receive no
+four previously connected chat topics in a single non-extending, at-most-30-second
+cleanup window; active topics take priority over these warm topics in the protocol
+budget. The window expires all idle topics together, avoiding staggered expiry
+reconnections. Real disconnect/retry discards warm topics before reconnecting. Closed observers receive no
 messages, and returning observers still take an authoritative snapshot. Project
 exit, disposal and failures clean up warm topics. This is bounded subscription
 reuse, not Project-wide chat-body broadcasting or a dynamic subscription protocol.

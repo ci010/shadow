@@ -304,3 +304,57 @@ test('warm topics yield the protocol topic-count budget to active subscriptions'
   assert.equal(selected.some(value => value.kind === 'chat' && value.sessionId === 'web:retained'), false)
   assert.ok(anchor)
 })
+
+
+test('staggered warm chats expire in one non-sliding cleanup batch', async t => {
+  const h = harness(t, 100_000)
+  const anchor = h.subscribe(topic('web:anchor'))
+  const panes = Array.from({ length: 4 }, (_, index) => h.subscribe(topic(`web:pane-${index}`)))
+  const source = h.open()
+  await anchor.ready()
+  panes[0].close()
+  for (let index = 1; index < panes.length; index++) {
+    t.mock.timers.tick(5_000)
+    panes[index].close()
+  }
+  source.send({ type: 'event', cursor: cursor(1), topic: topic('web:pane-3'), payload: 'not observed' })
+  assert.equal(h.events.length, 0)
+  t.mock.timers.tick(14_999)
+  assert.equal(h.sources.length, 1)
+  t.mock.timers.tick(1)
+  assert.equal(source.closed, true)
+  assert.equal(h.sources.length, 2, 'one cleanup reconnect, not four staggered reconnects')
+  const next = h.sources.at(-1)!
+  assert.deepEqual(JSON.parse(new URL(next.url).searchParams.get('topics')!), [topic('web:anchor')])
+  assert.equal(new URL(next.url).searchParams.get('cursor'), cursor(1))
+  next.send({ type: 'event', cursor: cursor(2), topic: topic('web:anchor'), payload: 'replay' })
+  next.send({ type: 'ready', cursor: cursor(2) })
+  await anchor.ready()
+  assert.deepEqual(h.events.map(event => event.payload), ['replay'])
+  assert.equal(h.resets.length, 5, 'existing observers do not snapshot again on cleanup')
+  t.mock.timers.tick(20_000)
+  assert.equal(h.sources.length, 2, 'no remaining per-topic expiry timers')
+})
+
+for (const mode of ['disconnect', 'retry'] as const) {
+  test(`necessary ${mode} consumes warm cleanup without a later expiry reconnect`, async t => {
+    const h = harness(t, 100_000)
+    const anchor = h.subscribe(topic('web:anchor'))
+    const pane = h.subscribe(topic('web:pane'))
+    const source = h.open(7)
+    pane.close()
+    t.mock.timers.tick(10_000)
+    if (mode === 'disconnect') source.dispatchEvent(new Event('error'))
+    else h.client.retry()
+    t.mock.timers.tick(mode === 'disconnect' ? 500 : 0)
+    assert.equal(h.sources.length, 2)
+    const next = h.sources.at(-1)!
+    assert.deepEqual(JSON.parse(new URL(next.url).searchParams.get('topics')!), [topic('web:anchor')])
+    assert.equal(new URL(next.url).searchParams.get('cursor'), mode === 'disconnect' ? cursor(7) : null)
+    next.send({ type: 'ready', cursor: cursor(7) })
+    await anchor.ready()
+    t.mock.timers.tick(30_000)
+    assert.equal(h.sources.length, 2)
+    assert.equal(next.closed, false)
+  })
+}

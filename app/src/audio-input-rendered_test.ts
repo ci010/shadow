@@ -17,7 +17,7 @@ interface ElementNode {
   parent?: ElementNode
 }
 const element = (tag: string, text = ''): ElementNode => ({ tag, text, props: {}, children: [], style: {}, contains(node: unknown) { return node === this || this.children.some(child => child.contains(node)) } })
-const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
+const settle = async () => { await new Promise(resolve => setTimeout(resolve, 15)); await nextTick() }
 
 function mount(t: TestContext, filename: string, props: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
   const popover = defineComponent({
@@ -64,8 +64,14 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>,
   const state = reactive(props)
   const app = renderer.createApp(defineComponent({ setup: () => () => h(component, state) }))
   app.component('RouterLink', defineComponent({ setup: (_, { slots }) => () => h('a', slots.default?.()) }))
+  const disposers: Array<() => void> = []
+  app.provide(Symbol.for('shadow.live-client-pool'), {
+    client: () => ({ subscribe: () => ({ ready: async () => {}, close() {} }) }),
+    observeHost: (_base: string, listener: (status: unknown) => void) => { listener({ phase: 'live' }); return () => {} },
+    onDispose: (callback: () => void) => { disposers.push(callback); return () => {} },
+  })
   app.mount(root)
-  t.after(() => app.unmount())
+  t.after(() => { app.unmount(); for (const dispose of disposers) dispose() })
   const nodes = (): ElementNode[] => {
     const visit = (node: ElementNode): ElementNode[] => [node, ...node.children.flatMap(visit)]
     return visit(root)
@@ -85,13 +91,14 @@ function environment(t: TestContext) {
   const win = new EventTarget(), doc = Object.assign(new EventTarget(), { hasFocus: () => true, hidden: false })
   Object.assign(globalThis, { window: win, document: doc })
   let reservations = 0, releasedReservations = 0, claimedReservations = 0
+  let statusReads = 0
   let ready = true, starts = 0, stops = 0, cancels = 0, uploads = 0, transcripts = 0, requests = 0, text = 'recognized', draft = '', pending = false
   let resolveCapture: ((v: unknown) => void) | undefined
   let audio = new Blob(['fixture']), signalError = false
   const recording = () => ({ cancel: () => { cancels++ }, stop: async () => { stops++; if (signalError) throw new actual.NoAudioSignalError(); return audio } })
   globalThis.fetch = async url => {
     if (String(url).endsWith('/transcribe')) { uploads++; return Response.json({ text }) }
-    return Response.json({ asr: { ready, route: 'local' }, tts: { ready: true, route: 'local' } })
+    statusReads++; return Response.json({ asr: { ready, route: 'local' }, tts: { ready: true, route: 'local' } })
   }
 
   const actual = createRequire(import.meta.url)('./audio-input.ts') as typeof import('./audio-input.ts')
@@ -102,7 +109,7 @@ function environment(t: TestContext) {
   function event(type: string, values: Record<string, unknown> = {}) { const e = new Event(type); Object.assign(e, values); win.dispatchEvent(e) }
   function key(type: string, key: string, values: Record<string, unknown> = {}) { event(type, { key, ctrlKey: true, shiftKey: true, ...values }) }
   const wait = async () => { await new Promise(resolve => setTimeout(resolve, 330)); await settle() }
-  return { view, event, key, wait, doc, stats: () => ({ reservations, releasedReservations, claimedReservations, starts, stops, cancels, uploads, draft, transcripts, requests }), draft: (v: string) => { draft = v }, noSignal: () => { signalError = true }, zeroAudio: () => { audio = actual.pcmWav(new Float32Array(1600), 16000) }, ready: (v: boolean) => { ready = v }, text: (v: string) => { text = v }, pending: () => { pending = true }, resolve: () => resolveCapture?.(recording()) }
+  return { view, event, key, wait, doc, stats: () => ({ statusReads, reservations, releasedReservations, claimedReservations, starts, stops, cancels, uploads, draft, transcripts, requests }), draft: (v: string) => { draft = v }, noSignal: () => { signalError = true }, zeroAudio: () => { audio = actual.pcmWav(new Float32Array(1600), 16000) }, ready: (v: boolean) => { ready = v }, text: (v: string) => { text = v }, pending: () => { pending = true }, resolve: () => resolveCapture?.(recording()) }
 }
 test('direct clicks, inline phases, empty text, setup and change configuration', async t => {
   const e = environment(t); await settle()
@@ -113,7 +120,8 @@ test('direct clicks, inline phases, empty text, setup and change configuration',
   assert.match(e.view.text(), /No speech recognized/)
   const change = e.view.nodes().find(n => n.props['aria-label'] === 'Change audio setup')!
   ;(change.props.onClick as () => void)(); await settle(); assert.match(e.view.text(), /Local · assess/)
-  e.ready(false); e.view.state.draftKey = 'b'; await settle(); await e.view.button().click(); await settle()
+  e.ready(false); e.view.state.draftKey = 'b'; await settle();
+  ;(e.view.nodes().find(n => n.props['aria-label'] === 'Change audio setup')!.props.onClick as () => void)(); await settle()
   assert.match(e.view.text(), /transcription still needs setup/)
 })
 test('pointer hold releases outside, pending acquisition release transcribes, cancellation discards', async t => {
@@ -169,7 +177,8 @@ test('short pointer click, keyboard ownership, processing exclusion and status f
   finish!(Response.json({ error: 'Fixture inference failure' }, { status: 500 })); await stopping; await settle()
   assert.match(e.view.text(), /Fixture inference failure/)
   globalThis.fetch = async () => new Response('{}', { status: 503 })
-  e.view.state.draftKey = 'failed'; await settle(); await e.view.button().click(); await settle()
+  e.view.state.draftKey = 'failed'; await settle();
+  ;(e.view.nodes().find(n => n.props['aria-label'] === 'Change audio setup')!.props.onClick as () => void)(); await settle()
   assert.match(e.view.text(), /Unable to read Project audio status/); assert.doesNotMatch(e.view.text(), /Local · assess/)
 })
 
@@ -341,4 +350,21 @@ test('hold/chord reserve in the original gesture before threshold; short/conflic
   e.key('keyup', 'Shift'); await settle()
   down(); await e.wait(); assert.equal(e.stats().claimedReservations, 2)
   e.event('pointerup', { pointerId: 9 }); await settle()
+})
+
+
+test('audio capability survives session and visibility switches without GET, explicit setup revalidates', async t => {
+  const e = environment(t)
+  await settle()
+  assert.equal(e.stats().statusReads, 1)
+  for (const id of ['web:second', 'web:third', 'web:first']) {
+    e.view.state.visible = false; await settle()
+    e.view.state.sessionId = id; e.view.state.draftKey = id
+    e.view.state.visible = true; await settle()
+  }
+  assert.equal(e.stats().statusReads, 1)
+  const change = e.view.nodes().find(n => n.props['aria-label'] === 'Change audio setup')!
+  ;(change.props.onClick as () => void)()
+  await settle()
+  assert.equal(e.stats().statusReads, 2, 'explicit setup detects external capability changes')
 })
