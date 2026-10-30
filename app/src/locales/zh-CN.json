@@ -1,4 +1,12 @@
 {
+  "Supported operations": "支持的操作",
+  "Update Main and this device": "请更新 Main 和此设备",
+  "The selected remote workspace is invalid. Select its original project folder again. No local folder was used.": "所选远程工作区无效。请重新选择其原始项目文件夹。未使用本地文件夹。",
+  "This device uses an incompatible execution protocol. Update Main and the device, then retry. No local folder was used.": "此设备的执行协议不兼容。请更新 Main 和此设备后重试。未使用本地文件夹。",
+  "Access to this folder resource was revoked. Select an authorized project folder.": "此文件夹资源的访问权限已撤销。请选择已授权的项目文件夹。",
+  "This folder resource is no longer available on the owning device.": "此文件夹资源在所属设备上已不可用。",
+  "The folder resource is unavailable on the owning device. Restore the folder and check again.": "此文件夹资源在所属设备上不可用。请恢复该文件夹后重新检查。",
+  "An existing remote folder could not be verified. Restore and reconnect its original folder resource before retrying. No local folder was used.": "无法验证已有的远程文件夹。请恢复并重新连接其原始文件夹资源后重试。未使用本地文件夹。",
   "{name} dashboard": "{name} 总览",
   "Signed out of Copilot instance {account} on {host}. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged.": "已退出 {host} 上的 Copilot 实例 {account}。其他实例（包括同一主机上的账号）及其他主机上的登录保持不变。",
   "Remove the saved Copilot sign-in for instance {account} on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.": "移除 {host} 上实例 {account} 保存的 Copilot 登录？这会影响使用此实例的所有项目。其他实例（包括同一主机上的账号）及其他主机上的登录保持不变。不会退出浏览器登录或撤销 GitHub 授权。",
@@ -1951,7 +1959,6 @@
   "No allowlist or blocklist declared.": "未声明允许列表或阻止列表。",
   "No background tasks running.": "没有正在运行的后台任务。",
   "No bots yet. Add a bot, then configure its credentials to connect it.": "尚无机器人。请添加机器人并配置凭据以建立连接。",
-  "No capabilities advertised.": "未公布任何能力。",
   "No change": "无变更",
   "No change is applied until you approve the review.": "批准审核前不会应用任何更改。",
   "No channels or DMs are assigned to this Bot.": "此机器人尚未分配任何频道或私信。",
@@ -4113,5 +4120,12 @@
   "Scheduled tasks are unavailable. Retry to reconnect.": "无法获取定时任务，请重试连接。",
   "Invalid scheduled task data.": "定时任务数据无效。",
   "No scheduled tasks.": "没有定时任务。",
-  "Next run": "下次触发"
+  "Next run": "下次触发",
+  "Devices, directories, and supported operations.": "设备、目录及支持的操作。",
+  "Directories and supported operations on this Child.": "此 Child 的目录及支持的操作。",
+  "Directories": "目录",
+  "No directories advertised.": "暂无已公布的目录。",
+  "Device operations": "设备操作",
+  "Support is not project permission. Select a registered project folder to use a directory.": "支持信息不代表项目权限。请选择已注册的项目文件夹以使用目录。",
+  "Available shells": "可用 Shell"
 }

@@ -1,9 +1,10 @@
+import { workdirIdOf } from './workdir-contracts.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import {
-  type ExecutionReceiptV1, type JobEventV1, type JobRequestV1,
-  validateJobEventV1, validateJobRequestV1,
+  type ExecutionReceiptV1, type JobEventV1, type ExecutionRequestV2,
+  validateJobEventV1, validateExecutionRequestV2, validateJobRequestV1,
 } from './contracts.ts'
 import type { Executor } from './executor.ts'
 import { parseGuardianResult, type GuardianResult } from './processes/guardian.ts'
@@ -16,7 +17,7 @@ export const RECONCILE_SHELL_OPERATION = 'workdir.process.reconcile'
 
 export function isUnknownShellReceipt(receipt: ExecutionReceiptV1): boolean {
   return ['remote-node-unavailable', 'execution-outcome-unknown', 'execution-journal-unavailable',
-    'process-cleanup-failed', 'cleanup-failed', 'supervisor-failed', 'unsupported-operation']
+    'process-cleanup-failed', 'cleanup-failed', 'supervisor-failed']
     .includes(receipt.reason?.code ?? '')
 }
 
@@ -38,7 +39,7 @@ export function parseShellReconciliation(value: unknown, jobId: string, nodeId: 
   const events = rawEvents.map((event, index) => {
     const parsed = validateJobEventV1(event)
     if (!parsed.success || parsed.value.jobId !== jobId || parsed.value.sequence !== index
-      || ('receipt' in parsed.value && (index !== rawEvents.length - 1 || parsed.value.receipt.nodeId !== nodeId))) {
+      || ('receipt' in parsed.value && (index !== rawEvents.length - 1 || parsed.value.receipt.nodeId !== nodeId || parsed.value.receipt.jobId !== jobId))) {
       throw new Error('Uncorrelated shell reconciliation')
     }
     return parsed.value
@@ -47,10 +48,10 @@ export function parseShellReconciliation(value: unknown, jobId: string, nodeId: 
   return { version: 1, outcome: 'known', events }
 }
 
-function sameExecution(left: JobRequestV1, right: JobRequestV1): boolean {
-  const identity = (request: JobRequestV1) => [
-    request.idempotencyKey, request.nodeId, request.capabilityId,
-    request.sessionId, request.turnId, request.operation, request.managedProject,
+function sameExecution(left: ExecutionRequestV2, right: ExecutionRequestV2): boolean {
+  const identity = (request: ExecutionRequestV2) => [
+    request.idempotencyKey, request.nodeId, workdirIdOf(request),
+    request.sessionId, request.turnId, request.operation, workdirIdOf(request).startsWith('managed-v1:') ? request.projectScope : undefined,
     parseWorkdirProcessArgs(request.args),
   ]
   return JSON.stringify(identity(left)) === JSON.stringify(identity(right))
@@ -74,12 +75,12 @@ export class ShellJournal {
     return join(this.root, createHash('sha256').update(idempotencyKey).digest('hex'))
   }
 
-  processResultPath(request: JobRequestV1): string | undefined {
+  processResultPath(request: ExecutionRequestV2): string | undefined {
     return request.operation === DURABLE_SHELL_OPERATION
       ? join(this.#directory(request.idempotencyKey), 'process.json') : undefined
   }
 
-  async claim(request: JobRequestV1): Promise<boolean> {
+  async claim(request: ExecutionRequestV2): Promise<boolean> {
     await mkdir(this.root, { recursive: true, mode: 0o700 })
     const directory = this.#directory(request.idempotencyKey)
     try { await mkdir(directory, { mode: 0o700 }) }
@@ -91,12 +92,12 @@ export class ShellJournal {
     return true
   }
 
-  async complete(request: JobRequestV1, events: JobEventV1[]): Promise<void> {
+  async complete(request: ExecutionRequestV2, events: JobEventV1[]): Promise<void> {
     const result = parseShellReconciliation({ version: 1, outcome: 'known', events }, request.jobId, request.nodeId)
     await writeJson(join(this.#directory(request.idempotencyKey), 'terminal.json'), result)
   }
 
-  async reconcile(request: JobRequestV1): Promise<ShellReconciliation> {
+  async reconcile(request: ExecutionRequestV2): Promise<ShellReconciliation> {
     const directory = this.#directory(request.idempotencyKey)
     const unknown = (reason: string): ShellReconciliation => ({ version: 1, outcome: 'unknown', reason })
     let original: unknown
@@ -107,7 +108,7 @@ export class ShellJournal {
       }
       throw error
     }
-    const validation = validateJobRequestV1(original)
+    const validation = normalizeJournalRequest(original)
     if (!validation.success || !sameExecution(validation.value, request)) {
       throw new Error('Execution identity does not match its durable admission record')
     }
@@ -144,11 +145,24 @@ export class JournaledShellExecutor implements Executor {
   getStatus(jobId: string) { return this.executor.getStatus(jobId) }
   cancel(jobId: string) { return this.executor.cancel(jobId) }
 
-  async *execute(request: JobRequestV1, signal: AbortSignal): AsyncIterable<JobEventV1> {
-    const validation = validateJobRequestV1(request)
+  async assertCanExecute(request: ExecutionRequestV2, signal: AbortSignal): Promise<void> {
+    if (!this.executor.assertCanExecute) throw Object.assign(new Error('Durable execution requires admission before journal access'), { code: 'admission-unavailable' })
+    await this.executor.assertCanExecute(request, signal)
+  }
+
+  async *execute(request: ExecutionRequestV2, signal: AbortSignal): AsyncIterable<JobEventV1> {
+    const validation = validateExecutionRequestV2(request)
     if (!validation.success) throw new TypeError(validation.errors.join('; '))
     if (request.operation !== DURABLE_SHELL_OPERATION && request.operation !== RECONCILE_SHELL_OPERATION) {
       yield* this.executor.execute(request, signal)
+      return
+    }
+    // Admission failures are definite refusals, not unknown execution outcomes.
+    try { await this.assertCanExecute(request, signal) }
+    catch (error) {
+      const event = failureEvent(request, error instanceof Error && 'code' in error ? String(error.code) : 'admission-denied', error instanceof Error ? error.message : 'Admission denied')
+      if ('receipt' in event) { event.type = 'rejected'; event.receipt.state = 'rejected' }
+      yield event
       return
     }
     let sequence = 0
@@ -181,7 +195,7 @@ export class JournaledShellExecutor implements Executor {
   }
 }
 
-function failureEvent(request: JobRequestV1, code: string, message: string, sequence = 0): JobEventV1 {
+function failureEvent(request: ExecutionRequestV2, code: string, message: string, sequence = 0): JobEventV1 {
   const timestamp = new Date().toISOString()
   return {
     version: 1, jobId: request.jobId, sequence, timestamp, type: 'failed',
@@ -190,14 +204,14 @@ function failureEvent(request: JobRequestV1, code: string, message: string, sequ
   }
 }
 
-function* replayEvents(request: JobRequestV1, events: JobEventV1[]): Iterable<JobEventV1> {
+function* replayEvents(request: ExecutionRequestV2, events: JobEventV1[]): Iterable<JobEventV1> {
   for (const event of events) yield {
     ...event, jobId: request.jobId,
-    ...('receipt' in event ? { receipt: { ...event.receipt, jobId: request.jobId } } : {}),
+    ...('receipt' in event ? { receipt: { ...event.receipt, jobId: request.jobId, reconciledJobId: event.jobId } } : {}),
   }
 }
 
-function guardianEvents(request: JobRequestV1, result: GuardianResult): JobEventV1[] {
+function guardianEvents(request: ExecutionRequestV2, result: GuardianResult): JobEventV1[] {
   const events: JobEventV1[] = []
   const shell = parseWorkdirProcessArgs(request.args).shell ?? defaultManagedShell()
   const envelope = () => ({ version: 1 as const, jobId: request.jobId, sequence: events.length, timestamp: result.finishedAt })
@@ -221,4 +235,31 @@ function guardianEvents(request: JobRequestV1, result: GuardianResult): JobEvent
   }
   events.push({ ...envelope(), type: state === 'cancelled' ? 'cancel-acknowledged' : state, receipt })
   return events
+}
+
+/** Storage-only V1 normalization. This function is never used by a wire parser. */
+function normalizeJournalRequest(value: unknown) {
+  const current = validateExecutionRequestV2(value)
+  if (current.success) return current
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const old = value as Record<string, unknown>
+    const target = old.target
+    if (old.version === 2 && target && typeof target === 'object' && !Array.isArray(target) && !Object.hasOwn(old, 'nodeId') && !Object.hasOwn(old, 'workdirId')) {
+      const address = target as Record<string, unknown>
+      if (address.kind === 'resource' && Object.keys(address).sort().join(',') === 'kind,nodeId,resourceId') {
+        const { target: _target, ...rest } = old
+        return validateExecutionRequestV2({ ...rest, nodeId: address.nodeId, workdirId: address.resourceId })
+      }
+    }
+  }
+  const legacy = validateJobRequestV1(value)
+  if (!legacy.success) return current
+  const old = legacy.value
+  return validateExecutionRequestV2({
+    version: 2, jobId: old.jobId, idempotencyKey: old.idempotencyKey,
+    sessionId: old.sessionId, turnId: old.turnId,
+    nodeId: old.nodeId, workdirId: old.capabilityId,
+    operation: old.operation, args: old.args, createdAt: old.createdAt, deadlineAt: old.deadlineAt,
+    ...(old.managedProject ? { projectScope: old.managedProject } : {}),
+  })
 }

@@ -23,7 +23,7 @@ async function createCluster(adapter: InMemoryRegistrySnapshotAdapter) {
       protocolMajor: 1,
       protocolMinor: 0,
       implementationVersion: 'test',
-      features: ['jobs-v1'],
+      features: ['workdir-execution-v2'],
     },
     authorizeOfferCreation: (request) =>
       request.headers.get('Authorization') === `Bearer ${launchCredential}`,
@@ -112,19 +112,12 @@ test('Main cluster pairs, approves, persists, and restores challenge credentials
   stopInventory(); stopThrowing()
   assertEquals(challengeResponse.status, 201)
 
-  cluster.registry.advertiseCapability(authentication, {
-    version: 1, nodeId: authentication.nodeId, capabilityId: 'folder',
-    kind: 'workdir', displayName: 'Folder', displayPath: '/child/folder',
-    permissions: [], online: true,
-  })
+  cluster.registry.advertiseWorkdir(authentication, { version: 2 as const, nodeId: authentication.nodeId, workdirId: 'folder', displayName: 'Folder', displayPath: '/child/folder', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } })
   const inventory = cluster.getNodeInventory()
   assertEquals(inventory.nodes[0].connection, 'offline')
-  assertEquals(inventory.nodes[0].capabilities[0], {
-    capabilityId: 'folder', kind: 'workdir', displayName: 'Folder',
-    displayPath: '/child/folder', online: false,
-  })
-  assertEquals(cluster.workdirCapabilityLookup({
-    version: 1, nodeId: authentication.nodeId, capabilityId: 'folder',
+  assertEquals(inventory.nodes[0].workdirs[0], { version: 2 as const, nodeId: authentication.nodeId, workdirId: 'folder', displayName: 'Folder', displayPath: '/child/folder', online: false, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } })
+  assertEquals(cluster.workdirLookup({
+    version: 2, nodeId: authentication.nodeId, workdirId: 'folder',
   }), { node: 'offline' })
   await cluster.save()
 
@@ -165,13 +158,13 @@ test('Main cluster exposes structured remote execution failure while a node is o
   const events: JobEventV1[] = []
   for await (
     const event of cluster.remoteExecutor.execute({
-      version: 1,
+      version: 2,
       jobId: 'offline-job',
       idempotencyKey: 'offline-job-key',
       sessionId: 'session-1',
       turnId: 'turn-1',
-      nodeId: 'offline-node',
-      capabilityId: 'workdir-1',
+      nodeId: 'offline-node', workdirId: 'workdir-1',
+      projectScope: '0123456789abcdef0123456789abcdef',
       operation: 'filesystem.read',
       args: { path: 'README.md' },
       createdAt: createdAt.toISOString(),
@@ -179,11 +172,11 @@ test('Main cluster exposes structured remote execution failure while a node is o
     }, new AbortController().signal)
   ) events.push(event)
 
-  assertEquals(events.map((event) => event.type), ['failed'])
+  assertEquals(events.map((event) => event.type), ['rejected'])
   const terminal = events[0]
   assertEquals(
     terminal && 'receipt' in terminal ? terminal.receipt.reason?.code : undefined,
-    'remote-node-unavailable',
+    'remote-dispatch-rejected',
   )
   await cluster.closeNodeConnections()
 })
@@ -203,10 +196,7 @@ test('Main removal persists revocation, requires authorization and supports retr
     pendingId: 'remove-pending', expectedDeviceIdentityFingerprint: fingerprint,
     credentialId: 'remove-credential',
   })
-  cluster.registry.advertiseCapability(authentication, {
-    version: 1, nodeId: authentication.nodeId, capabilityId: 'folder',
-    kind: 'workdir', displayName: 'Folder', displayPath: '/child/folder', permissions: [], online: true,
-  })
+  cluster.registry.advertiseWorkdir(authentication, { version: 2 as const, nodeId: authentication.nodeId, workdirId: 'folder', displayName: 'Folder', displayPath: '/child/folder', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } })
   const app = new Hono()
   registerGatewayRoutes(app, [...cluster.plugins], { launchCredential })
   const remove = (nodeId = authentication.nodeId, authorized = true) => app.request(`/nodes/v1/${nodeId}/revoke`, {
@@ -220,7 +210,7 @@ test('Main removal persists revocation, requires authorization and supports retr
   assertEquals((await remove()).status, 503)
   assertEquals(errors.mock.callCount(), 1)
   assertEquals(cluster.registry.getNodeState(authentication.nodeId), 'revoked')
-  assertEquals(cluster.registry.listCapabilities(authentication.nodeId), [])
+  assertEquals(cluster.registry.nodeSupport(authentication.nodeId), { operations: [] })
   assertThrows(() => cluster.registry.authenticate(authentication), /revoked/)
   save.mock.restore()
   const response = await remove()

@@ -6,10 +6,10 @@ import { writePrivateFile } from '../config/store.ts'
 import type { FolderRecord, RemoteFolderRecord } from '../folders/contracts.ts'
 import { parseWorkdirIdentity, workdirIdentitiesOverlap, type WorkdirIdentityV1 } from '../execution/workdir-identity.ts'
 import { isClusterIdentifier } from '../cluster/contracts.ts'
-import { parseWorkdirRefV1, type WorkdirRefV1 } from '../sessions/locality.ts'
+import { parseWorkdirRef, type WorkdirRefV2 } from '../sessions/locality.ts'
 import { existingDirectory, folderDescription, FolderError } from '../folders/registry.ts'
 import { DEFAULT_PROJECT_ID, projectPaths, type ProjectRecord } from './contracts.ts'
-import { isManagedWorkdir } from '../execution/managed-workdir.ts'
+import { isManagedWorkdir, projectExecutionKey } from '../execution/managed-workdir.ts'
 
 function onlyFields(value: object, fields: readonly string[]): boolean {
   return !Array.isArray(value) && Object.keys(value).every(key => fields.includes(key))
@@ -38,16 +38,16 @@ interface FolderLifecycle {
 
 export interface RemoteOwnershipClaim {
   projectId: string
-  workdir: WorkdirRefV1
+  workdir: WorkdirRefV2
   identity?: WorkdirIdentityV1
 }
 
-function remoteRef(value: unknown): WorkdirRefV1 {
-  const ref = parseWorkdirRefV1(value)
-  if (!ref || ref.nodeId === 'local' || !isClusterIdentifier(ref.nodeId) || !isClusterIdentifier(ref.capabilityId)) {
+function remoteRef(value: unknown): WorkdirRefV2 {
+  const ref = parseWorkdirRef(value)
+  if (!ref || ref.nodeId === 'local' || !isClusterIdentifier(ref.nodeId) || !isClusterIdentifier(ref.workdirId)) {
     throw new Error('Invalid remote folder reference')
   }
-  if (isManagedWorkdir(ref.capabilityId)) {
+  if (isManagedWorkdir(ref.workdirId)) {
     throw new FolderError('managed_workdir_not_folder', 'Managed session workdirs cannot be registered as project folders.')
   }
   return ref
@@ -129,8 +129,10 @@ export class ProjectCatalog {
           (folder.description !== undefined && typeof folder.description !== 'string') ||
           typeof folder.name !== 'string' || typeof folder.createdAt !== 'string') throw new Error('Invalid project folders')
         if (folder.kind === 'remote') {
-          remoteRef(folder.workdir)
+          folder.workdir = remoteRef(folder.workdir)
           parseWorkdirIdentity(folder.identity)
+        } else if (folder.workdir !== undefined || folder.identity !== undefined) {
+          throw new Error('Local folders cannot contain remote workdir or identity fields')
         }
         folderIds.add(folder.id)
       }
@@ -138,7 +140,7 @@ export class ProjectCatalog {
         if (!Array.isArray(data.remoteClaims)) throw new Error('Invalid remote ownership claims')
         for (const claim of data.remoteClaims) {
           if (!claim || !onlyFields(claim, claimFields) || !ids.has(claim.projectId)) throw new Error('Invalid remote ownership claim')
-          remoteRef(claim.workdir)
+          claim.workdir = remoteRef(claim.workdir)
           if (claim.identity !== undefined) parseWorkdirIdentity(claim.identity)
         }
       }
@@ -149,15 +151,17 @@ export class ProjectCatalog {
         for (const record of records) {
           if (!record || !onlyFields(record, key === 'retiredFolders' ? folderFields : claimFields) || !ids.has(record.projectId)) throw new Error('Invalid folder retirement')
           if (key === 'retiredRemoteClaims') {
-            remoteRef(record.workdir)
+            record.workdir = remoteRef(record.workdir)
             if (record.identity !== undefined) parseWorkdirIdentity(record.identity)
           } else {
             if ((record.description !== undefined && typeof record.description !== 'string') ||
               typeof record.id !== 'string' || typeof record.path !== 'string' ||
               (record.kind !== 'remote' && !isAbsolute(record.path))) throw new Error('Invalid retired folder')
             if (record.kind === 'remote') {
-              remoteRef(record.workdir)
+              record.workdir = remoteRef(record.workdir)
               parseWorkdirIdentity(record.identity)
+            } else if (record.workdir !== undefined || record.identity !== undefined) {
+              throw new Error('Retired local folders cannot contain remote workdir or identity fields')
             }
             if (folderIds.has(record.id)) throw new Error('A retired folder cannot be active')
           }
@@ -326,6 +330,19 @@ export class ProjectCatalog {
     this.#commit({ ...this.#current(), pendingRemoteJobs: jobs })
   }
 
+  /** A verified journal replay identifies the original scoped transport job, even after Main restarts. */
+  settleReconciledRemoteJob(projectId: string, scopedOriginalJobId: string): void {
+    const current = this.#current()
+    const pending = current.pendingRemoteJobs ?? []
+    const remaining = pending.filter(record => record.projectId !== projectId ||
+      projectExecutionKey(projectId, 'job', record.jobId) !== scopedOriginalJobId)
+    // Unknown, differently scoped, or already settled jobs are not proof for any
+    // other pending operation. In particular, a rejected reconcile query cannot
+    // release the original job's ownership protection.
+    if (remaining.length === pending.length) return
+    this.#commit({ ...current, pendingRemoteJobs: remaining })
+  }
+
   acquireFolderAccess(projectId: string): () => void {
     if (!this.get(projectId) || this.isDeleting(projectId)) throw new FolderError('project_unavailable', 'Project is unavailable.', 409)
     this.#access.set(projectId, (this.#access.get(projectId) ?? 0) + 1)
@@ -337,13 +354,13 @@ export class ProjectCatalog {
     }
   }
 
-  isRetiredWorkdir(projectId: string, ref: WorkdirRefV1): boolean {
+  isRetiredWorkdir(projectId: string, ref: WorkdirRefV2): boolean {
     return (this.#current().retiredFolders ?? []).some(folder => folder.projectId === projectId &&
       (folder.kind === 'remote'
-        ? folder.workdir.nodeId === ref.nodeId && folder.workdir.capabilityId === ref.capabilityId
-        : ref.nodeId === 'local' && ref.capabilityId === `local-project-v1:${folder.id}`)) ||
+        ? folder.workdir.nodeId === ref.nodeId && folder.workdir.workdirId === ref.workdirId
+        : ref.nodeId === 'local' && ref.workdirId === `local-project-v1:${folder.id}`)) ||
       (this.#current().retiredRemoteClaims ?? []).some(claim => claim.projectId === projectId &&
-        claim.workdir.nodeId === ref.nodeId && claim.workdir.capabilityId === ref.capabilityId)
+        claim.workdir.nodeId === ref.nodeId && claim.workdir.workdirId === ref.workdirId)
   }
 
   changeFolderProject(projectId: string, id: string, targetProjectId?: string, signal?: AbortSignal): Promise<FolderRecord | undefined> {
@@ -405,7 +422,7 @@ export class ProjectCatalog {
         folders: [...current.folders.filter(item => item.id !== id), ...(moved ? [moved] : [])],
         retiredFolders: [...(current.retiredFolders ?? []), folder],
         remoteClaims: (current.remoteClaims ?? []).filter(claim => !relatedClaims.some(item =>
-          item.workdir.nodeId === claim.workdir.nodeId && item.workdir.capabilityId === claim.workdir.capabilityId)),
+          item.workdir.nodeId === claim.workdir.nodeId && item.workdir.workdirId === claim.workdir.workdirId)),
         retiredRemoteClaims: [...(current.retiredRemoteClaims ?? []), ...relatedClaims],
         retiredSessions: [...(current.retiredSessions ?? []),
           ...retiredSessions.filter(sessionId => !this.isRetiredSession(projectId, sessionId)).map(sessionId => ({ projectId, sessionId }))],
@@ -471,7 +488,7 @@ export class ProjectCatalog {
     }
   }
 
-  reserveRemoteWorkdirs(projectId: string, refs: readonly WorkdirRefV1[]): Promise<void> {
+  reserveRemoteWorkdirs(projectId: string, refs: readonly WorkdirRefV2[]): Promise<void> {
     return this.#transaction(() => {
       if (!this.get(projectId)) throw new FolderError('project_not_found', 'Project not found.', 404)
       if (this.isDeleting(projectId)) throw new FolderError('project_deleting', 'Project deletion is pending.', 409)
@@ -479,7 +496,7 @@ export class ProjectCatalog {
       for (const value of refs) {
         const workdir = remoteRef(value)
         if (this.isRetiredWorkdir(projectId, workdir)) continue
-        const existing = claims.find(claim => claim.workdir.nodeId === workdir.nodeId && claim.workdir.capabilityId === workdir.capabilityId)
+        const existing = claims.find(claim => claim.workdir.nodeId === workdir.nodeId && claim.workdir.workdirId === workdir.workdirId)
         if (existing) {
           if (existing.projectId !== projectId) throw new Error('Remote workdir already belongs to another project')
           continue
@@ -490,11 +507,11 @@ export class ProjectCatalog {
     })
   }
 
-  resolveRemoteClaim(ref: WorkdirRefV1, identity: WorkdirIdentityV1): Promise<void> {
+  resolveRemoteClaim(ref: WorkdirRefV2, identity: WorkdirIdentityV1): Promise<void> {
     return this.#transaction(() => {
       const parsed = parseWorkdirIdentity(identity)
       const claims = this.remoteClaims()
-      const claim = claims.find(item => item.workdir.nodeId === ref.nodeId && item.workdir.capabilityId === ref.capabilityId)
+      const claim = claims.find(item => item.workdir.nodeId === ref.nodeId && item.workdir.workdirId === ref.workdirId)
       if (!claim) throw new Error('Remote ownership claim is missing')
       if (claim.identity && claim.identity.rootId !== parsed.rootId) {
         throw new FolderError('remote_claim_workdir_changed', 'An existing conversation reserves a different folder for this capability. Restore its original folder before opening new folders on this device.', 409)
@@ -533,7 +550,7 @@ export class ProjectCatalog {
     }
   }
 
-  registerRemoteFolder(projectId: string, value: WorkdirRefV1, identity: WorkdirIdentityV1, signal?: AbortSignal): Promise<RemoteFolderRecord> {
+  registerRemoteFolder(projectId: string, value: WorkdirRefV2, identity: WorkdirIdentityV1, signal?: AbortSignal): Promise<RemoteFolderRecord> {
     return this.#transaction(() => {
       signal?.throwIfAborted()
       const workdir = remoteRef(value)
@@ -548,7 +565,7 @@ export class ProjectCatalog {
         return structuredClone(updated)
       }
       const folder: RemoteFolderRecord & { projectId: string } = {
-        kind: 'remote', projectId, id: randomUUID(), name: workdir.displayName || workdir.capabilityId,
+        kind: 'remote', projectId, id: randomUUID(), name: workdir.displayName || workdir.workdirId,
         path: workdir.displayPathSnapshot ?? '', workdir, identity: verified, createdAt: new Date().toISOString(),
       }
       this.#commit({ ...this.#current(), folders: [...this.#current().folders, folder] })

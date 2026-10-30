@@ -172,7 +172,7 @@ test('Open File Viewer renders protected files with local assets in dev and buil
       }
       if (path === 'offline.docx') {
         response.statusCode = 503
-        response.end(JSON.stringify({ error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder' }))
+        response.end(JSON.stringify({ error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', workdirId: 'folder' }))
         return
       }
       if (path === 'denied.docx') { response.statusCode = 403; response.end(JSON.stringify({ error: 'denied' })); return }

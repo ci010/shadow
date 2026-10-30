@@ -621,7 +621,7 @@ test('call exec exposes foreground-only schema and rejects background, invalid l
     assertMatch(requireToolText(await ctx.tools.execute('exec', { script: 'must not spawn', timeout_ms }, ctx)), /background execution is forbidden/)
   }
   assertMatch(requireToolText(await tool.execute({ script: 'remote must not fall back' }, {
-    ...ctx, remoteWorkdir: { nodeId: 'remote', capabilityId: 'opaque', executor: {} as any },
+    ...ctx, remoteWorkdir: { nodeId: 'remote', workdirId: 'opaque', executor: {} as any },
   })), /remote workdirs/)
   assertEquals(executor.calls.length, 0)
   assertEquals(background.calls, 0)

@@ -2,7 +2,7 @@ import type {
   ExecutionReceiptV1,
   JobEventV1,
   JobReasonV1,
-  JobRequestV1,
+  ExecutionRequestV2,
 } from '../execution/contracts.ts'
 
 export interface JobAuditContextV1 {
@@ -13,14 +13,15 @@ export interface JobAuditContextV1 {
   implementationVersion: string
 }
 
-export interface JobAuditCorrelationV1 {
+export interface JobAuditCorrelationV2 {
   traceId: string
   jobId: string
   idempotencyKey: string
   sessionId: string
   turnId: string
   nodeId: string
-  capabilityId: string
+  workdirId?: string
+  projectScope?: string
   protocolMajor: number
   protocolMinor: number
   implementationVersion: string
@@ -39,10 +40,10 @@ export type AuditValue =
   | AuditValue[]
   | { [key: string]: AuditValue }
 
-export type JobAuditRecordV1 =
+export type JobAuditRecordV2 =
   & {
-    version: 1
-    correlation: JobAuditCorrelationV1
+    version: 2
+    correlation: JobAuditCorrelationV2
     timestamp: string
   }
   & (
@@ -74,11 +75,11 @@ export type JobAuditRecordV1 =
   )
 
 export interface JobAuditSink {
-  append(record: JobAuditRecordV1): void | Promise<void>
+  append(record: JobAuditRecordV2): void | Promise<void>
 }
 
 export interface JobAuditRedactor {
-  redactArgs(args: unknown, request: JobRequestV1): AuditValue
+  redactArgs(args: unknown, request: ExecutionRequestV2): AuditValue
   redactOutput(chunk: string, event: JobEventV1): AuditValue
   redactReason(reason: JobReasonV1, receipt: ExecutionReceiptV1): AuditValue
 }
@@ -96,21 +97,21 @@ export const defaultJobAuditRedactor: JobAuditRedactor = {
 }
 
 export class InMemoryJobAuditSink implements JobAuditSink {
-  readonly records: JobAuditRecordV1[] = []
+  readonly records: JobAuditRecordV2[] = []
 
-  append(record: JobAuditRecordV1): void {
+  append(record: JobAuditRecordV2): void {
     this.records.push(structuredClone(record))
   }
 }
 
 export class JobAuditRecorder {
-  readonly #correlation: JobAuditCorrelationV1
+  readonly #correlation: JobAuditCorrelationV2
   readonly #artifactIds = new Set<string>()
   readonly #seenSequences = new Set<number>()
   #lastSequence = -1
 
   constructor(
-    readonly request: JobRequestV1,
+    readonly request: ExecutionRequestV2,
     readonly context: JobAuditContextV1,
     readonly sink: JobAuditSink,
     readonly redactor: JobAuditRedactor = defaultJobAuditRedactor,
@@ -122,7 +123,8 @@ export class JobAuditRecorder {
       sessionId: request.sessionId,
       turnId: request.turnId,
       nodeId: request.nodeId,
-      capabilityId: request.capabilityId,
+      ...(request.workdirId === undefined ? {} : { workdirId: request.workdirId }),
+      ...(request.projectScope ? { projectScope: request.projectScope } : {}),
       protocolMajor: context.protocolMajor,
       protocolMinor: context.protocolMinor,
       implementationVersion: context.implementationVersion,
@@ -131,7 +133,7 @@ export class JobAuditRecorder {
 
   appendRequest(): void | Promise<void> {
     return this.sink.append({
-      version: 1,
+      version: 2,
       kind: 'job-requested',
       correlation: this.#correlation,
       timestamp: this.request.createdAt,
@@ -148,7 +150,7 @@ export class JobAuditRecorder {
     }
     if (event.sequence <= this.#lastSequence) {
       return this.sink.append({
-        version: 1,
+        version: 2,
         kind: 'job-event-anomaly',
         correlation: this.#correlation,
         timestamp: event.timestamp,
@@ -164,8 +166,8 @@ export class JobAuditRecorder {
     this.#seenSequences.add(event.sequence)
     if (event.type === 'artifact-ready') this.#artifactIds.add(event.artifactId)
 
-    const record: JobAuditRecordV1 = {
-      version: 1,
+    const record: JobAuditRecordV2 = {
+      version: 2,
       kind: 'job-event',
       correlation: this.#correlation,
       timestamp: event.timestamp,
@@ -197,7 +199,7 @@ export class JobAuditRecorder {
   }
 
   #terminal(receipt: ExecutionReceiptV1): NonNullable<
-    Extract<JobAuditRecordV1, { kind: 'job-event' }>['terminal']
+    Extract<JobAuditRecordV2, { kind: 'job-event' }>['terminal']
   > {
     return {
       state: receipt.state,

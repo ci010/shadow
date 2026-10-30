@@ -1,7 +1,8 @@
+import { assertExecutionProtocol } from '../execution/workdir-contracts.ts'
 import type { Hono } from 'hono'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { upgradeGatewayWebSocket } from '../gateway/websocket.ts'
-import type { JobEventV1, JobRequestV1 } from '../execution/contracts.ts'
+import type { JobEventV1, JobRequestV2 } from '../execution/contracts.ts'
 import type { RemoteNodeJobDispatcher } from '../execution/remote-executor.ts'
 import type { VersionHelloV1 } from './contracts.ts'
 import {
@@ -32,8 +33,10 @@ export interface MainNodeSession {
   run(): Promise<void>
   close(info: DuplexCloseInfo): Promise<void>
   readonly state?: string
-  hasAdvertisedCapability?(capabilityId: string): boolean
-  dispatchJob?(request: JobRequestV1): JobRequestV1
+  hasAdvertisedNodeSupport?(): boolean
+  hasAdvertisedWorkdir?(workdirId: string): boolean
+  supportsExecutionProtocol?(): boolean
+  dispatchJob?(request: JobRequestV2): JobRequestV2
   dispatchCancellation?(jobId: string): void
 }
 
@@ -56,7 +59,9 @@ export interface NodeWebSocketApi extends RemoteNodeJobDispatcher {
   readonly plugin: GatewayPlugin
   readonly activeSessionCount: number
   isNodeConnected(nodeId: string): boolean
-  hasAdvertisedCapability(nodeId: string, capabilityId: string): boolean
+  hasAdvertisedNodeSupport(nodeId: string): boolean
+  hasAdvertisedWorkdir(nodeId: string, workdirId: string): boolean
+  supportsExecutionProtocol(nodeId: string): boolean
   closeNode(nodeId: string, reason: string): Promise<void>
   closeAll(reason?: string): Promise<void>
 }
@@ -176,8 +181,14 @@ export function createNodeWebSocketApi(
     isNodeConnected(nodeId): boolean {
       return sessionsByNode.get(nodeId)?.state === 'authenticated'
     },
-    hasAdvertisedCapability(nodeId, capabilityId): boolean {
-      return sessionsByNode.get(nodeId)?.hasAdvertisedCapability?.(capabilityId) === true
+    hasAdvertisedNodeSupport(nodeId): boolean {
+      return sessionsByNode.get(nodeId)?.hasAdvertisedNodeSupport?.() === true
+    },
+    hasAdvertisedWorkdir(nodeId, workdirId): boolean {
+      return sessionsByNode.get(nodeId)?.hasAdvertisedWorkdir?.(workdirId) === true
+    },
+    supportsExecutionProtocol(nodeId): boolean {
+      return sessionsByNode.get(nodeId)?.supportsExecutionProtocol?.() === true
     },
     async closeNode(nodeId, reason): Promise<void> {
       sessionsByNode.delete(nodeId)
@@ -208,6 +219,7 @@ export function createNodeWebSocketApi(
       ) {
         throw new Error('Remote node is not connected and authenticated')
       }
+      if (!session.supportsExecutionProtocol?.()) assertExecutionProtocol([])
       jobs.set(request.jobId, {
         nodeId: request.nodeId,
         session,

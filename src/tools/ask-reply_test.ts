@@ -189,7 +189,7 @@ test('remote workdir context uses local coordination without touching executor o
   remote.tools = new SessionTools(registry, 'unused-no-filesystem')
   remote.cwd = 'opaque remote path'
   remote.remoteWorkdir = {
-    nodeId: 'remote-node', capabilityId: 'remote-workdir',
+    nodeId: 'remote-node', workdirId: 'remote-workdir',
     executor: new Proxy({}, { get: () => { throw new Error('Yield must not invoke the remote executor') } }) as NonNullable<ExecutionContext['remoteWorkdir']>['executor'],
   }
   const waiting = registry.execute('ask', question, remote)

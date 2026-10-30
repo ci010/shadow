@@ -3,14 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { mkdir, open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, normalize, parse } from 'node:path'
-import type { WorkdirCapabilityState, WorkdirRefV1 } from '../sessions/locality.ts'
+import { localFolderWorkdirRef, type WorkdirState, type WorkdirRefV2 } from '../sessions/locality.ts'
 import type { FolderRecord } from './contracts.ts'
 import type { ProjectCatalog } from '../projects/catalog.ts'
 import type { RemoteFolderOwnership } from './remote-ownership.ts'
 import type { RemoteFolderRecord } from './contracts.ts'
 import { isManagedWorkdir, ownsManagedWorkdir } from '../execution/managed-workdir.ts'
 
-// A rename must not mint new capability identities for existing directory grants.
+// A rename must not mint new resource identities for existing directory grants.
 const FOLDER_PREFIX = 'local-project-v1:'
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -202,10 +202,18 @@ export class FolderRegistry {
     return this.scope.catalog.changeFolderProject(this.scope.projectId, id, targetProjectId, signal)
   }
 
-  assertSessionFolder(state: { sessionId?: string; folderId?: string; workdir?: WorkdirRefV1 }): void {
+  assertSessionFolder(state: { sessionId?: string; folderId?: string; workdir?: WorkdirRefV2 }): void {
+    if (state.folderId) {
+      const folder = this.get(state.folderId)
+      if (!folder) throw new FolderError('folder_access_revoked', 'This conversation’s folder was removed or moved. Its history is preserved.', 409)
+      const bound = folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id)
+      if (!state.workdir || bound.nodeId !== state.workdir.nodeId || bound.workdirId !== state.workdir.workdirId) {
+        throw new FolderError('folder_workdir_mismatch', 'This conversation’s workdir does not match its registered folder. No alternate target was selected.', 409)
+      }
+    }
     if (!this.scope) return
-    if (state.workdir && isManagedWorkdir(state.workdir.capabilityId) &&
-      (state.folderId || state.workdir.nodeId === 'local' || !ownsManagedWorkdir(this.scope.projectId, state.workdir.capabilityId))) {
+    if (state.workdir && isManagedWorkdir(state.workdir.workdirId) &&
+      (state.folderId || state.workdir.nodeId === 'local' || !ownsManagedWorkdir(this.scope.projectId, state.workdir.workdirId))) {
       throw new FolderError('folder_access_revoked', 'This managed session workdir does not belong to this project.', 409)
     }
     if (state.sessionId && this.scope.catalog.isRetiredSession(this.scope.projectId, state.sessionId) ||
@@ -215,20 +223,20 @@ export class FolderRegistry {
     }
   }
 
-  isRetiredWorkdir(ref: WorkdirRefV1): boolean {
+  isRetiredWorkdir(ref: WorkdirRefV2): boolean {
     return this.scope?.catalog.isRetiredWorkdir(this.scope.projectId, ref) ?? false
   }
 
-  registerRemote(ref: WorkdirRefV1, signal: AbortSignal): Promise<RemoteFolderRecord> {
+  registerRemote(ref: WorkdirRefV2, signal: AbortSignal): Promise<RemoteFolderRecord> {
     this.#assertReady()
-    if (isManagedWorkdir(ref.capabilityId)) throw new FolderError('managed_workdir_not_folder', 'Managed session workdirs cannot be registered as project folders.')
+    if (isManagedWorkdir(ref.workdirId)) throw new FolderError('managed_workdir_not_folder', 'Managed session workdirs cannot be registered as project folders.')
     if (!this.#remoteOwnership) throw new FolderError('remote_folders_unavailable', 'Remote folder ownership is not configured.', 503)
     return this.#remoteOwnership.register(ref, signal)
   }
 
-  ownsRemoteWorkdir(ref: WorkdirRefV1): boolean {
+  ownsRemoteWorkdir(ref: WorkdirRefV2): boolean {
     return this.list().some(folder => folder.kind === 'remote' && folder.workdir.nodeId === ref.nodeId &&
-      folder.workdir.capabilityId === ref.capabilityId)
+      folder.workdir.workdirId === ref.workdirId)
   }
 
   async #persist(records: FolderRecord[], signal?: AbortSignal): Promise<void> {
@@ -257,6 +265,15 @@ export class FolderRegistry {
     }
   }
 
+  /** Existing-target admission; ownership registration/transfer keeps its full refresh. */
+  async requireExecutionAvailable(id: string, signal: AbortSignal = new AbortController().signal): Promise<FolderRecord> {
+    const folder = this.get(id)
+    if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
+    if (folder.kind !== 'remote') return this.requireAvailable(id, signal)
+    if (!this.#remoteOwnership) throw new FolderError('remote_folders_unavailable', 'Remote folder ownership is not configured.', 503)
+    return this.#remoteOwnership.requireExecutionAvailable(folder, signal)
+  }
+
   async requireAvailable(id: string, signal: AbortSignal = new AbortController().signal): Promise<FolderRecord> {
     const folder = this.get(id)
     if (!folder) throw new FolderError('folder_not_found', 'Folder not found.', 404)
@@ -271,11 +288,11 @@ export class FolderRegistry {
     return folder
   }
 
-  lookupWorkdir(ref: WorkdirRefV1): WorkdirCapabilityState | undefined {
-    if (ref.version !== 1 || ref.nodeId !== 'local' || !ref.capabilityId.startsWith(FOLDER_PREFIX)) {
+  lookupWorkdir(ref: WorkdirRefV2): WorkdirState | undefined {
+    if (ref.version !== 2 || ref.nodeId !== 'local' || !ref.workdirId.startsWith(FOLDER_PREFIX)) {
       return undefined
     }
-    const folder = this.get(ref.capabilityId.slice(FOLDER_PREFIX.length))
+    const folder = this.get(ref.workdirId.slice(FOLDER_PREFIX.length))
     if (!folder || folder.kind === 'remote') return { node: 'online' }
     let online = false
     try {
@@ -284,7 +301,7 @@ export class FolderRegistry {
     } catch {
       // Missing or inaccessible folders remain registered, but are never recreated.
     }
-    const capability = { kind: 'workdir', online, ...(online ? { path: folder.path } : {}) }
-    return { node: 'online', capability }
+    const workdir = { online, ...(online ? { path: folder.path } : {}) }
+    return { node: 'online', workdir }
   }
 }

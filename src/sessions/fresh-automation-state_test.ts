@@ -15,7 +15,7 @@ const state = (id: string, jobId = 'daily'): SessionState => ({
   physicalIdVersion: 2, segmentIndex: 0, parentSessionId: 'web:owner',
   automation: { jobId, runId: `run:${id}`, name: jobId, contextMode: 'fresh', startedAt: '2026-01-01T00:00:00.000Z' },
   statePersistence: { version: 1, kind: 'fresh-automation', jobId }, automationCallerSettled: true,
-  workdir: { version: 1, nodeId: 'remote-fixture', capabilityId: 'cap-fixture' },
+  workdir: { version: 2, nodeId: 'remote-fixture', workdirId: 'cap-fixture' },
 })
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {

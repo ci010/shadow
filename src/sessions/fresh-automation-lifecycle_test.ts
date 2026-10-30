@@ -99,7 +99,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(replays, 0)
         assert.equal(f.requests.length, 3)
         assert.equal(f.manager.getSessionState(ids[0]!), null)
-        assert.equal(f.manager.hasHistoricalWorkdir({ version: 1, nodeId: 'foreign', capabilityId: 'foreign' }), false)
+        assert.equal(f.manager.hasHistoricalWorkdir({ version: 2, nodeId: 'foreign', workdirId: 'foreign' }), false)
         await assert.rejects(f.manager.buildSession(ids[0]!), /existing session/)
       } finally { await f.manager.stop(); store.close() }
     })

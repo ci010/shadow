@@ -67,8 +67,9 @@ describe('folder file browsing', () => {
     const folder = await registry.register(folders)
     sessionsApiPlugin({
       workspace: folders,
-      getSessionState: () => ({ sessionId: 'encoded', workdir: { version: 1, nodeId: 'local', capabilityId: 'folder' } }),
-      workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true, path: folders } }),
+      assertHistoricalFolderAccess: async () => {},
+      readSessionState: async () => ({ sessionId: 'encoded', workdir: { version: 2, nodeId: 'local', workdirId: 'folder' } }),
+      workdirLookup: () => ({ node: 'online', workdir: { online: true, path: folders } }),
     } as unknown as SessionManager)(app)
     const filename = '\u65e5\u672c\u8a9e % #.txt'
     const bytes = Buffer.from([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea, 10])
@@ -122,7 +123,8 @@ describe('folder file browsing', () => {
     }
     assert.deepEqual(sessions, [])
     assert.equal(await readFile(registry.filePath, 'utf8'), savedRegistry)
-    assert.deepEqual(await readdir(workspace), ['folders.v2.json'])
+    assert.deepEqual(await readdir(workspace), ['state'])
+    assert.deepEqual(await readdir(join(workspace, 'state')), ['folders.v2.json'])
   })
 
   test('folder and local-session file routes share text, binary, media and static serving', async t => {
@@ -130,8 +132,9 @@ describe('folder file browsing', () => {
     const folder = await registry.register(folders)
     sessionsApiPlugin({
       workspace: folders,
-      getSessionState: () => ({ sessionId: 'existing', workdir: { version: 1, nodeId: 'local', capabilityId: 'folder' } }),
-      workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true, path: folders } }),
+      assertHistoricalFolderAccess: async () => {},
+      readSessionState: async () => ({ sessionId: 'existing', workdir: { version: 2, nodeId: 'local', workdirId: 'folder' } }),
+      workdirLookup: () => ({ node: 'online', workdir: { online: true, path: folders } }),
     } as unknown as SessionManager)(app)
     await mkdir(join(folders, 'page'))
     await writeFile(join(folders, 'page', 'index.html'), '<link rel="stylesheet" href="style.css"><h1>Fixture</h1>')
@@ -313,7 +316,7 @@ test('post-clone persistence failure leaves the checkout recoverable using Open 
   const { app, folders, registry } = await setup(t, async ({ destination }) => {
     await writeFile(join(destination, 'complete'), 'complete')
   })
-  await mkdir(registry.filePath)
+  await mkdir(registry.filePath, { recursive: true })
   const body = cloneBody(folders)
   await post(app, '/api/folders/clone', body)
   const operation = await terminal(app, body.operationId)

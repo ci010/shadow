@@ -5,10 +5,10 @@ import type { FolderRecord } from './folders-client.ts'
 import type { NodeInventoryEntry } from './node-inventory.ts'
 
 const local: FolderRecord = { id: 'local', name: 'shadow', path: '/repo/shadow', createdAt: '' }
-const remote: FolderRecord = { id: 'remote', name: 'shadow', path: 'C:\\repo\\shadow', createdAt: '', kind: 'remote', workdir: { version: 1, nodeId: 'child', capabilityId: 'repo' } }
+const remote: FolderRecord = { id: 'remote', name: 'shadow', path: 'C:\\repo\\shadow', createdAt: '', kind: 'remote', workdir: { version: 2, nodeId: 'child', workdirId: 'repo' } }
 const nodes: NodeInventoryEntry[] = [
-  { nodeId: 'main', displayName: 'Mac', role: 'main', connection: 'connected', capabilities: [] },
-  { nodeId: 'child', displayName: 'Windows', role: 'child', connection: 'offline', capabilities: [] },
+  { nodeId: 'main', displayName: 'Mac', role: 'main', connection: 'connected', executionProtocol: 'compatible', workdirs: [], support: { operations: [] } },
+  { nodeId: 'child', displayName: 'Windows', role: 'child', connection: 'offline', executionProtocol: 'compatible', workdirs: [], support: { operations: [] } },
 ]
 
 test('single device keeps compact folder names', () => {

@@ -1,4 +1,4 @@
-import type { WorkdirRefV1 } from '../sessions/locality.ts'
+import type { WorkdirRefV2 } from '../sessions/locality.ts'
 import type { WorkdirIdentityV1 } from '../execution/workdir-identity.ts'
 
 interface FolderBase {
@@ -18,7 +18,7 @@ export interface RemoteFolderRecord extends FolderBase {
   kind: 'remote'
   /** Display metadata only. Never resolve this path on Main. */
   path: string
-  workdir: WorkdirRefV1
+  workdir: WorkdirRefV2
   identity: WorkdirIdentityV1
 }
 

@@ -66,7 +66,7 @@ test('coordinator exec denies foreground, background and inline Node locally; re
     getStatus: async () => null,
     cancel: async () => { throw new Error('unexpected cancel') },
   }
-  const remote = { ...context, remoteWorkdir: { nodeId: 'child', capabilityId: 'opaque', executor } }
+  const remote = { ...context, remoteWorkdir: { nodeId: 'child', workdirId: 'opaque', executor } }
   for (const mode of ['session', 'task'] as const) {
     tools.setExecutionScope(mode, [])
     assert.equal(await tools.execute('exec', { script: 'pwd' }, remote), '(no output, exit code 0)')

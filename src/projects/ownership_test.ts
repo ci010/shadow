@@ -87,7 +87,7 @@ test('current catalog retains reservations, retirements, jobs and exclusive fold
     const folder = await catalog.registerFolder('default', directory)
     const other = await catalog.create('Other')
     catalog.recordRemoteJob('default', 'pending-job', true)
-    const ref = { version: 1 as const, nodeId: 'child', capabilityId: 'grant' }
+    const ref = { version: 2 as const, nodeId: 'child', workdirId: 'grant' }
     await catalog.reserveRemoteWorkdirs('default', [ref])
     const reload = new ProjectCatalog(host)
     await reload.init()
@@ -149,4 +149,49 @@ test('folder registries and bot records accept only current documents without co
     assert.equal(new BotInstanceStore({ path, projectId: 'owner' }).get('bot').projectId, 'owner')
   })
   assert.equal(validateOwnership({ ownershipVersion: 2, projectId: 'owner' }).folderId, undefined)
+})
+
+test('catalog normalizes active and retired persisted V1 refs without reactivating retired ownership', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'host'))
+    await catalog.init()
+    const identity = { version: 1 as const, rootId: 'a'.repeat(64), ancestorIds: [] }
+    const old = (id: string) => ({ version: 1, nodeId: 'child', capabilityId: id })
+    const current = (id: string) => ({ version: 2 as const, nodeId: 'child', workdirId: id })
+    const raw = JSON.parse(await readFile(catalog.filePath, 'utf8'))
+    raw.folders = [{ projectId: 'default', kind: 'remote', id: 'active', name: 'active', path: '/display',
+      createdAt: new Date().toISOString(), workdir: old('active'), identity }]
+    raw.remoteClaims = [{ projectId: 'default', workdir: old('claim') }]
+    raw.retiredFolders = [{ ...raw.folders[0], id: 'retired', workdir: old('retired') }]
+    raw.retiredRemoteClaims = [{ projectId: 'default', workdir: old('retired-claim') }]
+    await writeFile(catalog.filePath, JSON.stringify(raw))
+    const reopened = new ProjectCatalog(join(root, 'host')); await reopened.init()
+    const active = reopened.folders()[0]
+    assert.equal(active?.kind, 'remote')
+    if (active?.kind === 'remote') assert.deepEqual(active.workdir, current('active'))
+    assert.deepEqual(reopened.remoteClaims()[0]?.workdir, current('claim'))
+    assert.equal(reopened.isRetiredWorkdir('default', current('retired')), true)
+    assert.equal(reopened.isRetiredWorkdir('default', current('retired-claim')), true)
+    await reopened.reserveRemoteWorkdirs('default', [current('retired'), current('retired-claim')])
+    assert.equal(reopened.remoteClaims().length, 1)
+    const saved = JSON.parse(await readFile(catalog.filePath, 'utf8'))
+    for (const key of ['folders', 'remoteClaims', 'retiredFolders', 'retiredRemoteClaims']) {
+      assert.ok(saved[key].every((record: { workdir: unknown }) => JSON.stringify(record.workdir).includes('"version":2')))
+    }
+  })
+})
+
+test('catalog rejects workdir fields on local variants instead of retaining unparsed V1 or invalid refs', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'host')); await catalog.init()
+    const original = JSON.parse(await readFile(catalog.filePath, 'utf8'))
+    const local = { projectId: 'default', id: 'local-folder', name: 'Local', path: root, createdAt: new Date().toISOString() }
+    for (const key of ['folders', 'retiredFolders']) for (const workdir of [null, { version: 1, nodeId: 'child', capabilityId: 'wrong-variant' }]) {
+      const document = { ...original, [key]: [{ ...local, workdir }] }
+      const raw = JSON.stringify(document)
+      await writeFile(catalog.filePath, raw)
+      await assert.rejects(new ProjectCatalog(join(root, 'host')).init(), /local folders|Local folders/)
+      assert.equal(await readFile(catalog.filePath, 'utf8'), raw)
+    }
+  })
 })

@@ -24,8 +24,8 @@ export async function executeRemoteGit(target: RemoteFilesystemTarget, operation
   let bytes = 0
   let terminal: ExecutionReceiptV1 | undefined
   for await (const event of target.executor.execute({
-    version: 1, jobId: id, idempotencyKey: id, sessionId: target.sessionId, turnId: target.turnId,
-    nodeId: target.nodeId, capabilityId: target.capabilityId,
+    version: 2, jobId: id, idempotencyKey: id, sessionId: target.sessionId, turnId: target.turnId,
+    nodeId: target.nodeId, workdirId: target.workdirId,
     operation: operation === 'status' ? GIT_STATUS_OPERATION : GIT_DIFF_OPERATION,
     args: operation === 'status' ? {} : { path },
     createdAt: new Date(now).toISOString(), deadlineAt: new Date(now + 30_000).toISOString(),

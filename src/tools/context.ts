@@ -5,6 +5,12 @@ import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import type { SessionTools } from './registry.ts'
 import type { ExecShell } from './shell.ts'
 
+export interface ResolvedToolTarget {
+  cwd?: string
+  remoteWorkdir?: { nodeId: string; workdirId: string; executor: Executor }
+  fileChangeTarget: { nodeId: string; workdirId: string; folderId?: string }
+}
+
 export interface ExecutionContext extends MessageContext {
   memoryAccess?: import('../memory/contracts.ts').MemoryAccess
   projectId?: string
@@ -30,15 +36,17 @@ export interface ExecutionContext extends MessageContext {
   /** Committed selected Folder identity, never an argument or cwd alias. */
   folderId?: string
   /** Host-only sole-call boundary; never available to nested scripts or parallel batches. */
-  switchProjectFolder?: (prepared: { folderId: string; workdir: import('../sessions/locality.ts').WorkdirRefV1; content: string }) => Promise<string>
-  /** Resolved identity for explicit-target file-change provenance. */
-  fileChangeTarget?: { nodeId: string; capabilityId: string }
-  /** Host-only, Project-authorized explicit tool target lookup. Never interprets display paths. */
-  resolveToolTarget?: (nodeId: string, capabilityId: string) => Pick<ExecutionContext, 'cwd' | 'remoteWorkdir'>
-  /** Capability-backed remote workspace. Local-only tools must reject this context. */
+  switchProjectFolder?: (prepared: { folderId: string; workdir: import('../sessions/locality.ts').WorkdirRefV2; content: string }) => Promise<string>
+  /** Resolved resource identity for explicit-target file-change provenance. */
+  fileChangeTarget?: { nodeId: string; workdirId: string; folderId?: string }
+  /** Host-only, Project-authorized Folder target lookup. Never interprets display paths. */
+  resolveToolTarget?: (folder: string, operation: string) => Promise<ResolvedToolTarget>
+  /** Only for host-stamped reconciliation of a persisted V1 tool call; not a new targeting API. */
+  resolveStoredToolTarget?: (nodeId: string, workdirId: string, operation: string) => Promise<ResolvedToolTarget>
+  /** Resource-backed remote workspace. Local-only tools must reject this context. */
   remoteWorkdir?: {
     nodeId: string
-    capabilityId: string
+    workdirId: string
     executor: Executor
   }
   /** Session-scoped tool overlay - provides filtered, session-aware tool access. */

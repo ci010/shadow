@@ -10,9 +10,9 @@ export async function prepareWorkingContext(workdir: WorkdirResolution, folderId
   const base = [
     '# Working context snapshot',
     `- Selected Project folder: ${folderId ? JSON.stringify({ id: folderId, ...(folder ? { identifier: folderIdentifier(folder.id, folder.name), name: folder.name, kind: folder.kind ?? 'local' } : {}) }) : 'none'}`,
-    !workdir.available ? `- Working directory: unavailable (${workdir.reason}); node=${JSON.stringify(workdir.workdir.nodeId)}; capability=${JSON.stringify(workdir.workdir.capabilityId)}`
+    !workdir.available ? `- Working directory: unavailable (${workdir.reason}); node=${JSON.stringify(workdir.workdir.nodeId)}; resource=${JSON.stringify(workdir.workdir.workdirId)}`
       : workdir.locality === 'local' ? `- Default cwd: ${JSON.stringify(workdir.path)}`
-      : `- Working directory: remote; node=${JSON.stringify(workdir.workdir.nodeId)}; capability=${JSON.stringify(workdir.workdir.capabilityId)}`,
+      : `- Working directory: remote; node=${JSON.stringify(workdir.workdir.nodeId)}; resource=${JSON.stringify(workdir.workdir.workdirId)}`,
     '',
     ...(!workdir.available ? ['The working directory is unavailable. Do not fall back to Main or Project Home.', ''] : workdir.locality === 'remote' ? ['Use the remote executor only; never resolve display paths on Main.', ''] : []),
     'This committed working context supersedes the old default Project folder, cwd and folder-scoped instructions. Previously running processes, tasks and children retain their captured context. Explicit paths retain their own file scope.',

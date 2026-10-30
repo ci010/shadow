@@ -1,10 +1,10 @@
+import { assertExecutionSupported, assertExecutionProtocol, validateExecutionSupport, validateWorkdirAdvertisement, type WorkdirAdvertisement } from '../execution/workdir-contracts.ts'
 import type { Executor } from '../execution/executor.ts'
-import type { JobEventV1, JobRequestV1 } from '../execution/contracts.ts'
+import type { JobEventV1, JobRequestV2 } from '../execution/contracts.ts'
 import { validateJobEventV1 } from '../execution/contracts.ts'
-import type { CapabilityDescriptorV1, VersionHelloV1 } from './contracts.ts'
+import type { ExecutionSupport, VersionHelloV1 } from './contracts.ts'
 import {
   isClusterIdentifier,
-  validateCapabilityDescriptorV1,
 } from './contracts.ts'
 import {
   NodeSessionError,
@@ -32,8 +32,9 @@ export interface ChildNodeConnectionSessionOptions {
 }
 
 type ChildOutboundPayloadV1 =
-  | { type: 'capability-advertise'; capability: CapabilityDescriptorV1 }
-  | { type: 'capability-withdraw'; nodeId: string; capabilityId: string }
+  | { type: 'workdir-advertise'; workdir: WorkdirAdvertisement }
+  | { type: 'workdir-withdraw'; nodeId: string; workdirId: string }
+  | { type: 'node-support'; nodeId: string; support: ExecutionSupport }
   | { type: 'job-event'; event: JobEventV1 }
   | { type: 'heartbeat'; sentAt: string }
 
@@ -43,7 +44,8 @@ export class ChildNodeConnectionSession {
   readonly #authentication: DeviceAuthenticationV1
   readonly #executor: Executor
   readonly #options: ChildNodeConnectionSessionOptions
-  readonly #capabilities = new Map<string, CapabilityDescriptorV1>()
+  #nodeSupport: ExecutionSupport = { operations: [] }
+  readonly #workdirs = new Map<string, WorkdirAdvertisement>()
   readonly #outbound: NodeSessionInboundFrameV1[] = []
   readonly #outboundSpace = new Set<() => void>()
   readonly #executions = new Set<AbortController>()
@@ -180,57 +182,52 @@ export class ChildNodeConnectionSession {
     this.#lastSeenAt = this.#now()
   }
 
-  advertiseCapability(value: unknown): CapabilityDescriptorV1 {
+  advertiseWorkdir(value: unknown): WorkdirAdvertisement {
     this.#requireAuthenticated()
-    const validation = validateCapabilityDescriptorV1(value)
-    if (!validation.success) {
-      throw new NodeSessionError('invalid-frame', validation.errors.join('; '))
-    }
-    const capability = validation.value
-    if (capability.nodeId !== this.#authentication.nodeId) {
-      throw new NodeSessionError(
-        'authorization-failed',
-        'capability nodeId does not match the child connection',
-      )
-    }
-    const advertised = structuredClone(capability)
-    // Older Main versions reject unknown descriptor keys.
-    if (!this.#negotiated?.features.includes('workdir-display-v1')) {
-      delete advertised.displayPath
-    }
-    this.#enqueue({
-      type: 'capability-advertise',
-      capability: advertised,
-    })
-    this.#capabilities.set(capability.capabilityId, structuredClone(capability))
-    return structuredClone(capability)
+    assertExecutionProtocol(this.#negotiated?.features)
+    const parsed = validateWorkdirAdvertisement(value)
+    if (!parsed.success) throw new NodeSessionError('invalid-frame', parsed.errors.join('; '))
+    if (parsed.value.nodeId !== this.#authentication.nodeId) throw new NodeSessionError('authorization-failed', 'Workdir belongs to another node')
+    this.#enqueue({ type: 'workdir-advertise', workdir: parsed.value })
+    this.#workdirs.set(parsed.value.workdirId, structuredClone(parsed.value))
+    return parsed.value
   }
 
-  async advertiseCapabilityWhenReady(value: CapabilityDescriptorV1): Promise<void> {
+  async advertiseWorkdirWhenReady(value: WorkdirAdvertisement): Promise<void> {
     this.#requireAuthenticated()
     while (this.#outbound.length >= this.#options.maxOutboundQueue) {
       await new Promise<void>(resolve => this.#outboundSpace.add(resolve))
       this.#requireAuthenticated()
     }
-    this.advertiseCapability(value)
+    this.advertiseWorkdir(value)
   }
 
-  withdrawCapability(capabilityId: string): boolean {
+  withdrawWorkdir(workdirId: string): boolean {
     this.#requireAuthenticated()
-    if (!isClusterIdentifier(capabilityId)) {
-      throw new NodeSessionError(
-        'invalid-frame',
-        'capabilityId must be a valid identifier',
-      )
-    }
-    if (!this.#capabilities.has(capabilityId)) return false
-    this.#enqueue({
-      type: 'capability-withdraw',
-      nodeId: this.#authentication.nodeId,
-      capabilityId,
-    })
-    this.#capabilities.delete(capabilityId)
+    if (!isClusterIdentifier(workdirId)) throw new NodeSessionError('invalid-frame', 'Invalid workdir ID')
+    if (!this.#workdirs.has(workdirId)) return false
+    this.#enqueue({ type: 'workdir-withdraw', nodeId: this.#authentication.nodeId, workdirId })
+    this.#workdirs.delete(workdirId)
     return true
+  }
+
+  advertiseNodeSupport(value: unknown): ExecutionSupport {
+    this.#requireAuthenticated()
+    assertExecutionProtocol(this.#negotiated?.features)
+    const parsed = validateExecutionSupport(value, 'node')
+    if (!parsed.success) throw new NodeSessionError('invalid-frame', parsed.errors.join('; '))
+    this.#enqueue({ type: 'node-support', nodeId: this.#authentication.nodeId, support: parsed.value })
+    this.#nodeSupport = structuredClone(parsed.value)
+    return parsed.value
+  }
+
+  async advertiseNodeSupportWhenReady(value: ExecutionSupport): Promise<void> {
+    this.#requireAuthenticated()
+    while (this.#outbound.length >= this.#options.maxOutboundQueue) {
+      await new Promise<void>(resolve => this.#outboundSpace.add(resolve))
+      this.#requireAuthenticated()
+    }
+    this.advertiseNodeSupport(value)
   }
 
   sendHeartbeat(now = this.#now()): void {
@@ -296,6 +293,7 @@ export class ChildNodeConnectionSession {
         'negotiated features are not supported by the child',
       )
     }
+    assertExecutionProtocol(negotiated.features)
     this.#negotiated = structuredClone(negotiated)
     this.#state = 'authenticated'
     this.#authenticatedResolver.resolve(structuredClone(negotiated))
@@ -305,7 +303,13 @@ export class ChildNodeConnectionSession {
     frame: NodeSessionOutboundFrameV1,
   ): Promise<void> {
     if (frame.type === 'job-request') {
-      this.#acceptJob(frame.request)
+      try { this.#acceptJob(frame.request) }
+      catch (error) {
+        const timestamp = this.#now().toISOString()
+        this.#enqueue({ type: 'job-event', event: { version: 1, jobId: frame.request.jobId, sequence: 0, timestamp, type: 'rejected',
+          receipt: { version: 1, jobId: frame.request.jobId, nodeId: this.#authentication.nodeId, state: 'rejected', finishedAt: timestamp,
+            reason: { code: error instanceof Error && 'code' in error ? String(error.code) : 'admission-denied', message: error instanceof Error ? error.message : 'Admission denied', retryable: false } } } })
+      }
     } else if (frame.type === 'job-cancel') {
       await this.#executor.cancel(frame.jobId)
     } else if (frame.type === 'heartbeat') {
@@ -318,26 +322,22 @@ export class ChildNodeConnectionSession {
     }
   }
 
-  #acceptJob(request: JobRequestV1): void {
+  #acceptJob(request: JobRequestV2): void {
     if (request.nodeId !== this.#authentication.nodeId) {
       throw this.#fail(
         'job-correlation-failed',
         'job nodeId does not match the child connection',
       )
     }
-    if (!this.#capabilities.has(request.capabilityId)) {
-      throw this.#fail(
-        'job-correlation-failed',
-        'job capability is not advertised by the child',
-      )
-    }
+    assertExecutionProtocol(this.#negotiated?.features)
+    assertExecutionSupported(request, [...this.#workdirs.values()], this.#nodeSupport)
     const controller = new AbortController()
     this.#executions.add(controller)
     void this.#executeJob(structuredClone(request), controller)
   }
 
   async #executeJob(
-    request: JobRequestV1,
+    request: JobRequestV2,
     controller: AbortController,
   ): Promise<void> {
     let expectedSequence = 0

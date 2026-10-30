@@ -1,14 +1,15 @@
+import { workdirIdOf } from './workdir-contracts.ts'
 import { stat } from 'node:fs/promises'
 import { isAbsolute, win32, posix, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { localExecSafegitEnv } from './git/safegit.ts'
 import { localExecSafegitAliasEnv } from './git/safegit-alias.ts'
-import type { JobRequestV1 } from './contracts.ts'
+import type { ExecutionRequestV2 } from './contracts.ts'
 import type { ProcessExecuteArgsV1 } from './executor.ts'
 import type { LocalProcessOperationHandler } from './local-executor.ts'
 import {
   resolveExistingTarget,
-  type WorkdirCapabilityBinding,
+  type WorkdirBinding,
 } from './capability-filesystem.ts'
 import type { ManagedShell } from './processes/shells.ts'
 
@@ -52,13 +53,13 @@ function invalidArgs(): Error & { code: string } {
 export class CapabilityShell implements LocalProcessOperationHandler {
   readonly #roots = new Map<string, string>()
 
-  constructor(bindings: readonly WorkdirCapabilityBinding[]) {
+  constructor(bindings: readonly WorkdirBinding[]) {
     for (const binding of bindings) {
-      if (!binding.capabilityId || this.#roots.has(binding.capabilityId) ||
+      if (!binding.workdirId || this.#roots.has(binding.workdirId) ||
         !isAbsolute(binding.rootPath)) {
         throw new TypeError('Workdir shell bindings require unique IDs and absolute roots')
       }
-      this.#roots.set(binding.capabilityId, binding.rootPath)
+      this.#roots.set(binding.workdirId, binding.rootPath)
     }
   }
 
@@ -66,9 +67,9 @@ export class CapabilityShell implements LocalProcessOperationHandler {
     return operation === WORKDIR_PROCESS_EXECUTE_OPERATION || operation === 'workdir.process.execute-once'
   }
 
-  async prepareProcess(request: JobRequestV1, signal: AbortSignal): Promise<ProcessExecuteArgsV1> {
+  async prepareProcess(request: ExecutionRequestV2, signal: AbortSignal): Promise<ProcessExecuteArgsV1> {
     signal.throwIfAborted()
-    const root = this.#roots.get(request.capabilityId)
+    const root = this.#roots.get(workdirIdOf(request))
     if (!root) {
       throw Object.assign(new Error('Workdir shell capability is not granted'), { code: 'capability-denied' })
     }

@@ -4,6 +4,7 @@ import { parseTopicSessionFields } from './topic-contract.ts'
 import { parseSessionName } from './session-name.ts'
 import { parseChannelBoundary } from '../channels/integration-contract.ts'
 import { transaction } from '../utils/sqlite.ts'
+import { isDeepStrictEqual } from 'node:util'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -12,14 +13,14 @@ import { join } from 'node:path'
 import type { SessionState, ArchivedStateQuery, ArchiveReference } from './session-store.ts'
 import { validateOwnership } from '../projects/ownership.ts'
 import { parseAutomationSessionRef } from '../cron/contracts.ts'
-import { parseWorkdirRefV1 } from './locality.ts'
+import { parseWorkdirRef } from './locality.ts'
 import { parsePhysicalIdVersion } from './session-identity.ts'
 
 /** Explicitly assigned at creation; legacy automation classification never opts records in. */
 export interface FreshAutomationPolicy { version: 1; kind: 'fresh-automation'; jobId: string }
 
 export function validateFreshAutomationState(state: SessionState): SessionState {
-  validateOwnership({ ...state })
+  state = validateOwnership({ ...state }) as unknown as SessionState
   const policy = state.statePersistence
   const automation = parseAutomationSessionRef(state.automation)
   if (!policy || policy.version !== 1 || policy.kind !== 'fresh-automation' || !policy.jobId
@@ -32,7 +33,7 @@ export function validateFreshAutomationState(state: SessionState): SessionState 
   if (state.parentSessionId !== undefined && state.parentSessionId !== null && typeof state.parentSessionId !== 'string') throw new Error('Invalid automation parent')
   if (state.children !== undefined && (!Array.isArray(state.children) || state.children.some(id => typeof id !== 'string' || !id))) throw new Error('Invalid automation children')
   parsePhysicalIdVersion(state.physicalIdVersion)
-  if (state.workdir && !parseWorkdirRefV1(state.workdir)) throw new Error('Invalid fresh automation workdir')
+  if (state.workdir && !parseWorkdirRef(state.workdir)) throw new Error('Invalid fresh automation workdir')
   parseSessionRecovery(state.recovery)
   parseContextResetAt(state.contextResetAt)
   parseDecisionOwner(state.decisionOwnerSessionId)
@@ -45,8 +46,13 @@ export function validateFreshAutomationState(state: SessionState): SessionState 
   return state
 }
 
+/** Compare persisted revisions, normalizing only locality and JSON's omitted undefined values. */
+function sameRevision(a: SessionState, b: SessionState): boolean {
+  return isDeepStrictEqual(JSON.parse(JSON.stringify(a)), JSON.parse(JSON.stringify(b)))
+}
+
 interface Slot { version: 1; projectId: string; jobId: string; active: Record<string, SessionState> }
-interface Row { session_id: string; project_id: string; job_id: string; run_id: string; execution_id: string; state: string | null; archived: number }
+interface Row { session_id: string; project_id: string; job_id: string; run_id: string; execution_id: string; state: string | null; archived: number; workdir: string | null }
 
 /**
  * Small active pointers, separate indexed immutable finalized metadata. No log migration.
@@ -120,7 +126,7 @@ export class FreshAutomationStateStore {
   private validateSlot(slot: Slot): void {
     if (slot.version !== 1 || typeof slot.projectId !== 'string' || !slot.projectId || typeof slot.jobId !== 'string' || !slot.jobId || !slot.active || typeof slot.active !== 'object' || Array.isArray(slot.active)) throw new Error('Invalid fresh automation slot')
     for (const [id, state] of Object.entries(slot.active)) {
-      validateFreshAutomationState(state)
+      slot.active[id] = validateFreshAutomationState(state)
       if (id !== state.sessionId || slot.projectId !== state.projectId || slot.jobId !== state.statePersistence!.jobId) throw new Error('Fresh automation slot identity mismatch')
     }
   }
@@ -134,16 +140,24 @@ export class FreshAutomationStateStore {
   }
 
   private row(id: string): Row | undefined {
-    return this.database()?.prepare('SELECT session_id, project_id, job_id, run_id, execution_id, state, archived FROM runs WHERE session_id = ?').get(id) as Row | undefined
+    return this.database()?.prepare('SELECT session_id, project_id, job_id, run_id, execution_id, state, archived, workdir FROM runs WHERE session_id = ?').get(id) as Row | undefined
   }
 
   private validateRow(row: Row): SessionState {
     if (!row.state) throw new Error('Missing archived automation state')
     const state = validateFreshAutomationState(JSON.parse(row.state))
     this.assertIdentity(row, state)
+    this.assertIndexedWorkdir(row, state)
     if (row.archived && (!state.automationCallerSettled || !['completed', 'failed', 'cancelled'].includes(state.executionStatus ?? '')
       || state.recovery || state.reportTo && !state.completionReported)) throw new Error('Invalid finalized automation archive')
     return state
+  }
+
+  private assertIndexedWorkdir(row: Row, state: SessionState): void {
+    const indexedWorkdir = row.workdir === null ? undefined : this.parseClaim(row.workdir)
+    if (indexedWorkdir?.nodeId !== state.workdir?.nodeId || indexedWorkdir?.workdirId !== state.workdir?.workdirId) {
+      throw new Error('Fresh automation indexed workdir mismatch')
+    }
   }
 
   private assertIdentity(row: Row, state: SessionState): void {
@@ -196,6 +210,12 @@ export class FreshAutomationStateStore {
         this.assertIdentity(existing, snapshot)
         // Finalized rows are immutable. A delayed completion write cannot revive a run.
         if (existing.archived) throw new Error('Fresh automation execution already archived')
+        if (this.format === 'sqlite') this.validateRow(existing)
+        else {
+          const active = (await this.readSlot(existing.project_id, existing.job_id)).active[snapshot.sessionId]
+          if (!active) throw new Error('Fresh automation active state missing')
+          this.assertIndexedWorkdir(existing, active)
+        }
       }
       if (this.format === 'jsonl') {
         const slot = await this.readSlot(snapshot.projectId!, snapshot.automation!.jobId)
@@ -212,7 +232,7 @@ export class FreshAutomationStateStore {
     if (!row) return null
     if (this.format === 'jsonl') {
       const state = (await this.readSlot(row.project_id, row.job_id)).active[id]
-      if (state) { this.assertIdentity(row, state); return state }
+      if (state) { this.assertIdentity(row, state); this.assertIndexedWorkdir(row, state); return state }
       return null
     }
     return row.archived ? null : this.validateRow(row)
@@ -234,7 +254,7 @@ export class FreshAutomationStateStore {
       if (join(this.directory, name) !== this.slotPath(slot.projectId, slot.jobId)) throw new Error('Fresh automation slot address mismatch')
       for (const state of Object.values(slot.active)) {
         const row = this.row(state.sessionId)
-        if (row) this.assertIdentity(row, state)
+        if (row) { this.assertIdentity(row, state); this.assertIndexedWorkdir(row, state) }
         // Preserve archive-first duplicates as unsettled; never hydrate the archive.
         if (!row && !this.readOnly) this.index(state, false)
         states[state.sessionId] = state
@@ -257,17 +277,18 @@ export class FreshAutomationStateStore {
       const row = this.row(snapshot.sessionId)
       if (!row) throw new Error('Fresh automation active state missing')
       this.assertIdentity(row, snapshot)
-      if (row.archived && row.state !== JSON.stringify(snapshot)) throw new Error('Fresh automation archive revision conflict')
+      if (row.archived && !sameRevision(this.validateRow(row), snapshot)) throw new Error('Fresh automation archive revision conflict')
       if (this.format === 'jsonl') {
         const slot = await this.readSlot(snapshot.projectId!, snapshot.automation!.jobId)
         const active = slot.active[snapshot.sessionId]
-        if (active && JSON.stringify(active) !== JSON.stringify(snapshot)) throw new Error('Fresh automation active revision conflict')
+        if (active) this.assertIndexedWorkdir(row, active)
+        if (active && !sameRevision(active, snapshot)) throw new Error('Fresh automation active revision conflict')
         if (!row.archived) this.index(snapshot, true)
         delete slot.active[snapshot.sessionId]
         await this.writeSlot(slot)
       } else {
-        if (!row.archived && row.state !== JSON.stringify(snapshot)) throw new Error('Fresh automation active revision conflict')
-        this.index(snapshot, true)
+        if (!row.archived && !sameRevision(this.validateRow(row), snapshot)) throw new Error('Fresh automation active revision conflict')
+        if (!row.archived) this.index(snapshot, true)
       }
     })
   }
@@ -311,13 +332,16 @@ export class FreshAutomationStateStore {
 
   async references(): Promise<ArchiveReference[]> {
     await this.queue
-    const rows = this.database()?.prepare('SELECT project_id, folder_id, workdir FROM claims').all() as Array<{ project_id: string; folder_id: string | null; workdir: string | null }> | undefined
-    return (rows ?? []).map(row => ({ projectId: row.project_id, ...(row.folder_id ? { folderId: row.folder_id } : {}),
-      ...(row.workdir ? { workdir: this.parseClaim(row.workdir) } : {}) }))
+    // Compact columns only: finalized state blobs are not hydrated at startup.
+    const rows = this.database()?.prepare(`SELECT project_id, folder_id, workdir, 'claim' AS source FROM claims
+      UNION SELECT project_id, folder_id, workdir, 'run' AS source FROM runs`).all() as Array<{ project_id: string; folder_id: string | null; workdir: string | null; source: 'claim' | 'run' }> | undefined
+    const refs = (rows ?? []).map(row => ({ projectId: row.project_id, ...(row.folder_id ? { folderId: row.folder_id } : {}),
+      ...(row.workdir !== null && (row.source === 'run' || row.workdir !== '') ? { workdir: this.parseClaim(row.workdir) } : {}) }))
+    return [...new Map(refs.map(ref => [JSON.stringify([ref.projectId, ref.folderId, ref.workdir?.nodeId, ref.workdir?.workdirId]), ref])).values()]
   }
 
   private parseClaim(raw: string) {
-    const ref = parseWorkdirRefV1(JSON.parse(raw))
+    const ref = parseWorkdirRef(JSON.parse(raw))
     if (!ref) throw new Error('Invalid archived workdir claim')
     return ref
   }

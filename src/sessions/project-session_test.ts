@@ -19,7 +19,7 @@ import { SessionTools, Tools } from '../tools/registry.ts'
 import { ExecTool } from '../tools/shell.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
 import { physicalSessionId } from './session-identity.ts'
-import { localFolderWorkdirRef, managedSessionWorkdirRef, resolveSessionLocations, type WorkdirCapabilityLookup } from './locality.ts'
+import { localFolderWorkdirRef, managedSessionWorkdirRef, resolveSessionLocations, type WorkdirLookup } from './locality.ts'
 import { sessionsApiPlugin } from './routes.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
@@ -75,11 +75,11 @@ function manager(
   store: SessionStore,
   tools: Tools,
   provider: LLMProvider,
-  workdirCapabilityLookup: WorkdirCapabilityLookup,
+  workdirLookup: WorkdirLookup,
 ) {
   const fixtureBus = new Bus()
   return Object.assign(new SessionManager({
-    workspace, store, tools, provider, workdirCapabilityLookup, bus: fixtureBus,
+    workspace, store, tools, provider, workdirLookup, bus: fixtureBus,
     context: { buildSystemPrompt: async () => 'Synthetic folder context' },
     handoffManager: { shouldHandoff: () => false },
     agentTypes: {
@@ -110,8 +110,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const home = join(root, 'main')
     const folder = join(root, 'folder')
     await mkdir(folder)
-    const lookup: WorkdirCapabilityLookup = () => ({
-      node: 'online', capability: { kind: 'workdir', online: true, path: folder },
+    const lookup: WorkdirLookup = () => ({
+      node: 'online', workdir: { online: true, path: folder },
     })
     const provider: LLMProvider = {
       name: 'fixture', listModels: () => ['fixture'],
@@ -232,12 +232,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const home = join(root, 'main')
     const folders = { a: join(root, 'folder-a'), b: join(root, 'folder-b') }
     for (const path of [home, ...Object.values(folders)]) await mkdir(path)
-    const lookup: WorkdirCapabilityLookup = (ref) => {
-      const path = ref.capabilityId === 'local-project-v1:a' ? folders.a
-        : ref.capabilityId === 'local-project-v1:b' ? folders.b : undefined
+    const lookup: WorkdirLookup = (ref) => {
+      const path = ref.workdirId === 'local-project-v1:a' ? folders.a
+        : ref.workdirId === 'local-project-v1:b' ? folders.b : undefined
       let online = false
       try { online = !!path && statSync(path).isDirectory() } catch { /* missing folder */ }
-      return { node: 'online', capability: path ? { kind: 'workdir', online, path } : undefined }
+      return { node: 'online', workdir: path ? { online, path } : undefined }
     }
     let store: SessionStore = new Store(join(home, 'sessions'))
     const tools = new Tools(home)

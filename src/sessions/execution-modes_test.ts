@@ -491,7 +491,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         sessionId: 'web:fork', segmentIndex: 0, mode: 'session',
         parent: { id: 'web:root', physicalId: physical, index: 3 }, workspaceRoot: 'web:root',
       })
-      const remote = { version: 1 as const, nodeId: 'remote', capabilityId: 'opaque', displayPathSnapshot: 'C:\\never-use-on-main' }
+      const remote = { version: 2 as const, nodeId: 'remote', workdirId: 'opaque', displayPathSnapshot: 'C:\\never-use-on-main' }
       await store.saveState('web:remote', {
         sessionId: 'web:remote', segmentIndex: 0, mode: 'session',
         parentSessionId: 'web:root', workdir: remote, workspaceRoot: 'web:root',

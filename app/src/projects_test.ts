@@ -100,14 +100,14 @@ test('draft preparation remains captured to its project while another org opens 
   assert.equal(await draft.prepare(), id, 'Retry reuses the first session')
 })
 
-test('remote preparation preserves org and opaque capability, with no local fallback', async () => {
-  const target = { nodeId: 'remote', capabilityId: 'workdir', nodeName: 'Laptop', displayName: 'Same name', available: true }
+test('remote preparation preserves org and opaque resource, with no local fallback', async () => {
+  const target = { nodeId: 'remote', workdirId: 'workdir', nodeName: 'Laptop', displayName: 'Same name', available: true }
   let calls = 0
   const draft = createRemoteChatDraft(baseB, target, async (input, init) => {
     calls++
     assert.equal(String(input), `${baseB}api/sessions/remote`)
     const body = JSON.parse(String(init?.body))
-    assert.deepEqual(body, { nodeId: 'remote', capabilityId: 'workdir', requestId: body.requestId })
+    assert.deepEqual(body, { nodeId: 'remote', workdirId: 'workdir', requestId: body.requestId })
     assert.match(body.requestId, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/)
     return new Response('', { status: 503 })
   })

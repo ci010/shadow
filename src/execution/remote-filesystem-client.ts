@@ -4,7 +4,7 @@ import type { Executor } from './executor.ts'
 export interface RemoteFilesystemTarget {
   readonly executor: Executor
   readonly nodeId: string
-  readonly capabilityId: string
+  readonly workdirId: string
   readonly sessionId: string
   readonly turnId: string
   readonly signal: AbortSignal
@@ -23,11 +23,22 @@ export class RemoteFilesystemError extends Error {
   }
 }
 
-export async function executeRemoteFilesystemText(
-  target: RemoteFilesystemTarget,
+export type RemoteNodeTarget = Omit<RemoteFilesystemTarget, 'workdirId'>
+
+export function executeRemoteFilesystemText(target: RemoteFilesystemTarget, operation: string, args: unknown, maxOutputBytes = Number.POSITIVE_INFINITY): Promise<string> {
+  return executeRemoteText(target, target.workdirId, operation, args, maxOutputBytes)
+}
+
+export function executeRemoteNodeText(target: RemoteNodeTarget, operation: string, args: unknown, maxOutputBytes = Number.POSITIVE_INFINITY): Promise<string> {
+  return executeRemoteText(target, undefined, operation, args, maxOutputBytes)
+}
+
+async function executeRemoteText(
+  target: RemoteNodeTarget,
+  workdirId: string | undefined,
   operation: string,
   args: unknown,
-  maxOutputBytes = Number.POSITIVE_INFINITY,
+  maxOutputBytes: number,
 ): Promise<string> {
   const createdAt = new Date()
   const jobId = crypto.randomUUID()
@@ -38,13 +49,13 @@ export async function executeRemoteFilesystemText(
   let terminal: ExecutionReceiptV1 | undefined
   for await (
     const event of target.executor.execute({
-      version: 1,
+      version: 2,
       jobId,
       idempotencyKey: jobId,
       sessionId: target.sessionId,
       turnId: target.turnId,
       nodeId: target.nodeId,
-      capabilityId: target.capabilityId,
+      ...(workdirId === undefined ? {} : { workdirId }),
       operation,
       args,
       createdAt: createdAt.toISOString(),

@@ -5,7 +5,7 @@ Main runtime or execution Child. Vue assets are bundled with the native app;
 the Node backend, provider credentials, agent loop, SQLite/JSONL history,
 shells and MCP processes remain on Main or supported desktop Children.
 Capacitor does not embed Node. A mobile installation does not advertise shell
-or workdir capabilities.
+or workdir execution support.
 
 This is an initial implementation, not evidence of App Store acceptance or
 physical-device release certification. Native signing, installation, Keychain /

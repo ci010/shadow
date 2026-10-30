@@ -30,6 +30,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Local development and troubleshooting](development.md)
 - [Localization development](localization.md)
 - [Architecture and implementation boundaries](architecture.md)
+- [Devices, Folders and session execution](execution-model.md)
 - [Visual design system](../DESIGN.md)
 - [File spaces](file-spaces.md) and [media attachments](media-attachments.md)
 - [Session references](session-references.md), [proxy sessions](session-proxy.md),

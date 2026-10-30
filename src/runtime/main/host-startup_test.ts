@@ -28,12 +28,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await catalog.init()
       const healthy = await catalog.create('Healthy project')
       const identity = { version: 1 as const, rootId: 'a'.repeat(64), ancestorIds: [] }
-      const existing = await catalog.registerRemoteFolder(healthy.id, { version: 1, nodeId: 'child', capabilityId: 'existing' }, identity)
+      const existing = await catalog.registerRemoteFolder(healthy.id, { version: 2, nodeId: 'child', workdirId: 'existing' }, identity)
       const directory = projectStoragePath(projectPaths(home, 'default').home, '.sessions')
       const state = {
         sessionId: 'web:orchestrator', segmentIndex: 2, ownershipVersion: 2, projectId: 'default',
         sessionKind: 'orchestrator', agentType: 'orchestrator',
-        workdir: { version: 1 as const, nodeId: 'child', capabilityId: 'original-grant' },
+        workdir: { version: 2 as const, nodeId: 'child', workdirId: 'original-grant' },
       }
       const statePath = join(directory, `${safeSessionId(state.sessionId)}.json`)
       const store = new Store(directory)
@@ -95,7 +95,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal((await request('/api/projects')).status, 200)
         assert.equal((await request(`/projects/${healthy.id}/api/fixture`)).status, 200)
         assert.equal((await request('/projects/default/api/fixture')).status, 503)
-        const remote = { version: 1 as const, nodeId: 'child', capabilityId: 'new-grant' }
+        const remote = { version: 2 as const, nodeId: 'child', workdirId: 'new-grant' }
         for (const raw of [malformed, '', encode({ ...state, sessionKind: 'unknown' }),
           encode({ ...state, ownershipVersion: 999 }), encode({ ...state, projectId: healthy.id })]) {
           await put(raw)
@@ -115,7 +115,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const repaired = await request('/api/projects/default/retry', 'POST')
         assert.deepEqual(await repaired.json(), { state: 'ready' })
         assert.equal((await request('/projects/default/api/fixture')).status, 200)
-        assert.deepEqual(liveCatalog.remoteClaims().find(claim => claim.workdir.capabilityId === 'original-grant')?.workdir, state.workdir)
+        assert.deepEqual(liveCatalog.remoteClaims().find(claim => claim.workdir.workdirId === 'original-grant')?.workdir, state.workdir)
         await liveCatalog.resolveRemoteClaim(state.workdir, { ...identity, rootId: 'b'.repeat(64) })
         await liveCatalog.registerRemoteFolder(healthy.id, remote, { ...identity, rootId: 'c'.repeat(64) })
         assert.equal(await get(), encode(state), 'Reading and retrying must not rewrite the repaired source')
@@ -246,7 +246,7 @@ test('host propagates coordinator mode to every Project and stops advertising Ma
       assert.equal(dependencies.localExecutor, localExecutor !== false)
       const main = dependencies.mainCluster.getNodeInventory().nodes.find(node => node.role === 'main')!
       assert(main)
-      assert.equal(main.capabilities.some(capability => capability.kind === 'shell'), localExecutor !== false)
+      assert.equal(main.support.operations.includes('process.execute'), localExecutor !== false)
       seen.add(dependencies.project.id)
       return { app: new Hono(), folders: new FolderRegistry(dependencies.home), ready: Promise.resolve(),
         async shutdown() {}, updateConfig() {} }

@@ -39,7 +39,12 @@ function loadComponent(url: URL): Component {
   const module = { exports: {} as { default: Component } }
   const require = createRequire(url)
   new Function('require', 'module', 'exports', outputText)(
-    (id: string) => id.endsWith('.vue') ? { default: loadComponent(new URL(id, url)) }
+    // This host renderer has no DOM option/MutationObserver APIs. Keep the
+    // administration-to-select contract; UiSelect's browser behavior is tested separately.
+    (id: string) => id.endsWith('/UiSelect.vue') ? { default: defineComponent({
+      inheritAttrs: false,
+      setup: (_props, { attrs, slots }) => () => h('select', attrs, slots.default?.()),
+    }) } : id.endsWith('.vue') ? { default: loadComponent(new URL(id, url)) }
       : id.endsWith('/useInstallationContext.ts') ? { useInstallationContext } : require(id),
     module, module.exports,
   )
@@ -49,6 +54,8 @@ function loadComponent(url: URL): Component {
 const flush = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
 
 function mount(t: TestContext, name = 'DeviceAdministration', context?: InstallationContextV1) {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {} })
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { hidden: false, addEventListener() {}, removeEventListener() {} } })
   const renderer = createRenderer<Element, Element>({
@@ -76,6 +83,8 @@ function mount(t: TestContext, name = 'DeviceAdministration', context?: Installa
     if (unmounted) return
     app.unmount()
     unmounted = true
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
     if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument)
     else Reflect.deleteProperty(globalThis, 'document')
   }
@@ -152,7 +161,7 @@ function backend(t: TestContext, network = disabledNetwork, devices: PendingDevi
     if (path.endsWith('/revoke')) {
       assert.equal(method, 'POST')
       const nodeId = path.split('/').at(-2)!
-      state.nodes = state.nodes.map(node => node.nodeId === nodeId ? { ...node, connection: 'revoked', capabilities: [] } : node)
+      state.nodes = state.nodes.map(node => node.nodeId === nodeId ? { ...node, connection: 'revoked', workdirs: [], support: { operations: [] } } : node)
       return state.failRemoval ? Response.json({ error: 'node_revocation_failed' }, { status: 503 })
         : Response.json({ version: 1, nodeId, state: 'revoked' })
     }
@@ -164,7 +173,7 @@ function backend(t: TestContext, network = disabledNetwork, devices: PendingDevi
 
 test('rendered removal confirms intent, retains failed-save retry and moves devices out of the active list', async t => {
   const { state, calls } = backend(t)
-  state.nodes = [{ nodeId: 'node-1', displayName: 'Workshop Child', role: 'child', connection: 'connected', capabilities: [] }]
+  state.nodes = [{ nodeId: 'node-1', displayName: 'Workshop Child', role: 'child', connection: 'connected', executionProtocol: 'compatible', workdirs: [], support: { operations: [] } }]
   const view = mount(t, 'NodesView', createLocalMainAdminContext('http://127.0.0.1:3123'))
   await flush()
   await view.click('Remove device')
@@ -226,7 +235,7 @@ test('rendered approval requires identity verification and execution consent; on
   assert.deepEqual(calls.find(call => call.path.endsWith('/approve'))?.body, { version: 1, expectedDeviceIdentityFingerprint: pending.deviceIdentityFingerprint })
   assert.match(view.text(), /approved, but not connected/)
   assert.doesNotMatch(view.text(), /Workshop Child is connected/)
-  view.props.nodes = [{ nodeId: pending.nodeId, displayName: pending.displayName, role: 'child', connection: 'connected', capabilities: [] }]
+  view.props.nodes = [{ nodeId: pending.nodeId, displayName: pending.displayName, role: 'child', connection: 'connected', executionProtocol: 'compatible', workdirs: [], support: { operations: [] } }]
   await nextTick()
   assert.match(view.text(), /Workshop Child is connected/)
   view.props.nodes[0]!.connection = 'offline'

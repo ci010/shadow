@@ -32,7 +32,7 @@ test('current session JSON uses dedicated virtual write routing and validates ex
   assert.throws(() => vfs.write('v:unknown/self.json', { content: '{}' }, context), /Unknown/)
   assert.throws(() => vfs.write('v:session/self.json', { content: '{}' }, { ...context, tools: { executionMode: 'call' } } as ExecutionContext), /call mode/)
   const remoteContext = { ...context, remoteWorkdir: {
-    nodeId: 'remote', capabilityId: 'opaque',
+    nodeId: 'remote', workdirId: 'opaque',
     get executor(): never { throw new Error('Self metadata must not access the remote executor') },
   } } as ExecutionContext
   const remoteResult = await writer.execute({ path: 'v:session/self.json', match: 'true', content: 'false' }, remoteContext)

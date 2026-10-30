@@ -47,7 +47,7 @@ test('computer tools use lazy discovery, preserve transient observations through
       assert.match(toolResultText(await invoke('computer_observe', { targetId: f.desktop.target.id }, patch)), /owning local web conversation/)
     }
     assert.match(toolResultText(await invoke('computer_observe', { targetId: f.desktop.target.id },
-      { remoteWorkdir: { nodeId: 'child', capabilityId: 'opaque', executor } })), /remote workdirs/)
+      { remoteWorkdir: { nodeId: 'child', workdirId: 'opaque', executor } })), /remote workdirs/)
     tools.setExecutionScope('call', [])
     assert.match(toolResultText(await invoke('computer_observe', { targetId: f.desktop.target.id })), /owning local web conversation/)
     tools.setExecutionScope('session', ['call'])

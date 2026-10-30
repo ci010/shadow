@@ -112,7 +112,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.equal(saved.parent, undefined)
     assert.equal(saved.workspaceRoot, undefined)
     assert.equal(saved.createdBySessionId, 'web:chat-admin')
-    assert.equal(saved.workdir?.capabilityId, `local-project-v1:${folder.id}`)
+    assert.equal(saved.workdir?.workdirId, `local-project-v1:${folder.id}`)
     assert.equal(saved.initiativeId, 'work')
     assert.match(saved.topicRequestHash ?? '', /^[a-f0-9]{64}$/)
     assert.equal((await store.getState(created.sessionId))?.topicRequestHash, saved.topicRequestHash)
@@ -185,7 +185,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.equal(JSON.parse((await vfs.resolve(`v:sessions/${created.sessionId}/brief`, context))!).conversationUrl, created.conversationUrl)
     await assert.rejects(search.execute({ handler: 'glob', path: 'v:sessions', query: '**' }, { ...context, projectId: 'other' }), /Project/)
     const remoteContext = { ...context, sessionId: worker.sessionId, remoteWorkdir: {
-      nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not access remote executor') },
+      nodeId: 'remote', workdirId: 'opaque', get executor(): never { throw new Error('Must not access remote executor') },
     } }
     assert.match(await search.execute({ handler: 'grep', path: 'v:sessions', query: 'MCP' }, remoteContext), /\/brief/)
     const tool = new SessionTool(service)
@@ -314,17 +314,17 @@ test('session tool resolves Project selectors across nodes without fallback and 
   const local: FolderRecord = { id: randomUUID(), name: 'Code', path: '/synthetic/local', createdAt: new Date().toISOString() }
   const remote: FolderRecord = {
     id: randomUUID(), name: 'Remote App', path: '/opaque/not-on-main', createdAt: local.createdAt, kind: 'remote',
-    workdir: { version: 1, nodeId: 'child-a', capabilityId: 'remote-capability' },
+    workdir: { version: 2, nodeId: 'child-a', workdirId: 'remote-capability' },
     identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
   }
   const otherRemote: FolderRecord = {
     ...remote, id: randomUUID(), name: 'Code',
-    workdir: { version: 1 as const, nodeId: 'child-b', capabilityId: 'other-capability' },
+    workdir: { version: 2 as const, nodeId: 'child-b', workdirId: 'other-capability' },
   }
   let records: FolderRecord[] = [local, remote]
   const states = new Map<string, SessionState>([['web:actor', {
     sessionId: 'web:actor', segmentIndex: 0, projectId: 'p', mode: 'session',
-    workdir: { version: 1, nodeId: 'caller-node', capabilityId: 'caller-cap' },
+    workdir: { version: 2, nodeId: 'caller-node', workdirId: 'caller-cap' },
   }]])
   let offline = false
   let builds = 0
@@ -361,7 +361,7 @@ test('session tool resolves Project selectors across nodes without fallback and 
   const tool = new SessionTool(service)
   const context = {
     projectId: 'p', sessionId: 'web:actor', signal: new AbortController().signal,
-    remoteWorkdir: { nodeId: 'caller-node', capabilityId: 'caller-cap' },
+    remoteWorkdir: { nodeId: 'caller-node', workdirId: 'caller-cap' },
   } as ExecutionContext
   const create = async (folderId?: string) => {
     const result = JSON.parse(await tool.execute({ action: 'create', title: 'Selector', ...(folderId ? { folderId } : {}) }, context))
@@ -371,7 +371,7 @@ test('session tool resolves Project selectors across nodes without fallback and 
     const state = await create(selector)
     assert.equal(state.folderId, local.id)
     assert.equal(state.workdir?.nodeId, 'local')
-    assert.equal(state.workdir?.capabilityId, `local-project-v1:${local.id}`)
+    assert.equal(state.workdir?.workdirId, `local-project-v1:${local.id}`)
   }
   for (const selector of ['remote-app', folderIdentifier(remote.id, remote.name), remote.id]) {
     const state = await create(selector)

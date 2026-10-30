@@ -12,7 +12,7 @@ import type { ProtectedDeviceKeyStore } from '../../cluster/device-credentials.t
 import { createMainCluster, type MainCluster } from '../../cluster/main-cluster.ts'
 import { AtomicFileRegistrySnapshotAdapter } from '../../cluster/persistence.ts'
 import type { NodeInventoryResponse } from '../../cluster/node-inventory.ts'
-import type { JobEventV1, JobRequestV1 } from '../../execution/contracts.ts'
+import type { JobEventV1, JobRequestV2 } from '../../execution/contracts.ts'
 import { WORKDIR_PROCESS_EXECUTE_OPERATION } from '../../execution/capability-shell.ts'
 import {
   GatewayClientAddressRegistry,
@@ -28,10 +28,10 @@ import type { RuntimeDerivedPaths } from '../runtime-cli.ts'
 import { MainDeviceNetwork } from './device-network.ts'
 import { ConfigSchema } from '../../config/schema.ts'
 import type { MainRuntimeHandle } from './contracts.ts'
-import type { WorkdirRefV1 } from '../../sessions/locality.ts'
+import type { WorkdirRefV2 } from '../../sessions/locality.ts'
 
 const childNodeId = 'integration-child'
-const capabilityId = 'child-only-workdir'
+const workdirId = 'child-only-workdir'
 
 // Real Ed25519 proofs, but deliberately no OS Keychain/DPAPI or user credentials.
 function protectedStore(): ProtectedDeviceKeyStore {
@@ -170,7 +170,8 @@ test('real Main HTTP facade selects a paired Child folder and restores remote se
     const connected = () => until(async () => {
       const inventory = await json<NodeInventoryResponse>('/nodes/v1')
       return inventory.nodes.some(node => node.nodeId === childNodeId && node.connection === 'connected' &&
-        node.capabilities.some(capability => capability.capabilityId === capabilityId && capability.online))
+        node.workdirs.some(resource => resource.workdirId === workdirId && resource.online) &&
+        ['workdir.identity', 'workdir.process.execute-once'].every(operation => node.workdirs.some(w => w.online && w.workdirId === workdirId && w.support.operations.includes(operation))))
     }, 'full Main sees Child workdir')
     await startMain()
     await json('/nodes/v1/network', 'PUT', {
@@ -181,7 +182,7 @@ test('real Main HTTP facade selects a paired Child folder and restores remote se
     const childConfig: ChildBootstrapConfigV1 = {
       version: 1, mode: 'child', localNodeId: childNodeId, dataDir: childPaths.dataDir,
       mainEndpoint: endpoint, allowInsecureLocalTransport: true,
-      workdirs: [{ capabilityId, displayName: 'Selectable Child folder', rootPath: childWorkdir }],
+      workdirs: [{ workdirId, displayName: 'Selectable Child folder', rootPath: childWorkdir }],
     }
     const paired = await pairProductionChild(childConfig, childPaths, {
       ...offer, displayName: 'Facade Child', keyStore, signal: AbortSignal.timeout(5_000),
@@ -194,15 +195,15 @@ test('real Main HTTP facade selects a paired Child folder and restores remote se
     await connected()
 
     const project = '/projects/default'
-    const selection = { nodeId: childNodeId, capabilityId, requestId: randomUUID() }
-    const created = await json<{ sessionId: string; chatId: string; folderId: string; workdir: WorkdirRefV1 }>(
+    const selection = { nodeId: childNodeId, workdirId, requestId: randomUUID() }
+    const created = await json<{ sessionId: string; chatId: string; folderId: string; workdir: WorkdirRefV2 }>(
       project + '/api/sessions/remote', 'POST', selection, 201)
     assert(created.folderId)
     assert.equal(created.workdir.nodeId, childNodeId)
-    assert.equal(created.workdir.capabilityId, capabilityId)
+    assert.equal(created.workdir.workdirId, workdirId)
     const sessionPath = project + `/api/sessions/${encodeURIComponent(created.sessionId)}`
     const verifyFacade = async () => {
-      const folders = await json<{ folders: Array<{ id: string; kind: string; workdir: WorkdirRefV1 }> }>(
+      const folders = await json<{ folders: Array<{ id: string; kind: string; workdir: WorkdirRefV2 }> }>(
         project + '/api/folders')
       const folder = folders.folders.find(folder => folder.id === created.folderId)
       assert.equal(folder?.kind, 'remote')
@@ -231,6 +232,20 @@ test('real Main HTTP facade selects a paired Child folder and restores remote se
     await verifyFacade()
     assert.deepEqual((await json<History>(sessionPath)).commandResults, history.commandResults)
     assert.equal(await readFile(join(home, 'facade.txt'), 'utf8'), 'MAIN_MUST_NOT_BE_READ')
+    // A resource ID is not permission to silently rebind an existing Folder
+    // after Child restart. Test the existing session path, not a fresh picker.
+    await bounded(child.shutdown(), 'Child before resource rebinding')
+    const reboundRoot = join(root, 'different-child-directory')
+    await mkdir(reboundRoot)
+    await writeFile(join(reboundRoot, 'facade.txt'), 'DIFFERENT_RESOURCE_MUST_NOT_BE_READ')
+    child = await startProductionChildRuntime({ ...childConfig,
+      workdirs: [{ workdirId, displayName: 'Rebound directory', rootPath: reboundRoot }] }, childPaths, { keyStore })
+    await bounded(child.ready, 'rebound Child ready')
+    await until(async () => (await json<NodeInventoryResponse>('/nodes/v1')).nodes.some(node =>
+      node.nodeId === childNodeId && node.connection === 'connected'), 'rebound Child reconnects without making its changed resource usable')
+    const rebound = await request(sessionPath + '/preview?path=facade.txt')
+    assert.notEqual(rebound.status, 200, 'Existing session must reject a resource rebound across Child restart')
+    assert.doesNotMatch(await rebound.text(), /DIFFERENT_RESOURCE_MUST_NOT_BE_READ/)
     assert.deepEqual(forbiddenRequests, [], 'No provider or external HTTP may be attempted')
   } finally {
     try {
@@ -295,13 +310,13 @@ test('TCP device pairing approves a fingerprint, executes only on Child and rest
       snapshotAdapter: new AtomicFileRegistrySnapshotAdapter(mainPaths.clusterSnapshotPath),
       localHello: {
         protocolMajor: 1, protocolMinor: 0, implementationVersion: 'device-tcp-integration',
-        features: ['jobs-v1', 'capabilities-v1', 'workdir-display-v1'],
+        features: ['workdir-execution-v2'],
       },
       authorizeOfferCreation: authorize,
       clientKey: request => clientAddresses.resolve(request),
       localNodeInventory: () => ({
         nodeId: 'integration-main', role: 'main', displayName: 'Integration Main',
-        connection: 'connected', capabilities: [],
+        connection: 'connected', workdirs: [], support: { operations: [] }, executionProtocol: 'compatible',
       }),
     })
     network = new MainDeviceNetwork({
@@ -333,15 +348,16 @@ test('TCP device pairing approves a fingerprint, executes only on Child and rest
       const inventory = await adminJson<NodeInventoryResponse>('/nodes/v1')
       const node = inventory.nodes.find(node => node.nodeId === childNodeId)
       return node?.connection === 'connected' &&
-        node.capabilities.some(capability => capability.capabilityId === capabilityId && capability.online)
+        node.workdirs.some(resource => resource.workdirId === workdirId && resource.online) &&
+        ['workdir.identity', 'workdir.process.execute-once'].every(operation => node.workdirs.some(w => w.online && w.workdirId === workdirId && w.support.operations.includes(operation)))
     }, 'Child connected and advertised its workdir')
     assert.equal(cluster!.activeSessionCount, 1)
   }
   async function execute(operation: string, args: unknown): Promise<JobEventV1[]> {
     const jobId = randomUUID()
-    const job: JobRequestV1 = {
-      version: 1, jobId, idempotencyKey: jobId, sessionId: 'integration-session',
-      turnId: randomUUID(), nodeId: childNodeId, capabilityId, operation, args,
+    const job: JobRequestV2 = {
+      version: 2, jobId, idempotencyKey: jobId, sessionId: 'integration-session', projectScope: 'a'.repeat(32),
+      turnId: randomUUID(), nodeId: childNodeId, workdirId, operation, args,
       createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 5_000).toISOString(),
     }
     const events = await bounded((async () => {
@@ -405,7 +421,7 @@ test('TCP device pairing approves a fingerprint, executes only on Child and rest
     const childConfig: ChildBootstrapConfigV1 = {
       version: 1, mode: 'child', localNodeId: childNodeId, dataDir: childPaths.dataDir,
       mainEndpoint: endpoint, allowInsecureLocalTransport: true,
-      workdirs: [{ capabilityId, displayName: 'Child-only files', rootPath: childWorkdir }],
+      workdirs: [{ workdirId, displayName: 'Child-only files', rootPath: childWorkdir }],
     }
     await assert.rejects(pairProductionChild(childConfig, childPaths, {
       offerId: offer.offerId,
@@ -446,7 +462,7 @@ test('TCP device pairing approves a fingerprint, executes only on Child and rest
     await until(() => cluster!.activeSessionCount === 0, 'listener disable disconnects Child')
     const offline = (await adminJson<NodeInventoryResponse>('/nodes/v1')).nodes.find(node => node.nodeId === childNodeId)
     assert.equal(offline?.connection, 'offline')
-    assert(offline?.capabilities.every(capability => !capability.online))
+    assert(offline?.workdirs.every(workdir => !workdir.online))
     await adminJson('/nodes/v1/network', 'PUT', config)
     await connected()
     await verifyExecution('after-listener-reenable')
@@ -464,7 +480,7 @@ test('TCP device pairing approves a fingerprint, executes only on Child and rest
     assert.equal(cluster!.registry.getPending().length, 0)
     const restored = (await adminJson<NodeInventoryResponse>('/nodes/v1')).nodes.find(node => node.nodeId === childNodeId)
     assert.equal(restored?.connection, 'offline')
-    assert(restored?.capabilities.some(capability => capability.capabilityId === capabilityId && !capability.online))
+    assert(restored?.workdirs.some(resource => resource.workdirId === workdirId && !resource.online))
     child = await startProductionChildRuntime(childConfig, childPaths, { keyStore })
     await bounded(child.ready, 'restored Child ready')
     await connected()

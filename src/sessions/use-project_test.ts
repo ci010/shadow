@@ -118,7 +118,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         }
         const restored = await store.getState(state.sessionId)
         assert.equal(restored?.folderId, b.id)
-        assert.equal(restored?.workdir?.capabilityId, `local-project-v1:${b.id}`)
+        assert.equal(restored?.workdir?.workdirId, `local-project-v1:${b.id}`)
         assert.equal(restored?.workingContext, state.workingContext)
         assert.equal((await store.listSessions())[0]?.folderId, b.id, 'UI list uses committed folder')
         // A failed commit must leave the live state and emitted selector unchanged.
@@ -153,8 +153,8 @@ test('remote, unavailable and nested switch fail before committing', async () =>
   const context = { projectId: 'p', toolCallName: 'use_project', signal: new AbortController().signal,
     switchProjectFolder: async () => { throw new Error('must not commit') } } as unknown as ExecutionContext
   const remote = { path: 'C:\\DO-NOT-READ', identity: { version: 1 as const, rootId: 'a'.repeat(64), ancestorIds: [] }, id: 'remote', kind: 'remote' as const, name: 'remote', createdAt: '', projectId: 'p',
-    workdir: { version: 1 as const, nodeId: 'child', capabilityId: 'repo', displayPathSnapshot: 'C:\\DO-NOT-READ' } }
-  const tool = new UseProjectTool({ projectId: 'p', folders: { list: () => [remote], requireAvailable: async () => remote, acquireAccess: () => () => {} } })
+    workdir: { version: 2 as const, nodeId: 'child', workdirId: 'repo', displayPathSnapshot: 'C:\\DO-NOT-READ' } }
+  const tool = new UseProjectTool({ projectId: 'p', folders: { list: () => [remote], requireAvailable: async () => remote, requireExecutionAvailable: async () => remote, acquireAccess: () => () => {} } })
   await assert.rejects(tool.execute({ folder: 'remote' }, context), /Remote folder switching is unavailable/)
   await assert.rejects(tool.execute({ folder: 'remote' }, { ...context, scriptInvocation: true }), /sole direct/)
   await assert.rejects(tool.execute({ folder: 'remote' }, { ...context, projectId: 'foreign' }), /mismatch/)

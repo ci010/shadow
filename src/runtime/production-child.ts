@@ -1,3 +1,4 @@
+import { assertExecutionSupported } from '../execution/workdir-contracts.ts'
 import { childWorkspacePlugin } from './child-workspace.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
 import { join } from 'node:path'
@@ -11,7 +12,7 @@ import {
   validateDeviceCredentialReferenceV1,
 } from '../cluster/device-credentials.ts'
 import { createPlatformDeviceKeyStore } from '../cluster/protected-device-key-stores.ts'
-import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
+import type { ExecutionSupport } from '../cluster/contracts.ts'
 import type { NodeWebSocketFactory } from '../cluster/websocket-node-transport.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
 import { JournaledShellExecutor, ShellJournal } from '../execution/shell-journal.ts'
@@ -72,24 +73,15 @@ export async function startProductionChildRuntime(
     join(paths.dataDir, 'managed-session-workdirs-v1', pairingScope), config.localNodeId, config.workdirs ?? [],
   )
   await workdirs.init()
-  const capabilities = (): CapabilityDescriptorV1[] => [
-    {
-      version: 1,
-      capabilityId: 'process-execute',
-      nodeId: config.localNodeId,
-      kind: 'shell',
-      displayName: 'Local shell',
-      permissions: ['process.execute'],
-      online: true,
-    },
-    ...workdirs.capabilities,
-  ]
+  const support = (): ExecutionSupport => ({ operations: ['process.execute', ...workdirs.support.operations] })
   const journal = new ShellJournal(join(paths.dataDir, 'shell-executions-v1', pairingScope))
   const executor = new JournaledShellExecutor(new LocalExecutor(
     processManager,
     config.localNodeId,
     workdirs.operationHandlers,
-    ['process-execute'],
+    (request, signal) => request.workdirId === undefined && request.operation === 'process.execute'
+      ? assertExecutionSupported(request, workdirs.workdirs, support())
+      : workdirs.assertCanExecute(request, signal),
     request => journal.processResultPath(request),
   ), journal)
   const validateCredential = async (signal: AbortSignal): Promise<void> => {
@@ -108,7 +100,7 @@ export async function startProductionChildRuntime(
       protocolMajor: 1,
       protocolMinor: 0,
       implementationVersion: '0.1.0',
-      features: ['jobs-v1', 'capabilities-v1', 'workdir-display-v1'],
+      features: ['workdir-execution-v2'],
     },
     authentication: {
       deviceId: reference.deviceId,
@@ -116,7 +108,8 @@ export async function startProductionChildRuntime(
       credentialId: reference.credentialId,
     },
     executor,
-    capabilities,
+    support,
+    workdirs: () => workdirs.workdirs,
     webSocketFactory: options.webSocketFactory,
     authenticationProtocol: async ({ endpoint, authentication, signal }) => {
       const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(8_000)])
@@ -135,7 +128,9 @@ export async function startProductionChildRuntime(
     },
     session: { maxOutboundQueue: 128, heartbeatTimeoutMs: 90_000 },
   })
-  workdirs.onCapability = capability => connector.advertiseCapability(capability)
+  workdirs.onWorkdir = async workdir => {
+    await connector.advertiseWorkdir(workdir)
+  }
 
   let runtime: ChildRuntimeHandle | undefined
   let connection: 'connecting' | 'connected' | 'offline' = 'connecting'
@@ -154,7 +149,7 @@ export async function startProductionChildRuntime(
         },
       }),
       requestShutdown: () => runtime?.shutdown(),
-      nodeInventory: () => childLocalNodeInventory(config, capabilities(), '0.1.0', connection === 'connected' ? 'connected' : 'offline'),
+      nodeInventory: () => childLocalNodeInventory(config, workdirs.workdirs, support(), '0.1.0', connection === 'connected' ? 'connected' : 'offline'),
       childStatus: () => ({
         version: 1, nodeId: config.localNodeId, mainEndpoint: config.mainEndpoint,
         connection, error: connectionError, fingerprint: reference.deviceIdentityFingerprint,

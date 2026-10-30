@@ -209,7 +209,7 @@ export class WebChannel extends AbstractChannel {
           this.workspace,
           state ?? parent ?? { sessionId },
           undefined,
-          this.sessionManager?.workdirCapabilityLookup,
+          this.sessionManager?.workdirLookup,
         ).workdir
         if (!workdir.available || workdir.locality === 'remote') {
           return c.json({ error: 'Upload unavailable' }, 409)
@@ -262,7 +262,7 @@ export class WebChannel extends AbstractChannel {
       if (sessionId) {
         const { workdir } = resolveSessionLocations(
           this.workspace, state ?? { sessionId }, undefined,
-          this.sessionManager?.workdirCapabilityLookup,
+          this.sessionManager?.workdirLookup,
         )
         if (!workdir.available || workdir.locality === 'remote') {
           return c.json({ error: 'Media unavailable' }, 404)
@@ -538,7 +538,7 @@ export class WebChannel extends AbstractChannel {
         this.workspace,
         state,
         undefined,
-        this.sessionManager?.workdirCapabilityLookup,
+        this.sessionManager?.workdirLookup,
       )
       const workdir = locations.workdir
       if (!workdir.available || workdir.locality === 'remote') {

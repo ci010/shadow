@@ -58,11 +58,13 @@ test('Child wizard validates consent; workspace recovery replaces the old local 
             if(f.statusFailure) throw new Error('offline');
             return Response.json({version:1,nodeId:'child-1',mainEndpoint:info.endpoint,connection:f.connection,
               error:f.connection === 'offline' ? 'Main has not authorized this device.' : null,fingerprint:'sha256:1234567890abcdef',
-              dataDir:info.dataDir,workdirs:[{capabilityId:'desktop-workdir',rootPath:info.workdir,displayName:'Shared work folder'}],
+              dataDir:info.dataDir,workdirs:[{workdirId:'desktop-workdir',rootPath:info.workdir,displayName:'Shared work folder'}],
               allowInsecureLocalTransport:true});
           }
           if (String(url).endsWith('/local/v1/nodes')) return Response.json({version:1,nodes:[{nodeId:'child-1',displayName:'Child laptop',role:'child',
-            connection:f.connection === 'connected' ? 'connected':'offline',capabilities:[{capabilityId:'desktop-workdir',kind:'workdir',displayName:'Shared work folder',displayPath:info.workdir,online:true}]}]});
+            connection:f.connection === 'connected' ? 'connected':'offline',executionProtocol:'compatible',
+            workdirs:[{version:1,nodeId:'child-1',workdirId:'desktop-workdir',kind:'directory',displayName:'Shared work folder',displayPath:info.workdir,online:true}],
+            capabilities:[{version:2,nodeId:'child-1',capabilityId:'files',scope:{kind:'resource',workdirId:'desktop-workdir'},displayName:'File operations',operations:['filesystem.read'],online:true}]}]});
           throw new Error('Unexpected Main API request: '+url);
         };
         f.openRecovery = () => { f.role='child'; mounted.unmount(); mounted=createApp({render:()=>h(DesktopFrame,null,{default:()=>h(Recovery,{canReset:false,role:'child',code:'spawn-error',retry:async()=>{}})})});mounted.mount('#app'); };
