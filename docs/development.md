@@ -376,12 +376,21 @@ same recovery metadata shape.
 
 ## Observing chat history network traffic
 
-`GET /api/chat/session` returns an ETag for the complete history/context
-representation with `Cache-Control: private, no-cache`. The chat view uses
-`fetch` with `cache: 'no-cache'`: the browser must revalidate before reuse,
-but an unchanged response can return HTTP 304 without retransmitting history.
-The browser combines that response with its cached body; JavaScript normally
-sees a successful 200 response. Keep DevTools **Disable cache** unchecked when
-measuring this optimization. Changed context, tools, receipts, decisions or
-segment navigation also invalidate the ETag. This saves transfer bytes, not
-server-side history assembly work, and does not eliminate the validation GET.
+The chat view uses an explicit, memory-only snapshot protocol for
+`GET /api/chat/session?snapshot=...`. The first request returns a revision and
+the history/context data. Subsequent requests send that revision; unchanged
+responses contain only `{ revision, unchanged: true }` (HTTP 200), not history.
+Every read still validates against Main, including access and session existence.
+Changes to history, context, tools, decisions, receipts or segment navigation
+produce a new revision and full response. Network/access errors never serve a
+cached snapshot as a successful read.
+
+Snapshots are scoped to the live-client pool and full request URL (including
+Project and chat), capped at eight entries and 16 MiB per pool, and cleared on
+pool disposal. No localStorage, IndexedDB, service-worker or browser HTTP cache
+is used. `Cache-Control: no-store` remains in effect; DevTools **Disable cache**
+does not disable this memory-only optimization. In HAR, look for a `snapshot`
+query parameter and a small unchanged JSON response, not HTTP 304. Legacy
+clients without the query parameter retain the ETag conditional-read interface.
+This saves transfer bytes, not server-side history assembly work, and does not
+eliminate the validation GET.

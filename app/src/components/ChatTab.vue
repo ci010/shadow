@@ -567,6 +567,7 @@ import AutomationConversationInfo from './AutomationConversationInfo.vue'
 import { provideModelSelection, useModelSelection } from '../model-selection.ts'
 import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
+import { chatHistorySnapshots } from '../chat-history-snapshot.ts'
 import type { LiveSubscription } from '../live-client.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
@@ -2009,7 +2010,7 @@ async function loadDirectChat(background = false): Promise<void> {
     connectEventStream(chatId, true)
     await historySnapshot?.getPromise()
     if (controller.signal.aborted) return
-    const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal, cache: 'no-cache' })
+    const res = await chatHistorySnapshots(livePool).read(buildUrl('/api/chat/session', { chatId }), controller.signal)
     if (controller.signal.aborted) return
     if (res.status === 404 && activeSessionId.value === sessionId) {
       disconnectEventStream()
