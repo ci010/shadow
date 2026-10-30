@@ -238,3 +238,23 @@ test('capture preserves actual UTF-8 encoding and persistence failure stops retr
     assert.equal(await readFile(join(root, 'saved.md'), 'utf8'), 'already saved')
   })
 })
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: explicit target provenance survives log persistence and reopening`, async () => {
+    await withTempWorkspace(async root => {
+      const directory = join(root, 'sessions')
+      const state: SessionState = { sessionId: 'web:provenance', segmentIndex: 0, physicalIdVersion: 2 }
+      const change = { ...recordedFileChange({ sessionId: state.sessionId, toolCallId: 'write', path: 'note.txt', mode: 'write', before: 'old', after: 'new' }), target: { nodeId: 'child', capabilityId: 'approved' } }
+      const store = new Store(directory)
+      await store.init()
+      try {
+        await store.createSessionLog(physicalSessionId(state), [{ sessionId: state.sessionId }])
+        await store.appendRawEvents(physicalSessionId(state), [{ file_change: change }])
+      } finally { store.close?.() }
+      const reopened = new Store(directory)
+      try {
+        assert.deepEqual(await readSessionFileChange(reopened, state, change.id, new AbortController().signal), change)
+      } finally { reopened.close?.() }
+    })
+  })
+}

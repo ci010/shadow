@@ -41,6 +41,8 @@ export const fileChangeSchema = z.object({
   toolCallId: z.string().min(1),
   timestamp: z.string().datetime().optional(),
   path: z.string().min(1).max(4096),
+  /** Absent in legacy records; never infer their device from current session locality. */
+  target: z.object({ nodeId: z.string().min(1), capabilityId: z.string().min(1) }).optional(),
   mode: z.enum(['write', 'edit', 'append']),
   patch: z.string().max(MAX_FILE_CHANGE_CHARS).refine(validPatch, 'Invalid recorded patch'),
   unavailable: z.string().optional(),

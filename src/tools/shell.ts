@@ -1,3 +1,4 @@
+import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import type { ExecutionContext } from './context.ts'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
@@ -114,6 +115,7 @@ export class ExecTool implements Tool<ToolResult> {
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
+      ...executionTargetParameters,
       script: {
         type: 'string',
         description:
@@ -250,6 +252,7 @@ export class ExecTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
+    context = executionTargetContext(args, context)
     context.signal.throwIfAborted()
     const script = typeof args.script === 'string' ? args.script : ''
     if (!script.trim()) throw new ToolNoEffectError('`script` is required')

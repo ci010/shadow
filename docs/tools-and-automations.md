@@ -220,6 +220,61 @@ another Bot or expand its own authority. The exact human confirmation flow and
 audience implications are documented in [Messaging channels](channels.md).
 Use `authoring_change` for QQ/Feishu managed deployment, not Discord.
 
+## Per-call execution device selection
+
+`read`, `write`, `exec` and `search` accept optional `nodeId` **and**
+`capabilityId` together. Omitting both preserves the committed session locality.
+The selection applies only to that call: it does not switch the selected Folder,
+change session cwd, or affect concurrent calls. `nodeId` identifies a device;
+`exec.shell: "node"` still means the inline TypeScript runtime, not a device.
+
+Use the exact workdir reference from a registered remote Folder's
+`read("v:project/folders/<folder-uuid>")` details. For example:
+
+```json
+{"nodeId":"child-device-id","capabilityId":"approved-workdir-id","path":"notes.txt"}
+```
+
+Pass this to `read`, or add `content` for `write`. For an OS command:
+
+```json
+{"nodeId":"child-device-id","capabilityId":"approved-workdir-id","script":"pwd","shell":"sh","cwd":"subdirectory"}
+```
+
+Relative file paths and remote `exec.cwd` are interpreted by the Child within
+that capability, **never** relative to Main or a remote display path. Existing
+Child path/symlink and operation-permission checks still apply. Merely pairing a
+Child does not grant every Project access to all of its folders: the workdir
+must also belong to the current Project (for example through a registered
+remote Folder). The Project-scoped lookup and executor remain authoritative;
+unknown, offline, revoked, unauthorized or incompatible targets fail without a
+Main fallback. An execution context without host target lookup also fails closed.
+
+Current remote support is deliberately limited:
+
+- UTF-8 text and directory `read`, and the existing text overwrite/edit/append
+  `write`, use the existing capability filesystem operations.
+- OS `exec` uses the existing bounded remote process protocol. Its existing
+  lifecycle/time-limit/permission restrictions are unchanged. Inline
+  `shell: "node"`, Node-only exec policy, call-mode remote foreground execution,
+  and remote background execution remain unsupported.
+- Remote filesystem `search` (glob/grep) remains unsupported and explicitly
+  rejects the route; it does not run Main's ripgrep. Use Child OS `exec` within
+  its granted workdir when that process capability is authorized. Local explicit
+  targets retain ordinary filesystem search behavior.
+- Explicit targeting does not route virtual resources, URLs, web search, remote
+  images or legacy `search.space`. Omit the selection for control-plane virtual
+  resources. Remote image reads and explicit remote encoding overrides reject
+  without opening a Main file.
+
+`write` records the selected node/capability with its historical edit, including
+remote writes from an ordinary local session. `view_edit` continues to read the
+session's persisted patch (not a current file on either device) and displays
+that recorded identity. Old records without identity remain readable; their
+device is not inferred from the session's current locality. Existing JSONL and
+SQLite log readers retain the optional identity through the shared file-change
+schema.
+
 ## Shell and interrupted model requests
 
 `exec` uses the Runtime's declared default shell, normally `cmd` on Windows

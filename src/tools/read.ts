@@ -1,3 +1,4 @@
+import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import { sessionWebFetch } from '../execution/network/session-proxy.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { extname, isAbsolute, join, relative } from 'node:path'
@@ -194,6 +195,7 @@ export class ReadTool implements Tool<ToolResult> {
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
+      ...executionTargetParameters,
       path: {
         type: 'string',
         description: 'File path, directory path, or URL (http/https)',
@@ -226,6 +228,7 @@ export class ReadTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
+    context = executionTargetContext(args, context)
     const raw = String(args.path)
     if (args.encoding !== undefined && !isTextEncoding(args.encoding)) throw new TypeError('Unsupported read encoding.')
     const encoding: TextEncoding = isTextEncoding(args.encoding) ? args.encoding : 'auto'

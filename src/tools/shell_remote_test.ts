@@ -169,3 +169,21 @@ test('registered remote exec keeps bounded output intact instead of spilling to 
   assert.equal(await registry.execute('exec', { script: 'produce output' },
     { ...context, tools: new SessionTools(registry, process.cwd()) }), output)
 })
+
+test('explicit Child selection routes exec independently of committed session cwd and keeps shell=node distinct', async () => {
+  const { tool, context, requests } = fixture()
+  const remoteWorkdir = context.remoteWorkdir!
+  const local: ExecutionContext = { ...context, remoteWorkdir: undefined,
+    resolveToolTarget(nodeId, capabilityId) {
+      assert.equal(nodeId, 'child'); assert.equal(capabilityId, 'opaque')
+      return { cwd: undefined, remoteWorkdir }
+    },
+  }
+  assert.equal(await tool.execute({ nodeId: 'child', capabilityId: 'opaque', script: 'pwd', cwd: 'nested' }, local), '(no output, exit code 0)')
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0]?.nodeId, 'child')
+  assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested' })
+  assert.match(requireToolText(await tool.execute({ nodeId: 'child', capabilityId: 'opaque', shell: 'node', script: '1' }, local)), /not supported on remote/)
+  assert.equal(requests.length, 1)
+  assert.equal(local.remoteWorkdir, undefined)
+})
