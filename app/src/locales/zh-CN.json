@@ -2625,6 +2625,7 @@
   "Service": "服务",
   "Service output": "服务输出",
   "Session": "会话",
+  "Node": "节点",
   "Session ID": "会话 ID",
   "Session acknowledgement": "会话确认",
   "Session activity is unavailable.": "会话活动不可用。",
