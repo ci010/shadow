@@ -11,7 +11,8 @@ import { ReadTool } from './read.ts'
 import { WriteTool } from './filesystem.ts'
 import { SearchTool } from './search.ts'
 import { ViewEditTool } from './view-edit.ts'
-import { selectFolder } from '../folders/identifier.ts'
+import { Tools, SessionTools } from './registry.ts'
+import { UseProjectTool } from './use-project.ts'
 import type { RemoteFolderRecord } from '../folders/contracts.ts'
 import type { RecordedFileChange } from '../sessions/file-change-contract.ts'
 
@@ -40,11 +41,19 @@ test('Folder-targeted read/write operate the bound resource without touching Mai
         yield { version: 1, jobId: request.jobId, sequence: 1, timestamp, type: 'completed', receipt: { version: 1, jobId: request.jobId, nodeId: request.nodeId, state: 'completed', finishedAt: timestamp } }
       },
     }
+    const registry = new Tools(main)
+    registry.register(new UseProjectTool({ projectId: 'test', folders: {
+      list: () => [folder], requireAvailable: async () => folder,
+      requireExecutionAvailable: async () => folder, acquireAccess: () => () => {},
+    } }))
+    const sessionTools = new SessionTools(registry, main, ['read', 'write', 'search'])
+    // Host target resolution must work even when context switching is not exposed.
+    assert.equal(sessionTools.get('use_project'), undefined)
     let change: RecordedFileChange | undefined
-    const context: ExecutionContext = { ...base, cwd: main, toolCallId: 'write-call',
+    const context: ExecutionContext = { ...base, tools: sessionTools, cwd: main, toolCallId: 'write-call',
       resolveToolTarget: async (identifier, operation) => resolveExplicitToolTarget(main, base,
         ref => ref.nodeId === 'child' && ref.workdirId === 'approved' ? { node: 'online', workdir: { online: true } } : { node: 'missing' },
-        executor, selectFolder([folder], identifier), operation),
+        executor, await sessionTools.executionTargetFolder(identifier, base.signal), operation),
       recordFileChange: async value => { change = value }, readFileChange: async () => change,
     }
     const read = new ReadTool(main)
@@ -98,4 +107,36 @@ test('saved V1 tool targeting is reconciliation-only and cannot become a new raw
   await assert.rejects(executionTargetContext(args, context, 'filesystem.write'), /Use folder/)
   await assert.rejects(executionTargetContext({ ...args, folder: 'new' }, context, 'workdir.process.execute-once'), /Use folder/)
   assert.equal(calls, 1)
+})
+
+
+test('session Folder resolution preserves host errors, aborts and survives dynamic-tool reset', async () => {
+  const registry = new Tools('.')
+  let available = true
+  const verified: AbortSignal[] = []
+  registry.register(new UseProjectTool({ projectId: 'test', folders: {
+    list: () => [folder], requireAvailable: async () => folder,
+    requireExecutionAvailable: async (id, signal = new AbortController().signal) => {
+      assert.equal(id, folder.id)
+      verified.push(signal)
+      if (!available) throw new Error('Selected folder is offline')
+      return folder
+    }, acquireAccess: () => () => {},
+  } }))
+  const session = new SessionTools(registry, '.', ['read'])
+  const signal = new AbortController().signal
+  assert.equal(await session.executionTargetFolder('child', signal), folder)
+  assert.equal(verified[0], signal)
+  await session.resetDynamicAndWait()
+  assert.equal(await session.executionTargetFolder(folder.id, signal), folder)
+  await assert.rejects(session.executionTargetFolder('unknown', signal), /Unknown or ambiguous/)
+  available = false
+  await assert.rejects(session.executionTargetFolder('child', signal), /Selected folder is offline/)
+  const before = verified.length
+  const abort = new AbortController()
+  abort.abort()
+  await assert.rejects(session.executionTargetFolder('child', abort.signal), { name: 'AbortError' })
+  assert.equal(verified.length, before)
+  const absent = new SessionTools(new Tools('.'), '.')
+  await assert.rejects(absent.executionTargetFolder('child', signal), /targeting is unavailable/)
 })
