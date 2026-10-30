@@ -1,5 +1,5 @@
 import { ProposalInboxes } from '../../sessions/proposal-inbox.ts'
-import { createActivityInvalidator, sessionActivityFingerprint } from '../../sessions/activity-invalidation.ts'
+import { createActivityInvalidator, sessionActivityFingerprint, sessionActivityReadModel } from '../../sessions/activity-invalidation.ts'
 import { BotDeployments } from '../../bots/deployments.ts'
 import { parseBot, type BotDefinition } from '../../bots/sdk.ts'
 import { DirectoryBots, DirectoryBotService } from '../../agent-authoring/bot-runtime.ts'
@@ -313,7 +313,10 @@ export async function createProjectRuntime(
   const activityInvalidator = createActivityInvalidator(id => {
     if (!activitySource) throw new Error('Session activity source is initializing')
     return sessionActivityFingerprint(activitySource, id)
-  }, id => realtime.invalidateActivity(id))
+  }, id => {
+    try { realtime.invalidateActivity(id, activitySource ? sessionActivityReadModel(activitySource, id) : undefined) }
+    catch { realtime.invalidateActivity(id) }
+  })
   const activitySubscription = bus.on('session.activity.changed', fact => activityInvalidator.changed(fact.sessionId))
   cleanup.push(() => { bus.off(activitySubscription); activityInvalidator.dispose(); activitySource = undefined })
   const telemetry = initializeNodeTelemetry(otelStore, { scope, projectId: project.id })

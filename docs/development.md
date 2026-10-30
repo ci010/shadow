@@ -470,12 +470,21 @@ the inventory lookup or replace authoritative reads with event payloads.
 
 Activity notifications are deduplicated per Project/session against the visible
 stage, waiting-for-call flag, active request ID, recovery state and pending
-question/input metadata. Internal progress with no visible change does not cause
-another stages read. The bounded fingerprint map stores no response authority;
-eviction or fingerprint failure permits a notification rather than suppressing
-updates. Pure history persistence no longer invalidates activity snapshots;
-admission, completion, genuine activity changes, broad legacy notifications and
-recovery still do. Known session metadata changes can use targeted graph reads;
+question/input metadata. The `activity` event carries a runtime-validated complete
+per-session read-model (`stage`, `waitingForCall`, nullable `activeRequestId` and
+nullable `recovery`), derived by the same helper as `GET /api/sessions/stages`.
+After the initial full read, known-session activity events replace that session's
+activity locally, including clearing request/recovery state; fast tool start/end
+transitions need no additional stages HTTP requests. Question/input changes still
+publish even at the same stage, so `/ask` readers retain their invalidations.
+Legacy or malformed payloads and unknown sessions fall back to full stages reads.
+Initial reads, reset/reconnect, manual refresh and inventory/lifecycle invalidations
+also retain HTTP recovery. Events arriving during a stages read overlay that
+response for sessions still present in its inventory; they cannot resurrect deleted
+rows or be overwritten by a stale in-flight response. The bounded fingerprint map
+stores no response authority; eviction or fingerprint failure permits a notification
+rather than suppressing updates. Pure history persistence does not invalidate
+activity snapshots; admission, completion and broad legacy notifications still do. Known session metadata changes can use targeted graph reads;
 unknown/new sessions, handoff/end and broad Project events retain full recovery.
 Pure title/description/completion edits, existing-session configuration edits and
 working-folder switches publish `session.changed` with `metadataOnly: true`.

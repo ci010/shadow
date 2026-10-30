@@ -58,4 +58,24 @@ test('questions changing within the waiting stage still publish activity for ask
   yields.set('one', { id: 'question-b', timeoutPaused: true })
   invalidator.changed('one')
   assert.equal(notifications, 3)
+  yields.delete('one')
+  inputs.set('one', { id: 'input-a', question: 'first' })
+  invalidator.changed('one')
+  inputs.set('one', { id: 'input-b', question: 'second' })
+  invalidator.changed('one')
+  invalidator.changed('one')
+  assert.equal(notifications, 5, 'input changes still notify while stage remains waiting')
+})
+
+test('read-model wire validation requires complete replacements and validates recovery contents', async () => {
+  const { parseSessionActivityReadModel } = await import('./activity-read-model.ts')
+  const valid = { stage: 'tool', waitingForCall: false, activeRequestId: 'turn', recovery: null }
+  assert.deepEqual(parseSessionActivityReadModel(valid), valid)
+  for (const invalid of [null, [], {}, { ...valid, stage: 'unknown' }, { ...valid, waitingForCall: true },
+    { ...valid, activeRequestId: '' }, { ...valid, activeRequestId: undefined },
+    { ...valid, recovery: undefined }, { ...valid, recovery: { id: 'r', reason: 'failed', pendingToolCalls: -1 } }]) {
+    assert.equal(parseSessionActivityReadModel(invalid), undefined)
+  }
+  const recovery = { id: 'r', reason: 'interrupted', userInvolved: true, pendingToolCalls: 2, providerFailure: 'network' }
+  assert.deepEqual(parseSessionActivityReadModel({ ...valid, recovery })?.recovery, recovery)
 })
