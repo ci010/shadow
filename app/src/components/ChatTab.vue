@@ -205,8 +205,10 @@
                 <span v-for="cost in msg.usage.costs" :key="cost.currency" class="usage-badge usage-cost" :title="t('Estimated cost, not a bill. Plan allowances and discounts may differ.')"><span class="i-lucide-coins" aria-hidden="true" />{{ formatUsageCost(cost) }}</span>
                 <span v-if="msg.usage.costIncomplete" class="usage-badge">{{ t(msg.usage.costs?.length ? 'Cost estimate incomplete' : 'Cost could not be estimated') }}</span>
               </div>
-              <MessageTimestamp v-if="!msg.sessionSource" :timestamp="msg.timestamp" />
-              <MessageCopyActions v-if="msg.attachmentBody.text" :text="msg.attachmentBody.text" :render-content="renderMarkdown" />
+              <div class="chat-footer-actions">
+                <MessageTimestamp v-if="!msg.sessionSource" :timestamp="msg.timestamp" />
+                <MessageCopyActions v-if="msg.role === 'assistant' && msg.attachmentBody.text" :text="msg.attachmentBody.text" :render-content="renderMarkdown" />
+              </div>
               </div>
             </component>
             </template>
@@ -3374,6 +3376,17 @@ function resendLastMessage() {
 
 .chat-footer .usage-info {
   margin-top: 0;
+}
+
+.chat-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-left: auto;
+}
+
+.chat-footer-actions :deep(.message-time) {
+  margin-left: 0;
 }
 
 .chat-content :deep(pre) {
