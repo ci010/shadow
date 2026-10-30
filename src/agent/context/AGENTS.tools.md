@@ -1,6 +1,11 @@
 ## Tool discovery and recovery
 
 Run independent tools in parallel. Prefer `search` over shell for files/content.
+For ordinary text-file creation and local edits, prefer `write` to retain structured
+change records. Use `exec` for generators, formatters, encoding conversion or
+complex batch transformations that dedicated tools cannot reliably express;
+inspect the resulting diff and change scope. Do not use a dedicated tool if it
+would alter unrelated content just to satisfy this preference.
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 

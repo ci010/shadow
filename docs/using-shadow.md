@@ -231,8 +231,14 @@ The patch compares observed pre-write text with submitted write text, not a
 post-write read-back; CRLF-only differences are ignored.
 
 The model receives a short receipt such as `OK edit +2 -1 edit=<id>`, plus match
-counts and any no-op, fuzzy-match, newline-normalization or unavailable-diff
-notices. Source excerpts are not echoed. `view_edit({ "edit_id": "<id>" })`
+counts and any no-op or unavailable-diff notices. Filesystem edits require a
+nonempty, unique exact match (LF/CRLF are equivalent for matching), or explicit
+`flag: "g"` to replace all non-overlapping occurrences. No fuzzy matching is
+performed. Local and remote edits preserve untouched text, BOM, mixed line
+endings and the final newline state outside the replacement. New replacement
+lines follow the target region's line ending, then the following or preceding
+line ending if the target has none. Full overwrites and appends use the supplied
+content as-is; these edit-preservation rules do not apply to them. Source excerpts are not echoed. `view_edit({ "edit_id": "<id>" })`
 returns only that edit's saved patch, on demand, from the current session's own
 segments. It cannot select another session. Empty patches report no content
 changes; unavailable or missing details report an explicit error.

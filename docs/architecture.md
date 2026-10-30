@@ -1674,24 +1674,25 @@ tests does not establish live-model alignment reliability or autonomous remote
 job cancellation. Routine reports archive by default, while important attention
 events still wake their recipient; content classification remains a model duty.
 
-The `write` tool returns a bounded success report after the filesystem operation
-completes: path, mode, UTF-8 bytes written, resulting line count, and line-numbered
-boundary excerpts. Edits also report the actual matching strategy and replacement
-count; CRLF normalization, no-op edits, and the fuzzy fallback's single-region
-behavior with `g` are explicit. Replacement text is literal, including `$&`.
-Full writes show the head/tail, edits show surrounding context, and appends show
-the old/new seam. Long lines show clipped windows around the change; their column
-labels use UTF-16 code units. Reports cap output at 8,000 characters, 24 snippets,
-and four replacement regions, with omissions labeled.
+The `write` tool returns a compact receipt after the filesystem operation
+completes, with mode, line-change counts and an edit ID when recorded. Source
+excerpts stay out of the default receipt; `view_edit` retrieves the saved patch.
+Filesystem edits require a nonempty exact match, unique unless `g` explicitly
+requests all non-overlapping matches. There is no fuzzy fallback. LF and CRLF
+are equivalent during matching, but replacements splice original-text offsets:
+untouched mixed line endings, BOM and final newline state are preserved. New
+replacement lines use the target region's first line ending, falling back to
+the following or preceding line ending, then LF. Replacement text is literal,
+including `$&`. Full overwrites and appends retain supplied content verbatim.
 
-These previews describe the written payload and pre-write context, not a separate
-post-write read-back or a guarantee against concurrent modifications. Remote
-append reads its previous contents through the owning capability before the
-append job; missing files start at line 1. If the existing content exceeds the
-remote read limit or is not readable as text, the append can still succeed, but
-its preview explicitly uses appended-text-relative lines without a whole-file
-range. Other remote read failures stop the operation. Local append uses append
-mode rather than rewriting the previously read contents.
+Recorded patches compare the written payload and observed pre-write context,
+not a separate post-write read-back or a guarantee against concurrent
+modifications. Remote append reads previous contents through the owning
+capability before the append job; missing files are treated as empty. If the
+existing content exceeds the remote read limit or is not readable as text, the
+append can still succeed, but reports unavailable observations rather than
+inventing whole-file counts. Other remote read failures stop the operation.
+Local append uses append mode rather than rewriting previously read contents.
 
 ### Virtual filesystem
 
