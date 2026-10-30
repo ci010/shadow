@@ -77,122 +77,7 @@ async function observeBeforeOverwrite(path: string, signal: AbortSignal): Promis
   }
 }
 
-// ── Edit replacers ───────────────────────────────────────────────────────────
-// Cascading fuzzy-match strategies for edit mode, applied in order until one succeeds.
-
-function getCommonIndent(lines: string[]): string {
-  const nonEmpty = lines.filter((l) => l.trim().length > 0)
-  if (nonEmpty.length === 0) return ''
-  let common = nonEmpty[0].match(/^(\s*)/)?.[1] ?? ''
-  for (let i = 1; i < nonEmpty.length; i++) {
-    const indent = nonEmpty[i].match(/^(\s*)/)?.[1] ?? ''
-    let j = 0
-    while (j < common.length && j < indent.length && common[j] === indent[j]) {
-      j++
-    }
-    common = common.slice(0, j)
-  }
-  return common
-}
-
-/** Strategy 1 — exact string match. */
-function SimpleReplacer(
-  content: string,
-  oldStr: string,
-  newStr: string,
-  replaceAll: boolean,
-): ReplacementResult | null {
-  const idx = content.indexOf(oldStr)
-  if (idx === -1) return null
-  if (replaceAll) {
-    let count = 0
-    let delta = 0
-    const ranges: ReplacementResult['ranges'] = []
-    const updated = content.replaceAll(oldStr, (_match, offset: number) => {
-      const start = offset + delta
-      if (ranges.length < MAX_WRITE_REGIONS) ranges.push({ start, end: start + newStr.length })
-      count++
-      delta += newStr.length - oldStr.length
-      return newStr
-    })
-    return { content: updated, strategy: 'exact', count, ranges }
-  }
-  return {
-    content: content.slice(0, idx) + newStr + content.slice(idx + oldStr.length),
-    strategy: 'exact', count: 1, ranges: [{ start: idx, end: idx + newStr.length }],
-  }
-}
-
-/** Strategy 2 — match after trimming each line. Tolerates trailing/leading space differences. */
-function LineTrimmedReplacer(
-  content: string,
-  oldStr: string,
-  newStr: string,
-): ReplacementResult | null {
-  const contentLines = content.split('\n')
-  const oldLines = oldStr.split('\n')
-  const n = oldLines.length
-  const trimmedOld = oldLines.map((l) => l.trim())
-
-  for (let i = 0; i <= contentLines.length - n; i++) {
-    const window = contentLines.slice(i, i + n)
-    if (window.every((line, j) => line.trim() === trimmedOld[j])) {
-      const start = contentLines.slice(0, i).reduce((offset, line) => offset + line.length + 1, 0)
-      return { content: [
-        ...contentLines.slice(0, i),
-        ...newStr.split('\n'),
-        ...contentLines.slice(i + n),
-      ].join('\n'), strategy: 'line-trimmed', count: 1, ranges: [{ start, end: start + newStr.length }] }
-    }
-  }
-  return null
-}
-
-/** Strategy 3 — strip common leading indentation before comparing, then re-indent. */
-function IndentationFlexibleReplacer(
-  content: string,
-  oldStr: string,
-  newStr: string,
-): ReplacementResult | null {
-  const contentLines = content.split('\n')
-  const oldLines = oldStr.split('\n')
-  const n = oldLines.length
-  const commonOldIndent = getCommonIndent(oldLines)
-  const strippedOld = oldLines.map((l) =>
-    l.trim()
-      ? (l.startsWith(commonOldIndent) ? l.slice(commonOldIndent.length) : l)
-      : ''
-  )
-
-  for (let i = 0; i <= contentLines.length - n; i++) {
-    const window = contentLines.slice(i, i + n)
-    const commonWindowIndent = getCommonIndent(window)
-    if (commonWindowIndent === commonOldIndent) continue // same indent — SimpleReplacer would have caught this
-    const strippedWindow = window.map((l) =>
-      l.trim()
-        ? (l.startsWith(commonWindowIndent)
-          ? l.slice(commonWindowIndent.length)
-          : l)
-        : ''
-    )
-    if (strippedWindow.join('\n') === strippedOld.join('\n')) {
-      const newLines = newStr.split('\n').map((l) => {
-        if (!l.trim()) return l
-        const stripped = l.startsWith(commonOldIndent)
-          ? l.slice(commonOldIndent.length)
-          : l
-        return commonWindowIndent + stripped
-      })
-      const start = contentLines.slice(0, i).reduce((offset, line) => offset + line.length + 1, 0)
-      return { content: [
-        ...contentLines.slice(0, i),
-        ...newLines,
-        ...contentLines.slice(i + n),
-      ].join('\n'), strategy: 'indentation-flexible', count: 1, ranges: [{ start, end: start + newLines.join('\n').length }] }
-    }
-  }
-  return null
-}
+// ── Exact edits with original-text offsets ─────────────────────────────────────
 
 export function applyReplacement(
   content: string,
@@ -209,13 +94,54 @@ export function applyReplacementDetailed(
   newStr: string,
   replaceAll = false,
 ): ReplacementResult | null {
-  // Normalize line endings before all comparisons
-  const nc = content.replace(/\r\n/g, '\n')
-  const no = oldStr.replace(/\r\n/g, '\n')
-  const nn = newStr.replace(/\r\n/g, '\n')
-  return SimpleReplacer(nc, no, nn, replaceAll) ??
-    LineTrimmedReplacer(nc, no, nn) ??
-    IndentationFlexibleReplacer(nc, no, nn)
+  if (!oldStr) return null
+  // Compare logical newlines, but splice the original text so untouched bytes,
+  // including mixed line endings and the BOM, remain unchanged.
+  const offsets: number[] = []
+  const characters: string[] = []
+  for (let i = 0; i < content.length; i++) {
+    offsets.push(i)
+    if (content[i] === '\r' && content[i + 1] === '\n') {
+      characters.push('\n')
+      i++
+    } else characters.push(content[i])
+  }
+  offsets.push(content.length)
+  const normalized = characters.join('')
+  const needle = oldStr.replace(/\r\n/g, '\n')
+  const positions: number[] = []
+  let cursor = 0
+  while (cursor <= normalized.length - needle.length) {
+    const index = normalized.indexOf(needle, cursor)
+    if (index < 0) break
+    positions.push(index)
+    if (!replaceAll && positions.length > 1) return null
+    cursor = index + (replaceAll ? needle.length : 1)
+  }
+  if (!positions.length || (!replaceAll && positions.length !== 1)) return null
+  let updated = ''
+  let previousEnd = 0
+  const ranges: ReplacementResult['ranges'] = []
+  for (const index of positions) {
+    const start = offsets[index]
+    const end = offsets[index + needle.length]
+    // Prefer a line ending inside the target, then the surrounding line.
+    let replacement = newStr
+    if (newStr.includes('\n')) {
+      const targetEol = content.slice(start, end).match(/\r\n|\n/)
+      const followingEol = targetEol ? null : content.slice(start).match(/\r\n|\n/)
+      const precedingEols = targetEol || followingEol ? null : content.slice(0, start).match(/\r\n|\n/g)
+      const eol = targetEol?.[0] ?? followingEol?.[0] ?? precedingEols?.at(-1) ?? '\n'
+      replacement = newStr.replace(/\r\n/g, '\n').replace(/\n/g, eol)
+    }
+    updated += content.slice(previousEnd, start)
+    const rangeStart = updated.length
+    updated += replacement
+    if (ranges.length < MAX_WRITE_REGIONS) ranges.push({ start: rangeStart, end: updated.length })
+    previousEnd = end
+  }
+  updated += content.slice(previousEnd)
+  return { content: updated, strategy: 'exact', count: positions.length, ranges }
 }
 
 // ── Unified write tool ────────────────────────────────────────────────────────
@@ -236,7 +162,7 @@ export class WriteTool implements Tool {
       },
       match: {
         type: 'string',
-        description: 'Exact text to find for edit mode',
+        description: 'Exact text to find (LF/CRLF equivalent). Must be nonempty and unique unless flag g is set. No fuzzy matching; edits preserve existing line endings and BOM.',
       },
       flag: {
         type: 'string',
@@ -322,7 +248,7 @@ export class WriteTool implements Tool {
       const replaceAll = flags.includes('g')
       const updated = applyReplacementDetailed(existing, match, content, replaceAll)
       if (updated === null) {
-        return 'Error: match string not found in file'
+        return 'Error: match must be nonempty and occur exactly once (or use flag g for all occurrences); original file unchanged.'
       }
       context.signal.throwIfAborted()
       await writeFile(filePath, updated.content)
@@ -331,7 +257,7 @@ export class WriteTool implements Tool {
       context.signal.throwIfAborted()
       return formatWriteResult({
         mode: 'edit', change,
-        edit: updated, unchanged: existing === updated.content, normalizedNewlines: existing.includes('\r\n'), global: replaceAll,
+        edit: updated, unchanged: existing === updated.content, global: replaceAll,
         lineChanges: countLineChanges(existing, updated.content),
       })
     }
@@ -405,7 +331,7 @@ export class WriteTool implements Tool {
         content,
         flags.includes('g'),
       )
-      if (updated === null) return 'Error: match string not found in file'
+      if (updated === null) return 'Error: match must be nonempty and occur exactly once (or use flag g for all occurrences); original file unchanged.'
       edit = updated
       nextContent = updated.content
       mode = 'replace'
@@ -445,7 +371,7 @@ export class WriteTool implements Tool {
         ? countLineChanges(existing, resultingContent)
         : { unavailable: observationUnavailable ?? 'Previous remote file text was not observed.' },
       edit, unchanged: existing === resultingContent,
-      normalizedNewlines: edit ? existing?.includes('\r\n') : undefined, global: flags.includes('g'),
+      global: flags.includes('g'),
     })
   }
 

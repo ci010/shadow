@@ -91,20 +91,36 @@ test('global replacements use literal replacement text and final offsets', () =>
   assert.equal(edit.count, 3)
   for (const range of edit.ranges) assert.equal(edit.content.slice(range.start, range.end), '$&\nnew')
   assert.equal(applyReplacement('a a', 'a', "$`-$'-$&-$$", true), "$`-$'-$&-$$ $`-$'-$&-$$")
-  assert.equal(applyReplacement('ab', '', '-', true), '-a-b-')
+  assert.equal(applyReplacement('ab', '', '-', true), null)
+  assert.equal(applyReplacement('a a', 'a', 'b'), null)
+  assert.equal(applyReplacement('aaa', 'aa', 'b'), null)
+  assert.equal(applyReplacement('  a', 'a ', 'b'), null)
 })
 
-test('fuzzy matching and CRLF normalization are disclosed without changing fallback semantics', async t => {
+test('edits reject fuzzy and ambiguous matches without modifying the file', async t => {
   const { root, context, tool } = await fixture(t)
-  await writeFile(join(root, 'fuzzy.txt'), 'before\r\n  old  \r\n  old  \r\nafter\r\n')
-  const result = await tool.execute({ path: 'fuzzy.txt', match: 'old\n', content: 'new', flag: 'g' }, context)
-  assert.match(result, /^Error:/)
-  const fuzzy = await tool.execute({ path: 'fuzzy.txt', match: '\told', content: 'new', flag: 'g' }, context)
-  assert.match(fuzzy, /match: line-trimmed/)
-  assert.match(fuzzy, /fuzzy fallback replaces one region only/)
-  assert.match(fuzzy, /CRLF line endings were normalized/)
-  assert.match(fuzzy, /^OK edit \+1 -1 edit=/)
-  assert.equal(await readFile(join(root, 'fuzzy.txt'), 'utf8'), 'before\nnew\n  old  \nafter\n')
+  const original = 'before\r\n  old  \r\n  old  \r\nafter\r\n'
+  await writeFile(join(root, 'exact.txt'), original)
+  for (const match of ['old\n', '\told', 'old', '']) {
+    const result = await tool.execute({ path: 'exact.txt', match, content: 'new' }, context)
+    assert.match(result, /^Error:/)
+    assert.equal(await readFile(join(root, 'exact.txt'), 'utf8'), original)
+  }
+  const result = await tool.execute({ path: 'exact.txt', match: 'old', content: 'new', flag: 'g' }, context)
+  assert.match(result, /Replacements: 2; match: exact/)
+  assert.doesNotMatch(result, /normalized/)
+  assert.equal(await readFile(join(root, 'exact.txt'), 'utf8'), original.replaceAll('old', 'new'))
+})
+
+test('logical newline matching preserves BOM, mixed untouched endings and final newline state', () => {
+  const original = '\uFEFFheader\r\nold\r\nblock\r\ntail\nlast'
+  const result = applyReplacementDetailed(original, 'old\nblock', 'new\nlines\nextra')!
+  assert.equal(result.content, '\uFEFFheader\r\nnew\r\nlines\r\nextra\r\ntail\nlast')
+  assert.equal(result.count, 1)
+  assert.equal(result.content.slice(result.ranges[0].start, result.ranges[0].end), 'new\r\nlines\r\nextra')
+  assert.equal(applyReplacement('a\nb\n', 'b', 'c\nd'), 'a\nc\nd\n')
+  assert.equal(applyReplacement('a\r\nb', 'b', 'c\nd'), 'a\r\nc\r\nd')
+  assert.equal(applyReplacement('old\r\nx\nold\n', 'old', 'a\nb', true), 'a\r\nb\r\nx\na\nb\n')
 })
 
 test('append receipts count the joining line without returning its content', async t => {
@@ -244,11 +260,11 @@ test('newline normalization alone is not a line change while indentation remains
   const overwrite = await tool.execute({ path: 'crlf.txt', content: 'one\ntwo\n' }, context)
   assert.match(overwrite, /^OK write \+0 -0/)
   await writeFile(join(root, 'indent.txt'), '    first\n      second\nlast\n')
-  const fuzzy = await tool.execute({
-    path: 'indent.txt', match: 'first\n  second', content: 'first\n  changed',
+  const exact = await tool.execute({
+    path: 'indent.txt', match: '    first\n      second', content: 'first\n  changed',
   }, context)
-  assert.match(fuzzy, /match: line-trimmed/)
-  assert.match(fuzzy, /^OK edit \+2 -2/)
+  assert.match(exact, /match: exact/)
+  assert.match(exact, /^OK edit \+2 -2/)
 })
 
 test('full writes still succeed when previous content is too large or not UTF-8 text', async t => {

@@ -206,3 +206,34 @@ test('remote pre-read cancellation propagates without attempting an overwrite', 
   }), { name: 'AbortError' })
   assertEquals(executor.requests.length, 1)
 })
+
+test('remote exact edits preserve mixed endings and BOM without normalizing unrelated text', async () => {
+  const executor = new FilesystemExecutor(undefined, undefined, '\uFEFFheader\r\nold\r\nblock\r\ntail\nlast')
+  const result = await new WriteTool('.').execute(
+    { path: 'notes.txt', match: 'old\nblock', content: 'new\nlines' }, context(executor),
+  )
+  match(result, /match: exact/)
+  doesNotMatch(result, /normalized/)
+  assertEquals(executor.requests[1].args, {
+    path: 'notes.txt', content: '\uFEFFheader\r\nnew\r\nlines\r\ntail\nlast', mode: 'replace',
+  })
+})
+
+test('remote ambiguous, empty and fuzzy edits never submit a write', async () => {
+  for (const needle of ['old', '', '\told']) {
+    const executor = new FilesystemExecutor(undefined, undefined, 'old\r\nold\r\n')
+    const result = await new WriteTool('.').execute(
+      { path: 'notes.txt', match: needle, content: 'new' }, context(executor),
+    )
+    match(result, /^Error:/)
+    assertEquals(executor.requests.length, 1)
+  }
+})
+
+test('remote global edits replace every exact region with its local line ending', async () => {
+  const executor = new FilesystemExecutor(undefined, undefined, 'old\r\nold\n')
+  await new WriteTool('.').execute(
+    { path: 'notes.txt', match: 'old', content: 'a\nb', flag: 'g' }, context(executor),
+  )
+  assertEquals(executor.requests[1].args, { path: 'notes.txt', content: 'a\r\nb\r\na\nb\n', mode: 'replace' })
+})

@@ -6,7 +6,7 @@ export const MAX_WRITE_RESULT_CHARS = 1600
 
 export interface ReplacementResult {
   content: string
-  strategy: 'exact' | 'line-trimmed' | 'indentation-flexible'
+  strategy: 'exact'
   count: number
   /** Character offsets in the resulting text; end is exclusive. */
   ranges: Array<{ start: number; end: number }>
@@ -18,7 +18,6 @@ interface WriteResult {
   lineChanges: LineChanges
   edit?: ReplacementResult
   unchanged?: boolean
-  normalizedNewlines?: boolean
   global?: boolean
 }
 
@@ -28,10 +27,6 @@ export function formatWriteResult(result: WriteResult): string {
   const output = [`OK ${result.mode}${counts}${result.change ? ` edit=${result.change.id}` : ''}`]
   if (result.edit) output.push(`Replacements: ${result.edit.count}; match: ${result.edit.strategy}.`)
   if (result.unchanged) output.push('Content unchanged.')
-  if (result.normalizedNewlines) output.push('CRLF line endings were normalized to LF.')
-  if (result.global && result.edit && result.edit.strategy !== 'exact') {
-    output.push('Global flag: the fuzzy fallback replaces one region only.')
-  }
   const unavailable = result.change?.unavailable ?? result.lineChanges.unavailable
   if (unavailable) output.push(`Diff unavailable: ${unavailable.slice(0, 500)}`)
   if (!result.change) output.push('Historical edit details were not recorded.')
