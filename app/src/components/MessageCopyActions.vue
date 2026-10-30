@@ -14,5 +14,5 @@ const html = computed(() => props.renderContent(props.text))
 </script>
 
 <style scoped>
-.message-copy-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.message-copy-actions { display: flex; align-items: center; gap: 2px; }
 </style>

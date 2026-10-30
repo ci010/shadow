@@ -51,6 +51,8 @@ try {
   check(nodes().length===100 && calls===100,'initial history must render exactly once per message: '+calls);
   check(nodes().every((node,index)=>node.tagName==='DIV' && node.classList.contains('prose') && node.classList.contains('initial') && node.title==='History' && node.getAttribute('aria-label')==='history' && node.querySelector('strong')?.textContent==='message-'+index),'initial HTML or attribute fallthrough incorrect');
   check(nodes()[0].querySelector('.answer-html')?.shadowRoot?.querySelector('strong')?.textContent==='message-0','answer-html directive not mounted');
+  const firstParagraph=nodes()[0].querySelector('.markdown-body > p');
+  check(getComputedStyle(firstParagraph).marginTop==='0px','Markdown wrapper must not reintroduce first-paragraph top spacing');
   const initialParentRenders=parentRenders;
   const textarea=document.querySelector('textarea');
   for(const value of ['a','ab','abc','abcd','long draft','']){
@@ -95,6 +97,7 @@ try {
   copyApp.mount('#app');await nextTick();await nextTick();
   const click=async selector=>{document.querySelector(selector).click();await new Promise(resolve=>setTimeout(resolve,0));await nextTick()};
   check(document.querySelectorAll('pre .code-copy button').length===1,'missing code copy action');
+  check(getComputedStyle(document.querySelector('pre')).marginBottom==='0px','Markdown wrapper must not reintroduce last-block bottom spacing');
   await click('pre .code-copy button');
   check(writes.at(-1)==='first<tag>\\n','code copy must preserve raw text, not markup');
   await click('.message-copy-actions button');

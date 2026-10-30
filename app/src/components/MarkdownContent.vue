@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div ref="content" v-answer-html v-html="html" />
+    <div ref="content" class="markdown-body" v-answer-html v-html="html" />
     <Teleport v-for="(block, index) in blocks" :key="index" :to="block.target">
       <CopyIconButton class="code-copy" :value="block.text" :label="t('Copy code block')" />
     </Teleport>
@@ -33,6 +33,8 @@ watch([html, content], () => {
 </script>
 
 <style scoped>
+.markdown-body :deep(> :first-child) { margin-top: 0; }
+.markdown-body :deep(> :last-child) { margin-bottom: 0; }
 :deep(.copyable-code) { position: relative; padding-right: 44px !important; }
 :deep(.code-copy) { position: absolute; top: 4px; right: 4px; opacity: 0; pointer-events: none; }
 :deep(.copyable-code:hover .code-copy), :deep(.copyable-code:focus-within .code-copy) { opacity: 1; pointer-events: auto; }
