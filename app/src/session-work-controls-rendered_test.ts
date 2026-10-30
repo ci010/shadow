@@ -32,10 +32,18 @@ test('subagent popup has separate consistent gutters, square rows, focus and ins
         return `<script setup>
           import SessionWorkControls from '/src/components/SessionWorkControls.vue';
           import SessionActivity from '/src/components/SessionActivity.vue';
+          Object.defineProperty(document, 'hidden', {get:()=>false});
+          const apiBase = window.location.origin + '/projects/fixture';
+          const originalFetch = window.fetch;
+          window.fetch = (url, options) => {
+            if (String(url).includes('/scheduled-tasks')) return Promise.resolve(new Response(JSON.stringify({ sessionId:'web:inactive', tasks:[{id:'daily',name:'Daily reminder',task:'Check reports',schedule:'0 9 * * *',enabled:true,nextRun:'2027-01-02T09:00:00Z'}] }), {headers:{'Content-Type':'application/json'}}));
+            if (String(url).includes('/background-tasks')) return Promise.resolve(new Response(JSON.stringify({sessionId:'web:inactive',total:0,tasks:[]}), {headers:{'Content-Type':'application/json'}}));
+            return originalFetch(url, options);
+          };
           window.__inspected = null;
           const inspect = id => { window.__inspected = id };
         </script><template><main style="position:fixed;left:24px;bottom:24px">
-          <SessionWorkControls api-base="" session-id="" can-write :active="true"
+          <SessionWorkControls :api-base="apiBase" session-id="web:inactive" can-write :active="true"
             :subagents="[{sessionId:'worker',label:'测试 worker',mode:'task',executionStatus:'running'}]"
             @inspect="inspect" />
           <div id="activity-fixture">
@@ -68,6 +76,16 @@ test('subagent popup has separate consistent gutters, square rows, focus and ins
       await win.loadURL(${JSON.stringify(new URL('__popup', server.resolvedUrls!.local[0]).href)});
       const run=fn=>win.webContents.executeJavaScript('('+fn.toString()+')()');
       for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('[data-session-work="subagents"]')))break;await new Promise(r=>setTimeout(r,50));}
+      for(let i=0;i<100;i++){if(await run(()=>!!document.querySelector('[data-session-work="scheduled"]')))break;await new Promise(r=>setTimeout(r,50));}
+      assert.equal(await run(()=>!!document.querySelector('[data-session-work="scheduled"]')),true);
+      await run(()=>document.querySelector('[data-session-work="scheduled"]').click());
+      await new Promise(r=>setTimeout(r,250));
+      const schedule=await run(()=>({text:document.querySelector('.scheduled-tasks').textContent,time:document.querySelector('.scheduled-tasks time')?.dateTime}));
+      assert.match(schedule.text,/Daily reminder/);assert.match(schedule.text,/0 9/);
+      assert.equal(schedule.time,'2027-01-02T09:00:00Z');
+      await run(()=>document.querySelector('.session-work-panel').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})));
+      await new Promise(r=>setTimeout(r,250));
+      assert.equal(await run(()=>document.activeElement.matches('[data-session-work="scheduled"]')),true);
       const activities=await run(()=>[...document.querySelectorAll('#activity-fixture .session-activity')].map(item=>({
         wave:!!item.querySelector('.working-wave'),
         dot:getComputedStyle(item.querySelector('.activity-symbol'),'::after').content,

@@ -106,7 +106,9 @@ test('new cron jobs persist the format version and can be reloaded', async (t) =
       await reloaded.start()
       assert.equal(reloaded.listJobs()[0]?.id, id)
       assert.equal(reloaded.listJobs()[0]?.schedule, '0 9 * * SUN')
+      assert.ok(Date.parse(reloaded.nextJobRun(id)!) > Date.now())
       assert.equal(reloaded.removeJob(id), true)
+      assert.equal(reloaded.nextJobRun(id), null)
       await t.waitFor(async () => {
         const raw = await readFile(workspacePath(workspace, '.cron', 'jobs.json'), 'utf8')
         assert.deepEqual(JSON.parse(raw), { version: 1, ownershipVersion: 2, jobs: [] })
