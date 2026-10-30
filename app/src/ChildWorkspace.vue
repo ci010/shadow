@@ -23,9 +23,11 @@ import DesktopFrame from './DesktopFrame.vue'
 import DesktopRoleSettings from './components/DesktopRoleSettings.vue'
 import shadowLogo from './assets/shadow-logo.png'
 import { t } from './i18n.ts'
+import { useLiveClientPool } from './composables/useLiveClient.ts'
 import { createChildWorkspaceConnection } from './child-workspace.ts'
 const props = defineProps<{ apiBase: string }>()
-const connection = createChildWorkspaceConnection(props.apiBase)
+const pool = useLiveClientPool()
+const connection = createChildWorkspaceConnection(props.apiBase, { observeHost: pool.observeHost })
 const { available, checking, error } = connection
 const roleActionActive = ref(false)
 onMounted(connection.refresh)

@@ -57,7 +57,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
             folderRevision:revision.value, sessions:[], activeSessionId:'', collapsed:new Set(), stages:{},
             sessionsLoading:false, sessionsError:'',
           })});
-          app.provide(Symbol.for('shadow.live-client-pool'), {
+          app.provide(Symbol.for('shadow.live-client-pool'), {observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },
             client:() => ({subscribe:() => ({close(){}})}),
           });
           app.mount('#app');`
@@ -90,7 +90,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
           const visible = ref(true);
           window.__sidebarFixture = {setVisible:value => visible.value = value, router};
           const app = createApp({ render:() => h(ProjectsWorkspace, {apiBase:location.origin, visible:visible.value}) });
-          app.provide(Symbol.for('shadow.live-client-pool'), {
+          app.provide(Symbol.for('shadow.live-client-pool'), {observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },
             client:() => ({subscribe:() => ({close(){}})}),
           });
           app.use(router).mount('#app');`

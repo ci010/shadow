@@ -297,3 +297,21 @@ test('browser-safe contract parsers strictly reject unknown fields, wrong scope 
   const poisoned = Object.defineProperty({ ...metadata }, 'purpose', { get() { throw new Error(SECRET) } })
   assert.throws(() => parseCredentialRequest(poisoned), error('invalid_request_metadata', 400))
 })
+
+test('credential resource changes occur on create and abort, never on reads or stale decisions', async () => {
+  let changes = 0
+  const requests = new CredentialRequests({ projectId: 'resource-events', credentials: store(), changed: () => { changes++ } })
+  const controller = new AbortController()
+  const waiting = requests.request(input, controller.signal, 'web:owner')
+  const rejected = assert.rejects(waiting)
+  assert.equal(changes, 1)
+  requests.pending(); requests.pending()
+  assert.equal(changes, 1)
+  assert.throws(() => requests.cancel('stale'))
+  assert.equal(changes, 1)
+  controller.abort()
+  await rejected
+  assert.equal(changes, 2)
+  requests.stop()
+  assert.equal(changes, 2)
+})

@@ -29,6 +29,7 @@ export class AuthoringProbeRequests {
   private readonly running = new Map<string, AbortController>()
   private readonly inflight = new Set<Promise<ProbeDecisionResult>>()
   private stopped = false
+  private expiryTimer?: ReturnType<typeof setTimeout>
 
   constructor(private readonly options: {
     projectId: string
@@ -38,6 +39,7 @@ export class AuthoringProbeRequests {
     credentials: AgentCredentialStore
     canAuthor: (sessionId: string) => boolean
     notify: (request: ProbeRequest) => Promise<void>
+    changed?: () => void
     now?: () => number
   }) {
     this.document = new PrivateDocument({
@@ -56,8 +58,9 @@ export class AuthoringProbeRequests {
     if (document.requests.some(request => request.status === 'running')) {
       document.requests = document.requests.map(request => request.status === 'running'
         ? { ...request, status: 'failed', error: 'Probe interrupted by restart. It was not replayed; request a new review to run again.' } : request)
-      this.document.write(document)
+      this.write(document)
     }
+    this.scheduleExpiry()
   }
 
   list(): ProbeRequest[] { return this.document.read().requests }
@@ -100,7 +103,7 @@ export class AuthoringProbeRequests {
       isDeepStrictEqual(other.arguments, request.arguments))
     if (existing) return existing
     if (document.requests.length >= 200) throw new ProbeRequestError(409, 'Probe review history limit reached (200 requests). No new request was created.')
-    this.document.write({ ...document, requests: [...document.requests, request] })
+    this.write({ ...document, requests: [...document.requests, request] })
     return request
   }
 
@@ -173,11 +176,13 @@ export class AuthoringProbeRequests {
       this.running.get(request.id)?.abort(new Error('Authoring scope or source changed.'))
       return { ...request, status: 'cancelled' as const, error: 'The Change or its delegation changed. Request a new review.' }
     })
-    if (!isDeepStrictEqual(requests, document.requests)) this.document.write({ ...document, requests })
+    if (!isDeepStrictEqual(requests, document.requests)) this.write({ ...document, requests })
   }
 
   async stop(): Promise<void> {
     this.stopped = true
+    clearTimeout(this.expiryTimer)
+    this.expiryTimer = undefined
     for (const controller of this.running.values()) controller.abort(new Error('Project is stopping.'))
     const outcomes = await Promise.allSettled(this.inflight)
     const failures = outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason)
@@ -219,7 +224,38 @@ export class AuthoringProbeRequests {
 
   private update(request: ProbeRequest): void {
     const document = this.document.read()
-    this.document.write({ ...document, requests: document.requests.map(item => item.id === request.id ? request : item) })
+    this.write({ ...document, requests: document.requests.map(item => item.id === request.id ? request : item) })
+  }
+
+  private write(document: z.infer<typeof documentSchema>): void {
+    if (isDeepStrictEqual(document, this.document.read())) return
+    this.document.write(document)
+    this.scheduleExpiry()
+    this.options.changed?.()
+  }
+
+  private scheduleExpiry(retry = false): void {
+    clearTimeout(this.expiryTimer)
+    this.expiryTimer = undefined
+    if (this.stopped) return
+    const deadlines = this.document.read().requests.filter(request => request.status === 'pending').map(request => Date.parse(request.expiresAt))
+    if (!deadlines.length) return
+    const delay = retry ? 1000 : Math.max(0, Math.min(...deadlines) - this.now())
+    this.expiryTimer = setTimeout(() => {
+      try { this.expire(); this.scheduleExpiry() } catch {
+        console.warn('[authoring-probe] Expiry update failed')
+        this.scheduleExpiry(true)
+      }
+    }, Math.min(delay, 2_147_483_647))
+    this.expiryTimer.unref()
+  }
+
+  private expire(): void {
+    if (this.stopped) return
+    const document = this.document.read()
+    const requests = document.requests.map(request => request.status === 'pending' && this.now() >= Date.parse(request.expiresAt)
+      ? { ...request, status: 'cancelled' as const, error: 'Probe approval expired. Request a new review.' } : request)
+    if (!isDeepStrictEqual(requests, document.requests)) this.write({ ...document, requests })
   }
 
   private now(): number { return this.options.now?.() ?? Date.now() }

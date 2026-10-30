@@ -6,7 +6,7 @@ import type { GatewayPlugin } from '../gateway/types.ts'
 /** Ephemeral invitation only. Credential values never pass through this broker. */
 export class BotChatSetup {
   private pending = new Map<string, { id: string; sessionId: string; expiresAt: number; finish: (status: string) => void }>()
-  constructor(readonly projectId: string) {}
+  constructor(readonly projectId: string, private readonly changed: () => void = () => {}) {}
   request(sessionId: string, signal: AbortSignal): Promise<string> {
     signal.throwIfAborted()
     if (this.pending.has(sessionId)) throw new Error('Bot setup is already open in this chat.')
@@ -15,6 +15,7 @@ export class BotChatSetup {
       const finish = (status: string) => {
         if (this.pending.get(sessionId)?.id !== id) return
         this.pending.delete(sessionId)
+        this.changed()
         clearTimeout(timer)
         signal.removeEventListener('abort', abort)
         resolve(JSON.stringify({ status }))
@@ -23,6 +24,7 @@ export class BotChatSetup {
       const timer = setTimeout(() => finish('expired'), 10 * 60_000)
       timer.unref()
       this.pending.set(sessionId, { id, sessionId, expiresAt: Date.now() + 10 * 60_000, finish })
+      this.changed()
       signal.addEventListener('abort', abort, { once: true })
       if (signal.aborted) abort()
     })

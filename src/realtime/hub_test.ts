@@ -533,3 +533,29 @@ test('retired chat streams return an explicit error and background output only u
     hub.close()
   }
 })
+
+test('resource invalidations are minimal, project isolated, replayable and lease scoped', async () => {
+  const hub = new RealtimeHub()
+  const one = hub.registerProject('one'), two = hub.registerProject('two')
+  const topic: RealtimeTopic = { kind: 'resources', projectId: 'one' }
+  assert.deepEqual(parseRealtimeTopics(JSON.stringify([topic, topic])), [topic])
+  const cursor = hub.cursor
+  two.invalidateResource!('interactions')
+  one.invalidateResource!('interactions')
+  one.invalidateResource!('service-groups')
+  const stream = read(hub.connect([topic], new AbortController().signal, cursor))
+  try {
+    for (const resource of ['interactions', 'service-groups']) {
+      const event = await stream.next()
+      assert.equal(event.type, 'event')
+      if (event.type !== 'event') throw new Error('Expected event')
+      assert.deepEqual(event.topic, topic)
+      assert.deepEqual(event.payload, { event: 'invalidate', resource })
+    }
+    assert.equal((await stream.next()).type, 'ready')
+    one.close()
+    const closedCursor = hub.cursor
+    one.invalidateResource!('interactions')
+    assert.equal(hub.cursor, closedCursor)
+  } finally { await stream.cancel(); hub.close() }
+})

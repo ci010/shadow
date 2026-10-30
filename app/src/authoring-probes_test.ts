@@ -95,6 +95,7 @@ test('explicit approval is single flight and pinned; completed receipts retain t
   const refresh = state.refresh()
   calls[2]!.finish(Response.json({ requests: [probe()] }))
   await refresh
+  await settle()
   assert.equal(state.request.value?.status, 'completed')
   assert.equal(await state.approve(), false)
 })
@@ -155,6 +156,7 @@ test('stale, unauthorized, mismatched and uncertain decisions require explicit r
       const refresh = state.refresh()
       calls[2]!.finish(Response.json({ requests: [{ ...probe(), status: 'running', runId: 'run-a' }] }))
       await refresh
+  await settle()
       assert.equal(state.needsReload.value, true)
       const reload = state.reload()
       calls[3]!.finish(Response.json({ requests: [{ ...probe(), status: 'completed', runId: 'run-a' }] }))
@@ -194,11 +196,14 @@ test('late polling and old navigation responses cannot replace current state', a
   assert.equal(state.request.value?.id, 'probe-a')
   const refresh = state.refresh()
   const write = state.cancel()
-  assert.equal(calls[2]!.init.signal!.aborted, true)
+  assert.equal(calls[2]!.init.signal!.aborted, false, 'A decision cancels local read consumption, not the shared HTTP')
   calls[3]!.finish(Response.json({ result: { requestId: 'probe-a', revision, status: 'cancelled' } }))
   await write
   calls[2]!.finish(Response.json({ requests: [probe()] }))
+  await settle()
+  calls[4]!.finish(Response.json({ requests: [{ ...probe(), status: 'cancelled' }] }))
   await refresh
+  await settle()
   assert.equal(state.request.value?.status, 'cancelled')
 })
 

@@ -1,3 +1,5 @@
+import { useLiveClientPool } from './composables/useLiveClient.ts'
+import { acquireInteractionRead } from './interaction-resource.ts'
 import { t } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
@@ -50,7 +52,9 @@ export function usePublicationRequest(source: () => PublicationSource) {
   const busy = computed(() => operation.value !== null)
   let read: AbortController | undefined
   let write: AbortController | undefined
-  let timer: ReturnType<typeof setInterval> | undefined
+  const pool = useLiveClientPool()
+  let shared: ReturnType<typeof acquireInteractionRead> | undefined
+  let queued = false
   let generation = 0
   const resolvedIds = new Set<string>()
   const waitingIds = new Set<string>()
@@ -63,8 +67,9 @@ export function usePublicationRequest(source: () => PublicationSource) {
     read?.abort()
     write?.abort()
     read = write = undefined
-    if (timer) clearInterval(timer)
-    timer = undefined
+    shared?.dispose()
+    shared = undefined
+    queued = false
     requests.value = []
     selectedId.value = ''
     error.value = notice.value = ''
@@ -73,19 +78,16 @@ export function usePublicationRequest(source: () => PublicationSource) {
     resolvedIds.clear()
     waitingIds.clear()
   }
-  async function refresh(manual = false) {
-    if (!enabled.value || write || read) return
+  async function refresh(manual = false, fresh = manual) {
+    if (!enabled.value || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
+    if (write || read) { queued = true; return }
     const current = generation
     const controller = new AbortController()
     read = controller
     loading.value = true
     try {
-      const response = await fetch(endpoint(), {
-        cache: 'no-store', redirect: 'error',
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
-      })
-      if (!response.ok) throw new Error(t('Publication review unavailable'))
-      const parsed = parsePublicationRequests(await response.json(), source().projectId)
+      const body = await shared!.load(fresh)
+      const parsed = parsePublicationRequests(body, source().projectId)
       const next = (source().conversation ? parsed : visiblePublicationRequests(parsed, source().sessionId))
         .filter(item => {
           const target = source().conversation
@@ -107,7 +109,7 @@ export function usePublicationRequest(source: () => PublicationSource) {
         error.value = t('Could not load the publication review. Check your owner access and connection, then reload.')
       }
     } finally {
-      if (read === controller) { read = undefined; loading.value = false }
+      if (read === controller) { read = undefined; loading.value = false; if (queued) { queued = false; void refresh() } }
     }
   }
   async function decide(cancel: boolean): Promise<boolean> {
@@ -122,6 +124,7 @@ export function usePublicationRequest(source: () => PublicationSource) {
     operation.value = cancel ? 'cancelling' : 'publishing'
     error.value = notice.value = ''
     let status = 0
+    let confirmed = false
     try {
       const response = await fetch(endpoint(pending.id), {
         method: cancel ? 'DELETE' : 'POST',
@@ -138,6 +141,7 @@ export function usePublicationRequest(source: () => PublicationSource) {
       if (result.requestId !== pending.id || result.revision !== pending.revision
         || (cancel ? result.status !== 'cancelled' : !['published', 'waiting'].includes(result.status))) throw new Error(t('Publication receipt mismatch'))
       if (current !== generation || controller.signal.aborted) return false
+      confirmed = true
       if (result.status === 'waiting') {
         waitingIds.add(pending.id)
         requests.value = requests.value.map(item => item.id === pending.id ? { ...item, status: 'waiting' } : item)
@@ -160,17 +164,16 @@ export function usePublicationRequest(source: () => PublicationSource) {
       }
       return false
     } finally {
-      if (write === controller) { write = undefined; operation.value = null }
+      if (write === controller) { write = undefined; operation.value = null; if (confirmed) shared?.invalidate(); if (queued) { queued = false; void refresh() } }
     }
   }
   watch([() => source().apiBase, () => source().projectId, () => source().sessionId, () => JSON.stringify(source().conversation), enabled], () => {
     stop()
     if (!enabled.value) return
+    shared = acquireInteractionRead(pool, source().apiBase, source().projectId, endpoint(), () => { void refresh() })
     void refresh()
-    timer = setInterval(() => { void refresh() }, 3000)
   }, { immediate: true, flush: 'sync' })
-  watch(() => source().stage, () => { void refresh() })
   onUnmounted(stop)
   return { request, requests:visibleRequests, selectedId, error, notice, loading, operation, busy, enabled, needsReload,
-    reload: () => refresh(true), refresh: () => refresh(), confirm: () => decide(false), cancel: () => decide(true) }
+    reload: () => refresh(true), refresh: () => refresh(false, true), confirm: () => decide(false), cancel: () => decide(true) }
 }

@@ -72,7 +72,7 @@ test('automations open ordinary conversations and navigate run history without a
           ]});
           await router.push({name:'chat',params:{projectId:'fixture'},query:{automation:'cron:weekly'}});
           const app = createApp({render:() => h(ProjectsWorkspace,{apiBase:location.origin,visible:true})});
-          app.provide(Symbol.for('shadow.live-client-pool'),{client:() => ({
+          app.provide(Symbol.for('shadow.live-client-pool'),{observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
             subscribe:() => ({close(){},ready:async()=>{}})
           })});
           app.provide(ioBridgeKey, createIoBridge());

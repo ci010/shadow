@@ -40,7 +40,9 @@ async function fixture(projectId = 'project-a') {
   let retired = 0
   let validate: (snapshot: ResourceSnapshot) => Promise<void> = async () => {}
   let retirement: () => Promise<void> = async () => {}
+  let changes = 0
   const options = {
+    changed: () => { changes++ },
     service,
     retire: async () => { retired++; await retirement() },
     validateLive: (snapshot: ResourceSnapshot) => validate(snapshot),
@@ -49,6 +51,7 @@ async function fixture(projectId = 'project-a') {
   const app = new Hono()
   authoringPublicationPlugin(requests, request => request.headers.get('Authorization') === 'Bearer owner')(app)
   return {
+    changes: () => changes,
     store, requests, service, options, app,
     retired: () => retired,
     validate: (fn: typeof validate) => { validate = fn },
@@ -648,5 +651,20 @@ test('re-proposal binds review to its requesting ordinary session without transf
     await assert.rejects(f.requests.submit(legacy.id, decision(legacy)), /no longer|changed|stale/i)
     assert.equal(f.requests.pending()?.id, ordinary.id)
     assert.notEqual(f.store.snapshot().revision, ordinary.revision)
+  } finally { await f.close() }
+})
+
+ test('publication invalidates on actual mutations, not repeated list or absent Change invalidation', async () => {
+  const f = await fixture()
+  try {
+    await f.stage()
+    await f.requests.propose(undefined, undefined, 'web:chat-admin')
+    assert.equal(f.changes(), 1)
+    f.requests.list(); f.requests.list(); f.requests.invalidateChange('absent')
+    assert.equal(f.changes(), 1)
+    await f.stage(bundle('Revised'))
+    assert.equal(f.changes(), 2)
+    f.requests.list()
+    assert.equal(f.changes(), 2)
   } finally { await f.close() }
 })

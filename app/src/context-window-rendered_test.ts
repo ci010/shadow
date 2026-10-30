@@ -132,7 +132,7 @@ test('rendered channel and automation settings switch models, isolate sessions a
               ? h(YieldQuestion,{sessionId,apiBase:location.origin + '/projects/fixture',active:true,stage:'waiting',canAnswer:true})
               : h(ChatTab,{key:selectedSession.value,ref:view,managed:true,projectId:'fixture',sessionId:selectedSession.value,automationRun:automationIds.includes(selectedSession.value),apiBase:location.origin + '/projects/fixture'});
           }});
-          app.provide(Symbol.for('shadow.live-client-pool'),{client:() => ({subscribe:() => ({ready:async()=>{},close(){}})}),dispose(){}});
+          app.provide(Symbol.for('shadow.live-client-pool'),{observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({subscribe:() => ({ready:async()=>{},close(){}})}),dispose(){}});
           app.use(router).mount('#app');
           window.__composerFixture=fixture;`
       },

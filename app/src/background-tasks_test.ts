@@ -7,7 +7,7 @@ import { compileScript, compileTemplate, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import { fetchBackgroundTasks } from './background-tasks.ts'
 import { createLiveRefresh } from './live-refresh.ts'
-import type { LiveObserver } from './live-client.ts'
+import type { LiveObserver, LiveStatus } from './live-client.ts'
 
 const sessionId = 'web:chat-process'
 const task = (id = 'one') => ({ id, sessionId, kind: 'process', title: `exec: server ${id}`, status: 'running', createdAt: '2026-09-16T00:00:00Z' })
@@ -49,6 +49,10 @@ test('inventory limits and explicit authorization/upgrade failures are preserved
 })
 
 function mount(t: TestContext, active = true, log = false) {
+  const page = Object.assign(new EventTarget(), { hidden: false })
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: page })
+  let phase!: (status: LiveStatus) => void
   const requests: Array<{ url: URL; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (input: URL, init: RequestInit) => new Promise<Response>(resolve => {
     requests.push({ url: new URL(String(input)), signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
@@ -71,7 +75,7 @@ function mount(t: TestContext, active = true, log = false) {
     if (id === './ProcessOutput.vue') return { default: defineComponent({ render: () => null }) }
     if (id === '../composables/useLiveClient.ts') return {
       liveProjectId: (base: string) => new URL(base).pathname.split('/').at(-1),
-      useLiveClientPool: () => ({ client: (base: string) => ({
+      useLiveClientPool: () => ({ observeHost: (_base: string, callback: typeof phase) => { phase = callback; callback({ phase: 'live' }); return () => {} }, client: (base: string) => ({
         subscribe: (_topic: unknown, observer: LiveObserver) => {
           const entry = { base, observer, closed: false }
           subscriptions.push(entry)
@@ -94,12 +98,15 @@ function mount(t: TestContext, active = true, log = false) {
     setup: () => () => h(module.exports.default, { ...props, ref: (value: ComponentPublicInstance | null) => { instance = value } }),
   }))
   app.mount({})
-  t.after(() => app.unmount())
+  t.after(() => {
+    app.unmount()
+    if (previous) Object.defineProperty(globalThis, 'document', previous); else Reflect.deleteProperty(globalThis, 'document')
+  })
   const state = () => { assert.ok(instance); return Reflect.get(instance.$, 'setupState') }
   const invalidate = (id = sessionId) => subscriptions.at(-1)!.observer.event({
     type: 'event', cursor: 'fixture:1', topic: { kind: 'sessions', projectId: 'a' }, payload: { event: 'invalidate', sessionId: id },
   })
-  return { props, requests, subscriptions, state, invalidate }
+  return { props, requests, subscriptions, state, invalidate, page, phase: (value: LiveStatus['phase']) => phase({ phase: value }) }
 }
 
 test('running tasks update through shared invalidations and disappear after completion', async t => {
@@ -335,4 +342,29 @@ test('a completed turn during a pending draft read supersedes its stale 404', as
   view.requests[1].finish(snapshot([]))
   await settle()
   assert.equal(view.state().error, '')
+})
+
+ test('live idle inventory has no polling; disconnection, reconnect and visibility reconcile', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const view = mount(t)
+  await settle()
+  view.requests[0].finish(snapshot([])); await settle()
+  t.mock.timers.tick(90_000); await settle()
+  assert.equal(view.requests.length, 1)
+  view.phase('reconnecting')
+  t.mock.timers.tick(30_000); await settle()
+  assert.equal(view.requests.length, 2)
+  view.requests[1].finish(snapshot([])); await settle()
+  view.phase('live')
+  view.subscriptions[0].observer.reconnected?.(); await settle()
+  assert.equal(view.requests.length, 3)
+  view.requests[2].finish(snapshot([])); await settle()
+  view.page.hidden = true
+  view.invalidate(); view.subscriptions[0].observer.reset('reconnect')
+  view.phase('error'); t.mock.timers.tick(60_000); await settle()
+  assert.equal(view.requests.length, 3)
+  view.page.hidden = false
+  view.page.dispatchEvent(new Event('visibilitychange')); await settle()
+  assert.equal(view.requests.length, 4)
+  view.requests[3].finish(snapshot([])); await settle()
 })

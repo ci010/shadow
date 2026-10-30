@@ -59,7 +59,7 @@ test('real composer and diagnosis selections survive page reload and preserve se
               });
             };
           }});
-          app.provide(Symbol.for('shadow.live-client-pool'), {client:() => ({
+          app.provide(Symbol.for('shadow.live-client-pool'), {observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
             subscribe:() => ({close(){},ready:async()=>{}})
           })});
           app.use(router); await router.isReady(); app.mount('#app');

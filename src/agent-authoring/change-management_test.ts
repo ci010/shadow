@@ -76,7 +76,9 @@ async function fixture(workspace: string, publish = true) {
         change.base.revision !== request.baseRevision) throw new Error('Change review is stale.')
     },
   })
+  let probeChanges = 0
   const probeOptions = {
+    changed: () => { probeChanges++ },
     projectId: 'p', directory, changes, service, credentials, canAuthor,
     notify: async (request: { id: string }) => { notified.push(request.id) },
   }
@@ -100,6 +102,7 @@ async function fixture(workspace: string, publish = true) {
   authoringProbesPlugin(probes, authorize)(app)
   authoringPublicationPlugin(publications, authorize)(app)
   return {
+    probeChanges: () => probeChanges,
     directory, resources, changes, credentials, calls, notified, probes, publications, options, probeOptions,
     context, worker, invoke, app, setHook: (next: () => void) => { hook = next },
     setRetirementError: (error?: Error) => { retirementError = error },
@@ -538,5 +541,40 @@ test('creator configures reusable capabilities once in an unbound Agent Change; 
       assert.equal(f.resources.snapshot().revision, request.revision)
       assert.deepEqual(f.resources.snapshot().bundle.bindings, [])
     } finally { f.probes.stop(); f.publications.stop() }
+  })
+})
+
+test('probe create, expiry and invalidation notify once and reads are inert', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  await withTempWorkspace(async workspace => {
+    const f = await fixture(workspace)
+    try {
+      const change = await f.invoke({ action: 'create', input: { title: 'Probe notifications' } })
+      await f.invoke({ action: 'request_probe', changeId: change.id, expectedRevision: change.revision,
+        input: { toolName: 'issue_list', arguments: { method: 'GET' } } })
+      assert.equal(f.probeChanges(), 1)
+      f.probes.list(); f.probes.list(); f.probes.invalidateChange('absent')
+      assert.equal(f.probeChanges(), 1)
+      f.probes.invalidateChange(change.id)
+      assert.equal(f.probeChanges(), 2)
+      f.probes.invalidateChange(change.id)
+      assert.equal(f.probeChanges(), 2)
+      await f.invoke({ action: 'request_probe', changeId: change.id, expectedRevision: change.revision,
+        input: { toolName: 'issue_list', arguments: { method: 'GET' } } })
+      assert.equal(f.probeChanges(), 3)
+      await f.probes.stop()
+      let changes = 0
+      const restored = new AuthoringProbeRequests({ ...f.probeOptions,
+        now: () => Date.now() + 11 * 60_000, changed: () => { changes++ } })
+      try {
+        t.mock.timers.tick(1000)
+        assert.equal(changes, 1)
+        assert.ok(restored.list().every(request => request.status === 'cancelled'))
+        assert.equal((restored as unknown as { expiryTimer?: unknown }).expiryTimer, undefined)
+        t.mock.timers.tick(1000)
+        restored.list(); restored.invalidateChange(change.id)
+        assert.equal(changes, 1)
+      } finally { await restored.stop() }
+    } finally { f.stop() }
   })
 })

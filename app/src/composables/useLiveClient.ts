@@ -7,6 +7,7 @@ export function createLiveClientPool() {
   const clients = new Map<string, LiveClient>()
   const statuses = new Map<string, LiveStatus>()
   const observers = new Set<(statuses: readonly LiveStatus[]) => void>()
+  const hostObservers = new Map<string, Set<(status: LiveStatus) => void>>()
   const notify = () => {
     const current = [...statuses.values()].filter(status => status.phase !== 'idle')
     for (const observer of observers) observer(current)
@@ -16,10 +17,25 @@ export function createLiveClientPool() {
       const host = hostBase(base)
       let client = clients.get(host)
       if (!client) {
-        client = createLiveClient(host, { status: status => { statuses.set(host, status); notify() } })
+        client = createLiveClient(host, { status: status => {
+          statuses.set(host, status)
+          for (const observer of hostObservers.get(host) ?? []) observer(status)
+          notify()
+        } })
         clients.set(host, client)
       }
       return client
+    },
+    observeHost(base: string, observer: (status: LiveStatus) => void) {
+      const host = hostBase(base)
+      let listeners = hostObservers.get(host)
+      if (!listeners) { listeners = new Set(); hostObservers.set(host, listeners) }
+      listeners.add(observer)
+      observer(statuses.get(host) ?? { phase: 'idle' })
+      return () => {
+        listeners.delete(observer)
+        if (!listeners.size) hostObservers.delete(host)
+      }
     },
     observe(observer: (statuses: readonly LiveStatus[]) => void) {
       observers.add(observer)
@@ -29,6 +45,7 @@ export function createLiveClientPool() {
     retry() { for (const client of clients.values()) client.retry() },
     dispose() {
       observers.clear()
+      hostObservers.clear()
       for (const client of clients.values()) client.dispose()
       clients.clear()
       statuses.clear()

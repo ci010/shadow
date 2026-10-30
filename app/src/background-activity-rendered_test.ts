@@ -60,7 +60,7 @@ test('background chips and sidebar delegated activity update without making an i
               ]);
             };
           }});
-          app.provide(Symbol.for('shadow.live-client-pool'), {client:() => ({
+          app.provide(Symbol.for('shadow.live-client-pool'), {observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; }, client:() => ({
             subscribe:(_topic,observer) => {
               subscriptions.add(observer);
               return {close(){subscriptions.delete(observer)},ready:async()=>{}};
@@ -106,6 +106,7 @@ test('background chips and sidebar delegated activity update without making an i
               key: 'topic:web:chat-owner', subject: { kind: 'topic', sessionId: 'web:chat-owner' }, revision: 1,
               definition: { objective: 'Review a long assignment title that must fit beside the activity chips', acceptance: [], boundaries: [], evidence: [] },
               origin: 'human', reason: 'Fixture', paused: false,
+              sequence: 1, changedBy: 'user', changedAt: '2026-09-23T00:00:00Z', change: 'goal',
               authority: { manager: 'web:chat-owner', executor: 'web:chat-owner', active: true }, history: [],
             }] : [], effects: [],
           })

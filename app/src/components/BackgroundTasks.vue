@@ -40,6 +40,7 @@ import { computed, ref, useId, watch } from 'vue'
 import { BackgroundSessionNotFoundError, fetchBackgroundTasks, type ActiveBackgroundTask } from '../background-tasks.ts'
 import { createLiveRefresh } from '../live-refresh.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
+import type { LiveStatus } from '../live-client.ts'
 import { isRecord } from '../folders-sidebar.ts'
 
 const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; embedded?: boolean }>()
@@ -92,6 +93,8 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
   if (!active || !sessionId) return
   const snapshot = createLiveRefresh({
     load: async signal => {
+      // A coalesced invalidation may execute after the page was hidden.
+      if (document.hidden) return null
       if (sessionMissing) throw new BackgroundSessionNotFoundError(t('This conversation is no longer available.'))
       loading.value = true
       const turnAtRead = completedTurn
@@ -102,6 +105,7 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
       }
     },
     apply: value => {
+      if (!value) { loading.value = false; return }
       tasks.value = value.tasks
       total.value = value.total
       loading.value = false
@@ -116,7 +120,7 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
         ? cause.message : t('Background task status is unavailable. Check Main and retry.')
     },
   })
-  const autoRefresh = () => { if (!sessionMissing) { loading.value = true; snapshot.refresh() } }
+  const autoRefresh = () => { if (!sessionMissing && !document.hidden) { loading.value = true; snapshot.refresh() } }
   refresh = () => { sessionMissing = false; autoRefresh() }
   const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
     event: envelope => {
@@ -130,11 +134,20 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
       autoRefresh()
     },
     reset: autoRefresh,
+    reconnected: autoRefresh,
   })
-  const timer = setInterval(autoRefresh, 20_000)
+  let phase: LiveStatus['phase'] = 'connecting'
+  const stopHost = pool.observeHost(base, status => { phase = status.phase })
+  const timer = setInterval(() => {
+    if (phase === 'connecting' || phase === 'reconnecting' || phase === 'error') autoRefresh()
+  }, 30_000)
+  const visibilityChanged = () => { if (!document.hidden) autoRefresh() }
+  document.addEventListener('visibilitychange', visibilityChanged)
   autoRefresh()
   onCleanup(() => {
     clearInterval(timer)
+    stopHost()
+    document.removeEventListener('visibilitychange', visibilityChanged)
     subscription.close()
     snapshot.dispose()
   })
