@@ -1,4 +1,4 @@
-export type RealtimeSessionChange = 'history' | 'metadata' | 'work' | 'background-tasks' | 'scheduled-tasks'
+export type RealtimeSessionChange = 'history' | 'metadata' | 'activity' | 'work' | 'background-tasks' | 'scheduled-tasks'
 
 export type RealtimeResource = 'interactions' | 'service-groups' | 'automations' | 'config' | 'folders' | 'nodes' | 'channels'
 

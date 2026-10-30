@@ -2,7 +2,7 @@ import { parseSessionGraph, isRecord, type SidebarSession } from './folders-side
 import { projectJson } from './projects.ts'
 
 interface Graph { sessions: Array<Record<string, unknown>>; nodes: Array<Record<string, unknown>> }
-const narrowChanges = new Set(['history', 'metadata', 'work', 'background-tasks', 'scheduled-tasks'])
+const narrowChanges = new Set(['history', 'metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks'])
 function graphWire(value: unknown): Graph {
   if (!isRecord(value) || !Array.isArray(value.sessions) || !Array.isArray(value.nodes)
     || !value.sessions.every(isRecord) || !value.nodes.every(isRecord)) throw new Error('Invalid session graph')

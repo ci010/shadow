@@ -147,9 +147,11 @@ export function createProjectLiveState(
           graphLoader.invalidate(event.payload)
           graph.invalidate()
         }
-        activity.invalidate()
+        if (!isRecord(event.payload) || event.payload.event !== 'invalidate'
+          || affectsSessionResource(event.payload, undefined, 'activity')) activity.invalidate()
         if (usage.work && (isRecord(event.payload) && event.payload.event === 'activity'
-          || affectsSessionResource(event.payload, undefined, 'work'))) work.invalidate()
+          || affectsSessionResource(event.payload, undefined, 'work')
+          || affectsSessionResource(event.payload, undefined, 'activity'))) work.invalidate()
       },
       reset,
       reconnected: () => reset('reconnect'),
