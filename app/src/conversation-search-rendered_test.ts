@@ -69,7 +69,7 @@ test('Ctrl+F searches real conversations across all segments, split panes and li
             sessionId:state.sessionId, childSessionId:state.childSessionId, visible:state.visible,
             style:'height:100dvh',
           })});
-          app.provide(Symbol.for('shadow.live-client-pool'), {client:() => ({
+          app.provide(Symbol.for('shadow.live-client-pool'), {observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
             subscribe:() => ({close(){},ready:async()=>{}})
           })});
           app.use(router).mount('#app');`

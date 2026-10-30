@@ -2,6 +2,8 @@ import { onActivated, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
+import { useLiveClientPool } from './composables/useLiveClient.ts'
+import { createLiveResourceRefresh } from './live-resource-refresh.ts'
 
 export interface PublishedGroupSkill { name: string; tools: Array<{ name: string; modules: string[] }> }
 export interface AgentGroupSetup {
@@ -27,20 +29,28 @@ export function serviceGroupKey(group: Pick<ServiceGroup, 'botInstanceId' | 'con
   return JSON.stringify([group.botInstanceId, group.conversationId])
 }
 type ServiceGroupSource = { apiBase: string; projectId: string; active: boolean; group?: string; session?: string }
-const serviceGroupResources = new Map<string, ReturnType<typeof createServiceGroupResource>>()
+type LivePool = ReturnType<typeof useLiveClientPool>
+const serviceGroupResources = new WeakMap<LivePool, Map<string, ReturnType<typeof createServiceGroupResource>>>()
 
 // A resource exists only while at least one active component subscribes. Project ID
 // is included defensively even when callers already pass a project-scoped base.
-function createServiceGroupResource(options: ServiceGroupSource) {
+function createServiceGroupResource(options: ServiceGroupSource, pool: LivePool) {
   const source = () => options
   const agentSetups = ref<AgentGroupSetup[]>([])
   const skills = ref<PublishedGroupSkill[]>([]), agentRequirements = ref<Record<string, string[]>>({})
   const groups = ref<ServiceGroup[]>([]), agents = ref<string[]>([]), revision = ref(''), error = ref('')
   let controller: AbortController | undefined, generation = 0
   let pending: Promise<void> | undefined
+  let disposed = false, invalidated = false
   function refresh(): Promise<void> {
     if (pending) return pending
-    pending = load().finally(() => { pending = undefined })
+    if (disposed || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return Promise.resolve()
+    pending = (async () => {
+      do {
+        invalidated = false
+        await load()
+      } while (invalidated && !disposed && (typeof document === 'undefined' || document.visibilityState !== 'hidden'))
+    })().finally(() => { pending = undefined })
     return pending
   }
   async function load() {
@@ -64,20 +74,24 @@ function createServiceGroupResource(options: ServiceGroupSource) {
     } catch { if (current === generation && !request.signal.aborted) error.value = 'unavailable' }
     finally { if (controller === request) controller = undefined }
   }
-  const timer = setInterval(() => {
-    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void refresh()
-  }, 3000)
-  const visible = () => { if (document.visibilityState !== 'hidden') void refresh() }
+  const live = createLiveResourceRefresh(pool, {
+    base: options.apiBase, projectId: options.projectId, resource: 'service-groups',
+    refresh: () => { invalidated = true; void refresh() },
+  })
+  const visible = () => { if (document.visibilityState !== 'hidden') { invalidated = true; void refresh() } }
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visible)
   function dispose() {
-    generation++; controller?.abort()
-    clearInterval(timer)
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visible)
+    disposed = true; generation++; controller?.abort()
+    live.dispose()
   }
   return { groups, agents, agentSetups, skills, agentRequirements, revision, error, refresh, dispose, subscribers: 0 }
 }
 
 export function useServiceGroups(source: () => ServiceGroupSource) {
+  const pool = useLiveClientPool()
+  let resources = serviceGroupResources.get(pool)
+  if (!resources) { resources = new Map(); serviceGroupResources.set(pool, resources) }
   const lifecycleActive = ref(true)
   const agentSetups = ref<AgentGroupSetup[]>([])
   const skills = ref<PublishedGroupSkill[]>([]), agentRequirements = ref<Record<string, string[]>>({})
@@ -88,8 +102,8 @@ export function useServiceGroups(source: () => ServiceGroupSource) {
     const options = { ...source() }
     if (!options.active || !lifecycleActive.value) return
     const key = JSON.stringify([options.apiBase, options.projectId, options.group || '', options.session || ''])
-    const shared = serviceGroupResources.get(key) ?? createServiceGroupResource(options)
-    serviceGroupResources.set(key, shared)
+    const shared = resources!.get(key) ?? createServiceGroupResource(options, pool)
+    resources!.set(key, shared)
     resource = shared
     shared.subscribers++
     const stopSync = watch([shared.groups, shared.agents, shared.agentSetups, shared.skills, shared.agentRequirements, shared.revision, shared.error], () => {
@@ -99,7 +113,7 @@ export function useServiceGroups(source: () => ServiceGroupSource) {
     if (shared.subscribers === 1) void shared.refresh()
     cleanup(() => {
       stopSync(); resource = undefined
-      if (--shared.subscribers === 0) { shared.dispose(); serviceGroupResources.delete(key) }
+      if (--shared.subscribers === 0) { shared.dispose(); resources!.delete(key) }
     })
   }, { immediate: true })
   onActivated(() => { lifecycleActive.value = true })

@@ -505,11 +505,12 @@ export async function createProjectRuntime(
 
   const context = new ContextBuilder(workspace)
   const botStore = new BotInstanceStore({
+    changed: () => realtime.invalidateResource?.('service-groups'),
     projectId: project.id,
     path: resolve(workspace, 'config', 'bots.v1.json'),
     ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
   })
-  const serviceDiscovery = new ServiceDiscoveryStore(project.id, resolve(workspace, 'config', 'service-discovery.json'))
+  const serviceDiscovery = new ServiceDiscoveryStore(project.id, resolve(workspace, 'config', 'service-discovery.json'), Date.now, () => realtime.invalidateResource?.('service-groups'))
   const authoringDirectory = resolve(workspace, 'authoring')
   const integrationDirectory = resolve(workspace, 'bots', 'runtime', 'discord-security')
   const botDeployments = new BotDeployments({directory:resolve(workspace,'bots'),projectId:project.id,validate:files => {parseBot({...files})}})
@@ -530,7 +531,7 @@ export async function createProjectRuntime(
   const agentResources = new AgentResourceStore({ projectId: project.id, directory: authoringDirectory })
   const authoringChanges = new AuthoringChanges({ projectId: project.id, directory: authoringDirectory, resources: agentResources })
   const agentCredentials = new AgentCredentialStore(authoringDirectory)
-  const credentialRequests = new CredentialRequests({ projectId: project.id, credentials: agentCredentials })
+  const credentialRequests = new CredentialRequests({ projectId: project.id, credentials: agentCredentials, changed: () => realtime.invalidateResource?.('interactions') })
   cleanup.push(() => credentialRequests.stop())
   const canDeliverAuthoredMessage = (id: string): boolean => {
     const state = sessions.getSessionState(id)
@@ -1102,6 +1103,7 @@ export async function createProjectRuntime(
   )
   cleanup.push(() => pollingSources.stop())
   const publicationRequests = new PublicationRequests({
+    changed: () => realtime.invalidateResource?.('interactions'),
     ...authoringOptions,
     validateRequest: request => {
       if (!request.change) return
@@ -1117,6 +1119,7 @@ export async function createProjectRuntime(
     },
   })
   const probeRequests = new AuthoringProbeRequests({
+    changed: () => realtime.invalidateResource?.('interactions'),
     projectId: project.id, directory: authoringDirectory, changes: authoringChanges,
     service: authoring, credentials: agentCredentials, canAuthor,
     notify: async request => {
@@ -1353,7 +1356,7 @@ export async function createProjectRuntime(
     // Admission checks must not invoke the throwing managed-conversation policy resolver.
     serviceAssigned: directoryBots.serviceAssigned,
   })
-  const botChatSetup = new BotChatSetup(project.id)
+  const botChatSetup = new BotChatSetup(project.id, () => realtime.invalidateResource?.('interactions'))
   cleanup.push(() => botChatSetup.stop())
   botChatSetupPlugin(botChatSetup, dependencies.authorize)(app)
   importTool.registerBuiltin('bot_setup', new BotSetupTool(botChatSetup, channels, sessionId => {
@@ -1434,12 +1437,15 @@ export async function createProjectRuntime(
       const definitions = directoryBots.definitions().filter(item=>item.bot.id===id)
       const personalConnections = [...definitions.filter(item=>item.bot.mode==='personal').map(item=>item.bot.connection), ...(candidate?.mode === 'personal' ? [candidate.connection] : [])].filter((id): id is string => !!id)
       const bindings = definitions.flatMap(item=>item.bot.bindings)
-      return authoring.changePublished(async () => { await sessions.retireIdleConversationContexts(sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
+      const beforeRevision = botDeployments.read(id)?.deployment.revision
+      const result = await authoring.changePublished(async () => { await sessions.retireIdleConversationContexts(sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
         ? sessions.getSessionState(sessionId)?.channelBoundary?.bindingId === binding.id
         : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId}))) },async () => {
         channelIntegrations.setBotPublication(true)
         try{return await change()}finally{channelIntegrations.setBotPublication(false)}
       })
+      if (botDeployments.read(id)?.deployment.revision !== beforeRevision) realtime.invalidateResource?.('service-groups')
+      return result
     },
     changed:(ids:string[]) => {channelIntegrations.refreshBotDeployments(ids);realtime.invalidateIntegrations?.()},
   }

@@ -1,3 +1,5 @@
+import { useLiveClientPool } from './composables/useLiveClient.ts'
+import { observeInteractions } from './interaction-resource.ts'
 import { t } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
@@ -50,7 +52,9 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
     && !/[\u0000-\u001f\u007f]/.test(secret.value))
   let read: AbortController | undefined
   let write: AbortController | undefined
-  let interval: ReturnType<typeof setInterval> | undefined
+  const pool = useLiveClientPool()
+  let observer: ReturnType<typeof observeInteractions> | undefined
+  let queued = false
   let generation = 0
   let writeError = false
 
@@ -62,8 +66,9 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
     read?.abort()
     write?.abort()
     read = write = undefined
-    if (interval) clearInterval(interval)
-    interval = undefined
+    observer?.dispose()
+    observer = undefined
+    queued = false
     request.value = null
     secret.value = error.value = ''
     operation.value = null
@@ -71,7 +76,8 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
     writeError = false
   }
   async function refresh(): Promise<void> {
-    if (!enabled.value || read || write) return
+    if (!enabled.value || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
+    if (read || write) { queued = true; return }
     const current = generation
     const controller = new AbortController()
     read = controller
@@ -96,7 +102,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
         error.value = t('Could not load private credential entry. Check your owner access and connection, then retry.')
       }
     } finally {
-      if (read === controller) { read = undefined; loading.value = false }
+      if (read === controller) { read = undefined; loading.value = false; if (queued) { queued = false; void refresh() } }
     }
   }
   async function mutate(cancelling: boolean): Promise<boolean> {
@@ -147,14 +153,14 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
       return false
     } finally {
       if (current === generation) secret.value = ''
-      if (write === controller) { write = undefined; operation.value = null }
+      if (write === controller) { write = undefined; operation.value = null; void refresh() }
     }
   }
   watch([() => source().apiBase, () => source().projectId, () => source().sessionId, enabled], () => {
     stop()
     if (!enabled.value) return
+    observer = observeInteractions(pool, source().apiBase, source().projectId, () => { void refresh() })
     void refresh()
-    interval = setInterval(() => { void refresh() }, 1500)
   }, { immediate: true, flush: 'sync' })
   onUnmounted(stop)
   return { request, secret, error, loading, busy, operation, enabled, secure, valid, refresh,

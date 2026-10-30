@@ -27,38 +27,77 @@ test('cross Project and cross Bot addresses cannot steal existing sessions', () 
  assert.equal(projectGroupConversations([session], [{ ...group, botInstanceId: 'another' }], 'p').length, 2)
 })
 
-test('active subscribers share polling, concurrent refresh and recover after errors; final unmount aborts', async t => {
+test('active subscribers share live resources, concurrent refresh and recover after errors; final unmount aborts', async t => {
  const { createRenderer, defineComponent, h, nextTick, reactive } = await import('vue')
  const { useServiceGroups } = await import('./service-groups.ts')
+ const document = Object.assign(new EventTarget(), { visibilityState: 'visible' })
+ const oldDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+ Object.defineProperty(globalThis, 'document', { configurable: true, value: document })
+ t.after(() => { if (oldDocument) Object.defineProperty(globalThis, 'document', oldDocument); else Reflect.deleteProperty(globalThis, 'document') })
  const intervals = new Set<() => void>()
  t.mock.method(globalThis, 'setInterval', (callback: () => void) => { intervals.add(callback); return callback })
  t.mock.method(globalThis, 'clearInterval', (callback: () => void) => { intervals.delete(callback) })
+ const observers = new Set<import('./live-client.ts').LiveObserver>()
+ const pool = {
+   client: () => ({ isLive: () => true, subscribe: (_topic: unknown, observer: import('./live-client.ts').LiveObserver) => {
+     observers.add(observer); return { close: () => observers.delete(observer), ready: async () => {} }
+   } }),
+   observeHost: (_base: string, observer: (status: { phase: string }) => void) => { observer({ phase: 'live' }); return () => {} },
+   dispose() {},
+ }
  const requests: { resolve: (value: Response) => void; signal: AbortSignal; url: string }[] = []
  t.mock.method(globalThis, 'fetch', (url: URL, init: RequestInit) => new Promise<Response>(resolve => { requests.push({ resolve, signal: init.signal!, url: String(url) }) }))
  const renderer = createRenderer<any, any>({ patchProp() {}, insert() {}, remove() {}, createElement: () => ({}), createText: () => ({}), createComment: () => ({}), setText() {}, setElementText() {}, parentNode: () => null, nextSibling: () => null })
  const options = reactive({ apiBase: 'http://fixture/projects/shared', projectId: 'shared', active: true, group: '' })
  const values: ReturnType<typeof useServiceGroups>[] = []
- const mount = () => { const app = renderer.createApp(defineComponent({ setup() { values.push(useServiceGroups(() => options)); return () => h('div') } })); app.mount({}); return app }
+ const mount = (livePool = pool) => { const app = renderer.createApp(defineComponent({ setup() { values.push(useServiceGroups(() => options)); return () => h('div') } })); app.provide(Symbol.for('shadow.live-client-pool'), livePool); app.mount({}); return app }
  const a = mount(), b = mount()
  t.after(() => { a.unmount(); b.unmount() })
- assert.equal(intervals.size, 1); assert.equal(requests.length, 1)
+ assert.equal(intervals.size, 0); assert.equal(requests.length, 1)
+ assert.equal(observers.size, 1)
  const p = values[0].refresh(); assert.equal(values[1].refresh(), p)
  requests[0].resolve(Response.json({ revision: 'r1', groups: [], agents: ['agent'] })); await p; await nextTick()
  assert.equal(values[0].revision.value, 'r1'); assert.equal(values[1].revision.value, 'r1')
- a.unmount(); assert.equal(intervals.size, 1)
+ a.unmount(); assert.equal(intervals.size, 0)
  const failed = values[1].refresh(); requests[1].resolve(new Response('', { status: 503 })); await failed
  assert.equal(values[1].error.value, 'unavailable'); assert.equal(values[1].revision.value, 'r1')
- const recovered = values[1].refresh(); requests[2].resolve(Response.json({ revision: 'r2', groups: [], agents: [] })); await recovered
+ const recovered = values[1].refresh()
+ for (const observer of observers) observer.event({ type: 'event', topic: { kind: 'resources', projectId: 'shared' }, payload: { event: 'invalidate', resource: 'service-groups' } } as import('./live-client.ts').LiveEvent)
+ await new Promise(resolve => setTimeout(resolve, 150))
+ assert.equal(requests.length, 3, 'inflight invalidation does not overlap loads')
+ requests[2].resolve(Response.json({ revision: 'r2', groups: [], agents: [] })); await new Promise(resolve => setTimeout(resolve, 0))
+ assert.equal(requests.length, 4, 'inflight invalidation queues a followup')
+ requests[3].resolve(Response.json({ revision: 'r2', groups: [], agents: [] })); await recovered
  assert.equal(values[1].error.value, ''); assert.equal(values[1].revision.value, 'r2')
+ document.visibilityState = 'hidden'
+ for (const observer of observers) observer.reset('reconnect')
+ await new Promise(resolve => setTimeout(resolve, 150))
+ await values[1].refresh()
+ assert.equal(requests.length, 4, 'hidden resources do not fetch')
+ document.visibilityState = 'visible'; document.dispatchEvent(new Event('visibilitychange'))
+ assert.equal(requests.length, 5, 'visibility restoration reloads')
+ requests[4].resolve(Response.json({ revision: 'visible', groups: [], agents: [] })); await values[1].refresh()
+ for (const observer of observers) observer.reconnected?.()
+ await new Promise(resolve => setTimeout(resolve, 150))
+ assert.equal(requests.length, 6, 'reconnection reloads')
+ requests[5].resolve(Response.json({ revision: 'reconnected', groups: [], agents: [] })); await values[1].refresh()
  options.group = 'different'; await nextTick()
- assert.equal(requests.length, 4); assert.match(requests[3].url, /group=different/)
+ assert.equal(requests.length, 7); assert.match(requests[6].url, /group=different/)
  assert.equal(values[1].revision.value, '')
  options.active = false; await nextTick()
- assert.equal(intervals.size, 0); assert.equal(requests[3].signal.aborted, true)
+ assert.equal(intervals.size, 0); assert.equal(requests[6].signal.aborted, true)
  options.active = true; await nextTick()
- assert.equal(intervals.size, 1); assert.equal(requests.length, 5)
- b.unmount(); assert.equal(intervals.size, 0); assert.equal(requests[4].signal.aborted, true)
- requests[4].resolve(Response.json({ revision: 'late', groups: [], agents: [] }))
- requests[3].resolve(Response.json({ revision: 'stale', groups: [], agents: [] })); await Promise.resolve(); await nextTick()
+ assert.equal(intervals.size, 0); assert.equal(requests.length, 8)
+ b.unmount(); assert.equal(observers.size, 0); assert.equal(intervals.size, 0); assert.equal(requests[7].signal.aborted, true)
+ requests[7].resolve(Response.json({ revision: 'late', groups: [], agents: [] }))
+ requests[6].resolve(Response.json({ revision: 'stale', groups: [], agents: [] })); await Promise.resolve(); await nextTick()
  assert.notEqual(values[1].revision.value, 'stale')
+ const count = requests.length
+ const c = mount(), d = mount({ ...pool })
+ assert.equal(requests.length, count + 2, 'identical hosts in separate injected pools never share resources')
+ c.unmount(); d.unmount()
+ assert.equal(requests[count].signal.aborted, true); assert.equal(requests[count + 1].signal.aborted, true)
+ assert.equal(observers.size, 0)
+ requests[count].resolve(Response.json({ revision: 'disposed-c', groups: [], agents: [] }))
+ requests[count + 1].resolve(Response.json({ revision: 'disposed-d', groups: [], agents: [] }))
 })

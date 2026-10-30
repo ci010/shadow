@@ -33,6 +33,7 @@ export interface BotInstance {
 
 export interface BotInstanceStoreOptions {
   projectId: string
+  changed?: () => void
   path: string
   /** Explicitly supply only for the default project; never read environment here. */
   legacyConfig?: Config
@@ -139,8 +140,10 @@ export class BotInstanceStore {
   }
 
   private save(document: z.infer<typeof documentSchema>): void {
+    const changed = JSON.stringify(document) !== JSON.stringify(this.document)
     writePrivateFile(this.options.path, JSON.stringify(document, null, 2) + '\n')
     this.document = document
+    if (changed) this.options.changed?.()
   }
 
   create(platform: ChannelId, displayName: string, config: Record<string, unknown>, signal?: AbortSignal, purpose: 'personal' | 'service' = 'service'): BotInstance {

@@ -11,6 +11,7 @@ import {
 } from './publication-contract.ts'
 
 export interface PublicationOptions {
+  changed?: () => void
   service: AgentAuthoringService
   retire: (matches: (sessionId: string) => boolean) => Promise<void>
   validateLive: (snapshot: ResourceSnapshot) => Promise<void>
@@ -132,6 +133,7 @@ export class PublicationRequests {
   private stopped = false
   private generation = 0
   private publicationGeneration = 0
+  private savedEntries = ''
   private readonly unsubscribe: () => void
 
   constructor(private readonly options: PublicationOptions) {
@@ -181,6 +183,7 @@ export class PublicationRequests {
     })
     this.entries = this.document.read().map(entry => entry.approved
       ? { ...entry, request: { ...entry.request, status: 'waiting' } } : entry)
+    this.savedEntries = JSON.stringify(this.entries)
     let draft = store.draft().revision
     let published = store.snapshot().revision
     this.unsubscribe = store.onChange(() => {
@@ -364,8 +367,12 @@ export class PublicationRequests {
   }
 
   private save(entries: typeof this.entries): void {
+    const next = JSON.stringify(entries)
+    if (next === this.savedEntries) return
     this.document.write(entries)
     this.entries = entries
+    this.savedEntries = next
+    this.options.changed?.()
   }
 
   private requirePending(id: string, decision: { revision: string; baseRevision: string }): typeof this.entries[number] {

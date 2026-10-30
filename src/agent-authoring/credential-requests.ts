@@ -17,15 +17,17 @@ const pendingProjects = new Map<string, PendingRequest>()
 
 /** One project-scoped owner prompt; neither requests nor results contain secret values. */
 export class CredentialRequests {
+  private readonly changed?: () => void
   private active: PendingRequest | null = null
   private stopped = false
   private readonly projectId: string
   private readonly credentials: Pick<AgentCredentialStore, 'names' | 'put'>
 
-  constructor(options: { projectId: string; credentials: Pick<AgentCredentialStore, 'names' | 'put'> }) {
+  constructor(options: { projectId: string; credentials: Pick<AgentCredentialStore, 'names' | 'put'>; changed?: () => void }) {
     if (typeof options.projectId !== 'string' || options.projectId.length === 0 || options.projectId.length > 200) {
       throw new CredentialRequestError('invalid_project', 400, 'Invalid credential request project.')
     }
+    this.changed = options.changed
     this.projectId = options.projectId
     this.credentials = options.credentials
   }
@@ -67,6 +69,7 @@ export class CredentialRequests {
       }
       this.active = pending
       pendingProjects.set(this.projectId, pending)
+      this.changed?.()
       signal.addEventListener('abort', pending.abort, { once: true })
       if (signal.aborted) pending.abort()
     })
@@ -119,7 +122,9 @@ export class CredentialRequests {
 
   private clear(pending: PendingRequest): void {
     pending.signal.removeEventListener('abort', pending.abort)
-    if (this.active === pending) this.active = null
+    const changed = this.active === pending
+    if (changed) this.active = null
     if (pendingProjects.get(this.projectId) === pending) pendingProjects.delete(this.projectId)
+    if (changed) this.changed?.()
   }
 }

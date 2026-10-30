@@ -91,6 +91,7 @@ test('topic approves its own change in place and a waiting receipt cannot be app
   const refresh = state.refresh()
   calls[2]!.finish(Response.json({ request: own, requests: [own] }))
   await refresh
+  await settle()
   assert.equal(state.request.value?.status, 'waiting', 'Delayed snapshots cannot repeat recorded approval')
 })
 
@@ -100,11 +101,14 @@ test('a passive read overlapping a decision cannot resurrect the old review', as
   await settle()
   const refresh = state.refresh()
   const write = state.confirm()
-  assert.equal(calls[1]!.init.signal!.aborted, true)
+  assert.equal(calls[1]!.init.signal!.aborted, false, 'Shared HTTP remains available to other panes; local read consumption is cancelled')
   calls[2]!.finish(Response.json({ result: { requestId: id, revision, status: 'published' } }))
   assert.equal(await write, true)
   calls[1]!.finish(Response.json({ request: proposal() }))
+  await settle()
+  calls[3]!.finish(Response.json({ request: null }))
   await refresh
+  await settle()
   assert.equal(state.request.value, null)
 })
 
@@ -127,6 +131,7 @@ test('confirmation is dedicated, revision-bound, explicit and single-flight', as
   const refresh = state.refresh()
   calls[2]!.finish(Response.json({ request: proposal() }))
   await refresh
+  await settle()
   assert.equal(state.request.value, null, 'A delayed snapshot cannot restore the approved proposal')
 })
 
@@ -140,7 +145,7 @@ test('cancellation returns a matching receipt and never invokes chat or a generi
   calls[1]!.finish(Response.json({ result: { requestId: id, revision, status: 'cancelled' } }))
   assert.equal(await answer, true)
   assert.match(state.notice.value, /cancelled.*draft is unchanged/)
-  assert.equal(calls.length, 2)
+  assert.equal(calls.length, 3, 'Successful writes refresh the shared snapshot')
 })
 
 test('stale revisions and uncertain results require explicit reload instead of repeating authorization', async t => {
@@ -156,6 +161,7 @@ test('stale revisions and uncertain results require explicit reload instead of r
   const refresh = state.refresh()
   calls[2]!.finish(Response.json({ request: null }))
   await refresh
+  await settle()
   assert.equal(state.request.value, null, 'A closed proposal cannot remain actionable')
   assert.equal(state.needsReload.value, true)
   const reload = state.reload()

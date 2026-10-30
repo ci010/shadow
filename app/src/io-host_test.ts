@@ -7,6 +7,7 @@ import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import { createIoBridge } from './io/bridge.ts'
 import { IoExecution } from './io/execution.ts'
+import type { LiveStatus } from './live-client.ts'
 import { parseIoDefinition } from '../../src/io/contracts.ts'
 
 const run = {
@@ -31,7 +32,8 @@ function fixture(t: TestContext) {
     restore.push(() => { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key) })
   }
   t.mock.method(IoExecution.prototype, 'connect', () => {})
-  let live!: { event: () => void; reset: () => void }
+  let phase!: (status: LiveStatus) => void
+  let live!: { event: () => void; reset: () => void; reconnected: () => void }
   const calls: { path: string; init: RequestInit }[] = []
   let register = async () => Response.json({ clientToken: 'synthetic-client' })
   let prepareResponse = async () => Response.json({ leaseToken: 'synthetic-lease', run: { ...run, status: 'running' } })
@@ -83,6 +85,7 @@ function fixture(t: TestContext) {
   })
   const app = renderer.createApp(module.exports.default, { bridge })
   app.provide(Symbol.for('shadow.live-client-pool'), {
+    observeHost: (_base: string, callback: typeof phase) => { phase = callback; callback({ phase: 'live' }); return () => {} },
     client: () => ({ subscribe: (_topic: unknown, observer: typeof live) => { live = observer; return { close() {}, ready: async () => {} } } }),
   })
   let mounted = true
@@ -95,6 +98,7 @@ function fixture(t: TestContext) {
   return {
     bridge, calls, errors, document, unmount,
     live: () => live,
+    phase: (value: LiveStatus['phase']) => phase({ phase: value }),
     prepare: () => bridge.actions.value!.prepare(run, base),
     polls: () => calls.filter(call => call.path.endsWith('/runs')),
     prepareResponse: (next: typeof prepareResponse) => { prepareResponse = next },
@@ -121,9 +125,17 @@ test('idle discovery uses live invalidation and a slower fallback without regist
   f.live().reset()
   await settle()
   assert.equal(f.polls().length, 3)
-  t.mock.timers.tick(5000)
+  t.mock.timers.tick(60_000)
+  await settle()
+  assert.equal(f.polls().length, 3)
+  f.phase('reconnecting')
+  t.mock.timers.tick(30_000)
   await settle()
   assert.equal(f.polls().length, 4)
+  f.phase('live')
+  f.live().reconnected()
+  await settle()
+  assert.equal(f.polls().length, 5)
   assert.equal(f.registrations().length, 0)
   assert.equal(f.calls.filter(call => call.path.endsWith('/heartbeat')).length, 0)
 })

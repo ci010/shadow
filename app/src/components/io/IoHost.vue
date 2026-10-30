@@ -17,7 +17,7 @@ import { apiUrl } from '../../api-url.ts'
 import { createUuid } from '../../uuid.ts'
 import { parseSessionDetails } from '../../session-details.ts'
 import { liveProjectId, useLiveClientPool } from '../../composables/useLiveClient.ts'
-import type { LiveSubscription } from '../../live-client.ts'
+import type { LiveStatus, LiveSubscription } from '../../live-client.ts'
 import { browserIoCapabilities } from '../../io/adapters.ts'
 import { IoExecution } from '../../io/execution.ts'
 import { ioRunKey, type IoBridge } from '../../io/bridge.ts'
@@ -37,12 +37,15 @@ const statusText = computed(() => execution.value?.phase === 'recording' ? t('Re
   : execution.value?.phase === 'draining' ? t('Finishing input') : t('Preparing input'))
 const livePool = useLiveClientPool()
 const subscriptions = new Map<string, LiveSubscription>()
+const hostObservers = new Map<string, () => void>()
+const hostPhases = new Map<string, LiveStatus['phase']>()
 const clients = new Map<string, { clientId: string; clientToken: string }>()
 const registrations = new Map<string, { promise: Promise<{ clientId: string; clientToken: string }>; controller: AbortController }>()
 const attempted = new Set<string>()
 const capabilities = browserIoCapabilities()
 let disposed = false
 let polling = false
+let pendingPoll = false
 let leaseBusy = false
 let generation = 0
 let preparingBase: string | undefined
@@ -96,11 +99,13 @@ function forgetClient(base: string) {
   registrations.get(base)?.controller.abort()
   registrations.delete(base)
 }
-async function poll() {
-  if (polling || disposed || (document.hidden && !owned.value)) return
+async function poll(fallback = false) {
+  if (disposed || (document.hidden && !owned.value)) return
+  if (polling) { if (!fallback) pendingPoll = true; return }
   polling = true
   try {
     await Promise.all([...bases.value].map(async base => {
+      if (fallback && !['connecting', 'reconnecting', 'error'].includes(hostPhases.get(base) ?? 'connecting')) return
       try {
         const result = await ioRequest<{ runs: IoRun[] }>(base, '/runs')
         if (disposed || !bases.value.has(base)) return
@@ -128,7 +133,10 @@ async function poll() {
         run.status === 'awaiting_consent' && run.sessionId === current.sessionId && !attempted.has(ioRunKey(current.apiBase, run.id)))
       if (requested && current) void prepare(requested, current.apiBase)
     }
-  } finally { polling = false }
+  } finally {
+    polling = false
+    if (pendingPoll) { pendingPoll = false; void poll() }
+  }
 }
 async function prepare(run: IoRun, base: string) {
   if (owned.value || bridge.busy.value || disposed) return
@@ -224,11 +232,12 @@ watch(bases, values => {
   const retained = new Map(bridge.runs.value)
   for (const base of retained.keys()) if (!values.has(base)) retained.delete(base)
   bridge.runs.value = retained
-  for (const [base, subscription] of subscriptions) if (!values.has(base)) { subscription.close(); subscriptions.delete(base) }
+  for (const [base, subscription] of subscriptions) if (!values.has(base)) { subscription.close(); subscriptions.delete(base); hostObservers.get(base)?.(); hostObservers.delete(base); hostPhases.delete(base) }
   for (const base of values) {
     if (subscriptions.has(base)) continue
     const invalidate = () => { void poll(); if (bridge.executionBase.value === base) execution.value?.invalidate() }
-    subscriptions.set(base, livePool.client(base).subscribe({ kind: 'io', projectId: liveProjectId(base) }, { event: invalidate, reset: invalidate }))
+    hostObservers.set(base, livePool.observeHost(base, status => { hostPhases.set(base, status.phase) }))
+    subscriptions.set(base, livePool.client(base).subscribe({ kind: 'io', projectId: liveProjectId(base) }, { event: invalidate, reset: invalidate, reconnected: invalidate }))
   }
   void poll()
 }, { immediate: true })
@@ -240,7 +249,7 @@ onMounted(() => {
   // Live I/O events/reset are the primary invalidation path. This bounded
   // fallback also works when live updates are unavailable. Execution's own
   // heartbeat, lease checks and update loop are deliberately unchanged.
-  pollTimer = setInterval(() => { void poll() }, 15_000)
+  pollTimer = setInterval(() => { void poll(true) }, 30_000)
   leaseTimer = setInterval(() => { void pulseClients() }, 5000)
   clockTimer = setInterval(() => { bridge.clock.value = Date.now(); triggerRef(execution) }, 250)
   window.addEventListener('pagehide', pageHide)
@@ -255,6 +264,8 @@ onBeforeUnmount(() => {
   pageHide(); bridge.actions.value = undefined
   for (const subscription of subscriptions.values()) subscription.close()
   subscriptions.clear()
+  for (const stop of hostObservers.values()) stop()
+  hostObservers.clear()
 })
 </script>
 

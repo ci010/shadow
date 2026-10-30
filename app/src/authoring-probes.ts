@@ -1,3 +1,5 @@
+import { useLiveClientPool } from './composables/useLiveClient.ts'
+import { acquireInteractionRead } from './interaction-resource.ts'
 import { t } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
@@ -35,7 +37,9 @@ export function useAuthoringProbes(source: () => PublicationSource) {
   let generation = 0
   let read: AbortController | undefined
   let write: AbortController | undefined
-  let timer: ReturnType<typeof setInterval> | undefined
+  const pool = useLiveClientPool()
+  let shared: ReturnType<typeof acquireInteractionRead> | undefined
+  let queued = false
   const receipts = new Map<string, ProbeRequest>()
 
   function endpoint(id?: string) {
@@ -46,8 +50,9 @@ export function useAuthoringProbes(source: () => PublicationSource) {
     read?.abort()
     write?.abort()
     read = write = undefined
-    if (timer) clearInterval(timer)
-    timer = undefined
+    shared?.dispose()
+    shared = undefined
+    queued = false
     requests.value = []
     selectedId.value = ''
     error.value = notice.value = ''
@@ -55,19 +60,16 @@ export function useAuthoringProbes(source: () => PublicationSource) {
     operation.value = null
     receipts.clear()
   }
-  async function refresh(manual = false) {
-    if (!enabled.value || read || write) return
+  async function refresh(manual = false, fresh = manual) {
+    if (!enabled.value || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
+    if (write || read) { queued = true; return }
     const current = generation
     const controller = new AbortController()
     read = controller
     loading.value = true
     try {
-      const response = await fetch(endpoint(), {
-        cache: 'no-store', redirect: 'error',
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
-      })
-      if (!response.ok) throw new Error(t('Probe requests unavailable'))
-      const next = visibleProbeRequests(parseProbeResponse(await response.json(), source().projectId), source().sessionId)
+      const body = await shared!.load(fresh)
+      const next = visibleProbeRequests(parseProbeResponse(body, source().projectId), source().sessionId)
       if (current !== generation || controller.signal.aborted) return
       requests.value = next.map(item => receipts.get(item.id) ?? item)
       if (!requests.value.some(item => item.id === selectedId.value)) selectedId.value = requests.value[0]?.id ?? ''
@@ -82,7 +84,7 @@ export function useAuthoringProbes(source: () => PublicationSource) {
         error.value = t('Could not load connection tests. Check your owner access and connection, then reload.')
       }
     } finally {
-      if (read === controller) { read = undefined; loading.value = false }
+      if (read === controller) { read = undefined; loading.value = false; if (queued) { queued = false; void refresh() } }
     }
   }
   async function decide(cancel: boolean): Promise<boolean> {
@@ -102,6 +104,7 @@ export function useAuthoringProbes(source: () => PublicationSource) {
     operation.value = cancel ? 'cancelling' : 'running'
     error.value = notice.value = ''
     let status = 0
+    let confirmed = false
     try {
       const response = await fetch(endpoint(pending.id), {
         method: cancel ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' },
@@ -116,6 +119,7 @@ export function useAuthoringProbes(source: () => PublicationSource) {
       if (result.requestId !== pending.id || result.revision !== pending.revision
         || (cancel && result.status !== 'cancelled')) throw new Error(t('Probe receipt mismatch'))
       if (current !== generation || controller.signal.aborted) return false
+      confirmed = true
       const completed = { ...pending, status: result.status, runId: result.runId, error: result.error }
       receipts.set(pending.id, completed)
       requests.value = requests.value.map(item => item.id === pending.id ? completed : item)
@@ -134,17 +138,16 @@ export function useAuthoringProbes(source: () => PublicationSource) {
       }
       return false
     } finally {
-      if (write === controller) { write = undefined; operation.value = null }
+      if (write === controller) { write = undefined; operation.value = null; if (confirmed) shared?.invalidate(); if (queued) { queued = false; void refresh() } }
     }
   }
   watch([() => source().apiBase, () => source().projectId, () => source().sessionId, enabled], () => {
     stop()
     if (!enabled.value) return
+    shared = acquireInteractionRead(pool, source().apiBase, source().projectId, endpoint(), () => { void refresh() })
     void refresh()
-    timer = setInterval(() => { void refresh() }, 3000)
   }, { immediate: true, flush: 'sync' })
-  watch(() => source().stage, () => { void refresh() })
   onUnmounted(stop)
   return { requests, request, selectedId, error, notice, loading, operation, busy, enabled, needsReload,
-    refresh: () => refresh(), reload: () => refresh(true), approve: () => decide(false), cancel: () => decide(true) }
+    refresh: () => refresh(false, true), reload: () => refresh(true), approve: () => decide(false), cancel: () => decide(true) }
 }

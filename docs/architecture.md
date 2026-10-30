@@ -580,10 +580,30 @@ Not every other resource has push hooks: Nodes still use visible-only polling,
 and provider configuration uses ordinary bounded HTTP reads.
 
 Other renderer resources have bounded, resource-specific recovery rather than a
-blanket retry-on-error policy. `service-groups.ts` shares a request and polling
-lifecycle for equal API base, Project and filter keys; it pauses polling while
-the document is hidden and releases the resource with its last active consumer.
-It still uses polling because service-group invalidations are not yet published.
+blanket retry-on-error policy. Project-qualified `resources` live notifications
+carry only `{event:'invalidate', resource:'interactions'|'service-groups'}`;
+they contain no credentials or approval authority. Bot setup, credential entry,
+publication review and connection-probe transitions invalidate interactions;
+discovery observations, Bot inventory and deployment changes invalidate service
+groups. HTTP snapshots and explicit, revision-bound approval writes remain
+authoritative. Reads do not publish invalidations unless stored state actually
+changes, avoiding read/notification loops.
+
+`live-resource-refresh.ts` coalesces notifications and uses host-qualified live
+health: healthy connections have no periodic resource reads; disconnected hosts
+use a 30-second fallback, with reset/reconnect resnapshotting. Callers own initial
+reads and visibility. `interaction-resource.ts` shares non-secret publication and
+probe GET envelopes per pool, API base and Project, while writes and credential
+inputs stay local to each pane. An in-flight invalidation queues a catch-up read.
+`service-groups.ts` similarly shares one resource for equal pool, API base,
+Project and filter keys, pauses reads while hidden, and aborts/releases it with
+its last active consumer. Hidden-to-visible transitions resnapshot; unrelated
+resource events do not refresh these lists. Discovery retention is filtered on
+the next snapshot; elapsed retention alone does not run a background scanner.
+Direct external edits to deployment files do not emit resource notifications;
+managed deployment changes do, and a later explicit/visibility/reconnect read
+reconciles external edits.
+
 Computer discovery stops passive reads after an authorization denial in the same
 connection/session scope; it does not weaken the local-owner gateway boundary.
 Session-specific background/work discovery treats a confirmed missing session as
@@ -595,11 +615,17 @@ remain in force.
 
 The I/O host registers a capture client only when preparing input and renews its
 client heartbeat during prepare/owned capture, including while hidden. Idle
-views use I/O live invalidations plus a 15-second list fallback (paused while
-hidden), rather than registering clients and polling every two seconds. Each
-new prepare obtains fresh credentials after preflight; expired active grants
-fail instead of silently resuming capture. A disconnected live stream therefore
-has a longer fallback discovery latency, without relaxing capture leases.
+views use I/O live invalidations, with a 30-second list fallback only while the
+host is connecting, reconnecting or in error (paused while hidden and idle).
+Background task inventories use the same live-first policy; reset/reconnect and
+returning to a visible pane refresh them. Each new prepare obtains fresh
+credentials after preflight; expired active grants fail instead of silently
+resuming capture. A disconnected live stream therefore has a longer fallback
+discovery latency, without relaxing capture leases or active execution heartbeats.
+The Child workspace gate performs its initial authenticated Project probe before
+mounting the application, then reuses host live health to stop automatic probes
+while connected. Disconnection uses a 30-second fallback whose deadline is not
+postponed by repeated SSE reconnect attempts; explicit retry remains available.
 
 `app/src/chat-request-control.ts` manages composer Stop state across preparation,
 admission, streaming and cancellation. The Send button becomes Stop in the same

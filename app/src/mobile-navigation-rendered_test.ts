@@ -55,7 +55,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           addEventListener('error', event => window.__mobileFixture.errors.push(event.message));
           addEventListener('unhandledrejection', event => window.__mobileFixture.errors.push(String(event.reason)));
           const app = createApp(App);
-          app.provide(Symbol.for('shadow.live-client-pool'), {
+          app.provide(Symbol.for('shadow.live-client-pool'), {observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },
             client:() => ({subscribe:() => ({close(){}})}),
             observe:fn => { fn([]); return () => {} }, retry(){}, dispose(){},
           });

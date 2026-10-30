@@ -19,7 +19,7 @@ const retention = 30 * 24 * 60 * 60 * 1000
 export class ServiceDiscoveryStore {
   private entries: ServiceDiscovery[] = []
   private lastWrite = 0
-  constructor(readonly projectId: string, private path: string, private now = Date.now) {
+  constructor(readonly projectId: string, private path: string, private now = Date.now, private readonly changed: () => void = () => {}) {
     if (existsSync(path)) {
       const saved = documentSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
       if (saved.projectId !== projectId) throw new Error('Service discovery project mismatch')
@@ -44,9 +44,11 @@ export class ServiceDiscoveryStore {
       }
     }
     if (old && !entry.name && old.name) entry.name = old.name
+    if (old && JSON.stringify(old) === JSON.stringify(entry)) return
     if (index >= 0) entries.splice(index, 1)
     entries.unshift(entry)
     this.entries = entries.slice(0, 200)
+    this.changed()
     // Bound disk activity even when an untrusted platform floods novel groups.
     // In-memory observations are current; persistence is sampled at most once/minute.
     if (this.lastWrite && this.now() - this.lastWrite < 60_000) return

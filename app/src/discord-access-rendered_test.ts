@@ -63,7 +63,7 @@ test('Discord settings render named resources, exact human reviews, learning dom
             reviewUi.open ? h(ChannelsView,{apiBase:location.origin,projectId:'fixture-project',available:true,active:true,
               requestedReviewId:reviewUi.id,reviewBotId:reviewUi.botId}) : h(DiscordAccess,state)
           ])});
-          app.provide(Symbol.for('shadow.live-client-pool'),{client:()=>({subscribe:()=>({close(){},ready:async()=>{}})})});
+          app.provide(Symbol.for('shadow.live-client-pool'),{observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:()=>({subscribe:()=>({close(){},ready:async()=>{}})})});
           window.__switchProject=()=>{state.projectId='another-project'};
           window.__refreshBot=async()=>{state.bot={...state.bot,config:{...state.bot.config},secrets:{...state.bot.secrets}};await nextTick()};
           window.__switchBot=async()=>{state.bot={...state.bot,id:'another-bot'};await nextTick()};
