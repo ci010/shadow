@@ -52,6 +52,7 @@ export interface NodeConnectionSessionOptions {
     event: JobEventV1,
     request: JobRequestV1,
   ) => void | Promise<void>
+  onConnectionChange?: () => void
   onRegistryMutation?: (now: Date) => void | Promise<void>
 }
 
@@ -309,9 +310,17 @@ export class NodeConnectionSession {
     await this.close({ code: 'revoked', reason, clean: true })
   }
 
+  #notifyConnectionChange(): void {
+    try { this.#options.onConnectionChange?.() } catch {
+      console.warn('[cluster] Connection observer failed')
+    }
+  }
+
   async close(info: DuplexCloseInfo): Promise<void> {
     if (this.#state === 'closed') return
+    const wasAuthenticated = this.#state === 'authenticated'
     this.#state = 'closed'
+    if (wasAuthenticated) this.#notifyConnectionChange()
     this.#closeInfo = structuredClone(info)
     this.#outbound.splice(0)
     this.#writerWake?.()
@@ -346,6 +355,7 @@ export class NodeConnectionSession {
     }
     this.#authentication = structuredClone(authentication)
     this.#state = 'authenticated'
+    this.#notifyConnectionChange()
     this.#enqueue({
       type: 'authenticated',
       negotiated: structuredClone(this.#negotiated),

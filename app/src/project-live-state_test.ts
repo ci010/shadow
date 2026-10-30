@@ -290,3 +290,19 @@ test('snapshot initialLoading is opt-in and external-gate disposal settles a dir
   await waiting
   assert.equal(gated.state.loading, false)
 })
+
+
+test('history hints do not refresh Work overview; actual activity and Work changes still do', async t => {
+  const f = fixture(t)
+  const lease = f.store.acquireProject('http://fixture', 'a', undefined, true)
+  await f.tick()
+  for (const request of f.requests) request.finish(request.path.endsWith('/work') ? emptyWork : request.path.endsWith('/graph') ? graph('One') : { stages: {} })
+  await flush()
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one', changes: ['history'] })
+  await f.tick()
+  assert.equal(f.requests.filter(request => request.path.endsWith('/work')).length, 1)
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'activity', sessionId: 'web:one' })
+  await f.tick()
+  assert.equal(f.requests.filter(request => request.path.endsWith('/work')).length, 2, 'overview retains live execution activity')
+  lease.release()
+})

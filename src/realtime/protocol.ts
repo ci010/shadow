@@ -1,4 +1,6 @@
-export type RealtimeResource = 'interactions' | 'service-groups' | 'automations' | 'config'
+export type RealtimeSessionChange = 'history' | 'metadata' | 'work' | 'background-tasks' | 'scheduled-tasks'
+
+export type RealtimeResource = 'interactions' | 'service-groups' | 'automations' | 'config' | 'folders' | 'nodes' | 'channels'
 
 /** Backend/renderer wire contract. New subscriptions require authoritative HTTP
  * snapshots even when the connection cursor can be replayed. Persisted history,

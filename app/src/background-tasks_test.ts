@@ -412,3 +412,25 @@ test('background inventory has bounded HTTP fallback and catches up after late r
   view.requests[1].finish(snapshot())
   await settle()
 })
+
+
+test('history-only notifications do not reread background inventory but task changes do', async t => {
+  const view = mount(t)
+  await settle()
+  view.requests[0].finish(snapshot([]))
+  await settle()
+  const event = (changes: string[]) => view.subscriptions[0].observer.event({
+    type: 'event', cursor: 'fixture:2', topic: { kind: 'sessions', projectId: 'a' },
+    payload: { event: 'invalidate', sessionId, changes },
+  })
+  event(['history'])
+  event(['history', 'work'])
+  await settle()
+  assert.equal(view.requests.length, 1)
+  event(['background-tasks'])
+  await settle()
+  assert.equal(view.requests.length, 2)
+  view.requests[1].finish(snapshot())
+  await settle()
+  assert.equal(view.state().total, 1)
+})

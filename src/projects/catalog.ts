@@ -96,6 +96,7 @@ export class ProjectCatalog {
   #access = new Map<string, number>()
   #lifecycle = new Map<string, FolderLifecycle>()
   #observers = new Set<() => void>()
+  #folderObservers = new Map<string, Set<() => void>>()
   #unverifiedSessionProjects = new Set<string>()
 
   constructor(hostHome: string, private readonly reservedHomes: readonly string[] = []) {
@@ -189,8 +190,27 @@ export class ProjectCatalog {
   #commit(data: CatalogData): void {
     const projectsChanged = this.#data?.projects !== data.projects
     writePrivateFile(this.filePath, JSON.stringify(data, null, 2) + '\n')
+    const previous = this.#data
     this.#data = data
+    for (const [projectId, observers] of this.#folderObservers) {
+      if (JSON.stringify(previous?.folders.filter(folder => folder.projectId === projectId)) !==
+          JSON.stringify(data.folders.filter(folder => folder.projectId === projectId))) {
+        for (const observer of observers) {
+          try { observer() } catch { console.warn('[projects] Folder observer failed') }
+        }
+      }
+    }
     if (projectsChanged) for (const observer of this.#observers) observer()
+  }
+
+  observeFolders(projectId: string, observer: () => void): () => void {
+    const observers = this.#folderObservers.get(projectId) ?? new Set<() => void>()
+    this.#folderObservers.set(projectId, observers)
+    observers.add(observer)
+    return () => {
+      observers.delete(observer)
+      if (!observers.size) this.#folderObservers.delete(projectId)
+    }
   }
 
   observeProjects(observer: () => void): () => void {

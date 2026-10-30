@@ -42,6 +42,8 @@ import type { ProjectLiveLease } from '../project-live-state.ts'
 import { HomeTreeCacheKey } from '../home-tree-cache.ts'
 import { createBotSettingsClient } from '../bot-settings.ts'
 import type { SidebarBot } from '../bot-sidebar.ts'
+import { useLiveClientPool } from '../composables/useLiveClient.ts'
+import { createLiveResourceRefresh } from '../live-resource-refresh.ts'
 
 const props = withDefaults(defineProps<{
   apiBase: string; project: ProjectRecord; selectedProjectId: string; selectedSessionId: string
@@ -54,6 +56,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; knowledge: []; dashboard: []; 'session-automation': [sessionId: string, jobId?: string] }>()
 const scope = computed(() => projectBase(props.apiBase, props.project.id))
 const liveState = useProjectLiveState()
+const livePool = useLiveClientPool()
 const homeCache = inject(HomeTreeCacheKey, undefined)
 const sessions = ref<SidebarSession[]>([])
 const bots = ref<SidebarBot[]>([])
@@ -94,15 +97,11 @@ let disposed = false
 function toggle(id: string) { if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id) }
 function subscribe() {
   const current = lease = liveState.acquireProject(props.apiBase, props.project.id)
-  let seenGraph = false
   const stopGraph = watch(() => [current.graph.state.revision, current.graph.state.error], () => {
     if (current.graph.state.value) {
-      if (seenGraph) liveFolderRevision.value++
-      seenGraph = true
       sessions.value = current.graph.state.value
       homeCache?.setSessions(scope.value, sessions.value)
     }
-    if (current.graph.state.revision || current.graph.state.error) void refreshMetadata(current)
   }, { immediate: true })
   const stopActivity = watch(() => [current.activity.state.revision, current.activity.state.error], () => {
     if (current.activity.state.value) stages.value = current.activity.state.value.stages
@@ -110,10 +109,26 @@ function subscribe() {
     error.value = detail && runtimeState.value === 'failed'
       ? t('This project could not start. Use Retry project startup beside its name.') : detail
   }, { immediate: true })
-  stopWatching = () => { stopGraph(); stopActivity() }
+  // Session graph revisions (including turn start/end) are not catalog changes.
+  const stopMetadata = watch([() => !!current.graph.state.value,
+    () => !!current.graph.state.value?.some(session => session.channelAddress), () => current.graph.state.error], () => {
+    if (current.graph.state.value || current.graph.state.error) void refreshMetadata(current)
+  }, { immediate: true })
+  let initialCatalog = true
+  const catalog = createLiveResourceRefresh(livePool, {
+    base: props.apiBase, projectId: props.project.id, resource: 'channels',
+    refresh: () => {
+      // Graph readiness owns the first snapshot; do not duplicate it at resource ready.
+      if (initialCatalog) { initialCatalog = false; return }
+      void refreshMetadata(current)
+    },
+  })
+  stopWatching = () => { stopGraph(); stopActivity(); stopMetadata(); catalog.dispose() }
 }
 async function refresh() {
+  liveFolderRevision.value++
   await lease?.refresh()
+  if (lease) await refreshMetadata(lease)
 }
 async function refreshMetadata(snapshot: ProjectLiveLease) {
   if (disposed || !active) return
@@ -121,8 +136,6 @@ async function refreshMetadata(snapshot: ProjectLiveLease) {
   const current = new AbortController()
   controller = current
   try {
-    await snapshot.activity.read()
-    if (current.signal.aborted) return
     if (!snapshot.graph.state.error && sessions.value.some(session => session.channelAddress)) {
       try {
         const catalog = await createBotSettingsClient(scope.value, props.project.id).list(current.signal)

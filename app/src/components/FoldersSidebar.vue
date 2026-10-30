@@ -135,6 +135,8 @@
 </template>
 
 <script setup lang="ts">
+import { useLiveClientPool } from '../composables/useLiveClient.ts'
+import { createLiveResourceRefresh } from '../live-resource-refresh.ts'
 import { formatDateTime, i18n, t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { composerDraftKey, composerDraftEditedAt, composerDraftRevision } from '../composables/useComposerDraft.ts'
@@ -187,7 +189,8 @@ const emit = defineEmits<{
   manage: [folder: FolderRecord, action: 'remove' | 'move']
   automation: [id: string]
 }>()
-const client = createFoldersClient(props.apiBase)
+const client = computed(() => createFoldersClient(props.apiBase))
+const livePool = useLiveClientPool()
 const groupExpanded = ref(true)
 const componentId = useId()
 const domId = (id: string) => props.grouped ? `${componentId}-${id}` : id
@@ -290,6 +293,27 @@ const resizeBounds = computed(() => sidebarWidthBounds(containerWidth.value, 200
 const sidebarWidth = computed(() => clampSidebarWidth(preferredWidth.value ?? (compact.value ? 240 : 260), resizeBounds.value))
 let resizeObserver: ResizeObserver | undefined
 let listRequest: AbortController | undefined
+let nodeRequest: AbortController | undefined
+let stopCatalogs: (() => void) | undefined
+function subscribeCatalogs() {
+  stopCatalogs?.()
+  if (!props.projectId) { void loadFolders(); void loadNodes(); return }
+  const folders = createLiveResourceRefresh(livePool, { base: props.apiBase, projectId: props.projectId,
+    resource: 'folders', refresh: () => { void loadFolders() } })
+  const nodes = createLiveResourceRefresh(livePool, { base: props.apiBase, projectId: props.projectId,
+    resource: 'nodes', refresh: () => { void loadNodes() } })
+  stopCatalogs = () => { folders.dispose(); nodes.dispose() }
+}
+async function loadNodes() {
+  if (!active) return
+  nodeRequest?.abort()
+  const controller = nodeRequest = new AbortController()
+  try {
+    const inventory = await fetchNodeInventory(props.apiBase, 'main', AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]))
+    if (!controller.signal.aborted && active) nodes.value = inventory.nodes
+  } catch { /* Remote node IDs remain a usable fallback. */ }
+  finally { if (nodeRequest === controller) nodeRequest = undefined }
+}
 let active = true
 const folderWorkingStage = (sessions: SidebarSession[]) => prominentWorkingStage(sessions.map(session => props.stages[session.sessionId]))
 const folderSubagents = (sessions: SidebarSession[]) => summarizeSubagents(sessions.flatMap(session => executionsByOwner.value.get(session.sessionId) ?? []), props.stages)
@@ -320,17 +344,14 @@ watch(() => activeAutomation.value ? undefined : props.activeSessionId
 }, { immediate: true })
 
 async function loadFolders() {
-  if (loading.value || !active) return
+  if (!active) return
+  listRequest?.abort()
   const controller = new AbortController()
   listRequest = controller
   loading.value = true
   error.value = ''
   try {
-    // Device metadata must not delay the conversation list or make folders unavailable.
-    void fetchNodeInventory(props.apiBase, 'main', AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]))
-      .then(inventory => { if (!controller.signal.aborted && active) nodes.value = inventory.nodes })
-      .catch(() => { /* Remote node IDs remain a usable fallback. */ })
-    const result = await client.list(controller.signal)
+    const result = await client.value.list(controller.signal)
     if (!controller.signal.aborted) folders.value = result
   } catch (cause) {
     if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load folders. Retry.')
@@ -422,6 +443,10 @@ function menuKeydown(event: KeyboardEvent) {
 }
 function deactivate() {
   stopActivityClock()
+  stopCatalogs?.()
+  stopCatalogs = undefined
+  nodeRequest?.abort()
+  nodeRequest = undefined
   active = false
   resizeActive.value = false
   resizeObserver?.disconnect()
@@ -433,13 +458,18 @@ function deactivate() {
 }
 const closeOnResize = () => { closeMenu(); measureSidebar() }
 watch(() => props.folderRevision, () => {
+  void loadNodes()
   listRequest?.abort()
   listRequest = undefined
   loading.value = false
   void loadFolders()
 })
-onMounted(() => { window.addEventListener('storage', refreshDraftActivity); startActivityClock(); observeSidebar(); void loadFolders(); window.addEventListener('resize', closeOnResize) })
-onActivated(() => { startActivityClock(); active = true; observeSidebar(); void loadFolders() })
+watch(() => [props.apiBase, props.projectId], () => {
+  listRequest?.abort(); nodeRequest?.abort(); folders.value = []; nodes.value = []
+  if (active) subscribeCatalogs()
+})
+onMounted(() => { window.addEventListener('storage', refreshDraftActivity); startActivityClock(); observeSidebar(); subscribeCatalogs(); window.addEventListener('resize', closeOnResize) })
+onActivated(() => { if (active) return; startActivityClock(); active = true; observeSidebar(); subscribeCatalogs() })
 onDeactivated(deactivate)
 onUnmounted(() => { window.removeEventListener('storage', refreshDraftActivity); deactivate(); window.removeEventListener('resize', closeOnResize) })
 </script>

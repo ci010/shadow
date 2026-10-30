@@ -34,6 +34,7 @@
 </template>
 
 <script setup lang="ts">
+import { affectsSessionResource } from '../session-invalidation.ts'
 import { t, formatDateTime } from '../i18n.ts'
 import ProcessOutput from './ProcessOutput.vue'
 import { computed, ref, useId, watch } from 'vue'
@@ -128,12 +129,14 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
     event: envelope => {
       if (!isRecord(envelope.payload) || envelope.payload.event === 'activity'
         || (envelope.payload.sessionId !== undefined && envelope.payload.sessionId !== sessionId)) return
+      let recoverMissing = false
       if (envelope.payload.sessionId === sessionId && typeof envelope.payload.completedTurnId === 'string'
         && envelope.payload.completedTurnId && envelope.payload.completedTurnId !== completedTurn) {
+        recoverMissing = sessionMissing
         completedTurn = envelope.payload.completedTurnId
         sessionMissing = false
       }
-      initial.invalidate()
+      if (recoverMissing || affectsSessionResource(envelope.payload, sessionId, 'background-tasks')) initial.invalidate()
     },
     reset: initial.reset,
     reconnected: initial.reconnected,

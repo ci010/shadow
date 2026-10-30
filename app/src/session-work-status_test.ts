@@ -187,6 +187,10 @@ test('mounted work status gates initial ready and ignores graph revisions, but r
   event(0, 'web:one', 'activity'); await tick()
   event(0, 'web:one', 'unrelated'); await tick()
   assert.equal(requests, 1, 'pure activity and unrelated event kinds never refresh Work')
+  subscriptions[0].observer.event({ type: 'event', cursor: 'x:2', topic: { kind: 'sessions', projectId: 'a' },
+    payload: { event: 'invalidate', sessionId: 'web:one', changes: ['history'] } })
+  await tick()
+  assert.equal(requests, 1, 'history-only persistence notifications do not reread Work')
   finish = () => {}
   event(0, 'web:one'); await tick()
   assert.equal(requests, 2)

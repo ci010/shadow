@@ -475,3 +475,22 @@ test('retiring node privileges preserves fresh revocation checks for job dispatc
     await connection.close({ code: 'test-complete', reason: 'test complete', clean: true })
   }
 })
+
+test('inventory connection notifications expose authenticated and closed state only once', async () => {
+  const states: string[] = []
+  const connection = new NodeConnectionSession(approvedRegistry(), new RecordingDuplex(), hello, {
+    maxOutboundQueue: 128, heartbeatTimeoutMs: 90_000, now: () => baseTime,
+    onConnectionChange: () => { states.push(connection.state); throw new Error('test observer failure') },
+  })
+  await authenticate(connection)
+  assertEquals(states, ['authenticated'])
+  await connection.close({ code: 'peer-going-away', reason: 'test', clean: true })
+  await connection.close({ code: 'peer-going-away', reason: 'test', clean: true })
+  assertEquals(states, ['authenticated', 'closed'])
+  const unauthenticated = new NodeConnectionSession(approvedRegistry(), new RecordingDuplex(), hello, {
+    maxOutboundQueue: 128, heartbeatTimeoutMs: 90_000,
+    onConnectionChange: () => states.push('unexpected'),
+  })
+  await unauthenticated.close({ code: 'peer-going-away', reason: 'test', clean: true })
+  assertEquals(states, ['authenticated', 'closed'])
+})

@@ -10,6 +10,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import { affectsSessionResource } from '../session-invalidation.ts'
 import { t } from '../i18n.ts'
 import { enumLabel } from '../display-labels.ts'
 import { computed, onUnmounted, shallowRef, watch } from 'vue'
@@ -39,10 +40,11 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, id,
   const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
     event: envelope => {
       const payload = envelope.payload
-      if (!isRecord(payload) || payload.sessionId !== id || payload.event !== 'invalidate') return
+      if (!isRecord(payload) || payload.event !== 'invalidate'
+        || (payload.sessionId !== undefined && payload.sessionId !== id)) return
       if (typeof payload.completedTurnId === 'string'
         && payload.completedTurnId && !current.reconcile(payload, false)) return
-      gate.invalidate()
+      if (affectsSessionResource(payload, id, 'work')) gate.invalidate()
     },
     reset: gate.reset, reconnected: gate.reconnected,
   })

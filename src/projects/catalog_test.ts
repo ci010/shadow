@@ -1,3 +1,4 @@
+import { readFileSync as requireRead } from 'node:fs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises'
@@ -208,5 +209,46 @@ test('canonical catalog reopens without rewriting persisted project data', async
     await reopened.init()
     assert.equal(reopened.list().some(project => project.name === 'Existing'), true)
     assert.equal(await readFile(catalog.filePath, 'utf8'), before)
+  })
+})
+
+test('folder observers follow committed project views, including agent registration, move and detach', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'host'))
+    await catalog.init()
+    const other = await catalog.create('Other')
+    const folderPath = join(root, 'code')
+    await mkdir(folderPath)
+    const events: string[] = []
+    const observe = (projectId: string) => catalog.observeFolders(projectId, () => {
+      events.push(projectId)
+      // Notification is after both the durable write and in-memory commit.
+      assert.deepEqual(JSON.parse(requireRead(catalog.filePath, 'utf8')).folders.filter((f: {projectId: string}) => f.projectId === projectId), catalog.folders(projectId))
+    })
+    const stopThrowing = catalog.observeFolders(DEFAULT_PROJECT_ID, () => { throw new Error('test observer failure') })
+    const stopDefault = observe(DEFAULT_PROJECT_ID), stopOther = observe(other.id)
+    const registry = new FolderRegistry(catalog.hostHome, { catalog, projectId: DEFAULT_PROJECT_ID })
+    await registry.init()
+    const folder = await registry.register(folderPath)
+    assert.deepEqual(events.splice(0), [DEFAULT_PROJECT_ID])
+    await registry.register(folderPath)
+    await assert.rejects(catalog.registerFolder(other.id, folderPath), /another project/)
+    await catalog.rename(other.id, 'New name')
+    assert.deepEqual(events, [], 'No-op, rejected and unrelated writes do not notify folders')
+    const failedPath = join(root, 'failed-write')
+    await mkdir(failedPath)
+    const catalogPath = catalog.filePath
+    Object.defineProperty(catalog, 'filePath', { value: root, configurable: true })
+    try { await assert.rejects(registry.register(failedPath)) }
+    finally { Object.defineProperty(catalog, 'filePath', { value: catalogPath, configurable: true }) }
+    assert.deepEqual(events, [], 'Failed durable writes do not publish notifications')
+    assert.deepEqual(catalog.folders(DEFAULT_PROJECT_ID), [folder])
+    const moved = await catalog.changeFolderProject(DEFAULT_PROJECT_ID, folder.id, other.id)
+    assert.deepEqual(events.splice(0), [DEFAULT_PROJECT_ID, other.id])
+    await catalog.changeFolderProject(other.id, moved!.id)
+    assert.deepEqual(events.splice(0), [other.id])
+    stopDefault(); stopOther(); stopThrowing()
+    await registry.register(folderPath)
+    assert.deepEqual(events, [], 'Released runtime observers do not receive writes')
   })
 })

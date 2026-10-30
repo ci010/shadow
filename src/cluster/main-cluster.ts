@@ -59,6 +59,7 @@ export interface MainCluster {
   readonly activeSessionCount: number
   readonly remoteExecutor: RemoteExecutor
   readonly workdirCapabilityLookup: WorkdirCapabilityLookup
+  observeInventory(observer: () => void): () => void
   getNodeInventory(): NodeInventoryResponse
   approve(approval: ApprovalV1, now?: Date): Promise<DeviceAuthenticationV1>
   revoke(nodeId: string, now?: Date): Promise<void>
@@ -69,6 +70,12 @@ export interface MainCluster {
 export async function createMainCluster(
   options: MainClusterOptions,
 ): Promise<MainCluster> {
+  const inventoryObservers = new Set<() => void>()
+  const inventoryChanged = () => {
+    for (const observer of inventoryObservers) {
+      try { observer() } catch { console.warn('[cluster] Inventory observer failed') }
+    }
+  }
   const now = options.now ?? (() => new Date())
   const registry = new InMemoryPairingNodeRegistry()
   const persistence = new RegistrySnapshotCoordinator(
@@ -94,7 +101,8 @@ export async function createMainCluster(
     session: {
       maxOutboundQueue: 128,
       heartbeatTimeoutMs: 90_000,
-      onRegistryMutation: (mutationTime) => persistence.save(mutationTime),
+      onConnectionChange: inventoryChanged,
+      onRegistryMutation: async (mutationTime) => { await persistence.save(mutationTime); inventoryChanged() },
     },
   })
   const remoteExecutor = new RemoteExecutor(nodeApi)
@@ -145,6 +153,7 @@ export async function createMainCluster(
     }
     await authority.registerCredential(authentication)
     await persistence.save(approvalTime)
+    inventoryChanged()
     return authentication
   }
   const revoke = async (nodeId: string, revokedAt = now()): Promise<void> => {
@@ -155,6 +164,7 @@ export async function createMainCluster(
     if (node.state !== 'revoked') registry.revoke(node, reason, revokedAt)
     // Fail closed in memory, disconnect even if persistence fails, and allow retry.
     await Promise.all([persistence.save(revokedAt), nodeApi.closeNode(nodeId, reason)])
+    inventoryChanged()
   }
   let stopping = false
   const stoppingGate: GatewayPlugin = (app) => {
@@ -208,6 +218,10 @@ export async function createMainCluster(
     remoteExecutor,
     workdirCapabilityLookup,
     getNodeInventory,
+    observeInventory(observer) {
+      inventoryObservers.add(observer)
+      return () => { inventoryObservers.delete(observer) }
+    },
     approve,
     revoke,
     closeNodeConnections: (reason) => {
