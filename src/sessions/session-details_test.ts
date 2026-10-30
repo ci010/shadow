@@ -251,8 +251,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await store.init()
       const bus = new Bus()
       const changed: Array<{ id: string; exists: boolean }> = []
+      const hints: Array<true | undefined> = []
       const sessions = makeManager(workspace, store, { bus })
-      bus.on('session.changed', ({ sessionId }) => changed.push({ id: sessionId, exists: !!sessions.getSessionState(sessionId) }))
+      bus.on('session.changed', ({ sessionId, metadataOnly }) => {
+        changed.push({ id: sessionId, exists: !!sessions.getSessionState(sessionId) })
+        hints.push(metadataOnly)
+      })
       try {
         await sessions.start()
         await sessions.buildSession('web:new')
@@ -264,8 +268,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(changed.length, 5)
         await sessions.updateConversationMetadata('web:new', { title: 'Updated', description: 'Refresh metadata' })
         assert.equal(changed.length, 6)
+        await sessions.updateSelfMetadata('web:new', { description: 'Self update', completed: false })
+        assert.deepEqual(hints, [undefined, true, true, true, true, true, true])
         await sessions.deleteSession('web:new')
         assert.deepEqual(changed.at(-1), { id: 'web:new', exists: false })
+        assert.equal(hints.at(-1), undefined, 'deletion must retain broad invalidation')
       } finally { await sessions.stop(); store.close?.() }
     })
   })

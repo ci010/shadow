@@ -2242,7 +2242,7 @@ ${JSON.stringify(request)}`,
         await this.store.saveState(sessionId, { ...state, ...changes })
         Object.assign(state, changes)
         this.invalidateSystemPrompts()
-        this.deps.bus.emit('session.changed', { sessionId })
+        this.deps.bus.emit('session.changed', { sessionId, metadataOnly: true })
       } finally { release() }
     })
   }
@@ -2262,7 +2262,7 @@ ${JSON.stringify(request)}`,
         const next = { ...state, name, description: metadata.description }
         await this.store.saveState(sessionId, next)
         state.name = name; state.description = metadata.description
-        this.deps.bus.emit('session.changed', { sessionId })
+        this.deps.bus.emit('session.changed', { sessionId, metadataOnly: true })
       } finally { release() }
     })
   }
@@ -2310,6 +2310,7 @@ ${JSON.stringify(request)}`,
   ): Promise<void> {
     if (patch.set.contextWindow !== undefined && !isContextWindow(patch.set.contextWindow)) throw new TypeError('invalid_contextWindow')
     await this.withStateCreation(sessionId, async () => {
+      const existed = !!this.sessionStates[sessionId]
       const state = this.sessionStates[sessionId] ??
         (create ? await this.createMissingState(sessionId) : null)
       if (!state) throw new Error('session_not_found')
@@ -2319,7 +2320,7 @@ ${JSON.stringify(request)}`,
       // Keep the active session's state reference, but only publish durable changes.
       await this.store.saveState(sessionId, { ...state, config: next })
       state.config = next
-      this.deps.bus.emit('session.changed', { sessionId })
+      this.deps.bus.emit('session.changed', { sessionId, ...(existed ? { metadataOnly: true as const } : {}) })
     })
   }
 
@@ -2343,7 +2344,7 @@ ${JSON.stringify(request)}`,
       const next = Object.keys(config).length ? config : undefined
       await this.store.saveState(sessionId, { ...state, config: next })
       state.config = next
-      this.deps.bus.emit('session.changed', { sessionId })
+      this.deps.bus.emit('session.changed', { sessionId, metadataOnly: true })
     })
   }
 
@@ -2353,7 +2354,7 @@ ${JSON.stringify(request)}`,
       if (!state?.config) return
       await this.store.saveState(sessionId, { ...state, config: undefined })
       state.config = undefined
-      this.deps.bus.emit('session.changed', { sessionId })
+      this.deps.bus.emit('session.changed', { sessionId, metadataOnly: true })
     })
   }
 

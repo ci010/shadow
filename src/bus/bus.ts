@@ -42,7 +42,9 @@ export interface BusTopics {
   'session.turn.started': Pick<SessionTurnFact, 'sessionId' | 'turnId' | 'inputId' | 'source'>
   'session.provider.waiting': { sessionId: string; wait: import('../providers/retry.ts').RateLimitWait | undefined }
   'session.activity.changed': { sessionId: string }
-  'session.changed': { sessionId: string }
+  /** Pure metadata/config edits do not change activity, work, or task lists.
+   * Omitted hints retain broad invalidation for lifecycle/structural changes. */
+  'session.changed': { sessionId: string; metadataOnly?: true }
   'session.deleted': { sessionId: string; projectId?: string; automationJobId?: string }
   'background.task.changed': { sessionId: string; taskId: string; status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' }
 }
