@@ -506,3 +506,26 @@ Question identity/pause changes still notify even when the visible stage stays
 `waiting`. Initial readiness/fallback, invalidations during reads, visibility
 recovery and post-write reconciliation remain active; hidden pages cancel reads
 without discarding a draft answer.
+
+## Daily desktop builds
+
+`.github/workflows/daily-build.yml` checks the repository's default branch every
+day at 19:17 UTC (03:17 China Standard Time the following day). GitHub schedules
+can be delayed; the workflow must exist on the default branch to run. It can
+also be started manually with **Actions → Shadow daily build → Run workflow**
+on the default branch.
+
+The workflow compares the current commit with the last successful daily run.
+No previous success or a changed commit triggers a build; unchanged commits skip
+packaging. Failed builds do not advance the successful baseline and are retried
+on the next scheduled/manual run. This is commit-based, not a 24-hour timestamp
+filter, so changes are not lost when a scheduled run is delayed or missed.
+
+Daily builds reuse the release-check workflow's shared preparation, native tests,
+packaging and packaged-application checks, for Windows x64, macOS arm64 and macOS
+x64 only. Normal release checks retain Linux/mobile coverage. Download the
+`shadow-windows-x64`, `shadow-macos-arm64` and `shadow-macos-x64` artifacts from
+the daily run; installers are retained for 14 days. These are unsigned development
+builds (macOS uses ad-hoc signing, without notarization), not published GitHub
+Releases or automatic updates. Windows SmartScreen/macOS Gatekeeper may warn.
+The workflow only needs the built-in read-only `GITHUB_TOKEN`, no new secrets.
