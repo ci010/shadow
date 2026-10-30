@@ -22,7 +22,7 @@ test('sidebar completion renders idle and delegated icons in expanded and rail m
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
 
-  const fixture=`<template><FolderSessionList :sessions="sessions" active-session-id="web:chat-root" :collapsed="new Set()" :stages="stages" :executions-by-owner="owners" :rail="state.rail" :show-info="false" /></template>
+  const fixture=`<template><FolderSessionList :sessions="sessions" active-session-id="web:chat-root" :collapsed="new Set()" :stages="stages" :executions-by-owner="owners" :rail="state.rail" :session-metadata="() => ({folder: 'shadow', node: 'CI010', time: '', absoluteTime: ''})" /></template>
 <script setup>
 import {reactive,computed} from 'vue';
 import FolderSessionList from '/src/components/FolderSessionList.vue';

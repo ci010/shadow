@@ -2596,6 +2596,7 @@
   "Service": "Service",
   "Service output": "Service output",
   "Session": "Session",
+  "Node": "Node",
   "Session ID": "Session ID",
   "Session acknowledgement": "Session acknowledgement",
   "Session activity is unavailable.": "Session activity is unavailable.",

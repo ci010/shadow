@@ -41,11 +41,15 @@
           <strong class="session-info-title">{{ session.label }}</strong>
           <p v-if="session.description" class="session-info-description">{{ session.description }}</p>
           <div class="session-info-status">
-            <span v-if="session.completed">{{ t('Completed') }}</span>
+            <span v-if="session.completed" class="session-info-completed"><span class="i-lucide-circle-check" aria-hidden="true" />{{ t('Completed') }}</span>
             <SessionActivity :stage="stages[session.sessionId]" status-icons />
             <span v-if="!session.isDirectChat" class="session-info-readonly"><span class="i-lucide-lock-keyhole" aria-hidden="true" />{{ t('Read-only') }}</span>
           </div>
           <div class="session-info-identity">
+            <div v-if="sessionMetadata?.(session).node" class="session-info-node">
+              <span class="session-info-key">{{ t('Node') }}</span>
+              <span class="session-info-node-name">{{ sessionMetadata(session).node }}</span>
+            </div>
             <span class="session-info-key">{{ t('Session ID') }}</span>
             <CopyableId class="session-info-id" :value="session.sessionId" :label="t('Session ID')" />
           </div>
@@ -78,7 +82,7 @@ import { rootSessionFamilies } from '../folder-rail.ts'
 import { isAnimatingStage, isWorkingStage, prominentWorkingStage } from '../session-activity.ts'
 import { subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 const props = withDefaults(defineProps<{
-  sessionMetadata?: (session: SidebarSession) => { folder: string; folderTitle?: string; folderTone?: number; time: string; absoluteTime: string }
+  sessionMetadata?: (session: SidebarSession) => { folder: string; node?: string; folderTitle?: string; folderTone?: number; time: string; absoluteTime: string }
   sessionSubtitle?: (session: SidebarSession) => string
   sessions: SidebarSession[]
   activeSessionId: string
@@ -146,6 +150,10 @@ function isWorking(session: SidebarSession) { return isWorkingStage(activityStag
 .session-info p { margin: 6px 0; color: var(--c-text-secondary); white-space: pre-line; overflow-wrap: anywhere; }
 .session-info-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; max-height: 4.5em; overflow: hidden; line-height: 1.5; }
 .session-info-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+.session-info-completed { display: inline-flex; align-items: center; gap: 6px; color: var(--c-success); font-weight: 600; }
+.session-info-completed > span { width: 16px; height: 16px; flex-shrink: 0; }
+.session-info-node { display: grid; gap: 4px; margin-bottom: 12px; }
+.session-info-node-name { color: var(--c-text); overflow-wrap: anywhere; }
 .session-info-readonly { display: inline-flex; align-items: center; gap: 6px; color: var(--c-text-secondary); }
 .session-info-readonly > span { width: 14px; height: 14px; }
 .session-info-identity { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--c-border-soft); }

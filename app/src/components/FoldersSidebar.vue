@@ -237,7 +237,11 @@ function stopActivityClock() {
   activityTimer = undefined
 }
 function sessionMetadata(session: SidebarSession) {
+  const folder = folders.value.find(folder => folder.id === session.folderId)
+  const nodeId = folder?.kind === 'remote' ? folder.workdir.nodeId : undefined
+  const node = nodeId ? nodes.value.find(node => node.nodeId === nodeId) : nodes.value.find(node => node.role === 'main')
   return {
+    node: folder ? node?.displayName || nodeId || t('This computer') : undefined,
     folder: session.folderId ? folders.value.find(folder => folder.id === session.folderId)?.name ?? session.folderId : t('from scratch'),
     folderTitle: session.folderId ? folderNames.value.get(session.folderId) ?? session.folderId : t('from scratch'),
     folderTone: session.folderId ? folderTones.value.get(session.folderId) : undefined,

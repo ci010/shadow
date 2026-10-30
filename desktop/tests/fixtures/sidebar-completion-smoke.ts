@@ -15,6 +15,14 @@ async function main(){
  try{
  await window.loadURL(new URL('__activity',process.env.ACTIVITY_SMOKE_URL).href)
  await wait(`!!document.querySelector('.folder-session-row')`)
+ await change('inactive','completed',false)
+ await run(`void Object.assign(window.__activity,{completed:true})`)
+ await run(`document.querySelector('.session-select').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))`)
+ await wait(`!!document.querySelector('.session-info')`)
+ assert.equal(await run(`document.querySelector('.session-info-node-name').textContent`),'CI010')
+ assert.equal(await run(`!!document.querySelector('.session-info-completed .i-lucide-circle-check')`),true)
+ assert.equal(await run(`document.querySelector('.session-info-completed').textContent`),'Completed')
+ await run(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
  // Completion is shown at the left only while idle; real delegated/live icons win.
  for(const rail of [false,true]){
  for(const completed of [false,true]){
