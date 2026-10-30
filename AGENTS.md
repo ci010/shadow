@@ -99,6 +99,13 @@ confirmed, never silently overwrite existing product/design records. Do not
 install hooks or run upstream setup as a side effect. Non-UI tasks need no design
 setup.
 
+### Tooltips
+
+Use the shared `app/src/components/HoverInfo.vue` for UI tooltips, including
+icon-only actions. Do not use native HTML `title` tooltips for action hints.
+Bind the slot's `triggerProps` to the focusable control and give icon-only
+buttons a localized `aria-label`; keep hints available on keyboard focus too.
+
 ## Architectural rules
 
 - Keep backend code independent of Electron and Vue. Share small, validated
