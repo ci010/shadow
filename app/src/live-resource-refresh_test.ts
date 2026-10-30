@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createLiveResourceRefresh, type ResourceLivePool } from './live-resource-refresh.ts'
 import type { LiveObserver, LiveStatus } from './live-client.ts'
 
-function fixture(phase: LiveStatus['phase'] = 'live') {
+function fixture(phase: LiveStatus['phase'] = 'live', kind: 'interactions' | 'service-groups' | 'automations' = 'interactions') {
   let observer!: LiveObserver
   let status!: (value: LiveStatus) => void
   let closed = 0, unobserved = 0, reads = 0
@@ -19,7 +19,7 @@ function fixture(phase: LiveStatus['phase'] = 'live') {
       return () => { unobserved++ }
     },
   }
-  const resource = createLiveResourceRefresh(pool, { base: 'http://fixture/projects/p', projectId: 'p', resource: 'interactions', refresh: () => { reads++ } })
+  const resource = createLiveResourceRefresh(pool, { base: 'http://fixture/projects/p', projectId: 'p', resource: kind, refresh: () => { reads++ } })
   const event = (resource: string) => observer.event({ type: 'event', topic: { kind: 'resources', projectId: 'p' }, cursor: 'epoch:1', payload: { event: 'invalidate', resource } })
   return { resource, event, observer: () => observer, status: (phase: LiveStatus['phase']) => status({ phase }), reads: () => reads, closed: () => closed, unobserved: () => unobserved }
 }
@@ -64,4 +64,18 @@ test('reset/reconnect refresh, and disposing cancels pending work plus both subs
   t.mock.timers.tick(180_000)
   assert.equal(f.reads(), 2)
   assert.equal(f.closed(), 1); assert.equal(f.unobserved(), 1)
+})
+
+
+test('automation snapshots ignore unrelated resource events and do not poll a healthy host', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture('live', 'automations')
+  t.after(() => f.resource.dispose())
+  await f.resource.getPromise()
+  f.event('interactions'); f.event('service-groups')
+  t.mock.timers.tick(100_000)
+  assert.equal(f.reads(), 1)
+  f.event('automations')
+  t.mock.timers.tick(50)
+  assert.equal(f.reads(), 2)
 })

@@ -27,6 +27,7 @@ export function observeInteractions(pool: Pool, base: string, projectId: string,
 }
 
 interface SharedRead {
+  /** Distinguish an in-flight HTTP read from waiting on initial readiness. */
   started(): boolean
   load(fresh?: boolean): Promise<unknown>
   invalidate(): void
@@ -35,12 +36,24 @@ interface SharedRead {
 interface Entry {
   listeners: Set<() => void>
   value?: unknown
-  started: boolean
   valid: boolean
   version: number
   pending?: Promise<unknown>
   controller?: AbortController
-  observer: ReturnType<typeof observeInteractions>
+  observer?: ReturnType<typeof observeInteractions>
+  eviction?: ReturnType<typeof setTimeout>
+  disposed?: boolean
+  unobserveDispose?: () => void
+}
+function destroy(target: Entry) {
+  target.disposed = true
+  target.valid = false
+  target.version++
+  clearTimeout(target.eviction)
+  target.observer?.dispose()
+  target.unobserveDispose?.()
+  target.controller?.abort()
+  target.listeners.clear()
 }
 const pools = new WeakMap<Pool, Map<string, Entry>>()
 
@@ -51,31 +64,38 @@ export function acquireInteractionRead(pool: Pool, base: string, projectId: stri
   const key = JSON.stringify([base, projectId, url])
   let entry = entries.get(key)
   function invalidate(target: Entry) {
+    if (target.disposed) return
     target.valid = false
     target.version++
     if (!target.pending) for (const listener of target.listeners) listener()
   }
   if (!entry) {
-    entry = { listeners: new Set(), valid: false, started: false, version: 0, observer: undefined! }
+    entry = { listeners: new Set(), valid: false, version: 0 }
     const target = entry
-    entry.observer = observeInteractions(pool, base, projectId, () => invalidate(target), () => { target.valid = false; target.version++; target.controller?.abort() })
     entries.set(key, entry)
+    // Disposed pools call back synchronously, before any subscription is made.
+    entry.unobserveDispose = pool.onDispose?.(() => {
+      destroy(target)
+      entries!.delete(key)
+    })
+    if (!target.disposed) entry.observer = observeInteractions(pool, base, projectId, () => invalidate(target), () => { target.valid = false; target.version++; target.controller?.abort() })
   }
   const target = entry
-  target.listeners.add(refresh)
+  clearTimeout(target.eviction)
+  target.eviction = undefined
+  if (!target.disposed) target.listeners.add(refresh)
   let released = false
   return {
-    started: () => target.started,
+    started: () => !!target.pending,
     async load(fresh = false) {
-      if (!fresh) await target.observer.getPromise()
-      if (released || !target.listeners.size || !target.observer.visible()) throw new Error('Interaction read cancelled')
-      target.started = true
+      if (!fresh) await target.observer?.getPromise()
+      if (released || target.disposed || !target.listeners.size || !target.observer?.visible()) throw new Error('Interaction read cancelled')
       if (fresh) { target.valid = false; target.version++ }
       if (target.pending) return target.pending
       if (target.valid) return Promise.resolve(target.value)
       const controller = new AbortController()
       target.controller = controller
-      target.pending = (async () => {
+      const pending = (async () => {
         // Never hand an invalidated in-flight snapshot to an approval pane.
         // All waiters follow the same catch-up read instead.
         while (true) {
@@ -83,26 +103,40 @@ export function acquireInteractionRead(pool: Pool, base: string, projectId: stri
           const response = await fetch(url, { cache: 'no-store', redirect: 'error', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) })
           if (!response.ok) throw new Error('Interaction requests unavailable')
           const value: unknown = await response.json()
-          if (controller.signal.aborted) throw new Error('Interaction read cancelled')
+          if (controller.signal.aborted || target.disposed) throw new Error('Interaction read cancelled')
           if (target.version !== version) continue
           target.value = value
           target.valid = true
           return value
         }
       })().finally(() => {
-        target.pending = undefined
-        target.controller = undefined
+        if (target.pending === pending) {
+          target.pending = undefined
+          target.controller = undefined
+        }
       })
-      return target.pending
+      target.pending = pending
+      return pending
     },
     invalidate() { invalidate(target) },
     dispose() {
+      if (released) return
       released = true
       target.listeners.delete(refresh)
-      if (!target.listeners.size) {
-        target.observer.dispose()
-        target.controller?.abort()
-        entries!.delete(key)
+      if (!target.listeners.size && !target.disposed) {
+        // Keep the live invalidation observer, not a freshness deadline. An idle
+        // cache never starts HTTP; a later pane can reuse its valid envelope.
+        if (target.pending) {
+          invalidate(target)
+          target.controller?.abort()
+          target.pending = undefined
+          target.controller = undefined
+        }
+        target.eviction = setTimeout(() => {
+          destroy(target)
+          entries!.delete(key)
+        }, 60_000)
+        target.eviction.unref?.()
       }
     },
   }

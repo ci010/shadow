@@ -765,7 +765,7 @@ let historyRequest: AbortController | undefined
 const { activeSessionId, selectedMode, requestSession, selectSession, inspectExecution, restoreSession } = useConversationNavigation({
   props, router, emit, sessions: () => allSessions.value,
   reset: resetConversation,
-  refresh: () => { void loadSessionList(); void loadCurrentSession() },
+  refresh: () => { void projectLease?.read(); void loadCurrentSession() },
   mounted: () => mounted,
   newDraft: () => createNewWebChat(undefined, false),
 })
@@ -1080,7 +1080,11 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
     // An initial load already waiting on readiness owns this snapshot.
     if (!first || !historyRequest) refreshDirectHistory()
   } })
-  historySnapshot = snapshot
+  let initialActivity = true
+  const activitySnapshot = createInitialLiveSnapshot({ refresh() {
+    if (initialActivity) { initialActivity = false; void projectLease?.activity.read() }
+    else void refreshSessionActivity()
+  } })
   const subscription = livePool.client(props.apiBase).subscribe({ kind: 'chat', projectId, sessionId: `web:${chatId}` }, {
     reset() {
       if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}`) return
@@ -1088,9 +1092,9 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
       streamRequestId = undefined
       resetStreamPresentation()
       snapshot.reset()
-      void refreshSessionActivity()
+      activitySnapshot.reset()
     },
-    reconnected() { snapshot.reconnected() },
+    reconnected() { snapshot.reconnected(); activitySnapshot.reconnected() },
     event(envelope) {
       if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}` || viewingPhysicalId.value) return
       const payload = envelope.payload
@@ -1165,6 +1169,8 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
   eventStream = subscription
   eventStreamKey = key
   snapshot.attach(subscription)
+  activitySnapshot.attach(subscription)
+  historySnapshot = { ...snapshot, dispose() { snapshot.dispose(); activitySnapshot.dispose() } }
 }
 
 function closeEventStream(): void {
@@ -2955,7 +2961,7 @@ onMounted(async () => {
   }
 })
 async function loadEmbeddedSession(id: string): Promise<void> {
-  if (!allSessions.value.some(session => session.sessionId === id)) await loadSessionList()
+  if (!allSessions.value.some(session => session.sessionId === id)) await projectLease?.read()
   if (disposed || props.sessionId !== id) return
   if (allSessions.value.some(session => session.sessionId === id)) selectSession(id, false)
   else {

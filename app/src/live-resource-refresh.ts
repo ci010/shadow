@@ -1,8 +1,10 @@
+import type { RealtimeResource } from '../../src/realtime/protocol.ts'
 import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import type { LiveObserver, LiveStatus, LiveSubscription } from './live-client.ts'
 
 export interface ResourceLivePool {
   client(base: string): { subscribe(topic: { kind: 'resources'; projectId: string }, observer: LiveObserver): LiveSubscription }
+  onDispose?: (callback: () => void) => () => void
   observeHost?: (base: string, observer: (status: LiveStatus) => void) => () => void
 }
 
@@ -14,7 +16,7 @@ export interface ResourceLivePool {
 export function createLiveResourceRefresh(pool: ResourceLivePool, options: {
   base: string
   projectId: string
-  resource: 'interactions' | 'service-groups'
+  resource: RealtimeResource
   refresh: () => void
   fallbackMs?: number
   initialFallbackMs?: number

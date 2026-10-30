@@ -3,9 +3,8 @@ import { shallowReactive, readonly } from 'vue'
 import { apiUrl } from './api-url.ts'
 import { fetchAutomations, type AutomationSummary } from './automations.ts'
 import { liveProjectId } from './composables/useLiveClient.ts'
-import type { LiveClient } from './live-client.ts'
 import { createLiveRefresh } from './live-refresh.ts'
-import { isRecord } from './folders-sidebar.ts'
+import { createLiveResourceRefresh, type ResourceLivePool } from './live-resource-refresh.ts'
 
 export interface AutomationCatalogState {
   jobs: AutomationSummary[]
@@ -16,7 +15,7 @@ export interface AutomationCatalogState {
 }
 
 export function createAutomationCatalog(
-  pool: { client: (base: string) => Pick<LiveClient, 'subscribe'> },
+  pool: ResourceLivePool,
   options: { load?: typeof fetchAutomations; delayMs?: number } = {},
 ) {
   const entries = new Map<string, ReturnType<typeof createEntry>>()
@@ -42,20 +41,17 @@ export function createAutomationCatalog(
       state.revision++
       snapshot.refresh()
     }
-    const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
-      event: event => { if (!isRecord(event.payload) || event.payload.event !== 'activity') refresh() },
-      reset: refresh,
+    const live = createLiveResourceRefresh(pool, {
+      base, projectId: liveProjectId(base), resource: 'automations', refresh,
+      delayMs: options.delayMs,
     })
-    const timer = setInterval(refresh, 20_000)
-    snapshot.refresh()
     return {
       state: readonly(state), users: 0, refresh,
       dispose() {
         if (closed) return
         closed = true
         snapshot.dispose()
-        subscription.close()
-        clearInterval(timer)
+        live.dispose()
       },
     }
   }

@@ -177,3 +177,36 @@ test('same-name cron jobs bind runtime scope and stopping one drains only its ow
     }
   })
 })
+
+test('automation mutations and admitted run lifecycle notify, reads and no-op controls do not', async () => {
+  await withTempWorkspace(async workspace => {
+    const service = new CronService(workspace)
+    let changes = 0
+    let inventoryInvalidations = 0
+    service.setOnChanged(reason => { changes++; if (reason === 'inventory') inventoryInvalidations++ })
+    let finish!: () => void
+    service.setHandler(async () => new Promise<void>(resolve => { finish = resolve }))
+    try {
+      const id = service.addJob({ schedule: '0 0 1 1 *', session: 'fresh', task: 'fixture' })
+      assert.equal(changes, 1)
+      service.listJobs(); service.listJobs()
+      await service.setJobEnabled(id, true)
+      assert.equal(changes, 1)
+      await service.setJobEnabled(id, false)
+      assert.equal(changes, 2)
+      const run = service.runNow(id)
+      await Promise.resolve()
+      assert.equal(changes, 3, 'Run admission notifies before completion')
+      const duplicate = service.runNow(id)
+      assert.equal(changes, 3, 'Overlapping admission does not notify twice')
+      finish()
+      await Promise.all([run, duplicate])
+      assert.equal(changes, 4)
+      assert.equal(inventoryInvalidations, 2, 'Run lifecycle must not invalidate broad session inventory')
+      assert.equal(service.removeJob(id), true)
+      assert.equal(changes, 5)
+      assert.equal(service.removeJob(id), false)
+      assert.equal(changes, 5)
+    } finally { await service.stop() }
+  })
+})

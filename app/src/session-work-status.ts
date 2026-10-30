@@ -29,12 +29,13 @@ export function createSessionWorkStatus(base: string, id: string, request: typeo
     state: snapshot.state,
     refresh() { missing = undefined; return snapshot.refresh() },
     autoRefresh() { if (id && !missing) return snapshot.refresh(); return Promise.resolve() },
-    reconcile(value: unknown) {
+    reconcile(value: unknown, refresh = true) {
       if (!isRecord(value) || value.sessionId !== id || value.event !== 'invalidate'
-        || typeof value.completedTurnId !== 'string' || !value.completedTurnId || value.completedTurnId === completedTurn) return
+        || typeof value.completedTurnId !== 'string' || !value.completedTurnId || value.completedTurnId === completedTurn) return false
       completedTurn = value.completedTurnId
       missing = undefined
-      return snapshot.refresh()
+      if (refresh) return snapshot.refresh()
+      return true
     },
     pause: snapshot.pause,
     dispose: snapshot.dispose,

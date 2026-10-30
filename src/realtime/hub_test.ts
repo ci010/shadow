@@ -559,3 +559,25 @@ test('resource invalidations are minimal, project isolated, replayable and lease
     assert.equal(hub.cursor, closedCursor)
   } finally { await stream.cancel(); hub.close() }
 })
+
+test('automation resource notifications are project scoped and closed publisher leases cannot publish', async () => {
+  const hub = new RealtimeHub()
+  const one = hub.registerProject('one')
+  const two = hub.registerProject('two')
+  const stream = read(hub.connect([{ kind: 'resources', projectId: 'one' }], new AbortController().signal))
+  try {
+    await stream.next(); await stream.next()
+    two.invalidateResource?.('automations')
+    one.invalidateResource?.('automations')
+    const event = await stream.next()
+    assert.equal(event.type, 'event')
+    if (event.type === 'event') {
+      assert.deepEqual(event.topic, { kind: 'resources', projectId: 'one' })
+      assert.deepEqual(event.payload, { event: 'invalidate', resource: 'automations' })
+    }
+    two.close()
+    const cursor = hub.cursor
+    two.invalidateResource?.('automations')
+    assert.equal(hub.cursor, cursor)
+  } finally { await stream.cancel(); hub.close() }
+})

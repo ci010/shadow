@@ -13,6 +13,8 @@
 import { t } from '../i18n.ts'
 import { enumLabel } from '../display-labels.ts'
 import { computed, onUnmounted, shallowRef, watch } from 'vue'
+import { createInitialLiveSnapshot } from '../initial-live-snapshot.ts'
+import { isRecord } from '../folders-sidebar.ts'
 import { createSessionWorkStatus } from '../session-work-status.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
 const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; revision: number }>()
@@ -29,20 +31,25 @@ const records = computed(() => state.value?.value?.records.filter(record => !['d
 const record = computed(() => records.value[0])
 watch(() => [props.apiBase, props.sessionId], () => {
   snapshot.value?.dispose(); snapshot.value = create()
-  if (props.active) void snapshot.value.autoRefresh()
 }, { immediate: true })
 watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, id, active], _old, onCleanup) => {
-  if (!active || !id) return
+  const current = snapshot.value
+  if (!active || !id || !current) { current?.pause(); return }
+  const gate = createInitialLiveSnapshot({ refresh: () => { void current.autoRefresh() } })
   const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
-    event: envelope => { void snapshot.value?.reconcile(envelope.payload) },
-    reset() {},
+    event: envelope => {
+      const payload = envelope.payload
+      if (!isRecord(payload) || payload.sessionId !== id || payload.event !== 'invalidate') return
+      if (typeof payload.completedTurnId === 'string'
+        && payload.completedTurnId && !current.reconcile(payload, false)) return
+      gate.invalidate()
+    },
+    reset: gate.reset, reconnected: gate.reconnected,
   })
-  onCleanup(() => subscription.close())
+  gate.attach(subscription)
+  onCleanup(() => { gate.dispose(); subscription.close(); current.pause() })
 }, { immediate: true })
-watch(() => [props.active, props.revision], () => {
-  if (props.active) void snapshot.value?.autoRefresh()
-  else snapshot.value?.pause()
-})
+// revision is a graph publication counter, not a session-work invalidation.
 onUnmounted(() => snapshot.value?.dispose())
 </script>
 <style scoped>
