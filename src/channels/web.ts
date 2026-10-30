@@ -473,10 +473,12 @@ export class WebChannel extends AbstractChannel {
         const state = this.sessionManager!.getSessionState(sessionId)
         const segmentIndex = state?.segmentIndex ?? 0
         const identity = state ?? { sessionId, segmentIndex }
-        const body = JSON.stringify({ chatId, systemPrompt, history: history || [], commandResults, decisionRecords, tools,
+        if (!state) return c.json({ error: 'session_not_found' }, 404)
+        const data = { chatId, systemPrompt, history: history || [], commandResults, decisionRecords, tools,
           segmentIndex, currentPhysicalId: physicalSessionId(identity),
           previousPhysicalId: segmentIndex > 0 ? physicalSessionId(identity, segmentIndex - 1) : null,
-        })
+        }
+        const body = JSON.stringify(data)
         // Validate the complete representation, not just message count: context,
         // decisions, command receipts and segment navigation can change alone.
         const etag = `"${createHash('sha256').update(body).digest('hex')}"`
@@ -485,7 +487,22 @@ export class WebChannel extends AbstractChannel {
         if (c.req.query('snapshot') !== undefined) {
           c.header('Cache-Control', 'no-store')
           const revision = etag.slice(1, -1)
-          if (c.req.query('snapshot') === revision) return c.json({ revision, unchanged: true })
+          const countText = c.req.query('historyCount')
+          const count = countText !== undefined && /^(0|[1-9]\d*)$/.test(countText) ? Number(countText) : NaN
+          if (c.req.query('snapshot') === revision && (countText === undefined || count === data.history.length)) {
+            return c.json({ revision, unchanged: true })
+          }
+          // Reconstruct the old complete representation without retaining server snapshots.
+          // Only an exact prefix AND unchanged metadata may authorize an append.
+          const baseRevision = c.req.query('snapshot')
+          if (baseRevision && /^[a-f0-9]{64}$/.test(baseRevision)
+            && Number.isSafeInteger(count) && count >= 0 && count < data.history.length) {
+            const prefix = JSON.stringify({ ...data, history: data.history.slice(0, count) })
+            if (createHash('sha256').update(prefix).digest('hex') === baseRevision) {
+              return c.json({ revision, delta: { baseRevision, baseCount: count,
+                history: data.history.slice(count), count: data.history.length } })
+            }
+          }
           return c.body(`{"revision":"${revision}","data":${body}}`, 200, { 'Content-Type': 'application/json; charset=UTF-8' })
         }
         c.header('ETag', etag)

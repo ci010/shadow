@@ -1,9 +1,10 @@
 import { affectsSessionResource } from './session-invalidation.ts'
+import { createSessionGraphLoader } from './session-graph-snapshot.ts'
 import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import { t } from './i18n.ts'
 import { shallowReactive, shallowReadonly } from 'vue'
 import { hostBase, projectBase } from './api-url.ts'
-import { isRecord, parseSessionGraph } from './folders-sidebar.ts'
+import { isRecord } from './folders-sidebar.ts'
 import { createProjectsClient, projectJson } from './projects.ts'
 import { parseActiveRequestIds, parseSessionRecoveries, parseSessionStages } from './session-activity.ts'
 import type { LiveClient, LiveObserver } from './live-client.ts'
@@ -109,8 +110,12 @@ export function createProjectLiveState(
   }
   function createProject(base: string, projectId: string) {
     const scope = projectBase(base, projectId)
-    const graph = createSnapshot(async signal =>
-      parseSessionGraph(await projectJson(scope, '/api/sessions/graph', { signal }, request), projectId), delay, { initialLoading: true })
+    const graphLoader = createSessionGraphLoader(scope, projectId, request)
+    const graphSnapshot = createSnapshot(signal => graphLoader.load(signal), delay, { initialLoading: true })
+    const graph = { ...graphSnapshot,
+      reset() { graphLoader.reset(); graphSnapshot.reset() },
+      refresh() { graphLoader.reset(); return graphSnapshot.refresh() },
+    }
     const activity = createSnapshot(async signal => {
       const value = await projectJson(scope, '/api/sessions/stages', { signal }, request)
       return {
@@ -138,7 +143,10 @@ export function createProjectLiveState(
         for (const observer of observers) observer.event?.(event)
         // Events before readiness are covered by the initial snapshot.
         if (!started) return
-        if (!isRecord(event.payload) || event.payload.event !== 'activity') graph.invalidate()
+        if (!isRecord(event.payload) || event.payload.event !== 'activity') {
+          graphLoader.invalidate(event.payload)
+          graph.invalidate()
+        }
         activity.invalidate()
         if (usage.work && (isRecord(event.payload) && event.payload.event === 'activity'
           || affectsSessionResource(event.payload, undefined, 'work'))) work.invalidate()
