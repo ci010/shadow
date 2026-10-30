@@ -1,3 +1,4 @@
+import { resolveExplicitToolTarget } from '../execution/tool-target.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
 import { prepareWorkingContext } from '../agent/context/working-context.ts'
 import { withRateLimitWaiting, type RateLimitWait } from '../providers/retry.ts'
@@ -776,6 +777,9 @@ export abstract class BaseSession {
           ? { workUserInput: input.content } : {}),
         cwd,
         folderId: this.state.folderId,
+        resolveToolTarget: (nodeId, capabilityId) => resolveExplicitToolTarget(
+          this.workspace, this.state, this.workdirCapabilityLookup, this.remoteExecutor, nodeId, capabilityId,
+        ),
         remoteWorkdir,
         tools: this.tools,
         signal,

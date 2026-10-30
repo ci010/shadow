@@ -31,6 +31,10 @@ export interface ExecutionContext extends MessageContext {
   folderId?: string
   /** Host-only sole-call boundary; never available to nested scripts or parallel batches. */
   switchProjectFolder?: (prepared: { folderId: string; workdir: import('../sessions/locality.ts').WorkdirRefV1; content: string }) => Promise<string>
+  /** Resolved identity for explicit-target file-change provenance. */
+  fileChangeTarget?: { nodeId: string; capabilityId: string }
+  /** Host-only, Project-authorized explicit tool target lookup. Never interprets display paths. */
+  resolveToolTarget?: (nodeId: string, capabilityId: string) => Pick<ExecutionContext, 'cwd' | 'remoteWorkdir'>
   /** Capability-backed remote workspace. Local-only tools must reject this context. */
   remoteWorkdir?: {
     nodeId: string

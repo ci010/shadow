@@ -1,3 +1,4 @@
+import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { isUtf8 } from 'node:buffer'
 import { appendFile, mkdir, open, readFile, writeFile } from 'node:fs/promises'
@@ -227,6 +228,7 @@ export class WriteTool implements Tool {
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
+      ...executionTargetParameters,
       path: { type: 'string', description: 'File path' },
       content: {
         type: 'string',
@@ -265,6 +267,7 @@ export class WriteTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    context = executionTargetContext(args, context)
     context.signal.throwIfAborted()
     const rawPath = String(args.path)
     const virtualPath = isAbsolute(rawPath) ? relative(this.workspace, rawPath) : rawPath

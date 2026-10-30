@@ -26,6 +26,7 @@ export class ViewEditTool implements Tool {
     if (!change) throw new Error('Edit not found in this session.')
     if (change.sessionId !== context.sessionId || change.id !== edit_id) throw new Error('Historical edit identity mismatch.')
     if (change.unavailable) throw new Error(`Recorded diff unavailable: ${change.unavailable}`)
-    return change.patch || 'No content changes.'
+    const location = change.target ? `Recorded on node ${JSON.stringify(change.target.nodeId)}, capability ${JSON.stringify(change.target.capabilityId)}, path ${JSON.stringify(change.path)}.\n` : ''
+    return location + (change.patch || 'No content changes.')
   }
 }

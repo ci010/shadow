@@ -1,3 +1,4 @@
+import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { isAbsolute } from 'node:path'
@@ -27,6 +28,7 @@ export class SearchTool implements Tool {
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
+      ...executionTargetParameters,
       query: {
         type: 'string',
         description: 'Glob pattern, regex or web keywords. Use ** to list virtual entries.',
@@ -86,12 +88,13 @@ export class SearchTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    context = executionTargetContext(args, context)
     // Runtime-only compatibility for stored calls. Never advertise the overloaded legacy field.
     if (args.handler !== undefined && args.space !== undefined) return 'Error: use handler, not both handler and legacy space.'
     const legacy = args.handler === undefined && typeof args.space === 'string'
     const { scheme, qualifier } = legacy ? parseSpace(args.space as string) : { scheme: args.handler, qualifier: '' }
     if (typeof scheme !== 'string' || !['grep', 'glob', 'web'].includes(scheme)) return 'Error: handler must be a bare implementation name: grep, glob or web. Put file/virtual scope in path and web scope in domain.'
-    if (Object.keys(args).some(key => !['handler', 'domain', 'space', 'query', 'path', 'include', 'limit', 'offset'].includes(key))) return 'Error: supported search parameters are handler, query, path, include, domain, limit and offset.'
+    if (Object.keys(args).some(key => !['handler', 'domain', 'space', 'query', 'path', 'include', 'limit', 'offset', 'nodeId', 'capabilityId'].includes(key))) return 'Error: supported search parameters are handler, query, path, include, domain, limit, offset, nodeId and capabilityId.'
     if (args.domain !== undefined) {
       if (scheme !== 'web') return 'Error: domain is supported only by web.'
       if (typeof args.domain !== 'string' || args.domain.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(args.domain)) return 'Error: domain must be a DNS domain without URL, path, whitespace or site: prefix.'
@@ -127,6 +130,7 @@ export class SearchTool implements Tool {
     const virtualPath = ['grep', 'glob'].includes(scheme) && root && isVirtualPath(root) ? root
       : scheme === 'glob' && !root && isVirtualPath(query) ? query.split(/[\\/]/)[0] : undefined
     if (context.remoteWorkdir && scheme === 'web') return 'Error: web search is not supported with a remote workdir; no remote network capability exists.'
+    if (context.remoteWorkdir && args.nodeId !== undefined) return 'Error: remote filesystem glob/grep search is not supported by this executor; no Main ripgrep or filesystem fallback is allowed.'
     if (context.remoteWorkdir && (!virtualPath || !/^v:sessions(?:[\\/]|$)/.test(virtualPath))) {
       return 'Error: only v:sessions searches are supported with a remote workdir.'
     }

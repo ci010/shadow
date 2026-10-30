@@ -41,6 +41,8 @@ export async function recordFileWrite(context: ExecutionContext, options: {
   try {
     const after = options.after.length <= MAX_LINE_DIFF_CHARS ? Buffer.from(options.after, 'utf8').toString('utf8') : options.after
     const change = recordedFileChange({ ...options, after, sessionId: context.sessionId, toolCallId: context.toolCallId })
+    if (context.fileChangeTarget) change.target = { ...context.fileChangeTarget }
+    else if (context.remoteWorkdir) change.target = { nodeId: context.remoteWorkdir.nodeId, capabilityId: context.remoteWorkdir.capabilityId }
     await context.recordFileChange(change)
     return change
   } catch (cause) {
