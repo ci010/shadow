@@ -81,3 +81,41 @@ test('Windows native gate accepts postinstall preparation but retains pinned sou
   const fetch = await readFile(new URL('../integrations/agent-desktop/scripts/fetch.mjs', import.meta.url), 'utf8')
   assert.match(fetch, /if \(git\(\['rev-parse', 'HEAD'\], upstream\) !== revision\) throw new Error\('Upstream revision mismatch'\)/)
 })
+
+test('daily builds reuse native release gates and skip only previously successful commits', async () => {
+  const daily = await yaml('../.github/workflows/daily-build.yml')
+  const release = await yaml('../.github/workflows/release-check.yml')
+  assert.equal(daily.on.schedule[0].cron, '17 19 * * *')
+  assert.equal(daily.permissions.actions, 'read')
+  assert.equal(daily.permissions.contents, 'read')
+  assert.equal(daily.concurrency['cancel-in-progress'], false)
+  assert.match(daily.jobs.changes.if, /github.event.repository.default_branch/)
+  assert.equal(daily.jobs.desktop.uses, './.github/workflows/release-check.yml')
+  assert.equal(daily.jobs.desktop.if, "needs.changes.outputs.build == 'true'")
+  assert.deepEqual(daily.jobs.desktop.with, { target: 'desktop', skip_linux: true })
+  assert.equal(release.on.workflow_call.inputs.skip_linux.default, false)
+  const matrix = release.jobs['portable-release'].strategy.matrix.include
+  const lists = [...matrix.matchAll(/'(\[.*?\])'/g)].map(match => JSON.parse(match[1]))
+  assert.deepEqual(lists[0].map((entry: { arch: string }) => entry.arch), ['arm64', 'x64'])
+  assert(lists[0].every((entry: { platform: string }) => entry.platform === 'darwin'))
+  assert.equal(lists[1].length, 3, 'Existing release checks retain Linux')
+  const script = daily.jobs.changes.steps[0].with.script
+  const execute = new (Object.getPrototypeOf(async () => {}).constructor)('github', 'context', 'core', script)
+  for (const [runs, expected] of [
+    [[], 'true'],
+    [[{ head_sha: 'old' }], 'true'],
+    [[{ head_sha: 'current' }], 'false'],
+  ] as const) {
+    let output: string | undefined
+    const summary = { addHeading() { return this }, addRaw() { return this }, async write() {} }
+    await execute({ rest: { actions: { async listWorkflowRuns(args: Record<string, unknown>) {
+      assert.equal(args.status, 'success', 'Failed builds must be retried')
+      assert.equal(args.workflow_id, 'daily-build.yml')
+      assert.equal(args.branch, 'session')
+      return { data: { workflow_runs: runs } }
+    } } } }, { repo: { owner: 'example', repo: 'shadow' }, sha: 'current', payload: { repository: { default_branch: 'session' } } }, {
+      setOutput(key: string, value: string) { assert.equal(key, 'build'); output = value }, summary,
+    })
+    assert.equal(output, expected)
+  }
+})

@@ -15,6 +15,14 @@ on:
       - '.github/actions/**'
       - '.github/workflows/release-check.yml'
       - '.github/workflows/mobile-release.yml'
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        default: desktop
+      skip_linux:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       target:
@@ -35,7 +43,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.pull_request.number || github.ref }}-${{ inputs.target || 'all' }}
+  group: release-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.target || 'all' }}
   cancel-in-progress: true
 
 env:
@@ -154,25 +162,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: macOS Apple Silicon
-            runner: macos-15
-            platform: darwin
-            arch: arm64
-            artifact: shadow-macos-arm64
-            pattern: desktop/release/Shadow-*-mac-arm64.zip
-          - name: macOS Intel
-            runner: macos-15-intel
-            platform: darwin
-            arch: x64
-            artifact: shadow-macos-x64
-            pattern: desktop/release/Shadow-*-mac-x64.zip
-          - name: Linux
-            runner: ubuntu-22.04
-            platform: linux
-            arch: x64
-            artifact: shadow-linux-x64
-            pattern: desktop/release/Shadow-*-linux-x64.tar.gz
+        # exclude cannot filter entries added by include, so select the list itself.
+        include: ${{ fromJSON(inputs.skip_linux && '[{"name":"macOS Apple Silicon","runner":"macos-15","platform":"darwin","arch":"arm64","artifact":"shadow-macos-arm64","pattern":"desktop/release/Shadow-*-mac-arm64.zip"},{"name":"macOS Intel","runner":"macos-15-intel","platform":"darwin","arch":"x64","artifact":"shadow-macos-x64","pattern":"desktop/release/Shadow-*-mac-x64.zip"}]' || '[{"name":"macOS Apple Silicon","runner":"macos-15","platform":"darwin","arch":"arm64","artifact":"shadow-macos-arm64","pattern":"desktop/release/Shadow-*-mac-arm64.zip"},{"name":"macOS Intel","runner":"macos-15-intel","platform":"darwin","arch":"x64","artifact":"shadow-macos-x64","pattern":"desktop/release/Shadow-*-mac-x64.zip"},{"name":"Linux","runner":"ubuntu-22.04","platform":"linux","arch":"x64","artifact":"shadow-linux-x64","pattern":"desktop/release/Shadow-*-linux-x64.tar.gz"}]') }}
     steps:
       - uses: actions/checkout@v4
         with:
