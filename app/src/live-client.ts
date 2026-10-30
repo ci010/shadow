@@ -175,11 +175,18 @@ export function createLiveClient(base: string, options: {
   function changed() {
     if (disposed) return
     const desired = new Set(topics().map(realtimeTopicKey))
-    if (source && desired.size === connectedTopics.size && [...desired].every(key => connectedTopics.has(key))) return
+    if (source && desired.size === connectedTopics.size && [...desired].every(key => connectedTopics.has(key))) {
+      clearTimeout(timer)
+      timer = undefined
+      return
+    }
     clearTimeout(timer)
     timer = undefined
-    stopSource()
+    // Keep the current stream until the batched topic set is known. A pane can
+    // unsubscribe and resubscribe to the same topic in one synchronous update.
+    // connect() closes it if a different topic set is still needed next tick.
     if (!subscribers.size) {
+      stopSource()
       connectedTopics.clear()
       update({ phase: 'idle' })
     } else timer = setTimeout(connect, 0)

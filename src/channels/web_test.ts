@@ -619,3 +619,53 @@ test('chat session response includes segment navigation without another history 
     assert.equal(historyReads, 2)
   } finally { await channel.stop() }
 })
+
+
+test('chat history conditional reads validate all response fields and never hide deletion', async () => {
+  const app = new Hono()
+  let exists = true
+  let prompt = 'Prompt'
+  let history = [{ role: 'user', content: 'History' }]
+  let commands: string[] = []
+  let decisions: string[] = []
+  let tools: string[] = []
+  let segmentIndex = 0
+  const channel = new WebChannel(new Bus(), { sessionManager: {
+    getSessionState: () => exists ? { sessionId: 'web:cached', segmentIndex } : null,
+    getContext: async () => ({ systemPrompt: prompt, tools }),
+    getHistory: async () => ({ messages: history }),
+    getCommandResults: async () => commands, getYieldRecords: async () => decisions,
+  } as unknown as SessionManager })
+  await channel.start(app)
+  const read = (etag?: string) => app.request('/api/chat/session?chatId=cached', {
+    headers: etag ? { 'If-None-Match': etag } : {},
+  })
+  try {
+    let response = await read()
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('cache-control'), 'private, no-cache')
+    let etag = response.headers.get('etag')!
+    assert.ok(etag)
+    const unchanged = await read(etag)
+    assert.equal(unchanged.status, 304)
+    assert.equal(await unchanged.text(), '')
+    assert.equal((await read(`"other", W/${etag}`)).status, 304)
+    for (const change of [
+      () => { history = [{ role: 'user', content: 'Edited history of the same length' }] },
+      () => { prompt = 'Changed context' },
+      () => { tools = ['read'] },
+      () => { commands = ['command'] },
+      () => { decisions = ['decision'] },
+      () => { segmentIndex = 1 },
+    ]) {
+      change()
+      response = await read(etag)
+      assert.equal(response.status, 200)
+      assert.notEqual(response.headers.get('etag'), etag)
+      etag = response.headers.get('etag')!
+      assert.equal((await read(etag)).status, 304)
+    }
+    exists = false
+    assert.equal((await read(etag)).status, 404)
+  } finally { await channel.stop() }
+})

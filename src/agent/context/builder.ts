@@ -128,6 +128,24 @@ export class ContextBuilder {
       if (content) sections.push({ name: provider.name, content, characters: content.length })
     }
 
+    // Explicit skill links outside the discovery list already disclose these skills.
+    // Presentation only: catalog visibility, search and activation are unchanged.
+    const outsideCatalog = sections.map(section => section.content.replace(
+      /<available_skills>[\s\S]*?<\/available_skills>/g, '',
+    )).join('\n')
+    const disclosed = new Set([...outsideCatalog.matchAll(/`v:skills\/([a-z0-9][a-z0-9-]*)`/g)]
+      .map(match => match[1]))
+    for (const section of sections) {
+      section.content = section.content.replace(
+        /<available_skills>[\s\S]*?<\/available_skills>/g,
+        catalog => catalog.replace(
+          /^.*<skill name="([^"]+)">.*<\/skill>.*(?:\r?\n|$)/gm,
+          (entry, name: string) => disclosed.has(name) ? '' : entry,
+        ),
+      )
+      section.characters = section.content.length
+    }
+
     return { systemPrompt: sections.map(section => section.content).join('\n\n---\n\n'), sections }
   }
 }

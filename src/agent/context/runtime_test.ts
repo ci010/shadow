@@ -473,10 +473,14 @@ test('runtime supersedes legacy audience instructions without deriving recipient
 
 test('inline visual answer guidance is web-only and does not require an app', () => {
   const web = channelCapabilityPrompt('web', unavailableCapabilities(), false, true, false)
-  assert.match(web, /fenced `answer-html`/)
-  assert.match(web, /data-md/)
-  assert.match(web, /not a website, iframe, attachment or micro app/)
-  assert.match(web, /isolated <style> CSS/)
+  assert.match(web, /Advanced answering: prefer Markdown when it is clear/)
+  assert.match(web, /When more prose would obscure relationships, processes or comparisons/)
+  assert.match(web, /v:skills\/answer-flow.*v:skills\/answer-html/)
+  assert.match(web, /Load only the relevant skill before authoring/)
+  assert.match(web, /not an app or separate deliverable/)
+  assert.match(web, /Replies are sent automatically/)
+  assert.match(web, /Channel capabilities do not grant delegation permissions/)
+  assert.doesNotMatch(web, /data-md|answer-grid|isolated <style>|Tasks report completion|Example:/)
   for (const channel of ['discord', 'qq', 'wechat', 'feishu', 'a2a']) {
     assert.doesNotMatch(channelCapabilityPrompt(channel, unavailableCapabilities(), false, true, false), /answer-html/)
   }
@@ -543,8 +547,8 @@ test('standalone session contracts retain mode disclosure when no runtime provid
 
 test('Vue Flow capability points to its skill without embedding the protocol', () => {
   const prompt = channelCapabilityPrompt('web', unavailableCapabilities(), false, true, false)
-  assert.match(prompt, /answer-flow.*Vue Flow/)
-  assert.match(prompt, /Read `v:skills\/answer-flow`/)
+  assert.match(prompt, /answer-flow.*node\/edge diagrams/)
+  assert.match(prompt, /read `v:skills\/answer-flow`/)
   assert.doesNotMatch(prompt, /"nodes"|"edges"|"version"/)
   for (const channel of ['discord', 'qq', 'wechat', 'feishu', 'a2a']) {
     assert.doesNotMatch(channelCapabilityPrompt(channel, unavailableCapabilities(), false, true, false), /answer-flow/)

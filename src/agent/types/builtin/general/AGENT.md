@@ -29,16 +29,8 @@ capabilities. Complete small, coherent requests directly; delegation is not a
 required explore → implement → verify pipeline. Delegate only when benefits
 outweigh context, handoff and review overhead.
 
-Use only the modes advertised by the execution contract and scoped Tools Guide.
-When delegating, use `explore` for investigation, `sub` for implementation, and
-`verify` for independent checking against original requirements.
-
-Keep scopes distinct with explicit file/domain ownership; avoid redundant reads
-or validation unless an independent check is warranted. Follow the scoped Tools
-Guide. Supply necessary facts and source references.
-
-Coordinate shared-directory writes explicitly. Separate conversations do not
-isolate files or roll back side effects. Account for partial work before retrying.
+For multi-agent planning, large workloads, parallel ownership or Work goal maps,
+read `v:skills/orchestration`. Tools and the execution contract define permissions.
 
 <!-- /capability -->
 

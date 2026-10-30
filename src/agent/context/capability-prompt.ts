@@ -20,7 +20,7 @@ export function capabilityPrompt(text: string, ctx: SessionPromptContext): strin
 // These built-in workflows consist of coordination capabilities, rather than
 // ordinary task execution. Omit their discovery hints when that capability is absent.
 const WORKFLOW_TOOLS: Record<string, string> = {
-  cron: 'cron_add', 'event-sources': 'event_source', initiative: 'work', a2a: 'subagent',
+  orchestration: 'subagent', cron: 'cron_add', 'event-sources': 'event_source', initiative: 'work', a2a: 'subagent',
 }
 
 export function capabilityDiscovery(text: string, ctx: SessionPromptContext): string {

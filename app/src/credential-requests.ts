@@ -46,7 +46,9 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
   const operation = ref<'saving' | 'cancelling' | null>(null)
   const busy = computed(() => operation.value !== null)
   const enabled = computed(() => source().active && source().canSubmit
-    && source().sessionId.startsWith('web:') && !!source().projectId && source().stage === 'tool')
+    && source().sessionId.startsWith('web:') && !!source().projectId)
+  // Credential requests have their own interactions invalidation stream. Tool
+  // stages are unrelated: watching them starts and aborts a GET on every call.
   const secure = computed(() => privateCredentialTransport(source().apiBase))
   const valid = computed(() => secret.value.length > 0 && secret.value.length <= 16_384
     && !/[\u0000-\u001f\u007f]/.test(secret.value))

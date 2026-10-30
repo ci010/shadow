@@ -206,6 +206,7 @@
                 <span v-if="msg.usage.costIncomplete" class="usage-badge">{{ t(msg.usage.costs?.length ? 'Cost estimate incomplete' : 'Cost could not be estimated') }}</span>
               </div>
               <MessageTimestamp v-if="!msg.sessionSource" :timestamp="msg.timestamp" />
+              <MessageCopyActions v-if="msg.attachmentBody.text" :text="msg.attachmentBody.text" :render-content="renderMarkdown" />
               </div>
             </component>
             </template>
@@ -497,6 +498,7 @@ const mobileResources = useMobileResources()
 import { Marked } from 'marked'
 import { answerHtmlExtension, sanitizeAnswerHtmlRoots } from '../answer-html'
 import MarkdownContent from './MarkdownContent.vue'
+import MessageCopyActions from './MessageCopyActions.vue'
 import { paddedStrongCompatibility } from '../markdown-strong-compat.ts'
 import { markedMath } from '../marked-math.ts'
 import MessageAttachments from './MessageAttachments.vue'
@@ -2005,7 +2007,7 @@ async function loadDirectChat(background = false): Promise<void> {
     connectEventStream(chatId, true)
     await historySnapshot?.getPromise()
     if (controller.signal.aborted) return
-    const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal })
+    const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal, cache: 'no-cache' })
     if (controller.signal.aborted) return
     if (res.status === 404 && activeSessionId.value === sessionId) {
       disconnectEventStream()
