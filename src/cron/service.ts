@@ -307,6 +307,10 @@ export class CronService {
     return structuredClone([...this.jobs.values(), ...[...this.managed.values()].map(m => m.job)])
   }
 
+  nextJobRun(id: string): string | null {
+    return this.scheduledJobs.get(id)?.nextRun()?.toISOString() ?? null
+  }
+
   // ── Internal ──────────────────────────────────────────────────────────
 
   private scheduleCron(job: CronJob): void {

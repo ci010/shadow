@@ -1750,6 +1750,23 @@ participate; admin filtering happens before ranking. Successful exact reads and
 saves record use, not discovery or prompt rebuilding. Recency is memory-only,
 bounded per Project/session, and never removes files or active tools. Search
 continues to expose the complete permitted catalog.
+During system-prompt assembly, exact backticked `v:skills/<name>` links outside
+`available_skills` count as explicit disclosure: matching metadata entries are
+omitted from that list. Directory/resource links do not count. This presentation
+filter does not change catalog visibility, search, activation or permissions;
+it does not refill the bounded selection after deduplication.
+
+Large-workload task/call delegation, agent-team division of ownership, durable
+peer handoffs, team-message delivery details and optional Work goal maps (including
+question-to-goal fields) are documented in the on-demand
+`v:skills/orchestration` skill. Ordinary prompts retain capability-gated entry
+points and critical lifecycle/ownership boundaries, rather than the full workflow.
+This is guidance over existing tools, not a separate teams runtime.
+Web channel capabilities disclose advanced answering in one entry: prefer Markdown
+when clear, and load `answer-flow` for node/edge relationships or `answer-html` for
+flexible explanatory layouts only when they improve clarity over more prose.
+Renderer syntax, examples and HTML safety constraints live in those on-demand
+skills; these formats enhance inline replies rather than create applications.
 
 `SkillEditStore` and `skill_read`/`skill_save` provide ordinary shared Skill
 editing, including bundled tool sources, to durable local Web sessions. These tools do not grant extra filesystem or execution rights. Raw editing reads do not register tools. Session-local read

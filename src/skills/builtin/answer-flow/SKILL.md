@@ -7,11 +7,13 @@ metadata:
 
 # Native Vue Flow answers
 
-Use this for relationships that benefit from actual nodes and edges: architecture,
+Use Markdown when it already explains clearly. When additional prose would obscure
+relationships, use this advanced answering format for actual nodes and edges: architecture,
 network paths, process boundaries, dependencies or lifecycle sequences. This is a
 native block in a web reply, not an app build. No tools, server, iframe, Vue source
 or separate artifact are needed. Pair the diagram with ordinary Markdown for
-conclusions and caveats. Use answer-html for prose layouts/cards instead.
+conclusions and caveats. For flexible prose layouts/cards rather than node/edge relationships, read
+`v:skills/answer-html` instead. Do not load both skills unless both formats help.
 
 Only Shadow web answers advertise this renderer. For other channels use ordinary
 Markdown/text. The fence is `answer-flow`, containing strict JSON (no comments,

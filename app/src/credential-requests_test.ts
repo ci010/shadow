@@ -55,12 +55,16 @@ test('private entry validates Project identity and rejects unexpected secret-bea
   }
 })
 
-test('only visible owner coordination tool turns fetch requests and deactivation clears secret input', async t => {
+test('visible owner reads once regardless of tool stages and deactivation clears secret input', async t => {
   const { state, source, requests } = await harness(t, { stage: 'idle' })
-  assert.equal(requests.length, 0)
-  source.stage = 'tool'
-  await settle()
   assert.equal(requests.length, 1)
+  const first = requests[0]
+  for (const stage of ['tool', 'thinking', 'tool', 'idle']) {
+    source.stage = stage
+    await settle()
+    assert.equal(requests.length, 1, 'stage changes do not create credential reads')
+    assert.equal(first.init.signal?.aborted, false, 'stage changes do not abort the current read')
+  }
   requests[0].finish(Response.json({ request: question() }))
   await settle()
   state.secret.value = 'SYNTHETIC-SECRET'

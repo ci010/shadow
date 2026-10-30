@@ -31,6 +31,7 @@ import {render as renderStream} from '/streaming-markdown.js';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
 import MarkdownContent from '/src/components/MarkdownContent.vue';
+import MessageCopyActions from '/src/components/MessageCopyActions.vue';
 import {renderAnswerHtml} from '/src/answer-html.ts';
 const check=(ok,message)=>{if(!ok)throw Error(message)};
 try {
@@ -84,6 +85,27 @@ try {
   live.streamContent='';await nextTick();
   check(!document.querySelector('#app table'),'flushed streaming content remained mounted');
   streamApp.unmount();
+  const writes=[];
+  Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{writes.push(value)}}});
+  const source=ref('first');
+  const copyApp=createApp({setup:()=>()=>h('main',[
+    h(MarkdownContent,{text:source.value,renderContent:text=>'<pre><code>'+text+'&lt;tag&gt;\\n</code></pre>'}),
+    h(MessageCopyActions,{text:source.value,renderContent:text=>'<p>'+text+'</p>'})
+  ])});
+  copyApp.mount('#app');await nextTick();await nextTick();
+  const click=async selector=>{document.querySelector(selector).click();await new Promise(resolve=>setTimeout(resolve,0));await nextTick()};
+  check(document.querySelectorAll('pre .code-copy button').length===1,'missing code copy action');
+  await click('pre .code-copy button');
+  check(writes.at(-1)==='first<tag>\\n','code copy must preserve raw text, not markup');
+  await click('.message-copy-actions button');
+  check(writes.at(-1)==='first','Markdown copy changed source');
+  await click('.message-copy-actions .copy-icon-control:last-child button');
+  check(writes.at(-1)==='<p>first</p>','HTML copy did not use rendered HTML');
+  source.value='second';await nextTick();await nextTick();
+  check(document.querySelectorAll('pre .code-copy button').length===1,'code update duplicated copy action');
+  await click('pre .code-copy button');
+  check(writes.at(-1)==='second<tag>\\n','code copy stale after update');
+  copyApp.unmount();
   window.result='MARKDOWN_CONTENT_OK';
 } catch(error) {window.result=error.stack || String(error)}
 `

@@ -22,14 +22,18 @@
             <span class="attachment-type">{{ item.extension ? item.extension.toUpperCase() + t(' file') : t('File') }}</span>
           </span>
         </component>
-        <button v-if="canReveal(item)" class="attachment-download" type="button" :disabled="revealState.pending.has(item.path)" :aria-busy="revealState.pending.has(item.path)" @click="reveal(item)">{{ t('Show in file explorer') }}</button>
+        <HoverInfo v-if="canReveal(item)" :text="t('Show in file explorer')" v-slot="{ triggerProps }">
+        <button v-bind="triggerProps" class="attachment-download attachment-reveal" type="button" :aria-label="t('Show in file explorer')" :disabled="revealState.pending.has(item.path)" :aria-busy="revealState.pending.has(item.path)" @click="reveal(item)"><span :class="revealState.pending.has(item.path) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-folder-open'" aria-hidden="true" /></button>
+      </HoverInfo>
         <a v-if="item.downloadUrl" class="attachment-download" :href="item.downloadUrl" :download="item.name" :aria-label="t('Download {name}', { name: item.name })" :title="t('Download {name}', { name: item.name })" referrerpolicy="no-referrer"
           :aria-busy="downloads.pending.has(item.downloadUrl)" :aria-disabled="downloads.pending.has(item.downloadUrl)"
           @click="downloads.download($event, item.downloadUrl, item.name)">
           <span :class="downloads.pending.has(item.downloadUrl) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-download'" aria-hidden="true" /><span>{{ downloads.pending.has(item.downloadUrl) ? t('Downloading...') : t('Download') }}</span>
         </a>
       </div>
-      <button v-if="item.kind === 'image' && item.url && !failed.has(item.path) && canReveal(item)" class="attachment-download" type="button" :disabled="revealState.pending.has(item.path)" :aria-busy="revealState.pending.has(item.path)" @click="reveal(item)">{{ t('Show in file explorer') }}</button>
+      <HoverInfo v-if="item.kind === 'image' && item.url && !failed.has(item.path) && canReveal(item)" :text="t('Show in file explorer')" v-slot="{ triggerProps }">
+        <button v-bind="triggerProps" class="attachment-download attachment-reveal" type="button" :aria-label="t('Show in file explorer')" :disabled="revealState.pending.has(item.path)" :aria-busy="revealState.pending.has(item.path)" @click="reveal(item)"><span :class="revealState.pending.has(item.path) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-folder-open'" aria-hidden="true" /></button>
+      </HoverInfo>
       <p v-if="!item.url" class="attachment-error" role="status">{{ t('Attachment unavailable in this conversation.') }}</p>
       <p v-else-if="failed.has(item.path)" class="attachment-error" role="status">{{ t('Preview unavailable. Download the file to open it on your device.') }}</p>
       <p v-if="item.downloadUrl && downloads.errors.has(item.downloadUrl)" class="attachment-error" role="alert">{{ downloads.errors.get(item.downloadUrl) }}</p>
@@ -41,6 +45,7 @@
 
 <script setup lang="ts">
 import { t } from '../i18n.ts'
+import HoverInfo from './HoverInfo.vue'
 import FilePreviewModal from './files/FilePreviewModal.vue'
 import type { FileEntry } from '../composables/useSessionFiles.ts'
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
@@ -111,13 +116,15 @@ audio { display: block; width: 100%; }
 .attachment-name { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; color: var(--c-text); }
 .attachment-type { font-size: 12px; color: var(--c-text-secondary); }
 .attachment-download { position: relative; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 0 8px; color: var(--c-text); font-size: 12px; text-decoration: none; flex-shrink: 0; }
+.attachment-reveal { width: 36px; border: 0; background: transparent; cursor: pointer; }
+.attachment-reveal > span:last-child { display: block; }
 .attachment-download:hover { background: var(--c-bg-muted); }
 .attachment-download > span:first-child { width: 16px; height: 16px; }
 .attachment-download:focus-visible, .attachment-image-link:focus-visible { outline: 2px solid var(--c-text-secondary); outline-offset: -2px; }
 .attachment-error { margin: 0; padding: 8px 12px; font-size: 12px; color: var(--c-text-secondary); background: var(--c-bg-soft); overflow-wrap: anywhere; }
 @media (max-width: 480px) {
   .attachment-details { gap: 8px; padding: 10px; }
-  .attachment-download > span:last-child { display: none; }
+  .attachment-download:not(.attachment-reveal) > span:last-child { display: none; }
   .attachment-download { min-width: 36px; }
 }
 </style>
