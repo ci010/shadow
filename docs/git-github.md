@@ -33,8 +33,10 @@ an intentionally invalid executable; POSIX shells print a bounded error.
 
 `SHADOW_SAFEGIT_PATH` explicitly overrides the binary location and must be
 absolute; alias preparation validates the pinned version. Main aliases/paths
-are not sent to remote workdirs: prepare and invoke the execution device's own
-binary. Git must be installed on that device; gh remains optional.
+are not sent to remote workdirs. The Child prepares its own native alias and
+absolute binary path for remote shell execution, using the Child bundle or its
+explicit host override. Its content-addressed alias cache lives under the Child
+OS temporary directory (`shadow-exec/cli/safegit`), outside the worktree. Git must be installed on that device; gh remains optional.
 
 ## Preparation and failure handling
 

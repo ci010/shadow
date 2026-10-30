@@ -10,6 +10,7 @@ import { LocalExecutor } from './local-executor.ts'
 import { CapabilityFilesystem } from './capability-filesystem.ts'
 import { RemoteExecutor } from './remote-executor.ts'
 import { executeRemoteShell } from './remote-shell-client.ts'
+import { requestedSafegitBinary, SAFEGIT_VERSION } from './git/safegit.ts'
 import type { JobEventV1, JobRequestV1 } from './contracts.ts'
 
 function request(args: unknown, overrides: Partial<JobRequestV1> = {}): JobRequestV1 {
@@ -198,5 +199,21 @@ test('POSIX foreground completion also terminates owned children with redirected
     assert.match(await pending, /done/)
     await delay(1200)
     await assert.rejects(access(join(root, 'leaked.txt')), { code: 'ENOENT' })
+  })
+})
+
+// Exercise the actual Child process route, not a Main-side environment fixture.
+test('remote shell exposes the Child bundled safegit in native PATH', async t => {
+  try { await access(requestedSafegitBinary()) } catch { t.skip('Host bundle not prepared'); return }
+  await withTempWorkspace(async root => {
+    const fixture = setup(root)
+    const target = { executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal }
+    for (const shell of (process.platform === 'win32' ? ['cmd', 'powershell'] : ['sh']) as ('cmd' | 'powershell' | 'sh')[]) {
+      const output = await executeRemoteShell(target, { script: 'safegit --version', shell }, 10_000)
+      assert(output.includes(SAFEGIT_VERSION), output)
+      assert(!output.startsWith('Error:'), output)
+    }
+    assert(!JSON.stringify(fixture.requests).includes('SHADOW_SAFEGIT_PATH'))
+    assert.equal(fixture.manager.list().length, 0)
   })
 })
