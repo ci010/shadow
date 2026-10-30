@@ -385,12 +385,20 @@ function knowledgeNavigation(resource: ConversationResource, active: boolean, en
   if (route.name !== 'chat' && active) void router.push({ ...projectChatLocation(resource), query })
   else if (query.panel !== route.query.panel || query.entry !== route.query.entry) void router.push({ query })
 }
+// Settings document tabs return to the last section visited in each project.
+// Track the route, not the cached settings component (which also sees chat routes).
+const settingsSections = new Map<string, string>()
+watch(() => [route.name, route.params.projectId, route.params.section] as const, ([name, projectId, section]) => {
+  if (name === 'project-settings' && typeof projectId === 'string') {
+    settingsSections.set(projectId, typeof section === 'string' && section ? section : 'general')
+  }
+}, { immediate: true })
 function projectNavigation(resource: ConversationResource, tab?: ProjectTab) {
   if (!props.visible || selected.value?.key !== resource.key || route.params.projectId !== resource.projectId) return
   if (tab) {
     if (route.name !== 'project-settings') {
       void router.push({ name: 'project-settings',
-        params: { projectId: resource.projectId, section: 'general' } })
+        params: { projectId: resource.projectId, section: settingsSections.get(resource.projectId) ?? 'general' } })
     }
   } else if (route.name === 'project-settings' || route.name === 'agents') {
     void router.push(projectChatLocation(resource))

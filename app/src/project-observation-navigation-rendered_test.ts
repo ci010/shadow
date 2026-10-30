@@ -72,6 +72,14 @@ test('project settings and Knowledge click through history and observed groups w
       await wait('('+visible('.project-settings-view')+').querySelector("h1").textContent==="Project A settings"');
       assert.equal((await route()).name,'project-settings');assert.equal((await route()).params.projectId,'a');
       await primary();await wait('window.fixture.router.currentRoute.value.name==="chat"');assert.equal((await route()).params.sessionId,id);
+      // The settings document tab must restore its section, rather than General.
+      await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a",section:"learning"}})');
+      await wait('window.fixture.router.currentRoute.value.params.section==="learning"');
+      await primary();await wait('window.fixture.router.currentRoute.value.name==="chat"');
+      await run('[...document.querySelectorAll(".document-tab button[role=tab]")].find(e=>e.textContent.trim()==="Project settings" && e.getBoundingClientRect().width).click()');
+      await wait('window.fixture.router.currentRoute.value.name==="project-settings"');
+      assert.equal((await route()).params.section,'learning');
+      await primary();await wait('window.fixture.router.currentRoute.value.name==="chat"');
       await clickLabel('Project A knowledge');await wait(visible('.knowledge-document'));
       assert.equal((await route()).query.panel,'knowledge');assert.equal((await route()).params.sessionId,id);
       await primary();await wait('!window.fixture.router.currentRoute.value.query.panel');
