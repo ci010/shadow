@@ -172,3 +172,83 @@ test('aborted late append never replaces the validated cached base', async () =>
   await cache.read('http://main/history', new AbortController().signal)
   cache.dispose()
 })
+
+test('history block reuse updates metadata with append, prepend and metadata alone; rejects rewrites and rollover', async () => {
+  const app = new Hono()
+  let segmentIndex = 0
+  let systemPrompt = 'old'
+  let tools: unknown[] = []
+  let decisions: string[] = []
+  const history = [{ role: 'user', content: 'x'.repeat(100_000) }]
+  const channel = new WebChannel(new Bus(), { sessionManager: {
+    getSessionState: () => ({ sessionId: 'web:metadata', segmentIndex }),
+    getContext: async () => ({ systemPrompt, tools }),
+    getHistory: async () => ({ messages: history }),
+    getCommandResults: async () => [], getYieldRecords: async () => decisions,
+  } as unknown as SessionManager })
+  await channel.start(app)
+  const wires: string[] = []
+  const cache = createChatHistorySnapshots((async (url, init) => {
+    const response = await app.request(String(url), init)
+    const text = await response.text()
+    wires.push(text)
+    return new Response(text, { status: response.status })
+  }) as typeof fetch)
+  const read = async () => (await cache.read('http://main/api/chat/session?chatId=metadata', new AbortController().signal)).json()
+  try {
+    await read()
+    systemPrompt = 'new'; tools = [{ name: 'read' }]; decisions = ['decision']
+    history.push({ role: 'assistant', content: 'answer' })
+    const appended = await read()
+    assert.deepEqual(appended.history, history)
+    assert.equal(appended.systemPrompt, systemPrompt)
+    assert.deepEqual(appended.tools, tools)
+    assert.deepEqual(appended.decisionRecords, decisions)
+    assert.equal(JSON.parse(wires.at(-1)!).delta.history.length, 1)
+    assert.ok(wires.at(-1)!.length < 2000, 'metadata change does not replay 100KB prefix')
+    history.unshift({ role: 'system', content: 'prepended context' })
+    history.push({ role: 'assistant', content: 'another answer' })
+    systemPrompt = 'prepended'
+    assert.deepEqual((await read()).history, history)
+    assert.equal(JSON.parse(wires.at(-1)!).delta.historyOffset, 1)
+    assert.ok(wires.at(-1)!.length < 2000)
+    systemPrompt = 'metadata only'
+    assert.equal((await read()).systemPrompt, systemPrompt)
+    assert.deepEqual(JSON.parse(wires.at(-1)!).delta.history, [])
+    history[1] = { role: 'user', content: 'rewritten' }
+    assert.deepEqual((await read()).history, history)
+    assert.ok(JSON.parse(wires.at(-1)!).data, 'rewritten middle falls back to full')
+    segmentIndex++
+    assert.equal((await read()).segmentIndex, 1)
+    assert.ok(JSON.parse(wires.at(-1)!).data, 'identical history across segments must not splice')
+  } finally { cache.dispose(); await channel.stop() }
+})
+
+test('malformed block deltas evict rather than splice', async () => {
+  const metadata = { chatId: 'x', currentPhysicalId: 'web:x', segmentIndex: 0,
+    previousPhysicalId: null, systemPrompt: 'prompt', tools: [], commandResults: [], decisionRecords: [] }
+  for (const patch of [
+    { baseHistoryRevision: 'b'.repeat(64) }, { metadata: { ...metadata, currentPhysicalId: 'other' } },
+    { metadata: { ...metadata, segmentIndex: 1 } }, { metadata: { ...metadata, history: [] } },
+    { metadata: {} }, { count: 99 }, { historyOffset: 1 }, { leadingHistory: [null] },
+  ]) {
+    let calls = 0
+    const cache = createChatHistorySnapshots((async url => {
+      calls++
+      if (calls !== 2) {
+        assert.equal(new URL(String(url)).searchParams.get('snapshot'), '')
+        return Response.json({ revision, historyRevision: revision, data: { ...metadata, history: [{ role: 'user' }] } })
+      }
+      assert.equal(new URL(String(url)).searchParams.get('historyRevision'), revision)
+      return Response.json({ revision: 'c'.repeat(64), historyRevision: revision, delta: {
+        baseRevision: revision, baseHistoryRevision: revision, baseCount: 1, count: 1,
+        history: [], leadingHistory: [], historyOffset: 0, metadata, ...patch,
+      } })
+    }) as typeof fetch)
+    const read = () => cache.read('http://main/history', new AbortController().signal)
+    await read()
+    await assert.rejects(read(), /Invalid history delta/)
+    await read()
+    cache.dispose()
+  }
+})

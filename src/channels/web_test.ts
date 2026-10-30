@@ -714,3 +714,35 @@ test('history append validates complete old prefix and metadata, not client coun
     }
   } finally { await channel.stop() }
 })
+
+test('history block reuse requires exact hash/count and bounded offset', async () => {
+  const app = new Hono()
+  const original = [{ role: 'user', content: 'original' }]
+  let history = [...original]
+  let systemPrompt = 'old'
+  const channel = new WebChannel(new Bus(), { sessionManager: {
+    getSessionState: () => ({ sessionId: 'web:block', segmentIndex: 0 }),
+    getContext: async () => ({ systemPrompt, tools: [] }),
+    getHistory: async () => ({ messages: history }),
+    getCommandResults: async () => [], getYieldRecords: async () => [],
+  } as unknown as SessionManager })
+  await channel.start(app)
+  const read = async (params: Record<string, string>) => (await app.request('/api/chat/session?' + new URLSearchParams({ chatId: 'block', ...params }))).json()
+  try {
+    const base = await read({ snapshot: '' })
+    const params = { snapshot: base.revision, historyRevision: base.historyRevision, historyCount: '1' }
+    systemPrompt = 'new'
+    history = [...Array.from({ length: 16 }, () => ({ role: 'system', content: 'leading' })), ...original, { role: 'assistant', content: 'suffix' }]
+    const delta = await read(params)
+    assert.equal(delta.delta.historyOffset, 16)
+    assert.equal(delta.delta.leadingHistory.length, 16)
+    assert.deepEqual(delta.delta.history, history.slice(17))
+    for (const patch of [
+      { historyCount: '-1' }, { historyCount: '01' }, { historyCount: '9007199254740992' },
+      { historyCount: '999' }, { historyRevision: 'invalid' }, { historyRevision: 'a'.repeat(64) },
+      { snapshot: 'invalid' },
+    ]) assert.ok((await read({ ...params, ...patch })).data, 'invalid validator falls back to full')
+    history.unshift({ role: 'system', content: 'beyond bound' })
+    assert.ok((await read(params)).data, 'offset 17 is outside bounded reuse')
+  } finally { await channel.stop() }
+})
