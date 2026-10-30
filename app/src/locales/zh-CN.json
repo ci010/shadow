@@ -4105,5 +4105,8 @@
   "Process output is unavailable. Retry to reconnect.": "无法获取进程输出，请重试连接。",
   "Main returned invalid process output.": "Main 返回了无效的进程输出。",
   "Last inspected process (retained)": "上次查看的进程（已保留）",
-  "This Copilot authentication version is no longer supported. Select another connection to continue. To reuse this connection ID, stop Main and change its configured type to copilot or copilot-v2, then sign in if needed. Saved credentials have not been changed.": "此 Copilot 认证版本已不再支持。可先选择其他连接继续使用。如需复用此连接 ID，请停止 Main，将配置中的类型改为 copilot 或 copilot-v2，然后按需登录。已保存的凭据未被更改。"
+  "This Copilot authentication version is no longer supported. Select another connection to continue. To reuse this connection ID, stop Main and change its configured type to copilot or copilot-v2, then sign in if needed. Saved credentials have not been changed.": "此 Copilot 认证版本已不再支持。可先选择其他连接继续使用。如需复用此连接 ID，请停止 Main，将配置中的类型改为 copilot 或 copilot-v2，然后按需登录。已保存的凭据未被更改。",
+  "Copy code block": "复制代码",
+  "Copy Markdown": "复制 Markdown",
+  "Copy HTML": "复制 HTML"
 }
