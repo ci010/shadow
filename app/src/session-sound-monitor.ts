@@ -8,7 +8,7 @@ import { parseYieldResponse } from './yield-requests.ts'
 import type { LiveClient } from './live-client.ts'
 import type { ProjectLiveState } from './project-live-state.ts'
 import type { NotificationSound } from './notification-sounds.ts'
-import { isRecord } from './folders-sidebar.ts'
+import { isRecord, type SidebarSession } from './folders-sidebar.ts'
 
 export interface SessionCompletion {
   projectId: string
@@ -18,6 +18,12 @@ export interface SessionCompletion {
   turnId: string
 }
 
+/** Only app-owned conversations participate; arbitrary legacy channel prefixes are bots too. */
+function isNotificationSession(session: SidebarSession): boolean {
+  return !isOneShot(session) && !session.channelAddress
+    && /^(web|sub|cron):/.test(session.sessionId)
+}
+
 export function createSessionSoundTracker() {
   let previous: Map<string, string> | undefined
   const questions = new Map<string, string>()
@@ -25,7 +31,7 @@ export function createSessionSoundTracker() {
   return {
     reset() { previous = undefined; questions.clear(); completed.clear() },
     observe(snapshot: ProjectConversationState) {
-      const current = new Map(snapshot.sessions.filter(session => !isOneShot(session)).map(session =>
+      const current = new Map(snapshot.sessions.filter(session => isNotificationSession(session)).map(session =>
         [session.sessionId, snapshot.stages[session.sessionId] ?? 'inactive']))
       const idle: string[] = []
       const waiting = [...current].filter(([, stage]) => stage === 'waiting').map(([id]) => id)
@@ -101,7 +107,7 @@ export function startSessionSoundMonitor(options: {
         let idle = changes.idle.length > 0
         for (const [sessionId, turnId] of finished) {
           const session = snapshot.sessions.find(session => session.sessionId === sessionId)
-          if (session && !isOneShot(session) && snapshot.stages[sessionId] === 'idle') {
+          if (session && isNotificationSession(session) && snapshot.stages[sessionId] === 'idle') {
             if (tracker.completion(sessionId, turnId) && !changes.baseline) {
               idle = true
               options.completed?.({
@@ -110,7 +116,7 @@ export function startSessionSoundMonitor(options: {
               })
             }
             finished.delete(sessionId)
-          } else if ((session && isOneShot(session)) || (!session && !dirty)) finished.delete(sessionId)
+          } else if ((session && !isNotificationSession(session)) || (!session && !dirty)) finished.delete(sessionId)
         }
         let needsAnswer = false
         for (const sessionId of changes.waiting) {
