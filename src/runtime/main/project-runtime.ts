@@ -217,6 +217,7 @@ import { DiffusionCppTool } from '../../tools/diffusion-cpp.ts'
 import { Aria2Downloader } from '../../downloader/aria2.ts'
 import { DownloadTool } from '../../tools/download.ts'
 import { createPromptCaptureStore } from '../../sessions/prompt-capture.ts'
+import { projectStoragePath } from '../../utils/data-paths.ts'
 import { createA2aRuntime } from '../../a2a/runtime.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { CoordinatorExecutionPolicy } from '../../execution/coordinator-policy.ts'
@@ -254,8 +255,8 @@ export async function createProjectRuntime(
   const startup = new StartupTimings('project', project.id)
   const workspace = config.agent.workspace
   const cleanup: Array<() => unknown> = []
-  const promptCaptures = createPromptCaptureStore(project.id)
-  if (promptCaptures) cleanup.push(() => promptCaptures.clear())
+  const promptCaptures = createPromptCaptureStore(project.id, process.env, projectStoragePath(workspace, '.learning', 'audit'))
+  if (promptCaptures) cleanup.push(() => promptCaptures.close())
 
   // ── Create core components ────────────────────────────────
   const bus = new Bus()

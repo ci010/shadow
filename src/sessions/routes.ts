@@ -711,7 +711,8 @@ export function sessionsApiPlugin(
           return c.json({
             key, source: 'captured', boundary: 'provider-input',
             captures,
-            note: 'Captured system messages and tools at session provider calls, before adapter transformations; not HTTP wire payloads. Empty means no retained capture.',
+            status: sessions.getPromptCaptureStatus(key),
+            note: 'Actual provider.chat inputs before adapter transformations, not HTTP wire. Inspect scope/payload/omissions: ordinary debug records system and tools only; opted-in learning audit records inference messages with explicit media omissions. Empty is not evidence of capture; see status.',
           })
         }
         if (!sessions.getSessionState(key)) return c.json({ error: 'archived_context_unavailable', key,

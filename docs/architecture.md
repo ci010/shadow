@@ -1142,12 +1142,20 @@ can bypass application memory controls through host authority.
 Each project's `LearningService` registers in-process activity aggregation
 and managed fresh jobs on its existing `CronService`:
 
-- **Reflector**, default 30-minute poll: process pinned physical-segment ranges
-  (at most eight ranges of 100 messages per batch). Select useful conditional
-  goals, reasoning, facts or procedures instead of building a wiki for every
-  entity. `learning_memory` stores evidence, stated/inferred interpretation,
-  applicability, exceptions and revalidation triggers in `memory/decisions`.
-  Later evidence can support, correct or retire a decision.
+- **Reflector**, default 30-minute poll: process pinned physical-segment ranges.
+  New batches target at most four sources and an overview reading budget of
+  12,000 characters / 160 lines, retaining message-based consumption cursors.
+  A single oversized atomic message is isolated rather than skipped; it can
+  still require a partial result and manual recovery. Existing pending batches
+  retain their original scope and effects.
+  Independently assess Wiki knowledge updates, key events/corrections/challenges,
+  long-term memory and downstream skill material. Valuable unresolved evidence
+  need not become a mature decision before it can be logged; uncertainty and
+  source references remain required. Do not build a wiki for every entity or
+  force a write to each destination. `learning_memory` stores evidence,
+  stated/inferred interpretation, applicability, exceptions and revalidation
+  triggers in `memory/decisions`. Later evidence can support, correct or retire
+  a decision.
 - **Encapsulator**, default 2-hour poll: consume exact unconsumed events from
   verified reflection batches, including earlier dates. `learned_skill` uses
   the shared Skill edit store, checks revisions and verifies immediate discovery

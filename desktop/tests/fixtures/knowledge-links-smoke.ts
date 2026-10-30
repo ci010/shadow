@@ -29,8 +29,25 @@ async function main() {
   }
   const button = (label: string) => `[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(label)})`
   try {
-    await window.loadURL(new URL('__knowledge', process.env.KNOWLEDGE_LINKS_URL).href)
+    const initial = new URL('__knowledge?home=1', process.env.KNOWLEDGE_LINKS_URL)
+    await window.loadURL(initial.href)
+    // Browser layout/visibility, not just Vue renderer node existence: a native
+    // <template> wrapper makes these controls and the catalog error invisible.
+    await execute(`window.__visible = selector => {
+      const node = document.querySelector(selector);
+      if (!node || !node.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return false;
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }; void 0`)
+    await wait(`window.__visible('.knowledge > [role="alert"]') && document.querySelector('.knowledge > [role="alert"]').textContent.includes('503')`)
+    assert.equal(await execute(`window.__visible('input[aria-label="Search knowledge"]')`), true)
+    assert.equal(await execute(`${button('Refresh')}.disabled`), false)
+    await execute(`${button('Refresh')}.click()`)
+    await wait(`!document.querySelector('.knowledge > [role="alert"]') && document.querySelectorAll('.entry').length===5 && window.__visible('.entry')`)
+    assert.equal(await execute(`window.__visible('.content svg')`), true)
+    await execute(`document.querySelector('.entry').click()`)
     await loaded('Operations wiki')
+    assert.equal(await execute(`window.__visible('.knowledge-preview') && window.__visible('.detail-heading h2')`), true)
     assert.equal(await execute(`!!window.__unsafe || !!document.querySelector('.knowledge-preview script, .knowledge-preview img, .knowledge-preview [onclick]')`), false)
     for (const label of ['Unsafe', 'Data', 'File', 'Unsafe HTML']) {
       assert.equal(await execute(`${anchor(label)}.hasAttribute('href')`), false, label)

@@ -35,6 +35,16 @@ evidence / revalidate when**. Inferred motivations remain hypotheses, not facts
 about a person's identity. Easily recomputed environment facts and temporary
 task state usually stay in source history. No durable change is a valid result.
 
+Reflector is the first-stage evidence learner: independently assess Wiki
+knowledge updates, key events/corrections/challenges, long-term memory and
+material for downstream skills. A useful unresolved challenge can be logged with
+its source, attempted approaches, observed outcome and uncertainty before it
+supports a mature rule. Do not invent a resolution or force writes to all four
+destinations. Knowledge facts need not be behavioral lessons; prefer updating an
+existing Wiki item over duplicate pages. Stable event keys deduplicate retries,
+not repeated user actions into a behavior counter: counting is not implemented
+by this workflow.
+
 Reflector actively looks for user corrections, repeated failed approaches,
 promise/execution gaps, overturned assumptions, and successful reusable methods.
 A candidate connects the situation, actual choice, observed result, supported
@@ -50,7 +60,8 @@ learning signals and concrete changes separately from unread/truncated evidence
 and unobserved future usefulness. Attachment markers are not image understanding;
 relevant inaccessible evidence requires Partial/Blocked, not No change.
 These are model instructions, not a semantic-quality validator or proof that later
-behavior improved. The existing batch, retry and cursor semantics are unchanged.
+behavior improved. Verified completion is still required to advance message
+cursors; prompt instructions alone do not prove source coverage.
 
 The local Project learning roles use `learning_memory` to read a revision and save a scoped
 decision. Existing general sessions retain normal `write` access to wiki memory;
@@ -82,7 +93,13 @@ Source review and semantic quality remain model-driven; later sessions should
 identify useful decisions and counterexamples for the next reflection pass.
 Receipt checks include direct Markdown writes and persisted tool failures, not
 only writes through `learning_memory`. An unresolved write or source-read error
-cannot be hidden by reporting No change. Reflector direct writes need a
+cannot be hidden by reporting No change. A failed source read can be recovered
+by later successful complete pages covering its failed line range on the exact
+same resource; identical offset/limit arguments are not required. Different
+aliases or `/full` and `/overview` are not interchangeable coverage proofs.
+Diagnostics retain the failed path and range for explicit recovery. Unresolved
+write failures remain blocking, independently of read recovery.
+Reflector direct writes need a
 provenance-bearing `log` event before Applied; the structured memory tool creates
 that event automatically. Changed artifacts pause for reconciliation rather than
 automatically overwriting another editor's change.
@@ -126,6 +143,14 @@ completion counts, observed costs or live configuration values.
 
 Learning ceilings are selected by the trusted LearningRuntime pipeline, not an
 editable cron override; ordinary cron jobs retain their existing execution defaults.
+New reflector batches target an overview reading budget of 12,000 characters /
+160 lines across at most four sources; persisted cursors still count messages,
+not display lines. This leaves room for relevant lookups, writes and receipts,
+but is not a guarantee of completion within the tool ceiling. A single oversized
+atomic message is isolated, not skipped; Partial pauses for explicit recovery.
+Existing pending batches preserve their scope and effects rather than silently
+shrinking or acknowledging unread evidence.
+
 Writers need separate read, validated-write and learning_result/final stages and
 are not one-shot. Exhaustion may leave partial effects, which are retained for
 recovery; no cursor advances without the existing verified receipt and successful

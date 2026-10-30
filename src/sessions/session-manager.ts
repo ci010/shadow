@@ -995,6 +995,10 @@ ${JSON.stringify(request)}`,
     this.assertFolderAccess(sessionId)
     return this.deps.promptCaptures?.list(sessionId)
   }
+  getPromptCaptureStatus(sessionId: string) {
+    this.assertFolderAccess(sessionId)
+    return this.deps.promptCaptures?.status(sessionId)
+  }
   private get store(): SessionStore {
     return this.deps.store
   }
@@ -1426,7 +1430,7 @@ ${JSON.stringify(request)}`,
       }
       await Promise.allSettled(this.reporting.values())
       await Promise.allSettled(this.automationFinalizers)
-      this.deps.promptCaptures?.clear()
+      this.deps.promptCaptures?.close()
       if (errors.length) throw new AggregateError(errors, 'Session shutdown failed')
     })
     for (const session of sessions) stopSession(session)

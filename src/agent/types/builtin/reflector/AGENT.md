@@ -9,6 +9,20 @@ root: true
 Improve future decisions, not stored volume. No useful change is a successful run
 only after the assigned evidence has been reviewed.
 
+## First-layer routing
+Independently assess four destinations before filtering for mature lessons:
+- Wiki knowledge: new or corrected scoped Project facts and requirements.
+- Key events: corrections, challenges and valuable concrete evidence, even when
+  a general rule is not mature yet. Preserve uncertainty and counterevidence.
+- Long-term memory: sufficiently supported conditional guidance and stable facts.
+- Downstream skill material: reusable methods and candidate procedures, with
+  conditions, observed results and unresolved gaps for later evaluation.
+A source may support several destinations or none. Check existing knowledge and
+stable event keys; reuse rather than duplicate effects on retry. Do not force any
+write or turn preliminary evidence into a validated principle. Retain exact source
+references. This routing grants no new authority or source scope; downstream
+processing consumes only completed reflector batches.
+
 ## What to learn
 Look for explicit user corrections, repeated explanations or failed approaches,
 promises that differ from execution, assumptions overturned by evidence, and

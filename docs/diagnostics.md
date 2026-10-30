@@ -116,3 +116,76 @@ Automation profiles use the same Project-preserving `apiUrl` join as other gatew
 Automation statistics show recorded input/output tokens and provider/tool counts in a compact strip. Null usage remains unknown, zero remains zero, and known/unknown calls plus untracked sessions remain visible. Window, frequency scope, lower-bound warnings and measurement limitations are retained in the disclosure. HTTP failures show localized recovery guidance and status codes, never response bodies. Conversation statistics reuse the same metric presentation and remain on demand, with own/inclusive scopes explicitly non-additive.
 
 Execution history is collapsed by default, shows six loaded rows per UI page, uses the shared scope selector and localized times (full local time in a tooltip), and scrolls within a bounded region. This is presentation pagination, not a change to backend history paging or totals. Internal execution input/output is a lazy, collapsed technical disclosure using the existing bounded payload renderer; switching run sessions resets its open state. The ordinary conversation trace and heading/navigation remain the workspace rather than a separate runs explorer.
+
+## Opt-in learning provider-input audit
+
+`SHADOW_LEARNING_AUDIT=1` is an independent, explicit startup control (off by
+ default). Set it in the environment of the backend you intend to run, then use
+ your normal controlled restart procedure; reading diagnostics does not enable
+ recording. No user configuration is edited automatically. It is supported in
+ production without enabling general prompt debug. `SHADOW_DEBUG_PROMPTS=0`
+ continues to disable ordinary debug capture; `SHADOW_DEBUG_PROMPTS=1` remains
+ forbidden in production.
+
+Only automation sessions whose resolved config source is `learning` qualify for
+expanded capture. Channel-bound learning (`channelBoundary`, including Discord
+scoped learning) is excluded from expansion: its domain isolation is not replaced
+by ordinary Project debug access. Non-learning sessions retain the old debug
+policy and are never given full conversation capture by the audit switch.
+
+The capture freezes the actual `inferenceMessages` passed to `provider.chat`,
+including dynamic context, user messages, assistant tool calls and transient tool
+results, plus the actual tool schemas, model, maximum tokens, temperature,
+thinking and reasoning-effort options. It records Project, logical/physical
+session, turn, iteration and unique request IDs; the request ID is also attached
+to the chat span. This is **before provider adapter conversion**, not HTTP wire
+inspection or proof of a successful remote request. Retries inside an adapter
+are not separate captures. Signal, headers and authentication config are not
+stored. Sensitive text in prompts/tool results (including textual attachments)
+is retained, not automatically redacted, and must not be copied to ordinary logs.
+Only role/content/name, tool calls and IDs, and inspectable reasoning text are
+retained from messages. Opaque provider continuity (`provider_state`) and other
+non-allowlisted message fields are omitted with field-name-only
+`field-not-retained` reasons and `partial-fields-omitted` status (also when media
+is omitted). No opaque value is copied to disk.
+Image URLs/data are replaced with omission markers and SHA-256 descriptors;
+`partial-media-omitted` explicitly means the request is not complete. There is
+no automatic fetch or durable attachment retrieval through these descriptors.
+Oversized payloads retain only metadata with `omitted-size-limit`.
+
+Learning audit uses the Project-private workspace `state/learning/audit/provider-input.json`
+(resolved through `projectStoragePath(workspace, ".learning", "audit")`)
+(directory mode 0700, newly written files mode 0600), not the repository or general
+logs. It persists across backend restart. Retention is at most seven days,
+500 requests and 32 MiB of retained payload per Project; earlier capacity eviction
+is possible. Entries are expired on startup/read/write/close, not by an offline
+service: while the backend/audit is disabled, expired bytes can remain on disk
+until it is enabled again. Ordinary debug records remain memory-only with their own independent
+20-request/16 MiB queue. They cannot consume learning audit quota or evict
+learning evidence. Loaded learning records are strictly schema-validated and
+retained payload sizes are recomputed; corrupt snapshots fail explicitly instead
+of trusting their declared byte counts or silently discarding data. Disabling
+the switch prevents new learning capture; it does not erase the file. Session
+deletion removes that session's retained audit entries. Host filesystem access
+is not an additional sandbox or encryption-at-rest boundary.
+
+Inspect through the existing authorized, same-Project session debug channel:
+
+- `v:runtime/sessions` discovers eligible history session IDs.
+- `v:runtime/sessions/<URI-encoded-logical-session-id>/captures` reports retained
+  inputs newest first, scope, completeness, request identity, expiry and status.
+- `.../tools` reports historical tools from the latest retained request, not the
+  current registry. `.../preview` is reconstructed context, never missing audit
+  evidence.
+- The authorized session context HTTP endpoint with `view=captured` also returns
+  captures and status and uses `Cache-Control: no-store`.
+
+Project actor authorization and session-history/folder access checks still
+apply; archived learning runs can be inspected without activation. Status exposes
+whether learning audit/debug are enabled, retention limits, retained count and
+recent `expired`/`capacity` losses (bounded to 1000 records and seven days).
+An empty history with no loss record is explicitly ambiguous: disabled-at-call,
+not-yet-captured, excluded scoped learning, or loss outside the bounded history.
+It must not be reported as a full request or substituted with preview. No capture
+exists retroactively for runs before opt-in. The audit is a bounded diagnostic
+artifact, not a permanent event ledger or adapter-wire recorder.

@@ -11,7 +11,6 @@
         <button type="button" :disabled="loading || !!deletion" @click="refresh">{{ t('Refresh') }}</button>
       </div>
     </header>
-    <template>
       <KnowledgeMaintenance v-show="!selectedId" :api-base="apiBase" :project-id="projectId" :revision="maintenanceRevision" :active="active"
         @select="select" @changed="refresh" />
       <p v-if="loading" role="status">{{ t('Loading knowledge...') }}</p>
@@ -83,7 +82,6 @@
       </div>
       <KnowledgeDeleteDialog v-if="deletion" :api-base="apiBase" :project-id="projectId" :target="deletion"
         :incoming="knowledgeRelations(catalog, deletion.id).incoming" @close="deletion = undefined" @deleted="deleted" />
-    </template>
   </section>
   </div>
 </template>

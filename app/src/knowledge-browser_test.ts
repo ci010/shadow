@@ -17,7 +17,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('knowledge Markdown links navigate real previews without weakening sanitization', {
+test('knowledge is visible, recovers from 503 on Refresh, and navigates sanitized Markdown previews', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -64,6 +64,7 @@ test('knowledge Markdown links navigate real previews without weakening sanitiza
     links: docs.flatMap(doc => extractLinks(doc, directory, new Map([['fixture', 'builtin:skills/fixture']]))),
   }
   const reads: string[] = []
+  let catalogRequests = 0
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router', 'marked', 'dompurify'] },
@@ -80,7 +81,7 @@ test('knowledge Markdown links navigate real previews without weakening sanitiza
             {name:'chat',path:'/projects/:projectId/chat',component:{}}
           ]});
           const initial=new URLSearchParams(location.search);
-          await router.push({name:'chat',params:{projectId:'fixture'},query:{panel:'knowledge',entry:initial.get('entry')||'memory/topics/index.md'},hash:location.hash});
+          await router.push({name:'chat',params:{projectId:'fixture'},query:{panel:'knowledge',entry:initial.has('home')?'':initial.get('entry')||'memory/topics/index.md'},hash:location.hash});
           window.__knowledge={select:(id,hash='')=>router.push({name:'chat',params:{projectId:'fixture'},query:{panel:'knowledge',entry:id},hash}),router};
           createApp({render:()=>h(KnowledgeView,{
             apiBase:location.origin+'/projects/fixture',projectId:'fixture',
@@ -101,7 +102,10 @@ test('knowledge Markdown links navigate real previews without weakening sanitiza
             const id = url.searchParams.get('id')!
             reads.push(id)
             json(docs.find(doc => doc.entry.id === id))
-          } else if (url.pathname.endsWith('/api/knowledge')) json(catalog)
+          } else if (url.pathname.endsWith('/api/knowledge')) {
+            if (++catalogRequests === 1) { response.statusCode = 503; json({ error: 'Fixture catalog unavailable' }) }
+            else json(catalog)
+          }
           else if (url.pathname.endsWith('/api/knowledge/maintenance')) json({ intervalMs: 86_400_000, scanning: false, report: null })
           else next()
         })
@@ -131,4 +135,5 @@ test('knowledge Markdown links navigate real previews without weakening sanitiza
   assert.match(output, /KNOWLEDGE_LINKS_OK/)
   assert(!reads.includes('memory/topics/missing.md'), 'Missing catalog targets never cause an arbitrary file read')
   assert(reads.includes('builtin:skills/fixture'))
+  assert(catalogRequests >= 3, 'Initial 503, manual Refresh recovery and deep-link reload reach the fixture catalog')
 })

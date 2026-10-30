@@ -48,7 +48,7 @@ test('verified no-change advances bounded cursors; legacy history is not replaye
     f.onRun(async id => {
       const batch = f.runtime.ledger.batchFor(id)!
       assert.equal(batch.sources[0].offset, 3)
-      assert.equal(batch.sources[0].end, 103)
+      assert.equal(batch.sources[0].end, 43)
       assert.match(learningTask(batch), /\/overview.*read.offset\/read.limit/)
       const task = learningTask(batch, new Map([[batch.sources[0].physicalId, { offset: 12, end: 312, fullOffset: 28, fullEnd: 900 }]]))
       assert.match(task, /\/overview", offset: 12, limit: 100/)
@@ -69,7 +69,7 @@ test('verified no-change advances bounded cursors; legacy history is not replaye
     assert.equal(f.runtime.ledger.outcome(String(id))?.status, 'no_change')
     assert.deepEqual((f.started[0] as unknown as { executionLimits: unknown }).executionLimits, LEARNING_LIMITS.reflector)
     const restarted = new LearningRuntime(f.sessions, 'a')
-    assert.equal((await restarted.sources(signal()))[0].offset, 103)
+    assert.equal((await restarted.sources(signal()))[0].offset, 43)
     assert.equal(restarted.ledger.outcome('historical-run'), undefined)
     assert.equal(restarted.ledger.eventsFor('encapsulator').length, 0)
   })
@@ -267,9 +267,12 @@ test('direct writes and unresolved tool failures cannot masquerade as no-change,
         { sessionId: 'web:foreign', segmentIndex: 0, total: 50 }])
       f.records.get('web:foreign')!.projectId = 'b'
       let total = 10
-      t.mock.method(f.sessions, 'getHistory', async (...[id, query]: Parameters<typeof f.sessions.getHistory>) => ({
-        messages: [], total: id.startsWith('cron:') ? 0 : query?.physicalId?.endsWith('-0') ? 0 : query?.physicalId?.endsWith('-1') ? 5 : total,
-      }))
+      t.mock.method(f.sessions, 'getHistory', async (...[id, query]: Parameters<typeof f.sessions.getHistory>) => {
+        const count = id.startsWith('cron:') ? 0 : query?.physicalId?.endsWith('-0') ? 0 : query?.physicalId?.endsWith('-1') ? 5 : total
+        const offset = query?.offset ?? 0
+        return { messages: Array.from({ length: count }, () => ({ role: 'user' as const, content: 'hello' }))
+          .slice(offset, offset + (query?.pageSize ?? count)), total: count }
+      })
       const runtime = new LearningRuntime(f.sessions, 'a')
       const tools = new LearningTools(runtime)
       const context = fixture(workspace).context
@@ -430,3 +433,50 @@ test('batch instructions mention only pipeline-specific mutation tools', async (
     assert.equal(LEARNING_LIMITS[pipeline].inferenceRequests, pipeline === 'reflector' ? 6 : pipeline === 'encapsulator' ? 8 : 4)
   }
 }))
+
+test('audit repairs historical oversized reads across attempts while retaining unrelated failures', async t => {
+  await withTempWorkspace(async workspace => {
+    const f = fixture(workspace)
+    const batch = f.runtime.ledger.create('reflector', [], [])
+    f.runtime.ledger.bind(batch.id, 'cron:old')
+    f.runtime.ledger.interrupt(batch.id, 'retry')
+    f.runtime.ledger.bind(batch.id, 'cron:new')
+    for (const id of ['cron:old', 'cron:new']) f.records.set(id, { sessionId: id, segmentIndex: 0, projectId: 'a' })
+    const exchange = (id: string, name: string, args: object, text: string): ChatMessage[] => [
+      { role: 'assistant', content: '', tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] },
+      { role: 'tool', content: text, tool_call_id: id },
+    ]
+    let writeFailed = false
+    t.mock.method(f.sessions, 'getHistory', async (id: string) => {
+      const messages = id === 'cron:old'
+        ? Array.from({ length: 17 }, (_, i) => exchange(`old${i}`, 'read', { path: 'v:sessions/source/overview', offset: 1, limit: 90000 }, 'Error: too large')).flat()
+        : [...exchange('page1', 'read', { path: 'v:sessions/source/overview', offset: 1, limit: 2 }, 'a\nb\n\n[truncated: showing lines 1-2 of 4; use offset=3 to continue]'),
+          ...exchange('page2', 'read', { path: 'v:sessions/source/overview', offset: 3, limit: 2 }, 'c\nd'),
+          ...(writeFailed ? exchange('write', 'write', { path: 'v:memory/topics/x.md' }, 'Error: denied') : [])]
+      return { messages, total: messages.length }
+    })
+    await f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true)
+    writeFailed = true
+    await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /denied/)
+  })
+})
+
+test('readable-size batching preserves exact cursors and isolates atomic oversized messages', async t => {
+  await withTempWorkspace(async workspace => {
+    const f = fixture(workspace, 10)
+    let body = 'x'.repeat(5000)
+    t.mock.method(f.sessions, 'getHistory', async (_id: string, query?: { offset?: number; pageSize?: number }) => ({
+      messages: Array.from({ length: 10 }, () => ({ role: 'user' as const, content: body }))
+        .slice(query?.offset ?? 0, (query?.offset ?? 0) + (query?.pageSize ?? 10)), total: 10,
+    }))
+    const sources = await f.runtime.sources(signal())
+    assert.deepEqual(sources.map(s => [s.offset, s.end]), [[0, 2]])
+    const batch = f.runtime.ledger.create('reflector', sources, [])
+    f.runtime.ledger.bind(batch.id, 'cron:test')
+    f.runtime.ledger.propose(batch.id, 'no_change', 'Reviewed')
+    f.runtime.ledger.complete(batch.id)
+    assert.deepEqual((await f.runtime.sources(signal())).map(s => [s.offset, s.end]), [[2, 4]])
+    body = 'x'.repeat(50000)
+    assert.deepEqual((await f.runtime.sources(signal())).map(s => [s.offset, s.end]), [[2, 3]])
+  })
+})

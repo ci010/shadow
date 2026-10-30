@@ -1,4 +1,4 @@
-import { sessionHistoryLineAt } from '../../sessions/history-view.ts'
+import { formatSessionHistory, sessionHistoryLineAt } from '../../sessions/history-view.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, relative } from 'node:path'
@@ -13,6 +13,7 @@ import type { SkillsManager } from '../../skills/loader.ts'
 import { SkillEditStore } from '../../skills/edit-store.ts'
 import type { ChatMessage } from '../../providers/provider.ts'
 
+import { ReadCoverage } from './read-coverage.ts'
 import { isLearningSourceEligible } from './source-eligibility.ts'
 
 export class LearningRunError extends Error {
@@ -37,6 +38,7 @@ export function learningTask(batch: LearningBatch, ranges: Map<string, { offset:
     'Prefer no_change over low-value memory. Distinguish stated goals from inferred motives; retain conditions and counterexamples.',
     batch.pipeline === 'soulReflector' ? 'Use learning_soul for justified identity refinements.' : batch.pipeline === 'encapsulator' ? 'Use learning_memory for decisions and learned_skill for discoverable lessons.' : 'Use learning_memory for durable conditional decisions.',
     ...(batch.pipeline === 'reflector' ? [
+      'First independently assess Wiki knowledge updates, key events/corrections/challenges (including valuable evidence not yet mature enough for a rule), long-term memory, and downstream skill material. Preserve source references, uncertainty and deduplication; no destination requires a write and none grants new authority.',
       'Look for learning signals: explicit user corrections, repeated explanations or failed approaches, a gap between promises and execution, assumptions overturned by evidence, and successful methods with reusable conditions. Do not invent a mistake or force a lesson from every source.',
       'For each concrete candidate connect: triggering situation -> actual judgment/action -> observed result or correction -> evidence-backed explanation -> what to do differently next time -> exceptions. Keep unsupported causes unknown.',
       'Before retaining a candidate, answer: which future decision or action would this change? A transcript summary or copied requirement alone is not a behavioral lesson. A durable stated requirement can still be retained as a scoped fact without inventing a general principle.',
@@ -112,6 +114,7 @@ export class LearningRuntime {
 
   async sources(signal: AbortSignal): Promise<LearningSource[]> {
     const sources: LearningSource[] = []
+    let characters = 0, lines = 0
     for (const row of this.sessions.listSessions()) {
       signal.throwIfAborted()
       const state = this.sessions.getSessionState(row.sessionId)
@@ -124,8 +127,25 @@ export class LearningRuntime {
         if (offset === Number.MAX_SAFE_INTEGER) continue
         const { total } = await this.sessions.getHistory(row.sessionId, { physicalId, offset: 0, pageSize: 0 })
         signal.throwIfAborted()
-        if (total > offset) sources.push({ ...identity, offset, end: Math.min(total, offset + 100) })
-        if (sources.length === 8) return sources
+        if (total <= offset) continue
+        const { messages } = await this.sessions.getHistory(row.sessionId, { physicalId, maxMessages: Number.MAX_SAFE_INTEGER })
+        let end = offset
+        let previous = formatSessionHistory(messages.slice(0, offset), true, physicalId)
+        for (let index = offset; index < Math.min(total, offset + 100); index++) {
+          const rendered = formatSessionHistory(messages.slice(0, index + 1), true, physicalId)
+          const text = rendered.slice(previous.length)
+          const size = text.length + 2, count = text ? text.split('\n').length : 0
+          previous = rendered
+          if (characters + size > 12000 || lines + count > 160) {
+            if (end > offset) sources.push({ ...identity, offset, end })
+            // A single atomic message cannot be split by the persisted message cursor.
+            if (!sources.length) sources.push({ ...identity, offset, end: offset + 1 })
+            return sources
+          }
+          characters += size; lines += count; end++
+        }
+        if (end > offset) sources.push({ ...identity, offset, end })
+        if (sources.length === 4) return sources
       }
     }
     return sources
@@ -143,6 +163,7 @@ export class LearningRuntime {
   async inspectEffects(batch: LearningBatch, capture: boolean, requireResolved: boolean,
     signal = new AbortController().signal): Promise<LearningBatch> {
     const failures = new Map<string, string>()
+    const reads = new ReadCoverage()
     for (const sessionId of batch.attempts) {
       signal.throwIfAborted()
       const state = this.sessions.getSessionState(sessionId)
@@ -173,6 +194,11 @@ export class LearningRuntime {
               : name === 'read' && path ? `${path}:offset=${args.offset ?? 1}:limit=${args.limit ?? 'default'}`
               : path ? this.memoryPath(path) ?? path.replace(/[?].*$/, '') : `${name}:${args.name ?? args.origin ?? ''}`
             const text = this.messageText(message)
+            if (name === 'read' && path) {
+              if (/^(Error(?::| executing )|Blocked:|Tool execution aborted:)/.test(text)) reads.fail(path, args, text)
+              else reads.success(path, args, text)
+              continue
+            }
             if (/^(Error(?::| executing )|Blocked:|Tool execution aborted:)/.test(text)) failures.set(key, text)
             else failures.delete(key)
           }
@@ -204,8 +230,8 @@ export class LearningRuntime {
         if (!page.changes.length || offset >= page.total) break
       }
     }
-    if (requireResolved && failures.size) throw new LearningRunError(
-      `Unresolved learning tool failure: ${[...failures.values()].join('; ')}`.slice(0, 8000), false)
+    if (requireResolved && (failures.size || reads.errors().length)) throw new LearningRunError(
+      `Unresolved learning tool failure: ${[...failures.values(), ...reads.errors()].join('; ')}`.slice(0, 8000), false)
     return batch
   }
 
