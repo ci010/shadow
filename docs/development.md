@@ -373,3 +373,15 @@ or access denial). Access denial calls for checking model entitlement, license,
 SSO, host and organization policy, not mandatory reauthentication. Legacy
 `authentication` recovery records remain valid; both JSONL and SQLite keep the
 same recovery metadata shape.
+
+## Observing chat history network traffic
+
+`GET /api/chat/session` returns an ETag for the complete history/context
+representation with `Cache-Control: private, no-cache`. The chat view uses
+`fetch` with `cache: 'no-cache'`: the browser must revalidate before reuse,
+but an unchanged response can return HTTP 304 without retransmitting history.
+The browser combines that response with its cached body; JavaScript normally
+sees a successful 200 response. Keep DevTools **Disable cache** unchecked when
+measuring this optimization. Changed context, tools, receipts, decisions or
+segment navigation also invalidate the ETag. This saves transfer bytes, not
+server-side history assembly work, and does not eliminate the validation GET.

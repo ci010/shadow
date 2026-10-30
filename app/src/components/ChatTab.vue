@@ -2009,7 +2009,7 @@ async function loadDirectChat(background = false): Promise<void> {
     connectEventStream(chatId, true)
     await historySnapshot?.getPromise()
     if (controller.signal.aborted) return
-    const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal })
+    const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal, cache: 'no-cache' })
     if (controller.signal.aborted) return
     if (res.status === 404 && activeSessionId.value === sessionId) {
       disconnectEventStream()

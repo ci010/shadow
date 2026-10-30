@@ -1,6 +1,6 @@
 import { AbstractChannel, ChannelAdmissionError } from './base.ts'
 import type { ChannelCapabilities } from './capabilities.ts'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
@@ -473,10 +473,18 @@ export class WebChannel extends AbstractChannel {
         const state = this.sessionManager!.getSessionState(sessionId)
         const segmentIndex = state?.segmentIndex ?? 0
         const identity = state ?? { sessionId, segmentIndex }
-        return c.json({ chatId, systemPrompt, history: history || [], commandResults, decisionRecords, tools,
+        const body = JSON.stringify({ chatId, systemPrompt, history: history || [], commandResults, decisionRecords, tools,
           segmentIndex, currentPhysicalId: physicalSessionId(identity),
           previousPhysicalId: segmentIndex > 0 ? physicalSessionId(identity, segmentIndex - 1) : null,
         })
+        // Validate the complete representation, not just message count: context,
+        // decisions, command receipts and segment navigation can change alone.
+        const etag = `"${createHash('sha256').update(body).digest('hex')}"`
+        c.header('ETag', etag)
+        c.header('Cache-Control', 'private, no-cache')
+        const validators = c.req.header('If-None-Match')?.split(',').map(value => value.trim().replace(/^W\//, ''))
+        if (validators?.includes(etag) || validators?.includes('*')) return c.body(null, 304)
+        return c.body(body, 200, { 'Content-Type': 'application/json; charset=UTF-8' })
       } catch (error) {
         console.error('[web] Failed to retrieve session:', error)
         return c.json({ error: 'Failed to retrieve session' }, 500)
