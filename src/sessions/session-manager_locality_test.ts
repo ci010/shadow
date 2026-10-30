@@ -4,9 +4,9 @@ import type { SessionState } from './session-store.ts'
 import { sessionPromptLocality } from './session-manager.ts'
 
 const workdir = {
-  version: 1 as const,
+  version: 2 as const,
   nodeId: 'node-a',
-  capabilityId: 'folder-a',
+  workdirId: 'folder-a',
   displayPathSnapshot: 'C:\\Folders\\a',
 }
 

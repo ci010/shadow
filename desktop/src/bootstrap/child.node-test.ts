@@ -177,3 +177,25 @@ test('matching, missing and malformed identity metadata produce safe setup resul
   assert.equal(result.fingerprint, undefined)
   await assert.rejects(bootstrap.pair(input(directory)), /identity conflicts/)
 })
+
+
+test('legacy Child workdir binding is read without rewrite and new pairing writes resource identity', async t => {
+  const directory = join(root, randomUUID())
+  await mkdir(directory, { recursive: true })
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const configPath = join(directory, 'config.json')
+  const bootstrap = new FileChildBootstrap(configPath, async () => {})
+  await bootstrap.pair(input(directory))
+  const current = await bootstrap.readConfig()
+  assert.equal(current.workdirs[0].workdirId, 'desktop-workdir')
+  assert.equal((await readFile(configPath, 'utf8')).includes('capabilityId'), false)
+  const { workdirId, ...binding } = current.workdirs[0]
+  for (const field of ['capabilityId', 'resourceId']) {
+    const legacy = JSON.stringify({ ...current, workdirs: [{ ...binding, [field]: workdirId }] })
+    await writeFile(configPath, legacy)
+    assert.deepEqual(await bootstrap.readConfig(), current)
+    assert.equal(await readFile(configPath, 'utf8'), legacy)
+  }
+  await writeFile(configPath, JSON.stringify({ ...current, workdirs: [{ ...binding, workdirId, capabilityId: workdirId }] }))
+  await assert.rejects(bootstrap.readConfig(), /invalid/)
+})

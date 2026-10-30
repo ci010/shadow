@@ -1,8 +1,10 @@
+import { normalizeStoredWorkdirIdentity } from '../execution/workdir-storage.ts'
 import { isAbsolute, resolve } from 'node:path'
 import { sessionWorkspacePath } from '../utils/paths.ts'
 
 export const LOCAL_NODE_ID = 'local'
 
+/** Historical storage DTO only. Execution and new writes use WorkdirRefV2. */
 export interface WorkdirRefV1 {
   version: 1
   nodeId: string
@@ -11,50 +13,46 @@ export interface WorkdirRefV1 {
   displayPathSnapshot?: string
 }
 
+export interface WorkdirRefV2 {
+  version: 2
+  nodeId: string
+  workdirId: string
+  displayName?: string
+  displayPathSnapshot?: string
+}
+
 export type WorkdirUnavailableReason =
   | 'node-missing'
   | 'node-offline'
-  | 'capability-missing'
-  | 'capability-revoked'
-  | 'capability-offline'
+  | 'workdir-missing'
+  | 'workdir-revoked'
+  | 'workdir-offline'
   | 'incompatible'
 
-export interface WorkdirCapabilityState {
+export interface WorkdirState {
   readonly node: 'online' | 'offline' | 'missing' | 'revoked'
-  readonly capability?: {
-    readonly kind: string
+  readonly workdir?: {
     readonly online: boolean
-    /** Trusted local directory supplied by the capability registry, not a display path. */
+    /** Trusted local directory supplied by the resource registry, never a display path. */
     readonly path?: string
   }
+  readonly incompatible?: boolean
 }
 
-export type WorkdirCapabilityLookup = (
-  workdir: WorkdirRefV1,
-) => WorkdirCapabilityState
+export type WorkdirLookup = (
+  workdir: WorkdirRefV2,
+  operation?: string,
+) => WorkdirState
 
 export type WorkdirResolution =
-  | {
-    available: true
-    locality: 'local'
-    workdir: WorkdirRefV1
-    path: string
-  }
-  | {
-    available: true
-    locality: 'remote'
-    workdir: WorkdirRefV1
-  }
-  | {
-    available: false
-    workdir: WorkdirRefV1
-    reason: WorkdirUnavailableReason
-  }
+  | { available: true; locality: 'local'; workdir: WorkdirRefV2; path: string }
+  | { available: true; locality: 'remote'; workdir: WorkdirRefV2 }
+  | { available: false; workdir: WorkdirRefV2; reason: WorkdirUnavailableReason }
 
 export interface SessionLocalityState {
   sessionId: string
   workspaceRoot?: string
-  workdir?: WorkdirRefV1
+  workdir?: WorkdirRefV2
 }
 
 export interface ResolvedSessionLocations {
@@ -67,153 +65,100 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export function parseWorkdirRefV1(value: unknown): WorkdirRefV1 | null {
-  if (
-    !isRecord(value) || value.version !== 1 ||
+/** Read boundary for supported persisted formats. Resource identity is byte-preserving. */
+export function parseWorkdirRef(value: unknown): WorkdirRefV2 | null {
+  if (!isRecord(value) || (value.version !== 1 && value.version !== 2) ||
     typeof value.nodeId !== 'string' || value.nodeId.length === 0 ||
-    typeof value.capabilityId !== 'string' || value.capabilityId.length === 0 ||
-    (value.displayName !== undefined &&
-      typeof value.displayName !== 'string') ||
-    (value.displayPathSnapshot !== undefined &&
-      typeof value.displayPathSnapshot !== 'string')
-  ) {
-    return null
-  }
-
+    (value.displayName !== undefined && typeof value.displayName !== 'string') ||
+    (value.displayPathSnapshot !== undefined && typeof value.displayPathSnapshot !== 'string')) return null
+  const normalized = normalizeStoredWorkdirIdentity(value)
+  if (!normalized || Object.keys(normalized).some(key => !['version', 'nodeId', 'workdirId', 'displayName', 'displayPathSnapshot'].includes(key))) return null
+  if (value.version === 1 && (!Object.hasOwn(value, 'capabilityId') || Object.hasOwn(value, 'workdirId') || Object.hasOwn(value, 'resourceId'))) return null
+  if (value.version === 2 && Object.hasOwn(value, 'capabilityId')) return null
+  const workdirId = normalized.workdirId as string
   return {
-    version: 1,
-    nodeId: value.nodeId,
-    capabilityId: value.capabilityId,
-    ...(value.displayName === undefined
-      ? {}
-      : { displayName: value.displayName }),
-    ...(value.displayPathSnapshot === undefined
-      ? {}
-      : { displayPathSnapshot: value.displayPathSnapshot }),
+    version: 2, nodeId: value.nodeId, workdirId,
+    ...(value.displayName === undefined ? {} : { displayName: value.displayName }),
+    ...(value.displayPathSnapshot === undefined ? {} : { displayPathSnapshot: value.displayPathSnapshot }),
   }
 }
 
-export function managedSessionWorkdirRef(
-  ownerSessionId: string,
-  localNodeId = LOCAL_NODE_ID,
-): WorkdirRefV1 {
-  return {
-    version: 1,
-    nodeId: localNodeId,
-    capabilityId: `managed-session-v1:${encodeURIComponent(ownerSessionId)}`,
-  }
+/** Live response validation: retired field names are storage-only, never a wire adapter. */
+export function parseLiveWorkdirRef(value: unknown): WorkdirRefV2 | null {
+  if (!isRecord(value) || value.version !== 2 || !Object.hasOwn(value, 'workdirId') ||
+    Object.keys(value).some(key => !['version', 'nodeId', 'workdirId', 'displayName', 'displayPathSnapshot'].includes(key))) return null
+  return parseWorkdirRef(value)
 }
 
-export function localFolderWorkdirRef(folderId: string): WorkdirRefV1 {
-  return {
-    version: 1,
-    nodeId: LOCAL_NODE_ID,
-    capabilityId: `local-project-v1:${folderId}`,
-  }
+/** @deprecated Historical V1 DTO readers only; core callers must use parseWorkdirRef. */
+export function parseWorkdirRefV1(value: unknown): WorkdirRefV1 | null {
+  if (!isRecord(value) || value.version !== 1) return null
+  const parsed = parseWorkdirRef(value)
+  if (!parsed) return null
+  const { workdirId, ...rest } = parsed
+  return { ...rest, version: 1, capabilityId: workdirId }
+}
+
+export function managedSessionWorkdirRef(ownerSessionId: string, localNodeId = LOCAL_NODE_ID): WorkdirRefV2 {
+  return { version: 2, nodeId: localNodeId, workdirId: `managed-session-v1:${encodeURIComponent(ownerSessionId)}` }
+}
+
+export function localFolderWorkdirRef(folderId: string): WorkdirRefV2 {
+  return { version: 2, nodeId: LOCAL_NODE_ID, workdirId: `local-project-v1:${folderId}` }
 }
 
 export function normalizeSessionLocality<T extends SessionLocalityState>(
   state: T,
   localNodeId = LOCAL_NODE_ID,
-): T & { workdir: WorkdirRefV1 } {
-  return {
-    ...state,
-    workdir: state.workdir ?? managedSessionWorkdirRef(
-      state.workspaceRoot ?? state.sessionId,
-      localNodeId,
-    ),
+): T & { workdir: WorkdirRefV2 } {
+  if (state.workdir === undefined) return {
+    ...state, workdir: managedSessionWorkdirRef(state.workspaceRoot ?? state.sessionId, localNodeId),
   }
+  const workdir = parseWorkdirRef(state.workdir)
+  if (!workdir) throw new Error('Invalid or unsupported session workdir reference')
+  return { ...state, workdir }
 }
 
 export function resolveSessionLocations(
   workspace: string,
   state: SessionLocalityState,
   localNodeId = LOCAL_NODE_ID,
-  lookup?: WorkdirCapabilityLookup,
+  lookup?: WorkdirLookup,
 ): ResolvedSessionLocations {
   const normalized = normalizeSessionLocality(state, localNodeId)
   const ownerSessionId = state.workspaceRoot ?? state.sessionId
   const compatibilityRef = managedSessionWorkdirRef(ownerSessionId, localNodeId)
   const home = resolve(workspace)
   const sessionDataDir = sessionWorkspacePath(workspace, ownerSessionId)
+  const ref = normalized.workdir
+  const local = ref.nodeId === localNodeId || ref.nodeId === LOCAL_NODE_ID
 
-  if (normalized.workdir.nodeId !== localNodeId) {
-    const state = lookup?.(normalized.workdir)
-    if (state?.node === 'online' && state.capability) {
-      if (state.capability.kind !== 'workdir') {
-        return unavailable('incompatible')
-      }
-      if (!state.capability.online) return unavailable('capability-offline')
-      return {
-        home,
-        sessionDataDir,
-        workdir: {
-          available: true,
-          locality: 'remote',
-          workdir: normalized.workdir,
-        },
-      }
-    }
-    if (state?.node === 'offline') return unavailable('node-offline')
-    if (state?.node === 'revoked') return unavailable('capability-revoked')
-    if (state?.node === 'online') return unavailable('capability-missing')
-    return {
-      home,
-      sessionDataDir,
-      workdir: {
-        available: false,
-        workdir: normalized.workdir,
-        reason: 'node-missing',
-      },
-    }
+  const nativeManaged = local && ref.workdirId === compatibilityRef.workdirId
+  // An absent legacy target has this one host-owned default. Explicit refs still
+  // honor authoritative refusal; the native owner directory needs no advertised
+  // descriptor or display path to retain its existing identity.
+  const resourceState = nativeManaged && state.workdir === undefined ? undefined : lookup?.(ref)
+  if (nativeManaged) {
+    if (resourceState?.incompatible) return unavailable('incompatible')
+    if (resourceState?.node === 'revoked') return unavailable('workdir-revoked')
+    if (resourceState?.node === 'offline') return unavailable('node-offline')
+    if (resourceState?.node === 'missing') return unavailable('node-missing')
+    if (resourceState?.workdir && !resourceState.workdir.online) return unavailable('workdir-offline')
+    return { home, sessionDataDir, workdir: { available: true, locality: 'local', workdir: ref, path: sessionDataDir } }
   }
 
-  if (normalized.workdir.capabilityId !== compatibilityRef.capabilityId) {
-    const capabilityState = lookup?.(normalized.workdir)
-    if (capabilityState?.node === 'offline') return unavailable('node-offline')
-    if (capabilityState?.node === 'revoked') return unavailable('capability-revoked')
-    if (capabilityState?.node !== 'online') return unavailable('capability-missing')
-    const capability = capabilityState.capability
-    if (!capability) return unavailable('capability-missing')
-    if (capability.kind !== 'workdir') return unavailable('incompatible')
-    if (!capability.online) return unavailable('capability-offline')
-    if (typeof capability.path !== 'string' || !isAbsolute(capability.path)) {
-      return unavailable('incompatible')
-    }
-    return {
-      home,
-      sessionDataDir,
-      workdir: {
-        available: true,
-        locality: 'local',
-        workdir: normalized.workdir,
-        path: resolve(capability.path),
-      },
-    }
-  }
+  if (resourceState?.incompatible) return unavailable('incompatible')
+  if (resourceState?.node === 'offline') return unavailable('node-offline')
+  if (resourceState?.node === 'revoked') return unavailable('workdir-revoked')
+  if (!resourceState || resourceState.node === 'missing') return unavailable(local ? 'workdir-missing' : 'node-missing')
+  const resource = resourceState.workdir
+  if (!resource) return unavailable('workdir-missing')
+  if (!resource.online) return unavailable('workdir-offline')
+  if (!local) return { home, sessionDataDir, workdir: { available: true, locality: 'remote', workdir: ref } }
+  if (typeof resource.path !== 'string' || !isAbsolute(resource.path)) return unavailable('incompatible')
+  return { home, sessionDataDir, workdir: { available: true, locality: 'local', workdir: ref, path: resolve(resource.path) } }
 
-  return {
-    home,
-    sessionDataDir,
-    workdir: {
-      available: true,
-      locality: 'local',
-      workdir: normalized.workdir,
-      path: sessionDataDir,
-    },
-  }
-
-  function unavailable(
-    reason: WorkdirUnavailableReason,
-  ): ResolvedSessionLocations {
-    return {
-      home,
-      sessionDataDir,
-      workdir: {
-        available: false,
-        workdir: normalized.workdir,
-        reason,
-      },
-    }
+  function unavailable(reason: WorkdirUnavailableReason): ResolvedSessionLocations {
+    return { home, sessionDataDir, workdir: { available: false, workdir: ref, reason } }
   }
 }

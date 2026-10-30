@@ -1,7 +1,8 @@
+import type { WorkdirAdvertisement } from '../execution/workdir-contracts.ts'
 import type { ChildNodeConnectionSessionOptions } from '../cluster/child-node-connection-session.ts'
 import { ChildNodeConnectionSession } from '../cluster/child-node-connection-session.ts'
 import type {
-  CapabilityDescriptorV1,
+  ExecutionSupport,
   VersionHelloV1,
 } from '../cluster/contracts.ts'
 import type { DuplexCloseInfo } from '../cluster/node-transport.ts'
@@ -14,15 +15,12 @@ import { connectNodeWebSocket } from '../cluster/websocket-node-transport.ts'
 import type { Executor } from '../execution/executor.ts'
 import type { MainConnection, MainConnector } from './child-runtime.ts'
 
-export type ChildCapabilitySupplier = () =>
-  | Iterable<CapabilityDescriptorV1>
-  | Promise<Iterable<CapabilityDescriptorV1>>
-
 export interface ChildMainConnectorOptions {
   readonly localHello: VersionHelloV1
   readonly authentication: DeviceAuthenticationV1
   readonly executor: Executor
-  readonly capabilities: ChildCapabilitySupplier
+  readonly support: () => ExecutionSupport | Promise<ExecutionSupport>
+  readonly workdirs: () => Iterable<WorkdirAdvertisement> | Promise<Iterable<WorkdirAdvertisement>>
   readonly webSocketFactory?: NodeWebSocketFactory
   readonly authenticationProtocol?: (context: {
     readonly endpoint: string
@@ -71,9 +69,15 @@ export class ChildMainConnector implements MainConnector {
     return Promise.resolve()
   }
 
-  async advertiseCapability(capability: CapabilityDescriptorV1): Promise<void> {
+  async advertiseNodeSupport(support: ExecutionSupport): Promise<void> {
     for (const session of this.#sessions) {
-      if (session.state === 'authenticated') await session.advertiseCapabilityWhenReady(capability)
+      if (session.state === 'authenticated') await session.advertiseNodeSupportWhenReady(support)
+    }
+  }
+
+  async advertiseWorkdir(workdir: WorkdirAdvertisement): Promise<void> {
+    for (const session of this.#sessions) {
+      if (session.state === 'authenticated') await session.advertiseWorkdirWhenReady(workdir)
     }
   }
 
@@ -147,11 +151,11 @@ export class ChildMainConnector implements MainConnector {
     try {
       await session.authenticated
       options.signal.throwIfAborted()
-      const capabilities = await this.#options.capabilities()
+      const workdirs = await this.#options.workdirs()
+      for (const workdir of workdirs) await session.advertiseWorkdirWhenReady(workdir)
+      const support = await this.#options.support()
       options.signal.throwIfAborted()
-      for (const capability of capabilities) {
-        if (capability.online) await session.advertiseCapabilityWhenReady(capability)
-      }
+      await session.advertiseNodeSupportWhenReady(support)
       options.signal.throwIfAborted()
     } catch (error) {
       await session.close(

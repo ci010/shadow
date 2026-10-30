@@ -1,3 +1,5 @@
+import { fixtureProjectExecutor } from './test-fixtures.ts'
+import { fixtureDirectoryAdmission } from './test-fixtures.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { access, mkdir, realpath, symlink } from 'node:fs/promises'
@@ -11,14 +13,14 @@ import { CapabilityFilesystem } from './capability-filesystem.ts'
 import { RemoteExecutor } from './remote-executor.ts'
 import { executeRemoteShell } from './remote-shell-client.ts'
 import { requestedSafegitBinary, SAFEGIT_VERSION } from './git/safegit.ts'
-import type { JobEventV1, JobRequestV1 } from './contracts.ts'
+import type { JobEventV1, ExecutionRequestV2 } from './contracts.ts'
 
-function request(args: unknown, overrides: Partial<JobRequestV1> = {}): JobRequestV1 {
+function request(args: unknown, overrides: Partial<ExecutionRequestV2> = {}): ExecutionRequestV2 {
   const now = Date.now()
   const id = crypto.randomUUID()
   return {
-    version: 1, jobId: id, idempotencyKey: id, sessionId: 'session', turnId: 'turn',
-    nodeId: 'child', capabilityId: 'root', operation: WORKDIR_PROCESS_EXECUTE_OPERATION,
+    version: 2, jobId: id, idempotencyKey: id, sessionId: 'session', turnId: 'turn',
+    nodeId: 'child', workdirId: 'root', projectScope: '0123456789abcdef0123456789abcdef', operation: WORKDIR_PROCESS_EXECUTE_OPERATION,
     args, createdAt: new Date(now).toISOString(),
     deadlineAt: new Date(now + 10_000).toISOString(), ...overrides,
   }
@@ -40,9 +42,9 @@ async function until(predicate: () => boolean): Promise<void> {
 
 function setup(root: string) {
   const manager = new ProcessManager()
-  const workdirs = [{ capabilityId: 'root', rootPath: root }]
-  const local = new LocalExecutor(manager, 'child', [new CapabilityShell(workdirs), new CapabilityFilesystem(workdirs)], [])
-  const requests: JobRequestV1[] = []
+  const workdirs = [{ workdirId: 'root', rootPath: root }]
+  const local = new LocalExecutor(manager, 'child', [new CapabilityShell(workdirs), new CapabilityFilesystem(workdirs)], fixtureDirectoryAdmission('child', workdirs))
+  const requests: ExecutionRequestV2[] = []
   const events: JobEventV1[] = []
   const remote = new RemoteExecutor({
     dispatchJob(job, callbacks) {
@@ -69,11 +71,11 @@ test('capability shell rejects invalid wire args, absolute paths, traversal, nod
     { script: 'x'.repeat(40_000) },
   ]) assert.throws(() => parseWorkdirProcessArgs(args), /Remote shell requires/)
   await withTempWorkspace(async root => {
-    const handler = new CapabilityShell([{ capabilityId: 'root', rootPath: root }])
+    const handler = new CapabilityShell([{ workdirId: 'root', rootPath: root }])
     await mkdir(join(root, 'nested'))
     const prepared = await handler.prepareProcess(request({ script: 'echo ok', cwd: 'nested' }), new AbortController().signal)
     assert.equal(prepared.cwd, await realpath(join(root, 'nested')))
-    await assert.rejects(() => handler.prepareProcess(request({ script: 'echo ok' }, { capabilityId: 'unknown' }), new AbortController().signal), /not granted/)
+    await assert.rejects(() => handler.prepareProcess(request({ script: 'echo ok' }, { nodeId: 'child', workdirId: 'unknown' }), new AbortController().signal), /not granted/)
     await withTempWorkspace(async outside => {
       await symlink(outside, join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
       await assert.rejects(() => handler.prepareProcess(request({ script: 'echo ok', cwd: 'escape' }), new AbortController().signal), /outside the granted capability/)
@@ -84,12 +86,12 @@ test('capability shell rejects invalid wire args, absolute paths, traversal, nod
 test('workdir shell rejects an unregistered capability without spawning', async () => {
   await withTempWorkspace(async root => {
     const manager = new ProcessManager()
-    const executor = new LocalExecutor(manager, 'child', [new CapabilityShell([{ capabilityId: 'root', rootPath: root }])])
-    const events = await collect(executor.execute(request({ script: 'echo never' }, { capabilityId: 'unknown' }), new AbortController().signal))
+    const executor = new LocalExecutor(manager, 'child', [new CapabilityShell([{ workdirId: 'root', rootPath: root }])], fixtureDirectoryAdmission('child', [{ workdirId: 'root', rootPath: root }]))
+    const events = await collect(executor.execute(request({ script: 'echo never' }, { nodeId: 'child', workdirId: 'unknown' }), new AbortController().signal))
     const terminal = events.at(-1)!
     assert.equal(terminal.type, 'rejected')
     assert('receipt' in terminal)
-    assert.equal(terminal.receipt.reason?.code, 'capability-denied')
+    assert.equal(terminal.receipt.reason?.code, 'workdir-unavailable')
     assert.equal(manager.list().length, 0)
   })
 })
@@ -98,7 +100,7 @@ test('trusted Child executes shell, file writes and reads without an approval ro
   await withTempWorkspace(async root => {
     const fixture = setup(root)
     const output = await executeRemoteShell({
-      executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
+      executor: fixtureProjectExecutor('test-project', fixture.remote), nodeId: 'child', workdirId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
     }, { script: 'echo trusted-node' }, 10_000)
     assert.match(output, /trusted-node/)
     for (const [operation, args] of [
@@ -116,7 +118,7 @@ test('trusted Child executes shell, file writes and reads without an approval ro
 test('remote shell uses Child root and preserves stderr and nonzero receipts', async () => {
   await withTempWorkspace(async root => {
     const fixture = setup(root)
-    const target = { executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal }
+    const target = { executor: fixtureProjectExecutor('test-project', fixture.remote), nodeId: 'child', workdirId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal }
     const script = process.platform === 'win32' ? 'cd & echo error-output 1>&2 & exit /b 7' : 'pwd; echo error-output >&2; exit 7'
     const pending = executeRemoteShell(target, { script }, 10_000)
     const result = await pending
@@ -137,7 +139,7 @@ test('remote shell timeout and cancellation await owned process cleanup and keep
       const fixture = setup(root)
       const controller = new AbortController()
       const pending = executeRemoteShell({
-        executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: controller.signal,
+        executor: fixtureProjectExecutor('test-project', fixture.remote), nodeId: 'child', workdirId: 'root', sessionId: 'session', turnId: 'turn', signal: controller.signal,
       }, {
         script: process.platform === 'win32'
           ? 'echo before-wait & ping -n 30 127.0.0.1 > nul'
@@ -180,7 +182,7 @@ test('oversized shell output is split into bounded events and fails explicitly, 
       ? 'for /L %i in (1,1,10000) do @echo 0123456789abcdef0123456789abcdef'
       : 'i=0; while [ "$i" -lt 10000 ]; do echo 0123456789abcdef0123456789abcdef; i=$((i+1)); done'
     const pending = executeRemoteShell({
-      executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
+      executor: fixtureProjectExecutor('test-project', fixture.remote), nodeId: 'child', workdirId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
     }, { script }, 10_000)
     assert.match(await pending, /Error: remote exec failed \[process-output-too-large\]/)
     for (const event of fixture.events) assert(Buffer.byteLength(JSON.stringify(event)) < 256 * 1024)
@@ -194,7 +196,7 @@ test('POSIX foreground completion also terminates owned children with redirected
   await withTempWorkspace(async root => {
     const fixture = setup(root)
     const pending = executeRemoteShell({
-      executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
+      executor: fixtureProjectExecutor('test-project', fixture.remote), nodeId: 'child', workdirId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
     }, { script: '(sleep 1; echo leaked > leaked.txt) >/dev/null 2>&1 & echo done' }, 10_000)
     assert.match(await pending, /done/)
     await delay(1200)
@@ -207,7 +209,7 @@ test('remote shell exposes the Child bundled safegit in native PATH', async t =>
   try { await access(requestedSafegitBinary()) } catch { t.skip('Host bundle not prepared'); return }
   await withTempWorkspace(async root => {
     const fixture = setup(root)
-    const target = { executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal }
+    const target = { executor: fixtureProjectExecutor('test-project', fixture.remote), nodeId: 'child', workdirId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal }
     for (const shell of (process.platform === 'win32' ? ['cmd', 'powershell'] : ['sh']) as ('cmd' | 'powershell' | 'sh')[]) {
       const output = await executeRemoteShell(target, { script: 'safegit --version', shell }, 10_000)
       assert(output.includes(SAFEGIT_VERSION), output)

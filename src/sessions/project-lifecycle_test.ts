@@ -14,7 +14,7 @@ import { Tools } from '../tools/registry.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
-import { localFolderWorkdirRef, type WorkdirRefV1 } from './locality.ts'
+import { localFolderWorkdirRef, type WorkdirRefV2 } from './locality.ts'
 import { sessionsApiPlugin } from './routes.ts'
 import type { SessionMessageInput } from './input.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
@@ -48,7 +48,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       ownsFolder: (id: string) => !!registry.get(id), ownsWorkdir: () => true,
       assertSessionFolder: (state: SessionState) => registry.assertSessionFolder(state),
       acquireFolderAccess: () => registry.acquireAccess(),
-      workdirCapabilityLookup: (ref: WorkdirRefV1) => registry.lookupWorkdir(ref) ?? { node: 'online' },
+      workdirLookup: (ref: WorkdirRefV2) => registry.lookupWorkdir(ref) ?? { node: 'online' },
       getLlmRuntimeConfig: () => llm,
       handoffManager: { shouldHandoff: () => false },
       context: { buildSystemPrompt: async () => 'Project fixture context' },

@@ -73,8 +73,8 @@ function fixture(workspace: string, store: SessionStore, settings: {
   const manager = new SessionManager({
     workspace, store, bus, provider, tools, backgroundTasks: { listTasks: () => [] },
     projectId: 'org-a', ownsFolder: (id: string) => id === 'folder-a',
-    ownsWorkdir: (ref: { capabilityId: string }) => ref.capabilityId !== 'foreign',
-    workdirCapabilityLookup: () => ({ node: settings.remoteOnline === false ? 'offline' : 'online', capability: { kind: 'workdir', online: true } }),
+    ownsWorkdir: (ref: { workdirId: string }) => ref.workdirId !== 'foreign',
+    workdirLookup: () => ({ node: settings.remoteOnline === false ? 'offline' : 'online', resource: { kind: 'directory', online: true } }),
     remoteExecutor: { execute: () => { throw new Error('Unexpected remote tool execution') } },
     agentTypes: { resolve: (name: string) => ['general', 'reader', 'reflector', 'encapsulator', 'soul-reflector'].includes(name)
       ? { name, description: '', prompt: '', source: 'builtin', defaultMode: 'session',
@@ -109,7 +109,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await f.manager.start()
         await f.cron.start()
-        const workdir = { version: 1 as const, nodeId: 'remote-a', capabilityId: 'folder-a', displayPathSnapshot: 'Z:\\not-on-main' }
+        const workdir = { version: 2 as const, nodeId: 'remote-a', workdirId: 'folder-a', displayPathSnapshot: 'Z:\\not-on-main' }
         await f.manager.buildSession('web:origin', undefined, { folderId: 'folder-a', initiativeId: 'work', workdir })
         await f.manager.deliver('web:origin', input('PARENT TRANSCRIPT SENTINEL'))
         await until(() => f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
@@ -411,7 +411,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.manager.start()
         await f.cron.start()
         await f.manager.buildSession('web:origin', undefined, {
-          folderId: 'folder-a', workdir: { version: 1, nodeId: 'remote-a', capabilityId: 'folder-a', displayPathSnapshot: workspace },
+          folderId: 'folder-a', workdir: { version: 2, nodeId: 'remote-a', workdirId: 'folder-a', displayPathSnapshot: workspace },
         })
         const tool = new CronAddTool(f.cron, f.manager, name => name === 'general')
         const ctx = { sessionId: 'web:origin' } as ExecutionContext

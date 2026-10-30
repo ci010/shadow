@@ -98,7 +98,7 @@ function fileTreeTemplate() {
 const entry = { name: '.node-version', ext: '', type: 'file', size: 8, mtime: null }
 const base = { apiBase: 'http://localhost', sessionId: '', folderId: 'folder-a', active: true }
 
-const offlineResponse = { error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder' }
+const offlineResponse = { error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', workdirId: 'folder' }
 
 test('file row context menus preserve preview and expansion and support keyboard invocation', async t => {
   const menus: unknown[] = []

@@ -7,6 +7,7 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 import { ProjectCatalog } from './catalog.ts'
 import { FolderRegistry } from '../folders/registry.ts'
 import { DEFAULT_PROJECT_ID, projectPaths } from './contracts.ts'
+import { projectExecutionKey } from '../execution/managed-workdir.ts'
 
 test('project catalog persists names and transactionally rejects aliases and cross-org folder overlap', async () => {
   await withTempWorkspace(async root => {
@@ -113,7 +114,7 @@ test('project deletion removes owned Home and metadata, preserves working folder
     await catalog.registerFolder(project.id, folder)
     await mkdir(paths.home, { recursive: true })
     await writeFile(join(paths.home, 'history.jsonl'), 'Project history')
-    await catalog.reserveRemoteWorkdirs(project.id, [{ version: 1, nodeId: 'child', capabilityId: 'work' }])
+    await catalog.reserveRemoteWorkdirs(project.id, [{ version: 2, nodeId: 'child', workdirId: 'work' }])
     let stopped = false
     await catalog.remove(project.id, async () => {
       stopped = true
@@ -250,5 +251,61 @@ test('folder observers follow committed project views, including agent registrat
     stopDefault(); stopOther(); stopThrowing()
     await registry.register(folderPath)
     assert.deepEqual(events, [], 'Released runtime observers do not receive writes')
+  })
+})
+
+test('journal reconciliation settles only the exact original Project job durably after restart', async () => {
+  await withTempWorkspace(async root => {
+    const home = join(root, 'host')
+    const writer = new ProjectCatalog(home)
+    await writer.init()
+    const other = await writer.create('Other')
+    const folderPath = join(root, 'folder')
+    await mkdir(folderPath)
+    const folder = await writer.registerFolder(DEFAULT_PROJECT_ID, folderPath)
+    const original = 'original/job%2F原字节'
+    const second = 'still-unknown'
+    writer.recordRemoteJob(DEFAULT_PROJECT_ID, original, true)
+    writer.recordRemoteJob(DEFAULT_PROJECT_ID, second, true)
+    writer.recordRemoteJob(other.id, original, true)
+
+    // New Catalog instance has only the pre-existing logical IDs on disk, not
+    // an executor's in-memory execution keys or the original wire request.
+    const restarted = new ProjectCatalog(home)
+    await restarted.init()
+    const before = await readFile(restarted.filePath, 'utf8')
+    const expected = JSON.parse(before)
+    const originalScoped = projectExecutionKey(DEFAULT_PROJECT_ID, 'job', original)
+    for (const unproven of ['', original, 'unknown',
+      projectExecutionKey(DEFAULT_PROJECT_ID, 'job', 'rejected-reconcile-query'),
+      projectExecutionKey(DEFAULT_PROJECT_ID, 'session', original),
+      projectExecutionKey(other.id, 'job', original),
+      projectExecutionKey('unknown-project', 'job', original)]) {
+      restarted.settleReconciledRemoteJob(DEFAULT_PROJECT_ID, unproven)
+      assert.equal(await readFile(restarted.filePath, 'utf8'), before, 'unmatched proof must not rewrite or clear pending jobs')
+    }
+    restarted.settleReconciledRemoteJob(other.id, originalScoped)
+    restarted.settleReconciledRemoteJob('unknown-project', originalScoped)
+    assert.equal(await readFile(restarted.filePath, 'utf8'), before)
+    await assert.rejects(restarted.changeFolderProject(DEFAULT_PROJECT_ID, folder.id), /remote job.*terminal receipt/)
+
+    restarted.settleReconciledRemoteJob(DEFAULT_PROJECT_ID, originalScoped)
+    expected.pendingRemoteJobs = expected.pendingRemoteJobs.filter((job: { projectId: string; jobId: string }) =>
+      !(job.projectId === DEFAULT_PROJECT_ID && job.jobId === original))
+    assert.deepEqual(JSON.parse(await readFile(restarted.filePath, 'utf8')), expected, 'only the exact pending record changes; no new storage layout')
+    const reloaded = new ProjectCatalog(home)
+    await reloaded.init()
+    await assert.rejects(reloaded.changeFolderProject(DEFAULT_PROJECT_ID, folder.id), /remote job.*terminal receipt/)
+    reloaded.settleReconciledRemoteJob(DEFAULT_PROJECT_ID, projectExecutionKey(DEFAULT_PROJECT_ID, 'job', second))
+    await reloaded.changeFolderProject(DEFAULT_PROJECT_ID, folder.id)
+    await assert.rejects(reloaded.remove(other.id), /remote job.*terminal receipt/)
+    reloaded.settleReconciledRemoteJob(other.id, projectExecutionKey(other.id, 'job', original))
+    const settled = await readFile(reloaded.filePath, 'utf8')
+    assert.deepEqual(JSON.parse(settled).pendingRemoteJobs, [])
+    reloaded.settleReconciledRemoteJob(DEFAULT_PROJECT_ID, originalScoped)
+    assert.equal(await readFile(reloaded.filePath, 'utf8'), settled, 'duplicate proof is a read-only no-op')
+    const final = new ProjectCatalog(home)
+    await final.init()
+    assert.deepEqual(JSON.parse(await readFile(final.filePath, 'utf8')).pendingRemoteJobs, [])
   })
 })

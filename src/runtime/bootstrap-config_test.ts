@@ -96,7 +96,7 @@ test('Child workdirs are strict, absolute, and Child-only', () => {
       localNodeId: 'child-node',
       mainEndpoint: 'https://main.example.test',
       workdirs: [{
-        capabilityId: 'workdir-alpha',
+        workdirId: 'workdir-alpha',
         rootPath,
         displayName: 'Alpha folder',
       }],
@@ -105,21 +105,21 @@ test('Child workdirs are strict, absolute, and Child-only', () => {
   for (
     const workdirs of [
       [{
-        capabilityId: 'workdir-alpha',
+        workdirId: 'workdir-alpha',
         rootPath: './relative',
         displayName: 'Alpha',
       }],
       [
-        { capabilityId: 'duplicate', rootPath, displayName: 'First' },
-        { capabilityId: 'duplicate', rootPath, displayName: 'Second' },
+        { workdirId: 'duplicate', rootPath, displayName: 'First' },
+        { workdirId: 'duplicate', rootPath, displayName: 'Second' },
       ],
       [{
-        capabilityId: 'workdir-alpha',
+        workdirId: 'workdir-alpha',
         rootPath,
         displayName: 'Alpha',
         extra: true,
       }],
-      [{ capabilityId: 'process-execute', rootPath, displayName: 'Reserved' }],
+      [{ workdirId: 'process-execute', rootPath, displayName: 'Reserved' }],
     ]
   ) {
     assertThrows(

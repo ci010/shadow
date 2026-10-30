@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { JobEventV1, JobRequestV1 } from '../execution/contracts.ts'
+import type { JobEventV1, ExecutionRequestV2 } from '../execution/contracts.ts'
 import {
   isClusterIdentifier,
-  validateCapabilityDescriptorV1,
+  validateExecutionSupport,
+  validateWorkdirAdvertisement,
   validateNodeControlEnvelopeV1,
   validatePairingNodeStateV1,
   validateRegistrySnapshotV1,
@@ -15,7 +16,7 @@ test('cluster identity and version hello contracts reject malformed wire data', 
     protocolMajor: 1,
     protocolMinor: 0,
     implementationVersion: '0.1.0',
-    features: ['jobs-v1'],
+    features: ['workdir-execution-v2'],
   }
 
   assert(validateVersionHelloV1(hello).success)
@@ -46,19 +47,11 @@ test('pairing and capability contracts validate states, versions, and unknown fi
   assert.equal(validatePairingNodeStateV1({ ...pending, version: 2 }).success, false)
   assert.equal(validatePairingNodeStateV1({ ...pending, rawSecret: 'must-not-appear' }).success, false)
 
-  const capability = {
-    version: 1,
-    capabilityId: 'capability-1',
-    nodeId: 'node-1',
-    kind: 'shell',
-    displayName: 'Folder shell',
-    permissions: ['process.execute'],
-    online: true,
-  }
-  assert(validateCapabilityDescriptorV1(capability).success)
-  assert.equal(validateCapabilityDescriptorV1({ ...capability, approvalPolicy: 'none' }).success, false)
-  assert.equal(validateCapabilityDescriptorV1({ ...capability, approvalPolicy: 'invalid' }).success, false)
-  assert.equal(validateCapabilityDescriptorV1({ ...capability, kind: 'root-access' }).success, false)
+  const capability = { operations: ['process.execute'] }
+  assert(validateExecutionSupport(capability).success)
+  assert.equal(validateExecutionSupport({ ...capability, approvalPolicy: 'none' }).success, false)
+  assert.equal(validateExecutionSupport({ ...capability, approvalPolicy: 'invalid' }).success, false)
+  assert.equal(validateExecutionSupport({ ...capability, kind: 'root-access' }).success, false)
 })
 
 test('registry snapshot contract is strict, versioned, and validates nested state', () => {
@@ -91,33 +84,30 @@ test('registry snapshot contract is strict, versioned, and validates nested stat
 })
 
 test('workdir display metadata is optional, bounded and display-only', () => {
-  const capability = {
-    version: 1, capabilityId: 'workdir', nodeId: 'child', kind: 'workdir',
-    displayName: '项目', permissions: [], online: true,
-  }
-  assert(validateCapabilityDescriptorV1(capability).success)
+  const capability = { version: 2 as const, workdirId: 'workdir', nodeId: 'child', displayName: '项目', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } }
+  assert(validateWorkdirAdvertisement(capability).success)
   for (const displayPath of ['/home/user/folder', 'Z:\\folder', 'opaque:path', 'a'.repeat(4096)]) {
-    assert(validateCapabilityDescriptorV1({ ...capability, displayPath }).success)
+    assert(validateWorkdirAdvertisement({ ...capability, displayPath }).success)
   }
   for (const displayPath of [null, 7, '', ' ', 'a'.repeat(4097), '/a\nb', '/a\0b', '\u202eabc']) {
-    assert.equal(validateCapabilityDescriptorV1({ ...capability, displayPath }).success, false)
+    assert.equal(validateWorkdirAdvertisement({ ...capability, displayPath }).success, false)
   }
   for (const displayName of ['', ' ', 'a'.repeat(257), 'a\nb', '\u2066fake']) {
-    assert.equal(validateCapabilityDescriptorV1({ ...capability, displayName }).success, false)
+    assert.equal(validateWorkdirAdvertisement({ ...capability, displayName }).success, false)
   }
-  assert.equal(validateCapabilityDescriptorV1({ ...capability, kind: 'shell', displayPath: '/root' }).success, false)
-  assert.equal(validateCapabilityDescriptorV1({ ...capability, path: '/root' }).success, false)
+  assert.equal(validateWorkdirAdvertisement({ ...capability, kind: 'shell', displayPath: '/root' }).success, false)
+  assert.equal(validateWorkdirAdvertisement({ ...capability, path: '/root' }).success, false)
 })
 
 test('node-control envelopes carry runtime-validated S2 jobs and events', () => {
-  const request: JobRequestV1 = {
-    version: 1,
+  const request: ExecutionRequestV2 = {
+    version: 2,
     jobId: 'job-1',
     idempotencyKey: 'idempotency-1',
     sessionId: 'session-1',
     turnId: 'turn-1',
     nodeId: 'node-1',
-    capabilityId: 'capability-1',
+    projectScope: '0123456789abcdef0123456789abcdef',
     operation: 'process.execute',
     args: { command: 'node --test' },
     createdAt: '2026-08-26T00:00:00.000Z',
@@ -146,6 +136,26 @@ test('node-control envelopes carry runtime-validated S2 jobs and events', () => 
     version: 1,
     messageId: 'message-3',
     type: 'job-request',
-    request: { ...request, version: 2 },
+    request: { ...request, version: 1 },
   }).success, false)
+})
+
+test('intermediate registry resources and scoped descriptors normalize only at the storage boundary', async () => {
+  const { validateRegistrySnapshot } = await import('./contracts.ts')
+  const snapshot = {
+    version: 2, createdAt: '2026-01-01T00:00:00.000Z', offers: [], consumedOfferIds: [], pending: [], nodes: [],
+    resources: [{ version: 1, nodeId: 'child', resourceId: 'unchanged-id', kind: 'directory', displayName: 'Folder', online: true }],
+    capabilities: [{ version: 2, nodeId: 'child', capabilityId: 'old-support-description', scope: { kind: 'resource', resourceId: 'unchanged-id' }, displayName: 'Files', operations: ['filesystem.read'], online: true }],
+  }
+  const bytes = JSON.stringify(snapshot)
+  const result = validateRegistrySnapshot(snapshot)
+  assert(result.success)
+  assert.deepEqual(result.value.workdirs, [{ version: 2, nodeId: 'child', workdirId: 'unchanged-id', displayName: 'Folder', online: false, support: { operations: ['filesystem.read'] } }])
+  assert.deepEqual(result.value.nodeSupport, [])
+  assert.equal('capabilities' in result.value, false)
+  assert.equal('resources' in result.value, false)
+  assert.equal(JSON.stringify(snapshot), bytes)
+  assert.equal(validateRegistrySnapshot({ ...snapshot, workdirs: [] }).success, false)
+  assert.equal(validateRegistrySnapshot({ ...snapshot, resources: [{ ...snapshot.resources[0], workdirId: 'mixed' }] }).success, false)
+  assert.equal(validateNodeControlEnvelopeV1({ version: 1, messageId: 'old-live', type: 'resource-advertise', resource: snapshot.resources[0] }).success, false)
 })

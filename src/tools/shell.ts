@@ -252,8 +252,11 @@ export class ExecTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
-    context = executionTargetContext(args, context)
+    context = await executionTargetContext(args, context, 'workdir.process.execute-once')
     context.signal.throwIfAborted()
+    if (context.recoveringToolCall && !context.remoteWorkdir) {
+      throw new ToolOutcomeUnknownError('This saved local execution has no verifiable durable reconciliation route. Its outcome remains unknown; the command was not re-executed.')
+    }
     const script = typeof args.script === 'string' ? args.script : ''
     if (!script.trim()) throw new ToolNoEffectError('`script` is required')
     const shell = parseExecShell(args.shell, this.nodeOnly ? 'node' : context.defaultExecShell ?? this.defaultShell)

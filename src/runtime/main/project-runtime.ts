@@ -12,7 +12,7 @@ import { ChannelStreamTool } from '../../tools/channel-stream.ts'
 import { DiscordPatrolTool } from '../../tools/discord-patrol.ts'
 import { WatermarkTool } from '../../tools/watermark.ts'
 import { profileBindings } from '../../agent-authoring/capability-profiles.ts'
-import { FOLDER_PICKER_CAPABILITY, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../../folders/picker.ts'
+import { FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../../folders/picker.ts'
 import { bundledChromeAdapter } from '../../browser/chrome-adapter.ts'
 import { SessionProxyTool } from '../../tools/session-proxy.ts'
 import { createSelfSessionHandler } from '../../vfs/session.ts'
@@ -86,7 +86,9 @@ import { organizationExecutionError } from '../../projects/organization-output.t
 import { JsonlSessionStore } from '../../sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from '../../sessions/session-store-sqlite.ts'
 import type { SessionStore } from '../../sessions/session-store.ts'
-import { localFolderWorkdirRef, resolveSessionLocations, type WorkdirCapabilityLookup } from '../../sessions/locality.ts'
+import { localFolderWorkdirRef, resolveSessionLocations, type WorkdirLookup, type WorkdirRefV2 } from '../../sessions/locality.ts'
+import { ExecutionAdmissionError } from '../../execution/workdir-contracts.ts'
+import { executeRemoteWorkdirIdentity } from '../../execution/remote-workdir-identity-client.ts'
 import { FolderError, FolderRegistry, UUID_PATTERN } from '../../folders/registry.ts'
 import { FolderService } from '../../folders/routes.ts'
 import { ProjectFolderDiscovery } from '../../folders/discovery.ts'
@@ -133,7 +135,7 @@ import { SubagentTool } from '../../tools/subagent.ts'
 import { AskTool } from '../../tools/ask.ts'
 import { ReplyTool } from '../../tools/reply.ts'
 import { remoteSessionPlugin } from '../../sessions/remote-session-routes.ts'
-import { isManagedWorkdir, ownsManagedWorkdir, MANAGED_SESSION_CAPABILITY, MANAGED_SESSION_OPERATION } from '../../execution/managed-workdir.ts'
+import { isManagedWorkdir, ownsManagedWorkdir, MANAGED_SESSION_OPERATION } from '../../execution/managed-workdir.ts'
 import { RemoteFolderOwnership } from '../../folders/remote-ownership.ts'
 import {
   createBgTasksHandler,
@@ -200,7 +202,7 @@ import { assertSessionProjectOwnership } from '../../projects/session-ownership.
 import { startupStateSnapshot } from '../../sessions/startup-state-snapshot.ts'
 import { EvalBridgeRuntime } from '../../script-runtime/bridge.ts'
 import { DEFAULT_PROJECT_ID } from '../../projects/contracts.ts'
-import { ProjectExecutor } from '../../projects/executor.ts'
+import { DIRECTORY_OPERATIONS, ProjectExecutor } from '../../projects/executor.ts'
 import { LearningService, type LearningCallbacks } from '../../agent/learning/service.ts'
 import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
 import { IoBroker } from '../../io/broker.ts'
@@ -371,42 +373,66 @@ export async function createProjectRuntime(
   const folderRegistry = new FolderRegistry(resolve(workspace), { projectId: project.id, catalog: dependencies.catalog })
   await startup.measure('folders', () => folderRegistry.init())
   app.use('*', folderAccessMiddleware(folderRegistry))
-  const ownsWorkdir = (ref: import('../../sessions/locality.ts').WorkdirRefV1): boolean => {
-    if (isManagedWorkdir(ref.capabilityId)) return ref.nodeId !== 'local' && ownsManagedWorkdir(project.id, ref.capabilityId)
-    if (folderRegistry.lookupWorkdir(ref)?.capability) return true
-    if (folderRegistry.ownsRemoteWorkdir(ref)) return true
+  const sameWorkdir = (left: WorkdirRefV2, right: WorkdirRefV2) => left.nodeId === right.nodeId && left.workdirId === right.workdirId
+  // Check ownership directly. No authorization object is constructed or passed.
+  const directoryAccess = (ref: WorkdirRefV2): boolean => {
+    const folder = folderRegistry.list().find(folder => sameWorkdir(folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id), ref))
+    if (folder) return true
     if (folderRegistry.isRetiredWorkdir(ref)) return false
-    return sessions.hasHistoricalWorkdir(ref) || sessions.listSessions().some(session => {
+    if (isManagedWorkdir(ref.workdirId)) return ref.nodeId !== 'local' && ownsManagedWorkdir(project.id, ref.workdirId)
+    const reserved = dependencies.catalog.remoteClaims(ref.nodeId).some(claim => claim.projectId === project.id && sameWorkdir(claim.workdir, ref))
+    return reserved && (sessions.hasHistoricalWorkdir(ref) || sessions.listSessions().some(session => {
       const workdir = sessions.getSessionState(session.sessionId)?.workdir
-      return workdir?.nodeId === ref.nodeId && workdir.capabilityId === ref.capabilityId
-    })
+      return !!workdir && sameWorkdir(workdir, ref)
+    }))
   }
-  const workdirCapabilityLookup: WorkdirCapabilityLookup = ref =>
-    folderRegistry.lookupWorkdir(ref) ?? (ownsWorkdir(ref) ? mainCluster.workdirCapabilityLookup(ref) : { node: 'online' })
-  const remoteExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
-    if (request.capabilityId === MANAGED_SESSION_CAPABILITY && request.operation === MANAGED_SESSION_OPERATION &&
-      request.sessionId.startsWith('web:chat-') && UUID_PATTERN.test(request.sessionId.slice('web:chat-'.length))) {
-      folderRegistry.assertSessionFolder({ sessionId: request.sessionId })
-      return
-    }
-    if (request.sessionId === `folder-identity:${project.id}` && request.operation === 'workdir.identity') return
+  const denyAccess = (): never => {
+    throw new ExecutionAdmissionError('project-access-denied', 'This Project has no current access to the selected directory and operation.')
+  }
+  const workdirLookup: WorkdirLookup = (ref, operation) => {
+    if (!directoryAccess(ref) || operation && !DIRECTORY_OPERATIONS.includes(operation)) return { node: 'online' }
+    return folderRegistry.lookupWorkdir(ref) ?? mainCluster.workdirLookup(ref, operation)
+  }
+  const recordRemoteJob = (jobId: string, pending: boolean) => dependencies.catalog.recordRemoteJob(project.id, jobId, pending)
+  const remoteExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, async (request, signal) => {
+    if (request.workdirId === undefined || !DIRECTORY_OPERATIONS.includes(request.operation)) return denyAccess()
     if (request.sessionId.startsWith('folder:')) {
-      if (!folderRegistry.get(request.sessionId.slice('folder:'.length))) {
+      const folder = folderRegistry.get(request.sessionId.slice('folder:'.length))
+      const ref = folder && (folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id))
+      if (!ref || ref.nodeId !== request.nodeId || ref.workdirId !== request.workdirId) {
         throw new FolderError('folder_access_revoked', 'This folder is no longer available to this project.', 409)
       }
-    } else {
-      sessions.assertFolderAccess(request.sessionId)
+    } else sessions.assertFolderAccess(request.sessionId)
+    const ref: WorkdirRefV2 = { version: 2, nodeId: request.nodeId, workdirId: request.workdirId }
+    if (!directoryAccess(ref)) denyAccess()
+    const folder = folderRegistry.list().find(folder => sameWorkdir(folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id), ref))
+    // Verify the exact selected directory, without refreshing unrelated devices.
+    if (folder) await folderRegistry.requireExecutionAvailable(folder.id, signal)
+    else if (!isManagedWorkdir(ref.workdirId)) {
+      const identity = await executeRemoteWorkdirIdentity({ executor: identityExecutor, nodeId: ref.nodeId, workdirId: ref.workdirId,
+        sessionId: `folder-identity:${project.id}`, turnId: randomUUID(), signal })
+      await dependencies.catalog.resolveRemoteClaim(ref, identity)
     }
-    if (!ownsWorkdir({ version: 1, nodeId: request.nodeId, capabilityId: request.capabilityId })) {
-      throw new FolderError('folder_access_revoked', 'This folder is no longer available to this project.', 409)
-    }
-  }, (jobId, pending) => dependencies.catalog.recordRemoteJob(project.id, jobId, pending))
+    signal.throwIfAborted()
+    if (!directoryAccess(ref)) denyAccess()
+    if (folder && !folderRegistry.get(folder.id)) denyAccess()
+  }, recordRemoteJob, originalJobId => dependencies.catalog.settleReconciledRemoteJob(project.id, originalJobId),
+  () => folderRegistry.acquireAccess())
+  // Dedicated host-held service executors, not magic session IDs as credentials.
+  const identityExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+    if (request.workdirId === undefined || request.operation !== 'workdir.identity') denyAccess()
+  })
+  const allocationExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+    if (request.workdirId !== undefined || request.operation !== MANAGED_SESSION_OPERATION ||
+      !request.sessionId.startsWith('web:chat-') || !UUID_PATTERN.test(request.sessionId.slice('web:chat-'.length))) denyAccess()
+    folderRegistry.assertSessionFolder({ sessionId: request.sessionId })
+  }, recordRemoteJob)
   folderRegistry.configureRemote(new RemoteFolderOwnership({
     projectId: project.id,
     catalog: dependencies.catalog,
-    executor: remoteExecutor,
-    lookup: mainCluster.workdirCapabilityLookup,
-    capability: ref => mainCluster.registry.listCapabilities(ref.nodeId).find(capability => capability.capabilityId === ref.capabilityId),
+    executor: identityExecutor,
+    lookup: mainCluster.workdirLookup,
+    workdir: ref => mainCluster.registry.listWorkdirs(ref.nodeId).find(resource => resource.workdirId === ref.workdirId),
   }))
 
   const execConfig = config.tools.exec
@@ -563,7 +589,7 @@ export async function createProjectRuntime(
   directoryBots.setBroker(capabilityBroker)
   const authoring = new DirectoryBotService({
     projectId: project.id, workspace, store: agentResources, broker: capabilityBroker,
-    folders: folderRegistry, remoteExecutor: mainCluster.remoteExecutor,
+    folders: folderRegistry, remoteExecutor,
 
   }, directoryBots)
   const sessions: SessionManager = new SessionManager({
@@ -573,7 +599,7 @@ export async function createProjectRuntime(
     hasInitiative: id => initiatives.getSummary(id) !== null,
     scope,
     ownsFolder: id => !!folderRegistry.get(id),
-    ownsWorkdir,
+    ownsWorkdir: ref => !!directoryAccess(ref),
     assertSessionFolder: state => folderRegistry.assertSessionFolder(state),
     acquireFolderAccess: () => folderRegistry.acquireAccess(),
     evalBridge,
@@ -603,17 +629,17 @@ export async function createProjectRuntime(
       return activeConfig.providers[provider]?.modelContextWindows?.[model] ??
         MODEL_CONTEXT_WINDOWS[model] ?? null
     },
-    workdirCapabilityLookup,
+    workdirLookup,
     remoteExecutor,
     getNodeInventory: () => {
       const inventory = mainCluster.getNodeInventory()
       return {
         ...inventory,
-        nodes: inventory.nodes.map(node => ({
-          ...node,
-          capabilities: node.capabilities.filter(capability => capability.kind !== 'workdir' ||
-            ownsWorkdir({ version: 1, nodeId: node.role === 'main' ? 'local' : node.nodeId, capabilityId: capability.capabilityId })),
-        })),
+        nodes: inventory.nodes.map(node => {
+          const workdirs = node.workdirs.filter(workdir => directoryAccess({ version: 2,
+            nodeId: node.role === 'main' ? 'local' : node.nodeId, workdirId: workdir.workdirId }))
+          return { ...node, workdirs }
+        }),
       }
     },
     onSessionStopped: (id) => { releaseComputerSession(id); backgroundTasks.handleSessionStopped(id) },
@@ -633,7 +659,7 @@ export async function createProjectRuntime(
       throw new ComputerError('invalid_session', 'Computer use requires a local, user-owned web conversation.', 403)
     }
     sessions.assertFolderAccess(sessionId)
-    const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirCapabilityLookup)
+    const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
     if (!locations.workdir.available || locations.workdir.locality === 'remote') {
       throw new ComputerError('local_only', 'Computer use is not available in a remote or unavailable workdir.', 403)
     }
@@ -661,7 +687,7 @@ export async function createProjectRuntime(
     const state = sessions.getSessionState(sessionId)
     if (!state) throw new IoError('session_not_found', 'The owning conversation no longer exists', 404)
     sessions.assertFolderAccess(sessionId)
-    const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirCapabilityLookup)
+    const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
     if (!locations.workdir.available || locations.workdir.locality === 'remote') {
       throw new IoError('local_io_only', 'Browser I/O currently requires a local conversation', 409)
     }
@@ -930,7 +956,7 @@ export async function createProjectRuntime(
     getProject: () => dependencies.catalog.get(project.id),
     registry: folderRegistry,
     getNodeInventory: () => sessions.getNodeInventory(),
-    workdirCapabilityLookup,
+    workdirLookup,
   })
   tools.register(new UseProjectTool({
     projectId: project.id, folders: folderRegistry,
@@ -938,7 +964,7 @@ export async function createProjectRuntime(
   }))
   context.register(initiativeProvider(initiatives))
   context.register({ name: 'project-conventions', getPromptSection: () => conventions.prompt() })
-  context.register(workspaceProvider(workspace, vfs, workdirCapabilityLookup, projectFolderDiscovery))
+  context.register(workspaceProvider(workspace, vfs, workdirLookup, projectFolderDiscovery))
   context.register(guidelineProvider())
   context.register(runtimeDiscoveryProvider(runtimePrompt))
   context.register(memoryProvider(
@@ -1010,7 +1036,7 @@ export async function createProjectRuntime(
   const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context), ctx => {
     const state = sessions.getSessionState(ctx.sessionId)
     if (!state?.folderId) return undefined
-    const location = resolveSessionLocations(workspace, state, undefined, workdirCapabilityLookup).workdir
+    const location = resolveSessionLocations(workspace, state, undefined, workdirLookup).workdir
     if (!location.available) throw new Error('Selected folder skill scope is unavailable')
     return location.locality === 'local' ? { folderId: state.folderId, path: location.path } : undefined
   })
@@ -1113,7 +1139,7 @@ export async function createProjectRuntime(
   const canAuthor = (id: string): boolean => {
     const state = sessions.getSessionState(id)
     if (!isOwnerAuthoringSession(state, project.id) || !state || sessions.isManagedConversation(id)) return false
-    const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirCapabilityLookup)
+    const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
     return locations.workdir.available && locations.workdir.locality === 'local'
   }
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
@@ -1487,9 +1513,8 @@ export async function createProjectRuntime(
   const folders = new FolderService({
     registry: folderRegistry,
     picker: { inventory: () => mainCluster.getNodeInventory(), executor: new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
-      if (request.sessionId !== 'owner-folder-picker' || request.capabilityId !== FOLDER_PICKER_CAPABILITY ||
-        ![FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation)) throw new Error('Invalid owner picker operation')
-    }) },
+      if (request.workdirId !== undefined || ![FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation)) denyAccess()
+    }, recordRemoteJob) },
     remoteExecutor,
     createSession: async (folder, requestId) => {
       const chatId = `chat-${requestId ?? randomUUID()}`
@@ -1559,7 +1584,7 @@ export async function createProjectRuntime(
       authorize: dependencies.authorize,
       requireFolderOwnership: true,
       folders: folderRegistry,
-      managedSessions: { projectId: project.id, inventory: () => mainCluster.getNodeInventory() },
+      managedSessions: { projectId: project.id, inventory: () => mainCluster.getNodeInventory(), executor: allocationExecutor },
     }),
     folders.plugin,
     serviceGroupsPlugin({bots:botStore,discovery:serviceDiscovery,runtime:directoryBots,authorize:dependencies.authorize}),

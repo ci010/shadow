@@ -185,7 +185,7 @@ test('viewer bytes use the owning raw endpoint with authorization and without re
 
 test('viewer raw errors retain offline, denied and unavailable workdir semantics without fallback', async t => {
   const mock = t.mock.method(globalThis, 'fetch', async () => Response.json({
-    error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder',
+    error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', workdirId: 'folder',
   }, { status: 503 }))
   const files = useSessionFiles('http://localhost', 'remote-folder')
   await assert.rejects(files.readBlob('ignored', 'report.pdf'), error => error instanceof Error && error.name === 'NodeOfflineError')

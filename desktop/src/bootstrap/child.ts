@@ -25,7 +25,7 @@ export interface ChildConfig {
   readonly dataDir: string
   readonly mainEndpoint: string
   readonly allowInsecureLocalTransport: boolean
-  readonly workdirs: readonly [{ readonly capabilityId: 'desktop-workdir'; readonly rootPath: string; readonly displayName: string }]
+  readonly workdirs: readonly [{ readonly workdirId: 'desktop-workdir'; readonly rootPath: string; readonly displayName: string }]
 }
 export interface ChildSetupInfo {
   readonly dataDir: string
@@ -130,10 +130,19 @@ export class FileChildBootstrap implements ChildBootstrap {
   }
 
   async readConfig(): Promise<ChildConfig> {
-    const value = JSON.parse(await readFile(this.configPath, 'utf8')) as ChildConfig
+    const saved = JSON.parse(await readFile(this.configPath, 'utf8'))
+    // Storage-only adapter: keep the original desktop resource/node identity.
+    const value = saved && typeof saved === 'object' && Array.isArray(saved.workdirs)
+      ? { ...saved, workdirs: saved.workdirs.map((entry: unknown) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry
+        const old = entry as Record<string, unknown>
+        const fields = ['workdirId', 'resourceId', 'capabilityId'].filter(key => Object.hasOwn(old, key))
+        if (fields.length !== 1) throw new TypeError('Saved Child directory identity is invalid')
+        return Object.fromEntries(Object.entries(old).map(([key, value]) => [key === fields[0] ? 'workdirId' : key, value]))
+      }) } as ChildConfig : saved as ChildConfig
     if (value.version !== 1 || value.mode !== 'child' || typeof value.localNodeId !== 'string' || !value.localNodeId
-      || !Array.isArray(value.workdirs) || value.workdirs.length !== 1 || value.workdirs[0]?.capabilityId !== 'desktop-workdir'
-      || Object.keys(value).length !== 7) throw new TypeError('Saved Child configuration is invalid')
+      || !Array.isArray(value.workdirs) || value.workdirs.length !== 1 || value.workdirs[0]?.workdirId !== 'desktop-workdir'
+      || Object.keys(value).length !== 7 || Object.keys(value.workdirs[0]).sort().join(',') !== 'displayName,rootPath,workdirId') throw new TypeError('Saved Child configuration is invalid')
     parseChildPairInput({ endpoint: value.mainEndpoint, offerId: 'validate', pin: '000000', displayName: 'Child',
       dataDir: value.dataDir, workdir: value.workdirs[0].rootPath,
       allowInsecureLocalTransport: value.allowInsecureLocalTransport, executionConsent: true })
@@ -171,7 +180,7 @@ export class FileChildBootstrap implements ChildBootstrap {
     if (!config || changed) {
       config = { version: 1, mode: 'child', localNodeId: config?.localNodeId ?? randomUUID(), dataDir: input.dataDir,
         mainEndpoint: input.endpoint, allowInsecureLocalTransport: input.allowInsecureLocalTransport,
-        workdirs: [{ capabilityId: 'desktop-workdir', rootPath: input.workdir, displayName: 'Shared work folder' }] }
+        workdirs: [{ workdirId: 'desktop-workdir', rootPath: input.workdir, displayName: 'Shared work folder' }] }
       await mkdir(dirname(this.configPath), { recursive: true })
       const staging = `${this.configPath}.${randomUUID()}.tmp`
       try {

@@ -45,7 +45,7 @@ test('initial local instructions and discovery use exactly the switch preparatio
 })
 
 test('no-folder, unknown metadata, remote and unavailable snapshots do not read metadata paths', async () => {
-  const remote = { version: 1 as const, nodeId: 'child', capabilityId: 'repo', displayPathSnapshot: 'DO-NOT-READ' }
+  const remote = { version: 2 as const, nodeId: 'child', workdirId: 'repo', displayPathSnapshot: 'DO-NOT-READ' }
   const folder = { id: 'f', name: 'repo', path: '\u0000invalid-main-path', createdAt: '', projectId: 'p' }
   for (const workdir of [
     { available: true as const, locality: 'remote' as const, workdir: remote },

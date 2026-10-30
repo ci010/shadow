@@ -43,7 +43,7 @@ export class EphemeralSession extends BaseSession {
     return true
   }
   protected override async drainPendingMessages(llm: LlmRuntimeConfig): Promise<void> {
-    const locations = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup)
+    const locations = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup)
     const cwd = locations.workdir.available && locations.workdir.locality === 'local'
       ? locations.workdir.path : locations.sessionDataDir
     while (this.corrections.length) {

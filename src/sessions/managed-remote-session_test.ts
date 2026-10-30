@@ -8,7 +8,7 @@ import { Hono } from 'hono'
 import { folderFixture } from '../folders/test-fixtures.ts'
 import { FolderRegistry } from '../folders/registry.ts'
 import { ProjectCatalog } from '../projects/catalog.ts'
-import { ProjectExecutor } from '../projects/executor.ts'
+import { ProjectExecutor, DIRECTORY_OPERATIONS } from '../projects/executor.ts'
 import { reserveRemoteSessionWorkdirs } from '../projects/session-ownership.ts'
 import { InMemoryPairingNodeRegistry } from '../cluster/registry.ts'
 import { createNodeWebSocketApi } from '../cluster/node-websocket-api.ts'
@@ -20,12 +20,12 @@ import { LocalExecutor } from '../execution/local-executor.ts'
 import { RemoteExecutor } from '../execution/remote-executor.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
 import { executeRemoteFilesystemText } from '../execution/remote-filesystem-client.ts'
-import { managedSessionCapability, MANAGED_SESSION_CAPABILITY } from '../execution/managed-workdir.ts'
+import { managedSessionWorkdirId, LEGACY_MANAGED_SERVICE_ID, MANAGED_SESSION_OPERATION } from '../execution/managed-workdir.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionStore, SessionState } from './session-store.ts'
 import type { SessionManager } from './session-manager.ts'
-import { resolveSessionLocations, type WorkdirCapabilityLookup } from './locality.ts'
+import { resolveSessionLocations, type WorkdirLookup } from './locality.ts'
 import { remoteSessionPlugin } from './remote-session-routes.ts'
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
@@ -35,7 +35,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     await catalog.init()
     const other = await catalog.create('Other')
     const auth = { deviceId: 'child-device', nodeId: 'child', credentialId: 'child-credential' }
-    const hello = { protocolMajor: 1 as const, protocolMinor: 0, implementationVersion: 'fixture', features: ['jobs-v1', 'capabilities-v1', 'workdir-display-v1'] }
+    const hello = { protocolMajor: 1 as const, protocolMinor: 0, implementationVersion: 'fixture', features: ['workdir-execution-v2'] }
     const registry = new InMemoryPairingNodeRegistry()
     const now = new Date()
     registry.createOffer('offer', now, new Date(now.getTime() + 60_000))
@@ -46,7 +46,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       session: { maxOutboundQueue: 8, heartbeatTimeoutMs: 60_000 },
     })
     const app = new Hono()
-    registerGatewayRoutes(app, [api.plugin])
+    registerGatewayRoutes(app, [api.plugin], {
+      launchCredentialExemptions: [{ method: 'GET', path: '/cluster/v1/node' }],
+    })
     const server = serveGateway(app, { host: '127.0.0.1', port: 0 })
     await server.ready
     const endpoint = `http://127.0.0.1:${server.addr.port}`
@@ -59,19 +61,19 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await child.init()
       connector = new ChildMainConnector({
         localHello: hello, authentication: auth,
-        executor: new LocalExecutor(new ProcessManager(), 'child', child.operationHandlers, []),
-        capabilities: () => child.capabilities, session: { maxOutboundQueue: 2, heartbeatTimeoutMs: 60_000 },
+        executor: new LocalExecutor(new ProcessManager(), 'child', child.operationHandlers, (request, signal) => child.assertCanExecute(request, signal)),
+        workdirs: () => child.workdirs, support: () => child.support, session: { maxOutboundQueue: 2, heartbeatTimeoutMs: 60_000 },
       })
-      child.onCapability = capability => connector!.advertiseCapability(capability)
+      child.onWorkdir = async resource => { await connector!.advertiseWorkdir(resource) }
       await connector.connect({ endpoint, localNodeId: 'child', signal: new AbortController().signal })
-      for (let i = 0; i < 200 && !api.hasAdvertisedCapability('child', MANAGED_SESSION_CAPABILITY); i++) await delay(5)
-      assert(api.hasAdvertisedCapability('child', MANAGED_SESSION_CAPABILITY))
+      for (let i = 0; i < 200 && !api.hasAdvertisedNodeSupport('child'); i++) await delay(5)
+      assert(api.hasAdvertisedNodeSupport('child'))
     }
-    const lookup: WorkdirCapabilityLookup = ref => {
-      const descriptor = registry.listCapabilities(ref.nodeId).find(capability => capability.capabilityId === ref.capabilityId)
+    const lookup: WorkdirLookup = ref => {
+      const descriptor = registry.listWorkdirs(ref.nodeId).find(resource => resource.workdirId === ref.workdirId)
       return {
         node: api.isNodeConnected(ref.nodeId) ? 'online' : 'offline',
-        ...(descriptor ? { capability: { kind: descriptor.kind, online: api.hasAdvertisedCapability(ref.nodeId, ref.capabilityId) } } : {}),
+        ...(descriptor ? { workdir: { online: api.hasAdvertisedWorkdir(ref.nodeId, ref.workdirId) } } : {}),
       }
     }
     const stores: SessionStore[] = []
@@ -84,10 +86,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const states = await store.listAllStates()
       const folders = new FolderRegistry(home, { projectId, catalog })
       await folders.init()
-      const executor = new ProjectExecutor(projectId, remote)
+      const executor = new ProjectExecutor(projectId, remote, request => {
+        assert.ok([...DIRECTORY_OPERATIONS, MANAGED_SESSION_OPERATION].includes(request.operation))
+      })
       let builds = 0
-      const sessions: Pick<SessionManager, 'workspace' | 'workdirCapabilityLookup' | 'remoteExecutor' | 'buildSession' | 'getSessionState'> = {
-        workspace: home, remoteExecutor: executor, workdirCapabilityLookup: lookup,
+      const sessions: Pick<SessionManager, 'workspace' | 'workdirLookup' | 'remoteExecutor' | 'buildSession' | 'getSessionState'> = {
+        workspace: home, remoteExecutor: executor, workdirLookup: lookup,
         getSessionState: id => states[id],
         buildSession: async (sessionId, _parent, fields) => {
           const state: SessionState = { sessionId, projectId, segmentIndex: 0, mode: fields?.mode, workdir: fields?.workdir }
@@ -100,7 +104,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const routes = new Hono()
       remoteSessionPlugin({
         sessions, folders, requireFolderOwnership: true, authorize: () => true,
-        managedSessions: { projectId, inventory: () => mainNodeInventory(undefined, registry, api) },
+        managedSessions: { projectId, executor, inventory: () => mainNodeInventory(undefined, registry, api) },
       })(routes)
       const request = (body: unknown, signal?: AbortSignal) => routes.request('/api/sessions/remote', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
@@ -122,15 +126,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.deepEqual(created, repeated)
       assert.equal(first.builds(), 1)
       assert.equal(created.folderId, undefined)
-      assert.equal(created.workdir.capabilityId, managedSessionCapability('default', created.sessionId))
+      assert.equal(created.workdir.workdirId, managedSessionWorkdirId('default', created.sessionId))
       assert.equal((await first.request({ ...body, nodeId: 'other-child' })).status, 409)
       assert.equal((await first.request({ nodeId: 'child' })).status, 400)
       assert.equal((await first.request({ ...body, requestId: '../escape' })).status, 400)
-      assert.equal((await first.request({ ...body, capabilityId: created.workdir.capabilityId })).status, 400)
+      assert.equal((await first.request({ ...body, workdirId: created.workdir.workdirId })).status, 400)
       assert.equal((await first.request({ ...body, folderId: randomUUID() })).status, 400)
       assert.throws(() => first.folders.registerRemote(created.workdir, new AbortController().signal), /cannot be registered/)
       const operation = (executor: ProjectExecutor, operation: string, args: unknown) => executeRemoteFilesystemText({
-        executor, nodeId: 'child', capabilityId: created.workdir.capabilityId,
+        executor, nodeId: 'child', workdirId: created.workdir.workdirId,
         sessionId: created.sessionId, turnId: randomUUID(), signal: new AbortController().signal,
       }, operation, args)
       await operation(first.executor, 'filesystem.write', { path: 'hello.txt', content: 'Child only' })
@@ -138,7 +142,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert(text.includes('Child only'))
       await assert.rejects(operation(second.executor, 'filesystem.read', { path: 'hello.txt' }), /project access denied/)
       await assert.rejects(operation(first.executor, 'filesystem.read', { path: '../owner.json' }))
-      const descriptor = registry.listCapabilities('child').find(capability => capability.capabilityId === created.workdir.capabilityId)!
+      const descriptor = registry.listWorkdirs('child').find(resource => resource.workdirId === created.workdir.workdirId)!
       assert.equal(await readFile(join(descriptor.displayPath!, 'hello.txt'), 'utf8'), 'Child only')
       await assert.rejects(readFile(join(first.home, 'hello.txt')), { code: 'ENOENT' })
       await operation(first.executor, 'workdir.process.execute', { script: 'git init --quiet' })
@@ -146,10 +150,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const otherResponse = await second.request(body)
       assert.equal(otherResponse.status, 201, await otherResponse.clone().text())
       const otherSession = await otherResponse.json()
-      assert.notEqual(otherSession.workdir.capabilityId, created.workdir.capabilityId)
+      assert.notEqual(otherSession.workdir.workdirId, created.workdir.workdirId)
       assert.notEqual(otherSession.workdir.displayPathSnapshot, created.workdir.displayPathSnapshot)
       const fresh = await (await first.request({ ...body, requestId: randomUUID() })).json()
-      assert.notEqual(fresh.workdir.capabilityId, created.workdir.capabilityId)
+      assert.notEqual(fresh.workdir.workdirId, created.workdir.workdirId)
       assert.deepEqual(catalog.folders(), [])
       await reserveRemoteSessionWorkdirs(first.home, catalog, 'default')
       assert.deepEqual(catalog.remoteClaims('child'), [])
@@ -165,14 +169,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await connector!.shutdown()
       assert.equal((await first.request({ ...body, requestId: randomUUID() })).status, 503)
       await startChild()
-      for (let i = 0; i < 200 && !api.hasAdvertisedCapability('child', created.workdir.capabilityId); i++) await delay(5)
+      for (let i = 0; i < 200 && !api.hasAdvertisedWorkdir('child', created.workdir.workdirId); i++) await delay(5)
       assert.equal((await first.request(body)).status, 201)
       assert((await operation(first.executor, 'filesystem.read', { path: 'hello.txt' })).includes('Child only'))
       const restored = await createProjectRoutes('default')
       assert.deepEqual(await (await restored.request(body)).json(), created)
       assert.equal(restored.builds(), 0)
       assert.equal((await restored.store.getState(created.sessionId))?.projectId, 'default')
-      assert.equal((await readdir(storage)).length, 3)
+      const stored = await readdir(storage)
+      assert(stored.includes('.resource-identities-v1'), 'The established Child identity index is retained')
+      assert.equal(stored.filter(name => name !== '.resource-identities-v1').length, 3)
     } finally {
       for (const store of stores) store.close?.()
       await connector?.shutdown()

@@ -16,6 +16,7 @@ import { parseYieldReference } from './yield-contract.ts'
 import { SessionResumeError } from './recovery.ts'
 import type { SessionRecovery } from './session-store.ts'
 import { FolderError } from '../folders/registry.ts'
+import { RemoteWorkdirIdentityError } from '../execution/remote-workdir-identity-client.ts'
 import { isLearningAutomationSession } from './session-purpose.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
 import { cronContextMode, type CronService } from '../cron/service.ts'
@@ -26,7 +27,7 @@ import {
   resolveSessionLocations,
   managedSessionWorkdirRef,
   type SessionLocalityState,
-  type WorkdirCapabilityLookup,
+  type WorkdirLookup,
   type WorkdirResolution,
   type WorkdirUnavailableReason,
 } from './locality.ts'
@@ -45,14 +46,14 @@ import {
 
 export type WorkdirUnavailableAction =
   | 'connect_node'
-  | 'select_workdir_capability'
+  | 'select_folder'
   | 'upgrade_node'
 
 export interface WorkdirUnavailableApiResult {
   error: 'workdir_unavailable'
   key: string
   nodeId: string
-  capabilityId: string
+  workdirId: string
   reason: WorkdirUnavailableReason
   action: WorkdirUnavailableAction
 }
@@ -61,20 +62,20 @@ export interface RemoteWorkdirRequiresExecutorApiResult {
   error: 'remote_workdir_requires_executor'
   key: string
   nodeId: string
-  capabilityId: string
+  workdirId: string
 }
 
 export function resolveSessionFileBase(
   workspace: string,
   key: string,
   state?: SessionLocalityState,
-  workdirCapabilityLookup?: WorkdirCapabilityLookup,
+  workdirLookup?: WorkdirLookup,
 ): WorkdirResolution {
   return resolveSessionLocations(
     workspace,
     state ?? { sessionId: key },
     undefined,
-    workdirCapabilityLookup,
+    workdirLookup,
   ).workdir
 }
 
@@ -84,16 +85,16 @@ export function workdirUnavailableApiResult(
 ): WorkdirUnavailableApiResult {
   const action: WorkdirUnavailableAction = resolution.reason === 'incompatible'
     ? 'upgrade_node'
-    : resolution.reason === 'capability-missing' ||
-        resolution.reason === 'capability-revoked'
-    ? 'select_workdir_capability'
+    : resolution.reason === 'workdir-missing' ||
+        resolution.reason === 'workdir-revoked'
+    ? 'select_folder'
     : 'connect_node'
 
   return {
     error: 'workdir_unavailable',
     key,
     nodeId: resolution.workdir.nodeId,
-    capabilityId: resolution.workdir.capabilityId,
+    workdirId: resolution.workdir.workdirId,
     reason: resolution.reason,
     action,
   }
@@ -110,7 +111,7 @@ function remoteWorkdirRequiresExecutorApiResult(
     error: 'remote_workdir_requires_executor',
     key,
     nodeId: resolution.workdir.nodeId,
-    capabilityId: resolution.workdir.capabilityId,
+    workdirId: resolution.workdir.workdirId,
   }
 }
 
@@ -138,7 +139,7 @@ async function sessionFileBase(
 ): Promise<WorkdirResolution & { scope?: 'home' }> {
   const state = await sessions.readSessionState(key)
   if (managed && state) {
-    const locations = resolveSessionLocations(sessions.workspace, state, undefined, sessions.workdirCapabilityLookup)
+    const locations = resolveSessionLocations(sessions.workspace, state, undefined, sessions.workdirLookup)
     // Explicit session storage is Main-local, independently of execution workdir locality.
     return { available: true, locality: 'local', workdir: managedSessionWorkdirRef(state.workspaceRoot ?? key), path: locations.sessionDataDir }
   }
@@ -146,7 +147,7 @@ async function sessionFileBase(
     sessions.workspace,
     key,
     state ?? undefined,
-    sessions.workdirCapabilityLookup,
+    sessions.workdirLookup,
   )
   if (!state || !base.available || base.locality !== 'local') return base
   const visited = new Set<string>()
@@ -220,7 +221,7 @@ export function sessionsApiPlugin(
         c.req.method !== 'GET' || suffix.endsWith('/context'))) {
         try { if (historicalRead) await sessions.assertHistoricalFolderAccess(key); else sessions.assertFolderAccess?.(key) }
         catch (error) {
-          if (error instanceof FolderError) return c.json({ error: error.code, message: error.message }, error.status)
+          if (error instanceof FolderError || error instanceof RemoteWorkdirIdentityError) return c.json({ error: error.code, message: error.message }, error.status)
           throw error
         }
       }
@@ -237,7 +238,7 @@ export function sessionsApiPlugin(
             ? c.json({ available: false, reason: 'remote_unsupported', entries: [] })
             : c.json({ error: 'remote_unsupported', message: 'Remote Git requires a connected executor. No local folder was used.' }, 501)
           return serveRemoteGit(c, {
-            executor: sessions.remoteExecutor, nodeId: base.workdir.nodeId, capabilityId: base.workdir.capabilityId,
+            executor: sessions.remoteExecutor, nodeId: base.workdir.nodeId, workdirId: base.workdir.workdirId,
             sessionId: key, turnId: `session-git:${crypto.randomUUID()}`, signal: c.req.raw.signal,
           }, operation)
         }
@@ -614,7 +615,7 @@ export function sessionsApiPlugin(
         const parsed = answerMediaSchema.safeParse(body.media)
         if (cancel || !parsed.success || typeof body.option === 'string') return c.json({ error: 'invalid_request', message: 'Attachments require a custom answer.' }, 400)
         const state = sessions.getSessionState(key)!
-        const { workdir } = resolveSessionLocations(sessions.workspace, state, undefined, sessions.workdirCapabilityLookup)
+        const { workdir } = resolveSessionLocations(sessions.workspace, state, undefined, sessions.workdirLookup)
         if (!key.startsWith('web:') || !workdir.available || workdir.locality === 'remote') {
           return c.json({ error: 'invalid_request', message: 'Answer attachments require a local web conversation.' }, 400)
         }
@@ -780,13 +781,14 @@ export function sessionsApiPlugin(
         const output = await executeRemoteFilesystemText({
           executor: sessions.remoteExecutor,
           nodeId: base.workdir.nodeId,
-          capabilityId: base.workdir.capabilityId,
+          workdirId: base.workdir.workdirId,
           sessionId: key,
           turnId: `session-file-search:${crypto.randomUUID()}`,
           signal: c.req.raw.signal,
         }, FILESYSTEM_READ_OPERATION, { path: '.', query })
         return c.json(remoteFileSearchResult(output))
       } catch (error) {
+        if (error instanceof FolderError || error instanceof RemoteWorkdirIdentityError) return c.json({ error: error.code, message: error.message }, error.status)
         if (error instanceof RemoteFilesystemError) return c.json({
           error: 'remote_file_search_failed', message: error.message,
         }, remoteFilesystemStatus(error))
@@ -817,7 +819,7 @@ export function sessionsApiPlugin(
             {
               executor,
               nodeId: base.workdir.nodeId,
-              capabilityId: base.workdir.capabilityId,
+              workdirId: base.workdir.workdirId,
               sessionId: key,
               turnId: `session-files:${crypto.randomUUID()}`,
               signal: c.req.raw.signal,
@@ -846,11 +848,12 @@ export function sessionsApiPlugin(
             key,
             path: path === '.' ? '' : path,
             workdir: { kind: 'remote', displayPath: sessions.getNodeInventory?.()?.nodes
-              .find(node => node.nodeId === base.workdir.nodeId)?.capabilities
-              .find(capability => capability.capabilityId === base.workdir.capabilityId && capability.kind === 'workdir')?.displayPath ?? null },
+              .find(node => node.nodeId === base.workdir.nodeId)?.workdirs
+              .find(resource => resource.workdirId === base.workdir.workdirId)?.displayPath ?? null },
             entries,
           })
         } catch (error) {
+          if (error instanceof FolderError || error instanceof RemoteWorkdirIdentityError) return c.json({ error: error.code, message: error.message }, error.status)
           if (error instanceof RemoteFilesystemError) {
             return c.json({
               error: 'remote_filesystem_failed',
@@ -928,7 +931,7 @@ export function sessionsApiPlugin(
             {
               executor,
               nodeId: base.workdir.nodeId,
-              capabilityId: base.workdir.capabilityId,
+              workdirId: base.workdir.workdirId,
               sessionId: key,
               turnId: `session-preview:${crypto.randomUUID()}`,
               signal: c.req.raw.signal,
@@ -948,6 +951,7 @@ export function sessionsApiPlugin(
             content: new TextDecoder().decode(slice, { stream: bytes.length > slice.length }),
           })
         } catch (error) {
+          if (error instanceof FolderError || error instanceof RemoteWorkdirIdentityError) return c.json({ error: error.code, message: error.message }, error.status)
           if (error instanceof RemoteFilesystemError) {
             return c.json({
               error: 'remote_filesystem_failed',

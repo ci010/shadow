@@ -66,8 +66,8 @@ if (process.argv[2] === 'worker') {
     owner.stderr!.on('data', chunk => { errors += chunk.toString() })
     const journal = new ShellJournal(join(root, 'journal'))
     const request = {
-      version: 1 as const, jobId: id, idempotencyKey: id, sessionId: 'session', turnId: 'turn',
-      nodeId: 'child', capabilityId: 'root', operation: DURABLE_SHELL_OPERATION,
+      version: 2 as const, jobId: id, idempotencyKey: id, sessionId: 'session', turnId: 'turn',
+      nodeId: 'child', workdirId: 'root' , operation: DURABLE_SHELL_OPERATION,
       args: { script: `"${process.execPath}" "command with spaces.cjs"` },
       createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 15000).toISOString(),
     }
@@ -156,8 +156,8 @@ describe('supervision layer failures', () => {
         })
         const journal = new ShellJournal(join(root, 'journal'))
         const request = {
-          version: 1 as const, jobId: id, idempotencyKey: id, sessionId: 'session', turnId: 'turn',
-          nodeId: 'child', capabilityId: 'root', operation: DURABLE_SHELL_OPERATION,
+          version: 2 as const, jobId: id, idempotencyKey: id, sessionId: 'session', turnId: 'turn',
+          nodeId: 'child', workdirId: 'root' , operation: DURABLE_SHELL_OPERATION,
           args: { script: `"${process.execPath}" "command with spaces.cjs"` },
           createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 15000).toISOString(),
         }

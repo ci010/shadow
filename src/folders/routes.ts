@@ -1,6 +1,6 @@
-import { browseDirectories, parseDirectoryListing, pickerPath, FOLDER_PICKER_CAPABILITY, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from './picker.ts'
+import { browseDirectories, parseDirectoryListing, pickerPath, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from './picker.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
-import { parseWorkdirRefV1 } from '../sessions/locality.ts'
+import { parseLiveWorkdirRef } from '../sessions/locality.ts'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from 'hono'
@@ -17,7 +17,7 @@ import { serveRemoteGit } from '../gateway/remote-git.ts'
 import { serveRemoteFolderFiles } from './remote-files.ts'
 import { RemoteFolderWorkdirUnavailableError } from './remote-ownership.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
-import { executeRemoteFilesystemText, RemoteFilesystemError } from '../execution/remote-filesystem-client.ts'
+import { executeRemoteFilesystemText, executeRemoteNodeText, RemoteFilesystemError } from '../execution/remote-filesystem-client.ts'
 
 export interface FolderServiceOptions {
   picker?: { inventory: () => NodeInventoryResponse; executor: Executor }
@@ -68,7 +68,7 @@ function errorResponse(c: Context, error: unknown): Response {
   if (error instanceof FolderError) {
     return c.json({ error: error.code, message: error.message,
       ...(error instanceof RemoteFolderWorkdirUnavailableError
-        ? { reason: error.reason, nodeId: error.workdir.nodeId, capabilityId: error.workdir.capabilityId } : {}),
+        ? { reason: error.reason, nodeId: error.workdir.nodeId, workdirId: error.workdir.workdirId } : {}),
     }, error.status)
   }
   if (error instanceof Error && error.name === 'AbortError') {
@@ -96,7 +96,7 @@ export class FolderService {
       const nodes = this.#options.picker?.inventory().nodes ?? []
       return c.json({ devices: nodes.map(node => ({ nodeId: node.nodeId, name: node.displayName,
         role: node.role, online: node.connection === 'connected',
-        supported: node.role === 'main' || node.capabilities.some(cap => cap.capabilityId === FOLDER_PICKER_CAPABILITY && cap.online),
+        supported: node.role === 'main' || node.executionProtocol === 'compatible' && node.support.operations.includes(FOLDER_BROWSE_OPERATION) && node.support.operations.includes(FOLDER_SELECT_OPERATION),
       })) }, 200, { 'Cache-Control': 'no-store' })
     })
     for (const action of ['browse', 'select'] as const) {
@@ -115,18 +115,18 @@ export class FolderService {
             if (action === 'browse') return c.json({ listing: await browseDirectories(body.path, c.req.raw.signal) })
             return c.json({ folder: await this.#options.registry.register(pickerPath(body.path), c.req.raw.signal) })
           }
-          if (!node.capabilities.some(cap => cap.capabilityId === FOLDER_PICKER_CAPABILITY && cap.online)) {
+          if (node.executionProtocol !== 'compatible' || (!node.support.operations.includes(FOLDER_BROWSE_OPERATION) || !node.support.operations.includes(FOLDER_SELECT_OPERATION))) {
             throw new FolderError('picker_unsupported', 'Update the selected device to support folder browsing, then reconnect.', 409)
           }
           // The path remains opaque on Main; only its owning Child validates/canonicalizes it.
-          const output = await executeRemoteFilesystemText({ executor: picker.executor, nodeId: node.nodeId,
-            capabilityId: FOLDER_PICKER_CAPABILITY, sessionId: 'owner-folder-picker', turnId: crypto.randomUUID(),
+          const output = await executeRemoteNodeText({ executor: picker.executor, nodeId: node.nodeId,
+            sessionId: 'owner-folder-picker', turnId: crypto.randomUUID(),
             signal: c.req.raw.signal }, action === 'browse' ? FOLDER_BROWSE_OPERATION : FOLDER_SELECT_OPERATION, { path: body.path }, 2_000_000)
           if (output.length > 2_000_000) throw new Error('Picker result too large')
           const value: unknown = JSON.parse(output)
           if (action === 'browse') return c.json({ listing: parseDirectoryListing(value) })
-          const ref = parseWorkdirRefV1(value)
-          if (!ref || ref.nodeId !== node.nodeId || !/^picked-v1:[a-f0-9]{64}$/.test(ref.capabilityId)) throw new Error('Invalid selected folder')
+          const ref = parseLiveWorkdirRef(value)
+          if (!ref || !value || typeof value !== 'object' || !('version' in value) || value.version !== 2 || ref.nodeId !== node.nodeId || !/^picked-v1:[a-f0-9]{64}$/.test(ref.workdirId)) throw new Error('Invalid selected folder')
           return c.json({ folder: await this.#options.registry.registerRemote(ref, c.req.raw.signal) })
         } catch (error) {
           if (error instanceof TypeError) return c.json({ error: 'invalid_directory', message: 'Check the directory path on the selected device and retry.' }, 400)
@@ -210,7 +210,7 @@ export class FolderService {
         this.#assertOpen()
         const body = await objectBody(c)
         if (Object.keys(body).some(key => key !== 'path' && key !== 'description')) {
-          throw new FolderError('invalid_request', 'Local folder registration accepts only path and description. Select a remote folder capability to open a remote folder.')
+          throw new FolderError('invalid_request', 'Local folder registration accepts only path and description. Select a remote directory resource to open a remote folder.')
         }
         const folder = await this.#options.registry.register(
           absoluteDirectoryPath(body.path),
@@ -313,7 +313,7 @@ export class FolderService {
   #remoteTarget(c: Context, folder: import('./contracts.ts').RemoteFolderRecord) {
     if (!this.#options.remoteExecutor) throw new FolderError('remote_executor_unavailable', 'Reconnect the owning device; no local folder was used.', 503)
     return {
-      executor: this.#options.remoteExecutor, nodeId: folder.workdir.nodeId, capabilityId: folder.workdir.capabilityId,
+      executor: this.#options.remoteExecutor, nodeId: folder.workdir.nodeId, workdirId: folder.workdir.workdirId,
       sessionId: `folder:${folder.id}`, turnId: crypto.randomUUID(), signal: c.req.raw.signal,
     }
   }

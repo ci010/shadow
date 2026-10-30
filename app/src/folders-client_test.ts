@@ -22,14 +22,19 @@ test('folders and clones validate wire contracts and drop raw URLs, tokens and G
 test('remote folder parsing retains opaque ownership and display metadata without treating its path as local', () => {
   const remote = {
     ...folder, kind: 'remote', projectId: 'a', path: '/display/only',
-    workdir: { version: 1, nodeId: 'child', capabilityId: 'workdir', displayName: 'Remote folder', displayPathSnapshot: '/display/only' },
+    workdir: { version: 2, nodeId: 'child', workdirId: 'workdir', displayName: 'Remote folder', displayPathSnapshot: '/display/only' },
     identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: ['b'.repeat(64)] },
   }
   assert.deepEqual(parseFolder(remote), remote)
+  assert.throws(() => parseFolder({ ...remote, workdir: { version: 1, nodeId: 'child', capabilityId: 'workdir' } }), /Update Main and the device/)
   for (const invalid of [
     { ...remote, workdir: undefined }, { ...remote, identity: undefined },
     { ...remote, kind: 'local' }, { ...remote, kind: 'unknown' },
     { ...remote, workdir: { ...remote.workdir, nodeId: '' } },
+    { ...remote, workdir: { ...remote.workdir, workdirId: ' ' } },
+    { ...remote, workdir: { ...remote.workdir, version: 1 } },
+    { ...remote, workdir: { version: 1, nodeId: 'child', capabilityId: 'workdir' } },
+    { ...remote, workdir: { ...remote.workdir, capabilityId: 'different-resource' } },
   ]) assert.throws(() => parseFolder(invalid))
   assert.throws(() => parseCloneOperation({ ...running, state: 'succeeded', folder: remote }, running.id), /invalid folder response/)
 })
@@ -275,4 +280,15 @@ test('process termination failure during cancellation preserves failed status an
   assert.equal(views.at(-1)?.operation?.destination, folder.path)
   await controller.cancel()
   assert.equal(views.at(-1)?.state, 'failed', 'subsequent inactive cleanup must not erase the warning')
+})
+
+
+test('folder session upgrade errors remain explicit and retain the original scoped folder route', async () => {
+  const paths: string[] = []
+  const client = createFoldersClient('http://fixture/projects/a/', async input => {
+    paths.push(String(input))
+    return Response.json({ error: 'workdir_unavailable', reason: 'incompatible', nodeId: 'child', workdirId: 'folder' }, { status: 409 })
+  })
+  await assert.rejects(client.createSession('original-folder'), /Update Main and the device.*No local folder was used/)
+  assert.deepEqual(paths, ['http://fixture/projects/a/api/folders/original-folder/sessions'])
 })

@@ -1,11 +1,14 @@
+import { type ExecutionSupport, type WorkdirAdvertisement, validateExecutionSupport, validateWorkdirAdvertisement, IMPLEMENTED_OPERATIONS, NODE_OPERATIONS } from '../execution/workdir-contracts.ts'
+export { validateExecutionSupport, validateWorkdirAdvertisement } from '../execution/workdir-contracts.ts'
+export type { ExecutionSupport, WorkdirAdvertisement } from '../execution/workdir-contracts.ts'
 import type {
   JobEventV1,
-  JobRequestV1,
+  JobRequestV2,
   ValidationResult,
 } from '../execution/contracts.ts'
 import {
   validateJobEventV1,
-  validateJobRequestV1,
+  validateJobRequestV2,
 } from '../execution/contracts.ts'
 
 export type NodeId = string
@@ -86,6 +89,7 @@ export interface RegistrySnapshotV1 {
   capabilities: CapabilityDescriptorV1[]
 }
 
+/** Original registry storage DTO only; never accepted as a live advertisement. */
 export interface CapabilityDescriptorV1 {
   version: 1
   capabilityId: CapabilityId
@@ -105,24 +109,14 @@ export type NodeControlEnvelopeV1 =
     type: 'hello'
     hello: VersionHelloV1
   }
-  | {
-    version: 1
-    messageId: string
-    type: 'capability-advertise'
-    capability: CapabilityDescriptorV1
-  }
-  | {
-    version: 1
-    messageId: string
-    type: 'capability-withdraw'
-    nodeId: NodeId
-    capabilityId: CapabilityId
-  }
+  | { version: 1; messageId: string; type: 'workdir-advertise'; workdir: WorkdirAdvertisement }
+  | { version: 1; messageId: string; type: 'workdir-withdraw'; nodeId: string; workdirId: string }
+  | { version: 1; messageId: string; type: 'node-support'; nodeId: string; support: ExecutionSupport }
   | {
     version: 1
     messageId: string
     type: 'job-request'
-    request: JobRequestV1
+    request: JobRequestV2
   }
   | {
     version: 1
@@ -453,17 +447,22 @@ export function validateNodeControlEnvelopeV1(
     hasOnlyKeys(value, ['version', 'messageId', 'type', 'hello'], errors)
     const nested = validateVersionHelloV1(value.hello)
     if (!nested.success) errors.push(...nested.errors.map((error) => `hello.${error}`))
-  } else if (value.type === 'capability-advertise') {
-    hasOnlyKeys(value, ['version', 'messageId', 'type', 'capability'], errors)
-    const nested = validateCapabilityDescriptorV1(value.capability)
-    if (!nested.success) errors.push(...nested.errors.map((error) => `capability.${error}`))
-  } else if (value.type === 'capability-withdraw') {
-    hasOnlyKeys(value, ['version', 'messageId', 'type', 'nodeId', 'capabilityId'], errors)
+  } else if (value.type === 'workdir-advertise') {
+    hasOnlyKeys(value, ['version', 'messageId', 'type', 'workdir'], errors)
+    const parsed = validateWorkdirAdvertisement(value.workdir)
+    if (!parsed.success) errors.push(...parsed.errors)
+  } else if (value.type === 'workdir-withdraw') {
+    hasOnlyKeys(value, ['version', 'messageId', 'type', 'nodeId', 'workdirId'], errors)
     requireIdentifier(value, 'nodeId', errors)
-    requireIdentifier(value, 'capabilityId', errors)
+    requireIdentifier(value, 'workdirId', errors)
+  } else if (value.type === 'node-support') {
+    hasOnlyKeys(value, ['version', 'messageId', 'type', 'nodeId', 'support'], errors)
+    requireIdentifier(value, 'nodeId', errors)
+    const support = validateExecutionSupport(value.support, 'node')
+    if (!support.success) errors.push(...support.errors)
   } else if (value.type === 'job-request') {
     hasOnlyKeys(value, ['version', 'messageId', 'type', 'request'], errors)
-    const nested = validateJobRequestV1(value.request)
+    const nested = validateJobRequestV2(value.request)
     if (!nested.success) errors.push(...nested.errors.map((error) => `request.${error}`))
   } else if (value.type === 'job-event') {
     hasOnlyKeys(value, ['version', 'messageId', 'type', 'event'], errors)
@@ -474,4 +473,88 @@ export function validateNodeControlEnvelopeV1(
   }
 
   return result(errors, value as unknown as NodeControlEnvelopeV1)
+}
+export interface RegistrySnapshotV2 extends Omit<RegistrySnapshotV1, 'version' | 'capabilities'> {
+  version: 2
+  workdirs: WorkdirAdvertisement[]
+  nodeSupport: { nodeId: string; support: ExecutionSupport }[]
+}
+
+/** Saved inventory is normalized only on read and is never live admission evidence. */
+export function validateRegistrySnapshot(input: unknown): ValidationResult<RegistrySnapshotV2> {
+  if (!isRecord(input)) return { success: false, errors: ['registry snapshot must be an object'] }
+  const errors: string[] = []
+  const legacy = input.version === 1
+  const intermediate = input.version === 2 && Object.hasOwn(input, 'resources')
+  const { workdirs, nodeSupport, resources, capabilities, ...base } = input
+  hasOnlyKeys(input, legacy ? ['version', 'createdAt', 'offers', 'consumedOfferIds', 'pending', 'nodes', 'capabilities'] : intermediate ? ['version', 'createdAt', 'offers', 'consumedOfferIds', 'pending', 'nodes', 'resources', 'capabilities'] : ['version', 'createdAt', 'offers', 'consumedOfferIds', 'pending', 'nodes', 'workdirs', 'nodeSupport'], errors)
+  const checked = validateRegistrySnapshotV1({ ...base, version: 1, capabilities: legacy ? capabilities : [] })
+  if (!checked.success) errors.push(...checked.errors)
+  if (input.version !== 1 && input.version !== 2) errors.push('unsupported registry version')
+  const dirs: WorkdirAdvertisement[] = []
+  const supports = new Map<string, ExecutionSupport>()
+  if (legacy && checked.success) {
+    for (const old of checked.value.capabilities) {
+      const operations = old.permissions.filter(op => IMPLEMENTED_OPERATIONS.includes(op as typeof IMPLEMENTED_OPERATIONS[number]))
+      if (old.kind === 'workdir') dirs.push({ version: 2, nodeId: old.nodeId, workdirId: old.capabilityId, displayName: old.displayName, ...(old.displayPath ? { displayPath: old.displayPath } : {}), online: false, support: { operations: operations.filter(op => !NODE_OPERATIONS.has(op)) } })
+      else if (old.kind === 'shell') supports.set(old.nodeId, { operations: operations.filter(op => NODE_OPERATIONS.has(op)) })
+    }
+  } else if (intermediate) {
+    if (!Array.isArray(resources) || !Array.isArray(capabilities)) errors.push('legacy resources/capabilities must be arrays')
+    else {
+      for (const old of resources) {
+        if (!isRecord(old)) { errors.push('invalid saved directory'); continue }
+        hasOnlyKeys(old, ['version', 'nodeId', 'resourceId', 'kind', 'displayName', 'displayPath', 'online'], errors)
+        if (old.version !== 1 || old.kind !== 'directory' || typeof old.online !== 'boolean') errors.push('invalid saved directory version/kind/availability')
+        dirs.push({ version: 2, nodeId: old.nodeId as string, workdirId: old.resourceId as string, displayName: old.displayName as string, ...(old.displayPath === undefined ? {} : { displayPath: old.displayPath as string }), online: false, support: { operations: [] } })
+      }
+      for (const old of capabilities) {
+        if (!isRecord(old) || !isRecord(old.scope)) { errors.push('invalid saved support'); continue }
+        hasOnlyKeys(old, ['version', 'capabilityId', 'nodeId', 'scope', 'displayName', 'operations', 'conditions', 'online'], errors)
+        if (old.version !== 2 || !isClusterIdentifier(old.capabilityId) || !isClusterIdentifier(old.nodeId) || typeof old.online !== 'boolean') errors.push('invalid saved support identity')
+        requireDisplayText(old, 'displayName', 256, errors)
+        const node = old.scope.kind === 'node'
+        hasOnlyKeys(old.scope, node ? ['kind'] : ['kind', 'resourceId'], errors)
+        if (!node && (old.scope.kind !== 'resource' || !isClusterIdentifier(old.scope.resourceId))) errors.push('invalid saved support scope')
+        const support: ExecutionSupport = { operations: old.operations as string[] }
+        if (old.conditions !== undefined) {
+          if (!isRecord(old.conditions)) errors.push('invalid saved conditions')
+          else {
+            hasOnlyKeys(old.conditions, ['version', 'shells', 'initialCwd', 'maxInputBytes', 'maxDeadlineMs'], errors)
+            if (old.conditions.version !== 1 || old.conditions.initialCwd !== undefined && old.conditions.initialCwd !== 'resource-relative') errors.push('invalid saved conditions')
+            if (node && old.conditions.initialCwd !== undefined) errors.push('saved node service cannot have directory cwd conditions')
+            for (const key of ['maxInputBytes', 'maxDeadlineMs']) if (old.conditions[key] !== undefined && (!Number.isSafeInteger(old.conditions[key]) || Number(old.conditions[key]) < 1 || Number(old.conditions[key]) > 16_777_216)) errors.push('invalid saved shell limit')
+            if (old.conditions.shells !== undefined) support.shell = { shells: old.conditions.shells as string[], ...(old.conditions.maxInputBytes === undefined ? {} : { maxInputBytes: old.conditions.maxInputBytes as number }), ...(old.conditions.maxDeadlineMs === undefined ? {} : { maxDeadlineMs: old.conditions.maxDeadlineMs as number }) }
+          }
+        }
+        const parsed = validateExecutionSupport(support, node ? 'node' : 'workdir')
+        if (!parsed.success) errors.push(...parsed.errors)
+        else if (node) {
+          const previous = supports.get(old.nodeId as string)
+          supports.set(old.nodeId as string, { ...support, operations: [...new Set([...(previous?.operations ?? []), ...support.operations])] })
+        } else {
+          const dir = dirs.find(d => d.nodeId === old.nodeId && d.workdirId === (old.scope as Record<string, unknown>).resourceId)
+          if (!dir) errors.push('saved support references unknown directory')
+          else dir.support = { ...support, operations: [...new Set([...dir.support.operations, ...support.operations])] }
+        }
+      }
+    }
+  } else {
+    if (!Array.isArray(workdirs) || !Array.isArray(nodeSupport)) errors.push('workdirs/nodeSupport must be arrays')
+    else {
+      for (const dir of workdirs) { const parsed = validateWorkdirAdvertisement(dir); if (!parsed.success) errors.push(...parsed.errors); else dirs.push(parsed.value) }
+      for (const item of nodeSupport) {
+        if (!isRecord(item)) { errors.push('invalid node support'); continue }
+        hasOnlyKeys(item, ['nodeId', 'support'], errors)
+        const parsed = validateExecutionSupport(item.support, 'node')
+        if (!isClusterIdentifier(item.nodeId) || supports.has(String(item.nodeId))) errors.push('invalid/duplicate node support identity')
+        if (!parsed.success) errors.push(...parsed.errors)
+        else supports.set(String(item.nodeId), parsed.value)
+      }
+    }
+  }
+  for (const dir of dirs) { const parsed = validateWorkdirAdvertisement(dir); if (!parsed.success) errors.push(...parsed.errors) }
+  const normalizedBase = checked.success ? { ...checked.value } : { ...base }
+  delete (normalizedBase as Record<string, unknown>).capabilities
+  return result(errors, { ...normalizedBase, version: 2, workdirs: dirs, nodeSupport: [...supports].map(([nodeId, support]) => ({ nodeId, support })) } as RegistrySnapshotV2)
 }

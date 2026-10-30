@@ -5,14 +5,14 @@ import type { ExecutionContext } from './context.ts'
 import type { ProcessManager } from '../execution/processes/manager.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
 import type { Executor } from '../execution/executor.ts'
-import type { JobRequestV1 } from '../execution/contracts.ts'
+import type { ExecutionRequestV2 } from '../execution/contracts.ts'
 import { ExecTool } from './shell.ts'
 import { CommandHandlerManager } from './shell-commands/command-handler.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { executeRemoteShell } from '../execution/remote-shell-client.ts'
 
 function fixture(nodeOnly = false) {
-  const requests: JobRequestV1[] = []
+  const requests: ExecutionRequestV2[] = []
   const executor: Executor = {
     async *execute(request) {
       requests.push(request)
@@ -36,7 +36,7 @@ function fixture(nodeOnly = false) {
     sessionId: 'session', messageId: 'turn', cwd: 'C:\\Main\\never-resolve',
     defaultExecShell: 'powershell',
     signal: new AbortController().signal,
-    remoteWorkdir: { nodeId: 'child', capabilityId: 'opaque', executor },
+    remoteWorkdir: { nodeId: 'child', workdirId: 'opaque', executor },
   } as unknown as ExecutionContext
   return { tool, context, requests }
 }
@@ -50,7 +50,7 @@ test('Node-only exec rejects remote workdirs without dispatch or a local shell f
   assert.equal(requests.length, 0)
 })
 
-test('ExecTool remote path sends only capability-relative cwd and does not inherit Main shell or environment', async () => {
+test('ExecTool remote path sends only resource-relative cwd and does not inherit Main shell or environment', async () => {
   const { tool, context, requests } = fixture()
   const previous = process.env.SHADOW_SAFEGIT_PATH
   try {
@@ -61,7 +61,7 @@ test('ExecTool remote path sends only capability-relative cwd and does not inher
     else process.env.SHADOW_SAFEGIT_PATH = previous
   }
   assert.equal(requests[0]?.operation, 'workdir.process.execute-once')
-  assert.equal(requests[0]?.capabilityId, 'opaque')
+  assert.equal(requests[0]?.nodeId, 'child'); assert.equal(requests[0]?.workdirId, 'opaque')
   assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested', args: ['one'] })
   assert.equal(requests[0]?.turnId, 'turn')
   assert(!JSON.stringify(requests).includes('SHADOW_SESSION_DATA_DIR'))
@@ -174,16 +174,28 @@ test('explicit Child selection routes exec independently of committed session cw
   const { tool, context, requests } = fixture()
   const remoteWorkdir = context.remoteWorkdir!
   const local: ExecutionContext = { ...context, remoteWorkdir: undefined,
-    resolveToolTarget(nodeId, capabilityId) {
-      assert.equal(nodeId, 'child'); assert.equal(capabilityId, 'opaque')
-      return { cwd: undefined, remoteWorkdir }
+    async resolveToolTarget(folder, operation) {
+      assert.equal(folder, 'child-folder'); assert.equal(operation, 'workdir.process.execute-once')
+      return { cwd: undefined, remoteWorkdir, fileChangeTarget: { nodeId: 'child', workdirId: 'opaque' } }
     },
   }
-  assert.equal(await tool.execute({ nodeId: 'child', capabilityId: 'opaque', script: 'pwd', cwd: 'nested' }, local), '(no output, exit code 0)')
+  assert.equal(await tool.execute({ folder: 'child-folder', script: 'pwd', cwd: 'nested' }, local), '(no output, exit code 0)')
   assert.equal(requests.length, 1)
   assert.equal(requests[0]?.nodeId, 'child')
   assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested' })
-  assert.match(requireToolText(await tool.execute({ nodeId: 'child', capabilityId: 'opaque', shell: 'node', script: '1' }, local)), /not supported on remote/)
+  assert.match(requireToolText(await tool.execute({ folder: 'child-folder', shell: 'node', script: '1' }, local)), /not supported on remote/)
   assert.equal(requests.length, 1)
   assert.equal(local.remoteWorkdir, undefined)
+})
+
+test('recovering a saved local target never falls through into a new local process', async () => {
+  let attempts = 0
+  const { context } = fixture()
+  const tool = new ExecTool(process.cwd(), 1000, new CommandHandlerManager(), {} as ProcessManager, 'sh',
+    {} as BackgroundTaskManager, { async startProcess() { attempts++; throw new Error('Must not spawn') } })
+  const local: ExecutionContext = { ...context, recoveringToolCall: true, remoteWorkdir: undefined,
+    async resolveStoredToolTarget(nodeId, workdirId) { return { cwd: process.cwd(), fileChangeTarget: { nodeId, workdirId } } } }
+  await assert.rejects(tool.execute({ nodeId: 'local', capabilityId: 'local-project-v1:original', script: 'old command' }, local), ToolOutcomeUnknownError)
+  await assert.rejects(tool.execute({ script: 'old command', shell: 'node' }, local), ToolOutcomeUnknownError)
+  assert.equal(attempts, 0)
 })

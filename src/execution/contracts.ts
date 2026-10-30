@@ -1,3 +1,23 @@
+import { isExecutionIdentifier, NODE_OPERATIONS, IMPLEMENTED_OPERATIONS } from './workdir-contracts.ts'
+
+export interface ExecutionRequestV2 {
+  version: 2
+  jobId: string
+  idempotencyKey: string
+  sessionId: string
+  turnId: string
+  nodeId: string
+  workdirId?: string
+  operation: string
+  args: unknown
+  createdAt: string
+  deadlineAt: string
+  /** Host-only until ProjectExecutor injects the runtime-bound Project scope. */
+  projectScope?: string
+}
+export interface JobRequestV2 extends ExecutionRequestV2 { projectScope: string }
+
+/** Read-only journal migration input. Never accepted at the live execution boundary. */
 export interface JobRequestV1 {
   version: 1
   jobId: string
@@ -46,6 +66,8 @@ export interface ExecutionReceiptV1 {
   exitCode?: number
   signal?: string
   reason?: JobReasonV1
+  /** Set only when replaying a verified journal receipt; identifies its original transport job. */
+  reconciledJobId?: string
 }
 
 interface JobEventBaseV1 {
@@ -220,6 +242,31 @@ export function validateJobRequestV1(value: unknown): ValidationResult<JobReques
   return result(errors, value as unknown as JobRequestV1)
 }
 
+export function validateExecutionRequestV2(value: unknown): ValidationResult<ExecutionRequestV2> {
+  if (!isRecord(value)) return { success: false, errors: ['request must be an object'] }
+  const errors: string[] = []
+  hasOnlyKeys(value, ['version', 'jobId', 'idempotencyKey', 'sessionId', 'turnId', 'nodeId', 'workdirId', 'operation', 'args', 'createdAt', 'deadlineAt', 'projectScope'], errors)
+  if (value.version !== 2) errors.push('version must be 2; upgrade both Main and Child')
+  for (const key of ['jobId', 'idempotencyKey', 'sessionId', 'turnId', 'operation']) requireString(value, key, errors)
+  if (!isExecutionIdentifier(value.nodeId)) errors.push('nodeId is invalid')
+  if (value.workdirId !== undefined && !isExecutionIdentifier(value.workdirId)) errors.push('workdirId is invalid')
+  if (NODE_OPERATIONS.has(String(value.operation)) !== (value.workdirId === undefined)) errors.push('directory operations require workdirId; node services forbid it')
+  if (!IMPLEMENTED_OPERATIONS.includes(value.operation as typeof IMPLEMENTED_OPERATIONS[number])) errors.push('operation is unsupported')
+  if (!Object.hasOwn(value, 'args')) errors.push('args is required')
+  if (value.projectScope !== undefined && (typeof value.projectScope !== 'string' || !/^[0-9a-f]{32}$/.test(value.projectScope))) errors.push('projectScope must be a managed project scope')
+  requireTimestamp(value, 'createdAt', errors)
+  requireTimestamp(value, 'deadlineAt', errors)
+  if (Date.parse(String(value.deadlineAt)) < Date.parse(String(value.createdAt))) errors.push('deadlineAt must not precede createdAt')
+  return result(errors, value as unknown as ExecutionRequestV2)
+}
+
+export function validateJobRequestV2(value: unknown): ValidationResult<JobRequestV2> {
+  const parsed = validateExecutionRequestV2(value)
+  if (!parsed.success) return parsed
+  if (!parsed.value.projectScope) return { success: false, errors: ['projectScope is required at the wire boundary'] }
+  return { success: true, value: parsed.value as JobRequestV2 }
+}
+
 function validateReason(value: unknown, errors: string[]): value is JobReasonV1 {
   if (!isRecord(value)) {
     errors.push('reason must be an object')
@@ -248,9 +295,11 @@ export function validateExecutionReceiptV1(
     'exitCode',
     'signal',
     'reason',
+    'reconciledJobId',
   ], errors)
   if (value.version !== 1) errors.push('version must be 1')
   requireString(value, 'jobId', errors)
+  if (value.reconciledJobId !== undefined) requireString(value, 'reconciledJobId', errors)
   requireString(value, 'nodeId', errors)
   if (!TERMINAL_STATES.has(value.state as JobTerminalStateV1)) {
     errors.push('receipt.state must be terminal')

@@ -1,14 +1,15 @@
+import { validateExecutionSupport, validateWorkdirAdvertisement, type WorkdirAdvertisement } from '../execution/workdir-contracts.ts'
 import type {
   JobEventV1,
-  JobRequestV1,
+  JobRequestV2,
   ValidationResult,
 } from '../execution/contracts.ts'
 import {
   validateJobEventV1,
-  validateJobRequestV1,
+  validateJobRequestV2,
 } from '../execution/contracts.ts'
 import type {
-  CapabilityDescriptorV1,
+  ExecutionSupport,
   DeviceCredentialId,
   DeviceId,
   NodeId,
@@ -16,7 +17,6 @@ import type {
 } from './contracts.ts'
 import {
   isClusterIdentifier,
-  validateCapabilityDescriptorV1,
   validateVersionHelloV1,
 } from './contracts.ts'
 import type { NegotiatedVersionV1 } from './registry.ts'
@@ -43,15 +43,9 @@ export type NodeSessionInboundFrameV1 =
       credentialId: DeviceCredentialId
     }
   })
-  | (InboundFrameBaseV1 & {
-    type: 'capability-advertise'
-    capability: CapabilityDescriptorV1
-  })
-  | (InboundFrameBaseV1 & {
-    type: 'capability-withdraw'
-    nodeId: NodeId
-    capabilityId: string
-  })
+  | (InboundFrameBaseV1 & { type: 'workdir-advertise'; workdir: WorkdirAdvertisement })
+  | (InboundFrameBaseV1 & { type: 'workdir-withdraw'; nodeId: NodeId; workdirId: string })
+  | (InboundFrameBaseV1 & { type: 'node-support'; nodeId: NodeId; support: ExecutionSupport })
   | (InboundFrameBaseV1 & { type: 'job-event'; event: JobEventV1 })
   | (InboundFrameBaseV1 & { type: 'heartbeat'; sentAt: string })
 
@@ -65,7 +59,7 @@ export type NodeSessionOutboundFrameV1 =
     type: 'authenticated'
     negotiated: NegotiatedVersionV1
   })
-  | (OutboundFrameBaseV1 & { type: 'job-request'; request: JobRequestV1 })
+  | (OutboundFrameBaseV1 & { type: 'job-request'; request: JobRequestV2 })
   | (OutboundFrameBaseV1 & { type: 'job-cancel'; jobId: string })
   | (OutboundFrameBaseV1 & { type: 'heartbeat'; sentAt: string })
 
@@ -184,26 +178,18 @@ export function validateNodeSessionInboundFrameV1(
         }
       }
     }
-  } else if (value.type === 'capability-advertise') {
-    hasOnlyKeys(value, ['version', 'sequence', 'type', 'capability'], errors)
-    const capability = validateCapabilityDescriptorV1(value.capability)
-    if (!capability.success) {
-      errors.push(...capability.errors.map((error) => `capability.${error}`))
-    }
-  } else if (value.type === 'capability-withdraw') {
-    hasOnlyKeys(value, [
-      'version',
-      'sequence',
-      'type',
-      'nodeId',
-      'capabilityId',
-    ], errors)
-    if (!isClusterIdentifier(value.nodeId)) {
-      errors.push('nodeId must be a valid identifier')
-    }
-    if (!isClusterIdentifier(value.capabilityId)) {
-      errors.push('capabilityId must be a valid identifier')
-    }
+  } else if (value.type === 'workdir-advertise') {
+    hasOnlyKeys(value, ['version', 'sequence', 'type', 'workdir'], errors)
+    const parsed = validateWorkdirAdvertisement(value.workdir)
+    if (!parsed.success) errors.push(...parsed.errors)
+  } else if (value.type === 'workdir-withdraw') {
+    hasOnlyKeys(value, ['version', 'sequence', 'type', 'nodeId', 'workdirId'], errors)
+    if (!isClusterIdentifier(value.nodeId) || !isClusterIdentifier(value.workdirId)) errors.push('invalid workdir identifiers')
+  } else if (value.type === 'node-support') {
+    hasOnlyKeys(value, ['version', 'sequence', 'type', 'nodeId', 'support'], errors)
+    if (!isClusterIdentifier(value.nodeId)) errors.push('nodeId is invalid')
+    const support = validateExecutionSupport(value.support, 'node')
+    if (!support.success) errors.push(...support.errors)
   } else if (value.type === 'job-event') {
     hasOnlyKeys(value, ['version', 'sequence', 'type', 'event'], errors)
     const event = validateJobEventV1(value.event)
@@ -254,7 +240,7 @@ export function validateNodeSessionOutboundFrameV1(
     }
   } else if (value.type === 'job-request') {
     hasOnlyKeys(value, ['version', 'sequence', 'type', 'request'], errors)
-    const request = validateJobRequestV1(value.request)
+    const request = validateJobRequestV2(value.request)
     if (!request.success) {
       errors.push(...request.errors.map((error) => `request.${error}`))
     }

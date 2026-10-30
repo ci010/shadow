@@ -8,7 +8,7 @@ import { decodeReadText } from './read-text.ts'
 import type { ExecutionContext } from './context.ts'
 import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { CapabilityFilesystem } from '../execution/capability-filesystem.ts'
-import type { JobRequestV1 } from '../execution/contracts.ts'
+import type { ExecutionRequestV2 } from '../execution/contracts.ts'
 
 test('strict decoding tolerates only cap-induced incomplete characters', () => {
   const cap = 256 * 1024
@@ -79,14 +79,14 @@ test('local edits/appends and capability appends leave non-UTF8 bytes intact', a
   t.after(() => rm(root, { recursive: true, force: true }))
   const context = { cwd: root, sessionId: 'encoding', physicalSessionId: 'encoding-0', signal: new AbortController().signal } as ExecutionContext
   const writer = new WriteTool(root)
-  const fs = new CapabilityFilesystem([{ capabilityId: 'workdir', rootPath: root }])
+  const fs = new CapabilityFilesystem([{ workdirId: 'workdir', rootPath: root }])
   for (const bytes of [Buffer.from([0xd6, 0xd0]), Buffer.from('\ufeff中', 'utf16le'), Buffer.from([97, 0, 98])]) {
     await writeFile(join(root, 'text.txt'), bytes)
     for (const args of [{ match: 'a', content: 'b' }, { flag: 'a', content: 'tail' }]) {
       await assert.rejects(writer.execute({ path: 'text.txt', ...args }, context), /requires UTF-8/)
       assert.deepEqual(await readFile(join(root, 'text.txt')), bytes)
     }
-    await assert.rejects(fs.execute({ capabilityId: 'workdir', operation: 'filesystem.write', args: { path: 'text.txt', mode: 'append', content: 'tail' } } as JobRequestV1, context.signal), /requires UTF-8/)
+    await assert.rejects(fs.execute({ nodeId: 'child', workdirId: 'workdir', operation: 'filesystem.write', args: { path: 'text.txt', mode: 'append', content: 'tail' } } as ExecutionRequestV2, context.signal), /requires UTF-8/)
     assert.deepEqual(await readFile(join(root, 'text.txt')), bytes)
   }
 })

@@ -5,7 +5,7 @@ import type { ExecutionContext } from './context.ts'
 import type {
   CancelReceiptV1,
   JobEventV1,
-  JobRequestV1,
+  ExecutionRequestV2,
   JobStatusV1,
 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
@@ -13,9 +13,9 @@ import { ReadTool } from './read.ts'
 import { Tools } from './registry.ts'
 
 class RecordingExecutor implements Executor {
-  request?: JobRequestV1
+  request?: ExecutionRequestV2
 
-  async *execute(request: JobRequestV1): AsyncIterable<JobEventV1> {
+  async *execute(request: ExecutionRequestV2): AsyncIterable<JobEventV1> {
     this.request = request
     const timestamp = new Date().toISOString()
     yield {
@@ -63,7 +63,7 @@ function context(executor: Executor): ExecutionContext {
     signal: new AbortController().signal,
     remoteWorkdir: {
       nodeId: 'child-1',
-      capabilityId: 'workdir-1',
+      workdirId: 'workdir-1',
       executor,
     },
   }
@@ -81,7 +81,7 @@ test('ReadTool dispatches remote workdir reads as capability jobs', async () => 
     '2  second\n\n[truncated: showing lines 2–2 of 3 — use offset=3 to read more]',
   )
   assertEquals(executor.request?.nodeId, 'child-1')
-  assertEquals(executor.request?.capabilityId, 'workdir-1')
+  assertEquals(executor.request?.workdirId, 'workdir-1')
   assertEquals(executor.request?.operation, 'filesystem.read')
   assertEquals(executor.request?.args, { path: 'notes.txt' })
 })

@@ -1,21 +1,21 @@
+import { validateExecutionSupport, validateWorkdirAdvertisement, type WorkdirAdvertisement } from '../execution/workdir-contracts.ts'
 import type {
   ApprovedNodeV1,
-  CapabilityDescriptorV1,
+  ExecutionSupport,
   DeviceCredentialId,
   DeviceId,
   NodeId,
   PairingOfferV1,
   PendingPairingId,
   PendingPairingV1,
-  RegistrySnapshotV1,
+  RegistrySnapshotV2,
   RevokedNodeV1,
   VersionHelloV1,
 } from './contracts.ts'
 import {
   isClusterIdentifier,
-  validateCapabilityDescriptorV1,
   validatePairingNodeStateV1,
-  validateRegistrySnapshotV1,
+  validateRegistrySnapshot,
   validateVersionHelloV1,
 } from './contracts.ts'
 
@@ -88,10 +88,9 @@ export class InMemoryPairingNodeRegistry {
   readonly #consumedOffers = new Set<string>()
   readonly #pending = new Map<PendingPairingId, PendingPairingV1>()
   readonly #nodes = new Map<string, ApprovedNodeV1 | RevokedNodeV1>()
-  readonly #capabilities = new Map<
-    NodeId,
-    Map<string, CapabilityDescriptorV1>
-  >()
+  readonly #nodeSupport = new Map<NodeId, ExecutionSupport>()
+
+  readonly #workdirs = new Map<NodeId, Map<string, WorkdirAdvertisement>>()
 
   #identityExists(deviceId: DeviceId, nodeId: NodeId): boolean {
     return [...this.#pending.values()].some((record) =>
@@ -287,7 +286,8 @@ export class InMemoryPairingNodeRegistry {
       throw new RegistryError('invalid-contract', validation.errors.join('; '))
     }
     this.#nodes.set(nodeKey(revoked.deviceId, revoked.nodeId), revoked)
-    this.#capabilities.delete(revoked.nodeId)
+    this.#nodeSupport.delete(revoked.nodeId)
+    this.#workdirs.delete(revoked.nodeId)
     return structuredClone(revoked)
   }
 
@@ -320,58 +320,38 @@ export class InMemoryPairingNodeRegistry {
     return negotiateVersion(localHello, remoteHello)
   }
 
-  advertiseCapability(
-    auth: DeviceAuthenticationV1,
-    value: unknown,
-  ): CapabilityDescriptorV1 {
+  advertiseNodeSupport(auth: DeviceAuthenticationV1, nodeId: string, value: unknown): ExecutionSupport {
     this.authenticate(auth)
-    const validation = validateCapabilityDescriptorV1(value)
-    if (!validation.success) {
-      throw new RegistryError('invalid-contract', validation.errors.join('; '))
-    }
-    if (validation.value.nodeId !== auth.nodeId) {
-      throw new RegistryError(
-        'capability-denied',
-        'capability nodeId does not match authenticated node',
-      )
-    }
-    const nodeCapabilities = this.#capabilities.get(auth.nodeId) ?? new Map()
-    nodeCapabilities.set(
-      validation.value.capabilityId,
-      structuredClone(validation.value),
-    )
-    this.#capabilities.set(auth.nodeId, nodeCapabilities)
-    return structuredClone(validation.value)
+    if (nodeId !== auth.nodeId) throw new RegistryError('capability-denied', 'Support node does not match authenticated node')
+    const parsed = validateExecutionSupport(value, 'node')
+    if (!parsed.success) throw new RegistryError('invalid-contract', parsed.errors.join('; '))
+    this.#nodeSupport.set(nodeId, parsed.value)
+    return structuredClone(parsed.value)
   }
 
-  withdrawCapability(
-    auth: DeviceAuthenticationV1,
-    nodeId: NodeId,
-    capabilityId: string,
-  ): boolean {
+  advertiseWorkdir(auth: DeviceAuthenticationV1, value: unknown): WorkdirAdvertisement {
     this.authenticate(auth)
-    if (nodeId !== auth.nodeId) {
-      throw new RegistryError(
-        'capability-denied',
-        'capability nodeId does not match authenticated node',
-      )
-    }
-    if (!isClusterIdentifier(capabilityId)) {
-      throw new RegistryError(
-        'invalid-contract',
-        'capabilityId must be a valid identifier',
-      )
-    }
-    const nodeCapabilities = this.#capabilities.get(nodeId)
-    const withdrawn = nodeCapabilities?.delete(capabilityId) ?? false
-    if (nodeCapabilities?.size === 0) this.#capabilities.delete(nodeId)
-    return withdrawn
+    const parsed = validateWorkdirAdvertisement(value)
+    if (!parsed.success) throw new RegistryError('invalid-contract', parsed.errors.join('; '))
+    if (parsed.value.nodeId !== auth.nodeId) throw new RegistryError('capability-denied', 'Workdir node does not match authenticated node')
+    const workdirs = this.#workdirs.get(auth.nodeId) ?? new Map()
+    workdirs.set(parsed.value.workdirId, structuredClone(parsed.value))
+    this.#workdirs.set(auth.nodeId, workdirs)
+    return structuredClone(parsed.value)
   }
 
-  listCapabilities(nodeId: NodeId): CapabilityDescriptorV1[] {
-    return [...(this.#capabilities.get(nodeId)?.values() ?? [])].map((value) =>
-      structuredClone(value)
-    )
+  withdrawWorkdir(auth: DeviceAuthenticationV1, nodeId: string, workdirId: string): boolean {
+    this.authenticate(auth)
+    if (auth.nodeId !== nodeId || !isClusterIdentifier(workdirId)) throw new RegistryError('capability-denied', 'Invalid workdir withdrawal')
+    return this.#workdirs.get(nodeId)?.delete(workdirId) ?? false
+  }
+
+  listWorkdirs(nodeId: NodeId): WorkdirAdvertisement[] {
+    return [...(this.#workdirs.get(nodeId)?.values() ?? [])].map(value => structuredClone(value))
+  }
+
+  nodeSupport(nodeId: NodeId): ExecutionSupport {
+    return structuredClone(this.#nodeSupport.get(nodeId) ?? { operations: [] })
   }
 
   getPending(): PendingPairingV1[] {
@@ -398,9 +378,10 @@ export class InMemoryPairingNodeRegistry {
     return revoked ? 'revoked' : 'missing'
   }
 
-  exportSnapshot(now: Date): RegistrySnapshotV1 {
+  exportSnapshot(now: Date): RegistrySnapshotV2 {
     return {
-      version: 1,
+      version: 2,
+      workdirs: [...this.#workdirs.values()].flatMap(workdirs => [...workdirs.values()].map(value => structuredClone(value))),
       createdAt: timestamp(now),
       offers: [...this.#offers.values()].map((value) => structuredClone(value)),
       consumedOfferIds: [...this.#consumedOffers],
@@ -408,16 +389,12 @@ export class InMemoryPairingNodeRegistry {
         structuredClone(value)
       ),
       nodes: [...this.#nodes.values()].map((value) => structuredClone(value)),
-      capabilities: [...this.#capabilities.values()].flatMap((
-        nodeCapabilities,
-      ) =>
-        [...nodeCapabilities.values()].map((value) => structuredClone(value))
-      ),
+      nodeSupport: [...this.#nodeSupport].map(([nodeId, support]) => ({ nodeId, support: structuredClone(support) })),
     }
   }
 
   restoreSnapshot(value: unknown, now: Date): void {
-    const validation = validateRegistrySnapshotV1(value)
+    const validation = validateRegistrySnapshot(value)
     if (!validation.success) {
       throw new RegistryError('invalid-contract', validation.errors.join('; '))
     }
@@ -426,7 +403,8 @@ export class InMemoryPairingNodeRegistry {
     const consumedOffers = new Set(snapshot.consumedOfferIds)
     const pending = new Map<PendingPairingId, PendingPairingV1>()
     const nodes = new Map<string, ApprovedNodeV1 | RevokedNodeV1>()
-    const capabilities = new Map<NodeId, Map<string, CapabilityDescriptorV1>>()
+    const nodeSupport = new Map<NodeId, ExecutionSupport>()
+    const workdirs = new Map<NodeId, Map<string, WorkdirAdvertisement>>()
 
     const duplicateOfferId = duplicate(
       snapshot.offers.map((offer) => offer.offerId),
@@ -491,38 +469,33 @@ export class InMemoryPairingNodeRegistry {
     const nodesById = new Map(
       snapshot.nodes.map((record) => [record.nodeId, record]),
     )
-    for (const capability of snapshot.capabilities) {
-      const node = nodesById.get(capability.nodeId)
-      if (!node) {
-        throw new RegistryError(
-          'invalid-contract',
-          'capability references an unknown node',
-        )
-      }
+    for (const workdir of snapshot.workdirs) {
+      const node = nodesById.get(workdir.nodeId)
+      if (!node) throw new RegistryError('invalid-contract', 'Workdir references unknown node')
       if (node.state === 'revoked') continue
-      const nodeCapabilities = capabilities.get(capability.nodeId) ?? new Map()
-      if (nodeCapabilities.has(capability.capabilityId)) {
-        throw new RegistryError(
-          'invalid-contract',
-          'registry snapshot contains duplicate capabilities',
-        )
-      }
-      nodeCapabilities.set(capability.capabilityId, structuredClone(capability))
-      capabilities.set(capability.nodeId, nodeCapabilities)
+      const entries = workdirs.get(workdir.nodeId) ?? new Map()
+      if (entries.has(workdir.workdirId)) throw new RegistryError('invalid-contract', 'Duplicate workdir identity')
+      entries.set(workdir.workdirId, structuredClone(workdir))
+      workdirs.set(workdir.nodeId, entries)
+    }
+    for (const entry of snapshot.nodeSupport) {
+      const node = nodesById.get(entry.nodeId)
+      if (!node || nodeSupport.has(entry.nodeId)) throw new RegistryError('invalid-contract', 'Invalid/duplicate node support')
+      if (node.state !== 'revoked') nodeSupport.set(entry.nodeId, structuredClone(entry.support))
     }
 
     this.#offers.clear()
     this.#consumedOffers.clear()
     this.#pending.clear()
     this.#nodes.clear()
-    this.#capabilities.clear()
+    this.#nodeSupport.clear()
+    this.#workdirs.clear()
+    for (const [key, entries] of workdirs) this.#workdirs.set(key, entries)
     for (const [key, offer] of offers) this.#offers.set(key, offer)
     for (const offerId of consumedOffers) this.#consumedOffers.add(offerId)
     for (const [key, record] of pending) this.#pending.set(key, record)
     for (const [key, record] of nodes) this.#nodes.set(key, record)
-    for (const [key, nodeCapabilities] of capabilities) {
-      this.#capabilities.set(key, nodeCapabilities)
-    }
+    for (const [key, support] of nodeSupport) this.#nodeSupport.set(key, support)
   }
 }
 

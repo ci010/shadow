@@ -1,4 +1,12 @@
 {
+  "Supported operations": "Supported operations",
+  "Update Main and this device": "Update Main and this device",
+  "The selected remote workspace is invalid. Select its original project folder again. No local folder was used.": "The selected remote workspace is invalid. Select its original project folder again. No local folder was used.",
+  "This device uses an incompatible execution protocol. Update Main and the device, then retry. No local folder was used.": "This device uses an incompatible execution protocol. Update Main and the device, then retry. No local folder was used.",
+  "Access to this folder resource was revoked. Select an authorized project folder.": "Access to this folder resource was revoked. Select an authorized project folder.",
+  "This folder resource is no longer available on the owning device.": "This folder resource is no longer available on the owning device.",
+  "The folder resource is unavailable on the owning device. Restore the folder and check again.": "The folder resource is unavailable on the owning device. Restore the folder and check again.",
+  "An existing remote folder could not be verified. Restore and reconnect its original folder resource before retrying. No local folder was used.": "An existing remote folder could not be verified. Restore and reconnect its original folder resource before retrying. No local folder was used.",
   "{name} dashboard": "{name} dashboard",
   "Signed out of Copilot instance {account} on {host}. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged.": "Signed out of Copilot instance {account} on {host}. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged.",
   "Remove the saved Copilot sign-in for instance {account} on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.": "Remove the saved Copilot sign-in for instance {account} on {host}? This affects all projects using this instance. Other instances, including accounts on the same host, and sign-ins on other hosts are unchanged. It does not sign you out in your browser or revoke the GitHub authorization.",
@@ -1922,7 +1930,6 @@
   "No allowlist or blocklist declared.": "No allowlist or blocklist declared.",
   "No background tasks running.": "No background tasks running.",
   "No bots yet. Add a bot, then configure its credentials to connect it.": "No bots yet. Add a bot, then configure its credentials to connect it.",
-  "No capabilities advertised.": "No capabilities advertised.",
   "No change": "No change",
   "No change is applied until you approve the review.": "No change is applied until you approve the review.",
   "No channels or DMs are assigned to this Bot.": "No channels or DMs are assigned to this Bot.",
@@ -4113,5 +4120,12 @@
   "Scheduled tasks are unavailable. Retry to reconnect.": "Scheduled tasks are unavailable. Retry to reconnect.",
   "Invalid scheduled task data.": "Invalid scheduled task data.",
   "No scheduled tasks.": "No scheduled tasks.",
-  "Next run": "Next run"
+  "Next run": "Next run",
+  "Devices, directories, and supported operations.": "Devices, directories, and supported operations.",
+  "Directories and supported operations on this Child.": "Directories and supported operations on this Child.",
+  "Directories": "Directories",
+  "No directories advertised.": "No directories advertised.",
+  "Device operations": "Device operations",
+  "Support is not project permission. Select a registered project folder to use a directory.": "Support is not project permission. Select a registered project folder to use a directory.",
+  "Available shells": "Available shells"
 }

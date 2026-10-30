@@ -217,7 +217,7 @@ test(`web admission, channel fanout, commands and retry follow one directed inpu
   assert.doesNotMatch(forkHistory, /Synthetic answer/, 'The fork stops at the requested message')
   const remoteDisplayPath = join(workspace, 'remote-display-path-not-a-local-directory')
   await sessions.buildSession('web:command-remote', undefined, { workdir: {
-    version: 1, nodeId: 'remote-node', capabilityId: 'remote-capability', displayPathSnapshot: remoteDisplayPath,
+    version: 2, nodeId: 'remote-node', workdirId: 'remote-capability', displayPathSnapshot: remoteDisplayPath,
   } })
   await sessions.prepareCommandSession('web:command-remote')
   assert((await stat(resolveSessionLocations(workspace, sessions.getSessionState('web:command-remote')!).sessionDataDir)).isDirectory())

@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
 import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 import type { CronContextMode } from './contracts.ts'
-import { parseWorkdirRefV1, type WorkdirRefV1 } from '../sessions/locality.ts'
+import { parseWorkdirRef, type WorkdirRefV2 } from '../sessions/locality.ts'
 import { validateOwnership } from '../projects/ownership.ts'
 import { normalizeInitiativeMetadata, parseInitiativeId } from '../sessions/initiative-metadata.ts'
 import {
@@ -27,7 +27,7 @@ export interface CronJobDef {
   folderId?: string
   initiativeId?: string
   workspaceRoot?: string
-  workdir?: WorkdirRefV1
+  workdir?: WorkdirRefV2
   schedule: string
   task?: string
   target?: CronEventTarget
@@ -71,8 +71,34 @@ function isCronJob(value: unknown): value is CronJob {
   for (const field of ['name', 'agentType', 'originSessionId', 'folderId', 'initiativeId', 'workspaceRoot']) {
     if (v[field] !== undefined && (typeof v[field] !== 'string' || !v[field])) return false
   }
-  if (v.workdir !== undefined && !parseWorkdirRefV1(v.workdir)) return false
+  if (v.workdir !== undefined) {
+    const workdir = parseWorkdirRef(v.workdir)
+    if (!workdir) return false
+    v.workdir = workdir
+  }
   return true
+}
+
+/** Pure persisted reader, also used by startup ownership scanning without starting timers. */
+export function parseStoredCronJobs(store: unknown, projectId?: string): { jobs: CronJob[]; initializedDefaults: string[] } {
+  if (Array.isArray(store)) throw new TypeError('Legacy cron schedules are not converted or executed; recreate them with standard cron weekdays')
+  if (!store || typeof store !== 'object' || !('version' in store) || store.version !== 1 ||
+    !('jobs' in store) || !Array.isArray(store.jobs)) throw new TypeError('Expected { version: 1, jobs: [...] } cron storage')
+  if (!('ownershipVersion' in store) || store.ownershipVersion !== 2) throw new TypeError('Unsupported cron ownership version')
+  const defaults = 'initializedDefaults' in store ? store.initializedDefaults : []
+  if (!Array.isArray(defaults) || defaults.some(key => typeof key !== 'string' || !key)) throw new TypeError('Invalid automation defaults')
+  const ids = new Set<string>()
+  const jobs = store.jobs.map(raw => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new TypeError('Invalid cron job')
+    const { ownershipVersion: _, projectId: owner, ...job } = normalizeInitiativeMetadata(validateOwnership({
+      ...raw, projectId: raw.projectId === undefined ? projectId : raw.projectId, ownershipVersion: store.ownershipVersion,
+    }))
+    if (owner !== undefined && owner !== projectId) throw new TypeError('Cron job belongs to another project')
+    if (!isCronJob(job) || ids.has(job.id)) throw new TypeError('Invalid or duplicate cron job')
+    ids.add(job.id)
+    return job
+  })
+  return { jobs, initializedDefaults: defaults as string[] }
 }
 
 export function cronContextMode(job: CronJobDef): CronContextMode {
@@ -411,36 +437,10 @@ export class CronService {
   private async loadJobs(): Promise<void> {
     const raw = await readFileIfExists(this.jobsPath)
     if (raw === undefined) return
-    const store: unknown = JSON.parse(raw)
-    if (Array.isArray(store)) {
-      throw new Error(
-        `[cron] Legacy jobs file: ${this.jobsPath}. Back it up outside jobs.json and recreate the jobs with standard cron weekdays (0=Sunday, 1=Monday). Legacy schedules are not converted or executed.`,
-      )
-    }
-    if (
-      !store || typeof store !== 'object' ||
-      !('version' in store) || store.version !== 1 ||
-      !('jobs' in store) || !Array.isArray(store.jobs)
-    ) {
-      throw new TypeError(`[cron] Expected { version: 1, jobs: [...] } in ${this.jobsPath}`)
-    }
-    const jobs = new Map<string, CronJob>()
-    const defaults = 'initializedDefaults' in store ? store.initializedDefaults : []
-    if (!Array.isArray(defaults) || defaults.some(key => typeof key !== 'string' || !key)) throw new TypeError('Invalid automation defaults')
-    if (!('ownershipVersion' in store) || store.ownershipVersion !== 2) throw new TypeError('Unsupported cron ownership version')
-    for (const raw of store.jobs) {
-      if (!raw || typeof raw !== 'object') throw new TypeError('Invalid cron job')
-      const { ownershipVersion: _, projectId, ...job } = normalizeInitiativeMetadata(validateOwnership({
-        ...raw, ownershipVersion: store.ownershipVersion,
-      }))
-      if (projectId !== undefined && projectId !== this.scope?.projectId) throw new TypeError('Cron job belongs to another project')
-      if (!isCronJob(job) || jobs.has(job.id) || this.maintenance.has(job.id)) {
-        throw new TypeError(`[cron] Invalid or duplicate job in ${this.jobsPath}`)
-      }
-      jobs.set(job.id, job)
-    }
-    this.jobs = jobs
-    this.initializedDefaults = new Set(defaults)
+    const parsed = parseStoredCronJobs(JSON.parse(raw), this.scope?.projectId)
+    if (parsed.jobs.some(job => this.maintenance.has(job.id))) throw new TypeError('Cron job conflicts with maintenance')
+    this.jobs = new Map(parsed.jobs.map(job => [job.id, job]))
+    this.initializedDefaults = new Set(parsed.initializedDefaults)
   }
 
   async flush(): Promise<void> {

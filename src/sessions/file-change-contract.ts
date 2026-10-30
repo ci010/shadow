@@ -42,7 +42,12 @@ export const fileChangeSchema = z.object({
   timestamp: z.string().datetime().optional(),
   path: z.string().min(1).max(4096),
   /** Absent in legacy records; never infer their device from current session locality. */
-  target: z.object({ nodeId: z.string().min(1), capabilityId: z.string().min(1) }).optional(),
+  target: z.union([
+    z.object({ nodeId: z.string().min(1), workdirId: z.string().min(1), folderId: z.string().min(1).optional() }).strict(),
+    z.object({ nodeId: z.string().min(1), resourceId: z.string().min(1), folderId: z.string().min(1).optional() }).strict(),
+    // Historical event DTO: retain its exact identity instead of rewriting history.
+    z.object({ nodeId: z.string().min(1), capabilityId: z.string().min(1) }).strict(),
+  ]).optional(),
   mode: z.enum(['write', 'edit', 'append']),
   patch: z.string().max(MAX_FILE_CHANGE_CHARS).refine(validPatch, 'Invalid recorded patch'),
   unavailable: z.string().optional(),

@@ -73,11 +73,11 @@ function mount(t: TestContext, props: Record<string, unknown>) {
   return { button, click, text: () => text(root) }
 }
 
-test('rendered picker offers other local folders and registered remote folders, never another project capability', async t => {
+test('rendered picker offers other local folders and registered remote folders, never an unregistered resource', async t => {
   const local: FolderRecord = { id: 'local', projectId: 'a', name: 'Local source', path: 'C:\\fixture\\source', createdAt: '2026-09-17' }
   const remote: FolderRecord = {
     id: 'remote', projectId: 'a', name: 'Remote source', path: '/display/source', createdAt: '2026-09-17', kind: 'remote',
-    workdir: { version: 1, nodeId: 'laptop', capabilityId: 'source' },
+    workdir: { version: 2, nodeId: 'laptop', workdirId: 'source' },
     identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
   }
   const requests: string[] = []
@@ -91,12 +91,12 @@ test('rendered picker offers other local folders and registered remote folders, 
     ] })
     assert.equal(path, '/nodes/v1')
     return Response.json({ version: 1, nodes: [{
-      nodeId: 'laptop', displayName: 'Laptop', role: 'child', connection: 'connected', supportsManagedSessions: true,
-      capabilities: [
-        { capabilityId: 'source', displayName: 'Remote source', kind: 'workdir', online: true },
-        { capabilityId: 'foreign', displayName: 'Foreign capability', displayPath: '/foreign/private', kind: 'workdir', online: true },
-      ],
-    }, { nodeId: 'old', displayName: 'Old device', role: 'child', connection: 'connected', capabilities: [] }] })
+      nodeId: 'laptop', displayName: 'Laptop', role: 'child', connection: 'connected', supportsManagedSessions: true, executionProtocol: 'compatible',
+      workdirs: [
+        { version: 2 as const, nodeId: 'laptop', workdirId: 'source', displayName: 'Remote source', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } },
+        { version: 2 as const, nodeId: 'laptop', workdirId: 'foreign', displayName: 'Foreign resource', displayPath: '/foreign/private', online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute','workdir.process.execute-once','workdir.process.reconcile'] } },
+      ], support: { operations: ['workdir.session.allocate'] },
+    }, { nodeId: 'old', displayName: 'Old device', role: 'child', connection: 'connected', executionProtocol: 'upgrade-required', workdirs: [], support: { operations: [] } }] })
   })
   const selections: Array<ExecutionLocation | undefined> = []
   const props = reactive({
@@ -112,10 +112,10 @@ test('rendered picker offers other local folders and registered remote folders, 
   assert.match(view.text(), /Project folders/)
   assert.equal(view.button('Other local folder').props.disabled, false)
   assert.equal(view.button('Remote source').props.disabled, false)
-  assert.doesNotMatch(view.text(), /Foreign folder|Foreign capability|\/foreign\/private/)
+  assert.doesNotMatch(view.text(), /Foreign folder|Foreign resource|\/foreign\/private/)
   assert.equal(view.button('Start from scratch on Laptop').props.disabled, false)
   assert.equal(view.button('Start from scratch on Old device').props.disabled, true)
-  assert.match(view.text(), /Update this device/)
+  assert.match(view.text(), /Update Main and this device/)
   await view.click('Other local folder')
   assert.equal(selections[0]?.kind, 'folder')
   assert.equal(props.folder?.id, 'other-local')

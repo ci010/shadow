@@ -1,4 +1,4 @@
-import { resolveExplicitToolTarget } from '../execution/tool-target.ts'
+import { resolveExplicitToolTarget, resolveWorkdirToolTarget } from '../execution/tool-target.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
 import { prepareWorkingContext } from '../agent/context/working-context.ts'
 import { withRateLimitWaiting, type RateLimitWait } from '../providers/retry.ts'
@@ -37,7 +37,7 @@ import { errDetail, errMsg } from '../utils/truncate.ts'
 import type { SessionStore } from './session-manager.ts'
 import {
   resolveSessionLocations,
-  type WorkdirCapabilityLookup,
+  type WorkdirLookup,
 } from './locality.ts'
 import type { SessionState, StoredMessage } from './session-store.ts'
 import type { Executor } from '../execution/executor.ts'
@@ -75,7 +75,7 @@ export abstract class BaseSession {
     protected readonly tools: SessionTools,
     protected readonly bus: Bus,
     protected readonly store: SessionStore,
-    protected readonly workdirCapabilityLookup?: WorkdirCapabilityLookup,
+    protected readonly workdirLookup?: WorkdirLookup,
     protected readonly remoteExecutor?: Executor,
     protected readonly evalBridge?: ToolBridgeFactory,
     protected readonly promptCaptures?: PromptCaptureStore,
@@ -243,7 +243,7 @@ export abstract class BaseSession {
   protected async ensureWorkingContext(admin = false): Promise<void> {
     if (this.boundedSystemTask) return
     if (this.state.workingContext === undefined) {
-      const workdir = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).workdir
+      const workdir = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup).workdir
       const folder = this.state.folderId ? this.tools.workingContextFolder(this.state.folderId) : undefined
       const content = await prepareWorkingContext(workdir, this.state.folderId, folder, undefined, admin)
       await this.store.saveState(this.id, { ...this.state, workingContext: content })
@@ -291,13 +291,13 @@ export abstract class BaseSession {
     await this.ensureWorkingContext()
     for (let i = 0; budget.remaining > 0; i++) {
       // Resolve at inference boundaries, not by mutating any in-flight call's context.
-      const current = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).workdir
+      const current = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup).workdir
       if (!current.available) throw new Error(`Session workdir unavailable: ${current.reason}`)
       executionContext = { ...executionContext,
         folderId: this.state.folderId,
         cwd: current.locality === 'local' ? current.path : undefined,
         remoteWorkdir: current.locality === 'remote' ? {
-          nodeId: current.workdir.nodeId, capabilityId: current.workdir.capabilityId,
+          nodeId: current.workdir.nodeId, workdirId: current.workdir.workdirId,
           executor: this.remoteExecutor ?? failMissingRemoteExecutor(),
         } : undefined,
       }
@@ -500,7 +500,7 @@ export abstract class BaseSession {
       }
       const transient = transientToolSummary(result)
       const media = typeof result === 'string' || transient !== undefined ? [] : await saveToolImages(
-        resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).sessionDataDir,
+        resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup).sessionDataDir,
         result.content, signal,
       )
       const snapshotText = media.length ? '\nImage snapshots (read these paths to view the same images again):\n' + media.map(path => JSON.stringify(path)).join('\n') : ''
@@ -562,7 +562,7 @@ export abstract class BaseSession {
             switchProjectFolder: calls.length === 1 && tc.name === 'use_project' ? async prepared => {
               signal.throwIfAborted()
               const next = { ...this.state, folderId: prepared.folderId, workdir: prepared.workdir }
-              const resolved = resolveSessionLocations(this.workspace, next, undefined, this.workdirCapabilityLookup).workdir
+              const resolved = resolveSessionLocations(this.workspace, next, undefined, this.workdirLookup).workdir
               if (!resolved.available || resolved.locality !== 'local') throw new Error('Target folder execution unavailable; prior context retained.')
               const content = prepared.content
               // The existing state store is the commit point. Recovery replays this
@@ -703,7 +703,7 @@ export abstract class BaseSession {
         this.workspace,
         this.state,
         undefined,
-        this.workdirCapabilityLookup,
+        this.workdirLookup,
       )
       if (!locations.workdir.available) {
         throw new Error(`Session workdir unavailable: ${locations.workdir.reason}`)
@@ -711,7 +711,7 @@ export abstract class BaseSession {
       const remoteWorkdir = locations.workdir.locality === 'remote'
         ? {
           nodeId: locations.workdir.workdir.nodeId,
-          capabilityId: locations.workdir.workdir.capabilityId,
+          workdirId: locations.workdir.workdir.workdirId,
           executor: this.remoteExecutor ?? failMissingRemoteExecutor(),
         }
         : undefined
@@ -777,8 +777,13 @@ export abstract class BaseSession {
           ? { workUserInput: input.content } : {}),
         cwd,
         folderId: this.state.folderId,
-        resolveToolTarget: (nodeId, capabilityId) => resolveExplicitToolTarget(
-          this.workspace, this.state, this.workdirCapabilityLookup, this.remoteExecutor, nodeId, capabilityId,
+        resolveStoredToolTarget: async (nodeId, workdirId, operation) => resolveWorkdirToolTarget(
+          this.workspace, this.state, this.workdirLookup, this.remoteExecutor,
+          { version: 2, nodeId, workdirId }, operation,
+        ),
+        resolveToolTarget: async (folder, operation) => resolveExplicitToolTarget(
+          this.workspace, this.state, this.workdirLookup, this.remoteExecutor,
+          await this.tools.executionTargetFolder(folder, signal), operation,
         ),
         remoteWorkdir,
         tools: this.tools,
