@@ -1,6 +1,7 @@
 import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import type { TopicService } from '../sessions/topics.ts'
+import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 
 export class SessionTool implements Tool {
   readonly name = 'session'
@@ -16,6 +17,8 @@ export class SessionTool implements Tool {
       requestId: { type: 'string', description: 'Create only: optional UUID; reuse exactly the same request on retry. Initial messages are never replayed.' },
       folderId: { type: 'string', description: 'Create only: current Project folder shortName, name-ID selector or full UUID. Uses the registered folder and its node. Omit for a discussion-only session; never a path.' },
       agentType: { type: 'string', description: 'Create only: agent template name, default general.' },
+      model: { type: 'string', description: 'Create only: optional exact model ID from v:models; omission preserves agent/Project defaults.' },
+      effort: { type: 'string', enum: [...REASONING_EFFORTS], description: 'Create only: optional reasoning effort supported by the selected model; omission preserves agent/Project defaults.' },
       initiativeId: { type: 'string', description: 'Create only: root Work key for an Initiative view (or a legacy Initiative ID), optional; not an assignment.' },
       initialMessage: { type: 'string', description: 'Create only: optional kickoff request, with the necessary context and source references.' },
       work: { type: 'object', description: 'Create only: {key:string}, an unassigned note coordinated by this session. Link responsibility and contextual questions before kickoff; no adoption protocol.' },

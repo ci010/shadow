@@ -757,8 +757,8 @@ export class ImportTool implements Tool {
 
   private contextError(source: string, context: ExecutionContext): string | undefined {
     if (context.remoteWorkdir &&
-      (source !== `${VIRTUAL_TOOLS_PREFIX}initiative` || !this.canInvokeFromRemote('initiative'))) {
-      return 'Error: remote workdirs can import only the built-in Project-Home initiative tool.'
+      (!source.startsWith(VIRTUAL_TOOLS_PREFIX) || !this.canInvokeFromRemote(source.slice(VIRTUAL_TOOLS_PREFIX.length)))) {
+      return 'Error: remote workdirs can import only the built-in Project-Home initiative and session tools.'
     }
     const entry = source.startsWith(VIRTUAL_TOOLS_PREFIX) ? this.loadable.get(source.slice(VIRTUAL_TOOLS_PREFIX.length)) : undefined
     if (entry && isMcpLoadable(entry)) {
@@ -775,7 +775,7 @@ export class ImportTool implements Tool {
 
   canInvokeFromRemote(toolName: string): boolean {
     const entry = this.loadable.get(toolName)
-    return toolName === 'initiative' && entry !== undefined && entry === this.builtins.get(toolName) &&
+    return (toolName === 'initiative' || toolName === 'session') && entry !== undefined && entry === this.builtins.get(toolName) &&
       !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsRemoteWorkdir === true
   }
 

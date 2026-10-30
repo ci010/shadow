@@ -20,7 +20,7 @@ export function capabilityPrompt(text: string, ctx: SessionPromptContext): strin
 // These built-in workflows consist of coordination capabilities, rather than
 // ordinary task execution. Omit their discovery hints when that capability is absent.
 const WORKFLOW_TOOLS: Record<string, string> = {
-  orchestration: 'subagent', cron: 'cron_add', 'event-sources': 'event_source', initiative: 'work', a2a: 'subagent',
+  orchestration: 'subagent', 'peer-sessions': 'session', 'work-coordination': 'work', cron: 'cron_add', 'event-sources': 'event_source', initiative: 'work', a2a: 'subagent',
 }
 
 export function capabilityDiscovery(text: string, ctx: SessionPromptContext): string {
@@ -29,7 +29,7 @@ export function capabilityDiscovery(text: string, ctx: SessionPromptContext): st
     const tool = WORKFLOW_TOOLS[name]
     if (!tool) return entry
     // Remote A2A delegation only implements task, which one-shot workers cannot create.
-    if (name === 'a2a' && mode !== 'session') return ''
+    if ((name === 'a2a' || name === 'peer-sessions') && mode !== 'session') return ''
     return executionModeAllowsTool(mode, tool) && isToolAllowed(ctx.agent, tool) ? entry : ''
   })
 }

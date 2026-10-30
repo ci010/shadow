@@ -34,12 +34,12 @@ test('one-shot role and common guidance omit unavailable operation tutorials', a
 })
 
 test('one-shot discovery omits scheduling, tracking and remote-task workflows', () => {
-  const summary = '<available_skills>\n' + ['cron', 'event-sources', 'initiative', 'a2a', 'chrome-devtools']
+  const summary = '<available_skills>\n' + ['cron', 'event-sources', 'initiative', 'a2a', 'peer-sessions', 'work-coordination', 'chrome-devtools']
     .map(name => `  <skill name="${name}">workflow</skill>\n`).join('') + '</available_skills>'
   assert.match(capabilityDiscovery(summary, ctx('session')), /name="cron"/)
   for (const mode of ['task', 'call'] as const) {
     const hints = capabilityDiscovery(summary, ctx(mode))
-    assert.doesNotMatch(hints, /name="(?:cron|event-sources|initiative|a2a)"/)
+    assert.doesNotMatch(hints, /name="(?:cron|event-sources|initiative|a2a|peer-sessions|work-coordination)"/)
     assert.match(hints, /name="chrome-devtools"/)
   }
 })

@@ -47,7 +47,12 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const changes: (string | undefined)[] = []
     let failDelivery = false
     let builds = 0
+    const validated: unknown[] = []
     const sessions: TopicServiceOptions['sessions'] = {
+      async validateExecutionInference(settings) {
+        validated.push(settings)
+        if (settings.model === 'unsupported') throw new Error('Unsupported model')
+      },
       getSessionState: id => states.get(id) ?? null,
       async buildSession(id, parent, fields) {
         builds++
@@ -88,6 +93,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const { folder } = await service.registerFolder(folderPath)
     const request = {
       requestId: randomUUID(), title: 'MCP configuration',
+      model: 'synthetic', effort: 'high',
       description: 'MCP configuration and skill declarations',
       folderId: folder.id, initiativeId: 'work', initialMessage: 'Read the selected skill and explain how to configure MCP.',
     }
@@ -116,8 +122,20 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.equal((await restartedService.create(request, 'web:chat-admin')).initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, 1)
     assert.equal(builds, 2)
+    assert.deepEqual(validated, [{ model: 'synthetic', reasoningEffort: 'high' }])
+    assert.deepEqual(saved.config, { model: 'synthetic', reasoningEffort: 'high' })
+    assert.deepEqual((await store.getState(created.sessionId))?.config, saved.config)
+    for (const change of [{ model: 'different' }, { effort: 'low' }]) {
+      await assert.rejects(service.create({ ...request, ...change }, 'web:chat-admin'), /requestId/)
+    }
+    await assert.rejects(service.create({ title: 'Bad model', model: 'unsupported' }), /Unsupported model/)
+    for (const fields of [{ model: '' }, { effort: 'invalid' }]) {
+      await assert.rejects(service.create({ title: 'Invalid inference', ...fields }))
+    }
+    assert.equal(builds, 2)
 
     const plain = await service.create({ title: 'Discussion' })
+    assert.equal(states.get(plain.sessionId)?.config, undefined)
     assert.equal(states.get(plain.sessionId)?.topic, undefined)
     assert.equal(states.get(plain.sessionId)?.sessionKind, undefined)
     await assert.rejects(service.create({ title: 'No duplicate goal', goal: 'Not a metadata field' }))
@@ -283,6 +301,12 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const selectedDeliveryCount = deliveries.length
     assert.equal((await retryWithoutRegistry.create(selectorRequest, 'web:chat-admin')).initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, selectedDeliveryCount)
+    const modelOnly = await service.create({ title: 'Model only', model: 'synthetic' })
+    assert.deepEqual(states.get(modelOnly.sessionId)?.config, { model: 'synthetic' })
+    const effortOnlyService = new TopicService({ ...options, resolveAgent: () => ({ defaultMode: 'session', model: 'agent-model', reasoningEffort: 'medium' }) })
+    const effortOnly = await effortOnlyService.create({ title: 'Effort only', effort: 'low' })
+    assert.deepEqual(validated.at(-1), { model: 'agent-model', reasoningEffort: 'low' })
+    assert.deepEqual(states.get(effortOnly.sessionId)?.config, { reasoningEffort: 'low' })
   })
 }
 
@@ -321,6 +345,7 @@ test('session tool resolves Project selectors across nodes without fallback and 
       },
     },
     sessions: {
+      async validateExecutionInference() {},
       getSessionState: id => states.get(id) ?? null,
       assertFolderAccess: id => { assert(states.has(id)) },
       assertInitiativeAccess() {},
