@@ -1,5 +1,5 @@
 import { useLiveClientPool } from './composables/useLiveClient.ts'
-import { observeInteractions } from './interaction-resource.ts'
+import { acquireInteractionRead } from './interaction-resource.ts'
 import { t } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
@@ -55,7 +55,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
   let read: AbortController | undefined
   let write: AbortController | undefined
   const pool = useLiveClientPool()
-  let observer: ReturnType<typeof observeInteractions> | undefined
+  let shared: ReturnType<typeof acquireInteractionRead> | undefined
   let queued = false
   let generation = 0
   let writeError = false
@@ -68,8 +68,8 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
     read?.abort()
     write?.abort()
     read = write = undefined
-    observer?.dispose()
-    observer = undefined
+    shared?.dispose()
+    shared = undefined
     queued = false
     request.value = null
     secret.value = error.value = ''
@@ -77,7 +77,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
     loading.value = false
     writeError = false
   }
-  async function refresh(): Promise<void> {
+  async function refresh(fresh = false): Promise<void> {
     if (!enabled.value || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
     if (read || write) { queued = true; return }
     const current = generation
@@ -85,12 +85,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
     read = controller
     loading.value = true
     try {
-      const response = await fetch(endpoint(), {
-        cache: 'no-store', redirect: 'error',
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
-      })
-      if (!response.ok) throw new Error(t('Credential request unavailable'))
-      const pending = parseCredentialResponse(await response.json(), source().projectId)
+      const pending = parseCredentialResponse(await shared!.load(fresh), source().projectId)
       const next = pending?.sessionId === source().sessionId ? pending : null
       if (current !== generation || controller.signal.aborted) return
       if (next?.id !== request.value?.id) {
@@ -155,15 +150,16 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
       return false
     } finally {
       if (current === generation) secret.value = ''
-      if (write === controller) { write = undefined; operation.value = null; void refresh() }
+      if (write === controller) { write = undefined; operation.value = null; shared?.invalidate(); void refresh() }
     }
   }
   watch([() => source().apiBase, () => source().projectId, () => source().sessionId, enabled], () => {
     stop()
     if (!enabled.value) return
-    observer = observeInteractions(pool, source().apiBase, source().projectId, () => { void refresh() }, () => { read?.abort(); read = undefined; loading.value = false; queued = false })
+    shared = acquireInteractionRead(pool, source().apiBase, source().projectId, endpoint(), () => { void refresh() })
+    void refresh()
   }, { immediate: true, flush: 'sync' })
   onUnmounted(stop)
-  return { request, secret, error, loading, busy, operation, enabled, secure, valid, refresh,
+  return { request, secret, error, loading, busy, operation, enabled, secure, valid, refresh: () => refresh(true),
     submit: () => mutate(false), cancel: () => mutate(true) }
 }

@@ -12,13 +12,13 @@ class FakeSource extends EventTarget {
   close() { this.closed = true }
   send(value: RealtimeEnvelope) { this.dispatchEvent(new MessageEvent('realtime', { data: JSON.stringify(value) })) }
 }
-function harness(t: TestContext) {
+function harness(t: TestContext, heartbeatTimeoutMs = 1000) {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const sources: FakeSource[] = []
   const statuses: LiveStatus[] = []
   const client = createLiveClient('http://fixture.invalid/projects/default/', {
     source: url => { const source = new FakeSource(url); sources.push(source); return source },
-    status: status => statuses.push(status), heartbeatTimeoutMs: 1000,
+    status: status => statuses.push(status), heartbeatTimeoutMs,
   })
   t.after(() => client.dispose())
   const events: LiveEvent[] = []
@@ -232,6 +232,75 @@ test('transient topic changes keep the live stream when the final topic set is u
   assert.equal(h.sources.length, 1, 'same final topic set does not reconnect')
   replacement.close()
   t.mock.timers.tick(0)
-  assert.equal(source.closed, true, 'a real topic change still replaces the stream')
+  assert.equal(source.closed, false, 'a recently closed chat stays warm')
+  assert.equal(h.sources.length, 1)
+})
+
+
+test('returning to a warm chat keeps the stream but snapshots and isolates observers', async t => {
+  const h = harness(t, 100_000)
+  h.client.subscribe({ kind: 'sessions', projectId: 'default' }, { event() {}, reset() {} })
+  const first = h.subscribe(topic('web:first'))
+  h.open()
+  first.close()
+  const second = h.subscribe(topic('web:second'))
+  const source = h.open()
+  assert.equal(h.sources.length, 2, 'a never requested topic still needs a new authorized URL')
+  source.send({ type: 'event', cursor: cursor(1), topic: topic('web:first'), payload: 'closed' })
+  assert.equal(h.events.length, 0)
+  second.close()
+  const returned = h.subscribe(topic('web:first'))
+  await returned.ready()
+  await Promise.resolve()
+  t.mock.timers.tick(0)
   assert.equal(h.sources.length, 2)
+  assert.deepEqual(h.resets, ['subscription', 'subscription', 'subscription'])
+  source.send({ type: 'event', cursor: cursor(2), topic: topic('web:first'), payload: 'visible' })
+  assert.deepEqual(h.events.map(event => event.payload), ['visible'])
+  t.mock.timers.tick(30_000)
+  assert.equal(source.closed, true, 'the other retained chat expires even while this chat stays active')
+  const selected = JSON.parse(new URL(h.sources.at(-1)!.url).searchParams.get('topics')!)
+  assert.deepEqual(selected.filter((value: RealtimeTopic) => value.kind === 'chat'), [topic('web:first')])
+})
+
+test('warm chats are bounded, cleared on project exit, and disposed without delayed reconnects', t => {
+  const h = harness(t, 100_000)
+  const anchor = h.client.subscribe({ kind: 'sessions', projectId: 'default' }, { event() {}, reset() {} })
+  for (let index = 0; index < 8; index++) {
+    const pane = h.subscribe(topic(`web:${index}`))
+    const source = h.open(index)
+    pane.close()
+    t.mock.timers.tick(0)
+    const selected = JSON.parse(new URL(h.sources.at(-1)!.url).searchParams.get('topics')!)
+    assert.ok(selected.filter((value: RealtimeTopic) => value.kind === 'chat').length <= 4)
+    assert.ok(source)
+  }
+  anchor.close()
+  assert.equal(h.sources.at(-1)!.closed, true)
+  const other = h.subscribe(topic('web:other', 'other'))
+  const source = h.open(8)
+  assert.deepEqual(JSON.parse(new URL(source.url).searchParams.get('topics')!), [topic('web:other', 'other')])
+  other.close()
+  const count = h.sources.length
+  t.mock.timers.tick(200_000)
+  assert.equal(h.sources.length, count)
+})
+
+test('warm topics yield the protocol topic-count budget to active subscriptions', t => {
+  const h = harness(t)
+  const warm = h.subscribe(topic('web:warm'))
+  h.open()
+  warm.close()
+  // Closing the final observer drops all warm topics immediately. Keep an
+  // anchor for the actual capacity test.
+  const anchor = h.subscribe(topic('web:anchor'))
+  const retained = h.subscribe(topic('web:retained'))
+  h.open()
+  retained.close()
+  for (let index = 0; index < 127; index++) h.subscribe(topic(`web:active-${index}`))
+  const source = h.open()
+  const selected: RealtimeTopic[] = JSON.parse(new URL(source.url).searchParams.get('topics')!)
+  assert.equal(selected.length, 128)
+  assert.equal(selected.some(value => value.kind === 'chat' && value.sessionId === 'web:retained'), false)
+  assert.ok(anchor)
 })

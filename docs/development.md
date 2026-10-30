@@ -394,3 +394,30 @@ query parameter and a small unchanged JSON response, not HTTP 304. Legacy
 clients without the query parameter retain the ETag conditional-read interface.
 This saves transfer bytes, not server-side history assembly work, and does not
 eliminate the validation GET.
+
+## Shared resources during conversation navigation
+
+Project configuration snapshots belong to the live-client pool, not individual
+conversation components. Successful runtime config activation emits a `config`
+resource invalidation; saves and reconnects also invalidate the shared snapshot.
+Concurrent model-catalog/audio-status reads are coalesced, but completed results
+are not cached: external provider credentials and local audio files have no
+complete change-notification source. Audio session/draft changes cancel capture
+without re-reading status; activation, visibility, base changes and explicit
+refresh still read it.
+
+Credential-request metadata is shared per Project; Bot setup invitations are
+shared per session URL. Both reuse the existing interactions invalidation stream
+and idle-cache cleanup. Secret input and all approval writes remain local to the
+owning view. A healthy empty result need not be fetched on every chat switch.
+I/O discovery retains Main's bounded Project inventory and filters by the visible
+session, instead of re-fetching that inventory on every session change. Capture
+consent, lease heartbeats, failure handling and disconnected polling are unchanged.
+
+The fixed-topic SSE protocol still reconnects for new chat topics. To avoid
+reconnects when returning to recently visited chats, the client retains at most
+four previously connected chat topics for 30 seconds; active topics take priority
+over these warm topics in the protocol budget. Closed observers receive no
+messages, and returning observers still take an authoritative snapshot. Project
+exit, disposal and failures clean up warm topics. This is bounded subscription
+reuse, not Project-wide chat-body broadcasting or a dynamic subscription protocol.

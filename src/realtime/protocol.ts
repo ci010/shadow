@@ -1,4 +1,4 @@
-export type RealtimeResource = 'interactions' | 'service-groups' | 'automations'
+export type RealtimeResource = 'interactions' | 'service-groups' | 'automations' | 'config'
 
 /** Backend/renderer wire contract. New subscriptions require authoritative HTTP
  * snapshots even when the connection cursor can be replayed. Persisted history,
