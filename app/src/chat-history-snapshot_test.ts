@@ -85,6 +85,9 @@ test('snapshots are bounded, URL/project isolated and never used on network fail
   assert.deepEqual(validators, ['', '', ''], 'entry limit evicts other Project snapshot')
   fail = true
   await assert.rejects(cache.read('http://main/projects/a/api/chat/session?chatId=x', signal), /offline/)
+  fail = false
+  await cache.read('http://main/projects/a/api/chat/session?chatId=x', signal)
+  assert.equal(validators.at(-1), '', 'network failures evict the cached base')
   cache.dispose()
 })
 
@@ -176,7 +179,7 @@ test('aborted late append never replaces the validated cached base', async () =>
 test('history block reuse updates metadata with append, prepend and metadata alone; rejects rewrites and rollover', async () => {
   const app = new Hono()
   let segmentIndex = 0
-  let systemPrompt = 'old'
+  let systemPrompt = 'old'.repeat(16_000)
   let tools: unknown[] = []
   let decisions: string[] = []
   const history = [{ role: 'user', content: 'x'.repeat(100_000) }]
@@ -197,6 +200,16 @@ test('history block reuse updates metadata with append, prepend and metadata alo
   const read = async () => (await cache.read('http://main/api/chat/session?chatId=metadata', new AbortController().signal)).json()
   try {
     await read()
+    for (let i = 0; i < 3; i++) {
+      history.push({ role: 'assistant', content: `constant context ${i}` })
+      const body = await read()
+      const wire = JSON.parse(wires.at(-1)!)
+      assert.deepEqual(body.history, history)
+      assert.equal(body.systemPrompt, systemPrompt)
+      assert.equal('metadata' in wire.delta, false)
+      assert.equal(wire.delta.baseMetadataRevision, wire.metadataRevision)
+      assert.ok(wires.at(-1)!.length < 1000, '48KB metadata is not repeated')
+    }
     systemPrompt = 'new'; tools = [{ name: 'read' }]; decisions = ['decision']
     history.push({ role: 'assistant', content: 'answer' })
     const appended = await read()
@@ -215,6 +228,12 @@ test('history block reuse updates metadata with append, prepend and metadata alo
     systemPrompt = 'metadata only'
     assert.equal((await read()).systemPrompt, systemPrompt)
     assert.deepEqual(JSON.parse(wires.at(-1)!).delta.history, [])
+    tools = []; decisions = []; systemPrompt = ''
+    const cleared = await read()
+    assert.deepEqual(cleared.tools, [])
+    assert.deepEqual(cleared.decisionRecords, [])
+    assert.equal(cleared.systemPrompt, '')
+    assert.ok(JSON.parse(wires.at(-1)!).delta.metadata, 'metadata-only removal is sent')
     history[1] = { role: 'user', content: 'rewritten' }
     assert.deepEqual((await read()).history, history)
     assert.ok(JSON.parse(wires.at(-1)!).data, 'rewritten middle falls back to full')
@@ -229,7 +248,8 @@ test('malformed block deltas evict rather than splice', async () => {
     previousPhysicalId: null, systemPrompt: 'prompt', tools: [], commandResults: [], decisionRecords: [] }
   for (const patch of [
     { baseHistoryRevision: 'b'.repeat(64) }, { metadata: { ...metadata, currentPhysicalId: 'other' } },
-    { metadata: { ...metadata, segmentIndex: 1 } }, { metadata: { ...metadata, history: [] } },
+    { metadata: { ...metadata, segmentIndex: 1 } }, { metadata: { ...metadata, chatId: 'other' } },
+    { metadata: { ...metadata, history: [] } },
     { metadata: {} }, { count: 99 }, { historyOffset: 1 }, { leadingHistory: [null] },
   ]) {
     let calls = 0
@@ -251,4 +271,77 @@ test('malformed block deltas evict rather than splice', async () => {
     await read()
     cache.dispose()
   }
+})
+
+test('metadata references require an exact cached base and reject ambiguous shapes', async () => {
+  const metadata = { chatId: 'x', currentPhysicalId: 'web:x', segmentIndex: 0,
+    previousPhysicalId: null, systemPrompt: 'prompt', tools: [], commandResults: [], decisionRecords: [] }
+  for (const patch of [
+    { baseMetadataRevision: null }, { baseMetadataRevision: 'b'.repeat(64) },
+    { metadata }, { baseMetadataRevision: undefined },
+    { metadata: { ...metadata, chatId: 'other' } },
+  ]) {
+    let calls = 0
+    const cache = createChatHistorySnapshots((async url => {
+      calls++
+      if (calls !== 2) {
+        assert.equal(new URL(String(url)).searchParams.get('snapshot'), '')
+        return Response.json({ revision, historyRevision: revision, metadataRevision: revision,
+          data: { ...metadata, history: [{ role: 'user' }] } })
+      }
+      assert.equal(new URL(String(url)).searchParams.get('metadataRevision'), revision)
+      return Response.json({ revision: 'c'.repeat(64), historyRevision: revision, metadataRevision: revision, delta: {
+        baseRevision: revision, baseHistoryRevision: revision, baseCount: 1, count: 1,
+        history: [], leadingHistory: [], historyOffset: 0, baseMetadataRevision: revision, ...patch,
+      } })
+    }) as typeof fetch)
+    const read = () => cache.read('http://main/history', new AbortController().signal)
+    await read()
+    await assert.rejects(read(), /Invalid history delta/)
+    await read()
+    cache.dispose()
+  }
+})
+
+test('metadata reference cannot bootstrap a missing validator or disagree with response revision', async () => {
+  const metadata = { chatId: 'x', currentPhysicalId: 'web:x', segmentIndex: 0,
+    previousPhysicalId: null, systemPrompt: 'prompt', tools: [], commandResults: [], decisionRecords: [] }
+  for (const [baseMetadataRevision, nextMetadataRevision] of [
+    [undefined, revision], [revision, 'b'.repeat(64)], [revision, 'malformed'],
+  ]) {
+    let calls = 0
+    const cache = createChatHistorySnapshots((async url => {
+      calls++
+      if (calls !== 2) {
+        assert.equal(new URL(String(url)).searchParams.get('snapshot'), '')
+        return Response.json({ revision, historyRevision: revision, metadataRevision: baseMetadataRevision,
+          data: { ...metadata, obsolete: true, history: [{ role: 'user' }] } })
+      }
+      return Response.json({ revision: 'c'.repeat(64), historyRevision: revision, metadataRevision: nextMetadataRevision,
+        delta: { baseRevision: revision, baseHistoryRevision: revision, baseCount: 1, count: 1,
+          history: [], leadingHistory: [], historyOffset: 0, baseMetadataRevision: revision } })
+    }) as typeof fetch)
+    const read = () => cache.read('http://main/history', new AbortController().signal)
+    await read()
+    await assert.rejects(read(), /Invalid/)
+    await read()
+    cache.dispose()
+  }
+})
+
+test('complete changed metadata replaces rather than overlays removed fields', async () => {
+  const metadata = { chatId: 'x', currentPhysicalId: 'web:x', segmentIndex: 0,
+    previousPhysicalId: null, systemPrompt: '', tools: [], commandResults: [], decisionRecords: [] }
+  let calls = 0
+  const cache = createChatHistorySnapshots((async () => Response.json(++calls === 1
+    ? { revision, historyRevision: revision, metadataRevision: revision,
+      data: { ...metadata, obsolete: 'removed by next response', history: [{ role: 'user' }] } }
+    : { revision: 'c'.repeat(64), historyRevision: revision, metadataRevision: 'b'.repeat(64), delta: {
+      baseRevision: revision, baseHistoryRevision: revision, baseCount: 1, count: 1,
+      history: [], leadingHistory: [], historyOffset: 0, metadata,
+    } })) as typeof fetch)
+  const read = async () => (await cache.read('http://main/history', new AbortController().signal)).json()
+  assert.equal((await read()).obsolete, 'removed by next response')
+  assert.equal('obsolete' in await read(), false)
+  cache.dispose()
 })
