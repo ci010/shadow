@@ -185,7 +185,7 @@ async function sessionFileBase(
 export function sessionsApiPlugin(
   sessions: SessionManager | undefined,
   options: {
-    cron?: Pick<CronService, 'listJobs'>
+    cron?: Pick<CronService, 'listJobs'> & Partial<Pick<CronService, 'nextJobRun'>>
     backgroundTasks?: Pick<BackgroundTaskManager, 'listTasks'>
     authorizeContext?: (request: Request) => boolean | Promise<boolean>
     authorizeRename?: (request: Request) => boolean | Promise<boolean>
@@ -250,6 +250,19 @@ export function sessionsApiPlugin(
       }
       const list = (await sessions.listHistorySessions()).filter(session => session.agentType !== 'work-observer')
       return c.json({ sessions: list })
+    })
+
+    // Inventory is persistent and does not require an in-memory active session.
+    app.get('/api/sessions/:sessionId/scheduled-tasks', c => {
+      const sessionId = c.req.param('sessionId')
+      const tasks = (options.cron?.listJobs() ?? [])
+        .filter(job => cronContextMode(job) === 'existing' && job.target?.sessionId === sessionId)
+        .map(job => ({
+          id: job.id, name: job.name ?? job.task ?? job.id, task: job.task ?? '',
+          schedule: job.schedule, enabled: job.enabled !== false,
+          nextRun: job.enabled === false ? null : options.cron?.nextJobRun?.(job.id) ?? null,
+        }))
+      return c.json({ sessionId, tasks })
     })
 
     app.get('/api/sessions/graph', async (c) => {

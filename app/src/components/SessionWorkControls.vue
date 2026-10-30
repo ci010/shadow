@@ -1,5 +1,5 @@
 <template>
-  <section v-show="backgroundStatus.total || backgroundStatus.error || subagents?.length || expanded" ref="root" class="session-work-controls" :aria-label="t('Session controls')" @keydown.esc="closePanel">
+  <section v-show="backgroundStatus.total || backgroundStatus.error || scheduledStatus.total || scheduledStatus.error || subagents?.length || expanded" ref="root" class="session-work-controls" :aria-label="t('Session controls')" @keydown.esc="closePanel">
     <div class="session-work-triggers">
       <button v-if="backgroundStatus.total || backgroundStatus.error || expanded === 'background'" :id="`${id}-background`" ref="backgroundTrigger"
         type="button" data-session-work="background" :aria-expanded="expanded === 'background'" :aria-controls="`${id}-panel`"
@@ -8,6 +8,13 @@
         <span>{{ t('Background tasks') }}</span>
         <span v-if="backgroundStatus.error" class="session-work-attention" :aria-label="t('Status unavailable')">!</span>
         <span v-else>{{ backgroundStatus.total }}</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
+      </button>
+      <button v-if="scheduledStatus.total || scheduledStatus.error || expanded === 'scheduled'" :id="`${id}-scheduled`" ref="scheduledTrigger"
+        type="button" data-session-work="scheduled" :aria-expanded="expanded === 'scheduled'" :aria-controls="`${id}-panel`"
+        aria-haspopup="dialog" @click="toggle('scheduled')">
+        <span class="i-lucide-alarm-clock work-icon" aria-hidden="true" />
+        <span>{{ t('Scheduled tasks') }}</span><span>{{ scheduledStatus.error ? '!' : scheduledStatus.total }}</span>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
       </button>
       <button v-if="subagents?.length || expanded === 'subagents'" :id="`${id}-subagents`" ref="subagentsTrigger"
@@ -24,6 +31,9 @@
         :aria-labelledby="`${id}-${shownPanel || 'background'}`" :style="position" @keydown="popupKeydown">
         <div v-show="shownPanel === 'background'">
           <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />
+        </div>
+        <div v-show="shownPanel === 'scheduled'">
+          <ScheduledTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" @status="scheduledStatus = $event" />
         </div>
         <div v-show="shownPanel === 'subagents'" class="subagent-list" :aria-label="t('Active subagents')">
           <p v-if="!subagents?.length">{{ t('No subagents active.') }}</p>
@@ -44,6 +54,7 @@
 import { isSelectPopupEventInside } from '../select-control.ts'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onDeactivated, ref, useId, watch } from 'vue'
+import ScheduledTasks from './ScheduledTasks.vue'
 import BackgroundTasks from './BackgroundTasks.vue'
 import SessionActivity from './SessionActivity.vue'
 import OverlayTransition from './OverlayTransition.vue'
@@ -53,9 +64,11 @@ import { executionDisplayStage, subagentActivityLabel, summarizeSubagents } from
 const props = defineProps<{ apiBase: string; sessionId: string; canWrite: boolean; active?: boolean; subagents?: SidebarSession[]; stages?: Record<string, string> }>()
 const emit = defineEmits<{ inspect: [sessionId: string] }>()
 const id = useId()
-type Panel = 'background' | 'subagents'
+type Panel = 'background' | 'subagents' | 'scheduled'
 const expanded = ref<Panel | null>(null)
 const shownPanel = ref<Panel | null>(null)
+const scheduledStatus = ref({ total: 0, error: '' })
+const scheduledTrigger = ref<HTMLButtonElement>()
 const backgroundStatus = ref({ total: 0, loading: false, error: '' })
 const subagentStatus = computed(() => summarizeSubagents(props.subagents ?? [], props.stages ?? {}))
 const backgroundTrigger = ref<HTMLButtonElement>()
@@ -65,7 +78,7 @@ const popup = ref<HTMLElement>()
 const position = ref<Record<string, string>>({})
 
 function trigger(panel: Panel) {
-  return ({ background: backgroundTrigger, subagents: subagentsTrigger })[panel].value
+  return ({ background: backgroundTrigger, subagents: subagentsTrigger, scheduled: scheduledTrigger })[panel].value
 }
 function toggle(panel: Panel) {
   if (props.active === false) return
@@ -138,6 +151,7 @@ watch(expanded, async (panel, _previous, onCleanup) => {
 }, { flush: 'post' })
 watch(() => [props.apiBase, props.sessionId], () => {
   expanded.value = null
+  scheduledStatus.value = { total: 0, error: '' }
   backgroundStatus.value = { total: 0, loading: false, error: '' }
 })
 watch(() => props.active, active => { if (active === false) expanded.value = null })

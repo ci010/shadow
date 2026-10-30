@@ -1043,3 +1043,13 @@ metadata/completion changes invalidate organization source versions. Lightweight
 topics are never materialized as Work just to make organization possible.
 
 Current session metadata is available at `v:session/self.json` via read/write. Writes accept nonempty partial JSON objects or the full read result, with only title (string, max 120), description (string, max 4000), completed (boolean). Exact match edits validate the full resulting JSON; append is unsupported. Identity is runtime-bound, not a JSON target. Tasks must preserve parent-owned title/description unchanged or omit them; reviewable task completion changes require review, not self-acceptance. Calls/automations cannot write. Ordinary new sessions set accurate title and description after understanding the first request, and update only for meaningful goal changes.
+
+### Conversation schedule chip
+
+Conversations targeted by existing-session cron jobs show a **Scheduled tasks**
+chip beside background tasks and subagents above the composer. Its read-only
+popover lists the task, schedule and next trigger time (displayed in the browser's
+local timezone). Disabled jobs remain inspectable without a next trigger. The
+inventory comes from persisted cron jobs and does not require the conversation
+to be active in memory after a restart. Fresh-session automations remain in the
+Automations workspace rather than the creating conversation's chip.

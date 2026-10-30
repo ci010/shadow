@@ -592,3 +592,23 @@ test('history HTTP pagination defaults offset and validates both logical and phy
   assert.deepEqual(calls[0], { key: 'logical', query: { offset: 0, pageSize: 1, shallow: false } })
   assert.deepEqual(calls[3], { key: 'physical', query: { physicalId: 'physical', offset: 0, pageSize: 1 } })
 })
+
+
+test('scheduled inventory survives inactive sessions and exposes only existing target schedules', async () => {
+  const app = new Hono()
+  const jobs: import('../cron/service.ts').CronJob[] = [
+    { id: 'target', name: 'Reminder', task: 'Check', schedule: '0 9 * * *', createdAt: '2026-01-01', target: { sessionId: 'web:inactive' } },
+    { id: 'disabled', schedule: 'every 1h', createdAt: '2026-01-01', target: { sessionId: 'web:inactive' }, enabled: false },
+    { id: 'fresh', schedule: 'every 1h', createdAt: '2026-01-01', session: 'fresh', originSessionId: 'web:inactive' },
+    { id: 'other', schedule: 'every 1h', createdAt: '2026-01-01', target: { sessionId: 'web:other' } },
+  ]
+  sessionsApiPlugin({} as SessionManager, { cron: { listJobs: () => jobs, nextJobRun: () => '2027-01-02T09:00:00.000Z' } })(app)
+  const response = await app.request('/api/sessions/web%3Ainactive/scheduled-tasks')
+  assert.equal(response.status, 200)
+  const value = await response.json()
+  assert.deepEqual(value.tasks.map((task: { id: string }) => task.id), ['target', 'disabled'])
+  assert.equal(value.tasks[0].nextRun, '2027-01-02T09:00:00.000Z')
+  assert.equal(value.tasks[1].nextRun, null)
+  jobs.splice(0)
+  assert.deepEqual((await (await app.request('/api/sessions/web%3Ainactive/scheduled-tasks')).json()).tasks, [])
+})
