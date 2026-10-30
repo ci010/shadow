@@ -29,13 +29,14 @@ async function harness(t: TestContext, initial: Partial<CredentialRequestSource>
   const app = renderer.createApp(defineComponent({
     setup() { state = useCredentialRequest(() => source); return () => null },
   }))
-  app.provide(Symbol.for('shadow.live-client-pool'), { client: () => ({ subscribe: () => ({ ready: async () => {}, close() {} }) }), observeHost: (_base: string, callback: (status: { phase: string }) => void) => { callback({ phase: 'live' }); return () => {} } })
+  let resourceEvent: ((event: { payload: unknown }) => void) | undefined
+  app.provide(Symbol.for('shadow.live-client-pool'), { client: () => ({ subscribe: (_topic: unknown, observer: { event?: typeof resourceEvent }) => { resourceEvent = observer.event; return { ready: async () => {}, close() {} } } }), observeHost: (_base: string, callback: (status: { phase: string }) => void) => { callback({ phase: 'live' }); return () => {} } })
   app.mount({})
   await settle()
   let mounted = true
   function unmount() { if (mounted) { mounted = false; app.unmount() } }
   t.after(unmount)
-  return { state, source, requests, unmount }
+  return { state, source, requests, unmount, invalidate: () => resourceEvent?.({ payload: { event: 'invalidate', resource: 'interactions' } }) }
 }
 
 test('private entry validates Project identity and rejects unexpected secret-bearing metadata', () => {
@@ -76,13 +77,18 @@ test('visible owner reads once regardless of tool stages and deactivation clears
   await settle()
   source.active = true
   await settle()
-  assert.equal(requests.length, 2)
+  assert.equal(requests.length, 1, 'another session reuses the Project envelope')
+  assert.equal(state.request.value, null, 'cached requests are still filtered by session')
   source.sessionId = 'web:chat-admin'
   await settle()
-  assert.equal(requests.length, 3)
+  assert.equal(requests.length, 1)
+  assert.equal(state.request.value?.sessionId, 'web:chat-admin')
+  void state.refresh()
+  await settle()
+  assert.equal(requests.length, 2, 'manual reload bypasses the valid cache')
   source.canSubmit = false
   await settle()
-  assert.equal(requests[2].init.signal?.aborted, true)
+  assert.equal(requests[1].init.signal?.aborted, true)
   assert.equal(state.enabled.value, false)
 })
 
@@ -207,4 +213,17 @@ test('ordinary admin session shows only its own private credential card', async 
   await refreshed
   await settle()
   assert.equal(state.request.value?.sessionId, 'web:ordinary')
+})
+
+
+test('cached empty credentials refresh on an interactions event without a stage transition', async t => {
+  const { state, requests, invalidate } = await harness(t, { stage: 'idle' })
+  requests[0].finish(Response.json({ request: null }))
+  await settle()
+  invalidate()
+  await new Promise(resolve => setTimeout(resolve, 70))
+  assert.equal(requests.length, 2)
+  requests[1].finish(Response.json({ request: question() }))
+  await settle()
+  assert.equal(state.request.value?.id, requestId)
 })

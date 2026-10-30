@@ -29,6 +29,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import { coalescedRead } from '../settings-resource.ts'
 import { computed, onMounted, onActivated, onDeactivated, onUnmounted, ref, watch, useId } from 'vue'
 import { audioSetupRequest } from '../audio-setup'
 import { audioEntry, recognizedTranscript, recordMicrophone, prepareMicrophone, type MicrophonePreparation, type AudioStatus, NoAudioSignalError } from '../audio-input'
@@ -78,9 +79,12 @@ async function refresh() {
   cancel(); status.value = undefined; error.value = ''; loading.value = true
   const own = generation; controller = new AbortController()
   try {
-    const response = await fetch(apiUrl(props.apiBase, '/api/audio/status'), { signal: controller.signal })
-    if (!response.ok) throw new Error(t('Unable to read Project audio status. Retry before setup.'))
-    const value = await response.json()
+    const url = apiUrl(props.apiBase, '/api/audio/status').toString()
+    const value = await coalescedRead(fetch, url, async signal => {
+      const response = await fetch(url, { signal })
+      if (!response.ok) throw new Error(t('Unable to read Project audio status. Retry before setup.'))
+      return response.json()
+    }, controller.signal)
     if (!value.asr || !value.tts || typeof value.asr.ready !== 'boolean' || typeof value.tts.ready !== 'boolean' || !['local', 'remote'].includes(value.asr.route) || !['local', 'remote'].includes(value.tts.route)) throw new Error(t('Invalid audio status response.'))
     if (own === generation) status.value = value
   } catch (e) { if (own === generation) error.value = e instanceof Error ? e.message : String(e) }
@@ -189,10 +193,11 @@ function keyUp(e: KeyboardEvent) {
 function visibility() { if (document.hidden) cancel() }
 function attach() { active = true; window.addEventListener('keydown', keyDown); window.addEventListener('keyup', keyUp); window.addEventListener('pointerup', pointerUp); window.addEventListener('pointercancel', cancel); window.addEventListener('blur', cancel); document.addEventListener('visibilitychange', visibility) }
 function detach() { active = false; cancel(); window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp); window.removeEventListener('pointerup', pointerUp); window.removeEventListener('pointercancel', cancel); window.removeEventListener('blur', cancel); document.removeEventListener('visibilitychange', visibility) }
-onMounted(() => { attach(); void refresh() }); onActivated(attach); onDeactivated(detach); onUnmounted(detach)
-watch(() => [props.apiBase, props.draftKey, props.sessionId], () => { panel.value = false; void refresh() })
+onMounted(() => { attach(); void refresh() }); onActivated(() => { attach(); void refresh() }); onDeactivated(detach); onUnmounted(detach)
+watch(() => props.apiBase, () => { panel.value = false; void refresh() })
+watch(() => [props.draftKey, props.sessionId], () => { panel.value = false; cancel() })
 watch(() => props.disabled, value => { if (value) cancel() })
-watch(() => props.visible, value => { if (value === false) cancel() })
+watch(() => props.visible, value => { if (value === false) cancel(); else void refresh() })
 watch(() => props.keyboardActive, value => { if (value === false && (owner === 'keyboard' || arm)) cancel() })
 </script>
 <style scoped>

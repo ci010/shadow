@@ -112,9 +112,15 @@ async function poll(fallback = false, requestedBases: Iterable<string> = bases.v
     try {
       const result = await ioRequest<{ runs: IoRun[] }>(base, '/runs', undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))
       if (disposed || controller.signal.aborted || !bases.value.has(base)) return
-      const sessions = new Set([...bridge.views.value.values()].filter(view => view.apiBase === base).map(view => view.sessionId))
-      const sorted = result.runs.filter(run => sessions.has(run.sessionId)).toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-      const runs = sorted.filter((run, index) => index < 32 || ['awaiting_consent', 'running', 'stopping'].includes(run.status))
+      // /runs is already a Project inventory (bounded to 100 by Main). Keep
+      // other sessions' metadata so switching the visible chat is a projection,
+      // not another HTTP read. Keep at most 32 historical rows per session.
+      const counts = new Map<string, number>()
+      const runs = result.runs.toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).filter(run => {
+        const count = counts.get(run.sessionId) ?? 0
+        counts.set(run.sessionId, count + 1)
+        return count < 32 || ['awaiting_consent', 'running', 'stopping'].includes(run.status)
+      })
       const active = execution.value
       if (active && bridge.executionBase.value === base && active.phase !== 'closed') {
         const index = runs.findIndex(run => run.id === active.run.id)
@@ -134,6 +140,9 @@ async function poll(fallback = false, requestedBases: Iterable<string> = bases.v
       }
     }
   }))
+  prepareVisibleRequest()
+}
+function prepareVisibleRequest() {
   if (!disposed && !document.hidden && !owned.value && !bridge.busy.value) {
     const views = [...bridge.views.value.values()]
     const current = views.find(view => view === bridge.context.value) ?? views[0]
@@ -229,14 +238,14 @@ async function pulseClients() {
     }))
   } finally { leaseBusy = false }
 }
-// Registrations invalidate discovery only when the visible session set changes.
+// Keep Project inventory subscriptions stable while the visible session changes.
 const discovery = computed(() => {
   const sessions = new Map<string, Set<string>>()
   for (const base of bases.value) sessions.set(base, new Set())
   for (const view of bridge.views.value.values()) sessions.get(view.apiBase)!.add(view.sessionId)
   return new Map([...sessions].map(([base, ids]) => [base, JSON.stringify([...ids].sort())]))
 })
-watch(discovery, (visible, previous) => {
+watch(discovery, visible => {
   const values = new Set(visible.keys())
   for (const [base, controller] of polling) if (!values.has(base)) { controller.abort(); polling.delete(base); pendingPoll.delete(base) }
   for (const base of new Set([...clients.keys(), ...registrations.keys()])) {
@@ -260,9 +269,7 @@ watch(discovery, (visible, previous) => {
     subscriptions.set(base, subscription)
     initial.attach(subscription)
   }
-  for (const [base, sessions] of visible) {
-    if (previous?.has(base) && previous.get(base) !== sessions) initialSnapshots.get(base)?.invalidate()
-  }
+  prepareVisibleRequest()
 }, { immediate: true })
 const pageHide = () => { void execution.value?.cancel('cancelled', t('The capture page was closed.')); execution.value?.dispose() }
 const visibilityChanged = () => {
