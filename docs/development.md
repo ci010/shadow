@@ -459,3 +459,20 @@ manual refresh and recovery use the full graph. Missing/deleted or malformed
 partial rows trigger a full read, rather than guessing membership/topology.
 This narrows transfer and per-session enrichment work; it does not eliminate
 the inventory lookup or replace authoritative reads with event payloads.
+
+Activity notifications are deduplicated per Project/session against the visible
+stage, waiting-for-call flag, active request ID, recovery state and pending
+question/input metadata. Internal progress with no visible change does not cause
+another stages read. The bounded fingerprint map stores no response authority;
+eviction or fingerprint failure permits a notification rather than suppressing
+updates. Pure history persistence no longer invalidates activity snapshots;
+admission, completion, genuine activity changes, broad legacy notifications and
+recovery still do. Known session metadata changes can use targeted graph reads;
+unknown/new sessions, handoff/end and broad Project events retain full recovery.
+
+The waiting-question view's 1.5-second clock is local only. Healthy live updates
+drive `/ask` snapshots; disconnected connections use a 30-second fallback.
+Question identity/pause changes still notify even when the visible stage stays
+`waiting`. Initial readiness/fallback, invalidations during reads, visibility
+recovery and post-write reconciliation remain active; hidden pages cancel reads
+without discarding a draft answer.

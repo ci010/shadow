@@ -322,12 +322,34 @@ test('scoped session events use summary reads through the shared store and recon
   const summary = f.requests.slice(2).find(request => request.path.endsWith('/graph'))!
   assert.deepEqual(JSON.parse(summary.url.searchParams.get('sessionIds')!), ['web:one'])
   summary.finish({ ...graph('After'), nodes: [node], partial: true, sessionIds: ['web:one'] })
-  f.requests.slice(2).find(request => request.path.endsWith('/stages'))!.finish({ stages: {} })
+  assert.equal(f.requests.filter(request => request.path.endsWith('/stages')).length, 1, 'pure history does not reread activity')
   await lease.graph.read()
   assert.equal(lease.graph.state.value?.[0].title, 'After')
   f.observers.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!.reconnected()
   await f.tick()
-  const recovery = f.requests.slice(4).find(request => request.path.endsWith('/graph'))!
+  const recovery = f.requests.slice(3).find(request => request.path.endsWith('/graph'))!
   assert.equal(recovery.url.searchParams.has('sessionIds'), false)
+  lease.release()
+})
+
+
+test('history persistence does not reread stages; admission, completion and legacy events retain activity reads', async t => {
+  const f = fixture(t)
+  const lease = f.store.acquireProject('http://fixture', 'a')
+  await f.tick()
+  f.requests[0].finish(graph('Before')); f.requests[1].finish({ stages: {} })
+  await lease.graph.read()
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one', changes: ['history'] })
+  await f.tick()
+  assert.equal(f.requests.filter(request => request.path.endsWith('/stages')).length, 1)
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one', changes: ['history', 'activity'] })
+  await f.tick()
+  const activity = f.requests.filter(request => request.path.endsWith('/stages'))
+  assert.equal(activity.length, 2)
+  activity[1].finish({ stages: { 'web:one': 'llm' }, activeRequestIds: { 'web:one': 'turn' } })
+  await lease.activity.read()
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one' })
+  await f.tick()
+  assert.equal(f.requests.filter(request => request.path.endsWith('/stages')).length, 3)
   lease.release()
 })

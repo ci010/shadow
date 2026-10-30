@@ -1,4 +1,5 @@
 import { ProposalInboxes } from '../../sessions/proposal-inbox.ts'
+import { createActivityInvalidator, sessionActivityFingerprint } from '../../sessions/activity-invalidation.ts'
 import { BotDeployments } from '../../bots/deployments.ts'
 import { parseBot, type BotDefinition } from '../../bots/sdk.ts'
 import { DirectoryBots, DirectoryBotService } from '../../agent-authoring/bot-runtime.ts'
@@ -296,14 +297,22 @@ export async function createProjectRuntime(
   for (const topic of ['session.input.accepted', 'session.message.appended', 'session.handoff', 'session.ended', 'session.renamed', 'session.changed', 'background.task.changed'] as const) {
     const subscription = bus.on(topic, fact => realtime.invalidateSessions(fact.sessionId, undefined,
       topic === 'background.task.changed' ? ['background-tasks'] :
-        topic === 'session.input.accepted' || topic === 'session.message.appended' ? ['history'] : undefined))
+        topic === 'session.input.accepted' ? ['history', 'activity'] :
+        topic === 'session.message.appended' ? ['history'] :
+        topic === 'session.renamed' ? ['metadata'] :
+        topic === 'session.changed' ? ['metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks'] : undefined))
     cleanup.push(() => bus.off(subscription))
   }
   const finishedSubscription = bus.on('session.turn.finished', fact =>
-    realtime.invalidateSessions(fact.sessionId, fact.status === 'completed' ? fact.turnId : undefined, ['history', 'work']))
+    realtime.invalidateSessions(fact.sessionId, fact.status === 'completed' ? fact.turnId : undefined, ['history', 'work', 'activity']))
   cleanup.push(() => bus.off(finishedSubscription))
-  const activitySubscription = bus.on('session.activity.changed', fact => realtime.invalidateActivity(fact.sessionId))
-  cleanup.push(() => bus.off(activitySubscription))
+  let activitySource: SessionManager | undefined
+  const activityInvalidator = createActivityInvalidator(id => {
+    if (!activitySource) throw new Error('Session activity source is initializing')
+    return sessionActivityFingerprint(activitySource, id)
+  }, id => realtime.invalidateActivity(id))
+  const activitySubscription = bus.on('session.activity.changed', fact => activityInvalidator.changed(fact.sessionId))
+  cleanup.push(() => { bus.off(activitySubscription); activityInvalidator.dispose(); activitySource = undefined })
   const telemetry = initializeNodeTelemetry(otelStore, { scope, projectId: project.id })
   let telemetryShutdown: Promise<void> | undefined
   const closeTelemetry = () => {
@@ -616,6 +625,7 @@ export async function createProjectRuntime(
     state: id => sessions.getSessionState(id),
     changed: () => realtime.invalidateResource?.('automations'),
   }))
+  activitySource = sessions
   const assertComputerSession = (sessionId: string) => {
     const state = sessions.getSessionState(sessionId)
     if (!state || !sessionId.startsWith('web:') || (state.mode ?? 'session') !== 'session'

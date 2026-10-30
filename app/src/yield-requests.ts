@@ -1,6 +1,8 @@
 import { t, formatDateTime } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
+import { useLiveClientPool, liveProjectId } from './composables/useLiveClient.ts'
+import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import { parseYieldRequest, parseYieldCustomText, MAX_YIELD_CUSTOM_TEXT_LENGTH, type YieldRequest } from '../../src/sessions/yield-contract.ts'
 import { parseInputRequest, type InputRequest } from '../../src/sessions/input-request.ts'
 import { answerMediaSchema, MAX_ANSWER_ATTACHMENTS } from '../../src/sessions/answer-media.ts'
@@ -68,7 +70,16 @@ export function useYieldRequest(source: () => YieldSource) {
   let read: AbortController | undefined
   let write: AbortController | undefined
   let interval: ReturnType<typeof setInterval> | undefined
+  const pool = useLiveClientPool()
+  let subscription: { close(): void } | undefined
+  let initial: ReturnType<typeof createInitialLiveSnapshot> | undefined
+  let unobserve: (() => void) | undefined
+  let fallback: ReturnType<typeof setInterval> | undefined
+  let queued = false
+  let afterWrite: ReturnType<typeof setTimeout> | undefined
+  const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
   let generation = 0
+  let disposed = false
   let draftRequestId: string | undefined
   let answeredId: string | undefined
   let answerError = false
@@ -79,6 +90,16 @@ export function useYieldRequest(source: () => YieldSource) {
   }
   function stopRequests() {
     generation++
+    initial?.dispose()
+    initial = undefined
+    subscription?.close()
+    subscription = undefined
+    unobserve?.()
+    unobserve = undefined
+    clearInterval(fallback)
+    fallback = undefined
+    queued = false
+    clearTimeout(afterWrite)
     read?.abort()
     write?.abort()
     read = write = undefined
@@ -87,8 +108,10 @@ export function useYieldRequest(source: () => YieldSource) {
     interval = undefined
   }
   async function refresh(): Promise<void> {
+    clearTimeout(afterWrite)
     const { sessionId, active, stage } = source()
-    if (!active || !sessionId || stage !== 'waiting' || read || write) return
+    if (disposed || !active || !sessionId || stage !== 'waiting' || hidden()) return
+    if (read || write) { queued = true; return }
     const current = generation
     const controller = new AbortController()
     read = controller
@@ -114,7 +137,10 @@ export function useYieldRequest(source: () => YieldSource) {
         error.value = cause instanceof Error ? cause.message : t('Could not load the question. Check the connection and retry.')
       }
     } finally {
-      if (read === controller) { read = undefined; loading.value = false }
+      if (read === controller) {
+        read = undefined; loading.value = false
+        if (queued) { queued = false; void refresh() }
+      }
     }
   }
   async function mutate(isCancellation: boolean, media?: string[]): Promise<boolean> {
@@ -186,7 +212,12 @@ export function useYieldRequest(source: () => YieldSource) {
       }
       return false
     } finally {
-      if (write === controller) { write = undefined; submitting.value = cancelling.value = false }
+      if (write === controller) {
+        write = undefined; submitting.value = cancelling.value = false
+        queued = false
+        clearTimeout(afterWrite)
+        afterWrite = setTimeout(() => { void refresh() }, 50)
+      }
     }
   }
 
@@ -204,8 +235,27 @@ export function useYieldRequest(source: () => YieldSource) {
     }
     if (!active || !sessionId || !waiting) return
     now.value = Date.now()
-    void refresh()
-    interval = setInterval(() => { now.value = Date.now(); void refresh() }, 1500)
+    // Subscribe before the snapshot; notifications during HTTP reads are queued.
+    const base = source().apiBase
+    unobserve = pool.observeHost(base, status => {
+      if (status.phase === 'live') { clearInterval(fallback); fallback = undefined }
+      else if (fallback === undefined) fallback = setInterval(() => { void refresh() }, 30_000)
+    })
+    const gate = createInitialLiveSnapshot({ refresh: () => { void refresh() } })
+    initial = gate
+    const liveSubscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
+      event: envelope => {
+        const payload = envelope.payload
+        if (payload && typeof payload === 'object' && 'sessionId' in payload && payload.sessionId === sessionId
+          && 'event' in payload && (payload.event === 'invalidate' || payload.event === 'activity')) gate.invalidate()
+      },
+      reset: gate.reset,
+      reconnected: gate.reconnected,
+    })
+    subscription = liveSubscription
+    gate.attach(liveSubscription)
+    // Deadline rendering is a local clock, never a reason to fetch a snapshot.
+    interval = setInterval(() => { now.value = Date.now() }, 1500)
   }, { immediate: true, flush: 'sync' })
   watch(() => source().canAnswer, () => {
     if (!source().canAnswer) {
@@ -218,7 +268,20 @@ export function useYieldRequest(source: () => YieldSource) {
       submitting.value = cancelling.value = false
     }
   }, { flush: 'sync' })
-  onUnmounted(stopRequests)
+  function visibilityChanged() {
+    if (hidden()) {
+      read?.abort()
+      read = undefined
+      loading.value = false
+      queued = false
+    } else { now.value = Date.now(); void refresh() }
+  }
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibilityChanged)
+  onUnmounted(() => {
+    disposed = true
+    stopRequests()
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibilityChanged)
+  })
   return { request, selected, customMode, customText, error, submitting, cancelling, busy, loading, now, answerable, refresh,
     submit: () => mutate(false), cancelQuestion: () => mutate(true),
     submitCustom: (requestId: string, text: string, media: string[] = []) => {

@@ -11,7 +11,7 @@ const question = (sessionId = 'web:root', id = 'question-1') => ({
 })
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
-function harness(t: TestContext, initial: Partial<YieldSource> = {}) {
+function harness(t: TestContext, initial: Partial<YieldSource> = {}, delayedReady = false) {
   const requests: { url: string; init: RequestInit; finish: (response: Response) => void }[] = []
   t.mock.method(globalThis, 'fetch', (url: string, init: RequestInit) =>
     new Promise<Response>(resolve => requests.push({ url, init, finish: resolve })))
@@ -25,9 +25,28 @@ function harness(t: TestContext, initial: Partial<YieldSource> = {}) {
   const app = renderer.createApp(defineComponent({
     setup() { state = useYieldRequest(() => source); return () => null },
   }))
+  let observer: import('./live-client.ts').LiveObserver
+  let phase: (status: import('./live-client.ts').LiveStatus) => void
+  const readyCallbacks: (() => void)[] = []
+  let closed = 0
+  app.provide(Symbol.for('shadow.live-client-pool'), {
+    observeHost: (_base: string, callback: typeof phase) => { phase = callback; callback({ phase: 'live' }); return () => {} },
+    client: () => ({ subscribe: (_topic: unknown, callback: typeof observer) => {
+      observer = callback
+      callback.reset?.()
+      return {
+        close() { closed++ },
+        ready: () => ({ then: (resolve: () => void) => {
+          if (delayedReady) readyCallbacks.push(resolve)
+          else resolve()
+        } }),
+      }
+    } }),
+  })
   app.mount({})
   t.after(() => app.unmount())
-  return { state, source, requests, app }
+  return { state, source, requests, app, live: () => observer, phase: (status: import('./live-client.ts').LiveStatus) => phase(status),
+    ready: () => { for (const resolve of readyCallbacks.splice(0)) resolve() }, closed: () => closed }
 }
 
 test('yield response validates session identity, two or three options, and one default', () => {
@@ -465,4 +484,137 @@ test('stale cancellation results cannot clear a new session or revoke its select
   requests[3]!.finish(Response.json({ cancelled: true }))
   assert.equal(await forbidden, false)
   assert.equal(state.request.value?.id, 'question-2')
+})
+
+
+test('healthy live keeps the deadline clock without HTTP polling; disconnect uses bounded fallback', async t => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  const { state, requests, phase } = harness(t)
+  requests[0].finish(Response.json({ request: question() }))
+  await settle()
+  const before = state.now.value
+  t.mock.timers.tick(78_000)
+  assert.ok(state.now.value > before)
+  assert.equal(requests.length, 1)
+  phase({ phase: 'reconnecting' })
+  t.mock.timers.tick(29_999)
+  assert.equal(requests.length, 1)
+  t.mock.timers.tick(1)
+  assert.equal(requests.length, 2)
+  requests[1].finish(Response.json({ request: question() }))
+  await settle()
+  phase({ phase: 'live' })
+  t.mock.timers.tick(60_000)
+  assert.equal(requests.length, 2)
+})
+
+test('relevant in-flight invalidations queue one authoritative read and preserve drafts', async t => {
+  const { state, requests, live } = harness(t)
+  const notify = (sessionId: string) => live().event?.({ payload: { event: 'invalidate', sessionId } } as never)
+  notify('web:other')
+  requests[0].finish(Response.json({ request: question() }))
+  await settle()
+  assert.equal(requests.length, 1)
+  state.customMode.value = true
+  state.customText.value = 'Keep this draft'
+  notify('web:root')
+  notify('web:root')
+  notify('web:root')
+  assert.equal(requests.length, 2)
+  requests[1].finish(Response.json({ request: question() }))
+  await settle()
+  assert.equal(requests.length, 3)
+  requests[2].finish(Response.json({ request: question() }))
+  await settle()
+  assert.equal(state.customText.value, 'Keep this draft')
+  live().reconnected?.()
+  assert.equal(requests.length, 4)
+})
+
+test('document hiding cancels reads, not the clock or drafts, and visibility restores a snapshot', async t => {
+  const document = Object.assign(new EventTarget(), { visibilityState: 'visible' })
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: document })
+  t.after(() => {
+    if (previous) Object.defineProperty(globalThis, 'document', previous)
+    else Reflect.deleteProperty(globalThis, 'document')
+  })
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  const { state, requests } = harness(t)
+  requests[0].finish(Response.json({ request: question() }))
+  await settle()
+  state.customMode.value = true
+  state.customText.value = 'Retained while hidden'
+  void state.refresh()
+  document.visibilityState = 'hidden'
+  document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(requests[1].init.signal?.aborted, true)
+  const before = state.now.value
+  t.mock.timers.tick(30_000)
+  assert.ok(state.now.value > before)
+  assert.equal(requests.length, 2)
+  document.visibilityState = 'visible'
+  document.dispatchEvent(new Event('visibilitychange'))
+  requests[2].finish(Response.json({ request: question() }))
+  await settle()
+  assert.equal(state.customText.value, 'Retained while hidden')
+})
+
+
+test('delayed subscription ready and initial resets produce exactly one initial GET', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { requests, live, ready } = harness(t, {}, true)
+  live().reset?.()
+  live().reconnected?.()
+  t.mock.timers.tick(749)
+  assert.equal(requests.length, 0)
+  ready()
+  assert.equal(requests.length, 1)
+  requests[0].finish(Response.json({ request: question() }))
+  await settle()
+  t.mock.timers.tick(1000)
+  assert.equal(requests.length, 1)
+})
+
+test('initial readiness fallback is bounded and late ready after disposal cannot fetch', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { requests, ready, app, closed } = harness(t, {}, true)
+  t.mock.timers.tick(750)
+  assert.equal(requests.length, 1)
+  app.unmount()
+  assert.equal(closed(), 1)
+  assert.equal(requests[0].init.signal?.aborted, true)
+  ready()
+  t.mock.timers.tick(60_000)
+  await settle()
+  assert.equal(requests.length, 1)
+})
+
+test('disposing before subscription readiness cancels the initial fallback and late ready', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { requests, ready, app, closed } = harness(t, {}, true)
+  app.unmount()
+  ready()
+  t.mock.timers.tick(60_000)
+  await settle()
+  assert.equal(closed(), 1)
+  assert.equal(requests.length, 0)
+})
+
+
+test('repeated failed writes keep one reconciliation timer and unmount prevents late reads', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { state, requests, app } = harness(t)
+  requests[0].finish(Response.json({ request: question() }))
+  await settle()
+  for (let i = 0; i < 2; i++) {
+    const saving = state.submit()
+    requests.at(-1)!.finish(Response.json({ error: 'synthetic failure' }, { status: 503 }))
+    assert.equal(await saving, false)
+  }
+  assert.equal(requests.length, 3)
+  app.unmount()
+  t.mock.timers.tick(60_000)
+  await state.refresh()
+  assert.equal(requests.length, 3, 'neither overwritten timers nor stale callers fetch after unmount')
 })
