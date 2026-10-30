@@ -637,6 +637,12 @@ export class SessionTools extends Tools {
 
   override workingContextFolder(id: string) { return this.base.workingContextFolder(id) }
 
+  // Folder resolution is a host service, not a session-local dynamic tool or
+  // permission to expose use_project through the model's allowlist.
+  override executionTargetFolder(identifier: string, signal: AbortSignal) {
+    return this.base.executionTargetFolder(identifier, signal)
+  }
+
   override get(name: string): Tool | undefined {
     if (!this.isToolAllowed(name)) return undefined
     return this.base.get(name)
