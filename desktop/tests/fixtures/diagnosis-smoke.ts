@@ -23,6 +23,7 @@ const assets = argument('layout-assets')
 const layoutMode = process.argv.find(value => value.startsWith('--conversation-layout='))?.split('=')[1]
 const messageSourceMode = process.argv.includes('--message-source')
 const conversationSummaryMode = process.argv.includes('--conversation-summary')
+const timelineMode = process.argv.includes('--timeline-navigation')
 let devServer: { close(): Promise<void> } | undefined
 const ui = new Hono()
 uiPlugin(assets)(ui)
@@ -422,7 +423,8 @@ const server = createServer(async (request, response) => {
     }
     if (path === '/api/chat/session') {
       chatHistoryRequests.push(url.searchParams.get('chatId') || '')
-      return json({ history: historyFor(url.searchParams.get('chatId') || ''), systemPrompt: '# Synthetic system prompt\n\nUse the folder workdir. Inline $x^2$.\n\n$$\\frac{1}{2}$$', tools, previousPhysicalId: 'physical-older' })
+      const data = { history: historyFor(url.searchParams.get('chatId') || ''), systemPrompt: '# Synthetic system prompt\n\nUse the folder workdir. Inline $x^2$.\n\n$$\\frac{1}{2}$$', tools, previousPhysicalId: 'physical-older' }
+      return json(timelineMode ? { revision: 'a'.repeat(64), data } : data)
     }
     if (path.startsWith('/api/sessions/')) {
       const key = decodeURIComponent(path.slice('/api/sessions/'.length))
@@ -494,6 +496,11 @@ const server = createServer(async (request, response) => {
         if (waiting) await waiting
         return json({ messages: snapshot, currentPhysicalId: 'physical-agent', previousPhysicalId: null })
       }
+      if (timelineMode && key === 'physical-older') {
+        await new Promise(r => setTimeout(r, 900))
+        return json({ messages: Array.from({ length: 2001 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `Earlier synthetic message ${i}` })), currentPhysicalId: key, previousPhysicalId: 'physical-earlier' })
+      }
+      if (timelineMode && key === 'physical-earlier') return json({ messages: [{ role: 'user', content: 'Targeted earlier segment reached.' }], currentPhysicalId: key, previousPhysicalId: null })
       return json({ messages: historyFor(key), currentPhysicalId: key === idB ? 'physical-b' : key === idChild ? 'physical-child' : 'physical-a', previousPhysicalId: key === idA ? 'physical-older' : null })
     }
     if (path === '/v1/query/session-spans') {
@@ -794,6 +801,7 @@ async function closeDetails(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (timelineMode) messagesA.push(...Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `Synthetic timeline reply ${i}: a quiet reading surface with preserved context.`, timestamp: timestamp(3000 + i) })))
   await app.whenReady()
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -830,7 +838,75 @@ async function main(): Promise<void> {
   await waitFor(`document.querySelectorAll('.session-select').length === 5`)
   await selectSession(idA)
   await waitFor(`document.querySelectorAll('.chat-bubble').length >= 4`)
-  await waitFor(`document.querySelector('.file-workbench.explorer-docked .tree-row[data-path="README.md"]')`)
+  if (!timelineMode) await waitFor(`document.querySelector('.file-workbench.explorer-docked .tree-row[data-path="README.md"]')`)
+  if (timelineMode) {
+    // This older disposable fixture does not serve credential/setup endpoints.
+    await evaluate(`(() => { const style = document.createElement('style'); style.textContent = '.bot-chat-setup, .credential-request { display:none !important }'; document.head.append(style) })()`)
+    await new Promise(r => setTimeout(r, 250))
+    for (const width of [320, 390, 480, 1400]) {
+      window.setContentSize(width, 900)
+      await waitFor(`window.innerWidth === ${width}`)
+      await new Promise(r => setTimeout(r, 250))
+      for (const theme of ['light', 'dark']) {
+        await evaluate(`document.documentElement.classList.toggle('dark', ${theme === 'dark'})`)
+        // At desktop size exercise a narrow embedded pane rather than viewport positioning.
+        await evaluate(`(() => { const pane = document.querySelector('.chat-history'); pane.style.width = ${width} === 480 ? '480px' : ''; const scroller = document.querySelector('.chat-messages'); scroller.scrollTop = 100; scroller.dispatchEvent(new Event('scroll')); })()`)
+        await waitFor(`Boolean(document.querySelector('.timeline-latest'))`)
+        await writeFile(join(directory, `timeline-${width}-${theme}.png`), (await window.webContents.capturePage()).toPNG())
+        assert.equal(await evaluate(`(() => {
+          const button = document.querySelector('.timeline-latest'), pane = document.querySelector('.chat-history');
+          const b = button.getBoundingClientRect(), p = pane.getBoundingClientRect();
+          const composer = document.querySelector('.conversation-dock').getBoundingClientRect();
+          return b.left >= p.left && b.right <= p.right && b.top >= p.top && b.bottom <= Math.min(p.bottom, composer.top) && Math.abs(b.width - b.height) < 1 && !button.title && button.getAttribute('aria-label') === 'Return to latest' && !button.textContent.trim();
+        })()`), true, `timeline bounds ${width} ${theme}`)
+        window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
+        window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' })
+        await evaluate(`document.querySelector('.timeline-latest').focus()`)
+        assert.equal(await evaluate(`document.querySelector('.timeline-latest').hasAttribute('data-hover-info-trigger')`), true)
+        // Hidden offscreen windows do not expose native keyboard focus reliably.
+        await evaluate(`document.querySelector('.hover-info-anchor:has(.timeline-latest)').dispatchEvent(new PointerEvent('pointerenter'))`)
+        await waitFor(`document.querySelector('.timeline-latest').getAttribute('aria-describedby') === document.querySelector('[role="tooltip"]')?.id`)
+        assert.equal(await evaluate(`document.querySelector('.timeline-latest').getAttribute('aria-describedby') === document.querySelector('[role="tooltip"]').id`), true)
+        await writeFile(join(directory, `timeline-${width}-${theme}.png`), (await window.webContents.capturePage()).toPNG())
+        await evaluate(`document.querySelector('.timeline-latest').click()`)
+        await waitFor(`!document.querySelector('.timeline-latest')`)
+        assert.equal(await evaluate(`(() => { const s = document.querySelector('.chat-messages'); return s.scrollHeight - s.clientHeight - s.scrollTop < 5 })()`), true)
+      }
+    }
+    for (const [width, theme] of [[390, 'dark'], [1400, 'light']] as const) {
+      window.setContentSize(width, 900)
+      await waitFor(`window.innerWidth === ${width}`)
+      await evaluate(`document.documentElement.classList.toggle('dark', ${theme === 'dark'})`)
+      await new Promise(r => setTimeout(r, 250))
+      // Prevent only the first scroll's automatic loading, to inspect the manual action.
+      await evaluate(`(() => { const scroller = document.querySelector('.chat-messages'); scroller.addEventListener('scroll', event => event.stopImmediatePropagation(), { capture: true, once: true }); scroller.scrollTop = 0; })()`)
+      await new Promise(r => setTimeout(r, 100))
+      assert.equal(await evaluate(`(() => { const b = document.querySelector('.timeline-older button'); return b.textContent === 'Load older messages' && getComputedStyle(b).borderTopWidth === '0px'; })()`), true)
+      await writeFile(join(directory, `timeline-older-${width}-${theme}.png`), (await window.webContents.capturePage()).toPNG())
+      await evaluate(`document.querySelector('.timeline-older button').click()`)
+      await waitFor(`document.querySelector('.timeline-older button')?.disabled === true`)
+      assert.equal(await evaluate(`document.querySelector('.timeline-older [role="status"]').textContent === 'Loading older messages…' && document.querySelector('.chat-history').getAttribute('aria-busy') === 'true'`), true)
+      await writeFile(join(directory, `timeline-loading-${width}-${theme}.png`), (await window.webContents.capturePage()).toPNG())
+      await waitFor(`Boolean(document.querySelector('.timeline-limit'))`)
+      await evaluate(`document.querySelector('.chat-messages').scrollTop = 0`)
+      await waitFor(`document.querySelector('.chat-messages').scrollTop === 0`)
+      await new Promise(r => setTimeout(r, 150))
+      assert.equal(await evaluate(`document.querySelector('.timeline-limit').tagName === 'P' && !document.querySelector('.timeline-older button')`), true)
+      await writeFile(join(directory, `timeline-limit-${width}-${theme}.png`), (await window.webContents.capturePage()).toPNG())
+      await evaluate(`document.querySelector('.conversation-boundary').scrollIntoView({ block: 'center' }); document.querySelector('.conversation-boundary summary').click()`)
+      await waitFor(`document.querySelector('.conversation-boundary').open`)
+      await new Promise(r => setTimeout(r, 150))
+      assert.equal(await evaluate(`(() => { const d = document.querySelector('.conversation-boundary'); return !d.innerText.includes('physical-earlier') && !d.innerText.includes('physical-older') && getComputedStyle(d.querySelector('button')).borderTopWidth === '0px'; })()`), true)
+      await writeFile(join(directory, `timeline-boundary-${width}-${theme}.png`), (await window.webContents.capturePage()).toPNG())
+      await evaluate(`document.querySelector('.conversation-boundary button').click()`)
+      await waitFor(`document.body.innerText.includes('Targeted earlier segment reached.')`)
+      // Existing current-history node returns from targeted navigation to live.
+      await evaluate(`document.querySelector('.segment-nav button[aria-label="Back to current session"]').click()`)
+      await waitFor(`Boolean(document.querySelector('.timeline-older button'))`)
+    }
+    console.log('LAYOUT_RESULT {"ok":true,"mode":"timeline"}')
+    return
+  }
   if (conversationSummaryMode) {
     assert.equal(await evaluate(`document.querySelector('.compaction-summary').tagName`), 'DETAILS')
     assert.equal(await evaluate(`document.querySelector('.compaction-summary').open`), false)

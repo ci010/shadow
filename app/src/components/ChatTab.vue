@@ -94,11 +94,15 @@
           @update:open="searchVisibilityChanged" @query-change="clearSearchHighlights" />
 
         <!-- Messages -->
-        <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
+        <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" :class="{ 'has-history-rail': !mobileLayout }" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
         <div ref="messagesContainer" class="chat-messages" tabindex="-1" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
           <ChannelGroupContext v-if="/^(qq:|feishu:|bot:)/.test(activeSessionId) && !viewingPhysicalId" :key="activeSessionId" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :group-key="activeSession?.channelAddress ? serviceGroupKey(activeSession.channelAddress) : undefined" :session-id="activeSessionId" :active="visible && route.name === 'chat'" />
           <div class="chat-message-list">
-          <button v-if="!viewingPhysicalId && oldestPhysicalId" type="button" class="timeline-control" :disabled="loadingHistory || !canLoadOlder" @click="prependOlderSegment">{{ loadingHistory ? t('Loading older messages…') : canLoadOlder ? t('Load older messages') : t('History window limit reached. Use history navigation to read earlier segments.') }}</button>
+          <div v-if="!viewingPhysicalId && oldestPhysicalId" class="timeline-older">
+            <button v-if="canLoadOlder || loadingHistory" type="button" :disabled="loadingHistory" @click="prependOlderSegment">{{ loadingHistory ? t('Loading older messages…') : t('Load older messages') }}</button>
+            <p v-else class="timeline-limit">{{ t('History window limit reached. Use history navigation to read earlier segments.') }}</p>
+            <span v-if="loadingHistory" class="sr-only" role="status">{{ t('Loading older messages…') }}</span>
+          </div>
           <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
             :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
           <div v-else-if="!loadingHistory && messages.length === 0 && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : channelConversation ? t('Messages from this channel will appear here.') : t('No messages yet. Send one below.') }}</div>
@@ -242,7 +246,9 @@
           </div>
           </div>
         </div>
-        <button v-if="historyBrowsing && !viewingPhysicalId" type="button" class="timeline-latest timeline-control" @click="returnToLatest">{{ t('Return to latest') }}<span class="i-lucide-arrow-down" aria-hidden="true" /></button>
+        <div v-if="historyBrowsing && !viewingPhysicalId" class="timeline-latest-anchor"><HoverInfo :text="t('Return to latest')" v-slot="{ triggerProps }">
+          <button v-bind="triggerProps" type="button" class="timeline-latest" :aria-label="t('Return to latest')" @click="returnToLatest"><span class="i-lucide-arrow-down" aria-hidden="true" /></button>
+        </HoverInfo></div>
         <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
         </div>
       </template>
@@ -533,6 +539,7 @@ import MessageTimestamp from './MessageTimestamp.vue'
 import SessionActivity from './SessionActivity.vue'
 import SegmentNavigation from './SegmentNavigation.vue'
 import ConversationBoundary from './ConversationBoundary.vue'
+import HoverInfo from './HoverInfo.vue'
 import ConversationHistoryMenu from './ConversationHistoryMenu.vue'
 import WorkingWave from './WorkingWave.vue'
 import YieldQuestion from './YieldQuestion.vue'
@@ -3438,11 +3445,18 @@ function resendLastMessage() {
 .decision-history-note { margin: 0; color: var(--c-text-secondary); font-size: 12px; }
 .unlinked-executions summary { cursor: pointer; }
 .unlinked-executions summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.timeline-control { min-height: 40px; padding: 8px 12px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-secondary); cursor: pointer; font-size: 12px; }
-@media (pointer: coarse) { .timeline-control { min-height: 44px; } }
-.timeline-control:disabled { cursor: default; }
-.timeline-control:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.timeline-latest { position: absolute; bottom: 12px; right: 32px; display: flex; align-items: center; gap: 8px; }
+.timeline-older { text-align: center; color: var(--c-text-muted); font-size: 12px; }
+.timeline-older button { min-height: 40px; padding: 8px; border: 0; background: transparent; color: var(--c-text-secondary); cursor: pointer; font: inherit; }
+.timeline-older button:hover:not(:disabled) { color: var(--c-text); background: var(--c-bg-soft); }
+.timeline-older button:disabled { cursor: default; }
+.timeline-limit { margin: 8px auto 16px; max-width: 65ch; line-height: 1.5; }
+.timeline-latest-anchor { position: absolute; bottom: calc(var(--composer-height, 0px) + 12px); right: 64px; z-index: 2; }
+.timeline-latest { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-secondary); cursor: pointer; }
+.timeline-latest > span { width: 16px; height: 16px; }
+.timeline-latest:hover { background: var(--c-bg-muted); color: var(--c-text); }
+.timeline-latest:focus-visible, .timeline-older button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+@container (max-width: 700px) { .timeline-latest-anchor { right: 12px; } .has-history-rail .timeline-latest-anchor { right: 40px; } .timeline-latest { width: 44px; height: 44px; } .timeline-older button { min-height: 44px; } }
+@media (pointer: coarse) { .timeline-latest { width: 44px; height: 44px; } .timeline-older button { min-height: 44px; } }
 .chat-messages { overflow-anchor: none; }
 .history-disclosure { width: 100%; margin: 0; }
 .history-disclosure > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px; box-sizing: border-box; list-style: none; font-size: 12px; line-height: 20px; font-weight: 500; }
