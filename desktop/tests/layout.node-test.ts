@@ -122,6 +122,10 @@ test('settings groups providers and live channel setup with persistent drafts an
   await runFixture(t, 'settings-smoke')
 })
 
+test('timeline navigation stays pane-contained and accessible across themes and widths', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'diagnosis-smoke', ['--timeline-navigation'])
+})
+
 async function runFixture(t: TestContext, fixture: string, args: string[] = []): Promise<void> {
   const assets = join(repository, 'app', 'dist')
   await assert.doesNotReject(access(join(assets, 'index.html')), 'Build the renderer with pnpm build:app before the layout test')
@@ -233,6 +237,22 @@ async function runFixture(t: TestContext, fixture: string, args: string[] = []):
         try { await access(join(directory, name)) } catch { continue }
       }
       await copyFile(join(directory, name), join(output, name))
+    }
+  }
+  if (args.includes('--timeline-navigation') && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+    const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
+    await mkdir(output, { recursive: true })
+    for (const width of [320, 390, 480, 1400]) for (const theme of ['light', 'dark']) {
+      const name = `timeline-${width}-${theme}.png`
+      try { await access(join(directory, name)) } catch { continue }
+      await copyFile(join(directory, name), join(output, name))
+    }
+  }
+  if (args.includes('--timeline-navigation') && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+    for (const width of [390, 1400]) for (const theme of ['light', 'dark']) for (const state of ['older', 'loading', 'limit', 'boundary']) {
+      const name = `timeline-${state}-${width}-${theme}.png`
+      try { await access(join(directory, name)) } catch { continue }
+      await copyFile(join(directory, name), join(resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS), name))
     }
   }
   if (args.length && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
