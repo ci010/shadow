@@ -4127,5 +4127,12 @@
   "No directories advertised.": "暂无已公布的目录。",
   "Device operations": "设备操作",
   "Support is not project permission. Select a registered project folder to use a directory.": "支持信息不代表项目权限。请选择已注册的项目文件夹以使用目录。",
-  "Available shells": "可用 Shell"
+  "Available shells": "可用 Shell",
+  "Loading older messages…": "正在加载更早的消息…",
+  "Load older messages": "加载更早的消息",
+  "History window limit reached. Use history navigation to read earlier segments.": "已达到历史窗口上限。请使用历史导航阅读更早的分段。",
+  "Return to latest": "返回最新消息",
+  "Previous segment": "上一分段",
+  "View previous segment": "查看上一分段",
+  "History": "历史"
 }

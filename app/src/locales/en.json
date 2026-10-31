@@ -4127,5 +4127,12 @@
   "No directories advertised.": "No directories advertised.",
   "Device operations": "Device operations",
   "Support is not project permission. Select a registered project folder to use a directory.": "Support is not project permission. Select a registered project folder to use a directory.",
-  "Available shells": "Available shells"
+  "Available shells": "Available shells",
+  "Loading older messages…": "Loading older messages…",
+  "Load older messages": "Load older messages",
+  "History window limit reached. Use history navigation to read earlier segments.": "History window limit reached. Use history navigation to read earlier segments.",
+  "Return to latest": "Return to latest",
+  "Previous segment": "Previous segment",
+  "View previous segment": "View previous segment",
+  "History": "History"
 }

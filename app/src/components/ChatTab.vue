@@ -74,7 +74,7 @@
             :name="conversationTitle" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :can-rename="true" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
-          <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="!!previousPhysicalId || !!automationConversation?.hasPrevious.value"
+          <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="viewingPhysicalId ? !!previousPhysicalId : canLoadOlder || !!automationConversation?.hasPrevious.value"
             :historical="!!viewingPhysicalId || !!automationConversation?.historical.value" :busy="loadingHistory || !!automationConversation?.loading.value" @previous="viewPreviousSegment"
             @next="viewNextSegment" @current="goBackToCurrentSegment">
             <ConversationHistoryMenu :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId" :automation="automationConversation" @select="selectHistorySegment" />
@@ -98,6 +98,7 @@
         <div ref="messagesContainer" class="chat-messages" tabindex="-1" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
           <ChannelGroupContext v-if="/^(qq:|feishu:|bot:)/.test(activeSessionId) && !viewingPhysicalId" :key="activeSessionId" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :group-key="activeSession?.channelAddress ? serviceGroupKey(activeSession.channelAddress) : undefined" :session-id="activeSessionId" :active="visible && route.name === 'chat'" />
           <div class="chat-message-list">
+          <button v-if="!viewingPhysicalId && oldestPhysicalId" type="button" class="timeline-control" :disabled="loadingHistory || !canLoadOlder" @click="prependOlderSegment">{{ loadingHistory ? t('Loading older messages…') : canLoadOlder ? t('Load older messages') : t('History window limit reached. Use history navigation to read earlier segments.') }}</button>
           <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
             :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
           <div v-else-if="!loadingHistory && messages.length === 0 && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : channelConversation ? t('Messages from this channel will appear here.') : t('No messages yet. Send one below.') }}</div>
@@ -125,8 +126,9 @@
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :data-msg-idx="index" :can-manage="true" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
           </div>
-          <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
-          <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx">
+          <template v-for="(msg, idx) in displayMessages" :key="msg.timelineKey ?? `${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
+          <ConversationBoundary v-for="previousId in timelineBoundaries.get(idx) ?? []" :key="previousId" :previous-id="previousId" @select="selectTimelineBoundary" />
+          <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx" :data-timeline-key="msg.timelineKey">
             <div v-if="automationConversation?.automation.value?.source === 'system' && (msg.role === 'user' || (msg.role === 'assistant' && !msg.event && !!msg.content))"
               class="chat-bubble automation-bubble" :class="msg.role === 'user' ? 'chat-user' : 'chat-assistant'" :data-msg-idx="idx"
               role="article" :aria-label="t(msg.role === 'user' ? 'User message' : 'Assistant message')">
@@ -219,6 +221,7 @@
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </div>
           </template>
+          <ConversationBoundary v-for="previousId in timelineBoundaries.get(displayMessages.length) ?? []" :key="previousId" :previous-id="previousId" @select="selectTimelineBoundary" />
           <p v-if="decisionRecordError" class="composer-error" role="alert">{{ decisionRecordError }}
             <button type="button" @click="refreshDecisionRecords">{{ t('Retry decision history') }}</button>
           </p>
@@ -239,6 +242,7 @@
           </div>
           </div>
         </div>
+        <button v-if="historyBrowsing && !viewingPhysicalId" type="button" class="timeline-latest timeline-control" @click="returnToLatest">{{ t('Return to latest') }}<span class="i-lucide-arrow-down" aria-hidden="true" /></button>
         <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
         </div>
       </template>
@@ -528,6 +532,7 @@ import { insertQuote } from '../selection-actions.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import SessionActivity from './SessionActivity.vue'
 import SegmentNavigation from './SegmentNavigation.vue'
+import ConversationBoundary from './ConversationBoundary.vue'
 import ConversationHistoryMenu from './ConversationHistoryMenu.vue'
 import WorkingWave from './WorkingWave.vue'
 import YieldQuestion from './YieldQuestion.vue'
@@ -567,6 +572,7 @@ import AutomationConversationInfo from './AutomationConversationInfo.vue'
 import { provideModelSelection, useModelSelection } from '../model-selection.ts'
 import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
+import { timelineCanPrepend, prependScrollTop, retainTimelineRollover, timelineBoundaryPositions, reconcileTimelineKeys, limitFollowingTimeline, type TimelineSegment } from '../conversation-timeline.ts'
 import { chatHistorySnapshots } from '../chat-history-snapshot.ts'
 import type { LiveSubscription } from '../live-client.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
@@ -795,7 +801,7 @@ const isDirectChat = computed(() => {
 })
 const chatInput = ref<HTMLTextAreaElement>()
 const messagesContainer = ref<HTMLElement>()
-let historyBrowsing = false
+const historyBrowsing = ref(false)
 let historyLeftBottom = false
 const loadingHistory = ref(!!activeSessionId.value)
 const streaming = ref(false)
@@ -1271,6 +1277,8 @@ interface ChatMsg {
   isSystemEvent?: boolean
   /** Parsed event metadata: type, source name, and all XML attributes from the <event .../> tag. */
   eventMeta?: ChatEventMeta
+  /** View-local identity remains stable when older segments are prepended. */
+  timelineKey?: string
   /** True for compaction summary messages — the first message after a session compact. */
   isSummary?: boolean
   /** True when this bubble is a failed-request notice that can be retried. */
@@ -1278,6 +1286,95 @@ interface ChatMsg {
 }
 
 const messages = ref<ChatMsg[]>([])
+const olderSegments = shallowRef<TimelineSegment<ChatMsg, YieldDecisionRecord>[]>([])
+let currentTimelinePhysicalId: string | undefined
+let currentTimelineDecisions: YieldDecisionRecord[] = []
+let currentTimelinePrevious: string | null | undefined
+let timelineKeySequence = 0
+const oldestPhysicalId = computed(() => olderSegments.value[0]?.previousId ?? (olderSegments.value.length ? null : previousPhysicalId.value))
+const timelinePrefixLength = computed(() => olderSegments.value.reduce((count, segment) => count + segment.messages.length, 0))
+const timelineBoundaries = computed(() => timelineBoundaryPositions(olderSegments.value, previousPhysicalId.value))
+const canLoadOlder = computed(() => !viewingPhysicalId.value && !!oldestPhysicalId.value && timelineCanPrepend(olderSegments.value, messages.value.length))
+function tagTimelineMessages(items: ChatMsg[]): ChatMsg[] {
+  return items.map(msg => ({ ...msg, timelineKey: msg.timelineKey ?? `timeline-${++timelineKeySequence}` }))
+}
+function resetTimeline(): void {
+  olderSegments.value = []
+  currentTimelinePrevious = undefined
+  currentTimelineDecisions = []
+  currentTimelinePhysicalId = undefined
+}
+function applyCurrentTimeline(items: ChatMsg[], records: YieldDecisionRecord[], previousId: string | null, physicalId?: string): void {
+  const container = messagesContainer.value
+  const anchor = historyBrowsing.value && container
+    ? [...container.querySelectorAll<HTMLElement>('[data-timeline-key]')].find(element => element.getBoundingClientRect().bottom > container.getBoundingClientRect().top)
+    : undefined
+  const anchorKey = anchor?.dataset.timelineKey
+  const anchorTop = anchor?.getBoundingClientRect().top
+  const prefixLength = olderSegments.value.reduce((count, segment) => count + segment.messages.length, 0)
+  const current = messages.value.slice(prefixLength)
+  // A changed previous ID identifies a closed physical segment, not its transition reason.
+  if (!viewingPhysicalId.value) olderSegments.value = retainTimelineRollover(olderSegments.value, tagTimelineMessages(current), currentTimelineDecisions, currentTimelinePrevious, previousId, currentTimelinePhysicalId ?? previousId)
+  if (viewingPhysicalId.value) resetTimeline()
+  const tagged = currentTimelinePrevious === previousId ? reconcileTimelineKeys(items, current) : items
+  messages.value = [...olderSegments.value.flatMap(segment => segment.messages), ...tagTimelineMessages(tagged)]
+  decisionRecords.value = [...new Map([...olderSegments.value.flatMap(segment => segment.decisions), ...records].map(record => [record.request.id, record])).values()]
+  currentTimelinePrevious = previousId
+  currentTimelineDecisions = records
+  currentTimelinePhysicalId = physicalId
+  if (!historyBrowsing.value) pruneFollowingTimeline()
+  if (anchorKey && anchorTop !== undefined) void nextTick(() => {
+    const retained = [...(container?.querySelectorAll<HTMLElement>('[data-timeline-key]') ?? [])].find(element => element.dataset.timelineKey === anchorKey)
+    if (container && retained && historyBrowsing.value) container.scrollTop += retained.getBoundingClientRect().top - anchorTop
+  })
+}
+async function prependOlderSegment(): Promise<void> {
+  const id = oldestPhysicalId.value
+  if (!id || !canLoadOlder.value || loadingHistory.value || historyRequest || olderSegments.value.some(segment => segment.id === id)) return
+  const controller = new AbortController()
+  historyRequest = controller
+  loadingHistory.value = true
+  const container = messagesContainer.value
+  browseHistory()
+  try {
+    const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(id)}`), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) })
+    if (!res.ok) throw new Error(t('Could not load this historical segment. Refresh to retry.'))
+    const data = await res.json()
+    if (controller.signal.aborted) return
+    const segment = { id, previousId: data.previousPhysicalId ?? null, messages: tagTimelineMessages(mergeCommandResults(collapseHistory(data.messages ?? []), data.commandResults)), decisions: parseDecisionRecords(data.decisionRecords ?? []) }
+    const before = container ? { top: container.scrollTop, height: container.scrollHeight } : undefined
+    olderSegments.value = [segment, ...olderSegments.value]
+    const expanded = [...expandedThinking]
+    expandedThinking.clear()
+    expanded.forEach(index => expandedThinking.add(index + segment.messages.length))
+    messages.value = [...segment.messages, ...tagTimelineMessages(messages.value)]
+    decisionRecords.value = [...new Map([...segment.decisions, ...decisionRecords.value].map(record => [record.request.id, record])).values()]
+    composerError.value = ''
+    await nextTick()
+    if (container && before) container.scrollTop = prependScrollTop(before, container.scrollHeight)
+  } catch (cause) {
+    if (!controller.signal.aborted) composerError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (historyRequest === controller) { historyRequest = undefined; loadingHistory.value = false; if (directRefreshPending) refreshDirectHistory() }
+  }
+}
+function pruneFollowingTimeline(): void {
+  const current = messages.value.slice(timelinePrefixLength.value)
+  const retained = limitFollowingTimeline(olderSegments.value, current.length)
+  if (retained === olderSegments.value) return
+  olderSegments.value = retained
+  messages.value = [...retained.flatMap(segment => segment.messages), ...current]
+  decisionRecords.value = [...new Map([...retained.flatMap(segment => segment.decisions), ...currentTimelineDecisions].map(record => [record.request.id, record])).values()]
+}
+function returnToLatest(): void {
+  conversationSearch.value?.close()
+  pruneFollowingTimeline()
+  historyBrowsing.value = false
+  historyLeftBottom = false
+  if (viewingPhysicalId.value) void goBackToCurrentSegment()
+  else scrollToBottom()
+}
+
 const displayMessages = computed(() => messages.value.map(msg => ({
   ...msg, attachmentBody: messageAttachments(msg.content, msg.media),
 })))
@@ -1334,7 +1431,8 @@ async function refreshDecisionRecords() {
     const data = await response.json()
     const records = parseDecisionRecords(data.records)
     if (!controller.signal.aborted && activeSessionId.value === sessionId && viewingPhysicalId.value === physicalId) {
-      decisionRecords.value = records
+      if (!physicalId) currentTimelineDecisions = records
+      decisionRecords.value = [...new Map([...olderSegments.value.flatMap(segment => segment.decisions), ...records].map(record => [record.request.id, record])).values()]
       decisionRecordError.value = ''
     }
   } catch (cause) {
@@ -1345,7 +1443,7 @@ async function refreshDecisionRecords() {
 }
 const toolActivity = computed(() => groupToolActivity(displayMessages.value, new Set([
   ...inlineExecutions.value.excluded, ...messageActions.value.excluded, ...yieldDecisions.value.excluded, ...inputQuestions.value.excluded,
-]), new Set([...yieldDecisions.value.after.keys(), ...ioAfter.value.keys()])))
+]), new Set([...yieldDecisions.value.after.keys(), ...ioAfter.value.keys(), ...[...timelineBoundaries.value.keys()].map(index => index - 1)])))
 const allSessions = ref<SidebarSession[]>([])
 const sessionsLoading = ref(false)
 const sessionsError = ref('')
@@ -1952,12 +2050,13 @@ function resetConversation(): void {
   decisionRecordRequest?.abort()
   decisionRecords.value = []
   decisionRecordError.value = ''
-  historyBrowsing = false
+  historyBrowsing.value = false
   historyLeftBottom = false
   resetStreamPresentation()
   streamingToolCallData.value = null
   systemPrompt.value = ''
   tools.value = []
+  resetTimeline()
   previousPhysicalId.value = null
   viewingPhysicalId.value = null
   physicalIdStack.value = []
@@ -2031,8 +2130,7 @@ async function loadDirectChat(background = false): Promise<void> {
     if (controller.signal.aborted) return
     const container = messagesContainer.value
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
-    messages.value = mergeCommandResults(collapseHistory(data.history ?? []), data.commandResults)
-    decisionRecords.value = parseDecisionRecords(data.decisionRecords ?? [])
+    applyCurrentTimeline(mergeCommandResults(collapseHistory(data.history ?? []), data.commandResults), parseDecisionRecords(data.decisionRecords ?? []), data.previousPhysicalId ?? null, data.currentPhysicalId)
     decisionRecordError.value = ''
     if (!sendRequest && !streaming.value) {
       streaming.value = false
@@ -2081,8 +2179,7 @@ async function loadReadonlySession(background = false): Promise<void> {
     const container = messagesContainer.value
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
     const rawMessages: RawMessage[] = histData.messages ?? []
-    messages.value = mergeCommandResults(collapseHistory(rawMessages), histData.commandResults)
-    decisionRecords.value = parseDecisionRecords(histData.decisionRecords ?? [])
+    applyCurrentTimeline(mergeCommandResults(collapseHistory(rawMessages), histData.commandResults), parseDecisionRecords(histData.decisionRecords ?? []), histData.previousPhysicalId ?? null, histData.currentPhysicalId)
     decisionRecordError.value = ''
     previousPhysicalId.value = histData.previousPhysicalId ?? null
     if (!background) {
@@ -2112,6 +2209,14 @@ async function loadReadonlySession(background = false): Promise<void> {
 
 // ── Segment navigation ───────────────────────────────────────────────────────
 
+async function selectTimelineBoundary(id: string): Promise<void> {
+  const index = olderSegments.value.findIndex(segment => segment.id === id)
+  const newer = viewingPhysicalId.value
+    ? [...physicalIdStack.value.map(value => value || null), viewingPhysicalId.value]
+    : [null, ...olderSegments.value.slice(index + 1).map(segment => segment.id).reverse()]
+  await selectHistorySegment(id, newer)
+}
+
 async function selectHistorySegment(id: string | null, newer: (string | null)[]): Promise<void> {
   if (loadingHistory.value) return
   if (!id) { await loadCurrentSession(); return }
@@ -2121,7 +2226,8 @@ async function selectHistorySegment(id: string | null, newer: (string | null)[])
 
 async function viewPreviousSegment(): Promise<void> {
   if (loadingHistory.value) return
-  if (previousPhysicalId.value) await loadHistoricalSegment(previousPhysicalId.value, 'previous')
+  if (!viewingPhysicalId.value && canLoadOlder.value) await prependOlderSegment()
+  else if (viewingPhysicalId.value && previousPhysicalId.value) await loadHistoricalSegment(previousPhysicalId.value, 'previous')
   else automationConversation.value?.previous()
 }
 
@@ -2148,6 +2254,7 @@ async function loadHistoricalSegment(physId: string, direction: 'previous' | 'ne
     const nextDecisions = parseDecisionRecords(data.decisionRecords ?? [])
     if (direction === 'previous') physicalIdStack.value.push(viewingPhysicalId.value ?? '')
     else physicalIdStack.value.pop()
+    resetTimeline()
     messages.value = nextMessages
     decisionRecords.value = nextDecisions
     decisionRecordError.value = ''
@@ -2217,13 +2324,13 @@ function searchEntries(segment: SearchSegment): ConversationSearchEntry[] {
 }
 const currentSearchEntries = computed(() => {
   if (!searchOpen.value || viewingPhysicalId.value) return undefined
-  return searchEntries({ id: null, previousId: previousPhysicalId.value, messages: messages.value, decisions: decisionRecords.value })
+  return searchEntries({ id: null, previousId: previousPhysicalId.value, messages: messages.value.slice(timelinePrefixLength.value), decisions: decisionRecords.value })
 })
 const liveSearchEntries = computed(() => {
   const entries = currentSearchEntries.value
   if (!entries) return undefined
   return streaming.value && streamContent.value
-    ? [...entries, { segmentId: null, messageIndex: messages.value.length, blocks: [streamContent.value] }] : entries
+    ? [...entries, { segmentId: null, messageIndex: messages.value.length - timelinePrefixLength.value, blocks: [streamContent.value] }] : entries
 })
 async function loadSearchEntries(signal: AbortSignal): Promise<ConversationSearchEntry[]> {
   const history = await loadConversationSearchHistory(props.apiBase, activeSessionId.value, signal)
@@ -2238,7 +2345,7 @@ async function loadSearchEntries(signal: AbortSignal): Promise<ConversationSearc
   })
   if (!viewingPhysicalId.value && !loadingHistory.value) {
     const current = segments.at(-1)!
-    current.messages = [...messages.value]
+    current.messages = messages.value.slice(timelinePrefixLength.value)
     current.decisions = decisionRecords.value
   }
   searchSegments = segments
@@ -2274,6 +2381,7 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
       signal.throwIfAborted()
       if (composerError.value) throw new Error(composerError.value)
     } else {
+      resetTimeline()
       messages.value = [...segment.messages]
       decisionRecords.value = segment.decisions
       decisionRecordError.value = ''
@@ -2285,8 +2393,10 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   }
   await nextTick()
   signal.throwIfAborted()
-  const wrapper = messagesContainer.value?.querySelector<HTMLElement>(`[data-search-message-idx="${match.entry.messageIndex}"]`)
-  const processNode = messagesContainer.value?.querySelector<HTMLElement>(`.tool-entry[data-msg-idx="${match.entry.messageIndex}"]`)
+  const renderedIndex = match.entry.messageIndex + (match.entry.segmentId === null ? timelinePrefixLength.value : 0)
+  const processNode = messagesContainer.value?.querySelector<HTMLElement>(`.tool-entry[data-msg-idx="${renderedIndex}"]`)
+  const wrapper = messagesContainer.value?.querySelector<HTMLElement>(`[data-search-message-idx="${renderedIndex}"]`)
+    ?? processNode?.closest<HTMLElement>('[data-search-message-idx]')
   if (processNode) {
     for (let parent: HTMLElement | null = processNode; parent && parent !== messagesContainer.value; parent = parent.parentElement) {
       if (parent instanceof HTMLDetailsElement) parent.open = true
@@ -2296,7 +2406,7 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   for (let parent = wrapper.parentElement; parent && parent !== messagesContainer.value; parent = parent.parentElement) {
     if (parent instanceof HTMLDetailsElement) parent.open = true
   }
-  for (const details of wrapper.querySelectorAll('details')) details.open = true
+  for (const details of (processNode ?? wrapper).querySelectorAll('details')) details.open = true
   for (const card of wrapper.querySelectorAll('.message-preview-card')) card.dispatchEvent(new Event('message-card-expand'))
   // Lazy disclosure bodies mount after the native toggle event, not on the same Vue tick.
   await new Promise<void>(resolve => setTimeout(resolve, 0))
@@ -2341,7 +2451,7 @@ watch([messagesContainer, searchOpen], ([container, open]) => {
       searchFrame = undefined
       if (!searchTarget) return
       const { match, query } = searchTarget
-      const wrapper = container.querySelector<HTMLElement>(`[data-search-message-idx="${match.entry.messageIndex}"]`)
+      const wrapper = container.querySelector<HTMLElement>(`[data-search-message-idx="${match.entry.messageIndex + (match.entry.segmentId === null ? timelinePrefixLength.value : 0)}"]`)
       const block = wrapper && visibleSearchBlocks(wrapper)[match.blockIndex]
       const range = block && searchRange(block, match.start, match.end)
       const hit = range && textMatches(range.toString(), query)[0]
@@ -2576,7 +2686,7 @@ async function sendMessage(overrideContent?: string, opts?: {
   }
   if (providerBlocksSubmission(providerNotice.value, false, !!opts?.queue)) return
   const followUp = requestBusy.value
-  historyBrowsing = false
+  historyBrowsing.value = false
   historyLeftBottom = false
   submittingMessage.value = true
   const generation = sessionSelectionGeneration
@@ -2787,7 +2897,7 @@ watch(() => props.visible && conversationDocumentVisible.value && activePanel.va
 })
 
 function browseHistory(): void {
-  historyBrowsing = true
+  historyBrowsing.value = true
   historyLeftBottom = false
 }
 
@@ -2800,15 +2910,16 @@ function trackHistoryScroll(): void {
   const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 32
   // A smooth jump starts at the bottom; only resume following after returning there.
   if (!atBottom) {
-    historyBrowsing = true
+    historyBrowsing.value = true
     historyLeftBottom = true
   }
-  else if (historyLeftBottom) historyBrowsing = false
+  else if (historyLeftBottom) historyBrowsing.value = false
+  if (container.scrollTop < 80 && !viewingPhysicalId.value) void prependOlderSegment()
 }
 
 function scrollToBottom(): void {
   nextTick(() => {
-    if (searchOpen.value || historyBrowsing || !props.visible || !conversationDocumentVisible.value || activePanel.value !== 'conversation') return
+    if (searchOpen.value || historyBrowsing.value || !props.visible || !conversationDocumentVisible.value || activePanel.value !== 'conversation') return
     const el = messagesContainer.value
     if (el) el.scrollTop = el.scrollHeight
   })
@@ -3007,7 +3118,7 @@ watch(composerDock, element => {
     const container = messagesContainer.value
     const followBottom = container && container.scrollHeight - container.scrollTop - container.clientHeight < 32
     dockHeight.value = element.getBoundingClientRect().height
-    if (followBottom) void nextTick(() => { if (container && !historyBrowsing && !searchOpen.value) container.scrollTop = container.scrollHeight })
+    if (followBottom) void nextTick(() => { if (container && !historyBrowsing.value && !searchOpen.value) container.scrollTop = container.scrollHeight })
   })
   dockObserver.observe(element)
 }, { flush: 'post' })
@@ -3327,6 +3438,12 @@ function resendLastMessage() {
 .decision-history-note { margin: 0; color: var(--c-text-secondary); font-size: 12px; }
 .unlinked-executions summary { cursor: pointer; }
 .unlinked-executions summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.timeline-control { min-height: 40px; padding: 8px 12px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-secondary); cursor: pointer; font-size: 12px; }
+@media (pointer: coarse) { .timeline-control { min-height: 44px; } }
+.timeline-control:disabled { cursor: default; }
+.timeline-control:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.timeline-latest { position: absolute; bottom: 12px; right: 32px; display: flex; align-items: center; gap: 8px; }
+.chat-messages { overflow-anchor: none; }
 .history-disclosure { width: 100%; margin: 0; }
 .history-disclosure > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px; box-sizing: border-box; list-style: none; font-size: 12px; line-height: 20px; font-weight: 500; }
 .history-disclosure > summary::-webkit-details-marker { display: none; }

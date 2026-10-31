@@ -444,10 +444,25 @@ banner.
 
 ### Conversation and action cards
 
-Physical session history is navigated from the conversation heading, not from
-rows above or below the messages. Use three compact Git-style node controls:
-previous segment, return to current, and next segment. Next retraces visited
-segments one at a time; the middle control jumps directly to the live session.
+The live conversation is a continuous timeline. Older physical segments load on
+approaching the top or using Load older messages; prepending preserves the reading
+position and keeps the live composer available. History disclosures sit at actual
+segment boundaries, retaining summary/event rows without inferring a compact or
+handoff reason from the segment link. Return to latest resumes bottom following.
+The first version loads one segment per request, stops manual/lazy loading after
+eight older segments or 2,000 loaded messages, and does not virtualize messages
+within a segment. A single fetched segment may exceed that soft message limit;
+live rollover retains visible messages rather than evicting a reader's viewport.
+Returning to latest prunes excess older segments; a reader's window may temporarily
+exceed the limits during successive live rollovers.
+The heading's History menu and search still support targeted read-only navigation.
+Use three compact Git-style node controls: previous (prepend in the live view),
+return to current, and next. In targeted history, next retraces visited segments
+one at a time; the middle control jumps directly to the live session.
+Automation run navigation retains its existing run semantics. If multiple physical
+rollovers were missed, retained messages keep their known physical identity;
+unloaded intervening segments remain reachable through boundary History links,
+rather than being fabricated or eagerly fetched.
 Keep all three slots stable, disable unavailable directions and navigation while
 loading, and provide explicit hover/accessibility labels. On narrow or touch
 layouts, targets grow to (44px); the controls remain above the conversation.
