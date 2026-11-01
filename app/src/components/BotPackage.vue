@@ -1,7 +1,7 @@
 <template>
   <section class="bot-package" :aria-label="t('BOT deployments')">
     <h3>{{ t('BOT deployments') }}</h3>
-    <p>{{ t('Edit BOT.md, bot.json and tool modules in a registered local Folder, then ask your Agent to deploy. One confirmation shows the summary and permission changes. Workspace edits never change a running deployment.') }}</p>
+    <p>{{ t('Edit BOT.md and its companion files in a registered local Folder through conversation, then review the exact deployment confirmation. Source edits never change a running deployment.') }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <button type="button" :disabled="loading" @click="refresh">{{ t('Refresh status') }}</button>
     <details v-for="item in pending" :key="item.revision"><summary>{{ t('Pending exact permissions and affected locations') }} · {{ item.revision.slice(0,12) }}</summary><pre>{{ JSON.stringify(item.facts,null,2) }}</pre></details>
@@ -42,7 +42,14 @@ watch(()=>[props.apiBase,props.projectId,props.active],()=>{generation++;deploym
 onBeforeUnmount(()=>{generation++})
 </script>
 <style scoped>
-.bot-package { padding:16px; border:1px solid var(--c-border); border-radius:12px; margin-block:12px; overflow-wrap:anywhere; }
+.bot-package { padding-block:12px; margin-block:12px; overflow-wrap:anywhere; font-size:13px; }
+pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:300px; overflow:auto; }
+button { min-height:36px; padding:7px 12px; border:1px solid var(--c-border); border-radius:var(--radius-control); background:var(--c-bg-card); color:var(--c-text); font:inherit; cursor:pointer; }
+button:hover:not(:disabled) { background:var(--c-bg-muted); }
+button:disabled { opacity:.6; cursor:not-allowed; }
+summary { cursor:pointer; padding-block:8px; }
+button:focus-visible, summary:focus-visible { outline:2px solid var(--c-blue); outline-offset:2px; }
+@media (max-width:700px), (pointer:coarse) { button { min-height:44px; } }
 article { padding-block:12px; border-top:1px solid var(--c-border); }
 p { color:var(--c-text-secondary); }
 </style>

@@ -26,6 +26,30 @@ export function botDraft(bot: BotInstanceStatus): ChannelDraft {
   return { ...channelDraft(botChannel(bot)), displayName: bot.displayName }
 }
 
+/** The connection card edits only required platform credentials, never access or BOT files. */
+export function botConnectionFields(platform: ChannelId) {
+  return channelDefinitions.find(item => item.id === platform)!.fields.filter(field => field.required)
+}
+
+export function botConnectionDraft(platform: ChannelId): ChannelDraft {
+  // Even non-secret App IDs are entered privately; saved values need not be echoed.
+  return Object.fromEntries(botConnectionFields(platform).map(field => [field.key, '']))
+}
+
+export function botConnectionPatch(bot: BotInstanceStatus, draft: ChannelDraft, enabled: boolean) {
+  const config: Record<string, unknown> = { enabled }
+  for (const field of botConnectionFields(bot.platform)) {
+    const entry = draft[field.key]
+    const value = typeof entry === 'string' ? entry.trim() : ''
+    const stored = bot.config[field.key]
+    const saved = field.kind === 'password' ? bot.secrets[field.key] === true
+      : typeof stored === 'string' && !!stored.trim()
+    if (enabled && !value && !saved) throw new Error(t('{label} is required to connect {label2}.', { label: field.label, label2: bot.displayName }))
+    if (value) config[field.key] = value
+  }
+  return { config }
+}
+
 export function botPatch(bot: BotInstanceStatus, draft: ChannelDraft, enabled: boolean) {
   const displayName = typeof draft.displayName === 'string' ? draft.displayName.trim() : ''
   if (!displayName) throw new Error(t('Enter a bot name.'))
@@ -83,7 +107,7 @@ export function parseBotCatalog(value: unknown, projectId: string): import('./bo
 export function createBotSettingsClient(base: string, projectId: string, request: typeof fetch = fetch) {
   async function json(path: string, init?: RequestInit): Promise<unknown> {
     const response = await request(apiUrl(base, `/api/channels${path}`), {
-      ...init, headers: { 'Content-Type': 'application/json' },
+      ...init, redirect: 'error', headers: { 'Content-Type': 'application/json' },
       signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
     })
     if (!response.ok) {
@@ -133,16 +157,20 @@ export function createBotSettingsClient(base: string, projectId: string, request
           messages: messages as Array<{ id: string; sender: string; text: string; receivedAt: number }> }
       })
     },
-    async challenge(id: string) {
-      return await json(`/${encodeURIComponent(id)}/owner-challenge`, { method: 'POST' }) as { challenge: string; expiresAt: string }
+    async challenge(id: string, signal?: AbortSignal) {
+      const value = await json(`/${encodeURIComponent(id)}/owner-challenge`, { method: 'POST', signal })
+      if (!isRecord(value) || typeof value.challenge !== 'string' || !value.challenge || typeof value.expiresAt !== 'string') throw new Error('Invalid owner challenge')
+      return { challenge: value.challenge, expiresAt: value.expiresAt }
     },
-    async candidate(id: string) {
-      return await json(`/${encodeURIComponent(id)}/owner-candidate`) as { candidate?: string }
+    async candidate(id: string, signal?: AbortSignal) {
+      const value = await json(`/${encodeURIComponent(id)}/owner-candidate`, { signal })
+      if (!isRecord(value) || (value.candidate !== undefined && typeof value.candidate !== 'string')) throw new Error('Invalid owner candidate')
+      return { candidate: value.candidate as string | undefined }
     },
-    async confirm(id: string, challenge: string) {
-      await json(`/${encodeURIComponent(id)}/owner-confirm`, { method: 'POST', body: JSON.stringify({ challenge }) })
+    async confirm(id: string, challenge: string, signal?: AbortSignal) {
+      await json(`/${encodeURIComponent(id)}/owner-confirm`, { method: 'POST', body: JSON.stringify({ challenge }), signal })
     },
-    async revoke(id: string) { await json(`/${encodeURIComponent(id)}/owner`, { method: 'DELETE' }) },
+    async revoke(id: string, signal?: AbortSignal) { await json(`/${encodeURIComponent(id)}/owner`, { method: 'DELETE', signal }) },
     async remove(id: string, signal?: AbortSignal) {
       const result = await json(`/${encodeURIComponent(id)}`, { method: 'DELETE', signal })
       if (!isRecord(result) || result.deleted !== true) throw new Error(t('Main did not confirm bot removal. Refresh before retrying.'))

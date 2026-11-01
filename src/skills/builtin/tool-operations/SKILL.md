@@ -206,7 +206,12 @@ The workflows below configure service Bots, not personal Project entry points.
 
 For registered local BOT directories on QQ, Feishu and Discord, read
 `v:skills/project-administration` and use `bot_package` status/propose. All use
-`BOT.md` `{id, config}` plus data-only `bot.json` and declared tool modules.
+`BOT.md` `{id, config, mode}` plus prompt body, with Service inference
+(`model`, `temperature`, `maxTokens`, `thinking`, `reasoningEffort`) or Personal
+`agent` in frontmatter. JSON retains connection, subscriptions, bindings, tools,
+allowedModules, skills and read scopes. Whole legacy JSON-behavior packages remain
+readable during transition; mixed/duplicate fields are rejected, never overridden.
+Source format upgrades are not live deployments and require the same owner review.
 Declare permissions directly in bindings, subject to BOT-level ceilings; do not
 introduce `capabilityProfiles` or reuse grants inferred from old bindings.
 One exact-content native Deploy/Cancel confirmation publishes one BOT. There is

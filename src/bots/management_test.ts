@@ -217,3 +217,106 @@ test('second deployment read integrity failure or disappearance remains fatal', 
   assert.throws(() => f.runtime.definitions(), /deployment disappeared/)
   assert.deepEqual(f.runtime.diagnostics(), [])
 })
+
+
+test('format-only upgrade still needs exact owner approval and preserves frozen semantics/previous revision', async t => {
+  const f = fixture(t)
+  const { migrateBotFrontmatter } = await import('./format.ts')
+  const { parseBot } = await import('./sdk.ts')
+  const first = JSON.parse(await f.propose() as string).deployment.revision
+  const before = f.deployments.read('support')!
+  const converted = migrateBotFrontmatter(before.files)
+  for (const [path, text] of Object.entries(converted)) writeFileSync(join(f.source, path), text)
+  // No special migration endpoint, authorization exemption or inferred approval.
+  f.options.ask.execute = async () => JSON.stringify({ option: 'Deploy support', answeredBy: 'agent' })
+  assert.equal(JSON.parse(await f.propose(first) as string).status, 'cancelled')
+  assert.equal(f.deployments.read('support')!.deployment.revision, first)
+  f.options.ask.execute = async args => {
+    assert.match(String(args.question), /Added permissions: none/)
+    assert.match(String(args.question), /Removed permissions: none/)
+    f.save('Unapproved later edit')
+    return JSON.stringify({ option: 'Deploy support', answeredBy: 'user' })
+  }
+  const next = JSON.parse(await f.propose(first) as string)
+  assert.equal(next.status, 'deployed')
+  assert.equal(next.deployment.previous, first)
+  assert.deepEqual({ ...f.deployments.read('support')!.files }, converted)
+  assert.deepEqual(parseBot(f.deployments.read('support')!.files), parseBot(before.files))
+  await f.deployments.restorePrevious('support') // Storage primitive exercised only in this disposable fixture.
+  assert.equal(f.deployments.read('support')!.deployment.revision, first)
+})
+
+
+async function legacySkillsRepair(t: TestContext, invalidPatch?: (config: any) => void) {
+  const f = fixture(t)
+  const { migrateBotFrontmatter } = await import('./format.ts')
+  const legacy = files()
+  const config = JSON.parse(legacy['bot.json'])
+  config.skills = [{ name: 'issues', content: 'Unchanged issue instructions' }]
+  config.allowedModules = ['@shadow/issues']
+  config.bindings[0].skills = ['issues']
+  config.bindings[0].tools = ['read']
+  config.bindings[0].allowFrom = ['owner']
+  config.bindings[0].readFolders = ['approved-folder']
+  config.bindings[0].grants = [{ id: 'issues', kind: 'http', origin: 'https://api.example.com', routes: [{ method: 'GET', path: '/issues/*' }] }]
+  const repaired = structuredClone(config)
+  delete repaired.bindings[0].skills
+  const candidate = migrateBotFrontmatter({ ...legacy, 'bot.json': JSON.stringify(repaired) })
+  invalidPatch?.(config)
+  legacy['bot.json'] = JSON.stringify(config)
+  const initial = await f.deployments.deploy({ id: 'support', source: { folderId: 'folder', directory: '' }, ...f.deployments.freeze(legacy) })
+  for (const [path, text] of Object.entries(candidate)) writeFileSync(join(f.source, path), text)
+  return { f, candidate, legacy, initial }
+}
+
+test('owner proposal narrowly repairs retired selectors with complete permissions, invalid-state and restoration disclosure', async t => {
+  const { f, candidate, legacy, initial } = await legacySkillsRepair(t)
+  f.onAsk(args => {
+    const question = String(args.question)
+    assert.match(question, /Active package is invalid/)
+    assert.match(question, /bindings\[0\].skills=\["issues"\]/)
+    assert.match(question, /restores a valid BOT definition and its enabled input subscriptions\/runtime/)
+    assert.match(question, /Candidate permissions \(complete\)/)
+    for (const fact of ['@shadow/issues', 'tool read', 'allowed senders owner', 'folder approved-folder', 'GET https://api.example.com/issues/*', 'input subscription']) assert.ok(question.includes(fact), fact)
+    assert.ok(question.includes(initial.revision))
+    assert.ok(question.includes(f.deployments.freeze(candidate).revision))
+    const pending = [...f.options.pending.values()][0] as any
+    assert.equal(pending.repair.activeInvalid, true)
+    assert.deepEqual(pending.repair.removedBindingSkills, [{ index: 0, names: ['issues'] }])
+    assert.deepEqual(f.deployments.read('support')!.files['bot.json'], legacy['bot.json'], 'audit baseline never rewrites active')
+  })
+  const result = JSON.parse(await f.propose(initial.revision) as string)
+  assert.equal(f.asks, 1)
+  assert.equal(result.status, 'deployed')
+  assert.equal(result.deployment.previous, initial.revision)
+  assert.deepEqual({ ...f.deployments.read('support')!.files }, candidate)
+  assert.deepEqual(f.runtime.resolve({ platform: 'qq', botInstanceId: 'bot', conversationId: 'group:one' })?.skillPrompts, [{ name: 'issues', content: 'Unchanged issue instructions' }])
+})
+
+test('cancelled selector repair preserves exact active bytes and post-confirmation live validation can still deny', async t => {
+  const { f, legacy, initial } = await legacySkillsRepair(t)
+  f.options.ask.execute = async () => JSON.stringify({ option: 'Cancel deployment', answeredBy: 'user' })
+  assert.equal(JSON.parse(await f.propose(initial.revision) as string).status, 'cancelled')
+  assert.deepEqual({ ...f.deployments.read('support')!.files }, legacy)
+  assert.equal(f.options.pending.size, 0)
+  f.options.ask.execute = async () => { f.fail(); return JSON.stringify({ option: 'Deploy support', answeredBy: 'user' }) }
+  await assert.rejects(() => f.propose(initial.revision), /live authority changed/)
+  assert.equal(f.deployments.read('support')!.deployment.revision, initial.revision)
+  assert.deepEqual({ ...f.deployments.read('support')!.files }, legacy)
+})
+
+test('selector repair does not accept other invalid active packages, malformed selectors or missing top-level prompts', async t => {
+  for (const patch of [
+    (config: any) => { config.unknown = true },
+    (config: any) => { config.bindings[0].unknown = true },
+    (config: any) => { config.bindings[0].skills = 'issues' },
+    (config: any) => { config.bindings[0].skills = ['missing-prompt'] },
+    (config: any) => { config.temperature = 100 },
+  ]) {
+    const { f, initial, legacy } = await legacySkillsRepair(t, patch)
+    await assert.rejects(() => f.propose(initial.revision))
+    assert.equal(f.asks, 0)
+    assert.equal(f.options.pending.size, 0)
+    assert.deepEqual({ ...f.deployments.read('support')!.files }, legacy)
+  }
+})

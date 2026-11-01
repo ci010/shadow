@@ -8,6 +8,7 @@ import { BotDeployments } from './deployments.ts'
 import { bindingSubscription, botSubscriptionKey, subscribedBindings, parseBot, type BotDefinition } from './sdk.ts'
 import { DirectoryBots } from './runtime.ts'
 import { snapshotBotDirectory, sourceUsesGit } from './directory.ts'
+import { botProposalBaseline } from './format.ts'
 
 type Options = {
   inventory?:()=>unknown
@@ -64,7 +65,7 @@ export function botPackageTool(options: Options): Tool {
       if (context.projectId !== options.projectId || context.channel !== 'web' || context.inputSource !== 'user' || context.admin !== true || context.isGroup || context.channelAddress || context.remoteWorkdir || context.memoryAccess || context.tools.executionMode !== 'session' || !options.canAuthor(context.sessionId)) throw new Error('Use an authenticated owner conversation in this Project.')
       if (raw.action === 'status') {
         z.object({action:z.literal('status')}).strict().parse(raw)
-        return JSON.stringify({projectId:options.projectId,deployments:options.deployments.list(),folders:options.folders.list(),inventory:options.inventory?.(),format:'BOT.md {id, config: bot.json} + data-only bot.json + tool modules',receivePolicy:'Service QQ/Feishu bindings own trigger: mention (default) or all. Connection triggerMode is not inherited. Existing Service packages without trigger narrow to mention; explicitly configure all and confirm deployment if that behavior is intended.'})
+        return JSON.stringify({projectId:options.projectId,deployments:options.deployments.list(),folders:options.folders.list(),inventory:options.inventory?.(),format:'BOT.md {id, config: bot.json, mode, Service model/temperature/maxTokens/thinking/reasoningEffort OR Personal agent} + JSON connection/subscriptions/bindings/tools/allowedModules/skills/read scopes + tool modules; whole legacy JSON behavior supported temporarily, mixed/duplicate fields rejected',receivePolicy:'Service QQ/Feishu bindings own trigger: mention (default) or all. Connection triggerMode is not inherited. Existing Service packages without trigger narrow to mention; explicitly configure all and confirm deployment if that behavior is intended.'})
       }
       const input = proposal.parse(raw)
       const parts = input.directory ? input.directory.split('/') : []
@@ -84,7 +85,17 @@ export function botPackageTool(options: Options): Tool {
       const current = options.deployments.read(bot.id)?.deployment
       if (current?.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before proposing.')
       await options.validate(frozen.files,context.signal)
-      const facts = {projectId:options.projectId,bot:bot.id,source:{folderId:input.folderId,directory:input.directory},sourceGit:gitSource,
+      const baseline = current ? botProposalBaseline(options.deployments.read(bot.id)!.files) : undefined
+      if (baseline && baseline.bot.id !== bot.id) throw new Error('BOT active identity mismatch.')
+      const before = baseline?.bot
+      const oldAuthority=authorities(before),newAuthority=authorities(bot)
+      const repair = baseline?.removedBindingSkills.length ? {
+        activeInvalid: true, reason: 'Retired binding.skills selectors; the active package fails the current strict schema.',
+        removedBindingSkills: baseline.removedBindingSkills,
+        effect: 'Deployment restores a valid BOT definition and its enabled input subscriptions/runtime; it is not only a format change.',
+        candidatePermissions: [...newAuthority], expectedRevision: current!.revision, exactContent: frozen.revision,
+      } : undefined
+      const facts = {projectId:options.projectId,bot:bot.id,source:{folderId:input.folderId,directory:input.directory},sourceGit:gitSource,repair,
         exactContent:frozen.revision,fileCount:Object.keys(frozen.files).length,
         mode:bot.mode,connection:bot.connection,agent:bot.agent,bindings:bot.bindings,subscriptions:subscribedBindings(bot).map(bindingSubscription),subscriptionMigration:bot.subscriptions === undefined ? 'legacy bindings (same authority)' : 'explicit',toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
         modules:bot.allowedModules,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders ?? [],discordHistory:bot.discordHistory ?? null,
@@ -92,13 +103,12 @@ export function botPackageTool(options: Options): Tool {
         execution:bot.mode === 'personal' ? 'Normal verified-owner session, ordinary role tools/context; BOT prompt only, no custom modules' : 'Restricted child runtime, no raw credentials/platform clients; no source executes during deployment'}
       const approve = `Deploy ${bot.id}`
       options.pending.set(frozen.revision,facts)
-      const before = current ? parseBot(options.deployments.read(bot.id)!.files) : undefined
-      const oldAuthority=authorities(before),newAuthority=authorities(bot)
       const added=[...newAuthority].filter(value=>!oldAuthority.has(value)),removed=[...oldAuthority].filter(value=>!newAuthority.has(value))
+      const repairNotice = repair ? `\nActive package is invalid: retired binding.skills selectors. Removed selections: ${repair.removedBindingSkills.map(value => `bindings[${value.index}].skills=${JSON.stringify(value.names)}`).join('; ')}. Top-level skill prompts remain in the baseline. ${repair.effect}\nCandidate permissions (complete): ${repair.candidatePermissions.join('; ') || 'none'}.\nExpected active revision: ${repair.expectedRevision}. Exact candidate hash: ${repair.exactContent}.` : ''
       const targets=[...new Set([...(before?.bindings ?? []),...bot.bindings].map(location))]
       let result: ToolResult
       try {
-        result = await options.ask.execute({kind:'decision',question:`Agent summary: ${input.summary.replace(/\s+/g,' ')}\nAffected: ${targets.join('; ') || 'no channel bindings'}.\nAdded permissions: ${added.join('; ') || 'none'}.\nRemoved permissions: ${removed.join('; ') || 'none'}.\nDeploy this frozen BOT version? Optional exact source/permission details are in Channels → BOT deployments.`,options:[approve,'Cancel deployment'],default_option:'Cancel deployment'},context)
+        result = await options.ask.execute({kind:'decision',question:`Agent summary: ${input.summary.replace(/\s+/g,' ')}\nAffected: ${targets.join('; ') || 'no channel bindings'}.\nAdded permissions: ${added.join('; ') || 'none'}.\nRemoved permissions: ${removed.join('; ') || 'none'}.${repairNotice}\nDeploy this frozen BOT version? Optional exact source/permission details are in Channels → BOT deployments.`,options:[approve,'Cancel deployment'],default_option:'Cancel deployment'},context)
       } finally { options.pending.delete(frozen.revision) }
       const answer = typeof result === 'string' ? JSON.parse(result) as Record<string,unknown> : undefined
       if (!answer || answer.option !== approve || answer.answeredBy !== 'user' || answer.custom) return JSON.stringify({status:'cancelled',bot:bot.id,activeUnchanged:true})

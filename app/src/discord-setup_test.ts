@@ -2,81 +2,38 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { compileScript, parse } from 'vue/compiler-sfc'
-import { channelDefinitions, channelDraft, channelPatch } from './channel-settings.ts'
+import { botConnectionDraft, botConnectionPatch, parseBotStatus } from './bot-settings.ts'
 
-const view = readFileSync(new URL('./components/ChannelsView.vue', import.meta.url), 'utf8')
+const view = readFileSync(new URL('./components/BotConnectionSetup.vue', import.meta.url), 'utf8')
+const settings = readFileSync(new URL('./components/ChannelsView.vue', import.meta.url), 'utf8')
+const status = readFileSync(new URL('./components/BotServiceStatus.vue', import.meta.url), 'utf8')
 
-test('Discord service setup uses staged guidance without implying owner pairing or access readiness', () => {
-  const start = view.indexOf('<section v-if="channel.platform');
-  const card = view.slice(start, view.indexOf('</section>', start))
-  assert.match(card, /channel.platform === 'discord' && channel.purpose === 'service'/)
-  for (const label of ['Connect platform', 'Invite to a Discord server', 'Publish and assign an Agent', 'Review and approve access']) assert.ok(card.includes(`t('${label}')`))
-  assert.match(card, /Connection status does not verify assignments/)
-  assert.match(card, /Owner pairing is only for personal Bots/)
-  assert.doesNotMatch(card, /pairOwner\(|ownerVerified|Ready for your messages/)
-  assert.match(card, /accessBot = accessBot === channel.id \? undefined : channel.id/)
-  assert.match(view, /<DiscordAccess v-if="available && accessBot === channel.id && channel.platform === 'discord' && channel.purpose === 'service'"/)
-  assert.match(view, /requested-review-id="requestedReviewId"/)
-  assert.match(view, /channel.purpose === 'personal'\r?\n    \? \[\.\.\.instructions.slice\(0, 2\)/)
-  const { descriptor } = parse(view)
-  assert.doesNotThrow(() => compileScript(descriptor, { id: 'discord-setup-test', inlineTemplate: true }))
+test('Discord service setup has minimal credentials and file-authored permissions, not configuration wizards', () => {
+  assert.match(view, /Connection does not grant service access/)
+  assert.match(view, /Owner pairing is only for personal Bots/)
+  assert.match(view, /Guilds, channels, participants and grants belong in BOT files/)
+  assert.doesNotMatch(settings + view, /<DiscordAccess|Publish and assign an Agent|setup-steps|Advanced settings and access/)
+  assert.match(settings, /retired Discord configuration workflow. No change has been approved or published/)
+  assert.match(settings, /requestedReviewId/)
+  assert.match(view, /<BotServiceStatus v-if="serviceStatusOpen"/)
+  assert.doesNotMatch(status, /\.propose\(|\.commit\(|\.cancel\(|<form|<input/)
+  for (const source of [view, settings, status]) assert.doesNotThrow(() => compileScript(parse(source).descriptor, { id: 'discord-setup-test', inlineTemplate: true }))
 })
 
-test('legacy response mode stays editable under advanced settings and preserves credentials', () => {
-  const definition = channelDefinitions.find(item => item.id === 'discord')!
-  const field = definition.fields.find(item => item.key === 'triggerMode')!
-  assert.equal(field.advanced, true)
-  assert.equal(definition.fields.find(item => item.key === 'token')!.advanced, undefined)
-  assert.match(view, /UiSelect v-else-if="field.kind === 'select'"/)
-  const status = { id: 'discord' as const, label: 'Discord', enabled: false, configured: true, state: 'disabled' as const, config: { triggerMode: 'all' }, secrets: { token: true } }
-  const draft = channelDraft(status)
-  assert.equal(draft.triggerMode, 'all')
-  const patch = channelPatch(status, draft, true)
-  assert.equal(patch.triggerMode, 'all')
-  assert.equal(patch.enabled, true)
-  assert.equal(Object.hasOwn(patch, 'token'), false)
-  draft.triggerMode = 'mention'
-  assert.equal(channelPatch(status, draft, false).triggerMode, 'mention')
+test('legacy Discord access settings remain untouched by credential-only patches', () => {
+  const bot = parseBotStatus({ id: 'discord-bot', projectId: 'p', platform: 'discord', label: 'Discord', displayName: 'Discord', purpose: 'service', enabled: false, configured: true, state: 'disabled', config: { triggerMode: 'all', memberIntent: true, allowFrom: ['123'], adminChats: ['456'] }, secrets: { token: true } }, 'p')
+  const draft = botConnectionDraft('discord')
+  assert.deepEqual(draft, { token: '' })
+  assert.deepEqual(botConnectionPatch(bot, draft, true), { config: { enabled: true } })
+  draft.token = 'synthetic-replacement'
+  assert.deepEqual(botConnectionPatch(bot, draft, false), { config: { enabled: false, token: 'synthetic-replacement' } })
 })
 
-test('new service setup guidance is translated in both locales', () => {
-  const en = JSON.parse(readFileSync(new URL('./locales/en.json', import.meta.url), 'utf8'))
-  const zh = JSON.parse(readFileSync(new URL('./locales/zh-CN.json', import.meta.url), 'utf8'))
-  const start = view.indexOf('<section v-if="channel.platform')
-  for (const [, key] of view.slice(start, view.indexOf('</section>', start)).matchAll(/t\('([^']+)'/g)) {
-    assert.ok(en[key], `English: ${key}`)
-    assert.ok(zh[key], `Chinese: ${key}`)
-    assert.notEqual(en[key], zh[key], key)
-  }
-})
-
-
-test('server invitation fallback remains visible without connection or editor, and never guesses identity', () => {
-  const start = view.indexOf('<section v-if="channel.platform')
-  const card = view.slice(start, view.indexOf('</section>', start))
-  const installStart = card.indexOf('<div class="setup-next setup-install">')
-  const install = card.slice(installStart, card.indexOf('</div>', installStart))
-  assert.ok(installStart > 0)
-  assert.doesNotMatch(install, /v-if|v-else|channel.config|channel.secrets/)
-  assert.match(install, /application ID verified for this Bot is not available/)
-  assert.match(install, /Installation.*Guild Install.*Install Link/)
-  assert.match(install, /OAuth2 URL Generator with the bot scope/)
-  assert.match(install, /do not select Administrator/)
-  assert.match(install, /Installation alone does not enable Agent access/)
-  assert.match(install, /href="https:\/\/discord.com\/developers\/applications" target="_blank" rel="noopener noreferrer"/)
-  assert.match(install, /@click.prevent="openPortal\(channel\)"/)
-  assert.match(install, /Discord installation documentation/)
-  assert.doesNotMatch(card, /client_id=|permissions=8|atob\(|split\('\.'\)/)
-  assert.equal((card.match(/class="step-number"/g) ?? []).length, 4)
-  assert.equal((card.match(/'step-done'/g) ?? []).length, 1)
-  assert.ok(card.indexOf("t('Invite to a Discord server')") < card.indexOf("t('Publish and assign an Agent')"))
-})
-
-
-test('steps three and four are navigable without treating invitation as verified', () => {
-  assert.match(view, /@click="openAccess\(channel.id\)">{{ t\('Publish and assign an Agent'\) }}/)
-  assert.match(view, /@click="openAccess\(channel.id, 'reviews'\)">{{ t\('Review and approve access'\) }}/)
-  assert.match(view, /I have invited the Bot — continue to assignments/)
-  assert.match(view, /Opening configuration does not verify installation or grant access/)
-  assert.doesNotMatch(view, /<small>{{ t\('Closed until assigned.'\) }}/)
+test('Discord install fallback never guesses application ID or requests administrator access', () => {
+  assert.match(view, /application’s Guild Install link with only the required channel permissions/)
+  assert.match(view, /Do not select Administrator/)
+  assert.match(view, /Platform installation and permissions are not verified by connection status/)
+  assert.match(view, /never share a token in chat or an invite URL/)
+  assert.match(view, /window.shadowDesktop\?\.openExternal/)
+  assert.doesNotMatch(view, /client_id=|permissions=8|atob\(|split\('\.'\)/)
 })
