@@ -618,7 +618,14 @@ the summary, daily cost chart and history table. CNY stays separate (no exchange
 rate is assumed). The trend charts have their own **7/30 day** window, independent
 of the summary selection, with the exact UTC range shown above the plots. Daily
 tokens use the main bar chart; estimated cost and cumulative call time appear
-below it. There is no date-share pie chart. **Data completeness** expands
+below it. ECharts renders these plots with date-axis hover/tap tooltips, automatic
+scales and responsive sizing. Focus a chart and use Left/Right or Home/End to
+inspect exact dated values (Escape dismisses); **View chart data** also exposes
+all dates in the current window as an accessible table. Missing values stay
+unknown and are not connected across line-chart gaps; partial estimates are
+identified in the tooltip/readout and by dashed marks. Costs include the same
+credit-to-USD conversion in every view. There is no date-share pie chart.
+**Data completeness** expands
 missing-call counts and tracking coverage; **How usage is measured** expands the
 statistical definitions below. Both are collapsed initially.
 

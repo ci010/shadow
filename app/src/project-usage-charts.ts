@@ -11,16 +11,6 @@ export function usageWindow(data: ProjectUsage, days: number): UsagePoint[] {
     return { date, usage, tokens: usage?.tokens ?? null, seconds: usage?.durationMs == null ? null : usage.durationMs / 1000 }
   })
 }
-export function lineSegments(points: UsagePoint[], maximum: number, plotWidth = 540): string[] {
-  const segments: string[] = []
-  let current: string[] = []
-  points.forEach((point, i) => {
-    if (point.seconds === null) { if (current.length) segments.push(current.join(' ')); current = []; return }
-    current.push(`${30 + i * plotWidth / Math.max(1, points.length - 1)},${160 - point.seconds / maximum * 130}`)
-  })
-  if (current.length) segments.push(current.join(' '))
-  return segments
-}
 export type CostUnit = 'USD' | 'CNY'
 export const costUnits: CostUnit[] = ['USD', 'CNY']
 /** Presentation only: retain raw provider estimates, convert credits at 100:1,
