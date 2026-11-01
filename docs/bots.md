@@ -120,6 +120,65 @@ Deploy only after the active backend supports this format; editing repository
 code does not upgrade a running process. Publication is per BOT, not cross-Project
 or cross-BOT atomic. No automatic deployment migration or approval exemption exists.
 
+## Read-only Bot state
+
+Use `read("v:bots/overview")` in the current Project's authenticated owner durable
+Web conversation. The mount is a live, read-only projection, not a second state
+database or publication interface:
+
+- `v:bots/connections/index` and `v:bots/connections/<id>`: connection ID,
+  displayName, platform, purpose, enabled, transport health and ownerVerified only.
+  No configuration, secret-presence flags, private card drafts, headers, free-form
+  errors, owner sender/chat IDs or signed URLs. URL-bearing labels are omitted.
+- `v:bots/deployments/index`: IDs and links, including broken/quarantined objects.
+- `v:bots/deployments/<id>/status`: integrity-verified current/previous revisions,
+  source Folder ID and relative directory, storage mode, supported format layout
+  (`frontmatter` or `legacy-json`, not a new persisted version number), validation,
+  mode, binding enablement and subscription selection. Older unsafe source labels
+  are omitted rather than exported as absolute paths or URLs.
+- `v:bots/deployments/<id>/listeners`: the canonical `botInputListeners` selectors
+  used by `InputRouter`, with source/kind/topic/target and thread ancestry matching.
+  These are management-visible selectors, not message contents or participant
+  grants. Personal BOTs have no service selectors: verified personal ingress uses
+  host-owned Session listeners, which this view does not enumerate.
+
+`loaded: lazy-validated` means the object's current verified bytes pass the same
+strict parser as DirectoryBots' lazy policy loader. It does not mean a process was
+started, a connection is healthy, or an input was processed. Configured bindings,
+selected subscriptions, binding enablement, projected listeners and connection
+health are separate facts. Explicit empty subscriptions still yield zero listeners.
+The view reports `processingSuccess: unknown` and `routing: not-probed`; conflicting
+subscribers, a corrupt sibling's storage, live source admission and handler policy
+can still block delivery. It neither probes routes nor replays messages.
+
+Invalid packages report `quarantined` with `invalid-package` or `identity-mismatch`,
+no listeners and no parsed policy/format. Storage/integrity failures report
+`unavailable`, with `storage-unavailable` or `integrity-failure`; unchecked metadata
+is not extracted from `active.json`. A broken sibling does not hide healthy status
+objects. Existing runtime admission remains fail-closed: diagnostic tolerance is
+not used for routing, repair or publication, and reads do not update quarantine
+bookkeeping/logs. No parser relaxations or source recovery are performed.
+
+Index/object views contain at most 50 compact rows. Follow `next` paths such as
+`v:bots/deployments/index/2` or `v:bots/deployments/<id>/listeners/2`; read line
+paging and search result paging work normally. Broad searches expand only the
+first page of the first 50 objects of each kind; narrow search to an ID for all
+its object pages. Broad deployment search warns about this page-expansion limit. Discovery
+scans at most 1024 deployment directory entries and 1000 connection IDs. Incomplete
+or unsafe enumeration emits a warning, even when grep finds no matches. Known
+IDs may be read directly beyond this bounded discovery window. Reads are live
+rather than a cross-file transaction, so revisions/pages can change between calls.
+
+Both read and list (hence glob/grep) enforce the runtime-bound Project and the same
+live durable/root owner Web management boundary as `bot_setup`. Service/channel,
+nonowner, child/task/call, nested-script, memory-lease and remote-workdir access are
+not widened by ordinary read/search permissions. A per-call local Folder cannot
+turn a remote-session owner into a local management session. `v:bots` has no write
+handler; discovery does not connect adapters, execute BOT modules, open private
+cards or start Sessions. Use `bot_setup`, `bot_package` and `credential_request` for
+operations. Existing `status` actions remain compatible; the Bot setup Skill now
+prefers read/search for state.
+
 ## External input subscriptions
 
 New service packages should declare `subscriptions` in the JSON file selected by

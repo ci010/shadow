@@ -91,9 +91,19 @@ function noLinks(target: string): void {
   for (const part of parts.reverse()) { if (!exists(part)) break; if (fs.lstatSync(part).isSymbolicLink()) throw new Error('Symlink storage boundary'); }
 }
 function readJson(target: string): unknown {
-  noLinks(target); const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try { const stat = fs.fstatSync(fd); if (!stat.isFile() || stat.nlink !== 1 || stat.size > 16384) throw new Error('Invalid bounded metadata'); const buffer = Buffer.alloc(16385); const count = fs.readSync(fd, buffer, 0, buffer.length, 0); if (count !== stat.size) throw new Error('Metadata changed or exceeds bound'); return JSON.parse(buffer.subarray(0, count).toString('utf8')); }
-  finally { fs.closeSync(fd); }
+  noLinks(target);
+  const before = fs.lstatSync(target);
+  if (!before.isFile() || before.nlink !== 1 || before.size > 16384) throw new Error('Invalid bounded metadata');
+  // Reject a static FIFO/device before open; NONBLOCK also prevents a raced FIFO
+  // from hanging the runtime before fstat can check its identity/type.
+  const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 16384 || stat.ino !== before.ino || stat.dev !== before.dev || stat.ctimeMs !== before.ctimeMs || stat.mtimeMs !== before.mtimeMs) throw new Error('Invalid bounded metadata');
+    const buffer = Buffer.alloc(16385); const count = fs.readSync(fd, buffer, 0, buffer.length, 0); const after = fs.fstatSync(fd);
+    if (count !== stat.size || after.size !== stat.size || after.ctimeMs !== stat.ctimeMs || after.mtimeMs !== stat.mtimeMs) throw new Error('Metadata changed or exceeds bound');
+    return JSON.parse(buffer.subarray(0, count).toString('utf8'));
+  } finally { fs.closeSync(fd); }
 }
 function validSource(value: unknown): value is BotSource {
   if (!value || typeof value !== 'object') return false;
@@ -160,6 +170,46 @@ export class BotDeployments {
       return value;
     });
   }
+  /** Bounded names only for diagnostics. Never use this tolerant enumeration for
+   * policy/admission. Each detail still goes through read(), ownership and hash
+   * verification; one corrupt deployment must not hide its healthy neighbours.
+   */
+  diagnosticIds(): { ids: string[]; warning?: string } {
+    const ids: string[] = [];
+    let warning: string | undefined;
+    try {
+      noLinks(this.root);
+      if ((readJson(path.join(this.root, '.store.json')) as {projectId?: string}).projectId !== this.projectId) throw new Error('Store Project ownership mismatch');
+      const directory = fs.opendirSync(this.root);
+      try {
+        let entry: fs.Dirent | null; let count = 0;
+        while ((entry = directory.readSync())) {
+          if (++count > 1024) { warning = 'deployment-index-limit'; break; }
+          if (['runtime', 'deployments'].includes(entry.name.toLowerCase()) || entry.name.startsWith('.')) continue;
+          if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(entry.name)) { warning ??= 'unsafe-deployment-entry-omitted'; continue; }
+          // Include damaged directories/links, even if their owner marker cannot
+          // be read. Do not follow them here or extract unverified metadata.
+          if (entry.isDirectory() || entry.isSymbolicLink()) ids.push(entry.name);
+        }
+      } finally { directory.closeSync(); }
+    } catch { return { ids: [], warning: 'deployment-store-unavailable' }; }
+    return { ids: ids.sort(), ...(warning ? { warning } : {}) };
+  }
+
+  /** Read-only diagnostics retain a safe error category, never exception text,
+   * source bytes, journal contents or unchecked active.json fields.
+   */
+  inspect(id: string): { value?: { deployment: BotDeployment; files: Record<string, string> }; error?: 'integrity-failure' | 'storage-unavailable' } {
+    try {
+      noLinks(this.root);
+      if ((readJson(path.join(this.root, '.store.json')) as {projectId?: string}).projectId !== this.projectId) throw new Error('Store Project ownership mismatch');
+      const value = this.read(id);
+      if (!value && exists(this.bot(id))) throw new Error('BOT marker without active deployment');
+      return { value };
+    }
+    catch (error) { return { error: error instanceof Error && error.message === 'Deployment integrity failure' ? 'integrity-failure' : 'storage-unavailable' }; }
+  }
+
   private checkOwner(bot: string, id: string): void {
     const owner = readJson(path.join(bot, 'owner.json')) as {projectId?: string; id?: string};
     if (owner.projectId !== this.options.projectId || owner.id !== id) throw new Error('BOT ownership mismatch');

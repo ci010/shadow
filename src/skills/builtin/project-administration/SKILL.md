@@ -14,12 +14,18 @@ BOT deployment. No dedicated management session or role exists.
 
 ## Directory BOT deployment (Discord / QQ / Feishu)
 
-Use `bot_package` status/propose through `invoke_tool` in an authenticated owner
-Web conversation. Status returns deployments, registered Folders, connections and
-known conversations. Do not guess IDs. Propose freezes one registered local
-directory and requests one native Deploy/Cancel confirmation. Stable BOT `id`
-identifies an independently versioned package, not the source path. Read status
-for the exact expectedRevision before updates. Source edits do not activate it.
+Read `v:bots/overview`, `v:bots/connections/index` and `v:bots/deployments/index`
+first; expand `v:bots/deployments/<id>/status` and `/listeners`. Read/search are
+owner-only, bounded, read-only projections; no connection or source runs. Read
+`v:project/folders` for registered source Folder IDs. Do not guess IDs or equate a
+configured binding/healthy connection with successful processing. Invalid packages
+remain visible and fail closed; processing success is unknown.
+Use `bot_package` propose through `invoke_tool` in an authenticated owner Web
+conversation. Propose freezes one registered local directory and requests one
+native Deploy/Cancel confirmation. Stable BOT `id` identifies an independently
+versioned package, not the source path. Read its status for the exact
+expectedRevision before updates. The old status action remains compatible for
+existing inventory callers. Source edits do not activate it.
 Never write private deployment storage or activate through general tools.
 
 All three platforms use `BOT.md` with header `{id, config: bot.json, mode}` and

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { assertBotManagementAccess } from '../bots/access.ts'
 import type { BotChatSetup } from '../channels/chat-setup.ts'
 import type { ChannelManager } from '../channels/manager.ts'
 import { CHANNEL_IDS } from '../channels/setup-contract.ts'
@@ -15,7 +16,7 @@ const argsSchema = z.discriminatedUnion('action', [
 export class BotSetupTool implements Tool {
   readonly name = 'bot_setup'
   readonly supportsRemoteWorkdir = false
-  readonly description = 'Manage current Project Bots from an authorized Web admin chat. Read v:skills/bot-setup first. open waits while the human uses the inline private setup card; no secret arguments, results or owner-confirm action exist. status returns redacted status. create adds a disconnected Bot; connection enables/disables an existing configured Bot.'
+  readonly description = 'Manage current Project Bots from an authorized Web admin chat. Read v:skills/bot-setup first. open waits while the human uses the inline private setup card; no secret arguments, results or owner-confirm action exist. Read v:bots/overview for read-only status first; status remains compatible. create adds a disconnected Bot; connection enables/disables an existing configured Bot.'
   readonly parameters: ToolParameters = { type: 'object', properties: {
     action: { type: 'string', enum: ['open', 'status', 'create', 'connection'] },
     purpose: { type: 'string', enum: ['personal', 'service'] }, platform: { type: 'string', enum: [...CHANNEL_IDS] },
@@ -23,13 +24,8 @@ export class BotSetupTool implements Tool {
   }, required: ['action'], additionalProperties: false }
   constructor(private setup: BotChatSetup, private channels: ChannelManager, private assertSession: (sessionId: string) => void) {}
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
-    context.signal.throwIfAborted()
-    if (context.projectId !== this.setup.projectId || this.channels.projectId !== this.setup.projectId ||
-      context.admin !== true || context.isGroup || !context.sessionId.startsWith('web:') ||
-      !['web', 'virtual'].includes(context.channel) || context.scriptInvocation || context.remoteWorkdir) {
-      throw new Error('Bot management requires the owning Project authenticated Web administrator chat.')
-    }
-    this.assertSession(context.sessionId)
+    assertBotManagementAccess(this.setup.projectId, context, this.assertSession)
+    if (this.channels.projectId !== this.setup.projectId) throw new Error('Bot runtime ownership mismatch.')
     const input = argsSchema.parse(args)
     if (input.action === 'open') return this.setup.request(context.sessionId, context.signal)
     if (input.action === 'status') return JSON.stringify({ bots: this.channels.botStatuses() })

@@ -58,7 +58,7 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
 
 export function botPackageTool(options: Options): Tool {
   return {name:'bot_package',optIn:true,
-    description:'Manage unified directory BOTs for QQ, Feishu and Discord. status lists deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then asks one exact-content owner confirmation. Supply a concise user-facing summary. No review history or embedded source snapshots. Edit source and propose again to update.',
+    description:'Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then asks one exact-content owner confirmation. Supply a concise user-facing summary. No review history or embedded source snapshots. Edit source and propose again to update.',
     parameters:{type:'object',properties:{action:{type:'string',enum:['status','propose']},folderId:{type:'string'},directory:{type:'string'},expectedRevision:{type:'string'},summary:{type:'string'}},required:['action'],additionalProperties:false},
     execute:async(raw,context) => {
       context.signal.throwIfAborted()

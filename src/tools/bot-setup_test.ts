@@ -11,7 +11,7 @@ function harness() {
   const calls: unknown[] = []
   const manager = { projectId: 'p', botStatuses: () => [], createBot: async (value: unknown) => { calls.push(value); return { id: 'b' } }, updateBot: async () => ({ id: 'b' }) } as unknown as ChannelManager
   const tool = new BotSetupTool(setup, manager, sessionId => { if (sessionId !== 'web:chat-a') throw new Error('Not a user-owned Web session') })
-  const context = { projectId: 'p', sessionId: 'web:chat-a', channel: 'virtual', admin: true, signal: new AbortController().signal } as ExecutionContext
+  const context = { projectId: 'p', sessionId: 'web:chat-a', channel: 'virtual', admin: true, tools: { executionMode: 'session' }, signal: new AbortController().signal } as ExecutionContext
   return { setup, tool, context, calls }
 }
 test('Bot tool enforces Web admin and Project ownership independent of paired channel admin', async () => {

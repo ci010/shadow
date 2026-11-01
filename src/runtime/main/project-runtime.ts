@@ -1,4 +1,5 @@
 import { InputRouter } from '../../input/router.ts'
+import { createBotsHandler } from '../../vfs/bots.ts'
 import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../../channels/input.ts'
 import { sessionInputListeners, handleSessionInput } from '../../sessions/input-listeners.ts'
 import { handleBotInput } from '../../bots/input.ts'
@@ -1366,12 +1367,14 @@ export async function createProjectRuntime(
   const botChatSetup = new BotChatSetup(project.id, () => realtime.invalidateResource?.('interactions'))
   cleanup.push(() => botChatSetup.stop())
   botChatSetupPlugin(botChatSetup, dependencies.authorize)(app)
-  importTool.registerBuiltin('bot_setup', new BotSetupTool(botChatSetup, channels, sessionId => {
+  const assertBotSession = (sessionId: string) => {
     const state = sessions.getSessionState(sessionId)
-    if (!state || !sessionId.startsWith('web:') || (state.mode ?? 'session') !== 'session'
-      || state.parentSessionId || state.automation) throw new Error('Bot setup requires a user-owned Web conversation.')
+    if (!isOwnerSession(state, project.id) || !canAuthor(sessionId)) throw new Error('Bot management requires a user-owned Web conversation.')
     sessions.assertFolderAccess(sessionId)
-  }))
+  }
+  importTool.registerBuiltin('bot_setup', new BotSetupTool(botChatSetup, channels, assertBotSession))
+  const botsVfs = createBotsHandler({ projectId: project.id, store: botStore, channels, directory: directoryBots, assertSession: assertBotSession })
+  vfs.mount('v:bots', 'read-only current Project Bot connections/deployments/listeners; owner durable Web management only; read v:bots/overview', botsVfs.read, botsVfs.list)
   const channelStreamDeps: ConstructorParameters<typeof ChannelStreamTool>[3] = {
     authorized: id => canAuthor(id) && !sessions.getSessionState(id)?.parentSessionId,
     assertConnection: (bot, conversation) => channels.assertStreamAccess(bot, conversation),

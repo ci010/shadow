@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { assertPrivateFileBoundary } from '../utils/private-document.ts'
 import { BotDeployments } from './deployments.ts'
-import { bindingSubscribed, botInferenceSettings, parseBot, type BotDefinition } from './sdk.ts'
+import { bindingSubscribed, botInferenceSettings, parseBot, parseBotPackage, type BotDefinition } from './sdk.ts'
 import { botInputListeners } from './input.ts'
 import { executeBotTool } from './tool-runtime.ts'
 import { parseAgentFile } from '../agent/types/parse.ts'
@@ -30,6 +30,23 @@ export class DirectoryBots {
   /** Quarantined deployments are visible for diagnosis, but never provide policy or tools. */
   diagnostics() {
     return [...this.invalidDeployments].map(([id, diagnostic]) => ({ id, ...diagnostic }))
+  }
+  /** Pure status projection. Unlike definitions(), this neither updates quarantine
+   * bookkeeping nor logs, and a bad sibling cannot abort an object's inspection.
+   * It grants no policy: live routing still performs its normal strict reads.
+   */
+  inspect(id: string) {
+    const current = this.deployments.inspect(id)
+    if (current.error) return { id, state: 'unavailable' as const, loaded: false, error: current.error }
+    if (!current.value) return undefined
+    const { deployment, files } = current.value
+    try {
+      const { bot, format } = parseBotPackage(files)
+      if (bot.id !== id) return { id, deployment, state: 'quarantined' as const, loaded: false, error: 'identity-mismatch' as const }
+      return { id, deployment, bot, format, state: 'valid' as const, loaded: true, listeners: botInputListeners(bot) }
+    } catch {
+      return { id, deployment, state: 'quarantined' as const, loaded: false, error: 'invalid-package' as const }
+    }
   }
   definitions() {
     // Store enumeration/ownership failures remain fatal: do not bypass storage boundaries.

@@ -264,6 +264,32 @@ directory mode `channel_config` retains domain/knowledge operations, not BOT
 Agent/binding/processor publication. Private entry uses `credential_request`
 with only a reference and purpose; it never grants access or deploys a BOT.
 
+## Bot status virtual directory
+
+In an authenticated owner durable Web conversation, read `v:bots/overview` first.
+`v:bots/connections/index` discovers compact, allowlisted live connection state;
+`v:bots/connections/<id>` shows enabled, transport health and ownerVerified without
+credentials/configuration or the owner's private platform identity.
+`v:bots/deployments/index` links `v:bots/deployments/<id>/status` (verified current /
+previous revisions, registered source, format, validation and binding/subscription
+state) and `/listeners` (the same selectors used by the Project input router).
+
+Use `read` or virtual `search` glob/grep; follow index/object `next` paths for pages
+of up to 50 rows. Broad search expands only the first page of the first 50 objects
+per kind; search an explicit ID for all its pages. Warnings report bounded/incomplete discovery, not
+absence. No adapters, BOT modules, private cards or Sessions start from these reads.
+Invalid/quarantined deployments remain visible; integrity failures expose no
+unverified revision/source fields. Connection health and projected listeners are
+not proof of processing success (`unknown`). See [Bot state semantics](bots.md#read-only-bot-state).
+
+Read/search grants do not confer management authority: the mount checks the live
+runtime-bound Project and owner durable/root Web session on both read and list
+(including grep/glob). Channel/Service, child/task/call, nested script, memory-lease
+and remote-workdir callers are denied. The mount has no write handler. Operations
+remain `bot_setup`, `bot_package` and `credential_request` under their existing
+private-entry / owner-confirmation boundaries; legacy status actions remain
+compatible, not the default discovery path.
+
 ## Per-call Folder selection
 
 `read`, `write`, `exec` and `search` accept an optional `folder`: the unique short
