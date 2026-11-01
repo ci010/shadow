@@ -4,12 +4,14 @@
       <span class="session-message-icon" :class="outgoing ? 'i-lucide-send' : 'i-lucide-inbox'" aria-hidden="true" />
       <strong :title="title">{{ title }}</strong>
       <span v-if="!outgoing" class="session-message-origin">{{ t('From session') }}</span>
-      <button v-if="sessionId" type="button" class="session-message-link" :title="sessionId"
-        :aria-label="t('Open conversation {id}', { id: sessionId })"
-        @click.stop.prevent="emit('interact'); emit('inspect', sessionId)">
-        <span>{{ recipient }}</span>
-        <span class="session-message-icon i-lucide-arrow-up-right" aria-hidden="true" />
-      </button>
+      <HoverInfo v-if="sessionId" class="session-message-source" :text="t('Open conversation {id}', { id: sessionId })" v-slot="{ triggerProps }">
+        <button v-bind="triggerProps" type="button" class="session-message-link"
+          :aria-label="t('Open conversation {id}', { id: sessionId })"
+          @click.stop.prevent="emit('interact'); emit('inspect', sessionId)">
+          <span>{{ recipient }}</span>
+          <span class="session-message-icon i-lucide-arrow-up-right" aria-hidden="true" />
+        </button>
+      </HoverInfo>
       <span v-else class="session-message-recipient">{{ recipient }}</span>
       <slot name="status" />
       <MessageTimestamp v-if="timestamp" :timestamp="timestamp" />
@@ -22,6 +24,7 @@
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
+import HoverInfo from './HoverInfo.vue'
 import MessagePreviewCard from './MessagePreviewCard.vue'
 
 defineProps<{ title: string; recipient: string; sessionId?: string; outgoing?: boolean; timestamp?: string }>()
@@ -29,16 +32,26 @@ const emit = defineEmits<{ inspect: [id: string]; interact: [] }>()
 </script>
 
 <style scoped>
-.session-message :deep(.message-preview-header) { color: var(--c-text); font-size: 14px; }
-.session-message :deep(.message-preview-header > strong) { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; font-weight: 600; }
+.session-message { background: var(--c-chat-action-bg); border-color: transparent; padding: 6px 12px; }
+.session-message :deep(.message-preview-header) { color: var(--c-text-secondary); font-size: 12px; }
+.session-message :deep(.message-preview-content) { max-height: 3lh; }
+.session-message[data-expanded="true"] :deep(.message-preview-content) { max-height: none; }
+.session-message :deep(.message-preview-body::after) { height: 1lh; }
+.session-message :deep(.message-preview-header > strong) { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; font-weight: 500; }
 .session-message :deep(.message-preview-body) { font-size: 13px; line-height: 1.6; }
 .session-message :deep(.message-preview-body .prose) { color: var(--c-text-body); font-size: 13px; line-height: 1.6; }
 .session-message-icon { flex: 0 0 14px; width: 14px; height: 14px; }
 .session-message-origin { flex: 0 0 auto; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
 .session-message-recipient { font-weight: 400; }
+.session-message-source { display: flex; flex: 1 1 0; min-width: 0; }
+.session-message-source .session-message-link { width: 100%; }
 .session-message-link { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; max-width: 100%; min-height: 28px; padding: 4px 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 400; text-align: left; cursor: pointer; }
 .session-message-link > span:first-child, .session-message-recipient { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-message-recipient { flex: 1 1 0; }
 .session-message-link:hover { color: var(--c-text); text-decoration: underline; }
 .session-message-link:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+@media (max-width: 700px), (pointer: coarse) {
+  .session-message :deep(.message-preview-toggle), .session-message-link { min-height: 44px; }
+  .session-message :deep(.message-preview-toggle) { flex-basis: 44px; width: 44px; }
+}
 </style>

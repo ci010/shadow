@@ -529,7 +529,7 @@ onUnmounted(() => { request?.abort(); releaseArchive() })
 .file-markdown :deep(code) { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: .85em; padding: .15em .3em; background: var(--c-bg-card); border-radius: var(--radius-sm); }
 .file-markdown :deep(pre) { max-width: 100%; overflow: auto; padding: 16px; background: var(--c-bg-card); border-radius: var(--radius-control); line-height: 1.55; }
 .file-markdown :deep(pre code) { padding: 0; white-space: pre; }
-.file-markdown :deep(blockquote) { margin: 1em 0; padding-left: 16px; border-left: 1px solid var(--c-border); color: var(--c-text-secondary); }
+/* Blockquotes use the shared Markdown baseline in styles.css. */
 .file-markdown :deep(table) { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; margin: 1em 0; }
 .file-markdown :deep(th), .file-markdown :deep(td) { padding: 8px 12px; border: 1px solid var(--c-border); text-align: left; }
 .file-markdown :deep(img) { max-width: 100%; height: auto; }

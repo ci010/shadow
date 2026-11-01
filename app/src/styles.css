@@ -627,3 +627,24 @@ input:not([type]), textarea {
   --answer-font: var(--font-sans);
   --answer-font-mono: var(--font-mono);
 }
+
+/* Shared Markdown baseline: quotes are reading surfaces, not semantic alerts. */
+:where(.prose, .markdown-body, .file-markdown) blockquote {
+  margin: 1em 0;
+  padding: 0.65em 1em;
+  border-left: 3px solid var(--c-border-hover);
+  background: var(--c-bg-muted);
+  color: var(--c-text-body);
+  font-style: normal;
+  font-weight: 400;
+  quotes: none;
+}
+:where(.prose, .markdown-body, .file-markdown) blockquote p::before,
+:where(.prose, .markdown-body, .file-markdown) blockquote p::after { content: none; }
+:where(.prose, .markdown-body, .file-markdown) blockquote > :first-child { margin-top: 0; }
+:where(.prose, .markdown-body, .file-markdown) blockquote > :last-child { margin-bottom: 0; }
+:where(.prose, .markdown-body, .file-markdown) blockquote blockquote {
+  margin: 0.65em 0;
+  padding: 0.25em 0.75em;
+  background: transparent;
+}
