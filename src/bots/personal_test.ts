@@ -3,11 +3,11 @@ import { test } from 'node:test'
 import { join } from 'node:path'
 import { BotDeployments } from './deployments.ts'
 import { parseBot } from './sdk.ts'
-import { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
+import { DirectoryBots } from './runtime.ts'
 import { botConversationPolicies } from '../channels/bot-policies.ts'
 import { BotInstanceStore } from '../channels/bot-store.ts'
 import { channelSessionId, deriveSessionId } from '../bus/events.ts'
-import { ChannelInputRouter } from '../input/channel-router.ts'
+import { channelInputFixture } from '../testing/channel-input.ts'
 import { Bus } from '../bus/bus.ts'
 import { SessionManager } from '../sessions/session-manager.ts'
 import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
@@ -19,7 +19,7 @@ import { BackgroundTaskManager } from '../agent/background-task.ts'
 import { HandoffManager } from '../sessions/handoff/manager.ts'
 import { Tools } from '../tools/registry.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import type { ConversationPolicies } from '../agent-authoring/service.ts'
+import type { ConversationPolicies } from './conversation-policy.ts'
 import type { LLMProvider } from '../providers/provider.ts'
 import { channelMessageInput } from '../sessions/input.ts'
 
@@ -65,7 +65,7 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
       assert.equal(policies.managed(id),false)
       const finished=Promise.withResolvers<void>()
       bus.on('session.turn.finished',()=>finished.resolve())
-      const inputs = new ChannelInputRouter({ projectId, bots: store, directory: runtime,
+      const inputs = channelInputFixture({ projectId, sessions, bots: store, directory: runtime,
         receive: message => sessions.deliver(deriveSessionId(message), channelMessageInput(message)) })
       await inputs.receive(message)
       await finished.promise

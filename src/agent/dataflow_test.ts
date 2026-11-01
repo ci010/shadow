@@ -1,7 +1,7 @@
 import { isRuntimeContextEvent } from '../sessions/runtime-context-contract.ts'
-import { ChannelInputRouter } from '../input/channel-router.ts'
+import { channelInputFixture } from '../testing/channel-input.ts'
 import { BotDeployments } from '../bots/deployments.ts'
-import { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
+import { DirectoryBots } from '../bots/runtime.ts'
 import { BotInstanceStore } from '../channels/bot-store.ts'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
@@ -127,11 +127,11 @@ test(`web input routing without event fanout, commands and retry follow one dire
     getLlmRuntimeConfig: () => llm,
   })
   const live: Array<{ sessionId: string; payload: unknown; requestId?: string }> = []
-  const channel = new WebChannel(bus, { workspace, sessionManager: sessions, realtime: {
+  const channel = new WebChannel(bus, { authorize: () => true, prepareSession: id => sessions.prepareCommandSession(id), workspace, sessionManager: sessions, realtime: {
     chat(sessionId, payload, requestId) { live.push({ sessionId, payload, requestId }) },
     invalidateSessions() {}, invalidateActivity() {}, close() {},
   } })
-  const inputs = new ChannelInputRouter({ projectId: 'fixture',
+  const inputs = channelInputFixture({ projectId: 'fixture', sessions,
     bots: new BotInstanceStore({ projectId: 'fixture', path: join(workspace, 'bots.json') }),
     directory: new DirectoryBots(new BotDeployments({ projectId: 'fixture', directory: join(workspace, 'deployments') })),
     receive: message => agent.receiveChannelMessage(message) })

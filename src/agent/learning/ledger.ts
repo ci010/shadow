@@ -32,6 +32,7 @@ const batchSchema = z.object({
   id: z.string().uuid(), createdAt: z.string().datetime(), pipeline: z.enum(pipelines), sources: z.array(sourceSchema),
   inputEvents: z.array(eventSchema), events: z.array(eventSchema), artifacts: z.array(artifactSchema),
   attempts: z.array(z.string()), state: z.enum(['pending', 'running', 'done']),
+  retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative() }).optional(),
   proposal: outcomeSchema.optional(), evaluated: z.array(z.string()), error: z.string().optional(),
 }).strict()
 export type LearningBatch = z.infer<typeof batchSchema>
@@ -47,6 +48,7 @@ const stateSchema = z.object({
   batches: z.array(batchSchema), outcomes: z.record(z.string(), outcomeSchema),
   consumed: z.object({ encapsulator: z.array(z.string()), soulReflector: z.array(z.string()) }),
   retries: z.record(z.string(), retrySchema),
+  preferFresh: z.record(z.string(), z.boolean()).optional(),
 }).strict()
 export const fingerprint = (text: string) => createHash('sha256').update(text).digest('hex')
 
@@ -104,8 +106,34 @@ export class LearningLedger {
   cursor(source: Omit<LearningSource, 'offset' | 'end'>): number {
     return this.core(source).cursor(source.physicalId)
   }
-  pending(pipeline: Pipeline): LearningBatch | undefined {
-    return structuredClone(this.core().pending(pipeline))
+  pending(pipeline: Pipeline, dueOnly = false): LearningBatch | undefined {
+    return structuredClone(this.state.batches.filter(batch => batch.pipeline === pipeline && batch.state !== 'done'
+      && (!dueOnly || batch.state === 'running' || (batch.retry?.notBefore ?? 0) <= Date.now()))
+      .sort((a, b) => (a.retry?.notBefore ?? 0) - (b.retry?.notBefore ?? 0))[0])
+  }
+  /** Selection frontier reserves failed work without acknowledging it. */
+  selectionCursor(source: Omit<LearningSource, 'offset' | 'end'>): number {
+    return Math.max(this.cursor(source), ...this.state.batches.flatMap(batch =>
+      batch.sources.filter(range => range.physicalId === source.physicalId).map(range => range.end)))
+  }
+  defer(id: string, retryable: boolean): void {
+    const batch = this.required(id)
+    const attempts = (batch.retry?.attempts ?? 0) + 1
+    batch.retry = { attempts, notBefore: Date.now() + (retryable
+      ? Math.min(3_600_000, 60_000 * 2 ** Math.min(attempts - 1, 6)) : 3_600_000) }
+    this.save()
+  }
+  batch(id: string): LearningBatch { return structuredClone(this.required(id)) }
+  select(pipeline: Pipeline, sources: LearningSource[], events: LearningEvent[], manual = false): LearningBatch | undefined {
+    const due = this.pending(pipeline, !manual)
+    const fresh = sources.length > 0 || events.length > 0
+    const batch = fresh && (!due || this.state.preferFresh?.[pipeline]) ? this.create(pipeline, sources, events) : due
+    if (batch) {
+      this.state.preferFresh ??= {}
+      this.state.preferFresh[pipeline] = batch === due
+      this.save()
+    }
+    return batch
   }
   batchFor(sessionId: string): LearningBatch | undefined {
     return structuredClone(this.state.batches.find(batch => batch.attempts.at(-1) === sessionId && batch.state === 'running'))
@@ -115,14 +143,19 @@ export class LearningLedger {
   retry(pipeline: Pipeline): LearningRetry { return structuredClone(this.state.retries[pipeline] ?? { attempts: 0 }) }
   setRetry(pipeline: Pipeline, retry: LearningRetry): void { this.state.retries[pipeline] = retrySchema.parse(retry); this.save() }
   eventsFor(pipeline: 'encapsulator' | 'soulReflector'): LearningEvent[] {
-    const consumed = new Set(this.state.consumed[pipeline])
+    const consumed = new Set([...this.state.consumed[pipeline], ...this.state.batches
+      .filter(batch => batch.pipeline === pipeline && batch.state !== 'done').flatMap(batch => batch.inputEvents.map(event => event.id))])
     return structuredClone(this.state.batches.filter(batch => batch.pipeline === 'reflector' && batch.state === 'done')
       .flatMap(batch => batch.events).filter(event => !consumed.has(event.id)).slice(0, 40))
   }
   create(pipeline: Pipeline, sources: LearningSource[], inputEvents: LearningEvent[]): LearningBatch {
     const batch = batchSchema.parse({ id: randomUUID(), createdAt: new Date().toISOString(), pipeline, sources, inputEvents,
       events: [], artifacts: [], evaluated: [], attempts: [], state: 'pending' })
-    this.core().create(batch); this.save()
+    for (const source of sources) {
+      if (source.offset !== this.selectionCursor(source)) throw new Error('Learning reservation conflict')
+    }
+    if (this.state.batches.some(other => other.pipeline === pipeline && other.state === 'running')) throw new Error('Learning pipeline is running')
+    this.state.batches.push(batch); this.save()
     return structuredClone(batch)
   }
   bind(id: string, sessionId: string): void {
@@ -163,7 +196,18 @@ export class LearningLedger {
           ...this.state.consumed[batch.pipeline], ...batch.inputEvents.map(event => event.id),
         ])]
       }
-      this.core().settle(id, sessionId, true)
+      batch.state = 'done'
+      // Only verified contiguous ranges acknowledge history; later successes cannot skip a failed hole.
+      for (const source of batch.sources) {
+        let cursor = this.cursor(source)
+        while (true) {
+          const next = this.state.batches.filter(item => item.state === 'done').flatMap(item => item.sources)
+            .find(range => range.physicalId === source.physicalId && range.offset === cursor)
+          if (!next) break
+          cursor = next.end
+        }
+        this.state.cursors[source.physicalId] = cursor
+      }
     } else this.core().settle(id, sessionId, false)
     this.save()
     return structuredClone(outcome)

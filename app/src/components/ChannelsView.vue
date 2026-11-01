@@ -32,7 +32,7 @@
             <button :disabled="!!saving" @click="removeBot(channel)">{{ t('Remove') }}</button>
           </div>
         </header>
-        <p>{{ channel.purpose === 'personal' ? t('Personal assistant: verified owner direct messages only. Project skills and approved permissions apply; management remains Web-only where required.') : channel.purpose === 'service' ? t('Service Bot: explicit published Agent, skills, tools and resources required. Owner DMs do not become personal sessions.') : t('Legacy / unclassified: business requests blocked until explicitly configured.') }}</p>
+        <p>{{ channel.purpose === 'personal' ? t('Personal assistant: verified owner direct messages only. Project skills and approved permissions apply; management remains Web-only where required.') : channel.purpose === 'service' ? t('Service Bot: a deployed directory BOT with explicit binding permissions is required. Owner DMs do not become personal sessions.') : t('Legacy / unclassified: business requests blocked until explicitly configured.') }}</p>
         <div v-if="!channel.enabled">
           <small>{{ t('Role changes require disconnecting and no existing conversation history. Create a new Bot for an existing connection with history.') }}</small>
           <button v-if="channel.purpose !== 'personal'" @click="changePurpose(channel, 'personal')">{{ t('Configure as personal assistant') }}</button>
@@ -61,7 +61,7 @@
             <strong>{{ t('QQ platform checklist — not verified by Shadow') }}</strong>
             <ol><li v-for="instruction in definition('qq').instructions" :key="instruction">{{ instruction }}</li></ol>
             <p>{{ t('Check sandbox testers, approved events and bot availability in QQ Open Platform. Saving credentials does not verify these settings or prove message delivery. Save and connect below, then refresh status.') }}</p>
-            <p v-if="channel.purpose === 'service'">{{ t('QQ service groups use the Project sidebar group page: select a published Agent and explicitly approve its setup there. This connection wizard does not grant access or enable owner pairing.') }}</p>
+            <p v-if="channel.purpose === 'service'">{{ t('QQ service groups use directory BOT bindings. Edit the registered BOT source and confirm deployment in owner chat. This connection wizard does not grant access or enable owner pairing.') }}</p>
             <p v-else-if="channel.purpose !== 'personal'">{{ t('Choose a role explicitly before using this Bot. Connection alone does not authorize requests.') }}</p>
           </div>
         </section>

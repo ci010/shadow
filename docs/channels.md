@@ -7,6 +7,13 @@ App-wide. A saved bot configuration is not proof of platform delivery or
 verified connectivity; the backend can be locally ready while a bot is
 offline. Legacy global WeChat configuration is not imported or started by Project runtimes.
 
+The sidebar reads a Project-scoped Bot catalog independently of whether a loaded
+conversation has a channel address. Catalog readiness/reconnect and transport
+state invalidations refresh names and connection facts. The sidebar does not
+require editable configuration fields to match the renderer's settings schema.
+A question-mark indicator means connection status is unavailable or the SDK is
+running without verified readiness; incoming messages alone do not set it to connected.
+
 Service Bots do not deliver host-generated LLM request errors to external chats
 (including groups). The error event and failed-turn state remain available to
 WebChat for diagnosis; ordinary responses are unaffected. Personal Bots retain
@@ -22,6 +29,12 @@ admitted channel stream but are filtered before Session entry: no Session is
 created/woken and no model, compaction, acknowledgement reaction or automatic reply
 runs. They are not automatically added to Agent history. This separates passive
 collection from the BOT's receive policy; see [external input routing](input-routing.md).
+One InputRouter matches Web Session, verified Personal pairing and Service BOT
+listeners from host state. An address or payload cannot register a listener or
+claim admin/source identity. Web authentication precedes new-Session preparation;
+Personal/Service lazy strategies run only after their listener is selected. No
+matching listener means no execution; conflicting handlers are rejected, not
+broadcast or routed to another Agent.
 Mentions/replies and reviewed processors retain their trigger behavior. Edits/deletes and admitted thread discovery append local events.
 Other platforms currently contribute only through their existing admitted receive
 boundary, not a new universal history/edit feed. Unbound service chats and
@@ -204,45 +217,23 @@ An explicitly authorized Discord management channel gets a bounded version of
 the same tool, restricted to its Bot and existing tool/domain ceiling. Its
 proposal can also be confirmed with `/shadow-approve <draft-id> <hash>` by the
 same currently authorized human. Ordinary chat text and model tool calls are
-never that approval. QQ/Feishu managed authoring remains a separate workflow.
+never that approval. BOT configuration on all three platforms uses the directory lifecycle.
 
 ### QQ/Feishu configuration from Shadow owner chat
 
-QQ and Feishu also support owner-chat authoring of Agent Markdown, selected tools
-and per-conversation bindings. This is the existing `authoring_change` workflow,
-not Discord's `channel_config propose`. Owner `channel_config list` includes
-`otherPlatformBots` and the appropriate authoring route so an absent Discord
-assignment is not mistaken for unsupported QQ configuration.
+QQ and Feishu use the same directory BOT lifecycle as Discord. `bot_package
+status` discovers deployments, connections, registered Folders and known
+conversations. Match the target to its exact Bot/platform/conversation address;
+edit `BOT.md`, `bot.json` and declared modules in the registered source, then
+propose one frozen BOT for native owner confirmation. Permissions are binding
+fields, not capability profiles or a shared resource draft. No configuration
+tool is exposed to the target group; platform roles do not confer Shadow ownership.
+Unassigned Service conversations cannot fall back to an ordinary assistant.
 
-Use `authoring_change inspect` for read-only discovery without creating a Change:
-published Agent settings, the provider model/effort catalog, and the Project's
-Bot and known conversation inventory, including uncovered conversations. Match the target
-session to its exact Bot/platform/conversation address. Edit the Agent resource,
-selected skill tools and binding, run the Change checks, then propose the exact
-revision. Tools are read/search and published skill tool aliases with explicit
-module/grant ceilings, not the unrestricted host tool catalog.
-The owner must approve the publication card in Shadow; this workflow does not
-currently use Discord's Settings Review page. A model cannot approve publication.
-Do not expose management tools to the target QQ group or treat a QQ group role
-as Shadow ownership. Unbound QQ conversations retain their existing behavior
-until an owner-approved binding is published.
-
-For inference-only edits, create a Change and use `configure_inference` with an
-explicit Agent name and `settings` (`model`, `reasoningEffort`, `temperature`,
-`maxTokens`, `thinking`). Omitted fields stay unchanged; null removes an override.
-This edits frontmatter without changing instructions, tools or bindings. Every
-binding sharing the Agent is affected; **there are no Bot-wide model defaults**.
-Known unbound conversations are explicitly listed and remain unchanged.
-Run `check validate` before proposing; known unsupported model/effort combinations
-are rejected, while missing effort metadata means unknown support.
-Ordinary channel turns and synthetic scenarios share inference setting assembly:
-explicit session overrides win over published Agent settings, then runtime defaults.
-Agent defaults are not copied into QQ session state, so removing them restores
-inheritance. Query `status` by Change ID after approval to compare the exact
-revision against the published snapshot and pending/waiting/error review state.
-An absent request alone never means publication succeeded.
-Check/status responses include compact assertions and errors; full scenario
-transcripts remain available through the saved `run` ID rather than chat scraping.
+For BOT inference changes, edit its model/effort configuration and confirm the
+new deployment. Provider capability validation and defaults are described under
+[Directory Service BOT inference](#directory-service-bot-inference). Old Change,
+scenario and saved-run checks are retired, not required setup steps.
 
 When viewing a QQ, Discord, or Feishu conversation in Shadow, the bottom model/effort menu saves
 overrides for that logical conversation only, including after reopening it.
@@ -415,7 +406,7 @@ field is retained for personal/standalone compatibility, not directory Service
 policy. Old Service packages without a binding `trigger` now default to `mention`,
 even if the connection stored `triggerMode: "all"`. Nothing is silently migrated
 to `all`; explicitly configure the affected BOT binding to retain that behavior.
-See [BOT receive configuration](agent-authoring.md#external-input-subscriptions).
+See [BOT receive configuration](bots.md#external-input-subscriptions).
 
 Reception and triggering are separate. In `mention` mode, ordinary admitted
 service-group messages can be collected in the bounded channel stream, but the
@@ -652,97 +643,32 @@ its observed messages. File/audio observations show a type placeholder rather th
 downloading media. Available QQ text is truncated; Feishu observation currently
 extracts plain text messages only.
 
-The same conversation workspace displays received-only observations for groups
-without a session, or the existing history when a session exists. Open
-**Settings** in that chat to select a **published Agent**. The group page shows
-**Ready to enable** or **Agent setup incomplete**, and a human-readable summary
-of the actual tool declarations, HTTPS targets and allowed methods/paths,
-read-only folders and private connection use. It does not derive authority from
-the prompt. Group setup never asks for skills, route JSON or credential references.
-
-The profile-based group setup below is a legacy/resource-based workflow, not
-an onboarding requirement for directory BOTs. Directory BOTs declare permissions
-directly in `bot.json` bindings and update through `bot_package`; they do not use
-`capabilityProfiles` or Change-based source recovery. See
-[Directory BOT authoring](agent-authoring.md#author-and-confirm).
-
-The creator prepares a reusable capability profile once in the Agent authoring
-layer (see [Agent capability profiles](agent-authoring.md#reusable-agent-capability-profiles)).
-Profiles are explicit per Bot/platform within the runtime-bound Project, stored
-in versioned `AGENT.md` frontmatter, and published through the existing exact
-Authoring Change review. A profile is not a global mutable default. Ordinary
-bindings, including old same-Bot bindings, are never promoted into a profile.
-An old Agent without a profile still resolves its existing bindings unchanged,
-but cannot be enabled in a new group until its creator publishes an explicit
-profile. Even a no-tool Agent requires an explicitly empty capability policy.
-
-Missing profiles or private connections disable **Review group setup**. Links
-open an ordinary administrator Web draft for the creator to repair Agent configuration, or to
-request the existing **Private credential entry** card using `project_config
-request_secret`. The connection link is a configuration handoff, not a secret
-input or automatic credential request. Never send secrets in chat. Credentials
-remain in the owning Project credential store; no local `gh` token is imported.
-A profile for one Bot cannot authorize another Bot, even within the same Project.
-Credential use by another Bot requires its own explicitly reviewed profile.
-
-Choose **Review group setup** only when configuration is complete. The server
-copies only the selected published profile into an independent exact candidate.
-The ordinary POST accepts no policy overrides or Agent creation fields. Missing
-profiles, folders, inbox targets or credentials enable nothing; live validation
-runs again before review and publication. There is no implicit group-admin grant.
-
-The sidebar shows a pending-approval icon for affected groups. A compact inline
-**Group setup awaiting review** disclosure opens the original publication review;
-collapsing it does not reopen it on polling. Approve/cancel controls remain inside
-that full review alongside its exact revisions and permission details. The conversation reuses
-Project publication reviews, not an Agent ask or a second approval database:
-**Approve publication** binds the exact candidate and published-base revisions;
-**Cancel publication** leaves it inactive. Approval is Web-owner-authorized only,
-never a group command. Edits, concurrent publication and stale/double submissions
-are rejected by the shared publication contract. Active work may defer an
-explicitly approved publication using the existing waiting-review state. Review
-and sidebar snapshots refresh every three seconds while visible; refresh is not
-approval. A review affecting multiple groups remains a single atomic publication
-and lists its full impact. A foreign Project cannot approve it.
-
-Agent creation and advanced tool/permission editing belong in an authorized
-owner authoring topic, not the group-binding popover. Group setup creates an
-independent published-base Authoring Change and exact-snapshot review. An
-unrelated shared draft (including its source and revision) is never staged,
-discarded or published. Independent reviews coexist; identical candidates reuse
-their review. Conflicting group reviews must be resolved first. Rejection enables
-nothing; changed published bases require refresh and fresh review, not a silent
-merge. Changing an Agent profile affects future proposals only: existing bindings
-retain their previously approved policy until explicitly reviewed and changed.
+The conversation workspace shows received-only observations without a Session,
+or existing history when one exists. Settings links to an ordinary owner Web
+conversation for directory BOT configuration; there is no Agent/profile selector
+or group publication card. Declare the exact target and its permissions in the
+registered source and use `bot_package`. Source edits never change an active
+BOT until the owner confirms the frozen deployment. Use `credential_request` for
+private credential entry, never chat or package files.
 
 Observations are private Project-local data in `config/service-discovery.json`:
 at most 200 targets, deduplicated by Bot/platform/ID, with 30-day group expiry.
 Each group retains at most 20 text observations of at most 2,000 characters, for
 seven days. They are untrusted platform text, not instructions; Vue renders them
 as text. Do not post secrets to groups: this is not a general secret scanner.
-Message text is excluded from the model-visible authoring inventory. Persistence
+Message text is excluded from the model-visible BOT inventory. Persistence
 is sampled at most once per minute plus clean shutdown; a crash can lose the last
 sample. Expired content is filtered on reads and removed on the next flush.
 Deleted/non-service Bots are excluded. Enabled groups remain in the sidebar;
 the legacy Bot-settings pending list hides enabled bindings and links to the
 same group page.
 
-Owner-only, no-store APIs use the runtime-bound Project, never a Project body
-field: `GET /api/service-groups` returns observation metadata, published Agent names
-and per-Bot `agentSetups` readiness/safe capability summaries with published-profile provenance, plus affected-review flags; a `group` query containing JSON `[botId, conversationId]`
-includes only that group's bounded text. `POST /api/service-groups/propose` accepts
-`{botInstanceId, conversationId, agent, revision}` (all other fields are rejected) and prepares, but does not enable,
-the candidate. Decisions use the existing
-`/api/agent-resources/publication-requests/:id` endpoints. The legacy
-`GET /api/channels/:id/pending-groups` remains owner-only.
-
-Group proposal errors retain their specific HTTP status and safe error code:
-invalid input/name or policy overrides are 400, a removed Bot is 404, changed revisions or a
-conflicting group review is 409, live validation is 422, and an
-unavailable publication service is 503. Refresh is local; existing reviews open
-in place. Live validation problems offer an ordinary administrator Web conversation for configuration repair. Repeating an identical proposal returns its existing exact review;
-it never replaces another pending review or unrelated draft. Live validation
-categories never expose credential values or arbitrary server exception text.
+The owner-only, no-store `GET /api/service-groups` uses the runtime-bound Project
+and returns observed targets and directory deployment identities. A `group`
+query containing JSON `[botId, conversationId]` includes only that group's bounded
+text. It is read-only: there is no group propose API or profile/readiness evidence.
+`GET /api/channels/:id/pending-groups` remains owner-only. Deployment confirmation
+uses `bot_package`, not the retired resource publication endpoints.
 
 ### Directory Service BOT inference
 

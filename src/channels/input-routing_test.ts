@@ -4,8 +4,8 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { BotDeployments } from '../bots/deployments.ts'
-import { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
-import { ChannelInputRouter } from '../input/channel-router.ts'
+import { DirectoryBots } from '../bots/runtime.ts'
+import { channelInputFixture } from '../testing/channel-input.ts'
 import { BotInstanceStore } from './bot-store.ts'
 import { ChannelManager } from './manager.ts'
 import { DiscordChannel } from './discord.ts'
@@ -41,8 +41,8 @@ async function fixture(t: TestContext, workspace: string, observation: boolean, 
   }
   await deploy()
   let routerOpen = true
-  const subscriptions = directory.inputSubscriptions.bind(directory)
-  t.mock.method(directory, 'inputSubscriptions', () => { trace.push('select'); return routerOpen ? subscriptions() : [] })
+  const subscriptions = directory.inputListeners.bind(directory)
+  t.mock.method(directory, 'inputListeners', () => { trace.push('select'); return routerOpen ? subscriptions() : [] })
   const agents = new AgentTypesManager(workspace); await agents.load()
   const memory = new MemoryDomains(projectId, join(workspace, 'domains'))
   const store = new IntegrationStore({ projectId, workspace, directory: join(workspace, 'security'), bots, agents, memory, deployedBots: () => directory.discord() })
@@ -61,14 +61,14 @@ async function fixture(t: TestContext, workspace: string, observation: boolean, 
   }, async () => { throw new Error('unused') })
   const observe = integration.observe.bind(integration)
   t.mock.method(integration, 'observe', (...args: Parameters<typeof observe>) => { trace.push('observation-receive'); return observe(...args) })
-  const inputs = new ChannelInputRouter({ projectId, bots, directory, receive: async message => {
+  const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => {
     trace.push('wake:ordinary'); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
   } })
   const bus = new Bus(), adapter = new DiscordChannel(bus, { token: 'synthetic', workspace, reactionEmoji: '' })
   Object.assign(adapter, { botUserId: '900' })
   const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, sessions, inputs.receive, {
     projectId, instanceStore: bots, factory: () => adapter, discordIntegration: integration,
-    routeServiceInput: (message, run) => inputs.policy(message, async configuration => { trace.push('handler:ordinary'); await run(configuration) }),
+    routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { trace.push('handler:ordinary'); await run(configuration) }),
     routeObservation: (connection, scopeId, run) => inputs.observation(connection, scopeId, async () => { trace.push('handler:observation'); await run() }),
   })
   await manager.init()
@@ -155,13 +155,13 @@ for (const connectionTrigger of ['mention', 'all'] as const) test(`two directory
       await deployments.deploy({ id, source: { folderId: 'fixture', directory: '' }, ...frozen })
     }
     const directory = new DirectoryBots(deployments), delivered: string[] = [], configured: string[] = []
-    const inputs = new ChannelInputRouter({ projectId, bots, directory, receive: async message => {
+    const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => {
       delivered.push(message.chatId); assert.equal(message.channelAddress?.botInstanceId, connection.id)
       return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
     } })
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, {} as SessionManager, inputs.receive, {
       projectId, instanceStore: bots, serviceAssigned: directory.serviceAssigned,
-      routeServiceInput: (message, run) => inputs.policy(message, async configuration => {
+      routeInputPolicy: (message, run) => inputs.policy(message, async configuration => {
         assert.ok(configuration?.platform === 'qq' && Object.isFrozen(configuration))
         configured.push(`${message.chatId}:${configuration.trigger}`)
         await run(configuration)

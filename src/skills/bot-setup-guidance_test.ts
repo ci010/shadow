@@ -41,6 +41,8 @@ test('Directory BOT guidance keeps direct bindings and independent source public
     assert.match(skill.body, /capabilityProfiles/)
     assert.match(skill.body, /Development source and (?:the deployment copy|deployed files) are\s*independent/)
     assert.match(skill.body, /(?:no cross-BOT atomic publication|not an atomic release\s+across BOTs)/)
-    assert.match(skill.body, /Legacy\/resource-based|legacy\/generic authoring/)
+    assert.match(skill.body, /[Ll]egacy[\s\S]*retired/)
+    assert.match(skill.body, /credential_request/)
+    assert.doesNotMatch(skill.body, /`authoring_change`|`project_config`|v:authoring/)
   }
 })

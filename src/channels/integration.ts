@@ -1,8 +1,8 @@
 import type { SourceResources } from './source-resources.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import type { ConversationPolicies } from '../agent-authoring/service.ts'
-import type { ResolvedConversationPolicy } from '../agent-authoring/contracts.ts'
+import type { ConversationPolicies } from '../bots/conversation-policy.ts'
+import type { ResolvedConversationPolicy } from '../bots/contracts.ts'
 import { channelAddressFromSessionId, channelSessionId, type ChannelAddress, type OutboundMessage } from '../bus/events.ts'
 import type { MemoryAccess } from '../memory/contracts.ts'
 import type { MemoryDomains } from '../memory/domains.ts'
@@ -135,7 +135,7 @@ export class DiscordIntegration implements ConversationPolicies {
     sources?: SourceResources
     classifier?:import('../events/input-classifier.ts').InputClassifier
     baseTools: Tools
-    directoryBots?: import('../agent-authoring/bot-runtime.ts').DirectoryBots
+    directoryBots?: import('../bots/runtime.ts').DirectoryBots
   }) {
     this.invalidations.push(options.store.onChange(ids => this.invalidate(new Set(ids))))
     this.invalidations.push(options.memory.onChange(domainId => this.invalidate(new Set([

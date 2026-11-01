@@ -8,11 +8,11 @@ type PairingWindow = Pick<WindowControlTarget, 'isDestroyed' | 'once' | 'removeL
   readonly webContents: Pick<WindowControlTarget['webContents'], 'mainFrame' | 'isDestroyed'>
 }
 
-async function requestPairing(authorization: RuntimeAuthorization, signal: AbortSignal, request: typeof fetch): Promise<DesktopWebPairing> {
+async function requestPairing(authorization: RuntimeAuthorization, signal: AbortSignal, request: typeof fetch, lan?: boolean): Promise<DesktopWebPairing> {
   try {
     const origin = requireLoopbackOrigin(authorization.apiBase)
     const token = requireLaunchToken(authorization.launchToken)
-    const response = await request(`${origin}/local/v1/web-pairing`, {
+    const response = await request(`${origin}/local/v1/web-pairing${lan === undefined ? '' : `?lan=${lan}`}`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}` }, redirect: 'error', signal,
     })
     if (!response.ok || !response.body) {
@@ -52,13 +52,13 @@ export function installWebPairing(
       || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
       throw new TypeError('Browser pairing requires the Main window')
     }
-    if (args.length) throw new TypeError('Browser pairing accepts no arguments')
+    if (args.length > 1 || (args.length === 1 && typeof args[0] !== 'boolean')) throw new TypeError('Browser pairing accepts no arguments except an explicit LAN boolean')
     const current = authorization()
     if (!current) throw new Error('Main is not ready. Wait for it to start, then retry.')
     if (pending) throw new Error('A pairing code is already being generated.')
     pending = true
     try {
-      const result = await requestPairing(current, AbortSignal.any([lifetime.signal, AbortSignal.timeout(10_000)]), request)
+      const result = await requestPairing(current, AbortSignal.any([lifetime.signal, AbortSignal.timeout(10_000)]), request, args[0] as boolean | undefined)
       if (lifetime.signal.aborted || authorization() !== current) throw new Error('Main changed. Generate a new pairing code.')
       return result
     } finally { pending = false }

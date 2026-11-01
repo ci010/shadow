@@ -5,21 +5,6 @@ import { isRecord } from './folders-sidebar.ts'
 import { useLiveClientPool } from './composables/useLiveClient.ts'
 import { createLiveResourceRefresh } from './live-resource-refresh.ts'
 
-export interface PublishedGroupSkill { name: string; tools: Array<{ name: string; modules: string[] }> }
-export interface AgentGroupSetup {
-  botInstanceId: string; agent: string; status: 'ready' | 'incomplete'; problem?: string
-  source?: { kind: 'published_agent_profile'; revision: string }
-  summary?: { hostModules?: string[]; tools: Array<{ name: string; description: string }>; reads: string[]; readFolders: string[]; restrictedSenders: number; targets: Array<{ kind: 'http' | 'inbox'; target: string; operations: string[]; authenticated: boolean }> }
-}
-function validSetup(value: unknown): value is AgentGroupSetup {
-  if (!isRecord(value) || typeof value.botInstanceId !== 'string' || typeof value.agent !== 'string' || !['ready', 'incomplete'].includes(String(value.status)) || (value.problem !== undefined && typeof value.problem !== 'string')) return false
-  if (value.source !== undefined && (!isRecord(value.source) || value.source.kind !== 'published_agent_profile' || typeof value.source.revision !== 'string')) return false
-  if (value.status === 'ready' && (!value.source || !value.summary)) return false
-  if (value.summary === undefined) return true
-  const s = value.summary
-  const strings = (v: unknown) => Array.isArray(v) && v.every(x => typeof x === 'string')
-  return isRecord(s) && (s.hostModules === undefined || strings(s.hostModules)) && Array.isArray(s.tools) && s.tools.every(tool => isRecord(tool) && typeof tool.name === 'string' && typeof tool.description === 'string') && strings(s.reads) && strings(s.readFolders) && typeof s.restrictedSenders === 'number' && Array.isArray(s.targets) && s.targets.every(target => isRecord(target) && ['http', 'inbox'].includes(String(target.kind)) && typeof target.target === 'string' && strings(target.operations) && typeof target.authenticated === 'boolean')
-}
 export interface ServiceGroup {
   sessionId?: string; botInstanceId: string; platform: string; conversationId: string; name?: string; botName: string
   enabled: boolean; agent?: string; pending: boolean; lastSeen: number
@@ -36,8 +21,6 @@ const serviceGroupResources = new WeakMap<LivePool, Map<string, ReturnType<typeo
 // is included defensively even when callers already pass a project-scoped base.
 function createServiceGroupResource(options: ServiceGroupSource, pool: LivePool) {
   const source = () => options
-  const agentSetups = ref<AgentGroupSetup[]>([])
-  const skills = ref<PublishedGroupSkill[]>([]), agentRequirements = ref<Record<string, string[]>>({})
   const groups = ref<ServiceGroup[]>([]), agents = ref<string[]>([]), revision = ref(''), error = ref('')
   let controller: AbortController | undefined, generation = 0
   let pending: Promise<void> | undefined
@@ -68,8 +51,6 @@ function createServiceGroupResource(options: ServiceGroupSource, pool: LivePool)
         for (const message of group.messages) if (!isRecord(message) || typeof message.id !== 'string' || typeof message.sender !== 'string' || typeof message.text !== 'string' || message.text.length > 2000 || !['received', 'not_enabled', 'not_triggered'].includes(String(message.state)) || typeof message.receivedAt !== 'number') throw new Error('Invalid message')
       }
       if (current !== generation || request.signal.aborted) return
-      skills.value = Array.isArray(body.skills) ? body.skills.filter((skill: unknown): skill is PublishedGroupSkill => isRecord(skill) && typeof skill.name === 'string' && Array.isArray(skill.tools) && skill.tools.every((tool: unknown) => isRecord(tool) && typeof tool.name === 'string' && Array.isArray(tool.modules) && tool.modules.every((name: unknown) => typeof name === 'string'))) : []; agentRequirements.value = isRecord(body.agentRequirements) ? Object.fromEntries(Object.entries(body.agentRequirements).filter(([, value]) => Array.isArray(value) && value.every(name => typeof name === 'string'))) as Record<string, string[]> : {};
-      agentSetups.value = Array.isArray(body.agentSetups) ? body.agentSetups.filter(validSetup) : []
       groups.value = body.groups as unknown as ServiceGroup[]; agents.value = body.agents as string[]; revision.value = body.revision; error.value = ''
     } catch { if (current === generation && !request.signal.aborted) error.value = 'unavailable' }
     finally { if (controller === request) controller = undefined }
@@ -90,7 +71,7 @@ function createServiceGroupResource(options: ServiceGroupSource, pool: LivePool)
     disposed = true; generation++; controller?.abort()
     live?.dispose()
   }
-  return { groups, agents, agentSetups, skills, agentRequirements, revision, error, refresh, dispose, subscribers: 0 }
+  return { groups, agents, revision, error, refresh, dispose, subscribers: 0 }
 }
 
 export function useServiceGroups(source: () => ServiceGroupSource) {
@@ -98,12 +79,10 @@ export function useServiceGroups(source: () => ServiceGroupSource) {
   let resources = serviceGroupResources.get(pool)
   if (!resources) { resources = new Map(); serviceGroupResources.set(pool, resources) }
   const lifecycleActive = ref(true)
-  const agentSetups = ref<AgentGroupSetup[]>([])
-  const skills = ref<PublishedGroupSkill[]>([]), agentRequirements = ref<Record<string, string[]>>({})
   const groups = ref<ServiceGroup[]>([]), agents = ref<string[]>([]), revision = ref(''), error = ref('')
   let resource: ReturnType<typeof createServiceGroupResource> | undefined
   const stop = watch(() => [source().apiBase, source().projectId, source().active, source().group, source().session, lifecycleActive.value], (_, __, cleanup) => {
-    agentSetups.value = []; skills.value = []; agentRequirements.value = {}; groups.value = []; agents.value = []; revision.value = ''; error.value = ''
+    groups.value = []; agents.value = []; revision.value = ''; error.value = ''
     const options = { ...source() }
     if (!options.active || !lifecycleActive.value) return
     const key = JSON.stringify([options.apiBase, options.projectId, options.group || '', options.session || ''])
@@ -111,9 +90,9 @@ export function useServiceGroups(source: () => ServiceGroupSource) {
     resources!.set(key, shared)
     resource = shared
     shared.subscribers++
-    const stopSync = watch([shared.groups, shared.agents, shared.agentSetups, shared.skills, shared.agentRequirements, shared.revision, shared.error], () => {
-      groups.value = shared.groups.value; agents.value = shared.agents.value; agentSetups.value = shared.agentSetups.value
-      skills.value = shared.skills.value; agentRequirements.value = shared.agentRequirements.value; revision.value = shared.revision.value; error.value = shared.error.value
+    const stopSync = watch([shared.groups, shared.agents, shared.revision, shared.error], () => {
+      groups.value = shared.groups.value; agents.value = shared.agents.value
+      revision.value = shared.revision.value; error.value = shared.error.value
     }, { immediate: true, flush: 'sync' })
     cleanup(() => {
       stopSync(); resource = undefined
@@ -123,7 +102,7 @@ export function useServiceGroups(source: () => ServiceGroupSource) {
   onActivated(() => { lifecycleActive.value = true })
   onDeactivated(() => { lifecycleActive.value = false })
   onUnmounted(stop)
-  return { groups, agents, agentSetups, skills, agentRequirements, revision, error, refresh: () => resource?.refresh() ?? Promise.resolve() }
+  return { groups, agents, revision, error, refresh: () => resource?.refresh() ?? Promise.resolve() }
 }
 
 // Display-only addresses are never passed to session prepare/send APIs.

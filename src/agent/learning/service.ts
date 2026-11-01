@@ -91,8 +91,8 @@ export class LearningService {
     for (const pipeline of pipelines) {
       const retry = ledger?.retry(pipeline)
       Object.assign(this.states[pipeline], {
-        pending: !!ledger, lastError: retry?.lastError, paused: retry?.paused,
-        retryAt: retry?.notBefore ? new Date(retry.notBefore).toISOString() : undefined,
+        pending: !!ledger, lastError: retry?.lastError, paused: undefined,
+        retryAt: undefined,
       })
     }
     this.subscriptions.push(bus.on('session.input.accepted', scope.bind((event) => {
@@ -113,8 +113,8 @@ export class LearningService {
     this.started = true
     for (const pipeline of pipelines) {
       const retry = this.ledger?.retry(pipeline)
-      Object.assign(this.states[pipeline], { pending: !!this.ledger, lastError: retry?.lastError, paused: retry?.paused,
-        retryAt: retry?.notBefore ? new Date(retry.notBefore).toISOString() : undefined })
+      Object.assign(this.states[pipeline], { pending: !!this.ledger, lastError: retry?.lastError, paused: undefined,
+        retryAt: undefined })
     }
     this.schedule()
     this.lifecycle.changed?.()
@@ -204,7 +204,7 @@ export class LearningService {
 
   private async dispatch(pipeline: Pipeline, job: CronJob, signal: AbortSignal): Promise<void> {
     const state = this.states[pipeline]
-    if ((!this.pipelineEnabled(pipeline) && !this.manual.has(pipeline)) || this.stopped || !state.pending || this.running.has(pipeline)) return
+    if ((!this.pipelineEnabled(pipeline) && !this.manual.has(pipeline)) || this.stopped || (!state.pending && !this.ledger) || this.running.has(pipeline)) return
     if (!this.manual.has(pipeline) && (state.paused || state.retryAt && Date.parse(state.retryAt) > Date.now())) return
     state.pending = false
     this.results.delete(pipeline)
@@ -244,11 +244,10 @@ export class LearningService {
       if (controller.signal.aborted) return
       this.enqueue(pipeline)
       const attempts = (this.ledger?.retry(pipeline).attempts ?? 0) + 1
-      if (error instanceof LearningRunError && !error.retryable || attempts >= 3) {
-        state.paused = 'Automatic retries paused. Correct the cause, then retry with /learn or update configuration.'
-      } else {
-        state.retryAt = new Date(Date.now() + Math.min(60 * 60_000, 60_000 * 2 ** (attempts - 1))).toISOString()
-      }
+      state.paused = undefined
+      // Durable runtimes isolate/back off individual batches, not the automation.
+      state.retryAt = this.ledger ? undefined : new Date(Date.now() +
+        (error instanceof LearningRunError && !error.retryable ? 3_600_000 : Math.min(3_600_000, 60_000 * 2 ** Math.min(attempts - 1, 6)))).toISOString()
       this.ledger?.setRetry(pipeline, { attempts, lastError: state.lastError, paused: state.paused,
         notBefore: state.retryAt ? Date.parse(state.retryAt) : undefined })
       console.error(`[learning] ${pipeline} dispatch failed (${this.scope.projectId}):`, error)

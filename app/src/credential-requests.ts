@@ -4,7 +4,7 @@ import { t } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
-import { parseCredentialRequest, parseCredentialRequestResult, type CredentialRequest } from '../../src/agent-authoring/credential-request-contract.ts'
+import { parseCredentialRequest, parseCredentialRequestResult, type CredentialRequest } from '../../src/credentials/request-contract.ts'
 
 export interface CredentialRequestSource {
   apiBase: string
@@ -61,7 +61,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
   let writeError = false
 
   function endpoint(id?: string): string {
-    return apiUrl(source().apiBase, `/api/agent-resources/credential-requests${id ? `/${encodeURIComponent(id)}` : ''}`).toString()
+    return apiUrl(source().apiBase, `/api/credential-requests${id ? `/${encodeURIComponent(id)}` : ''}`).toString()
   }
   function stop() {
     generation++

@@ -20,31 +20,30 @@ export interface InputEnvelope<T, Reply = unknown> extends InputRoute {
   payload: T
 }
 export type InputTarget = { kind: 'bot' | 'session'; id: string }
-export interface InputSubscription extends InputRoute {
+export interface InputListener extends InputRoute {
   descendants?: boolean
   target: InputTarget
 }
-export function matchesInput(selector: InputSubscription, input: InputRoute & { parents?: readonly string[] }): boolean {
+export function matchesInput(selector: InputListener, input: InputRoute & { parents?: readonly string[] }): boolean {
   return selector.source.type === input.source.type && selector.source.id === input.source.id && selector.kind === input.kind &&
     (selector.topic === input.topic || selector.descendants === true && !!input.parents?.includes(selector.topic))
 }
 
 /** Single-owner delivery. No business filters, inference, fanout or Agent fallback.
- * direct is an entry-authorized target, never a field read from payload.
+ * Listeners are a live projection of host state, never installed by an input.
  * Arbitrary sources (including controlled program signals) use the same envelope;
  * connectors and producer grants are owned by their host entrypoints, not this class.
  */
 export class InputRouter<T, R> {
   constructor(readonly projectId: string, private readonly options: {
-    subscriptions: () => readonly InputSubscription[]
+    listeners: () => readonly InputListener[]
     deliver: (target: InputTarget, input: InputEnvelope<T>) => Promise<R>
   }) {}
 
-  async route(input: InputEnvelope<T>, direct?: InputTarget): Promise<R | undefined> {
+  async route(input: InputEnvelope<T>): Promise<R | undefined> {
     if (input.projectId !== this.projectId) throw new Error('External input Project mismatch')
-    if (direct) return this.options.deliver(direct, input)
-    const matches = this.options.subscriptions().filter(sub => matchesInput(sub, input))
-    const targets = new Map(matches.map(sub => [JSON.stringify(sub.target), sub.target]))
+    const matches = this.options.listeners().filter(sub => matchesInput(sub, input))
+    const targets = new Map(matches.map(sub => [JSON.stringify([sub.target.kind, sub.target.id]), sub.target]))
     if (targets.size > 1) throw new Error('External input has conflicting subscribers')
     const target = targets.values().next().value
     return target ? this.options.deliver(target, input) : undefined

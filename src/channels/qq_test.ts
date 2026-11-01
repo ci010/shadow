@@ -173,7 +173,7 @@ test('QQ sends a local file from the originating non-mention group message', asy
       if (url.pathname.endsWith('/upload_prepare')) {
         return Response.json({
           upload_id: 'upload-id',
-          block_size: 1024,
+          block_size: '1024',
           parts: [{
             index: 0,
             presigned_url: 'https://upload.example.test/part-0',
@@ -219,7 +219,7 @@ test('QQ sends a local file from the originating non-mention group message', asy
           body: {
             file_type: 4,
             file_name: 'report.txt',
-            file_size: 15,
+            file_size: '15',
             md5: createHash('md5').update('report contents').digest('hex'),
             sha1: createHash('sha1').update('report contents').digest('hex'),
             md5_10m: createHash('md5').update('report contents').digest('hex'),
@@ -232,7 +232,7 @@ test('QQ sends a local file from the originating non-mention group message', asy
           body: {
             upload_id: 'upload-id',
             part_index: 0,
-            block_size: 15,
+            block_size: '15',
             md5: createHash('md5').update('report contents').digest('hex'),
           },
         },
@@ -259,3 +259,49 @@ test('QQ sends a local file from the originating non-mention group message', asy
     }
   })
 })
+
+for (const kind of ['group', 'c2c'] as const) {
+  test(`QQ ${kind} uploads large files with the official hash prefix and indexed parts`, async t => {
+    const channel = new QQChannel(new Bus(), { appId: 'fixture', secret: 'fixture' })
+    t.after(() => channel.stop())
+    const data = Buffer.alloc(10_485_760 + 123, 97)
+    data.fill(98, 10_002_432)
+    const blockSize = 5_242_880
+    const indices = [2, 0, 1]
+    const uploaded = new Map<number, Buffer>()
+    const resource = kind === 'group' ? '/v2/groups/recipient' : '/v2/users/recipient'
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input)
+      if (url.hostname === 'upload.example.test') {
+        const index = Number(url.pathname.slice(1))
+        assertEquals(init?.method, 'PUT')
+        assertEquals(new Headers(init?.headers).has('authorization'), false)
+        const bytes = Buffer.from(init?.body as Uint8Array)
+        assertEquals(bytes, data.subarray(index * blockSize, (index + 1) * blockSize))
+        uploaded.set(index, bytes)
+        return new Response(null)
+      }
+      const body = JSON.parse(String(init?.body))
+      if (url.pathname === `${resource}/upload_prepare`) {
+        assertEquals(body.file_size, String(data.length))
+        assertEquals(body.md5, createHash('md5').update(data).digest('hex'))
+        assertEquals(body.sha1, createHash('sha1').update(data).digest('hex'))
+        assertEquals(body.md5_10m, createHash('md5').update(data.subarray(0, 10_002_432)).digest('hex'))
+        return Response.json({ upload_id: 'upload', block_size: String(blockSize),
+          parts: indices.map(index => ({ index: kind === 'c2c' ? String(index) : index, presigned_url: `https://upload.example.test/${index}` })) })
+      }
+      if (url.pathname === `${resource}/upload_part_finish`) {
+        const bytes = uploaded.get(body.part_index)!
+        assertEquals(body.block_size, String(bytes.length))
+        assertEquals(body.md5, createHash('md5').update(bytes).digest('hex'))
+        return Response.json({})
+      }
+      assertEquals(url.pathname, `${resource}/files`)
+      assertEquals(uploaded.size, 3)
+      assertEquals(body, { upload_id: 'upload' })
+      return Response.json({ file_info: 'completed' })
+    })
+    assertEquals(await channel['uploadNamedMedia']({ kind, id: 'recipient' }, {}, 'report.zip', data, 4),
+      { file_info: 'completed' })
+  })
+}

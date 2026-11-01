@@ -1,9 +1,9 @@
 import { z } from 'zod'
-import { authoredModuleCall } from '../agent-authoring/tool-runtime.ts'
+import { grantedModuleCall } from '../script-runtime/granted-script.ts'
 import { evaluateScriptCases } from '../script-runtime/evaluate.ts'
 import { ScriptImportsSchema, assertImportPolicy, importedModules } from '../script-runtime/module-policy.ts'
-import { CapabilityError, validateJsonSchema } from '../agent-authoring/capabilities.ts'
-import { createMockResponder, validateMockResult } from '../agent-authoring/mock-results.ts'
+import { CapabilityError, validateJsonSchema } from '../execution/grants.ts'
+import { createMockResponder, validateMockResult } from '../script-runtime/mock-results.ts'
 import type { Tool } from './tool.ts'
 
 const grantSchema = z.object({
@@ -70,7 +70,7 @@ export const agentToolTest: Tool = {
       policy: { kind: 'restricted', mode: 'test', imports: input.imports },
     }, input.cases.map((scenario, index) => ({
       name: scenario.name, args: scenario.args, expected: scenario.expected,
-      callModule: authoredModuleCall(async (name, args, signal) => {
+      callModule: grantedModuleCall(async (name, args, signal) => {
         signal.throwIfAborted()
         if (!input.imports.includes(`@shadow/${name}`)) {
           throw new CapabilityError('capability_denied', 'Undeclared synthetic module.')

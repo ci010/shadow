@@ -14,7 +14,7 @@ import type { FolderRecord } from '../../folders/contracts.ts'
 import type { BotInstanceStatus } from '../../channels/setup-contract.ts'
 import type { AutomationSummary } from '../../cron/contracts.ts'
 import type { WebSearchStatus } from '../../config/web-search.ts'
-import { IntegrationDraftSchema, IntegrationOverviewSchema } from '../../channels/integration-contract.ts'
+import { IntegrationOverviewSchema } from '../../channels/integration-contract.ts'
 
 test('real Main concurrently isolates Project folders, Home prompts, defaults, bots and restart state', { timeout: 90_000 }, async () => {
   await withTempWorkspace(async root => {
@@ -36,6 +36,10 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const projectHome = projectPaths(home, 'default').home
       await mkdir(join(projectHome, 'config'), { recursive: true })
       await writeFile(join(projectHome, 'config', 'SOUL.md'), 'ORG_A_PRIVATE_IDENTITY_7f01\n')
+      // Retired resource data is inert, not a startup schema/migration dependency.
+      const retired = ['resources.json', 'changes.json', 'publication-requests.json', 'probe-requests.json']
+      await mkdir(join(projectHome, 'authoring'), { recursive: true })
+      for (const name of retired) await writeFile(join(projectHome, 'authoring', name), `unparsed retired ${name}\n`)
       await writeFile(join(home, 'unknown-user-file.bin'), Buffer.from([0, 41, 255]))
       await writeFile(join(pathA, 'sentinel.txt'), 'A file only')
       await writeFile(join(pathB, 'sentinel.txt'), 'B file only')
@@ -89,6 +93,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       runtime = await startMainRuntime(config, options)
       await runtime.ready
       assert.deepEqual(await json('/api/projects/default/status'), { state: 'ready' })
+      for (const name of retired) assert.equal(await readFile(join(projectHome, 'authoring', name), 'utf8'), `unparsed retired ${name}\n`)
       assert.equal((await fetch(base + '/projects/default/api/microapps')).status, 401)
       assert.deepEqual(await json('/projects/default/api/microapps'), { apps: [] })
       for (const [path, method] of [
@@ -154,18 +159,19 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert(!coordinatorContext.tools.some(tool => ['channel_config', 'project_config', 'authoring_change'].includes(tool.name)))
       assert(coordinatorContext.tools.some(tool => tool.name === 'invoke_tool'))
       assert.doesNotMatch(coordinatorContext.systemPrompt, /For Discord, use `channel_config`|Coordinator Capability Boundary/)
-      const discordAgentId = randomUUID()
-      const discordDraft = IntegrationDraftSchema.parse(await json(a + discordPath + '/drafts', 'POST', {
-        baseRevision: discordA.revision, change: { kind: 'agent.save', agent: {
-          id: discordAgentId, name: 'host-discord-support', displayName: 'Host support',
-          markdown: '---\nname: host-discord-support\ndescription: Isolated host fixture\ndefaultMode: session\n---\nHOST_DISCORD_AGENT_CANARY',
-          execution: 'restricted', tools: ['read', 'memory_save', 'learned_skill'], readDomains: [], skills: [],
-        } },
-      }, 201))
-      assert.equal((await request(b + discordPath + `/drafts/${discordDraft.id}/commit`, 'POST', { hash: discordDraft.hash })).status, 404)
-      const approvedDiscord = IntegrationDraftSchema.parse(await json(a + discordPath + `/drafts/${discordDraft.id}/commit`, 'POST', { hash: discordDraft.hash }))
-      assert.equal(approvedDiscord.status, 'applied')
-      assert(!JSON.stringify(await json(b + discordPath)).includes('HOST_DISCORD_AGENT_CANARY'))
+      // Production has one Service source: old resource lifecycle calls cannot publish.
+      for (const project of [a, b]) {
+        const rejected = await request(project + discordPath + '/drafts', 'POST', {
+          baseRevision: project === a ? discordA.revision : discordB.revision,
+          change: { kind: 'agent.save', agent: {
+            id: randomUUID(), name: 'retired-resource', displayName: 'Retired resource',
+            markdown: '---\nname: retired-resource\n---\nMUST_NOT_PUBLISH',
+            execution: 'restricted', tools: [], readDomains: [], skills: [],
+          } },
+        })
+        assert.equal(rejected.status, 400)
+        assert.equal((await rejected.json()).error, 'directory_required')
+      }
       assert.equal((await request(a + discordPath)).headers.get('cache-control'), 'no-store')
       assert.equal((await fetch(base + '/api/app/web-search')).status, 401)
       assert.equal((await fetch(base + '/api/app/web-search', { method: 'PATCH', body: '{}' })).status, 401)
@@ -189,31 +195,17 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       }
       assert.equal(JSON.parse(await readFile(configPath, 'utf8')).tools.exaApiKey, 'synthetic-search-exa')
       for (const project of [a, b]) {
-        const pending = project + '/api/agent-resources/credential-requests'
+        const pending = project + '/api/credential-requests'
         assert.equal((await fetch(base + pending)).status, 401)
         const metadata = await request(pending)
         assert.equal(metadata.headers.get('cache-control'), 'no-store')
         assert.deepEqual(await metadata.json(), { request: null })
         assert.equal((await request(`${pending}/${randomUUID()}`, 'POST', { value: 'synthetic-stale-value' })).status, 409)
-        assert.deepEqual(await json(project + '/api/agent-resources/credentials'), { names: [] })
-        const publication = project + '/api/agent-resources/publication-requests'
-        assert.equal((await fetch(base + publication)).status, 401)
-        const review = await request(publication)
-        assert.equal(review.headers.get('cache-control'), 'no-store')
-        assert.deepEqual(await review.json(), { request: null, requests: [] })
-        const decision = { revision: `sha256:${'a'.repeat(64)}`, baseRevision: `sha256:${'b'.repeat(64)}` }
-        for (const method of ['POST', 'DELETE']) {
-          assert.equal((await request(`${publication}/${randomUUID()}`, method, decision)).status, 409)
-          assert.equal((await fetch(base + `${publication}/${randomUUID()}`, { method })).status, 401)
-        }
-        const probes = project + '/api/agent-resources/probe-requests'
-        assert.equal((await fetch(base + probes)).status, 401)
-        const probeReviews = await request(probes)
-        assert.equal(probeReviews.headers.get('cache-control'), 'no-store')
-        assert.deepEqual(await probeReviews.json(), { requests: [] })
-        for (const method of ['POST', 'DELETE']) {
-          assert.equal((await request(`${probes}/${randomUUID()}`, method, { revision: decision.revision })).status, 409)
-          assert.equal((await fetch(base + `${probes}/${randomUUID()}`, { method })).status, 401)
+        assert.deepEqual(await json(project + '/api/credentials'), { names: [] })
+        for (const path of ['publication-requests', 'probe-requests', 'credential-requests', 'credentials']) {
+          for (const method of ['GET', 'POST', 'DELETE']) {
+            assert.equal((await request(`${project}/api/agent-resources/${path}`, method)).status, 404)
+          }
         }
       }
       assert.equal((await fetch(base + '/api/app/model-defaults')).status, 401)
@@ -388,7 +380,8 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.deepEqual(await (await fetch(base + '/api/web-auth/session')).json(), { version: 1, required: true, authenticated: false })
       assert.equal((await json<{ projects: ProjectRecord[] }>('/api/projects')).projects.length, 2)
       const restoredDiscord = IntegrationOverviewSchema.parse(await json(a + discordPath))
-      assert.equal(restoredDiscord.agents.find(agent => agent.id === discordAgentId)?.markdown.includes('HOST_DISCORD_AGENT_CANARY'), true)
+      assert.deepEqual(restoredDiscord.agents, [])
+      for (const name of retired) assert.equal(await readFile(join(projectHome, 'authoring', name), 'utf8'), `unparsed retired ${name}\n`)
       assert.deepEqual(restoredDiscord.deploymentIssues, [])
       assert.deepEqual(IntegrationOverviewSchema.parse(await json(b + discordPath)).agents, [])
       assert.equal((await json<{ model: string }>(a + '/api/config/model-defaults')).model, 'org-a@openai')

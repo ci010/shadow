@@ -22,7 +22,8 @@ export class SessionTool implements Tool {
       initiativeId: { type: 'string', description: 'Create only: root Work key for an Initiative view (or a legacy Initiative ID), optional; not an assignment.' },
       initialMessage: { type: 'string', description: 'Create only: optional kickoff request, with the necessary context and source references.' },
       work: { type: 'object', description: 'Create only: {key:string}, an unassigned note coordinated by this session. Link responsibility and contextual questions before kickoff; no adoption protocol.' },
-      path: { type: 'string', description: 'register_folder only: absolute existing directory on Main. This does not move data or change this chat workdir.' },
+      nodeId: { type: 'string', description: 'register_folder only: explicit runtime inventory device identity (Main or Child). Required from remote sessions; never inferred from a display path.' },
+      path: { type: 'string', description: 'register_folder only: absolute existing directory on Main when nodeId is omitted; otherwise an opaque directory path on the explicitly selected device. This does not move data or change this chat workdir.' },
     },
     required: ['action'],
     additionalProperties: false,
@@ -37,9 +38,9 @@ export class SessionTool implements Tool {
     if (action === 'create') return JSON.stringify(await this.topics.create(request, context.sessionId, context.signal))
     if (action === 'update') return JSON.stringify(await this.topics.update(request, context.sessionId))
     if (action === 'register_folder') {
-      if (context.remoteWorkdir) throw new Error('A remote session cannot register its display path on Main. Use a Main-local Project session to register a Main-local folder or select an existing remote capability.')
-      if (Object.keys(request).some(key => key !== 'path' && key !== 'description')) throw new TypeError('register_folder accepts only path and description.')
-      return JSON.stringify(await this.topics.registerFolder(request.path, context.signal, request.description as string | undefined))
+      if (context.remoteWorkdir && request.nodeId === undefined) throw new Error('A remote session cannot register its display path on Main. Use a Main-local Project session to register a Main-local folder or select an existing remote capability.')
+      if (Object.keys(request).some(key => key !== 'path' && key !== 'description' && key !== 'nodeId')) throw new TypeError('register_folder accepts only path, description and nodeId.')
+      return JSON.stringify(await this.topics.registerFolder(request.path, context.signal, request.description as string | undefined, request.nodeId))
     }
     throw new TypeError('Unknown session action.')
   }

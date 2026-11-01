@@ -22,7 +22,7 @@ import { createResponseContext } from '../sessions/response-context.ts'
 import { channelMessageInput } from '../sessions/input.ts'
 
 test('explicit web queue delivery becomes a queue input and invalid policies are rejected before admission', async () => {
-  const channel = new WebChannel(new Bus(), {})
+  const channel = new WebChannel(new Bus(), { authorize: () => true,})
   const app = new Hono()
   const deliveries: ReturnType<typeof channelMessageInput>[] = []
   channel.setReceiver(async message => {
@@ -48,7 +48,7 @@ test('explicit web queue delivery becomes a queue input and invalid policies are
 test('live event envelopes and parallel tool IDs are forwarded only to the owning chat', async () => {
   const bus = new Bus()
   const hub = new RealtimeHub()
-  const channel = new WebChannel(bus, { workspace: '.', realtime: hub.registerProject('one') })
+  const channel = new WebChannel(bus, { authorize: () => true, workspace: '.', realtime: hub.registerProject('one') })
   const app = new Hono()
   await channel.start(app)
   const response = hub.connect([{ kind: 'chat', projectId: 'one', sessionId: 'web:owner' }],
@@ -92,7 +92,7 @@ test('live event envelopes and parallel tool IDs are forwarded only to the ownin
 
 test('display provenance does not filter or relabel synchronous REST content and media', async () => {
   const bus = new Bus()
-  const channel = new WebChannel(bus, {})
+  const channel = new WebChannel(bus, { authorize: () => true,})
   const app = new Hono()
   channel.setReceiver(async message => {
     bus.emit('message.outbound', {
@@ -118,7 +118,7 @@ test('display provenance does not filter or relabel synchronous REST content and
 test('peer progress is projected once with its persisted author envelope, not as assistant stream text', async () => {
   const bus = new Bus()
   const hub = new RealtimeHub()
-  const channel = new WebChannel(bus, { workspace: '.', realtime: hub.registerProject('one') })
+  const channel = new WebChannel(bus, { authorize: () => true, workspace: '.', realtime: hub.registerProject('one') })
   const reader = hub.connect([{ kind: 'chat', projectId: 'one', sessionId: 'web:owner' }],
     new AbortController().signal).body!.getReader()
   const decode = async () => new TextDecoder().decode((await reader.read()).value)
@@ -166,7 +166,7 @@ async function createWebApp(
     getSessionState,
     workdirLookup,
   } as unknown as SessionManager
-  const channel = new WebChannel(new Bus(), { workspace, sessionManager })
+  const channel = new WebChannel(new Bus(), { authorize: () => true, workspace, sessionManager })
   await channel.start(app)
   return { app, channel }
 }
@@ -502,7 +502,7 @@ test('session media and legacy upload serving retain gateway authentication and 
   registerGatewayRoutes(app, [], { launchCredential: 'media-test-credential' })
   const checked: string[] = []
   let denied = false
-  const channel = new WebChannel(new Bus(), { workspace, sessionManager: {
+  const channel = new WebChannel(new Bus(), { authorize: () => true, workspace, sessionManager: {
     getSessionState: (id: string) => id === 'qq:chat' || id === 'web:chat'
       ? { sessionId: id, workspaceRoot: 'qq:chat' } : null,
     assertFolderAccess: (id: string) => {
@@ -570,7 +570,7 @@ test('explicit session media refuses remote and unavailable workdirs even when p
 test('web chat context rejects missing IDs before reading context and preserves existing sessions', async () => {
   const app = new Hono()
   const reads: string[] = []
-  const channel = new WebChannel(new Bus(), { sessionManager: {
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
     getSessionState: (id: string) => id === 'web:existing' ? { sessionId: id } : null,
     getContext: async ({ sessionId }: { sessionId: string }) => { reads.push(sessionId); return { systemPrompt: 'Existing prompt', tools: [] } },
     getHistory: async () => ({ messages: [{ role: 'user', content: 'Existing history' }] }),
@@ -598,7 +598,7 @@ test('chat session response includes segment navigation without another history 
   let state = { sessionId: 'web:segmented', segmentIndex: 2 }
   const history = [{ role: 'user', content: 'History' }]
   const tools = [{ name: 'read', description: 'Read' }]
-  const channel = new WebChannel(new Bus(), { sessionManager: {
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
     getSessionState: () => state,
     getContext: async () => ({ systemPrompt: 'Prompt', tools }),
     getHistory: async () => { historyReads++; return { messages: history } },
@@ -630,7 +630,7 @@ test('chat history conditional reads validate all response fields and never hide
   let decisions: string[] = []
   let tools: string[] = []
   let segmentIndex = 0
-  const channel = new WebChannel(new Bus(), { sessionManager: {
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
     getSessionState: () => exists ? { sessionId: 'web:cached', segmentIndex } : null,
     getContext: async () => ({ systemPrompt: prompt, tools }),
     getHistory: async () => ({ messages: history }),
@@ -678,7 +678,7 @@ test('history append validates complete old prefix and metadata, not client coun
   let segmentIndex = 0
   let commands: string[] = []
   let decisions: string[] = []
-  const channel = new WebChannel(new Bus(), { sessionManager: {
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
     getSessionState: () => ({ sessionId: 'web:delta', segmentIndex }),
     getContext: async () => ({ systemPrompt, tools: [] }),
     getHistory: async () => ({ messages: history }),
@@ -720,7 +720,7 @@ test('history block reuse requires exact hash/count and bounded offset', async (
   const original = [{ role: 'user', content: 'original' }]
   let history = [...original]
   let systemPrompt = 'old'
-  const channel = new WebChannel(new Bus(), { sessionManager: {
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
     getSessionState: () => ({ sessionId: 'web:block', segmentIndex: 0 }),
     getContext: async () => ({ systemPrompt, tools: [] }),
     getHistory: async () => ({ messages: history }),

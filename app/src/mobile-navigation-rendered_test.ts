@@ -100,8 +100,6 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           else if (path === '/api/io/runs') data = { runs: [] }
           else if (path === '/api/io/clients') data = { clientToken: 'synthetic-test-client' }
           else if (/^\/api\/io\/clients\/[^/]+\/heartbeat$/.test(path)) data = { ok: true }
-          else if (path === '/api/agent-resources/publication-requests') data = { request: null, requests: [] }
-          else if (path === '/api/agent-resources/probe-requests') data = { requests: [] }
           else if (path === '/v1/query/session-spans') data = {
             sessionId: url.searchParams.get('sessionId'), physicalSessionId: url.searchParams.get('physicalSessionId') ?? undefined,
             entries: [], hasMore: false,

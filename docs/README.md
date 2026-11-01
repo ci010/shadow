@@ -17,7 +17,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Provider instances and multiple accounts](provider-instances.md)
 - [Provider cost estimates](provider-cost.md)
 - [Quick Actions](quick-actions.md)
-- [Conversation agent authoring](agent-authoring.md), [external input routing](input-routing.md)
+- [Directory BOTs](bots.md), [external input routing](input-routing.md)
 - [Project Micro Apps](microapps.md)
 - [Inline visual answers](inline-visual-answers.md)
 - [Windows computer use](computer-use.md)

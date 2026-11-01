@@ -246,6 +246,18 @@ test('startup failures are explicit, sanitized, persisted, and retryable', async
   assert.equal(f.created.length, 2)
 })
 
+test('startup and cleanup failures log distinct sanitized phases', async t => {
+  const logs: string[] = []
+  t.mock.method(console, 'error', (...args: unknown[]) => { logs.push(args.map(String).join(' ')) })
+  const f = await fixture(t)
+  f.configure(channel => { channel.failStart = true; channel.failStop = true })
+  const response = await f.patch('discord', { token: 'synthetic-token', enabled: true })
+  assert.equal((await response.json()).channel.state, 'restart-required')
+  assert.ok(logs.some(line => line.includes('phase=start')))
+  assert.ok(logs.some(line => line.includes('phase=cleanup-after-start-failure')))
+  assert.doesNotMatch(logs.join('\n'), /synthetic-token/)
+})
+
 test('failed cleanup requires restart rather than creating duplicate clients', async (t) => {
   const f = await fixture(t)
   await f.patch('feishu', { appId: 'app', appSecret: 'synthetic-secret', enabled: true })

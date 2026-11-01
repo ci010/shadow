@@ -146,8 +146,6 @@ test('automations open ordinary conversations and navigate run history without a
             json(path.endsWith('/files') ? { path: '', entries: [] } : { available: false, reason: 'not_repository', entries: [] })
           } else if (path.endsWith('/api/slash-commands')) json({ commands: [] })
           else if (path.endsWith('/background-tasks')) json({ total: 0, tasks: [] })
-          else if (path.endsWith('/publication-requests')) json({ request: null, requests: [] })
-          else if (path.endsWith('/probe-requests')) json({ requests: [] })
           else if (path.startsWith('/api/') || path.startsWith('/debug/')) { unexpected.push(path); json({ error: 'Unstubbed fixture request' }, 404) }
           else next()
         })

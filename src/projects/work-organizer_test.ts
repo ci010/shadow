@@ -161,7 +161,10 @@ test('aborted organizer rejects further writes and retains committed patch with 
 test('delta selects at most three changed topics while full retains thirty-topic ceiling', async () => withTempWorkspace(async home => {
   const store = new InitiativeStore(home)
   try {
+    const empty = new WorkOrganizer(store, { projectId: 'fixture', evidence: async () => ({ sources: [], partial: true }), activity: () => '', changed() {} })
+    assert.equal(empty.hasDelta(), false, 'preflight is empty without creating a run')
     for (let i = 1; i <= 35; i++) store.saveWork(organizerRecord(i), 0, 'fixture', 'created')
+    assert.equal(empty.hasDelta(), true)
     const organizer = new WorkOrganizer(store, { projectId: 'fixture', evidence: async () => ({ sources: [], partial: true }), activity: () => '', changed() {} })
     const signal = new AbortController().signal
     assert.equal(JSON.parse(organizer.begin('fixture', 'delta', signal)).manifest.length, 3)

@@ -34,6 +34,7 @@ import { initializeNodeTelemetry } from '../../otel/runtime.ts'
 import { otelPlugin } from '../../otel/routes.ts'
 import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
 import { StartupTimings } from '../startup-timings.ts'
+import { privateLanAddresses } from '../../gateway/lan-browser.ts'
 import { BrowserAuth } from '../../gateway/web-auth.ts'
 import { MainDeviceUi } from '../../cluster/device-ui.ts'
 import { MainDeviceNetwork } from './device-network.ts'
@@ -113,7 +114,36 @@ export async function startProjectHost(
   cleanup.push(closeTelemetry)
   const clientAddresses = new GatewayClientAddressRegistry()
   const launchCredential = resolveLaunchCredential(options.gateway?.launchCredential, process.env.GATEWAY_LAUNCH_CREDENTIAL, process.env.WINDOWS_USE_LAUNCH_TOKEN)
-  const browserAuth = new BrowserAuth({ launchCredential, pinHash: options.gateway?.browserPinHash, clientAddresses, developmentUrl: process.env.VITE_DEV_URL })
+  const lanGateways: ReturnType<typeof serveGateway>[] = []
+  let lanStart: Promise<string[]> | undefined
+  const enableLan = () => lanStart ??= (async () => {
+    await Promise.resolve() // Assign the in-flight promise before any rejection resets it.
+    const addresses = privateLanAddresses()
+    try {
+      if (!addresses.length) throw new Error('No private LAN interface')
+      for (const host of addresses) {
+        if (stopping) throw new Error('Main is stopping')
+        const listener = serveGateway(app, { host, port: 0, clientAddresses, sharedWebSockets: true, requestGuard: request => browserAuth.guardLanRequest(request) })
+        lanGateways.push(listener)
+        await listener.ready
+        if (stopping) throw new Error('Main is stopping')
+        browserAuth.lanPorts.add(listener.addr.port)
+      }
+      return lanGateways.map(listener => `http://${listener.addr.hostname}:${listener.addr.port}/`)
+    } catch (error) {
+      await Promise.all(lanGateways.splice(0).map(listener => listener.shutdown()))
+      browserAuth.lanPorts.clear()
+      lanStart = undefined
+      throw error
+    }
+  })()
+  cleanup.push(() => Promise.all(lanGateways.map(listener => listener.shutdown())))
+  const disableLan = async () => {
+    await Promise.all(lanGateways.splice(0).map(listener => listener.shutdown()))
+    browserAuth.lanPorts.clear()
+    lanStart = undefined
+  }
+  const browserAuth = new BrowserAuth({ enableLan, disableLan, launchCredential, pinHash: options.gateway?.browserPinHash, clientAddresses, developmentUrl: process.env.VITE_DEV_URL })
   cleanup.push(() => browserAuth.close())
   const mobileConfig = mobileGatewayConfig(process.env)
   const mobileAccess = mobileConfig ? new MobileAccess({
@@ -336,6 +366,8 @@ export async function startProjectHost(
     await clean(() => providerSetup.dispose())
     await clean(() => deviceNetwork.shutdown())
     await clean(() => mainCluster.closeNodeConnections())
+    await clean(() => lanStart?.catch(() => {}))
+    await clean(() => Promise.all(lanGateways.map(listener => listener.shutdown())))
     await clean(() => gateway.shutdown())
     if (mobileGateway) await clean(() => mobileGateway.shutdown())
     await clean(() => mainCluster.save())

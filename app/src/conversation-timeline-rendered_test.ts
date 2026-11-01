@@ -99,8 +99,6 @@ test('continuous ChatTab prepends, preserves boundaries and handles live rollove
             response.end(html)
           }
           else if (path.endsWith('/preview')) json({ content: html, size: Buffer.byteLength(html), sourcePath: 'layout.html', binary: false })
-          else if (path.endsWith('/publication-requests')) json({ request: null, requests: [] })
-          else if (path.endsWith('/probe-requests')) json({ requests: [] })
           else if (path.endsWith('/background-tasks')) json({ sessionId: 'web:chat-one', total: 0, tasks: [] })
           else if (path.endsWith('/api/chat/send')) {
             const chunks: Buffer[] = []

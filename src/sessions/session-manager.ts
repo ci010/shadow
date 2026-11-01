@@ -19,7 +19,7 @@ import { parseInitiativeId } from './initiative-metadata.ts'
 import type { Hono } from 'hono'
 import type { AgentTypesManager } from '../agent/types/manager.ts'
 import type { AgentTypeDefinition } from '../agent/types/types.ts'
-import type { ConversationPolicies } from '../agent-authoring/service.ts'
+import type { ConversationPolicies } from '../bots/conversation-policy.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
 import type {
   ContextBuilder,
@@ -46,7 +46,6 @@ import { hasTruncatedLegacyHistory, physicalSessionId, SessionIdentityError } fr
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
-import { evaluateAuthoringScenario } from './authoring-evaluation.ts'
 import { runBoundedSession } from './bounded-session.ts'
 import type { ChannelBoundary } from '../channels/integration-contract.ts'
 import { LOCAL_NODE_ID, normalizeSessionLocality, resolveSessionLocations, type WorkdirLookup, type WorkdirRefV2 } from './locality.ts'
@@ -311,21 +310,6 @@ export class SessionManager {
 
   isWaitingForCall(sessionId: string): boolean {
     return [...this.calls.values()].some(frame => frame.callerId === sessionId)
-  }
-
-  async evaluateAuthoringScenario(input: {
-    prompt: string; tools: SessionTools; input: string; signal: AbortSignal
-    llmOverrides?: Partial<Pick<LlmRuntimeConfig, 'model' | 'temperature' | 'maxTokens' | 'thinking' | 'reasoningEffort'>>
-  }) {
-    if (this.stopped || !this.deps.projectId) throw new Error('Authoring evaluation requires a running Project session manager.')
-    const llm = this.deps.getLlmRuntimeConfig?.()
-    if (!llm) throw new Error('Authoring evaluation requires the configured LLM runtime.')
-    const executionPolicy = this.deps.tools.getExecutionPolicy()
-    if (executionPolicy) input.tools.setExecutionPolicy(executionPolicy)
-    return evaluateAuthoringScenario({
-      ...input, workspace: this.workspace, projectId: this.deps.projectId,
-      provider: this.deps.provider, llm: { ...llm, ...input.llmOverrides },
-    })
   }
 
   async runScopedLearning(input: {
@@ -2193,20 +2177,11 @@ ${JSON.stringify(request)}`,
     })
   }
 
-  /** Read-only actual execution paths; remote display paths are deliberately not returned. */
-  getSelfWorkingPaths(sessionId: string): { projectDir: string | null; cwd: string | null } {
-    const state = this.getSessionState(sessionId)
-    if (!state) throw new Error('Session unavailable')
-    const workdir = resolveSessionLocations(this.deps.workspace, state, undefined, this.deps.workdirLookup).workdir
-    const cwd = workdir.available && workdir.locality === 'local' ? workdir.path : null
-    return { projectDir: state.folderId ? cwd : null, cwd }
-  }
-
   /** Tool entry point: the caller supplies only its runtime-bound identity, never a target. */
   async updateSelfMetadata(sessionId: string, value: unknown, expected?: string): Promise<void> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected metadata object')
     const patch = value as Record<string, unknown>
-    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['title', 'description', 'completed', 'projectDir', 'cwd'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
+    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['title', 'description', 'completed'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
     const changes: Partial<SessionState> = {}
     if ('title' in patch) {
       if (typeof patch.title !== 'string') throw new TypeError('Title must be text')
@@ -2222,11 +2197,7 @@ ${JSON.stringify(request)}`,
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
       if (!state || this.stopped || this.deleting.has(sessionId) || state.mode === 'call' || state.automation) throw new Error('Self metadata requires an available ordinary durable session or task')
-      const paths = this.getSelfWorkingPaths(sessionId)
-      for (const key of ['projectDir', 'cwd'] as const) {
-        if (key in patch && patch[key] !== paths[key]) throw new Error('Execution paths are read-only. Use use_project to select a registered folder.')
-      }
-      if (expected !== undefined && expected !== JSON.stringify({ ...paths, title: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '', description: state.description ?? '', completed: state.completed ?? false }, null, 2)) throw new Error('Session metadata changed during editing. Reread v:session/self.json and retry.')
+      if (expected !== undefined && expected !== JSON.stringify({ title: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '', description: state.description ?? '', completed: state.completed ?? false }, null, 2)) throw new Error('Session metadata changed during editing. Reread v:session/self.json and retry.')
       // Fresh task identity is owned by its parent, not by the child's prompt or supplied patch.
       if (state.mode === 'task' && (('title' in patch && patch.title !== (state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '')) || ('description' in patch && patch.description !== (state.description ?? '')))) throw new Error('Task title and description are parent-owned; preserve them unchanged or omit them.')
       if (state.task && 'completed' in patch && patch.completed !== (state.completed ?? false)) throw new Error('Worker completion is a review submission, not acceptance; return a final response instead')

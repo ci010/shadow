@@ -172,54 +172,29 @@ test('learning ignores internal activity and does not report a no-op watermark c
   }
 })
 
-test('recovery gates timers; retries back off across restart, pause after three failures and resume explicitly', async t => {
-  t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: new Date('2026-10-02T00:00:00Z') })
+test('legacy paused state recovers and enabled ticks keep scanning even after false or failure', async t => {
   t.mock.method(console, 'error', () => {})
-  t.mock.method(console, 'info', () => {})
   await withTempWorkspace(async workspace => {
     const scope = createProjectScope('a')
     const ledger = new LearningLedger(workspace, 'a')
+    ledger.setRetry('reflector', { attempts: 3, paused: 'old permanent pause', notBefore: Date.now() + 3_600_000 })
     const cron = new CronService(workspace, 'UTC', scope)
     let calls = 0
-    let nonretryable = false
-    let changed = 0
-    const callbacks = { async reflector() {
-      calls++
-      throw new LearningRunError(nonretryable ? 'model_not_supported' : 'fetch failed', !nonretryable)
-    }, async encapsulator() { return false }, async soulReflector() { return false } }
-    const config = { reflectIntervalMs: 1000, encapsulateIntervalMs: 3600000, soulIntervalMs: 3600000 }
-    let service = new LearningService(new Bus(), scope, callbacks, config, cron, undefined, ledger,
-      { deferStart: true, changed: () => { changed++ } })
+    const service = new LearningService(new Bus(), scope, {
+      async reflector() { calls++; if (calls === 1) throw new LearningRunError('model_not_supported', false); return false },
+      async encapsulator() { return false }, async soulReflector() { return false },
+    }, config, cron, undefined, new LearningLedger(workspace, 'a'), { deferStart: true })
     try {
       assert.equal(cron.listJobs().length, 0)
-      t.mock.timers.tick(1000)
-      await tick()
-      assert.equal(calls, 0)
       await assert.rejects(service.trigger('reflector'), /recovery/)
       service.start()
-      await cron.runNow('learning:reflector')
-      assert.equal(calls, 1)
-      assert.equal(ledger.retry('reflector').notBefore, Date.now() + 60_000)
-      assert(changed >= 2, 'persisted outcomes and status changes must invalidate clients')
-      await service.stop()
-      service = new LearningService(new Bus(), scope, callbacks, config, cron, undefined, new LearningLedger(workspace, 'a'))
-      await cron.runNow('learning:reflector')
-      assert.equal(calls, 1)
-      t.mock.timers.tick(60_000)
-      await tick()
-      assert.equal(calls, 2)
-      t.mock.timers.tick(120_000)
-      await tick()
-      assert.equal(calls, 3)
-      assert(service.status().pipelines.reflector.paused)
-      await service.stop()
-      service = new LearningService(new Bus(), scope, callbacks, config, cron, undefined, new LearningLedger(workspace, 'a'))
-      await cron.runNow('learning:reflector')
-      assert.equal(calls, 3)
-      nonretryable = true
-      await assert.rejects(service.trigger('reflector'), /model_not_supported/)
+      assert.equal(service.status().pipelines.reflector.paused, undefined)
+      for (let i = 0; i < 4; i++) await cron.runNow('learning:reflector')
       assert.equal(calls, 4)
-      assert(service.status().pipelines.reflector.paused)
+      assert.equal(service.status().pipelines.reflector.paused, undefined)
+      service.update({ ...config, enabled: false })
+      await cron.runNow('learning:reflector')
+      assert.equal(calls, 4)
     } finally { await service.stop(); scope.close() }
   })
 })

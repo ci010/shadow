@@ -45,10 +45,20 @@ existing Wiki item over duplicate pages. Stable event keys deduplicate retries,
 not repeated user actions into a behavior counter: counting is not implemented
 by this workflow.
 
+Retention thresholds differ by destination: Wiki items need clear, sourced
+information with lasting reference value and a genuine addition or correction;
+key events/challenges need significant observed evidence worth tracking, not a
+completed lesson. Long-term preferences and principles need stronger evidence,
+conditions and exceptions. Publishable skills need reusable procedures and
+supported outcomes, evaluated downstream. Only behavioral guidance must explain
+which future action changes; that extra test does not gate Wiki or event writes.
+Receipts briefly explain relevant candidates retained or omitted (for example,
+duplicate, transient or unsupported), without an exhaustive checklist or quota.
+
 Reflector actively looks for user corrections, repeated failed approaches,
 promise/execution gaps, overturned assumptions, and successful reusable methods.
-A candidate connects the situation, actual choice, observed result, supported
-explanation, next-time adjustment and exceptions. It should identify which future
+A behavioral-lesson candidate connects the situation, actual choice, observed
+result, supported explanation, next-time adjustment and exceptions. It should identify which future
 decision or action changes, rather than only retelling the conversation. Durable
 stated requirements can still be scoped facts; they need not become universal
 behavioral principles. There is no quota of new memories.
@@ -121,12 +131,24 @@ no new events does not start these downstream model calls. Stable log keys
 avoid duplicating an event when a retained batch is retried; already-persisted
 effects are listed in recovery tasks.
 
-Nonretryable model/configuration/authentication errors pause automatic runs.
-Transient failures use increasing delays and pause after three attempts.
-Configuration updates or `/learn <reflector|encapsulator|soul-reflector>` explicitly
-resume paused work. Disabling learning stops active dispatch; it does not delete
-pending source history or journal data. The current backend must load the new
-code for these semantics to apply; old runs are never rewritten as successful.
+Enabled Project learning keeps checking on its configured schedule and starts
+fresh executions when new evidence or an eligible retry is available. Failed
+batches retain their evidence and effects with bounded retry backoff; they do not
+permanently pause the pipeline. Transient batch failures use 1, 2, 4, 8, 16 and
+32-minute delays, then cap at one hour; non-transient failures wait one hour.
+These are eligibility times, not extra timers: execution starts on a subsequent
+configured poll, and an empty scan does not consume a model call. Configuration/authentication failures still need
+attention: scheduled retries do not silently change models or repair credentials.
+Old pipeline-level paused records are normalized when the new learning runtime
+loads. New evidence and due failed batches receive alternating selection priority
+when both are available, so a backlog of failing retries cannot monopolize the
+pipeline. Unfinished ranges/events remain reserved; successful later ranges do
+not advance the acknowledged cursor across an unfinished gap.
+`/learn <reflector|encapsulator|soul-reflector>` bypasses batch cooldown for an
+explicit attempt while retaining the same selection fairness and fresh context.
+Disabling learning stops active dispatch; it does not delete pending source
+history or journal data. The current backend must load the new code for these
+semantics to apply; old runs are never rewritten as successful.
 
 ### Dedicated Project automation budgets
 
@@ -135,11 +157,29 @@ completion counts, observed costs or live configuration values.
 
 | Automation | Default trigger | Provider request ceiling | Tool calls / argument bytes |
 | --- | --- | --- | --- |
-| Organizer delta | Explicit delta action | 4 | 12 / 96,000 |
+| Organizer delta | Coalesced saved-topic changes, or explicit delta action | 4 | 12 / 96,000 |
 | Organizer full | Explicit action | 8 | 24 / 192,000 |
 | Reflector | 30-minute check, pending evidence only | 6 | 18 / 96,000 |
 | Encapsulator | 2-hour check, unconsumed events only | 8 | 24 / 192,000 |
 | Soul reflector | 12-hour check, unconsumed events only | 4 | 12 / 48,000 |
+
+Automatic topic organization reuses existing session metadata/rename, topic
+creation/update and turn-finished/context-ended notifications. Ordinary session
+hints are deduplicated; internal automation and temporary workers do not feed
+back into the trigger. Changes use a 30-second trailing debounce with a two-minute
+maximum wait. After runtime recovery, and on re-enable, a delta check reconciles
+existing source versions. No delta means no model call; each delta handles at most
+three topics and checks again for remaining work. Failures retry after 30 seconds
+rather than disabling the automation. Manual full/delta actions remain available,
+and only one organization run executes at a time. Disabling or stopping cancels
+timers and active execution. Automatic check time, next scheduled check and safe
+failure categories are exposed in organization status.
+
+This adds no metadata event store or session-log filter. Unassociated conversation
+topics use their existing session topic sequence; Work-associated topics continue
+to use the Work record sequence, so a member's metadata-only change is not a new
+independent Work revision. This is incremental presentation organization, not
+longitudinal title-history reconstruction or self-reflection learning.
 
 Learning ceilings are selected by the trusted LearningRuntime pipeline, not an
 editable cron override; ordinary cron jobs retain their existing execution defaults.
@@ -147,15 +187,16 @@ New reflector batches target an overview reading budget of 12,000 characters /
 160 lines across at most four sources; persisted cursors still count messages,
 not display lines. This leaves room for relevant lookups, writes and receipts,
 but is not a guarantee of completion within the tool ceiling. A single oversized
-atomic message is isolated, not skipped; Partial pauses for explicit recovery.
+atomic message is isolated, not skipped; Partial retains that batch for retry
+without preventing other available evidence from being processed.
 Existing pending batches preserve their scope and effects rather than silently
 shrinking or acknowledging unread evidence.
 
 Writers need separate read, validated-write and learning_result/final stages and
 are not one-shot. Exhaustion may leave partial effects, which are retained for
 recovery; no cursor advances without the existing verified receipt and successful
-completion. No new
-cooldown, polling schedule, one-shot organizer or profiling model call is introduced.
+completion. Batch retry backoff is separate from the existing polling schedules;
+no one-shot organizer or profiling model call is introduced.
 See src/runtime/main/project-runtime.ts, src/projects/work-organizer.ts and
 src/agent/learning/pipelines.ts for the enforced limits; src/agent/learning/service.ts
 schedules the intervals; src/config/schema.ts supplies their defaults. The general session inference default remains 1000.
@@ -218,7 +259,10 @@ An authorized Discord management assignment instead receives a same-Bot,
 ceiling-limited version. It cannot discover private Project memory, administer
 another Bot or expand its own authority. The exact human confirmation flow and
 audience implications are documented in [Messaging channels](channels.md).
-Use `authoring_change` for QQ/Feishu managed deployment, not Discord.
+Use `bot_package` for directory BOT deployment on Discord, QQ and Feishu. In
+directory mode `channel_config` retains domain/knowledge operations, not BOT
+Agent/binding/processor publication. Private entry uses `credential_request`
+with only a reference and purpose; it never grants access or deploys a BOT.
 
 ## Per-call Folder selection
 
@@ -887,7 +931,7 @@ Project Skill edits use the scoped `skill_read` and `skill_save` tools. Read an
 existing skill before saving so revision checks protect concurrent changes;
 built-ins are read-only. Saving does not grant tool permissions or publish a
 restricted conversation agent. Script execution is **not an OS sandbox**. See
-[conversation agent authoring](agent-authoring.md) for the separate,
+[directory BOTs](bots.md) for the separate,
 owner-reviewed publication workflow.
 
 ## Durable peer conversations
@@ -911,7 +955,11 @@ of that request identity, and an accepted kickoff is not replayed.
 
 The dynamic tool also supports own metadata `update` and `register_folder`.
 For own metadata/completion, prefer `v:session/self.json`. Remote workdir sessions
-can create peers and update themselves, but cannot register Main-local folders.
+can create peers, update themselves, and register directories with explicit
+`nodeId` plus `path` on the selected device. Child selection shares the UI picker
+protocol and Project ownership checks; offline or unsupported devices fail without
+Main fallback. Omitting `nodeId` preserves local Main registration only for local
+sessions. Remote folder descriptions are not yet supported.
 Task/call execution and agent tool restrictions still apply to lazy invocation.
 
 ## Scheduled conversations
@@ -984,7 +1032,7 @@ The UTC half-open window is `[asOf - 24h, asOf)`. Run counts use exact persisted
 
 Tool counts are distinct persisted tool-result IDs, not every nested or interrupted tool invocation. Historical missing telemetry, unreported usage, missing cached/reasoning breakdowns, durations and costs are explicit limitations. Totals are known subtotals, not estimated budgets or quality scores. Source reads stop at 100,000 records and visibly mark lower-bound counts if capped. No prompt, raw error or private configuration fields are returned.
 
-Frequency descriptions are scoped: explicit organizer full/delta operation, configured learning poll intervals, or the current user cron schedule. Historical snapshots never claim to describe current runtime policy.
+Frequency descriptions are scoped: automatic debounced organizer delta checks and explicit full/delta actions, configured learning poll intervals, or the current user cron schedule. Historical snapshots never claim to describe current runtime policy.
 
 ### Current-instance runtime diagnostics
 

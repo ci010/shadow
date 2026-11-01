@@ -471,9 +471,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
       const scope = createProjectScope('org-a')
       const config = { reflectIntervalMs: 3600000, encapsulateIntervalMs: 3600000, soulIntervalMs: 3600000 }
       const learning = new LearningService(f.bus, scope, {
-        reflector: (signal, job, accepted) => runtime.run('reflector', signal, job, accepted, f.dispatcher),
-        encapsulator: (signal, job, accepted) => runtime.run('encapsulator', signal, job, accepted, f.dispatcher),
-        soulReflector: (signal, job, accepted) => runtime.run('soulReflector', signal, job, accepted, f.dispatcher),
+        reflector: (signal, job, accepted, manual) => runtime.run('reflector', signal, job, accepted, f.dispatcher, manual),
+        encapsulator: (signal, job, accepted, manual) => runtime.run('encapsulator', signal, job, accepted, f.dispatcher, manual),
+        soulReflector: (signal, job, accepted, manual) => runtime.run('soulReflector', signal, job, accepted, f.dispatcher, manual),
       }, config, f.cron, id => f.manager.getSessionState(id)?.automation?.config?.source === 'learning', runtime.ledger)
       try {
         await f.manager.start()
@@ -527,7 +527,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
 })
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: completed runs with failed writes remain blocked and original provider errors pause retries`, async () => {
+  test(`${Store.name}: completed runs with failed writes remain blocked and original provider errors back off only their batch`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -548,8 +548,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(runtime.ledger.outcome(id)?.status, 'blocked')
         assert.equal(runtime.ledger.cursor(batch.sources[0]), 0)
         assert.equal(runtime.ledger.eventsFor('encapsulator').length, 0)
+        assert.equal(await runtime.run('reflector', new AbortController().signal), false)
+        assert(runtime.ledger.batch(batch.id).retry!.notBefore > Date.now())
         settings.providerError = 'Copilot 400 model_not_supported'
-        await assert.rejects(runtime.run('reflector', new AbortController().signal), error =>
+        await assert.rejects(runtime.run('reflector', new AbortController().signal, undefined, undefined, undefined, true), error =>
           error instanceof LearningRunError && !error.retryable && error.message.includes('model_not_supported'))
         const failed = runtime.ledger.pending('reflector')!.attempts.at(-1)!
         assert.match((await f.manager.getExecutionResult(failed))?.error ?? '', /model_not_supported/)

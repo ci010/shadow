@@ -3,8 +3,9 @@ import { agentInferenceSchema } from '../agent/inference-schema.ts'
 import { inferenceSettings, validateInferenceCapabilities, type LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { ModelInfo } from '../providers/provider.ts'
 import { parseDocument } from 'yaml'
-import { ConversationBindingSchema, ResourceName } from '../agent-authoring/contracts.ts'
-import { assertSupportedJsonSchema } from '../agent-authoring/capabilities.ts'
+import { ConversationBindingSchema } from './contracts.ts'
+import { ResourceName } from '../execution/grant-contract.ts'
+import { assertSupportedJsonSchema } from '../execution/grants.ts'
 import { DiscordBindingSchema, DiscordHistoryScopeSchema, SourceFoldersSchema } from '../channels/integration-contract.ts'
 
 /** SDK packages are data at publication time. Only tool invocation executes source. */

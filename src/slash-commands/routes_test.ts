@@ -8,7 +8,7 @@ import { FolderError } from '../folders/registry.ts'
 
 function fixture() {
   const dispatcher = new CommandDispatcher()
-  for (const name of ['status', 'yield', 'agent-publish']) dispatcher.register({
+  for (const name of ['status', 'yield', 'fixture-owner-command']) dispatcher.register({
     name, description: `Description of ${name}`, adminOnly: name !== 'yield',
     execute: async () => assert.fail('Catalog reads must never execute a command'),
   })
@@ -35,14 +35,14 @@ test('authenticated catalogs reuse registered handlers and advertise administrat
     assert.equal(response.status, 200)
     assert.equal(response.headers.get('cache-control'), 'no-store')
     assert.deepEqual((await response.json()).commands, [
-      { name: 'agent-publish', description: 'Description of agent-publish' },
+      { name: 'fixture-owner-command', description: 'Description of fixture-owner-command' },
       { name: 'status', description: 'Description of status' },
       { name: 'yield', description: 'Description of yield' },
     ])
   }
   assert.deepEqual(f.checked, ['web:conversation'])
   assert.deepEqual((await (await f.request('web:chat-admin')).json()).commands.map((item: { name: string }) => item.name),
-    ['agent-publish', 'status', 'yield'])
+    ['fixture-owner-command', 'status', 'yield'])
   f.dispatcher.register({ name: 'new-command', description: 'Registered later', adminOnly: true, execute: async () => '' })
   assert.equal((await (await f.request()).json()).commands.some((item: { name: string }) => item.name === 'new-command'), true)
 })
@@ -63,6 +63,6 @@ test('help and discovery use the same permission and conversation filtering', as
     sessionId: 'web:ordinary', admin: true, llm: { model: 'test', contextWindow: 4096, temperature: 0 },
     msg: { channel: 'web', chatId: 'ordinary', senderId: 'owner', messageId: 'synthetic', content: '/help', timestamp: new Date().toISOString() },
   }
-  assert.match(await createHelpCommand(dispatcher).execute(context, ''), /agent-publish/)
-  assert.match(await createHelpCommand(dispatcher).execute({ ...context, sessionId: 'web:chat-admin' }, ''), /agent-publish/)
+  assert.match(await createHelpCommand(dispatcher).execute(context, ''), /fixture-owner-command/)
+  assert.match(await createHelpCommand(dispatcher).execute({ ...context, sessionId: 'web:chat-admin' }, ''), /fixture-owner-command/)
 })

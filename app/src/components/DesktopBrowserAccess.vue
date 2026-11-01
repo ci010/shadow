@@ -1,18 +1,22 @@
 <template>
-  <button ref="trigger" class="browser-access-trigger" type="button" :aria-label="t('Connect browser')" :title="t('Connect browser')"
+  <HoverInfo :text="t('Connect phone or browser')" v-slot="{ triggerProps }">
+  <button v-bind="triggerProps" ref="trigger" class="browser-access-trigger" type="button" :aria-label="t('Connect phone or browser')"
     aria-haspopup="dialog" :aria-expanded="open" @click="show">
     <span class="browser-access-icon i-lucide-monitor-smartphone" aria-hidden="true" />
   </button>
+  </HoverInfo>
   <Teleport to="body">
     <dialog v-if="open" ref="dialog" class="browser-access-dialog" :aria-labelledby="titleId" :aria-describedby="descriptionId"
       @cancel.prevent="close" @keydown.stop>
       <div class="dialog-heading">
-        <h2 :id="titleId">{{ t('Connect a browser') }}</h2>
+        <h2 :id="titleId">{{ t('Connect phone or browser') }}</h2>
         <button class="btn ghost close-button" type="button" :aria-label="t('Close browser pairing')" @click="close">
           <span class="i-lucide-x w-4 h-4" aria-hidden="true" />
         </button>
       </div>
-      <p :id="descriptionId">{{ t('Open Shadow in a browser on this computer and enter this one-use code.') }}</p>
+      <p :id="descriptionId">{{ t('Open the address below on this computer, or enable LAN access for a phone on the same trusted network. Enter the one-use code.') }}</p>
+      <label><input v-model="lan" type="checkbox" :disabled="busy" @change="generate" /> {{ t('Enable LAN HTTP access') }}</label>
+      <p class="pairing-expired">{{ t('HTTP is not encrypted: people on the network can intercept codes, sessions and conversations. Use only a trusted private LAN. Access lasts until disabled or Main exits; firewall permission may be required. Do not forward these ports to the internet.') }}</p>
       <p v-if="busy" role="status">{{ t('Generating pairing code...') }}</p>
       <template v-else-if="offer">
         <label :for="codeId">{{ t('Pairing code') }}</label>
@@ -21,6 +25,7 @@
         <p v-if="!expired" class="pairing-expiry">{{ t('Expires in') }} {{ remaining }}{{ t('. Each code can be used once.') }}</p>
         <p class="pairing-label">{{ t('Browser address') }}</p>
         <a class="browser-address selectable-text" :href="offer.url" @click.prevent="openBrowser">{{ offer.url }}</a>
+        <p v-for="url in offer.urls?.slice(1)" :key="url" class="browser-address selectable-text">{{ url }}</p>
       </template>
       <p v-if="error" class="pairing-error" role="alert">{{ error }}</p>
       <p v-if="copied" class="pairing-copied" role="status">{{ t('Pairing code copied.') }}</p>
@@ -35,6 +40,7 @@
 </template>
 
 <script setup lang="ts">
+import HoverInfo from './HoverInfo.vue'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, useId } from 'vue'
 import type { DesktopWebPairing, DesktopWebPairingApi } from '../../../desktop/src/web-pairing-contract.ts'
@@ -46,6 +52,7 @@ const codeId = useId()
 const trigger = ref<HTMLButtonElement>()
 const dialog = ref<HTMLDialogElement>()
 const open = ref(false)
+const lan = ref(false)
 const busy = ref(false)
 const error = ref('')
 const copied = ref(false)
@@ -74,7 +81,7 @@ async function generate() {
   copied.value = false
   offer.value = undefined
   try {
-    const result = await props.api.create()
+    const result = await props.api.create(lan.value)
     if (current !== generation || !open.value) return
     now.value = Date.now()
     offer.value = result

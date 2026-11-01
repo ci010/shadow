@@ -125,7 +125,7 @@ export async function runBoundedSession(options: BoundedSessionOptions): Promise
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
     throw new Error('Scenario timeout must be between 1 and 120000 milliseconds.')
   }
-  const sessionId = options.state?.sessionId ?? `authoring-scenario:${randomUUID()}`
+  const sessionId = options.state?.sessionId ?? `bounded-session:${randomUUID()}`
   if (options.state && options.state.projectId !== options.projectId) throw new Error('Bounded session belongs to another Project.')
   const store = new EvaluationStore()
   const scope = createProjectScope(options.projectId)
@@ -174,7 +174,7 @@ export async function runBoundedSession(options: BoundedSessionOptions): Promise
         id: randomUUID(), timestamp: new Date().toISOString(), kind: 'message',
         policy: 'interactive', content: options.input,
         source: { kind: 'user', sender: {
-          channel: 'authoring-scenario', chatId: sessionId,
+          channel: 'bounded-session', chatId: sessionId,
           senderId: 'synthetic-user', messageId: randomUUID(),
         } },
       }, llm)

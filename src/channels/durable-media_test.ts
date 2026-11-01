@@ -71,7 +71,7 @@ test('media route serves historical durable Chinese attachments with GET/HEAD/ra
     getSessionState: (id: string) => ['web:owner', 'web:other'].includes(id) ? { sessionId: id } : null,
     getHistory: async (id: string) => ({ messages: id === 'web:owner' ? [{ role: 'assistant', content: `MEDIA:${file}` }] : [] }),
   } as unknown as SessionManager
-  const channel = new WebChannel(new Bus(), { workspace, sessionManager: manager, durableMediaRoots: async () => [root] })
+  const channel = new WebChannel(new Bus(), { authorize: () => true, workspace, sessionManager: manager, durableMediaRoots: async () => [root] })
   const app = new Hono()
   await channel.start(app)
   const url = (chat: string) => `/api/media?chatId=${chat}&path=${encodeURIComponent(file)}&download=1`

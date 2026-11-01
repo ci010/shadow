@@ -62,7 +62,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       invalidate: () => { invalidated++; sessions.invalidateFolderSessions() },
       sessionsToRetire: folder => sessions.folderDependentSessions(folder.id, [localFolderWorkdirRef(folder.id)]),
     })
-    const channel = new WebChannel(bus, { workspace, sessionManager: sessions })
+    const channel = new WebChannel(bus, { authorize: () => true, workspace, sessionManager: sessions })
     try {
       await sessions.buildSession('web:root', undefined, { folderId: folder.id, workdir: localFolderWorkdirRef(folder.id) })
       await sessions.buildSession('web:child', { id: 'web:root' })

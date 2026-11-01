@@ -99,7 +99,7 @@ test('saving uses only the dedicated Project endpoint and clears the value after
   state.secret.value = 'SYNTHETIC-SECRET'
   const submitted = state.submit()
   const write = requests[1]
-  assert.equal(write.url, `http://127.0.0.1:3123/projects/project-a/api/agent-resources/credential-requests/${requestId}`)
+  assert.equal(write.url, `http://127.0.0.1:3123/projects/project-a/api/credential-requests/${requestId}`)
   assert.equal(write.init.method, 'POST')
   assert.equal(write.init.redirect, 'error')
   assert.equal(write.init.cache, 'no-store')

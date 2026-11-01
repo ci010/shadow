@@ -12,6 +12,8 @@ export type { GatewayPlugin } from './types.ts'
 export interface GatewayOptions {
   port?: number
   host?: string
+  sharedWebSockets?: boolean
+  requestGuard?: (request: Request) => Response | undefined
   clientAddresses?: GatewayClientAddressRegistry
 }
 
@@ -122,6 +124,7 @@ function registerGatewayRoutes(
   app: Hono,
   plugins: GatewayPlugin[],
   opts: GatewayRouteOptions = {},
+  environment: NodeJS.ProcessEnv = env,
 ) {
   // Diagnose organize requests rejected before the Project plugin (origin/auth/routing).
   // Do not log URLs, headers, credentials or arbitrary error messages.
@@ -144,15 +147,15 @@ function registerGatewayRoutes(
   })
   const launchCredential = resolveLaunchCredential(
     opts.launchCredential,
-    env.GATEWAY_LAUNCH_CREDENTIAL,
-    env.WINDOWS_USE_LAUNCH_TOKEN,
+    environment.GATEWAY_LAUNCH_CREDENTIAL,
+    environment.WINDOWS_USE_LAUNCH_TOKEN,
   )
   const allowedOrigins = new Set(
     opts.allowedOrigins
       ? resolveAllowedOrigins(opts.allowedOrigins.join(','))
       : resolveAllowedOrigins(
-        env.GATEWAY_ALLOWED_ORIGINS,
-        env.VITE_DEV_URL,
+        environment.GATEWAY_ALLOWED_ORIGINS,
+        environment.VITE_DEV_URL,
       ),
   )
   const launchCredentialExemptions = new Set(
@@ -176,6 +179,11 @@ function registerGatewayRoutes(
       }
     } catch {
       return c.json({ error: 'invalid_websocket_host' }, 400)
+    }
+    const incoming: unknown = typeof c.env === 'object' && c.env !== null && 'incoming' in c.env ? c.env.incoming : undefined
+    if (incoming instanceof IncomingMessage && opts.browserAuth?.lanPorts.has(incoming.socket.localPort ?? -1)) {
+      const denied = opts.browserAuth.guardLanRequest(c.req.raw)
+      if (denied) return denied
     }
     const requestOrigin = c.req.header('Origin')
     let normalizedRequestOrigin: string | undefined
@@ -299,7 +307,8 @@ export function serveGateway(
       if (hostname) {
         opts.clientAddresses?.capture(request, { transport: 'tcp', hostname })
       }
-      return app.fetch(request, bindings)
+      const denied = opts.requestGuard?.(request)
+      return denied ?? app.fetch(request, bindings)
     },
   }, (address) => {
     console.info(`[gateway] Gateway server started on ${host}:${address.port}`)
@@ -330,8 +339,10 @@ export function serveGateway(
     shutdown(): Promise<void> {
       shutdownPromise ??= (async () => {
         await ready.promise.catch(() => {})
-        for (const socket of sockets.wss.clients) socket.terminate()
-        sockets.wss.close()
+        if (!opts.sharedWebSockets) {
+          for (const socket of sockets.wss.clients) socket.terminate()
+          sockets.wss.close()
+        }
         await new Promise<void>((resolve, reject) => {
           server.close((error) => {
             if (error && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') reject(error)

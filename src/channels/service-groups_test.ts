@@ -7,7 +7,7 @@ import { BotInstanceStore } from './bot-store.ts'
 import { ServiceDiscoveryStore } from './service-discovery.ts'
 import { serviceGroupsPlugin } from './service-groups.ts'
 import { BotDeployments } from '../bots/deployments.ts'
-import { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
+import { DirectoryBots } from '../bots/runtime.ts'
 
 test('observed groups use deployed directory bindings and expose no resource publication endpoint',async t=>{
   const root=mkdtempSync(join(process.cwd(),'.directory-group-test-'));t.after(()=>rmSync(root,{recursive:true,force:true}))

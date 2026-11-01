@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { executeAuthoredTool } from '../agent-authoring/tool-runtime.ts'
+import { executeGrantedScript } from '../script-runtime/granted-script.ts'
 import { assertPrivateFileBoundary } from '../utils/private-document.ts'
 import { InputProcessorSchema, type InputProcessorPolicy } from './input-processor-contract.ts'
 export { InputProcessorSchema } from './input-processor-contract.ts'
@@ -165,7 +165,7 @@ export class InputProcessor<T> {
         this.pruneState()
         const stateKey = this.stateKey(row)
         const previous = this.states.get(stateKey)
-        let result = decision.parse(await executeAuthoredTool({ code: row.policy.code,
+        let result = decision.parse(await executeGrantedScript({ code: row.policy.code,
           args: { event: row.event, state: previous?.value ?? null, now: this.now() }, signal,
           callModule: async () => { throw new Error('Input processors have no capability grants') } }))
         if (result.classify) {
@@ -173,7 +173,7 @@ export class InputProcessor<T> {
           const classification = await awaitInputSignal(context.classify(signal), signal)
           if (classification.label === 'unknown') result = {action:'ignore'}
           else {
-            result = decision.parse(await executeAuthoredTool({code:row.policy.code,
+            result = decision.parse(await executeGrantedScript({code:row.policy.code,
               args:{event:row.event,state:previous?.value ?? null,now:this.now(),classification},signal,
               callModule:async()=>{throw new Error('Input processors have no capability grants')} }))
             if (result.classify) throw new Error('Recursive classification denied')

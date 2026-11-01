@@ -84,7 +84,7 @@ test('schema resources support complete authoring from a non-repository cwd', as
 })
 
 test('multi-file compiler freezes every dependency and executes exactly the bundled artifact', async () => {
-  const { executeAuthoredTool } = await import('../agent-authoring/tool-runtime.ts')
+  const { executeGrantedScript } = await import('../script-runtime/granted-script.ts')
   const root = await mkdtemp(path.join(os.tmpdir(), 'processor-graph-'))
   try {
     await writeFile(path.join(root, 'p.ts'), `import type {Processor} from '@shadow/input-processor'; import {action} from './rule.ts'; export const run:Processor = () => ({action:action()});`)
@@ -97,7 +97,7 @@ test('multi-file compiler freezes every dependency and executes exactly the bund
     assert.equal(changed.ok, true, JSON.stringify(changed.diagnostics))
     assert.notEqual(frozen.sha256, changed.sha256)
     assert.notEqual(frozen.codeSha256, changed.codeSha256)
-    const run = (code: string) => executeAuthoredTool({ code, args: {event:{}}, signal: AbortSignal.timeout(5000), callModule: async () => { throw new Error('No grants') } })
+    const run = (code: string) => executeGrantedScript({ code, args: {event:{}}, signal: AbortSignal.timeout(5000), callModule: async () => { throw new Error('No grants') } })
     assert.deepEqual(await run(frozen.code), {action:'ignore'})
     assert.deepEqual(await run(changed.code), {action:'emit'})
     await writeFile(path.join(root, 'rule.ts'), `export {readFile as action} from 'node:fs'`)

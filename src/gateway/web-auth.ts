@@ -1,4 +1,5 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
+import { isPrivateLanAddress } from './lan-browser.ts'
 import { bodyLimit } from 'hono/body-limit'
 import type { GatewayPlugin } from './types.ts'
 import { type GatewayClientAddressRegistry, isLoopbackGatewayRequest, validateLaunchCredential } from './server.ts'
@@ -6,7 +7,6 @@ import { isBackendPath, isProjectPagePath } from './route-kind.ts'
 
 const CODE_TTL = 5 * 60_000
 const SESSION_TTL = 12 * 60 * 60_000
-const MAX_CODES = 32
 const MAX_SESSIONS = 128
 const MAX_ATTEMPTS = 20
 
@@ -42,7 +42,7 @@ function cookieToken(request: Request): string {
   return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : ''
 }
 
-function browserBusinessPath(path: string): boolean {
+export function browserBusinessPath(path: string): boolean {
   const unscoped = path.replace(/^\/projects\/[^/]+(?=\/)/, '')
   return isBackendPath(path) && !/^\/(?:local|cluster|pair)(?:\/|$)/.test(unscoped)
 }
@@ -62,6 +62,8 @@ export function isPublicWebShell(request: Request, development = false): boolean
 export class BrowserAuth {
   private readonly codes = new Map<string, number>()
   private readonly sessions = new Map<string, BrowserSession>()
+  readonly lanPorts = new Set<number>()
+  readonly lanOrigins = new Set<string>()
   private attempts = 0
   private attemptWindow = 0
   private readonly developmentOrigin?: string
@@ -71,6 +73,8 @@ export class BrowserAuth {
     pinHash?: string
     clientAddresses: GatewayClientAddressRegistry
     developmentUrl?: string
+    disableLan?: () => Promise<void>
+    enableLan?: () => Promise<string[]>
     now?: () => number
   }) {
     if (options.pinHash !== undefined && !/^[a-f0-9]{64}$/.test(options.pinHash)) throw new TypeError('Invalid browser PIN hash')
@@ -85,8 +89,21 @@ export class BrowserAuth {
     return isLoopbackGatewayRequest(request, this.options.clientAddresses)
   }
 
+  acceptsBrowser(request: Request): boolean {
+    const peer = this.options.clientAddresses.resolve(request).replace(/^tcp:(?:::ffff:)?/, '')
+    return this.local(request) || (this.lanOrigins.has(new URL(request.url).origin) && isPrivateLanAddress(peer))
+  }
+
+  guardLanRequest(request: Request): Response | undefined {
+    if (!this.lanOrigins.has(new URL(request.url).origin) || !this.acceptsBrowser(request)
+      || request.headers.has('authorization')
+      || (!this.isPublicRequest(request) && !this.authorize(request))) {
+      return Response.json({ error: 'unauthorized' }, { status: 403 })
+    }
+  }
+
   private browserOrigin(request: Request, requireOrigin = false): boolean {
-    if (!this.local(request) || request.headers.get('sec-fetch-site') === 'cross-site') return false
+    if (!this.acceptsBrowser(request) || request.headers.get('sec-fetch-site') === 'cross-site') return false
     const origin = request.headers.get('origin')
     if (!origin) return !requireOrigin
     return origin === new URL(request.url).origin || origin === this.developmentOrigin
@@ -159,7 +176,7 @@ export class BrowserAuth {
       app.use('/api/web-auth/*', async (c, next) => {
         c.header('Cache-Control', 'no-store')
         c.header('Referrer-Policy', 'no-referrer')
-        if (!this.local(c.req.raw)) return c.json({ error: 'local_browser_required' }, 403)
+        if (!this.acceptsBrowser(c.req.raw)) return c.json({ error: 'local_browser_required' }, 403)
         await next()
       })
       app.get('/api/web-auth/session', c => c.json(this.status(c.req.raw)))
@@ -176,14 +193,32 @@ export class BrowserAuth {
           || !await validateLaunchCredential(c.req.header('Authorization'), this.options.launchCredential)) {
           return c.json({ error: 'unauthorized' }, 401)
         }
+        let urls: string[] = []
+        const mode = c.req.query('lan')
+        if (mode !== undefined && mode !== 'true' && mode !== 'false') return c.json({ error: 'invalid_request' }, 400)
+        if (mode === 'false') {
+          this.lanOrigins.clear()
+          for (const [key, session] of this.sessions) {
+            if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(session.origin).hostname)) {
+              clearTimeout(session.timer); session.controller.abort(); this.sessions.delete(key)
+            }
+          }
+          await this.options.disableLan?.()
+        }
+        if (mode === 'true') {
+          if (!this.options.enableLan) return c.json({ error: 'lan_unavailable' }, 409)
+          try { urls = await this.options.enableLan() } catch { return c.json({ error: 'lan_unavailable' }, 503) }
+          if (!urls.length) return c.json({ error: 'lan_unavailable' }, 409)
+          for (const url of urls) this.lanOrigins.add(new URL(url).origin)
+        }
         this.prune()
-        if (this.codes.size >= MAX_CODES) return c.json({ error: 'pairing_capacity_reached' }, 429)
-        const code = randomBytes(12).toString('hex').toUpperCase()
+        this.codes.clear()
+        const code = String(randomInt(100_000_000)).padStart(8, '0')
         const expiresAt = this.now() + CODE_TTL
         this.codes.set(hash(code), expiresAt)
         return c.json({
-          version: 1, code: code.match(/.{4}/g)!.join('-'),
-          expiresAt: new Date(expiresAt).toISOString(), url: `${new URL(c.req.url).origin}/`,
+          version: 1, code,
+          expiresAt: new Date(expiresAt).toISOString(), url: urls[0] ?? `${new URL(c.req.url).origin}/`, ...(mode !== undefined ? { urls } : {}),
         })
       })
       const pairingBodyLimit = bodyLimit({
@@ -225,7 +260,7 @@ export class BrowserAuth {
         } else if ('code' in body && typeof body.code === 'string') {
           const code = body.code.replace(/[\s-]/g, '').toUpperCase()
           codeKey = hash(code)
-          if (!/^[A-F0-9]{24}$/.test(code) || !this.codes.has(codeKey)) {
+          if (!/^\d{8}$/.test(code) || !this.codes.has(codeKey)) {
             return c.json({ error: 'invalid_pairing_code' }, 401)
           }
         } else {

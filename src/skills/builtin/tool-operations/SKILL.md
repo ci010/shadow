@@ -80,7 +80,7 @@ new Skills can be created directly. Conflicts require rereading and merging.
 Built-ins are read-only; adapt them with a new name. No backup history is kept,
 and saving grants no execution permission or managed Bot deployment.
 These tools require a durable local session, not managed or temporary
-execution. Existing Bot resource publication remains under `authoring_change`.
+execution. Directory BOT deployment uses `bot_package`, separately from shared Skills.
 
 **Activate skill tools:** Only an exact `read("v:skills/csv-utils")` registers
 that skill's frontmatter `tools` declarations in the **current session**.
@@ -198,11 +198,11 @@ service authorization, and cross-Project/cross-Bot isolation. Preview and mocked
 tests are not proof of live platform delivery. Report unsupported capabilities
 and required Shadow owner-review steps explicitly.
 
-## Managed Bot authoring
+## Directory BOT configuration
 
 The workflows below configure service Bots, not personal Project entry points.
 
-### Directory BOTs (primary path)
+### Directory BOTs
 
 For registered local BOT directories on QQ, Feishu and Discord, read
 `v:skills/project-administration` and use `bot_package` status/propose. All use
@@ -211,65 +211,20 @@ Declare permissions directly in bindings, subject to BOT-level ceilings; do not
 introduce `capabilityProfiles` or reuse grants inferred from old bindings.
 One exact-content native Deploy/Cancel confirmation publishes one BOT. There is
 no cross-BOT atomic publication. Development source and deployed files are
-independent: edit the registered source and propose again, not a Change-based
-source recovery or legacy adoption workflow.
+independent: edit the registered source and propose again, without
+source recovery or legacy adoption workflows.
 
-### Legacy/resource-based compatibility workflows
+### Credentials and other owner operations
 
-The following `channel_config` and `authoring_change` instructions apply only to
-existing legacy/resource configurations, not directory BOTs.
+Use `credential_request` with only `secretRef` and `purpose` for private entry in
+this owner Web conversation. Never put credential values in chat, source, tool
+arguments or fixtures. Saved secrets neither deploy BOTs nor widen grants.
+`channel_config` remains the Discord connection/domain/knowledge interface; in
+directory mode it cannot deploy Agents, bindings or processors. Inspect current
+contracts on demand rather than treating legacy configuration examples as APIs.
 
-Read `v:skills/project-administration` for owner configuration and private credential entry. Skill reading does not authorize any operation. Discord uses `channel_config`, not `authoring_change`. In an ordinary direct administrator Web session,
-read `action: schema`, then `list` for named Bot connections and the current
-configuration revision. `directory` resolves servers/channels/roles; `members`
-resolves people in a mutual server. Disambiguate repeated names with the human.
-Propose against the exact revision; never silently rebase another configuration.
-Agent Markdown, channel grants and fixed-copy knowledge publication all require
-human review in Project Bots > Discord access. An authorized Discord manager can
-only draft within its existing ceiling and current Bot; the same authorized
-human can confirm its exact draft/hash with `/shadow-approve`. Models never
-confirm. Do not infer Shadow ownership from a Discord administrator role or DM.
-Participant restrictions control invocation, not the audience of channel replies.
-Conversation memory, scoped learning and SOUL drafts never become global merely
-because two channels use the same Agent. Trusted host execution is not a sandbox.
-
-Use `authoring_change` with `action: schema` for current edit/check/review
-contracts for QQ/Feishu. This workflow deploys managed Bot resources, not ordinary shared
-Skills. Create a Change from the published baseline on the owner's request.
-Start with `inspect` for published bindings, known uncovered conversations and
-the provider model/effort catalog; do not discover these by searching source or
-chat history. Use `configure_inference` for model/effort settings of explicitly
-selected bound Agents, with null to remove an override. Shared Agents affect all
-their bindings; there is no Bot-wide default. Validate the Change, propose it,
-then query `status` after owner approval. An absent pending card is not proof
-of publication, and synthetic model scenarios do not prove production delivery.
-Small prompt edits belong in that Change; substantial implementation belongs in
-a durable developer session with explicit resource paths. Pass changeId, goals
-and acceptance cases, not copied bundles, hashes or reports.
-
-Authoring uses a Project-managed virtual workspace; no business source folder
-is required. Edit the exact returned revision; published code stays unchanged.
-Owner-approved fixed scripts are implementations, not arbitrary Bot input.
-Arguments stay data; approvals never grant unrelated tools, secrets or paths.
-The Node child/VM is not an OS sandbox. Preserve module ceilings and grants.
-
-Delegated authors may edit, check and request review in their own session,
-including peer-triggered turns. The host saves versions, diffs and evidence.
-Read results by runId; do not create duplicate REPORT/manifest/provenance files
-or reconstruct receipts from chat history. Worker reports are not approval.
-Validate references, preview prompts, use mocks for changed tools and scenario
-checks for model behavior. A preview is not a behavior test.
-
-`request_probe` opens an expiring one-use GET approval card in the requesting Web session
-and requesting session. Do not repeat the request in another chat or publish
-first. It authorizes no writes, inbox delivery or deployment; inspect the saved
-run. Use `request_secret` with secretRef and purpose for private owner entry.
-Never put secrets in prompts, chat, source, arguments or tests. Respect
-cancellation; saved secrets neither publish nor widen grants.
-
-The Change's `propose` presents the owner's Publish/Cancel card for that exact
-snapshot, not the legacy shared draft. Never approve for the owner or infer
-approval from messages, input replies, results or silence. Changed revisions need new
-review. Rebase explicitly when the published baseline changes; do not mix
-independent changes or import `project_config` legacy drafts silently.
-Rollback also requires owner review of historical and current revisions.
+Legacy resource Change/check/scenario/run/profile publication and source
+recovery have been retired. Old files are neither loaded nor migrated. Do not
+recreate those workflows or silently adopt old bindings. Shared `skill_read`,
+`skill_save`, synthetic `agent_tool_test`, polling and restricted script execution
+are independent capabilities and remain available under their own permissions.

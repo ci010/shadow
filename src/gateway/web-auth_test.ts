@@ -19,6 +19,7 @@ function fixture(options: { protected?: boolean; developmentUrl?: string; pin?: 
   const auth = new BrowserAuth({ clientAddresses, launchCredential, developmentUrl: options.developmentUrl, now: () => now,
     ...(options.pin ? { pinHash: createHash('sha256').update(options.pin).digest('hex') } : {}) })
   const app = new Hono()
+  // Fixture protection is explicit: do not inherit the host's launch credentials.
   registerGatewayRoutes(app, [auth.plugin(), gateway => {
     gateway.get('/', c => c.html('<html>Pair this browser</html>'))
     gateway.get('/api/private', c => c.json({ ok: true }))
@@ -26,7 +27,7 @@ function fixture(options: { protected?: boolean; developmentUrl?: string; pin?: 
     gateway.get('/projects/default/api/private', c => c.json({ ok: auth.authorize(c.req.raw) }))
     gateway.get('/local/v1/readiness', c => c.json({ ready: true }))
     gateway.post('/local/v1/shutdown', c => c.json({ stopping: true }))
-  }], { launchCredential, browserAuth: auth, clientAddresses, allowedOrigins: options.developmentUrl ? [options.developmentUrl] : [] })
+  }], { launchCredential, browserAuth: auth, clientAddresses, allowedOrigins: options.developmentUrl ? [options.developmentUrl] : [] }, {})
   function request(path: string, init: RequestInit = {}, address = '127.0.0.1') {
     const request = new Request(origin + path, init)
     clientAddresses.capture(request, { transport: 'tcp', hostname: address })
@@ -39,7 +40,7 @@ function fixture(options: { protected?: boolean; developmentUrl?: string; pin?: 
     assert.equal(response.status, 200)
     assert.equal(response.headers.get('cache-control'), 'no-store')
     const offer = await response.json()
-    assert.match(offer.code, /^(?:[A-F0-9]{4}-){5}[A-F0-9]{4}$/)
+    assert.match(offer.code, /^\d{8}$/)
     assert.equal(offer.url, origin + '/')
     assert.equal(Date.parse(offer.expiresAt), now + 300_000)
     return offer.code as string
@@ -202,7 +203,8 @@ test('pair attempts and outstanding codes are bounded without consuming valid co
   assert.equal((await f.pair(code)).status, 200)
   for (let i = 0; i < 32; i++) await f.code()
   const over = await f.request('/local/v1/web-pairing', { method: 'POST', headers: { authorization: `Bearer ${credential}` } })
-  assert.equal(over.status, 429)
+  assert.equal(over.status, 200)
+  assert.equal((await f.pair(code)).status, 401, 'New issuance replaces old code')
   f.advance(300_000)
   await f.code()
 })

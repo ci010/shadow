@@ -411,7 +411,7 @@ test('admission-only send delivers chat output once with no legacy connection an
   const bus = new Bus()
   const hub = new RealtimeHub()
   const realtime = hub.registerProject('one')
-  const channel = new WebChannel(bus, { workspace: '.', realtime })
+  const channel = new WebChannel(bus, { authorize: () => true, workspace: '.', realtime })
   const app = new Hono()
   channel.setReceiver(async message => {
     bus.emit('message.outbound', {
@@ -474,7 +474,7 @@ test('observable heartbeat follows readiness without advancing replay sequence',
 test('explicit completed, failed and cancelled terminal facts retain input correlation and stop on channel cleanup', async () => {
   const hub = new RealtimeHub()
   const bus = new Bus()
-  const channel = new WebChannel(bus, { realtime: hub.registerProject('one') })
+  const channel = new WebChannel(bus, { authorize: () => true, realtime: hub.registerProject('one') })
   const stream = read(hub.connect([chat()], new AbortController().signal))
   try {
     await stream.next(); await stream.next()
@@ -525,7 +525,7 @@ test('HTTP cursor overrides Last-Event-ID and valid header reconnect starts afte
 test('retired chat streams return an explicit error and background output only uses the hub', async () => {
   const hub = new RealtimeHub()
   const bus = new Bus()
-  const channel = new WebChannel(bus, { realtime: hub.registerProject('one') })
+  const channel = new WebChannel(bus, { authorize: () => true, realtime: hub.registerProject('one') })
   const app = new Hono()
   await channel.start(app)
   const legacy = await app.request('/api/chat/events?chatId=chat')

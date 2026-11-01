@@ -1,3 +1,6 @@
+import { TopicService, type TopicServiceOptions } from '../sessions/topics.ts'
+import { SessionTool } from '../tools/session.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 import assert from 'node:assert/strict'
 import { mkdir, readdir, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -42,6 +45,7 @@ test('owner picker browses and registers Main and Child without creating a chat;
       workdirs: child.workdirs, support: online ? child.support : { operations: [] } },
     { nodeId: 'old-child', displayName: 'Old Child', role: 'child', connection: 'connected', executionProtocol: 'compatible', workdirs: [], support: { operations: [] } },
   ] })
+  let mismatch = false
   let sessions = 0
   async function service(projectId: string) {
     const registry = new FolderRegistry(f.workspace, { catalog, projectId })
@@ -58,7 +62,26 @@ test('owner picker browses and registers Main and Child without creating a chat;
     } })
     t.after(() => folders.dispose())
     const app = new Hono(); folders.plugin(app)
-    return { app, registry }
+    const topics = new TopicService({ projectId, folders: registry, picker: { inventory, executor: {
+      async *execute(request, signal) {
+        for await (const event of scoped.execute(request, signal)) {
+          yield mismatch && event.type === 'stdout' ? { ...event, chunk: event.chunk.replaceAll('other-child', 'wrong-child') } : event
+        }
+      }, getStatus: id => scoped.getStatus(id), cancel: id => scoped.cancel(id),
+    } },
+      registerRemote: (ref, signal) => registry.registerRemote(ref, signal),
+      sessions: { getSessionState: id => ({ sessionId: id, segmentIndex: 0, mode: id === 'task' ? 'task' : 'session' }),
+        assertFolderAccess() {}, assertInitiativeAccess() {}, async validateExecutionInference() {},
+        async buildSession() { throw new Error('Not used') }, async deliver() { throw new Error('Not used') },
+        async updateConversationMetadata() { throw new Error('Not used') },
+      } satisfies TopicServiceOptions['sessions'],
+      listStates: async () => [], resolveAgent: () => undefined, changed() {},
+    })
+    const tool = new SessionTool(topics)
+    const invoke = (args: Record<string, unknown>, actor = 'actor') => tool.execute({ action: 'register_folder', ...args }, {
+      projectId, sessionId: actor, signal: signal(), remoteWorkdir: { nodeId: 'other-child' },
+    } as ExecutionContext)
+    return { app, registry, invoke }
   }
   const one = await service('default')
   const two = await service(other.id)
@@ -76,6 +99,14 @@ test('owner picker browses and registers Main and Child without creating a chat;
   const selected = await post(one.app, 'select', 'other-child', childPath)
   assert.equal(selected.status, 200)
   const remote = (await selected.json()).folder
+  assert.equal(JSON.parse(await one.invoke({ nodeId: 'other-child', path: childPath })).folder.id, remote.id)
+  await assert.rejects(one.invoke({ path: mainPath }), /remote session cannot register/)
+  await assert.rejects(one.invoke({ nodeId: 'other-child', path: childPath }, 'task'), /Temporary/)
+  await assert.rejects(one.invoke({ nodeId: 'old-child', path: childPath }), /Update the selected device/)
+  await assert.rejects(one.invoke({ nodeId: 'other-child', path: childPath, description: 'unsupported' }), /descriptions are not supported/)
+  mismatch = true
+  await assert.rejects(one.invoke({ nodeId: 'other-child', path: childPath }), /Invalid selected folder/)
+  mismatch = false
   assert.equal(remote.kind, 'remote')
   assert.equal(remote.workdir.nodeId, 'other-child')
   assert.ok(advertised.includes(remote.workdir.workdirId))
@@ -88,6 +119,7 @@ test('owner picker browses and registers Main and Child without creating a chat;
   await restored.init()
   assert.ok(restored.workdirs.some(c => c.workdirId === remote.workdir.workdirId))
   online = false
+  await assert.rejects(one.invoke({ nodeId: 'other-child', path: childPath }), /offline/)
   assert.equal((await post(one.app, 'browse', 'other-child', childPath)).status, 503)
   assert.equal((await post(one.app, 'select', 'unknown', mainPath)).status, 503)
   assert.equal((await post(one.app, 'browse', 'old-child', '')).status, 409)
