@@ -530,8 +530,7 @@ onUnmounted(() => { request?.abort(); releaseArchive() })
 .file-markdown :deep(pre) { max-width: 100%; overflow: auto; padding: 16px; background: var(--c-bg-card); border-radius: var(--radius-control); line-height: 1.55; }
 .file-markdown :deep(pre code) { padding: 0; white-space: pre; }
 /* Blockquotes use the shared Markdown baseline in styles.css. */
-.file-markdown :deep(table) { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; margin: 1em 0; }
-.file-markdown :deep(th), .file-markdown :deep(td) { padding: 8px 12px; border: 1px solid var(--c-border); text-align: left; }
+/* Table geometry, alignment and blue tint use the shared Markdown baseline. */
 .file-markdown :deep(img) { max-width: 100%; height: auto; }
 .file-markdown :deep(hr) { margin: 24px 0; border: 0; border-top: 1px solid var(--c-border); }
 

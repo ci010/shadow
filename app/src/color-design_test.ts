@@ -286,9 +286,9 @@ test('collaboration messages keep compact neutral previews and uncapped expanded
   assert.equal(property('SessionMessageDisclosure', '.session-message[data-expanded="true"] :deep(.message-preview-content)', 'max-height'), 'none')
 })
 
-test('Markdown quotes share a neutral surface and normal type without generated punctuation', async () => {
+test('Markdown quotes share a neutral surface with a restrained blue rule and normal type without generated punctuation', async () => {
   const quote = declarations(globalStyles, ':where(.prose, .markdown-body, .file-markdown) blockquote')
-  assert.equal(quote.get('border-left'), '3px solid var(--c-border-hover)')
+  assert.equal(quote.get('border-left'), '3px solid var(--c-markdown-rule)')
   assert.equal(quote.get('background'), 'var(--c-bg-muted)')
   assert.equal(quote.get('color'), 'var(--c-text-body)')
   assert.equal(quote.get('font-style'), 'normal')
@@ -315,3 +315,42 @@ test('nested Markdown quotes use smaller transparent insets in global and preset
   const typography = await readFile(new URL('../unocss.config.ts', import.meta.url), 'utf8')
   assert.match(typography, /'blockquote blockquote': \{ margin: '0.65em 0', padding: '0.25em 0.75em', background: 'transparent' \}/)
 })
+
+
+test('Markdown structure accents share blue tokens across prose, knowledge and file previews', async () => {
+  const scope = ':is(.prose, .markdown-body, .file-markdown)'
+  assert.equal(declarations(globalStyles, ':root').get('--c-markdown-rule'), 'var(--c-selection-border)')
+  assert.equal(declarations(globalStyles, ':root').get('--c-markdown-table-bg'), 'color-mix(in srgb, var(--c-info-bg) 35%, var(--c-bg-card))')
+  const table = declarations(globalStyles, `${scope} table`)
+  assert.equal(table.get('border'), '1px solid var(--c-markdown-rule)')
+  assert.equal(table.get('background'), 'var(--c-markdown-table-bg)')
+  assert.equal(table.get('color'), 'var(--c-text-body)')
+  assert.equal(table.get('overflow-x'), 'auto')
+  const header = declarations(globalStyles, `${scope} table th`)
+  assert.equal(header.get('background'), 'var(--c-markdown-table-header)')
+  assert.equal(header.get('color'), 'var(--c-text)')
+  assert.equal(header.get('border-bottom'), '1px solid var(--c-markdown-rule)')
+  const headings = declarations(globalStyles, `${scope} :is(h1, h2, h3, h4, h5, h6)`)
+  assert.deepEqual([...headings], [['border-color', 'var(--c-markdown-rule)']], 'recolor existing rules without creating new heading borders')
+  const preview = await readFile(new URL('./components/files/FilePreviewModal.vue', import.meta.url), 'utf8')
+  assert.ok(!preview.includes('.file-markdown :deep(table)'))
+  assert.ok(!preview.includes('.file-markdown :deep(th)'))
+  const typography = await readFile(new URL('../unocss.config.ts', import.meta.url), 'utf8')
+  assert.match(typography, /'border-left': '3px solid var\(--c-markdown-rule\)'/)
+  assert.match(typography, /'h1,h2,h3,h4,h5,h6': \{ color: 'var\(--c-text\)', 'border-color': 'var\(--c-markdown-rule\)' \}/)
+  assert.match(typography, /'a': \{ color: 'var\(--c-primary\)' \}/)
+})
+
+for (const { name, tokens } of themes) {
+  test(`${name}: Markdown blue tint retains readable neutral body and heading ink`, () => {
+    const info = tokenColor('--c-info-bg', tokens)
+    const card = tokenColor('--c-bg-card', tokens)
+    // CSS color-mix(in srgb, info 35%, card) on opaque theme surfaces.
+    const tint: Color = [0, 1, 2].map(i => info[i]! * .35 + card[i]! * .65).concat(1) as Color
+    for (const bg of [tint, info]) {
+      for (const ink of ['--c-text', '--c-text-body', '--c-text-secondary']) {
+        assert.ok(contrast(tokenColor(ink, tokens), bg) >= 4.5, `${name} ${ink} on Markdown tint`)
+      }
+    }
+  })
+}
