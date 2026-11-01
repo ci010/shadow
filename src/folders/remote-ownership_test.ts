@@ -292,3 +292,57 @@ test('existing-target verification ignores unrelated offline folders but keeps b
   assert.equal((await f.two.registry.requireExecutionAvailable(b.id, signal())).id, b.id)
   await assert.rejects(f.two.registry.requireExecutionAvailable(a.id, signal()), { code: 'folder_not_found' })
 })
+
+
+test('existing execution lazily resolves historical claims after reconnect without releasing reservations', async t => {
+  const f = await fixture(t)
+  const a = await f.one.registry.registerRemote(ref('a'), signal())
+  await f.catalog.reserveRemoteWorkdirs('default', [ref('alias')])
+  await f.catalog.reserveRemoteWorkdirs(f.other.id, [ref('b')])
+  assert(f.catalog.remoteClaims().every(claim => !claim.identity))
+  // Recovery uses Child identities, not the Main-looking display snapshot.
+  assert.equal((await f.one.registry.requireExecutionAvailable(a.id, signal())).id, a.id)
+  assert.equal(f.catalog.remoteClaims().length, 2)
+  assert(f.catalog.remoteClaims().every(claim => claim.identity))
+  const restarted = new ProjectCatalog(join(f.root, 'host'))
+  await restarted.init()
+  assert.deepEqual(restarted.remoteClaims(), f.catalog.remoteClaims())
+  await assert.rejects(f.two.registry.registerRemote(ref('nested'), signal()), { code: 'folder_owned_by_another_project' })
+})
+
+test('historical missing capabilities stay reserved and block existing execution until verifiable', async t => {
+  const f = await fixture(t)
+  const a = await f.one.registry.registerRemote(ref('a'), signal())
+  await f.catalog.reserveRemoteWorkdirs(f.other.id, [ref('missing')])
+  await assert.rejects(f.one.registry.requireExecutionAvailable(a.id, signal()), { code: 'remote_workdir_unavailable', reason: 'workdir-missing' })
+  assert.deepEqual(f.catalog.remoteClaims(), [{ projectId: f.other.id, workdir: ref('missing') }])
+  assert.equal(f.catalog.folders('default')[0].id, a.id)
+})
+
+test('recovery rejects historical cross-project alias overlap and retains the unresolved claim', async t => {
+  const f = await fixture(t)
+  const a = await f.one.registry.registerRemote(ref('a'), signal())
+  await f.catalog.reserveRemoteWorkdirs(f.other.id, [ref('alias')])
+  await assert.rejects(f.one.registry.requireExecutionAvailable(a.id, signal()), { code: 'folder_owned_by_another_project' })
+  assert.deepEqual(f.catalog.remoteClaims(), [{ projectId: f.other.id, workdir: ref('alias') }])
+})
+
+test('existing recovery never resolves claims on unrelated devices', async t => {
+  const f = await fixture(t)
+  const a = await f.one.registry.registerRemote(ref('a'), signal())
+  const elsewhere: WorkdirRefV2 = { version: 2, nodeId: 'offline-child', workdirId: 'old' }
+  await f.catalog.reserveRemoteWorkdirs(f.other.id, [elsewhere])
+  assert.equal((await f.one.registry.requireExecutionAvailable(a.id, signal())).id, a.id)
+  assert.deepEqual(f.catalog.remoteClaims(), [{ projectId: f.other.id, workdir: elsewhere }])
+})
+
+
+test('aborted recovery leaves historical claims unidentified', async t => {
+  const f = await fixture(t)
+  const a = await f.one.registry.registerRemote(ref('a'), signal())
+  await f.catalog.reserveRemoteWorkdirs('default', [ref('alias')])
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(f.one.registry.requireExecutionAvailable(a.id, controller.signal))
+  assert.deepEqual(f.catalog.remoteClaims(), [{ projectId: 'default', workdir: ref('alias') }])
+})
