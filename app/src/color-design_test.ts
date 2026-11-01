@@ -215,11 +215,12 @@ test('conversation surfaces consume the shared chat aliases', () => {
   }
 })
 
-test('message preview cards reserve five lines without changing Markdown typography', () => {
-  assert.equal(property('MessagePreviewCard', '.message-preview-content', 'min-height'), '5lh')
+test('message preview cards cap previews without reserving empty lines or changing Markdown typography', () => {
+  assert.equal(property('MessagePreviewCard', '.message-preview-content', 'min-height'), '0')
+  assert.equal(property('MessagePreviewCard', '.message-preview-content', 'max-height'), '5lh')
   assert.equal(property('MessagePreviewCard', '.message-preview-card', 'font-size'), property('ChatTab', '.chat-bubble', 'font-size'))
   assert.equal(property('MessagePreviewCard', '.message-preview-card', 'line-height'), property('ChatTab', '.chat-bubble', 'line-height'))
-  assert.equal(property('MessagePreviewCard', '.message-preview-body', 'grid-template-rows'), '0fr')
+  assert.equal(property('MessagePreviewCard', '.message-preview-body', 'grid-template-rows'), '1fr')
   assert.equal(property('MessagePreviewCard', '.message-preview-card[data-expanded="true"] .message-preview-body', 'grid-template-rows'), '1fr')
   assert.match(property('MessagePreviewCard', '.message-preview-body::after', 'background'), /linear-gradient.*var\(--c-chat-action-bg\)/)
   assert.equal(property('MessagePreviewCard', '.message-preview-body::after', 'pointer-events'), 'none')
@@ -275,4 +276,42 @@ test('selected project coordination accents the title without a filled selection
 test('composer keeps a quiet resting edge and a visible interactive focus boundary', () => {
   assert.equal(property('ChatTab', '.composer-box', 'border'), '1px solid var(--c-border)')
   assert.equal(property('ChatTab', '.composer-box:focus-within', 'border-color'), 'var(--c-blue)')
+})
+
+test('collaboration messages keep compact neutral previews and uncapped expanded text', () => {
+  assert.equal(property('SessionMessageDisclosure', '.session-message', 'border-color'), 'transparent')
+  assert.equal(property('SessionMessageDisclosure', '.session-message :deep(.message-preview-header)', 'font-size'), '12px')
+  assert.equal(property('SessionMessageDisclosure', '.session-message :deep(.message-preview-header)', 'color'), 'var(--c-text-secondary)')
+  assert.equal(property('SessionMessageDisclosure', '.session-message :deep(.message-preview-content)', 'max-height'), '3lh')
+  assert.equal(property('SessionMessageDisclosure', '.session-message[data-expanded="true"] :deep(.message-preview-content)', 'max-height'), 'none')
+})
+
+test('Markdown quotes share a neutral surface and normal type without generated punctuation', async () => {
+  const quote = declarations(globalStyles, ':where(.prose, .markdown-body, .file-markdown) blockquote')
+  assert.equal(quote.get('border-left'), '3px solid var(--c-border-hover)')
+  assert.equal(quote.get('background'), 'var(--c-bg-muted)')
+  assert.equal(quote.get('color'), 'var(--c-text-body)')
+  assert.equal(quote.get('font-style'), 'normal')
+  assert.equal(quote.get('font-weight'), '400')
+  assert.equal(quote.get('quotes'), 'none')
+  const typography = await readFile(new URL('../unocss.config.ts', import.meta.url), 'utf8')
+  assert.match(typography, /'blockquote p::before,blockquote p::after': \{ content: 'none' \}/)
+})
+
+test('collaboration touch target override follows the desktop link rule', async () => {
+  const source = await readFile(new URL('./components/SessionMessageDisclosure.vue', import.meta.url), 'utf8')
+  const desktop = source.indexOf('.session-message-link { display: inline-flex;')
+  const media = source.indexOf('@media (max-width: 700px), (pointer: coarse)')
+  assert.ok(desktop >= 0 && media > desktop)
+  assert.match(source.slice(media), /\.session-message-link \{ min-height: 44px; \}/)
+  assert.ok(!source.slice(media).includes('min-height: 28px'))
+})
+
+test('nested Markdown quotes use smaller transparent insets in global and preset styles', async () => {
+  const nested = declarations(globalStyles, ':where(.prose, .markdown-body, .file-markdown) blockquote blockquote')
+  assert.equal(nested.get('background'), 'transparent')
+  assert.equal(nested.get('padding'), '0.25em 0.75em')
+  assert.equal(nested.get('margin'), '0.65em 0')
+  const typography = await readFile(new URL('../unocss.config.ts', import.meta.url), 'utf8')
+  assert.match(typography, /'blockquote blockquote': \{ margin: '0.65em 0', padding: '0.25em 0.75em', background: 'transparent' \}/)
 })
