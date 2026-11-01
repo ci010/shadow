@@ -315,3 +315,26 @@ This is a read-only view of in-memory agent-owned work, not an OS process monito
 or a persistent job ledger. Remote background exec remains unsupported; the
 panel does not introduce remote execution, PID inference, output streaming,
 or process termination controls.
+
+### Read-only conversation history validation
+
+ChatTab opts into memory-snapshot validation for logical
+`GET /api/sessions/:key?shallow=true&snapshot=...` reads (without pagination).
+Legacy, physical-segment and paginated callers retain complete response bodies.
+The snapshot envelope uses SHA-256 `revision`, `historyRevision` and
+`metadataRevision` validators, plus `historyCount`. An unchanged representation
+returns only `revision`/`unchanged`; an exact identity-bound history prefix returns
+an appended `delta.messages` and either metadata or a validated metadata reference.
+Metadata includes command receipts, decision records and segment navigation.
+Rewrites, truncation, missing validators and segment rollover require full data;
+a rollover during the read returns `409 history_conflict`, not mislabeled history.
+This reduces wire bytes, not server history-read/hash cost.
+
+The client retains at most eight snapshots / 16 MiB in authenticated-lifetime
+memory, never serves them on network/access errors, and falls back to full reads
+after eviction. Project sessions-topic owns recovery inventory validation; chat
+readiness still awaits the shared activity reader without forcing another refresh.
+`createSnapshot.state.refreshReason` and `readReason` expose bounded implementation
+reason labels (initial read, invalidation, manual, recovery), never event payloads.
+Initial-history pagination remains separate: partial history must preserve tool
+pairs and command/decision merging before it can replace the current full fallback.

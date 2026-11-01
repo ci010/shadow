@@ -15,7 +15,7 @@ test('history revalidation works through gateway no-store without readable ETag 
   let authorized = true
   const urls: string[] = []
   const wireBodies: string[] = []
-  const channel = new WebChannel(new Bus(), { sessionManager: {
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
     getSessionState: () => exists ? { sessionId: 'web:cached' } : null,
     getContext: async () => ({ systemPrompt: 'Prompt', tools: [] }),
     getHistory: async () => ({ messages: [{ role: 'user', content }, ...appended] }),
@@ -183,7 +183,7 @@ test('history block reuse updates metadata with append, prepend and metadata alo
   let tools: unknown[] = []
   let decisions: string[] = []
   const history = [{ role: 'user', content: 'x'.repeat(100_000) }]
-  const channel = new WebChannel(new Bus(), { sessionManager: {
+  const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
     getSessionState: () => ({ sessionId: 'web:metadata', segmentIndex }),
     getContext: async () => ({ systemPrompt, tools }),
     getHistory: async () => ({ messages: history }),

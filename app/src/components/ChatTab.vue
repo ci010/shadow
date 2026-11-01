@@ -571,6 +571,7 @@ import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
 import { timelineCanPrepend, prependScrollTop, retainTimelineRollover, timelineBoundaryPositions, reconcileTimelineKeys, limitFollowingTimeline, type TimelineSegment } from '../conversation-timeline.ts'
 import { chatHistorySnapshots } from '../chat-history-snapshot.ts'
+import { readonlyHistorySnapshots } from '../readonly-history-snapshot.ts'
 import type { LiveSubscription } from '../live-client.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
@@ -1088,10 +1089,10 @@ function connectEventStream(chatId: string, loadingCurrent = false): void {
     // An initial load already waiting on readiness owns this snapshot.
     if (!first || !historyRequest) refreshDirectHistory()
   } })
-  let initialActivity = true
+  // Project sessions-topic owns inventory recovery. Keep the readiness read,
+  // but do not force a second HTTP inventory refresh from the chat topic.
   const activitySnapshot = createInitialLiveSnapshot({ refresh() {
-    if (initialActivity) { initialActivity = false; void projectLease?.activity.read() }
-    else void refreshSessionActivity()
+    void projectLease?.activity.read()
   } })
   const subscription = livePool.client(props.apiBase).subscribe({ kind: 'chat', projectId, sessionId: `web:${chatId}` }, {
     reset() {
@@ -2166,7 +2167,7 @@ async function loadReadonlySession(background = false): Promise<void> {
   try {
     // Fetch all history + context in parallel
     const [histRes, ctxRes] = await Promise.all([
-      fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' }), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) }),
+      readonlyHistorySnapshots(livePool).read(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' }), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])),
       background ? Promise.resolve(null) : fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), { signal: controller.signal }),
     ])
 
