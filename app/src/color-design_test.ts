@@ -320,17 +320,20 @@ test('nested Markdown quotes use smaller transparent insets in global and preset
 test('Markdown structure accents share blue tokens across prose, knowledge and file previews', async () => {
   const scope = ':is(.prose, .markdown-body, .file-markdown)'
   assert.equal(declarations(globalStyles, ':root').get('--c-markdown-rule'), 'var(--c-selection-border)')
-  assert.equal(declarations(globalStyles, ':root').get('--c-markdown-table-bg'), 'color-mix(in srgb, var(--c-info-bg) 15%, var(--c-bg-card))')
+  assert.equal(declarations(globalStyles, ':root').get('--c-markdown-table-bg'), 'transparent')
+  assert.equal(declarations(globalStyles, ':root').get('--c-markdown-table-rule'), 'color-mix(in srgb, var(--c-selection-border) 25%, var(--c-border))')
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8')
+  assert.ok(css.includes(`${scope} table tbody tr:hover { background: var(--c-bg-muted); }`))
   assert.equal(declarations(globalStyles, ':root').get('--c-markdown-table-header'), 'color-mix(in srgb, var(--c-info-bg) 35%, var(--c-bg-card))')
   const table = declarations(globalStyles, `${scope} table`)
-  assert.equal(table.get('border'), '1px solid var(--c-markdown-rule)')
+  assert.equal(table.get('border'), '1px solid var(--c-markdown-table-rule)')
   assert.equal(table.get('background'), 'var(--c-markdown-table-bg)')
   assert.equal(table.get('color'), 'var(--c-text-body)')
   assert.equal(table.get('overflow-x'), 'auto')
   const header = declarations(globalStyles, `${scope} table th`)
   assert.equal(header.get('background'), 'var(--c-markdown-table-header)')
   assert.equal(header.get('color'), 'var(--c-text)')
-  assert.equal(header.get('border-bottom'), '1px solid var(--c-markdown-rule)')
+  assert.equal(header.get('border-bottom'), '1px solid var(--c-markdown-table-rule)')
   const headings = declarations(globalStyles, `${scope} :is(h1, h2, h3, h4, h5, h6)`)
   assert.deepEqual([...headings], [['border-color', 'var(--c-markdown-rule)']], 'recolor existing rules without creating new heading borders')
   const preview = await readFile(new URL('./components/files/FilePreviewModal.vue', import.meta.url), 'utf8')
@@ -346,8 +349,8 @@ for (const { name, tokens } of themes) {
   test(`${name}: Markdown blue tint retains readable neutral body and heading ink`, () => {
     const info = tokenColor('--c-info-bg', tokens)
     const card = tokenColor('--c-bg-card', tokens)
-    // Match the body (15%) and header/hover (35%) mixes on opaque surfaces.
-    const tints = [.15, .35].map(weight =>
+    // Check the neutral surface and the blue header (35%); body stays transparent.
+    const tints = [0, .35].map(weight =>
       [0, 1, 2].map(i => info[i]! * weight + card[i]! * (1 - weight)).concat(1) as Color)
     for (const bg of tints) {
       for (const ink of ['--c-text', '--c-text-body', '--c-text-secondary']) {
