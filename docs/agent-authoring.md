@@ -52,6 +52,7 @@ Minimal service QQ `bot.json` (use a real service connection ID and conversation
     "botInstanceId": "<registered QQ connection>",
     "conversationId": "group:<group ID>",
     "enabled": true,
+    "trigger": "mention",
     "tools": ["remember_note"],
     "allowFrom": ["<allowed sender ID>"],
     "readFolders": [],
@@ -60,6 +61,63 @@ Minimal service QQ `bot.json` (use a real service connection ID and conversation
   }]
 }
 ```
+
+## External input subscriptions
+
+New service packages should declare `subscriptions` in the JSON file selected by
+`BOT.md`. The receiver is this BOT; entries reference its existing permission
+bindings, not another Agent or arbitrary Session:
+
+```json
+"subscriptions": [
+  {"platform": "qq", "botInstanceId": "<registered QQ connection>", "conversationId": "group:<group ID>"},
+  {"platform": "discord", "bindingId": "<existing Discord binding UUID>"}
+]
+```
+
+Use only entries whose bindings are present in that package. Feishu uses the QQ
+reference shape with `platform: "feishu"`. Unknown references, duplicate references,
+and permission/filter fields in a subscription are rejected. Subscription selection
+cannot add tools, participants, folders or inherited threads. Those remain binding
+policy. The source router selects the BOT before its handler invokes the lazy
+platform receive strategy (triggers/processors/classifiers); security admission
+still verifies the source and connection. Policies are checked again before
+Session creation/execution and buffered processor retries. A non-triggering service message is filtered without creating/waking a
+Session; admitted channel-stream collection remains separate from Session history.
+
+Migration is read-time and non-destructive: omitting `subscriptions` retains the
+same legacy binding subscriptions (including enabled/disabled state and all
+existing restrictions); explicit `[]` receives **nothing**, even with enabled
+bindings. To make a deployed package explicit, copy the references of its intended
+bindings into `subscriptions`, then use the existing single `bot_package`
+confirmation. Existing deployment bytes/revisions are not rewritten automatically.
+The confirmation displays added/removed input subscriptions as well as permissions.
+Personal owner ingress is not a service subscription and cannot be selected here.
+
+QQ and Feishu service bindings own a narrow `trigger: "mention" | "all"` field.
+The selected BOT supplies its validated, read-only platform configuration to the
+policy callback; a shared connection cannot override another BOT's trigger.
+Omission defaults to `mention`. QQ's default recognizes native self mentions;
+Feishu's default preserves mentions, replies to the Bot and admitted managed topics.
+Direct messages remain trigger-eligible but still require normal source/owner/binding
+authorization. `all` never subscribes new conversations or enables platform delivery.
+
+**Connection compatibility:** older QQ service packages with no `trigger` no longer
+inherit a connection's `triggerMode: "all"`; they narrow to `mention`. No files or
+connection settings are rewritten, and no migration silently promotes a BOT to
+`all`. If the old all-message behavior is intended, explicitly add `trigger: "all"`
+to the affected BOT binding and use the existing `bot_package` confirmation, which
+shows trigger changes. The status response also explains this boundary. QQ connection
+`triggerMode` remains only for personal/standalone legacy compatibility. Feishu had
+no connection trigger switch; its omitted binding field keeps the previous safe
+mention/reply/topic default. Discord retains its existing binding trigger/processor.
+
+The Project input router routes source/kind/topic to a single BOT handler. It does
+not run business filters or tool-module listeners; conflicting BOT targets fail
+closed, never all reply and never fall back to a full-feature Agent. Web and verified
+personal-owner inputs have explicit ordinary Session targets. See
+[external input routing](input-routing.md) for the generic envelope, controlled
+program-signal extension point and internal-event boundary.
 
 ## Personal BOT mode
 
@@ -128,7 +186,15 @@ In an authenticated owner Web conversation, the Agent calls `bot_package`:
    has a 4000-character ceiling: exceptionally large permission/target changes fail
    closed rather than truncating consequential scopes.
 
-Source and deployment are separate. Runtime policy and custom tools read and verify
+Directory BOT bindings declare their permissions directly, subject to BOT-level
+ceilings. They do not use legacy `AGENT.md` `capabilityProfiles` or copy authority
+from old bindings. `authoring_change` and its source/baseline recovery workflows
+remain for legacy/resource-based authoring, not directory BOTs. Each proposal
+publishes one BOT; there is no cross-BOT atomic publication.
+
+Source and deployment are separate. Update the registered development source and
+propose again; deployment history is not a development-source recovery workflow.
+Runtime policy and custom tools read and verify
 files from the deployed directory, not the workspace or JSON-embedded source/history.
 The confirmation is bound to the exact content revision held by the host. An Agent
 summary is not a permission claim; the host computes actual scope changes.

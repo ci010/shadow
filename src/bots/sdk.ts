@@ -14,9 +14,27 @@ const moduleName = z.string().regex(/^@shadow\/[A-Za-z][A-Za-z0-9_-]{0,127}$/).r
 const imports = z.array(moduleName).max(31).refine(a => new Set(a).size === a.length, 'Duplicate imports')
 export const BotSourcePathSchema = z.string().min(1).max(256).refine(s =>
   !s.startsWith('/') && !s.includes('\\') && s.split('/').every(p => p !== '' && p !== '.' && p !== '..') && !/[\x00-\x1f\x7f:]/.test(s), 'Use a relative package path without traversal')
-const binding = ConversationBindingSchema.omit({ agent: true, skills: true }).extend({ platform: z.enum(['qq', 'feishu']), tools: names }).strict()
+// Service receive policy is package-owned. Missing legacy fields narrow to the
+// platform's mention/reply/topic default; connection-level `all` is never imported.
+const binding = ConversationBindingSchema.omit({ agent: true, skills: true }).extend({
+  platform: z.enum(['qq', 'feishu']), tools: names,
+  trigger: z.enum(['mention', 'all']).default('mention'),
+}).strict()
 const discord = DiscordBindingSchema.omit({ agentId: true, epochRevision: true }).extend({ platform: z.literal('discord'), tools: names }).strict()
 export const BotBindingSchema = z.discriminatedUnion('platform', [binding, discord])
+/** Subscription references select existing authority; they never supply grants or filters. */
+export const BotSubscriptionSchema = z.discriminatedUnion('platform', [
+  z.object({ platform: z.enum(['qq', 'feishu']), botInstanceId: z.string().min(1).max(512), conversationId: z.string().min(1).max(512) }).strict(),
+  z.object({ platform: z.literal('discord'), bindingId: z.string().uuid() }).strict(),
+])
+export type BotSubscription = z.infer<typeof BotSubscriptionSchema>
+export function botSubscriptionKey(ref: BotSubscription): string {
+  return JSON.stringify(ref.platform === 'discord' ? [ref.platform, ref.bindingId] : [ref.platform, ref.botInstanceId, ref.conversationId])
+}
+export function bindingSubscription(binding: z.infer<typeof BotBindingSchema>): BotSubscription {
+  return binding.platform === 'discord' ? { platform: 'discord', bindingId: binding.id }
+    : { platform: binding.platform, botInstanceId: binding.botInstanceId, conversationId: binding.conversationId }
+}
 const baseDefinition = z.object({
   id: ResourceName,
   prompt: z.string().trim().min(1).max(128_000),
@@ -31,6 +49,8 @@ const baseDefinition = z.object({
     imports,
   }).strict()).max(64),
   bindings: z.array(BotBindingSchema).max(1000),
+  /** Omission migrates legacy bindings to subscriptions in memory; [] explicitly receives nothing. */
+  subscriptions: z.array(BotSubscriptionSchema).max(1000).optional(),
   readDomains: z.array(z.string().uuid()).max(32).optional(),
   sourceFolders: SourceFoldersSchema.optional(),
   discordHistory: DiscordHistoryScopeSchema.optional(),
@@ -42,9 +62,14 @@ const definition = z.discriminatedUnion('mode', [
 ]).superRefine((bot, ctx) => {
   if (bot.mode === 'personal') {
     if (!bot.connection || !bot.agent) ctx.addIssue({ code: 'custom', message: 'Personal BOT requires connection and agent' })
-    if (bot.bindings.length || bot.tools.length || bot.allowedModules.length || bot.readDomains || bot.sourceFolders || bot.discordHistory || bot.skills)
+    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.readDomains || bot.sourceFolders || bot.discordHistory || bot.skills)
       ctx.addIssue({ code: 'custom', message: 'Personal BOT uses ordinary role tools/context; custom tools, service bindings and scopes are not supported' })
   } else if (bot.connection || bot.agent) ctx.addIssue({ code: 'custom', message: 'Service BOT cannot select a personal connection or role' })
+  const bindingKeys = bot.bindings.map(value => botSubscriptionKey(bindingSubscription(value)))
+  if (new Set(bindingKeys).size !== bindingKeys.length) ctx.addIssue({ code: 'custom', message: 'Duplicate binding subscription identity' })
+  const subscriptionKeys = (bot.subscriptions ?? []).map(botSubscriptionKey)
+  if (new Set(subscriptionKeys).size !== subscriptionKeys.length || subscriptionKeys.some(key => !bindingKeys.includes(key)))
+    ctx.addIssue({ code: 'custom', message: 'Subscriptions must uniquely reference this BOT’s existing bindings' })
   const seen = new Set<string>()
   for (const tool of bot.tools) {
     if (seen.has(tool.name)) ctx.addIssue({ code: 'custom', message: `Duplicate tool: ${tool.name}` })
@@ -54,6 +79,15 @@ const definition = z.discriminatedUnion('mode', [
 })
 export const BotDefinitionSchema = definition
 export type BotDefinition = z.infer<typeof BotDefinitionSchema>
+
+export function subscribedBindings(bot: BotDefinition): BotDefinition['bindings'] {
+  if (bot.mode !== 'service') return []
+  const keys = bot.subscriptions && new Set(bot.subscriptions.map(botSubscriptionKey))
+  return bot.bindings.filter(binding => !keys || keys.has(botSubscriptionKey(bindingSubscription(binding))))
+}
+export function bindingSubscribed(bot: BotDefinition, binding: BotDefinition['bindings'][number]): boolean {
+  return subscribedBindings(bot).includes(binding)
+}
 
 /** Service inference is Bot-wide, not a binding/session selector. */
 export function botInferenceSettings(bot: BotDefinition) {

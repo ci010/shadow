@@ -7,7 +7,8 @@ import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { assertPrivateFileBoundary } from '../utils/private-document.ts'
 import { BotDeployments } from '../bots/deployments.ts'
-import { botInferenceSettings, parseBot, type BotDefinition } from '../bots/sdk.ts'
+import { bindingSubscribed, botInferenceSettings, parseBot, type BotDefinition } from '../bots/sdk.ts'
+import { botInputSubscriptions } from '../bots/input.ts'
 import { executeBotTool } from '../bots/tool-runtime.ts'
 import { parseAgentFile } from '../agent/types/parse.ts'
 import { conversationBindingKey, type ResolvedConversationPolicy } from './contracts.ts'
@@ -35,6 +36,8 @@ export class DirectoryBots {
       return { bot, files: current.files, deployment: current.deployment }
     })
   }
+  inputSubscriptions() { return this.definitions().flatMap(({bot}) => botInputSubscriptions(bot)) }
+  definition(id: string) { return this.definitions().find(({bot}) => bot.id === id)?.bot }
   personal(connection: string) {
     const matches = this.definitions().filter(({bot}) => bot.mode === 'personal' && bot.connection === connection)
     if (matches.length > 1) throw new Error('Connection is owned by multiple personal BOT deployments.')
@@ -46,16 +49,17 @@ export class DirectoryBots {
   resolve(address: Pick<ChannelAddress, 'botInstanceId' | 'platform' | 'conversationId'>): ResolvedConversationPolicy | undefined {
     const matches = this.definitions().flatMap(({ bot, deployment }) => bot.bindings.flatMap(binding => {
       if (binding.platform === 'discord' || conversationBindingKey(binding) !== conversationBindingKey(address)) return []
-      const { tools, ...data } = binding
+      // Receive configuration belongs to the BOT handler, not Session tool grants.
+      const { tools, trigger: _trigger, ...data } = binding
       const agent = parseAgentFile(`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id), defaultMode:'session', allowedTools:tools, allowedModules:bot.allowedModules})}---\n${bot.prompt}`, agentName(bot.id), this.deployments.runtimeDirectory(bot.id))
-      return [{ revision: deployment.revision, binding: { ...data, skills: [], agent: agentName(bot.id) }, agent,
+      return [{ revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding), skills: [], agent: agentName(bot.id) }, agent,
         skillPrompts: bot.skills ?? [], tools: bot.tools.filter(tool => tools.includes(tool.name)).map(tool => ({...tool,source:tool.module,skill:bot.id,code:''})) }]
     }))
     if (matches.length > 1) throw new Error('Conversation is owned by multiple BOT deployments.')
     return matches[0]
   }
   /** Channel preflight must use the same deployed bindings as DirectoryBotService. */
-  readonly serviceAssigned = (address: ChannelAddress): boolean => !!this.resolve(address)?.binding.enabled
+  readonly serviceAssigned = (address: ChannelAddress): boolean => address.projectId === this.deployments.projectId && !!this.resolve(address)?.binding.enabled
   discord(candidates = this.definitions()): { agents: IntegrationAgent[]; bindings: DiscordBinding[] } {
     const agents: IntegrationAgent[] = [], bindings: DiscordBinding[] = []
     for (const {bot,deployment} of candidates) {
@@ -68,7 +72,7 @@ export class DirectoryBots {
         version:deployment.revision,publishedAt:new Date(0).toISOString() })
       for (const binding of selected) {
         const {platform: _platform,...data} = binding
-        bindings.push({...data,agentId:id,epochRevision:parseInt(deployment.revision.slice(0,12),16)})
+        bindings.push({...data,enabled:data.enabled && bindingSubscribed(bot,binding),agentId:id,epochRevision:parseInt(deployment.revision.slice(0,12),16)})
       }
     }
     if (new Set(bindings.map(binding => binding.id)).size !== bindings.length || new Set(bindings.map(binding => JSON.stringify([binding.botInstanceId,binding.target]))).size !== bindings.length) throw new Error('Discord conversation is owned by multiple BOT deployments.')

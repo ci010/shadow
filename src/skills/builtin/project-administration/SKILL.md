@@ -15,23 +15,25 @@ session or role exists.
 
 ## Primary BOT directory publication (Discord / QQ / Feishu service Bots)
 
-Use Project Bots → BOT directory releases to freeze a registered local directory
-and request one exact owner review. Stable BOT `name` identifies an independently
-versioned package, not the source path. Updating or reviewing rollback of one
-package preserves unrelated packages and legacy bindings; collisions are rejected.
+Use `bot_package` status/propose in an authenticated owner Web conversation to
+freeze one registered local directory and request one native Deploy/Cancel
+confirmation. Stable BOT `id` identifies an independently versioned package,
+not the source path. Read status for the exact expectedRevision before updates.
 Source edits remain draft-only until the owner approves. Never write private
-release storage or activate through general tools.
+deployment storage or activate through general tools.
 
-QQ/Feishu BOT.md declares name, allowedTools, allowedModules and channels; channel
-JSON uses conversation bindings without agent, and declared skill sources use
-pure Node modules or scoped grants. Discord BOT.md instead declares name,
-platform: discord, botInstanceId, channels, tools and readDomains. Its channel JSON
-uses the existing Discord binding contract without agentId/epochRevision, including
-frozen processors/observation policies where needed; skills are prompt-only.
-Discord packages reuse existing platform inspection, closed tools, participant
-permissions and authorization epochs through one atomic aggregate bot.save review.
-No per-Agent/binding/processor follow-up approval is required. Use the import card
-or Discord access Reviews for the same exact durable review, not two approvals.
+All three platforms use `BOT.md` with header `{id, config: bot.json}` and the
+prompt body, plus data-only `bot.json` and declared tool modules. Permissions
+are declared directly in each binding (tools, folders/domains, grants and
+participants as applicable), subject to BOT-level ceilings. Do not introduce
+`capabilityProfiles` or infer grants from old bindings. This is not the legacy
+`authoring_change` or Discord `channel_config` publication workflow.
+
+Development source and the deployment copy are independent. Edit the registered
+source and propose again; do not reconstruct it from a Change or add a source
+recovery workflow. Each proposal deploys one BOT only, not an atomic release
+across BOTs. Existing legacy/generic authoring remains available for its own
+resources, not as a fallback for directory BOTs.
 
 Connections, credential references, domains and installation must already exist.
 Remote folders, initialize hooks, full SDK/npm dependencies, trusted Discord exec

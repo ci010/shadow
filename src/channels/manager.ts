@@ -12,7 +12,7 @@ import type { Bus } from '../bus/bus.ts'
 import type { Config } from '../config/schema.ts'
 import type { Hono } from 'hono'
 import type { SessionManager } from '../sessions/session-manager.ts'
-import type { ReceiveChannelMessage } from '../sessions/input.ts'
+import type { ReceiveChannelMessage, ReceiveChannelPolicy } from '../sessions/input.ts'
 import { DiscordChannel } from './discord.ts'
 import { FeishuChannel } from './feishu.ts'
 import { QQChannel } from './qq.ts'
@@ -43,6 +43,9 @@ export interface ChannelManagerOptions {
   serviceAssigned?: (address: ChannelAddress) => boolean
   messageStream?: ChannelMessageStream
   discordIntegration?: DiscordIntegration
+  /** External observation subscriptions share the same router as ordinary platform input. */
+  routeObservation?: (connection: string, bindingId: string, runPolicy: () => Promise<void>) => Promise<void>
+  routeServiceInput?: ReceiveChannelPolicy
 }
 
 // Host-wide ownership, not a routing registry. Failed cleanup retains its claim.
@@ -381,6 +384,23 @@ export class ChannelManager {
       ...(bot.legacySessionId ? { legacySessionId: true } : {}),
     } : undefined
     if (scope) channel.setBotScope?.(scope)
+    if (bot?.purpose === 'service' && scope && this.options?.routeServiceInput) {
+      if (!channel.setReceivePolicy) throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
+      channel.setReceivePolicy(async (message, runPolicy) => {
+        const verify = this.options!.instanceStore.accessGuard(bot.id)
+        const guard = channel.connectionGuard?.()
+        const assertSource = () => {
+          verify(); guard?.()
+          const current = this.options!.instanceStore.get(bot.id)
+          if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key) ||
+            !current.enabled || current.purpose !== 'service' || message.channel !== channel.name || !channel.isAllowed(message.senderId))
+            throw new ChannelAdmissionError('Service source is unavailable', 403)
+        }
+        assertSource()
+        await this.options!.routeServiceInput!({ ...message, channelAddress: { ...scope, conversationId: message.chatId }, admin: false },
+          async configuration => { assertSource(); await runPolicy(configuration); assertSource() })
+      })
+    }
     if (bot && scope && ['qq', 'feishu'].includes(bot.platform)) channel.setGroupPreflight?.((chatId, name, message) => {
       if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key)) return false
       const current = this.options!.instanceStore.get(bot.id)
@@ -399,8 +419,24 @@ export class ChannelManager {
         processorStorageId: bot.id,
         admit: (input, signal) => integration.prepareIngress(bot.id, input, signal),
         classifyObservation: (proof,data,signal) => integration.classifyObservation(bot.id,proof,data,signal),
-        observe: (data,signal) => integration.observe(bot.id,data,signal),
-        wakeObservation: (proof,items,semantic,signal) => integration.wakeObservation(bot.id,proof,items,semantic,signal),
+        observationScopes: data => integration.observationScopes(bot.id, data),
+        runObservationPolicy: async (scopeId, runPolicy) => {
+          const verify = this.options!.instanceStore.accessGuard(bot.id), guard = channel.connectionGuard?.()
+          const run = async () => {
+            verify(); guard?.()
+            if (this.closing || this.channels.get(key) !== channel || !this.options!.instanceStore.get(bot.id).enabled)
+              throw new ChannelAdmissionError('Observation source is unavailable', 403)
+            await runPolicy()
+            verify(); guard?.()
+          }
+          if (this.options?.routeObservation) await this.options.routeObservation(bot.id, scopeId, run)
+          else await run() // Standalone legacy integration fixtures, not production composition.
+        },
+        observe: (data,signal,scopeId) => integration.observe(bot.id,data,signal,scopeId),
+        wakeObservation: (proof,items,semantic,signal) => {
+          const wake = () => integration.wakeObservation(bot.id,proof,items,semantic,signal)
+          return this.options?.routeObservation ? this.options.routeObservation(bot.id,proof.scopeId,wake) : wake()
+        },
         discard: id => integration.discardAdmission(id),
         confirm: async (chatId, senderId, draftId, hash, signal) => { await integration.confirmChat(bot.id, chatId, senderId, draftId, hash, signal) },
         invalidate: () => integration.invalidateBot(bot.id),
@@ -462,7 +498,7 @@ export class ChannelManager {
           return { status: 'accepted', sessionId: channelSessionId({ ...scope!, conversationId: message.chatId }), inputId: 'owner-pairing' }
         }
         if (current.purpose === 'personal') {
-          if (message.isGroup !== false || current.verifiedOwner?.senderId !== message.senderId) {
+          if (message.isGroup !== false || current.verifiedOwner?.senderId !== message.senderId || current.verifiedOwner?.chatId !== message.chatId) {
             throw new ChannelAdmissionError('Verified owner direct messages only', 403)
           }
         } else if (current.purpose !== 'service' || (current.platform === 'discord' && integration
@@ -792,7 +828,9 @@ export class ChannelManager {
       sandbox: ch.qq.sandbox,
       intents: ch.qq.intents,
       markdown: ch.qq.markdown,
-      triggerMode: ch.qq.triggerMode,
+      // Retained only for personal/standalone compatibility. Service policy comes
+      // from the selected directory BOT binding, never from this connection.
+      triggerMode: bot?.purpose === 'service' ? undefined : ch.qq.triggerMode,
       allowFrom: ch.qq.allowFrom,
       workspace: this.config.agent.workspace,
       adminChats: ch.qq.adminChats,

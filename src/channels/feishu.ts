@@ -1012,7 +1012,15 @@ export class FeishuChannel extends AbstractChannel {
       if (msgType === 'text') {
         try { const parsed = JSON.parse(message['content'] as string); if (typeof parsed.text === 'string') observedText = parsed.text } catch { /* malformed platform content is not displayed */ }
       }
-      if (isGroup && !this.admitGroup(replyTo, undefined, { id: messageId, sender: senderId, text: observedText, triggerEligible: managedTopic || (Array.isArray(message['mentions']) && message['mentions'].some((mention: Record<string, unknown>) => (mention.id as Record<string, unknown> | undefined)?.open_id === this._botOpenId)) || (!threadId && typeof message['parent_id'] === 'string' && this._botMessageIds.has(message['parent_id'])) })) return
+      if (isGroup && !this.admitGroup(replyTo)) {
+        this.admitGroup(replyTo, undefined, { id: messageId, sender: senderId, text: observedText })
+        return
+      }
+      await this.runReceivePolicy({ senderId, chatId: replyTo, messageId, content: observedText, isGroup }, async configuration => {
+      // The default preserves Feishu's mention/reply/managed-topic behavior. Only
+      // an explicitly published binding may broaden a Service BOT to all messages.
+      const triggerMode = configuration?.platform === 'feishu' ? configuration.trigger : 'mention'
+      if (isGroup && !this.admitGroup(replyTo, undefined, { id: messageId, sender: senderId, text: observedText, triggerEligible: triggerMode === 'all' || managedTopic || (Array.isArray(message['mentions']) && message['mentions'].some((mention: Record<string, unknown>) => (mention.id as Record<string, unknown> | undefined)?.open_id === this._botOpenId)) || (!threadId && typeof message['parent_id'] === 'string' && this._botMessageIds.has(message['parent_id'])) })) return
 
       // Hoist mentions early — used for both @bot stripping and mention detection
       const mentions = message['mentions'] as
@@ -1074,7 +1082,7 @@ export class FeishuChannel extends AbstractChannel {
       // In group chats, only respond if the bot is @mentioned or the user is
       // replying to one of the bot's own messages.
       let silent = false
-      if (isGroup && !managedTopic) {
+      if (isGroup && !managedTopic && triggerMode === 'mention') {
         const mentioned = mentions?.some((m) => {
           const id = m['id'] as Record<string, string> | undefined
           return id?.['open_id'] === this._botOpenId
@@ -1110,6 +1118,7 @@ export class FeishuChannel extends AbstractChannel {
         },
         fileMedia,
       )
+      })
     } catch (err) {
       console.error('[feishu] Error handling message')
     }

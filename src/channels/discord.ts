@@ -1,5 +1,7 @@
 import type { DiscordHistoryScope, DiscordObservationProof } from './integration-contract.ts'
 import { InputProcessor, awaitInputSignal } from '../events/input-processor.ts'
+import type { InputProcessorPolicy } from '../events/input-processor-contract.ts'
+import { isDeepStrictEqual } from 'node:util'
 import { extname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { workspacePath } from '../utils/paths.ts'
@@ -79,12 +81,39 @@ export class DiscordChannel extends AbstractChannel {
   private classifyObservation(proof:DiscordObservationProof,data:Record<string,unknown>,signal:AbortSignal) {
     return this.integration?.classifyObservation?.(proof,data,signal) ?? Promise.resolve({label:'unknown' as const,confidence:0})
   }
+  private runObservationPolicy(scopeId: string, runPolicy: () => Promise<void>): Promise<void> {
+    return this.integration?.runObservationPolicy ? this.integration.runObservationPolicy(scopeId, runPolicy) : runPolicy()
+  }
+  /** Buffered/recovered attempts reacquire security proof and select the live BOT
+   * before executing any stored rule. A journal entry is never subscription authority. */
+  private async runProcessorPolicy(data: Record<string, unknown>, signal: AbortSignal, runPolicy: () => Promise<void>, revision: string, policy: InputProcessorPolicy): Promise<void> {
+    if (!this.hasReceivePolicy) { await runPolicy(); return }
+    if (!this.integration) throw new Error('Service processor admission unavailable')
+    const senderId = String((data.author as Record<string, unknown>)?.id), chatId = String(data.channel_id), messageId = String(data.id)
+    const proof = await this.integration.admit({ senderId, chatId, messageId }, signal)
+    try {
+      signal.throwIfAborted()
+      if (proof.processorRevision !== revision || !isDeepStrictEqual(proof.processor, policy)) throw new Error('Service processor policy changed')
+      await this.runReceivePolicy({ senderId, chatId, messageId, content: String(data.content ?? ''), isGroup: !!data.guild_id,
+        channelAdmissionId: proof.admissionId, channelLocation: proof.location }, runPolicy)
+    } finally { this.integration.discard(proof.admissionId) }
+  }
+  private async runObservationProcessorPolicy(proof: DiscordObservationProof, data: Record<string, unknown>, signal: AbortSignal, runPolicy: () => Promise<void>): Promise<void> {
+    if (!this.integration?.runObservationPolicy) { await runPolicy(); return }
+    await this.runObservationPolicy(proof.scopeId, async () => {
+      const current = await this.integration!.observe?.(data, signal, proof.scopeId)
+      signal.throwIfAborted()
+      if (!current?.some(value => value.scopeId === proof.scopeId && value.revision === proof.revision && isDeepStrictEqual(value.policy, proof.policy))) throw new Error('Observation processor policy changed')
+      await runPolicy()
+    })
+  }
   private createObservationProcessor() {
     const id = this.integration?.processorStorageId
     return new InputProcessor<{proof:DiscordObservationProof;data:Record<string,unknown>}>(
       () => console.warn('[discord] Observation processing failed; no fallback wake'),100,undefined,
       id ? {journalPath:workspacePath(this.workspace, join('.events','observation-inbox-'+createHash('sha256').update(id).digest('hex')+'.json')),
-        recover: row => ({signal:this.controller.signal,publish:this.observationPublisher,classify:signal=>this.classifyObservation(row.item.proof,row.item.data,signal)})} : undefined)
+        recover: row => ({signal:this.controller.signal,publish:this.observationPublisher,classify:signal=>this.classifyObservation(row.item.proof,row.item.data,signal),
+          runPolicy: (run, signal) => this.runObservationProcessorPolicy(row.item.proof, row.item.data, signal, run)})} : undefined)
   }
   private botProcessorCooldowns = new Map<string, number>()
   private integration?: DiscordAdapterIntegration
@@ -137,7 +166,8 @@ export class DiscordChannel extends AbstractChannel {
           try {
             const key: unknown = JSON.parse(row.key)
             if (!Array.isArray(key) || key.length !== 3 || typeof key[2] !== 'string') return undefined
-            return { signal: this.controller.signal, publish: this.processedPublisher(key[2]) }
+            return { signal: this.controller.signal, publish: this.processedPublisher(key[2]),
+              runPolicy: (run, signal) => this.runProcessorPolicy(row.item, signal, run, key[2] as string, row.policy) }
           } catch { return undefined }
         },
       } : undefined)
@@ -1147,16 +1177,27 @@ export class DiscordChannel extends AbstractChannel {
       let observed = false
       if (processedRevision === undefined && this.integration?.observe) {
         const signal = AbortSignal.any([this.controller.signal,AbortSignal.timeout(2000)])
-        const proofs = await awaitInputSignal(this.integration.observe(data,signal),signal)
-        for (const proof of proofs) {
-          if (author.id === proof.botUserId || isBot && !proof.policy.includeBots) continue
-          observed = true
-          await this.observationProcessor.accept({
-            key:JSON.stringify([proof.scopeId,proof.revision,proof.guildId,author.id]),id:String(data.id),
-            event:{type:'discord.MESSAGE_CREATE',data},item:{proof,data:structuredClone(data)},
-            policy:proof.policy,signal:this.controller.signal,publish:this.observationPublisher,classify:signal=>this.classifyObservation(proof,data,signal),
-          })
+        const integration = this.integration
+        const receiveScope = async (scopeId?: string) => {
+          const runPolicy = async () => {
+            const proofs = await awaitInputSignal(integration.observe!(data,signal,scopeId),signal)
+            for (const proof of proofs) {
+              if (author.id === proof.botUserId || isBot && !proof.policy.includeBots) continue
+              observed = true
+              await this.observationProcessor.accept({
+                key:JSON.stringify([proof.scopeId,proof.revision,proof.guildId,author.id]),id:String(data.id),
+                event:{type:'discord.MESSAGE_CREATE',data},item:{proof,data:structuredClone(data)},
+                policy:proof.policy,signal:this.controller.signal,publish:this.observationPublisher,classify:signal=>this.classifyObservation(proof,data,signal),
+                runPolicy: (run, signal) => this.runObservationProcessorPolicy(proof, data, signal, run),
+              })
+            }
+          }
+          if (scopeId !== undefined) await this.runObservationPolicy(scopeId, runPolicy)
+          else await runPolicy() // Standalone adapters without the production source router.
         }
+        const scopes = integration.observationScopes?.(data)
+        if (scopes) { for (const scopeId of scopes) await receiveScope(scopeId) }
+        else await receiveScope()
       }
       const content = data.content as string
       const guildId = data.guild_id as string | undefined
@@ -1172,7 +1213,6 @@ export class DiscordChannel extends AbstractChannel {
       const sessionId = this.logicalSessionId(data.channel_id as string)
       const preparationSignal = processedSignal ?? this.controller.signal
       const wait = <T>(pending: Promise<T>) => awaitInputSignal(pending, preparationSignal)
-      const state = await wait(Promise.resolve(this.sessionManager?.getSessionState(sessionId)))
       if (!this.isAllowed(author.id)) return
       const admission = await wait(Promise.resolve(this.integration?.admit({
         chatId: data.channel_id as string, senderId: author.id, messageId: data.id as string,
@@ -1183,6 +1223,9 @@ export class DiscordChannel extends AbstractChannel {
       if (observed && this.integration && !admission) return
       let retainedAdmission = true
       try {
+      await this.runReceivePolicy({ senderId: author.id, chatId: String(data.channel_id), messageId: String(data.id), content,
+        isGroup: !!guildId, channelAdmissionId: admission?.admissionId, channelLocation: admission?.location }, async () => {
+      const state = await wait(Promise.resolve(this.sessionManager?.getSessionState(sessionId)))
       preparationSignal.throwIfAborted()
       if (author.id === admission?.botUserId || isBot && !admission?.processor?.includeBots) {
         if (admission) this.integration?.discard(admission.admissionId)
@@ -1233,6 +1276,7 @@ export class DiscordChannel extends AbstractChannel {
           event: { type: 'discord.MESSAGE_CREATE', data }, item: structuredClone(data),
           policy: admission.processor, signal: this.controller.signal,
           publish: this.processedPublisher(revision),
+          runPolicy: (run, signal) => this.runProcessorPolicy(data, signal, run, revision, admission.processor!),
         })
         return
       }
@@ -1245,9 +1289,9 @@ export class DiscordChannel extends AbstractChannel {
       if (processedRevision !== undefined) silent = false
       // DMs (no guildId) always pass through
 
-      // Stream collection supplements conversation history; it must not replace it.
-      // Non-triggering messages continue through admission with silent=true so the
-      // session persists them without model inference or an automatic reply.
+      // Preserve the adapter's trigger verdict. The Project BOT receive handler
+      // filters silent service inputs before Session creation; passive stream
+      // collection above remains independent of conversation history.
 
       // Add reaction to acknowledge receipt
       if (!silent && this.reactionEmoji) {
@@ -1311,6 +1355,7 @@ export class DiscordChannel extends AbstractChannel {
         },
         media,
       )
+      })
       } catch (error) {
         if (admission && retainedAdmission) this.integration?.discard(admission.admissionId)
         throw error

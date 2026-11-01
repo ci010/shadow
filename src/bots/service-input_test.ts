@@ -1,0 +1,92 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { join } from 'node:path'
+import { withTempWorkspace } from '../testing/workspace.ts'
+import { BotDeployments } from './deployments.ts'
+import { DirectoryBots, DirectoryBotService } from '../agent-authoring/bot-runtime.ts'
+import { AgentResourceStore } from '../agent-authoring/store.ts'
+import type { CapabilityBroker } from '../agent-authoring/capabilities.ts'
+import { botConversationPolicies } from '../channels/bot-policies.ts'
+import { BotInstanceStore } from '../channels/bot-store.ts'
+import { ChannelInputRouter } from '../input/channel-router.ts'
+import { channelSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
+import { channelMessageInput } from '../sessions/input.ts'
+import { Bus } from '../bus/bus.ts'
+import { SessionManager } from '../sessions/session-manager.ts'
+import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
+import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
+import { AgentTypesManager } from '../agent/types/manager.ts'
+import { ContextBuilder } from '../agent/context/builder.ts'
+import { IdentityManager } from '../agent/identity.ts'
+import { EventService } from '../events/service.ts'
+import { BackgroundTaskManager } from '../agent/background-task.ts'
+import { HandoffManager } from '../sessions/handoff/manager.ts'
+import { Tools } from '../tools/registry.ts'
+import type { LLMProvider } from '../providers/provider.ts'
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`service filters run before real Session creation/provider calls (${Store.name})`, async () => {
+  await withTempWorkspace(async workspace => {
+    const projectId = 'p', bots = new BotInstanceStore({ projectId, path: join(workspace, 'bots.json') })
+    const bot = bots.create('qq', 'support', { appId: 'test', secret: 'test', enabled: true })
+    const deployments = new BotDeployments({ projectId, directory: join(workspace, 'deployments'), runGit: async () => { throw new Error('No git') } })
+    const directory = new DirectoryBots(deployments)
+    const deploy = async (subscriptions?: unknown[]) => {
+      const frozen = deployments.freeze({ 'BOT.md': '---\nid: support\nconfig: bot.json\n---\nService-only prompt', 'bot.json': JSON.stringify({ mode: 'service', model: 'chosen-model', allowedModules: [], tools: [],
+        bindings: [{ platform: 'qq', botInstanceId: bot.id, conversationId: 'group:one', tools: [], allowFrom: ['owner'] }], ...(subscriptions ? { subscriptions } : {}) }) })
+      await deployments.deploy({ id: 'support', source: { folderId: 'fixture', directory: '' }, ...frozen, expectedRevision: deployments.read('support')?.deployment.revision })
+    }
+    const authoring = new DirectoryBotService({ projectId, workspace, store: new AgentResourceStore({ projectId, directory: join(workspace, 'authoring') }), broker: {} as CapabilityBroker,
+      folders: { get: () => undefined, requireAvailable: async () => { throw new Error('No folders') }, acquireAccess: () => () => {} } }, directory)
+    const bus = new Bus(), agents = new AgentTypesManager(workspace); await agents.load()
+    const tools = new Tools(workspace)
+    tools.register({ name: 'exec', description: 'private tool', parameters: { type: 'object', properties: {} }, execute: async () => { throw new Error('Must not escape') } })
+    const context = new ContextBuilder(workspace); context.register({ name: 'private', getPromptSection: () => 'PRIVATE_CONTEXT' })
+    const calls: Array<{ prompt: string; tools: string[]; model: string }> = []
+    const provider: LLMProvider = { name: 'fixture', listModels: () => [], chat: async (messages, definitions, options) => {
+      calls.push({ prompt: JSON.stringify(messages), tools: definitions.map(tool => tool.function.name), model: options.model }); return { content: 'done', toolCalls: [] }
+    } }
+    const store = new Store(join(workspace, 'sessions'))
+    const events = new EventService(workspace, bus, async () => { throw new Error('No event fanout') })
+    const backgroundTasks = new BackgroundTaskManager(bus, events)
+    const handoff = new HandoffManager(provider, 128000, { autoHandoff: false }, workspace, store)
+    const sessions = new SessionManager({ projectId, workspace, store, bus, provider, tools, agentTypes: agents, context, identity: new IdentityManager(workspace), handoffManager: handoff, events, backgroundTasks,
+      conversationPolicies: botConversationPolicies(bots, authoring, directory), getLlmRuntimeConfig: () => ({ model: 'default', temperature: 0, contextWindow: 128000 }) })
+    const inputs = new ChannelInputRouter({ projectId, bots, directory, receive: message => sessions.deliver(deriveSessionId(message), channelMessageInput(message)) })
+    const address = { projectId, botInstanceId: bot.id, platform: 'qq', conversationId: 'group:one' }
+    const message: InboundMessage = { channelAddress: address, channel: 'qq', chatId: address.conversationId, isGroup: true, admin: false, senderId: 'owner', content: 'hello', messageId: 'native', platformMessageId: 'native', timestamp: new Date().toISOString() }
+    try {
+      await sessions.start()
+      let policies = 0
+      const runPolicy = async () => { policies++; await inputs.receive(message) }
+      await assert.rejects(inputs.policy(message, runPolicy), /subscription/)
+      await deploy([])
+      await assert.rejects(inputs.policy(message, runPolicy), /subscription/)
+      await deploy()
+      await assert.rejects(inputs.policy({ ...message, senderId: 'stranger' }, runPolicy), /not authorized/)
+      assert.equal(policies, 0)
+      await inputs.policy(message, async () => {
+        assert.equal((await inputs.receive({ ...message, silent: true })).disposition, 'filtered')
+      })
+      assert.equal(calls.length, 0)
+      assert.equal(sessions.listSessions().length, 0)
+      assert.equal(sessions.listActiveSessions().length, 0)
+      const finished = Promise.withResolvers<void>()
+      bus.on('session.turn.finished', fact => { if (fact.inputId === message.messageId) finished.resolve() })
+      await inputs.policy(message, runPolicy); await finished.promise
+      assert.equal(policies, 1)
+      assert.equal(calls.length, 1)
+      assert.equal(calls[0]?.model, 'chosen-model')
+      assert.deepEqual(calls[0]?.tools, [])
+      assert.match(calls[0]!.prompt, /Service-only prompt/)
+      assert.doesNotMatch(calls[0]!.prompt, /PRIVATE_CONTEXT/)
+      assert.ok(sessions.getSessionState(channelSessionId(address)))
+      await deploy([])
+      await assert.rejects(inputs.policy({ ...message, messageId: 'revoked' }, runPolicy), /subscription/)
+      assert.equal(policies, 1)
+      assert.equal(calls.length, 1)
+    } finally {
+      await sessions.stop(); await handoff.stop(); await backgroundTasks.stop(); await events.stop(); bus.stopAll()
+      if (store instanceof SqliteSessionStore) store.close()
+    }
+  })
+})

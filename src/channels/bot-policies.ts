@@ -1,4 +1,4 @@
-import { channelAddressFromSessionId } from '../bus/events.ts'
+import { channelAddressFromSessionId, channelSessionId } from '../bus/events.ts'
 import type { ConversationPolicies } from '../agent-authoring/service.ts'
 import type { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
 import type { BotInstanceStore } from './bot-store.ts'
@@ -10,7 +10,9 @@ export function botConversationPolicies(store: BotInstanceStore, existing: Conve
     if (address) {
       if (address.projectId !== store.projectId) throw new Error('Bot Project mismatch')
       store.assertAccess(address.botInstanceId)
-      return store.get(address.botInstanceId)
+      const bot = store.get(address.botInstanceId)
+      if (address.platform !== bot.platform) throw new Error('Bot platform mismatch')
+      return bot
     }
     const bot = store.list().find(bot => bot.legacySessionId && id.startsWith(`${bot.platform}:`))
     if (bot) store.assertAccess(bot.id)
@@ -22,6 +24,9 @@ export function botConversationPolicies(store: BotInstanceStore, existing: Conve
     if (!bot.enabled || bot.purpose === 'legacy') throw new Error('Bot disabled or role not configured')
     if (bot.purpose === 'personal') {
       if (!bot.verifiedOwner) throw new Error('Verified owner required')
+      if (id !== channelSessionId({ projectId: store.projectId, botInstanceId: bot.id, platform: bot.platform,
+        conversationId: bot.verifiedOwner.chatId, ...(bot.legacySessionId ? { legacySessionId: true } : {}) }))
+        throw new Error('Verified owner direct conversation required')
       return undefined // Normal Project dynamic skills, not a published service Agent.
     }
     const policy = existing.resolve(id)
@@ -43,7 +48,7 @@ export function botConversationPolicies(store: BotInstanceStore, existing: Conve
       resolve(id)
       if (bot?.purpose === 'personal') {
         if (input.source.kind === 'user' && (input.source.sender.isGroup !== false ||
-          input.source.sender.senderId !== bot.verifiedOwner?.senderId)) throw new Error('Verified owner direct input required')
+          input.source.sender.senderId !== bot.verifiedOwner?.senderId || input.source.sender.chatId !== bot.verifiedOwner?.chatId)) throw new Error('Verified owner direct input required')
         return
       }
       existing.authorize(id, input)

@@ -202,6 +202,23 @@ and required Shadow owner-review steps explicitly.
 
 The workflows below configure service Bots, not personal Project entry points.
 
+### Directory BOTs (primary path)
+
+For registered local BOT directories on QQ, Feishu and Discord, read
+`v:skills/project-administration` and use `bot_package` status/propose. All use
+`BOT.md` `{id, config}` plus data-only `bot.json` and declared tool modules.
+Declare permissions directly in bindings, subject to BOT-level ceilings; do not
+introduce `capabilityProfiles` or reuse grants inferred from old bindings.
+One exact-content native Deploy/Cancel confirmation publishes one BOT. There is
+no cross-BOT atomic publication. Development source and deployed files are
+independent: edit the registered source and propose again, not a Change-based
+source recovery or legacy adoption workflow.
+
+### Legacy/resource-based compatibility workflows
+
+The following `channel_config` and `authoring_change` instructions apply only to
+existing legacy/resource configurations, not directory BOTs.
+
 Read `v:skills/project-administration` for owner configuration and private credential entry. Skill reading does not authorize any operation. Discord uses `channel_config`, not `authoring_change`. In an ordinary direct administrator Web session,
 read `action: schema`, then `list` for named Bot connections and the current
 configuration revision. `directory` resolves servers/channels/roles; `members`

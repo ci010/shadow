@@ -55,3 +55,31 @@ test('QQ/Feishu binding skills are rejected while Bot-level skill prompts remain
     for (const skills of [[], ['help']]) assert.throws(() => parseBot(botFiles('', { bindings: [{ ...binding, skills }] })))
   }
 })
+
+
+test('subscriptions explicitly narrow existing bindings; legacy omission preserves authority and [] receives nothing', async () => {
+  const { subscribedBindings, bindingSubscription } = await import('./sdk.ts')
+  const bindings = [{ platform: 'qq', botInstanceId: 'bot', conversationId: 'group:one', tools: [] }, { platform: 'feishu', botInstanceId: 'other', conversationId: 'oc_group', tools: [], allowFrom: ['owner'] }]
+  const legacy = parseBot(botFiles('', { bindings }))
+  assert.deepEqual(subscribedBindings(legacy), legacy.bindings)
+  assert.equal(subscribedBindings(parseBot(botFiles('', { bindings, subscriptions: [] }))).length, 0)
+  const selected = bindingSubscription(legacy.bindings[1]!)
+  const explicit = parseBot(botFiles('', { bindings, subscriptions: [selected] }))
+  assert.deepEqual(subscribedBindings(explicit), [legacy.bindings[1]])
+  assert.deepEqual(explicit.bindings, legacy.bindings, 'Subscription selection must not rewrite tools or participant permissions')
+  for (const subscriptions of [[selected, selected], [{ ...selected, conversationId: 'unbound' }], [{ ...selected, tools: ['exec'] }], [{ platform: 'github', repository: 'example/repo' }]])
+    assert.throws(() => parseBot(botFiles('', { bindings, subscriptions })))
+})
+
+
+test('QQ and Feishu Service bindings own a strict trigger and missing legacy fields safely default to mention', () => {
+  for (const platform of ['qq', 'feishu']) {
+    const binding = { platform, botInstanceId: 'connection', conversationId: 'conversation', tools: [] }
+    const files = botFiles('', { bindings: [binding] }), original = structuredClone(files)
+    assert.equal(parseBot(files).bindings[0]?.trigger, 'mention')
+    assert.deepEqual(files, original, 'Parsing does not rewrite deployed files or import connection settings')
+    assert.equal(parseBot(botFiles('', { bindings: [{ ...binding, trigger: 'all' }] })).bindings[0]?.trigger, 'all')
+    for (const trigger of [null, '', 'connection', 'inherit', 'always'])
+      assert.throws(() => parseBot(botFiles('', { bindings: [{ ...binding, trigger }] })))
+  }
+})

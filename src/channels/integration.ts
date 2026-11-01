@@ -65,11 +65,19 @@ export class DiscordIntegration implements ConversationPolicies {
     signal.throwIfAborted()
     if (this.closed || connectionRevision !== (this.connectionRevisions.get(binding.botInstanceId) ?? 0)) throw new IntegrationError('connection_changed','Observation connection changed.',409)
   }
-  async observe(botId:string,data:Record<string,unknown>,signal:AbortSignal):Promise<DiscordObservationProof[]> {
+  /** Source/target lookup only: no bot participation rule, processor or classifier. */
+  observationScopes(botId: string, data: Record<string, unknown>): string[] {
+    if (this.closed || typeof data.guild_id !== 'string' || typeof data.channel_id !== 'string') return []
+    return this.options.store.bindings().filter(binding => binding.botInstanceId === botId && binding.enabled && binding.observation?.enabled &&
+      binding.observation.guildId === data.guild_id && binding.observation.channelIds.includes(data.channel_id as string)).map(binding => binding.id)
+  }
+  /** Called inside the selected BOT handler; constructs fresh security proofs while
+   * applying this observation scope's receive policy, before any processor runs. */
+  async observe(botId:string,data:Record<string,unknown>,signal:AbortSignal,scopeId?:string):Promise<DiscordObservationProof[]> {
     const author = data.author as {id?:string;bot?:boolean} | undefined
     if (!author?.id || !data.guild_id || !data.channel_id) return []
     const proofs:DiscordObservationProof[] = []
-    for (const binding of this.options.store.bindings().filter(binding => binding.botInstanceId === botId && binding.enabled && binding.observation?.enabled)) {
+    for (const binding of this.options.store.bindings().filter(binding => binding.botInstanceId === botId && binding.enabled && binding.observation?.enabled && (scopeId === undefined || binding.id === scopeId))) {
       const scope = binding.observation!
       if (scope.guildId !== data.guild_id || !scope.channelIds.includes(String(data.channel_id)) || author.id === binding.botUserId || author.bot && !scope.processor.includeBots) continue
       const revision = this.resolve(this.serviceId(binding))!.revision
@@ -276,6 +284,9 @@ export class DiscordIntegration implements ConversationPolicies {
     }
   }
 
+  /** Security admission: live connection/location/participant permission and opaque
+   * proof construction. Trigger/processor fields are declarations only; business
+   * execution belongs to the subscribed BOT's lazy receive-policy stage. */
   async prepareIngress(botId: string, input: DiscordIngress, signal: AbortSignal): Promise<DiscordIngressResult> {
     if (!this.transport || this.closed) throw new IntegrationError('unavailable', 'Discord authorization is unavailable.', 503)
     const bot = this.options.bots.get(botId)

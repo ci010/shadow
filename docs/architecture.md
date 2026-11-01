@@ -454,12 +454,23 @@ cross-node filesystem identity guarantees, or distributed release readiness.
 
 ## A message from input to response
 
-1. **Normalize input at the boundary.** A channel validates its configured sender
-   policy and calls its explicit receiver. `AgentApp.receiveChannelMessage`
-   translates the existing channel wire shape into `SessionInput`. Only this
-   adapter preserves legacy `channel:chatId` addresses for migrated bots while
-   new bot instances carry project/instance-qualified addresses. Directed
-   callers supply a session ID without disguising input as a channel message.
+1. **Route external input before Session entry.** Authenticated platform adapters
+   and `ChannelManager` validate source/Project/connection authority.
+   `ChannelInputRouter` adapts channel messages into the generic `input/router.ts`
+   envelope (source identity, kind/topic, payload, correlation and optional reply).
+   Service inputs route a lazy platform strategy to a deployed BOT subscription;
+   the selected BOT handler, not the adapter entry, executes business triggers,
+   processors and optional authorized classifiers before selecting/creating/waking
+   a Session. Discord security admission may precede routing, but never executes
+   that business strategy. Buffered/recovered processor attempts reacquire this
+   handler scope before running stored code. QQ/Feishu receive configuration is
+   binding-owned (`trigger`, default `mention`) and passed read-only by the selected
+   BOT; Service connections do not supply business trigger settings. Web and exact verified
+   personal-owner DMs have explicit ordinary Session targets, never a service
+   fallback. `AgentApp.receiveChannelMessage` then translates accepted channel
+   messages into `SessionInput`, preserving legacy IDs and native reply/thread
+   addresses. [External input routing](input-routing.md) describes migration and
+   the host-only program-signal extension point; no new connector is implied.
 2. **Handle channel commands.** `AgentApp` tries the slash-command dispatcher for
    ordinary channel text, retaining its existing admin checks.
    Commands such as `/help`, `/config`, `/status`, `/sessions`, `/compact`, `/clear`,
@@ -509,10 +520,11 @@ cross-node filesystem identity guarantees, or distributed release readiness.
 
 ```mermaid
 flowchart LR
-  Channel["Channel adapter / web HTTP"] --> Ingress["AgentApp channel boundary"]
+  Channel["Authorized channel / web entry"] --> Router["InputRouter: source / subscription / target"]
+  Router --> Handler["BOT receive policy or explicit Session target"]
+  Handler --> Ingress["AgentApp channel boundary"]
   Ingress --> Delivery["SessionManager.deliver(target, typed input)"]
-  Ingress -. "explicit channel-source publication" .-> Events["EventService: match / dedupe / debounce"]
-  Producers["Cron / background completion / domain reports"] --> Events
+  Producers["Internal cron / background completion / domain reports"] --> Events["EventService: match / dedupe / debounce"]
   Events --> Delivery
   Messages["Other session: message tool"] --> Delivery
   Delivery --> Mailbox["Target Session mailbox"]
@@ -523,13 +535,13 @@ flowchart LR
   Output --> UI["Channels / HTTP SSE"]
 ```
 
-The channel source is published once after direct acceptance and skips its original
-session during subscription fanout. Delivery is never re-published as
-`message.inbound`: there is no Message-to-Event-to-Message feedback loop.
-`SessionInput` separates target identity from source and optional reply address;
-event IDs and original input/session provenance survive fanout, while each delivery
-has its own input ID. These envelopes are in-memory contracts, not a new storage
-format or network protocol.
+External channel input is no longer republished through EventService. Old
+`channel.message`/`channel:` subscriptions receive no feed; new ones are rejected.
+Delivery is never republished as `message.inbound`. Internal runtime/memory events
+and session cron keep their existing directed/EventService paths.
+`InputEnvelope` is source-generic; `SessionInput` separately represents admitted
+mailbox inputs and reply addresses. These are in-memory contracts, not a new
+storage format, public producer API, durable queue or deduplication guarantee.
 
 This is an iterative conversation loop, not a durable workflow DAG. A frontend
 SSE activity stream does not mean every provider is token-streaming to the UI:
@@ -2099,7 +2111,11 @@ remain external dependencies.
 
 ## Events, background work, and cron
 
-Three mechanisms must not be conflated:
+External [InputRouter](input-routing.md) is separate from these internal mechanisms:
+its source/target delivery neither replaces session cron nor publishes channel
+messages to runtime subscribers.
+
+Three internal mechanisms must not be conflated:
 
 1. **Bus:** in-memory typed notifications with immediate subscribers and bounded
    polling buffers/aggregators. A work queue exists only after `declareQueue`;

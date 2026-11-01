@@ -1,3 +1,8 @@
+import { isRuntimeContextEvent } from '../sessions/runtime-context-contract.ts'
+import { ChannelInputRouter } from '../input/channel-router.ts'
+import { BotDeployments } from '../bots/deployments.ts'
+import { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
+import { BotInstanceStore } from '../channels/bot-store.ts'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -30,7 +35,7 @@ import type { LlmRuntimeConfig } from './llm-config.ts'
 import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 
 for (const storage of ['jsonl', 'sqlite'] as const) {
-test(`web admission, channel fanout, commands and retry follow one directed input path (${storage})`, { timeout: 15_000 }, async (t) => {
+test(`web input routing without event fanout, commands and retry follow one directed input path (${storage})`, { timeout: 15_000 }, async (t) => {
   await mkdir('.test-data', { recursive: true })
   const workspace = await mkdtemp(join(process.cwd(), '.test-data', 'dataflow-'))
   const bus = new Bus()
@@ -117,7 +122,7 @@ test(`web admission, channel fanout, commands and retry follow one directed inpu
   const mcpManager = new McpManager(async () => {})
   const agent = new AgentApp({
     identity,
-    bus, sessions, events, agentTypes, commandDispatcher: commands,
+    bus, sessions, agentTypes, commandDispatcher: commands,
     skills: new SkillsManager(workspace), mcpManager,
     getLlmRuntimeConfig: () => llm,
   })
@@ -126,7 +131,11 @@ test(`web admission, channel fanout, commands and retry follow one directed inpu
     chat(sessionId, payload, requestId) { live.push({ sessionId, payload, requestId }) },
     invalidateSessions() {}, invalidateActivity() {}, close() {},
   } })
-  channel.setReceiver((message) => agent.receiveChannelMessage(message))
+  const inputs = new ChannelInputRouter({ projectId: 'fixture',
+    bots: new BotInstanceStore({ projectId: 'fixture', path: join(workspace, 'bots.json') }),
+    directory: new DirectoryBots(new BotDeployments({ projectId: 'fixture', directory: join(workspace, 'deployments') })),
+    receive: message => agent.receiveChannelMessage(message) })
+  channel.setReceiver(inputs.receive)
   const app = new Hono()
   t.after(async () => {
     await events.stop()
@@ -144,35 +153,28 @@ test(`web admission, channel fanout, commands and retry follow one directed inpu
   await agent.start()
   await channel.start(app)
   await sessionsApiPlugin(sessions)(app)
-  events.subscribe({ sessionId: 'web:origin', event: 'channel.message', channel: 'web', chatId: 'origin' })
   events.subscribe({ sessionId: 'web:mirror', event: '*', channel: 'web', chatId: 'origin' })
-  events.subscribe({ sessionId: 'web:mirror', event: 'channel.message', channel: 'web', chatId: 'origin' })
-  const commandSubscription = events.subscribe({ sessionId: 'web:command-mirror', event: 'channel.message', channel: 'web', chatId: 'commands' })
+  const commandSubscription = events.subscribe({ sessionId: 'web:command-mirror', event: '*', channel: 'web', chatId: 'commands' })
 
   const send = (body: object) => app.request('/api/chat/send', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ stream: false, ...body }),
   })
   assert.equal((await send({ chatId: 'origin', content: 'hello' })).status, 200)
-  await finished(2)
+  await finished(1)
   assert.equal(legacyInbound, 0)
-  assert.equal(modelCalls, 2)
-  assert.deepEqual(accepted.map((event) => event.sessionId), ['web:origin', 'web:mirror'])
+  assert.equal(modelCalls, 1)
+  assert.deepEqual(accepted.map((event) => event.sessionId), ['web:origin'])
   assert.equal(accepted[0].input.source.kind, 'user')
-  const mirrored = accepted[1].input
-  assert(mirrored.kind === 'message' && mirrored.source.kind === 'event')
-  assert.equal(mirrored.policy, 'queue')
-  assert.equal(mirrored.source.eventId, accepted[0].input.id)
-  assert.equal(mirrored.source.origin?.inputId, accepted[0].input.id)
-  assert.equal(contexts.find((ctx) => ctx.sessionId === 'web:mirror')?.admin, false)
+  assert.equal(sessions.getSessionState('web:mirror'), null)
 
   const commandResponse = await send({ chatId: 'commands', content: '/probe' })
   assert.equal(commandResponse.status, 200)
   const commandAdmission = await commandResponse.json()
   assert(isCommandReceipt(commandAdmission.commandReceipt))
   assert.equal(commandsRun, 1)
-  assert.equal(modelCalls, 2, 'Commands must not call a provider, including through subscriptions')
-  assert.equal(facts.length, 2, 'A command is not a model turn')
+  assert.equal(modelCalls, 1, 'Commands must not call a provider, including through subscriptions')
+  assert.equal(facts.length, 1, 'A command is not a model turn')
   assert.equal(sessions.getSessionState('web:command-mirror'), null)
   assert.equal(sessions.getActiveSession('web:commands'), undefined)
   const commandState = sessions.getSessionState('web:commands')!
@@ -201,15 +203,18 @@ test(`web admission, channel fanout, commands and retry follow one directed inpu
     assert.equal(admission.commandReceipt.failed, true)
     assert.match(admission.commandReceipt.output, /^Error:/)
   }
-  assert.equal(modelCalls, 2)
+  assert.equal(modelCalls, 1)
   assert.equal((await sessions.getCommandResults('web:commands')).length, 3)
   events.unsubscribe(commandSubscription.id)
   assert.equal((await send({ chatId: 'commands', content: 'Normal message after command' })).status, 200)
-  await finished(3)
-  assert.equal(modelCalls, 3)
+  await finished(2)
+  assert.equal(modelCalls, 2)
   assert.doesNotMatch(providerInputs.at(-1)!, /\/probe|Command handled|unknown-command|\/fail/)
   assert.match(providerInputs.at(-1)!, /Normal message after command/)
-  await sessions.buildSession('web:command-fork', { id: 'web:commands', physicalId: commandPhysical, index: 1 }, { parentSessionId: null })
+  const commandHistory = (await sessions.getHistory('web:commands')).messages
+  const messageIndex = commandHistory.findIndex(message => message.role === 'user' && JSON.stringify(message.content).includes('Normal message after command'))
+  assert.ok(messageIndex >= 0)
+  await sessions.buildSession('web:command-fork', { id: 'web:commands', physicalId: commandPhysical, index: messageIndex + 1 }, { parentSessionId: null })
   assert.deepEqual(await sessions.getCommandResults('web:command-fork'), [])
   const forkHistory = JSON.stringify((await sessions.getHistory('web:command-fork')).messages)
   assert.doesNotMatch(forkHistory, /\/probe|Command handled/)
@@ -238,12 +243,12 @@ test(`web admission, channel fanout, commands and retry follow one directed inpu
 
   const priorAccepted = accepted.length
   assert.equal((await send({ chatId: 'origin', content: 'hello', retry: true })).status, 200)
-  await finished(4)
-  assert.equal(modelCalls, 4)
+  await finished(3)
+  assert.equal(modelCalls, 3)
   assert.equal(accepted.length, priorAccepted + 1)
   assert.equal(accepted.at(-1)?.input.kind, 'control')
   const history = await sessions.getHistory('web:origin')
-  assert.equal(history.messages.filter((message) => message.role === 'user').length, 1)
+  assert.equal(history.messages.filter((message) => message.role === 'user' && !isRuntimeContextEvent(message)).length, 1)
 
   async function queueWhileBusy(chatId: string, signal: AbortSignal) {
     const targetSessionId = `web:${chatId}`
@@ -325,7 +330,7 @@ test(`web admission, channel fanout, commands and retry follow one directed inpu
   toolGate.resolve('Released tool')
   await finished(beforeTool + 4)
   assert(facts.slice(beforeTool).every((entry) => entry.status === 'completed'))
-  assert.equal((await sessions.getHistory('web:busy-tool')).messages.filter((message) => message.role === 'user').length, 4)
+  assert.equal((await sessions.getHistory('web:busy-tool')).messages.filter((message) => message.role === 'user' && !isRuntimeContextEvent(message)).length, 4)
 
   const rejected = await send({ chatId: 'reject', content: 'not accepted' })
   assert.equal(rejected.status, 503)

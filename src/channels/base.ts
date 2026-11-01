@@ -4,7 +4,7 @@ import type { InboundMessage, OutboundMessage } from '../bus/events.ts'
 import { channelSessionId, type ChannelAddress } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { Hono } from 'hono'
-import type { DeliveryReceipt, ReceiveChannelMessage } from '../sessions/input.ts'
+import type { DeliveryReceipt, ReceiveChannelMessage, ReceiveChannelPolicy, RunChannelPolicy } from '../sessions/input.ts'
 import type { ChannelState } from './setup-contract.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import type { YieldRequest } from '../sessions/yield-contract.ts'
@@ -70,6 +70,8 @@ export interface BaseChannel {
   /** Configure explicit message admission before starting the channel. */
   setStreamCollector?(collector: (event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean) => Promise<void>): void
   setReceiver(receiver: ReceiveChannelMessage): void
+  /** Service strategies are lazy: source selection must precede execution. */
+  setReceivePolicy?(receiver: ReceiveChannelPolicy): void
 
   setStatusListener?(listener: (state: ChannelState) => void): void
   getCapabilities?(chatId: string): ChannelCapabilities | Promise<ChannelCapabilities>
@@ -111,6 +113,25 @@ export abstract class AbstractChannel implements BaseChannel {
   private streamCollector?: (event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean) => Promise<void>
   setStreamCollector(collector: NonNullable<AbstractChannel['streamCollector']>): void { this.streamCollector = collector }
   protected async collectStream(event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean): Promise<void> { this.assertConnection(); await this.streamCollector?.(event, isGroup) }
+  private servicePolicy?: ReceiveChannelPolicy
+  setReceivePolicy(receiver: ReceiveChannelPolicy): void { this.servicePolicy = receiver }
+  protected get hasReceivePolicy(): boolean { return !!this.servicePolicy }
+  /** Only normalize source metadata here; runPolicy owns trigger/processor work and
+   * is called only after the production router has selected its BOT handler.
+   * Standalone/personal adapters retain their existing direct policy execution.
+   */
+  protected async runReceivePolicy(input: Pick<InboundMessage, 'senderId' | 'chatId' | 'messageId' | 'content'> & Partial<InboundMessage>, runPolicy: RunChannelPolicy): Promise<void> {
+    this.assertConnection()
+    const message: InboundMessage = { ...input, channel: this.name, timestamp: input.timestamp ?? new Date().toISOString(),
+      ...(this.address(input.chatId) ? { channelAddress: this.address(input.chatId) } : {}) }
+    if (this.servicePolicy) await this.servicePolicy(message, async configuration => {
+      if (!configuration || configuration.platform !== this.name ||
+        ((configuration.platform === 'qq' || configuration.platform === 'feishu') && !['mention', 'all'].includes(configuration.trigger)))
+        throw new ChannelAdmissionError('Selected BOT receive configuration required', 403)
+      await runPolicy(configuration)
+    })
+    else await runPolicy()
+  }
   private receiver?: ReceiveChannelMessage
   private botScope?: Omit<ChannelAddress, 'conversationId'>
   private identityHandler?: (identity: string) => void

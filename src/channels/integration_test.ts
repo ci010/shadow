@@ -1291,7 +1291,16 @@ test('directory Discord SDK tools run in the existing session loop with per-bind
   const original=f.transport.inspect
   f.transport.inspect=async(...args)=>{inspections++;return original(...args)}
   f.responses.push({content:'',toolCalls:[{id:'sdk-call',name:'sdk_probe',arguments:{}}]},{content:'Stored',toolCalls:[]})
-  await f.send('205')
+  const { ChannelInputRouter } = await import('../input/channel-router.ts')
+  const inputs = new ChannelInputRouter({ projectId: f.projectId, bots: f.bots, directory: runtime,
+    receive: async message => { const id = f.id(message.chatId); await f.deliver(id, channelMessageInput(message)); return { status: 'accepted', sessionId: id, inputId: message.messageId } } })
+  const input = await f.input('205')
+  assert.ok(input.kind === 'message' && input.source.kind === 'user')
+  const message = { ...input.source.sender, content: input.content, timestamp: input.timestamp }
+  assert.equal((await inputs.receive({ ...message, silent: true })).disposition, 'filtered')
+  assert.equal(f.sessions.getSessionState(f.id('205')), null)
+  assert.equal(f.requests.length, 0)
+  await inputs.receive(message)
   assert(f.requests.some(request=>request.tools.includes('sdk_probe')))
   for (const request of f.requests.filter(request => request.tools.includes('sdk_probe'))) assert.deepEqual(request.inference, inference)
   assert(JSON.stringify(f.requests).includes('SDK_SCOPED_RECEIPT'))

@@ -165,7 +165,7 @@ async function fixture(Store: typeof JsonlSessionStore | typeof SqliteSessionSto
   base.register(new InvokeTool(new ImportTool(new Map([[tool.name, tool]]), home)))
   registerAuthoringCommands(commands, { ...management, publicationRequests })
   const app = new AgentApp({
-    bus, sessions, commandDispatcher: commands, agentTypes, events, skills: new SkillsManager(home),
+    bus, sessions, commandDispatcher: commands, agentTypes, skills: new SkillsManager(home),
     mcpManager: new McpManager(async () => {}), getLlmRuntimeConfig: () => llm,
   })
   await app.start()

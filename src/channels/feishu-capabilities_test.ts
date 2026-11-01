@@ -414,3 +414,89 @@ test('Feishu manager integration selects cards, authorizes the initiating sender
   yields.cancelChannel(request.sessionId, third.pending.id, 'feishu', 'ou_user')
   await cancelled
 })
+
+
+test('directory Feishu ingress routes after native mention policy; unsubscribed and rejected inputs never enter Sessions', async t => {
+  const { withTempWorkspace } = await import('../testing/workspace.ts')
+  const { BotDeployments } = await import('../bots/deployments.ts')
+  const { BotInstanceStore } = await import('./bot-store.ts')
+  const { DirectoryBots } = await import('../agent-authoring/bot-runtime.ts')
+  const { ChannelInputRouter } = await import('../input/channel-router.ts')
+  const { deriveSessionId } = await import('../bus/events.ts')
+  await withTempWorkspace(async workspace => {
+    const f = await fixture(t)
+    const projectId = 'feishu-routing', bots = new BotInstanceStore({ projectId, path: join(workspace, 'bots.json') })
+    const bot = bots.create('feishu', 'support', { appId: 'fixture', appSecret: 'fixture', enabled: true })
+    const deployments = new BotDeployments({ projectId, directory: join(workspace, 'deployments'), runGit: async () => { throw new Error('No git') } })
+    const frozen = deployments.freeze({ 'BOT.md': '---\nid: support\nconfig: bot.json\n---\nSupport', 'bot.json': JSON.stringify({ mode: 'service', allowedModules: [], tools: [], bindings: [{ platform: 'feishu', botInstanceId: bot.id, conversationId: 'oc_group', tools: [], allowFrom: ['ou_user'] }] }) })
+    await deployments.deploy({ id: 'support', source: { folderId: 'fixture', directory: '' }, ...frozen })
+    const directory = new DirectoryBots(deployments), received: InboundMessage[] = [], order: string[] = []
+    const select = directory.inputSubscriptions.bind(directory)
+    t.mock.method(directory, 'inputSubscriptions', () => { order.push('select'); return select() })
+    const admit = f.channel['admitGroup'].bind(f.channel)
+    f.channel['admitGroup'] = (chatId, name, message) => { if (message?.triggerEligible !== undefined) order.push('trigger'); return admit(chatId, name, message) }
+    const inputs = new ChannelInputRouter({ projectId, bots, directory, receive: async message => { order.push('session'); received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } } })
+    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), {} as SessionManager, inputs.receive,
+      { projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned,
+        routeServiceInput: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
+    try {
+      await manager.init()
+      await f.incoming() // Unmentioned message: accepted by transport, no Session entry.
+      assert.ok(order.indexOf('select') < order.indexOf('handler'))
+      assert.ok(order.indexOf('handler') < order.indexOf('trigger'))
+      const policySteps = order.length
+      await f.incoming({ chat_id: 'oc_unbound', mentions: [{ id: { open_id: 'ou_bot' } }] })
+      assert.equal(order.length, policySteps, 'Unsubscribed group never evaluates trigger policy')
+      await f.incoming({ mentions: [{ id: { open_id: 'ou_bot' } }] }, 'ou_stranger')
+      assert.equal(received.length, 0)
+      await f.incoming({ message_id: 'om_native', mentions: [{ id: { open_id: 'ou_bot' } }] })
+      assert.equal(received.length, 1)
+      assert.equal(received[0]?.platformMessageId, 'om_native')
+      assert.equal(received[0]?.channelAddress?.botInstanceId, bot.id)
+      assert.equal(received[0]?.chatId, 'oc_group')
+    } finally { await manager.stopAll() }
+  })
+})
+
+
+test('two directory Feishu BOTs on one connection own independent mention/all receive configuration', async t => {
+  const { withTempWorkspace } = await import('../testing/workspace.ts')
+  const { BotDeployments } = await import('../bots/deployments.ts')
+  const { BotInstanceStore } = await import('./bot-store.ts')
+  const { DirectoryBots } = await import('../agent-authoring/bot-runtime.ts')
+  const { ChannelInputRouter } = await import('../input/channel-router.ts')
+  const { deriveSessionId } = await import('../bus/events.ts')
+  await withTempWorkspace(async workspace => {
+    const f = await fixture(t), projectId = 'feishu-trigger'
+    const bots = new BotInstanceStore({ projectId, path: join(workspace, 'connections.json') })
+    const connection = bots.create('feishu', 'shared', { enabled: true, appId: 'synthetic', appSecret: 'synthetic' })
+    const deployments = new BotDeployments({ projectId, directory: join(workspace, 'deployments'), runGit: async () => { throw new Error('No git') } })
+    for (const trigger of ['mention', 'all'] as const) {
+      const id = `reply-${trigger}`
+      const frozen = deployments.freeze({ 'BOT.md': `---\nid: ${id}\nconfig: bot.json\n---\nSupport`, 'bot.json': JSON.stringify({ mode: 'service', allowedModules: [], tools: [],
+        bindings: [{ platform: 'feishu', botInstanceId: connection.id, conversationId: `oc_${trigger}`, trigger, tools: [] }] }) })
+      await deployments.deploy({ id, source: { folderId: 'fixture', directory: '' }, ...frozen })
+    }
+    const directory = new DirectoryBots(deployments), delivered: string[] = [], configured: string[] = []
+    const inputs = new ChannelInputRouter({ projectId, bots, directory, receive: async message => {
+      delivered.push(message.chatId); assert.equal(message.channelAddress?.botInstanceId, connection.id)
+      return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
+    } })
+    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), {} as SessionManager, inputs.receive, {
+      projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned,
+      routeServiceInput: (message, run) => inputs.policy(message, async configuration => {
+        assert.ok(configuration?.platform === 'feishu' && Object.isFrozen(configuration))
+        configured.push(`${message.chatId}:${configuration.trigger}`)
+        await run(configuration)
+      }),
+    })
+    try {
+      await manager.init()
+      await f.incoming({ chat_id: 'oc_mention' }); await f.incoming({ chat_id: 'oc_all' })
+      assert.deepEqual(delivered, ['oc_all'])
+      assert.deepEqual(configured, ['oc_mention:mention', 'oc_all:all'])
+      await f.incoming({ chat_id: 'oc_mention', mentions: [{ id: { open_id: 'ou_bot' } }] })
+      assert.deepEqual(delivered, ['oc_all', 'oc_mention'])
+    } finally { await manager.stopAll() }
+  })
+})

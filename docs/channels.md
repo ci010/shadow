@@ -17,10 +17,11 @@ their existing error delivery behavior.
 Production Project runtimes persist an admitted, bounded channel event stream,
 separate from Agent trigger policy. Discord Gateway ordinary messages can be
 stored without inference. With the ordinary mention trigger (no custom input
-processor), authorized non-mention messages also enter the same Agent conversation
-history as silent inputs: they do not call the model, compact context, add an
-acknowledgement reaction, or send an automatic reply. The next triggered turn can
-use that history. Enabling stream collection must not bypass conversation history.
+processor), authorized non-mention service messages remain available in the
+admitted channel stream but are filtered before Session entry: no Session is
+created/woken and no model, compaction, acknowledgement reaction or automatic reply
+runs. They are not automatically added to Agent history. This separates passive
+collection from the BOT's receive policy; see [external input routing](input-routing.md).
 Mentions/replies and reviewed processors retain their trigger behavior. Edits/deletes and admitted thread discovery append local events.
 Other platforms currently contribute only through their existing admitted receive
 boundary, not a new universal history/edit feed. Unbound service chats and
@@ -404,16 +405,25 @@ The Bot must also have QQ's "receive all messages" capability enabled on the
 platform; Shadow cannot enable that permission or receive messages QQ does not
 deliver. See the official [full group-message event](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html).
 
-In **Project settings > Bots > Configure > Trigger model on**, choose
-**Mentions and direct messages** (the default) or **All messages**. This saves
-the Bot's `triggerMode` as `mention` or `all`; existing configurations without
-the field default to `mention` too.
+For a directory **Service BOT**, set `trigger: "mention"` (default) or `"all"`
+on its QQ binding in the JSON selected by `BOT.md`, then use normal `bot_package`
+confirmation. Two BOTs can use the same connection for distinct conversations
+with different triggers; connection settings cannot override them.
 
-Reception and triggering are separate. In `mention` mode, ordinary group
-messages are saved to session history without a model call, automatic
-compaction, or reply. The next mention-triggered turn can use that history as
-context. In `all` mode, every admitted group message enters the normal Agent
-turn/reply flow. Direct messages always trigger regardless of this setting.
+The legacy **Project settings > Bots > Configure > Trigger model on** connection
+field is retained for personal/standalone compatibility, not directory Service
+policy. Old Service packages without a binding `trigger` now default to `mention`,
+even if the connection stored `triggerMode: "all"`. Nothing is silently migrated
+to `all`; explicitly configure the affected BOT binding to retain that behavior.
+See [BOT receive configuration](agent-authoring.md#external-input-subscriptions).
+
+Reception and triggering are separate. In `mention` mode, ordinary admitted
+service-group messages can be collected in the bounded channel stream, but the
+BOT receive handler filters them before Session creation/history or inference.
+In `all` mode, every subscribed and authorized group message enters the configured
+service Agent turn/reply flow. Direct messages are trigger-eligible regardless of
+this setting, but still require the verified personal owner or an explicit service
+subscription; the trigger setting grants no access.
 The adapter recognizes the dedicated mention event and mentions of this Bot
 in the full-message event's structured `mentions` list, using QQ's boolean
 `is_you: true` marker or a matching Bot ID. Full-message mode can use a
@@ -633,7 +643,9 @@ header says **Quietly observing**; received messages are not proof of inference
 or delivery. Sender addresses are shortened when needed, with the full value
 available on hover. Group/Bot IDs, retention limits and authorization guidance
 are in **Settings → Group details**, not repeated alongside each message. QQ defaults to mention-only triggering; receiving and
-triggering are separate. Feishu preserves its mention/reply/topic trigger policy.
+triggering are separate. Feishu directory bindings also own `trigger: "mention"`
+(default, preserving mention/reply/managed-topic behavior) or an explicitly reviewed
+`"all"`. No connection-level business trigger is inherited.
 Unenabled groups never reach the Agent receiver, download attachments, react or
 reply. The observation store is not Agent history; enabling a group never replays
 its observed messages. File/audio observations show a type placeholder rather than
@@ -647,6 +659,12 @@ without a session, or the existing history when a session exists. Open
 of the actual tool declarations, HTTPS targets and allowed methods/paths,
 read-only folders and private connection use. It does not derive authority from
 the prompt. Group setup never asks for skills, route JSON or credential references.
+
+The profile-based group setup below is a legacy/resource-based workflow, not
+an onboarding requirement for directory BOTs. Directory BOTs declare permissions
+directly in `bot.json` bindings and update through `bot_package`; they do not use
+`capabilityProfiles` or Change-based source recovery. See
+[Directory BOT authoring](agent-authoring.md#author-and-confirm).
 
 The creator prepares a reusable capability profile once in the Agent authoring
 layer (see [Agent capability profiles](agent-authoring.md#reusable-agent-capability-profiles)).

@@ -131,3 +131,47 @@ test('publication retry uses bounded attempts without reclassifying or duplicate
   await processor.accept(input)
   assert.equal(attempts, 2)
 })
+
+
+test('host policy scope selects before any rule/classifier and is not supplied by serialized input', async t => {
+  let processor = new InputProcessor<string>()
+  t.after(() => processor.stop())
+  const trace: string[] = []
+  const policy = { code: `export function run({classification}) { return classification ? {action:'emit'} : {action:'ignore',classify:true}; }`, delayMs: 10,
+    classifier: { model: 'test', instructions: 'test', fields: ['content' as const], maxInputBytes: 1000, maxTokens: 32, maxRequests: 2, maxWindowTokens: 10000, windowMs: 1000, deadlineMs: 1000, minConfidence: 0.5 } }
+  const input = { key: 'authority', id: 'one', event: {}, item: 'one', policy, signal: new AbortController().signal,
+    classify: async () => { trace.push('classifier'); return { label: 'semanticwake' as const, confidence: 1 } },
+    publish: async () => { trace.push('publish') } }
+  await assert.rejects(processor.accept({ ...input, runPolicy: async () => { trace.push('select-denied'); throw new Error('unsubscribed') } }), /unsubscribed/)
+  assert.deepEqual(trace, ['select-denied'])
+  await processor.stop()
+  processor = new InputProcessor<string>()
+  trace.length = 0
+  await processor.accept({ ...input, id: 'two', runPolicy: async run => { trace.push('select'); trace.push('handler'); await run() } })
+  assert.deepEqual(trace, ['select', 'handler', 'classifier', 'publish'])
+})
+
+test('recovered classify rows reacquire host policy scope before executing stored rules or classifiers', async () => {
+  const { withTempWorkspace } = await import('../testing/workspace.ts')
+  const { join } = await import('node:path')
+  await withTempWorkspace(async workspace => {
+    let now = 0, classifiers = 0, published = 0
+    const clock = { now: () => now, setTimeout: (_callback: () => void, _delay: number) => ({ unref() {} }), clearTimeout: () => {} }
+    const journalPath = join(workspace, 'inbox.json')
+    const first = new InputProcessor<string>(() => {}, 100, clock, { journalPath, recover: () => undefined })
+    const policy = { code: `export function run(){return {action:'ignore',classify:true}}`, delayMs: 10,
+      classifier: { model: 'test', instructions: 'test', fields: ['content' as const], maxInputBytes: 1000, maxTokens: 32, maxRequests: 2, maxWindowTokens: 10000, windowMs: 1000, deadlineMs: 1000, minConfidence: 0.5 } }
+    await assert.rejects(first.accept({ key: 'authority', id: 'one', event: {}, item: 'one', policy, signal: new AbortController().signal,
+      publish: async () => { published++ }, runPolicy: async () => { throw new Error('temporarily unavailable') } }), /temporarily unavailable/)
+    await first.stop()
+    now = 1000
+    const entered = Promise.withResolvers<void>()
+    const second = new InputProcessor<string>(() => {}, 100, clock, { journalPath, recover: () => ({ signal: new AbortController().signal,
+      publish: async () => { published++ }, classify: async () => { classifiers++; return { label: 'semanticwake', confidence: 1 } },
+      runPolicy: async () => { entered.resolve(); throw new Error('subscription removed while stopped') },
+    }) })
+    try { await entered.promise } finally { await second.stop() }
+    assert.equal(classifiers, 0)
+    assert.equal(published, 0)
+  })
+})

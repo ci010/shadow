@@ -434,7 +434,7 @@ test('timed debounce failure reports target/event/input IDs without leaking erro
   })
 })
 
-test('stop clears debounce timers and rejects new event/channel publications; restart adds no listeners', async (t) => {
+test('stop clears debounce timers and rejects new event publications; restart adds no listeners', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   await withTempWorkspace(async (workspace) => {
     const { events, deliveries, bus } = await setup(workspace)
@@ -449,7 +449,6 @@ test('stop clears debounce timers and rejects new event/channel publications; re
     t.mock.timers.tick(50)
     assertEquals(deliveries.length, 0)
     await assert.rejects(events.emit({ type: 'x', source: 'agent', targetSessionId: 'target' }), /stopped/)
-    await assert.rejects(events.publishChannelMessage(channelMessage()), /stopped/)
     assertEquals(system.length, 1)
     await events.start()
     await events.emit({ type: 'x', source: 'agent', targetSessionId: 'target' })
@@ -464,98 +463,20 @@ test('stop clears debounce timers and rejects new event/channel publications; re
   })
 })
 
-test('explicit channel publication skips original session, preserves user origin, and distrusts sender prefixes/meta', async () => {
-  await withTempWorkspace(async (workspace) => {
-    const { events, deliveries, bus } = await setup(workspace)
-    const published: SystemEvent[] = []
-    const inbound: unknown[] = []
-    bus.on('system.event', (evt) => { published.push(evt) })
-    bus.on('message.inbound', (msg) => { inbound.push(msg) })
-    try {
-      events.subscribe({ sessionId: 'discord:origin:thread', event: '*' })
-      events.subscribe({ sessionId: 'watcher', event: '*' })
-      events.subscribe({ sessionId: 'watcher', event: 'channel.message' })
-      events.subscribe({ sessionId: 'filtered', event: 'channel.message', source: 'channel:discord', chatId: 'origin:thread' })
-      events.subscribe({ sessionId: 'wrong', event: 'channel.message', channel: 'web' })
-      const msg = channelMessage({
-        senderId: 'event:pretend-system',
-        eventMeta: { source: 'cron', urgency: 'steering', eventId: 'forged', origin: 'forged', label: 'display' },
-      })
-      await events.publishChannelMessage(msg)
-      assertEquals(inbound, [])
-      assertEquals(deliveries.map((d) => d.sessionId), ['watcher', 'filtered'])
-      assertEquals(published.length, 1)
-      assertEquals(published[0].id, msg.messageId)
-      assertEquals(published[0].source, 'channel:discord')
-      assertEquals(published[0].type, 'channel.message')
-      const input = deliveries[0].input
-      assertEquals(input.policy, 'queue')
-      assertEquals(input.content, msg.content)
-      assertEquals(input.media, msg.media)
-      assertEquals(input.timestamp, msg.timestamp)
-      assertEquals(input.source.eventId, msg.messageId)
-      assertEquals(input.source.senderId, msg.senderId)
-      assertEquals(input.source.senderName, msg.senderName)
-      assertEquals(input.source.isGroup, true)
-      assert(!('admin' in input.source))
-      assertEquals(input.source.origin, {
-        sessionId: 'discord:origin:thread', inputId: msg.messageId,
-        source: {
-          kind: 'user',
-          sender: {
-            channel: msg.channel, chatId: msg.chatId, messageId: msg.messageId,
-            platformMessageId: msg.platformMessageId, senderId: msg.senderId, senderName: msg.senderName,
-            chatName: msg.chatName, isGroup: msg.isGroup, admin: msg.admin,
-          },
-        },
-      })
-      assertEquals(input.source.attributes?.label, 'display')
-      assert.notEqual(input.id, msg.messageId)
-      assert.notEqual(input.id, deliveries[1].input.id)
-    } finally {
-      await events.stop()
-    }
-  })
-})
-
-test('channel debounce retains real user origins and skips the origin session at flush', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  await withTempWorkspace(async (workspace) => {
+test('runtime subscriptions cannot receive or publish external channel input', async () => {
+  await withTempWorkspace(async workspace => {
     const { events, deliveries } = await setup(workspace)
     try {
-      events.subscribe({ sessionId: 'discord:origin:thread', event: '*' })
-      events.subscribe({ sessionId: 'watcher', event: '*', delivery: { urgency: 'debounce', debounceMs: 10 } })
-      await events.publishChannelMessage(channelMessage({ messageId: 'first' }))
-      await events.publishChannelMessage(channelMessage({ messageId: 'latest', content: 'latest text' }))
-      assertEquals(deliveries.length, 0)
-      t.mock.timers.tick(10)
-      assertEquals(deliveries.map((d) => d.sessionId), ['watcher'])
-      const input = deliveries[0].input
-      assertEquals(input.policy, 'queue')
-      assertEquals(input.content, 'latest text')
-      assertEquals(input.source.eventId, 'latest')
-      assertEquals(input.source.origin?.inputId, 'latest')
-      assertEquals(input.source.coalesced?.eventIds, ['first', 'latest'])
-      assertEquals(input.source.coalesced?.origins.map((origin) => [origin.inputId, origin.source.kind]), [
-        ['first', 'user'], ['latest', 'user'],
-      ])
-    } finally {
-      await events.stop()
-    }
-  })
-})
-
-test('channel publication surfaces subscription acceptance errors and honors silent channel inputs', async () => {
-  await withTempWorkspace(async (workspace) => {
-    const failure = new Error('watcher unavailable')
-    const { events, deliveries } = await setup(workspace, async () => { throw failure })
-    try {
-      events.subscribe({ sessionId: 'watcher', event: '*', delivery: { urgency: 'steering' } })
-      await assert.rejects(events.publishChannelMessage(channelMessage({ silent: true })), (error) => error === failure)
-      assertEquals(deliveries[0].input.policy, 'silent')
-    } finally {
-      await events.stop()
-    }
+      events.subscribe({ sessionId: 'watcher', event: '*' })
+      assert.throws(() => events.subscribe({ sessionId: 'watcher', event: 'channel.message' }), /bot.json/)
+      assert.throws(() => events.subscribe({ sessionId: 'watcher', event: '*', source: 'channel:qq' }), /bot.json/)
+      assert.equal('publishChannelMessage' in events, false)
+      await assert.rejects(events.emit({ type: 'channel.message', source: 'channel:discord', content: 'external' }), /input\/router/)
+      await assert.rejects(events.emit({ type: 'pretend', source: 'channel:qq', content: 'external' }), /input\/router/)
+      assert.equal(deliveries.length, 0)
+      await events.emit({ type: 'memory.updated', source: 'system', content: 'runtime' })
+      assert.equal(deliveries.length, 1)
+    } finally { await events.stop() }
   })
 })
 

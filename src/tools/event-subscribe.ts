@@ -78,16 +78,16 @@ export class EventSubscribeTool implements Tool {
       source: {
         type: 'string',
         description:
-          'Event source tag. For subscribe/emit: filter/label (e.g. channel:web, cron). ' +
+          'Runtime event source tag. For subscribe/emit: filter/label (e.g. cron, system); external channel input uses BOT subscriptions, not this tool. ' +
           'For register_source/unregister_source: the source tag to define/remove.',
       },
       channel: {
         type: 'string',
-        description: 'Optional channel filter for channel.message events.',
+        description: 'Optional runtime-event channel metadata filter; not an external input subscription.',
       },
       chat_id: {
         type: 'string',
-        description: 'Optional chat filter for channel.message events.',
+        description: 'Optional runtime-event chat metadata filter; not an external input subscription.',
       },
       content: {
         type: 'string',
