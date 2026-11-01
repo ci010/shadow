@@ -142,3 +142,19 @@ test('personal preparation confirms exact hash and role without replacing live o
   assert.equal(f.runtime.personal(connection)?.prompt,'Frozen instructions')
   assert.equal(f.runtime.resolve({platform:'qq',botInstanceId:connection,conversationId:'dm'}),undefined)
 })
+
+
+test('BOT trigger changes use the existing owner confirmation and disclose the connection compatibility boundary', async t => {
+  const f = fixture(t)
+  const first = JSON.parse(await f.propose() as string)
+  const config = JSON.parse(files()['bot.json']!)
+  config.bindings[0].trigger = 'all'
+  writeFileSync(join(f.source, 'bot.json'), JSON.stringify(config))
+  f.onAsk(args => {
+    assert.match(String(args.question), /Added permissions:.*trigger all/)
+    assert.match(String(args.question), /Removed permissions:.*trigger mention/)
+  })
+  await f.propose(first.deployment.revision)
+  const status = JSON.parse(await f.tool.execute({ action: 'status' }, f.context) as string)
+  assert.match(status.receivePolicy, /Connection triggerMode is not inherited/)
+})

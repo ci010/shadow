@@ -863,13 +863,23 @@ export class QQChannel extends AbstractChannel {
     if (!msgId || !groupId || !senderId) return
     if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `group:${groupId}`
+    const chatName = typeof data.group_name === 'string' ? data.group_name : undefined
+    // Discovery without business trigger evaluation; unassigned sources stay closed.
+    if (!this.admitGroup(chatId, chatName)) {
+      this.admitGroup(chatId, chatName, { id: msgId, sender: senderId, text: typeof data.content === 'string' ? data.content : '[attachment]' })
+      return
+    }
+    await this.runReceivePolicy({ senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: true }, async configuration => {
+    // Service receives frozen package configuration from its selected BOT. Only
+    // personal/standalone adapters (no service policy) read the legacy option.
+    const triggerMode = configuration?.platform === 'qq' ? configuration.trigger : this.triggerMode
     const mentionsBot = mentioned || (Array.isArray(data.mentions) && data.mentions.some(
       (mention: unknown) => mention !== null && typeof mention === 'object'
         && (('is_you' in mention && mention.is_you === true)
           || ('id' in mention && typeof mention.id === 'string'
             && (mention.id === this.botUserId || mention.id === this.appId))),
     ))
-    if (!this.admitGroup(chatId, typeof data.group_name === 'string' ? data.group_name : undefined, { id: msgId, sender: senderId, triggerEligible: this.triggerMode === 'all' || mentionsBot, text: typeof data.content === 'string' ? data.content : '[attachment]' })) return
+    if (!this.admitGroup(chatId, typeof data.group_name === 'string' ? data.group_name : undefined, { id: msgId, sender: senderId, triggerEligible: triggerMode === 'all' || mentionsBot, text: typeof data.content === 'string' ? data.content : '[attachment]' })) return
     if (!this.isNewIncoming(chatId, msgId, data)) return
 
     const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, ((data.content as string) ?? '').trim())
@@ -881,9 +891,10 @@ export class QQChannel extends AbstractChannel {
       ...(typeof data.group_name === 'string' ? { chatName: data.group_name } : {}),
       ...(typeof author?.username === 'string' ? { senderName: author.username } : {}),
       displayMetadata,
-      silent: this.triggerMode === 'mention' && !mentionsBot,
+      silent: triggerMode === 'mention' && !mentionsBot,
     }, media))
     this.rememberIncoming(chatId, data, content, media, displayMetadata)
+    })
   }
 
   private async onC2CMessage(data: Record<string, unknown>): Promise<void> {
@@ -895,6 +906,7 @@ export class QQChannel extends AbstractChannel {
     const chatId = `c2c:${senderId}`
     if (!this.isNewIncoming(chatId, msgId, data)) return
 
+    await this.runReceivePolicy({ senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: false }, async () => {
     const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, ((data.content as string) ?? '').trim())
     if (!content && !media) return
 
@@ -905,6 +917,7 @@ export class QQChannel extends AbstractChannel {
       displayMetadata,
     }, media))
     this.rememberIncoming(chatId, data, content, media, displayMetadata)
+    })
   }
 
   private async onGuildMessage(
@@ -923,6 +936,7 @@ export class QQChannel extends AbstractChannel {
     if (!this.isNewIncoming(chatId, msgId, data)) return
     this._lastMsgId.set(chatId, msgId)
 
+    await this.runReceivePolicy({ senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: !isDirect }, async () => {
     const member = data.member as Record<string, unknown> | undefined
     const senderName = (member?.nick as string) ?? author?.username ?? senderId
     const chatName = isDirect ? senderName : await this.resolveChannelName(data.channel_id)
@@ -938,6 +952,7 @@ export class QQChannel extends AbstractChannel {
       displayMetadata,
     }, media)
     this.rememberIncoming(chatId, data, content, media, displayMetadata)
+    })
   }
 
   // ── Attachments ────────────────────────────────────────────────────────────

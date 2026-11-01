@@ -29,3 +29,18 @@ test('Bot setup guidance distinguishes verified personal entry points and restri
     /workflows below configure service Bots, not personal Project entry points/,
   ]) assert.match(skill.body, rule)
 })
+
+
+test('Directory BOT guidance keeps direct bindings and independent source publication', async () => {
+  const skills = await getBuiltinSkills()
+  for (const name of ['tool-operations', 'project-administration']) {
+    const skill = skills.get(name)
+    assert(skill)
+    assert.match(skill.body, /bot_package/)
+    assert.match(skill.body, /permissions\s+(?:are declared )?directly in (?:each )?binding/i)
+    assert.match(skill.body, /capabilityProfiles/)
+    assert.match(skill.body, /Development source and (?:the deployment copy|deployed files) are\s*independent/)
+    assert.match(skill.body, /(?:no cross-BOT atomic publication|not an atomic release\s+across BOTs)/)
+    assert.match(skill.body, /Legacy\/resource-based|legacy\/generic authoring/)
+  }
+})

@@ -78,6 +78,8 @@ export type SessionInput = SessionMessageInput | SessionControlInput
 
 export interface DeliveryReceipt {
   status: 'accepted'
+  /** Accepted by the external handler without selecting, creating or waking a Session. */
+  disposition?: 'filtered'
   sessionId: string
   inputId: string
   delivery?: DeliveryPolicy
@@ -103,6 +105,16 @@ export interface SessionTurnFact {
 
 export type DeliverInput = (sessionId: string, input: SessionInput) => Promise<DeliveryReceipt>
 export type ReceiveChannelMessage = (message: InboundMessage) => Promise<DeliveryReceipt>
+/** Narrow platform receive data supplied by the selected BOT, never by payload or
+ * connection settings. Discord keeps its existing binding/proof policy contract. */
+export type ChannelReceiveConfiguration =
+  | Readonly<{ platform: 'qq'; trigger: 'mention' | 'all' }>
+  | Readonly<{ platform: 'feishu'; trigger: 'mention' | 'all' }>
+  | Readonly<{ platform: 'discord' }>
+/** Undefined configuration is only for standalone/personal adapter compatibility. */
+export type RunChannelPolicy = (configuration?: ChannelReceiveConfiguration) => Promise<void>
+/** Host-owned lazy platform policy, invoked by the subscribed BOT handler, not the adapter entry. */
+export type ReceiveChannelPolicy = (message: InboundMessage, runPolicy: RunChannelPolicy) => Promise<void>
 
 /** Compatibility belongs at the channel boundary, not in the mailbox. */
 export function channelMessageInput(message: InboundMessage): SessionInput {

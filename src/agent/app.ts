@@ -9,7 +9,6 @@ import type { AgentTypesManager } from './types/manager.ts'
 import type { LlmRuntimeConfig } from './llm-config.ts'
 import type { McpManager } from '../mcp/manager.ts'
 import type { SkillsManager } from '../skills/loader.ts'
-import type { EventService } from '../events/service.ts'
 import type { IdentityManager } from './identity.ts'
 import { channelMessageInput, type DeliveryReceipt } from '../sessions/input.ts'
 import { StartupTimings } from '../runtime/startup-timings.ts'
@@ -24,7 +23,6 @@ export interface AgentOptions {
   commandDispatcher: CommandDispatcher
   agentTypes: AgentTypesManager
   getLlmRuntimeConfig: () => LlmRuntimeConfig
-  events: EventService
 }
 
 /**
@@ -44,7 +42,6 @@ export class AgentApp {
   private running = false
   private commandDispatcher: CommandDispatcher
   private getLlmRuntimeConfig: () => LlmRuntimeConfig
-  private events: EventService
 
   constructor(opts: AgentOptions) {
     this.identity = opts.identity
@@ -55,7 +52,6 @@ export class AgentApp {
     this.agentTypes = opts.agentTypes
     this.commandDispatcher = opts.commandDispatcher
     this.getLlmRuntimeConfig = opts.getLlmRuntimeConfig
-    this.events = opts.events
   }
 
   async start(startup = new StartupTimings('project')): Promise<void> {
@@ -132,13 +128,8 @@ export class AgentApp {
       receipt = await this.sessions.deliver(sessionId, input, llm)
     }
 
-    // Fanout is a separate source publication; its failure cannot undo acceptance
-    // of the original input or cause a client to retry an already accepted turn.
-    if (input.kind === 'message' && output === null && !msg.channelAdmissionId) {
-      void this.events.publishChannelMessage(msg).catch((error) => {
-        console.error(`[agent] Channel subscription delivery failed (${sessionId}, ${input.id}):`, errDetail(error))
-      })
-    }
+    // External source routing happens before this boundary. Do not republish channel
+    // content into runtime EventService subscriptions or create an implicit second owner.
     return receipt
   }
 

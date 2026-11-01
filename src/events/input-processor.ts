@@ -36,6 +36,9 @@ export type ProcessorSubmission<T> = {
   key: string; id: string; event: Record<string, unknown>; item: T; policy: InputProcessorPolicy;
   publish: Publish<T>; signal: AbortSignal;
   classify?: (signal:AbortSignal)=>Promise<import('./input-classifier.ts').Classification>;
+  /** Host-only live routing/handler scope, rebound on recovery and applied before
+   * every rule/classifier/publish attempt. Never serialized as producer authority. */
+  runPolicy?: (run: () => Promise<void>, signal: AbortSignal) => Promise<void>;
 }
 const rowSchema = z.object({
   key: z.string().max(4096), id: z.string().max(1024), identity: z.string(), event: z.record(z.unknown()), item: z.unknown(),
@@ -46,7 +49,7 @@ export interface ProcessorStorage<T> {
   /** Private per-adapter file. Recovery never restores old authorization closures. */
   journalPath: string
   recover(row: { key: string; id: string; event: Record<string, unknown>; item: T; policy: InputProcessorPolicy }):
-    { publish: Publish<T>; signal: AbortSignal; classify?:ProcessorSubmission<T>['classify'] } | undefined
+    { publish: Publish<T>; signal: AbortSignal; classify?:ProcessorSubmission<T>['classify']; runPolicy?:ProcessorSubmission<T>['runPolicy'] } | undefined
 }
 /** Bounded durable inbox. Ack after atomic journal replacement. Delivery is at-least-once:
  * a crash between downstream acceptance and journal replacement can replay an identical ID.
@@ -54,7 +57,7 @@ export interface ProcessorStorage<T> {
  */
 export class InputProcessor<T> {
   private rows = new Map<string, Row<T>>()
-  private contexts = new Map<string, { publish: Publish<T>; signal: AbortSignal; classify?:ProcessorSubmission<T>['classify'] }>()
+  private contexts = new Map<string, { publish: Publish<T>; signal: AbortSignal; classify?:ProcessorSubmission<T>['classify']; runPolicy?:ProcessorSubmission<T>['runPolicy'] }>()
   private waiters = new Map<string, { resolve(): void; reject(error: unknown): void }>()
   private seen = new Set<string>()
   private states = new Map<string, z.infer<typeof stateRow>>()
@@ -153,6 +156,11 @@ export class InputProcessor<T> {
       const signal = this.signal(context.signal)
       signal.throwIfAborted()
       if (this.now() - row.created > 10 * 60_000) throw new Error('Processor inbox expiry')
+      let executed = false
+      const runPolicy = async () => {
+      if (executed) throw new Error('Processor policy scope invoked twice')
+      executed = true
+      signal.throwIfAborted()
       if (row.status === 'classify') {
         this.pruneState()
         const stateKey = this.stateKey(row)
@@ -211,6 +219,10 @@ export class InputProcessor<T> {
         for (const entry of group) this.finish(entry)
         this.save()
       }
+      }
+      if (context.runPolicy) await context.runPolicy(runPolicy, signal)
+      else await runPolicy()
+      if (!executed) throw new Error('Processor policy scope did not admit execution')
       waiter?.resolve(); this.waiters.delete(row.identity)
     } catch (error) {
       waiter?.reject(error); this.waiters.delete(row.identity)

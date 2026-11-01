@@ -118,6 +118,7 @@ export class BotDeployments {
     if (!exists(owner)) fs.writeFileSync(owner, JSON.stringify({ projectId: options.projectId }), { flag: 'wx', mode: 0o600 });
     if ((readJson(owner) as {projectId?: string}).projectId !== options.projectId) throw new Error('Store Project ownership mismatch');
   }
+  get projectId(): string { return this.options.projectId; }
   freeze(files: Record<string, string>): FrozenBotSource { return freeze(files); }
   freezeDirectory(directory: string): FrozenBotSource { return freezeDirectory(directory); }
   private bot(id: string): string { if (['runtime', 'deployments'].includes(id.toLowerCase())) throw new Error('Reserved BOT identifier'); const bot = path.join(this.root, identifier(id)); noLinks(bot); return bot; }

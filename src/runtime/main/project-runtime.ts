@@ -1,3 +1,4 @@
+import { ChannelInputRouter } from '../../input/channel-router.ts'
 import { ProposalInboxes } from '../../sessions/proposal-inbox.ts'
 import { createActivityInvalidator, sessionActivityFingerprint, sessionActivityReadModel } from '../../sessions/activity-invalidation.ts'
 import { BotDeployments } from '../../bots/deployments.ts'
@@ -1085,7 +1086,6 @@ export async function createProjectRuntime(
     mcpManager,
     commandDispatcher,
     agentTypes,
-    events,
     getLlmRuntimeConfig: () => llm,
   })
 
@@ -1409,8 +1409,12 @@ export async function createProjectRuntime(
       realtime.invalidateResource?.('config')
       realtime.invalidateResource?.('channels')
   }
-  const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
+  const inputs = new ChannelInputRouter({ projectId: project.id, bots: botStore, directory: directoryBots,
+    receive: message => agent.receiveChannelMessage(message) })
+  const channels: ChannelManager = new ChannelManager(config, bus, sessions, inputs.receive, {
     projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery, messageStream: new ChannelMessageStream(workspace,project.id),
+    routeServiceInput: (message, runPolicy) => inputs.policy(message, runPolicy),
+    routeObservation: (connection, bindingId, runPolicy) => inputs.observation(connection, bindingId, runPolicy),
     // Admission checks must not invoke the throwing managed-conversation policy resolver.
     serviceAssigned: directoryBots.serviceAssigned,
   })

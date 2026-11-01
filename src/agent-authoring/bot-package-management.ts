@@ -5,7 +5,7 @@ import type { Hono } from 'hono'
 import type { Tool, ToolResult } from '../tools/tool.ts'
 import type { FolderRegistry } from '../folders/registry.ts'
 import { BotDeployments } from '../bots/deployments.ts'
-import { parseBot, type BotDefinition } from '../bots/sdk.ts'
+import { bindingSubscription, botSubscriptionKey, subscribedBindings, parseBot, type BotDefinition } from '../bots/sdk.ts'
 import { DirectoryBots } from './bot-runtime.ts'
 import { snapshotBotDirectory, sourceUsesGit } from './bot-directory.ts'
 
@@ -26,6 +26,7 @@ function location(binding: ReturnType<typeof parseBot>['bindings'][number]): str
 function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> {
   if(!bot)return new Set()
   const facts:string[]=[`mode ${bot.mode}`, ...(bot.mode === 'personal' ? [`personal connection ${bot.connection}; role ${bot.agent}; ordinary verified-owner tools/context`] : [])]
+  facts.push(...subscribedBindings(bot).map(binding => `input subscription ${botSubscriptionKey(bindingSubscription(binding))}`))
   facts.push(...bot.tools.flatMap(tool=>tool.imports.map(name=>`tool ${tool.name}: service module ${name}`)))
   for(const name of bot.allowedModules)facts.push(`BOT module ceiling ${name}`)
   for(const id of bot.sourceFolders ?? [])facts.push(`BOT source-folder ceiling ${id}`)
@@ -34,6 +35,7 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
   for(const binding of bot.bindings){
     const target=location(binding)
     facts.push(`${target}: ${binding.enabled ? 'enabled' : 'disabled'}`)
+    facts.push(`${target}: trigger ${binding.trigger}`)
     for(const name of binding.tools)facts.push(`${target}: tool ${name}`)
     for(const grant of binding.grants ?? [])facts.push(`${target}: ${grant.kind === 'http' ? grant.routes.map(route=>`${route.method} ${grant.origin}${route.path}`).join(', ') : 'inbox '+(grant.kind === 'inbox' ? grant.sessionId : grant.inbox)+(grant.kind === 'proposal-inbox' ? ' public-issue-proposal '+grant.disclosurePolicy.repository+' (bounded issue/enums only)' : ' (raw content)')}`)
     if(binding.platform==='discord'){
@@ -62,7 +64,7 @@ export function botPackageTool(options: Options): Tool {
       if (context.projectId !== options.projectId || context.channel !== 'web' || context.inputSource !== 'user' || context.admin !== true || context.isGroup || context.channelAddress || context.remoteWorkdir || context.memoryAccess || context.tools.executionMode !== 'session' || !options.canAuthor(context.sessionId)) throw new Error('Use an authenticated owner conversation in this Project.')
       if (raw.action === 'status') {
         z.object({action:z.literal('status')}).strict().parse(raw)
-        return JSON.stringify({projectId:options.projectId,deployments:options.deployments.list(),folders:options.folders.list(),inventory:options.inventory?.(),format:'BOT.md {id, config: bot.json} + data-only bot.json + tool modules'})
+        return JSON.stringify({projectId:options.projectId,deployments:options.deployments.list(),folders:options.folders.list(),inventory:options.inventory?.(),format:'BOT.md {id, config: bot.json} + data-only bot.json + tool modules',receivePolicy:'Service QQ/Feishu bindings own trigger: mention (default) or all. Connection triggerMode is not inherited. Existing Service packages without trigger narrow to mention; explicitly configure all and confirm deployment if that behavior is intended.'})
       }
       const input = proposal.parse(raw)
       const parts = input.directory ? input.directory.split('/') : []
@@ -84,7 +86,7 @@ export function botPackageTool(options: Options): Tool {
       await options.validate(frozen.files,context.signal)
       const facts = {projectId:options.projectId,bot:bot.id,source:{folderId:input.folderId,directory:input.directory},sourceGit:gitSource,
         exactContent:frozen.revision,fileCount:Object.keys(frozen.files).length,
-        mode:bot.mode,connection:bot.connection,agent:bot.agent,bindings:bot.bindings,toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
+        mode:bot.mode,connection:bot.connection,agent:bot.agent,bindings:bot.bindings,subscriptions:subscribedBindings(bot).map(bindingSubscription),subscriptionMigration:bot.subscriptions === undefined ? 'legacy bindings (same authority)' : 'explicit',toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
         modules:bot.allowedModules,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders ?? [],discordHistory:bot.discordHistory ?? null,
         storage:'BOT- and binding-scoped mutable data, separate from immutable deployment files',
         execution:bot.mode === 'personal' ? 'Normal verified-owner session, ordinary role tools/context; BOT prompt only, no custom modules' : 'Restricted child runtime, no raw credentials/platform clients; no source executes during deployment'}

@@ -116,7 +116,7 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
     promptInvalidations: () => promptInvalidations }
 }
 
-test('QQ per-bot trigger modes persist, reach the real adapter and can be reconfigured', async t => {
+test('QQ connection trigger compatibility values persist but do not configure Service receive policy', async t => {
   const root = directory(t)
   const path = join(root, 'bots.json')
   const store = new BotInstanceStore({ projectId: 'A', path })
@@ -143,7 +143,7 @@ test('QQ per-bot trigger modes persist, reach the real adapter and can be reconf
   }
   await incoming(mention.id)
   await incoming(all.id)
-  assert.deepEqual(received.map(message => message.silent), [true, false])
+  assert.deepEqual(received.map(message => message.silent), [true, true], 'A stored Service connection all setting is not a BOT trigger grant')
   const saved = await manager.updateBot(all.id, { config: { triggerMode: 'mention' } })
   assert.equal(saved.config.triggerMode, 'mention')
   await incoming(all.id)
@@ -669,7 +669,7 @@ test('service bot inference failures remain observable but are not delivered to 
   assert.equal(f.created.flatMap(channel => channel.sent).length, 1)
 })
 
-// Uses the production preflight callback, not an independently reimplemented predicate.
+// Uses production preflight and input routing, not independently reimplemented predicates.
 test('directory-deployed QQ service assignment gates real ingress independently of mention eligibility', async t => {
   const root = directory(t), projectId = 'directory-qq'
   const store = new BotInstanceStore({ projectId, path: join(root, 'bots.json') })
@@ -696,9 +696,16 @@ test('directory-deployed QQ service assignment gates real ingress independently 
   }
   const received: InboundMessage[] = []
   const discovery = new ServiceDiscoveryStore(projectId, join(root, 'discovery.json'))
+  const { ChannelInputRouter } = await import('../input/channel-router.ts')
+  const order: string[] = []
+  const select = directoryBots.inputSubscriptions.bind(directoryBots)
+  t.mock.method(directoryBots, 'inputSubscriptions', () => { order.push('select'); return select() })
+  const inputs = new ChannelInputRouter({ projectId, bots: store, directory: directoryBots,
+    receive: async message => { order.push('session'); received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } } })
   const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: root } }), new Bus(), {} as SessionManager,
-    async message => { received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } },
-    { projectId, instanceStore: store, serviceAssigned: directoryBots.serviceAssigned, serviceDiscovery: discovery })
+    inputs.receive,
+    { projectId, instanceStore: store, serviceAssigned: directoryBots.serviceAssigned, serviceDiscovery: discovery,
+      routeServiceInput: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
   await manager.init()
   t.after(() => manager.stopAll())
   const incoming = async (id: string, group: string, mention = true) => {
@@ -709,12 +716,21 @@ test('directory-deployed QQ service assignment gates real ingress independently 
       author: { member_openid: 'sender' }, timestamp: new Date().toISOString(),
     })
   }
+  const adapter = manager['channels'].get(bot.id) as QQChannel
+  Object.defineProperty(adapter, 'triggerMode', { get: () => { throw new Error('Service must not read connection triggerMode') } })
+  const admit = adapter['admitGroup'].bind(adapter)
+  adapter['admitGroup'] = (chatId, name, message) => { if (message?.triggerEligible !== undefined) order.push('trigger'); return admit(chatId, name, message) }
   await incoming(bot.id, 'bound')
+  assert.ok(order.indexOf('select') < order.indexOf('handler'))
+  assert.ok(order.indexOf('handler') < order.indexOf('trigger'))
+  assert.ok(order.indexOf('trigger') < order.indexOf('session'))
   await incoming(bot.id, 'bound', false)
-  assert.deepEqual(received.map(message => message.silent), [false, true])
+  assert.deepEqual(received.map(message => message.silent), [false])
+  const policySteps = order.length
   await incoming(bot.id, 'other')
   await incoming(bot.id, 'disabled')
   await incoming(other.id, 'bound')
-  assert.equal(received.length, 2)
+  assert.equal(order.length, policySteps, 'Unsubscribed groups do not execute the trigger policy')
+  assert.equal(received.length, 1)
   assert.equal(existsSync(join(root, 'authoring', 'resources.json')), false)
 })

@@ -6,7 +6,8 @@ import { parseBot } from './sdk.ts'
 import { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
 import { botConversationPolicies } from '../channels/bot-policies.ts'
 import { BotInstanceStore } from '../channels/bot-store.ts'
-import { channelSessionId } from '../bus/events.ts'
+import { channelSessionId, deriveSessionId } from '../bus/events.ts'
+import { ChannelInputRouter } from '../input/channel-router.ts'
 import { Bus } from '../bus/bus.ts'
 import { SessionManager } from '../sessions/session-manager.ts'
 import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
@@ -64,7 +65,9 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
       assert.equal(policies.managed(id),false)
       const finished=Promise.withResolvers<void>()
       bus.on('session.turn.finished',()=>finished.resolve())
-      await sessions.deliver(id,channelMessageInput(message))
+      const inputs = new ChannelInputRouter({ projectId, bots: store, directory: runtime,
+        receive: message => sessions.deliver(deriveSessionId(message), channelMessageInput(message)) })
+      await inputs.receive(message)
       await finished.promise
       assert.match(calls[0]!.prompt,/Scoped personal instructions/)
       assert.match(calls[0]!.prompt,/Custom role prompt/)
@@ -73,6 +76,8 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
       assert.ok(admins.includes(true))
       assert.equal(sessions.getSessionState(id)?.agentType,'personal-role')
       for(const sender of [{senderId:'stranger'},{isGroup:true}]) await assert.rejects(sessions.deliver(id,channelMessageInput({...message,...sender})),/Verified owner/)
+      await assert.rejects(sessions.deliver(channelSessionId({...address,conversationId:'other-dm'}),channelMessageInput(message)),/Verified owner/)
+      await assert.rejects(sessions.deliver(channelSessionId({...address,platform:'feishu'}),channelMessageInput(message)),/platform mismatch/)
       const cross=channelSessionId({...address,projectId:'other'})
       await assert.rejects(sessions.deliver(cross,channelMessageInput(message)),/Project mismatch/)
       store.update(bot.id,{purpose:'service'})

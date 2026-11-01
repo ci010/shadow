@@ -1,6 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import type { Bus } from '../bus/bus.ts'
-import { deriveSessionId, type InboundMessage } from '../bus/events.ts'
 import type { DeliverInput, InputOrigin, SessionMessageInput } from '../sessions/input.ts'
 import type {
   CreateEventSubscription,
@@ -184,6 +183,8 @@ export class EventService {
     if (!event) {
       throw new TypeError('event is required')
     }
+    if (event === 'channel.message' || input.source?.startsWith('channel:'))
+      throw new TypeError('External input subscriptions belong in BOT bot.json, not EventService')
     const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16)
     const sub: EventSubscription = {
       id,
@@ -244,49 +245,6 @@ export class EventService {
     await this.dispatch(full)
   }
 
-  /** Publish once at channel ingress, after accepting the original direct input. */
-  async publishChannelMessage(msg: InboundMessage): Promise<void> {
-    const origin: InputOrigin = {
-      sessionId: deriveSessionId(msg),
-      inputId: msg.messageId,
-      source: {
-        kind: 'user',
-        sender: {
-          channel: msg.channel,
-          chatId: msg.chatId,
-          messageId: msg.messageId,
-          platformMessageId: msg.platformMessageId,
-          senderId: msg.senderId,
-          senderName: msg.senderName,
-          chatName: msg.chatName,
-          isGroup: msg.isGroup,
-          admin: msg.admin,
-        },
-      },
-    }
-    await this.dispatch({
-      id: msg.messageId,
-      type: 'channel.message',
-      source: `channel:${msg.channel}`,
-      timestamp: msg.timestamp,
-      content: msg.content,
-      media: msg.media,
-      channel: msg.channel,
-      chatId: msg.chatId,
-      senderId: msg.senderId,
-      senderName: msg.senderName,
-      isGroup: msg.isGroup,
-      silent: msg.silent,
-      origin,
-      meta: {
-        ...msg.eventMeta,
-        platformMessageId: msg.platformMessageId,
-        chatName: msg.chatName,
-        admin: msg.admin,
-      },
-    }, origin.sessionId)
-  }
-
   private async dispatch(full: SystemEvent, excludedSessionId?: string): Promise<void> {
     const operation = () => this.dispatchWithinScope(full, excludedSessionId)
     await this.trackDelivery(this.scope ? this.scope.run(operation) : operation())
@@ -300,6 +258,8 @@ export class EventService {
 
   private async dispatchWithinScope(full: SystemEvent, excludedSessionId?: string): Promise<void> {
     this.assertRunning()
+    if (full.type === 'channel.message' || full.source.startsWith('channel:'))
+      throw new Error('External channel input belongs to input/router, not EventService')
     this.bus.emit('system.event', full)
 
     const delivered = new Set<string>()

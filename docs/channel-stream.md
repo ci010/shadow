@@ -35,6 +35,12 @@ does not create a default-workspace journal.
   This implementation's trusted stream tools support channel/thread service
   assignments, not service-DM discovery/history. No new approval system is added.
 
+Service input routing now filters non-triggering messages before Session creation;
+stream collection stays independent and does not wake a BOT. A directory package's
+explicit `subscriptions: []` also closes its service collection/admission route;
+omission preserves its existing binding-derived subscriptions. See
+[external input routing](input-routing.md).
+
 The stream contains bounded text and identities, not downloaded attachments or
 raw credential-bearing payloads. Platform content is untrusted data, never agent
 instructions. Disabled/revoked Bots and assignments are checked again at tool use.

@@ -247,7 +247,10 @@ export interface DiscordIntegrationTransport {
 export interface DiscordAdapterIntegration {
   processorStorageId?: string
   classifyObservation?(proof:DiscordObservationProof,data:Record<string,unknown>,signal:AbortSignal):Promise<import('../events/input-classifier.ts').Classification>
-  observe?(data: Record<string, unknown>, signal: AbortSignal): Promise<DiscordObservationProof[]>
+  /** Production source-only lookup and lazy BOT-owned strategy dispatch. */
+  observationScopes?(data: Record<string, unknown>): string[]
+  runObservationPolicy?(scopeId: string, runPolicy: () => Promise<void>): Promise<void>
+  observe?(data: Record<string, unknown>, signal: AbortSignal, scopeId?: string): Promise<DiscordObservationProof[]>
   wakeObservation?(proof: DiscordObservationProof, items: Record<string, unknown>[], semantic: {type:string;data:Record<string,unknown>}, signal: AbortSignal): Promise<void>
   admit(input: DiscordIngress, signal: AbortSignal): Promise<DiscordIngressResult>
   discard(admissionId: string): void
