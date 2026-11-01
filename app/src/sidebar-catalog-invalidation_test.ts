@@ -30,7 +30,7 @@ async function component(name: string, fixture: any, t: any) {
     'useProjectLiveState.ts': `export const useProjectLiveState = () => f.live`,
     'useLiveClient.ts': `export const useLiveClientPool = () => f.pool`,
     'service-groups.ts': `export const useServiceGroups = () => ({groups:{value:[]}}); export const projectGroupConversations = x => x; export const observedGroupId = () => ''`,
-    'bot-settings.ts': `export const createBotSettingsClient = () => ({list:async () => {f.channels++; return []}})`,
+    'bot-settings.ts': `export const createBotSettingsClient = () => ({catalog:async () => {f.channels++; if(f.failCatalog) throw Error('unavailable'); return f.bots || []}})`,
     'folders-client.ts': `export const createFoldersClient = base => ({list:async signal => {f.folders++; return f.records || []}})`,
     'node-inventory.ts': `export const fetchNodeInventory = async () => {f.nodes++;return {nodes:[]}}`,
     'useComposerDraft.ts': `export const composerDraftRevision={value:0}; export const composerDraftKey=()=>''; export const composerDraftEditedAt=()=>0`,
@@ -113,4 +113,53 @@ test('FoldersSidebar folder and node resources refresh independently and release
   app.unmount(); assert.equal(f.observers.size,0)
   f.invalidate('a','folders'); await settle()
   assert.deepEqual([f.folders,f.nodes], [2,2])
+})
+
+
+test('ProjectGroup reads catalog without channel sessions and recovers failed initial read on ready reset', async t => {
+  const f = Object.assign(fixture(), { failCatalog: true, bots: [{id:'discord-1',projectId:'a',platform:'discord',displayName:'Named Discord',connection:{state:'connected',configured:true}}] })
+  const graph = { state: reactive<any>({ revision: 1, value: [], error:'' }) }
+  const activity = { state: reactive<any>({revision:1,value:{stages:{}},error:''}) }
+  Object.assign(f, { live: { acquireProject: () => ({graph,activity,refresh:async()=>{},release(){}}) } })
+  const definition = await component('ProjectGroup', f, t)
+  const app = renderer.createApp({render: () => h(definition, {
+    apiBase:'http://localhost',project:{id:'a',name:'A'},selectedProjectId:'a',selectedSessionId:'',navigationKey:'a',remoteFolders:false,
+  })})
+  const vm = app.mount({})
+  t.after(() => app.unmount())
+  await settle()
+  assert.equal(f.channels, 1, 'initial read must not depend on channelAddress')
+  const state = (vm.$ as any).subTree.component.setupState
+  assert.deepEqual(state.bots, [])
+  f.failCatalog = false
+  for (const {observer} of f.observers) observer.reset()
+  await settle()
+  assert.equal(f.channels, 2)
+  assert.equal(state.bots[0].displayName, 'Named Discord')
+  assert.equal(state.bots[0].connection.state, 'connected')
+})
+
+
+test('ProjectGroup retries failed catalog even while resource transport remains live', async t => {
+  const f = Object.assign(fixture(), { failCatalog: true, bots: [{id:'qq-1',projectId:'a',platform:'qq',displayName:'Named QQ',connection:{state:'connected',configured:true}}] })
+  const graph = { state: reactive<any>({ revision:1,value:[],error:'' }) }
+  const activity = { state: reactive<any>({revision:1,value:{stages:{}},error:''}) }
+  Object.assign(f, { live: { acquireProject: () => ({graph,activity,refresh:async()=>{},release(){}}) } })
+  const definition = await component('ProjectGroup', f, t)
+  const app = renderer.createApp({render: () => h(definition, {
+    apiBase:'http://localhost',project:{id:'a',name:'A'},selectedProjectId:'a',selectedSessionId:'',navigationKey:'a',remoteFolders:false,
+  })})
+  const vm = app.mount({})
+  t.after(() => app.unmount())
+  await settle()
+  assert.equal(f.channels,1)
+  f.failCatalog = false
+  // No reset, reconnect, channel invalidation or session revision occurs.
+  await new Promise(done => setTimeout(done, 3_100))
+  await settle()
+  const state = (vm.$ as any).subTree.component.setupState
+  assert.equal(f.channels,2)
+  assert.equal(state.bots[0].connection.state,'connected')
+  app.unmount()
+  assert.equal(f.observers.size,0)
 })
