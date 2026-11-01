@@ -7,12 +7,13 @@
       </span>
       <span>{{ t('Thinking') }}</span>
     </summary>
-    <div v-if="expanded && active" class="thinking-content prose" v-answer-html v-html="renderContent(text)" />
+    <div v-if="expanded && active" class="thinking-content prose" v-answer-html v-markdown-link-hints v-html="renderContent(text)" />
     <slot v-if="expanded && active" />
   </details>
 </template>
 
 <script setup lang="ts">
+import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { ref, watch } from 'vue'
 import { t } from '../i18n.ts'
 import { vDisclosureMotion } from '../disclosure-motion.ts'

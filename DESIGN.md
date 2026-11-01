@@ -375,6 +375,8 @@ Use `UiSelect.vue` for single-choice fields instead of visible native `<select>`
 
 UI craft reference: [Emil Kowalski's design engineering skill](https://github.com/emilkowalski/skills/blob/e8a175de22ae1e49370fc144c1f3bb9aeedf988d/skills/emil-design-eng/SKILL.md). Apply its high-frequency interaction, pointer-hover, reduced-motion and edge-case guidance within Shadow's Quiet Workbench tokens; it does not replace this design system or require React dependencies.
 
+Markdown links in conversation, summaries, prompts, Knowledge and file previews use shared `HoverInfo` destination hints on pointer hover and keyboard focus. The hint shows the authored `href` (including relative paths and fragments), not a fetched page title. Remove native link `title` attributes; preserve the anchor and its existing navigation behavior. `vMarkdownLinkHints` manages DOM-rendered links and cleans up their tooltip hosts when the preview is removed.
+
 ### Navigation
 
 Tree rows use neutral ink and muted hover; selected rows use selection background and primary ink. Project coordination is a heading-level entry: use primary ink and a one-pixel title underline (4px offset), not a filled selection block. Its hover stays neutral and keyboard focus retains the blue outline. Maintain the icon/text/disclosure columns rather than distributing extra space between siblings. Tree icons are normally (16px); labels truncate within the row. Focus remains a visible blue outline, including the tree row's focus-within treatment.

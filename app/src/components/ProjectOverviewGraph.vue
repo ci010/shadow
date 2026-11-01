@@ -19,7 +19,7 @@
       </VueFlow>
     <div v-if="!visibleNodes.length" class="canvas-empty" role="status"><p>{{ t(query || focus ? 'No matching work' : 'No recorded topics yet') }}</p><button v-if="query || focus" @click="clearFilters">{{ t('Clear filters') }}</button></div>
     </div>
-    <aside v-if="selectedNode" class="context" :aria-label="t('Work details')"><button class="context-close" :aria-label="t('Close coordination panel')" @click="selectedId = ''">×</button><h3>{{ selectedNode.title }}</h3><p v-if="edgeEvidence" class="edge-evidence">{{ edgeEvidence }}</p><div v-if="selectedNode.kind === 'outcome'" class="prose outcome-explanation" v-html="outcomeMarkdown(selectedNode.detail ?? '')" /><p v-else>{{ selectedNode.detail }}</p><p v-if="selectedNode.status">{{ status(selectedNode.status) }}</p><p>{{ role(selectedNode.kind) }} · {{ authority(selectedNode.authority) }}</p><time>{{ selectedNode.at ? new Date(selectedNode.at).toLocaleString() : t('Unknown time') }}</time>
+    <aside v-if="selectedNode" class="context" :aria-label="t('Work details')"><button class="context-close" :aria-label="t('Close coordination panel')" @click="selectedId = ''">×</button><h3>{{ selectedNode.title }}</h3><p v-if="edgeEvidence" class="edge-evidence">{{ edgeEvidence }}</p><div v-if="selectedNode.kind === 'outcome'" class="prose outcome-explanation" v-markdown-link-hints v-html="outcomeMarkdown(selectedNode.detail ?? '')" /><p v-else>{{ selectedNode.detail }}</p><p v-if="selectedNode.status">{{ status(selectedNode.status) }}</p><p>{{ role(selectedNode.kind) }} · {{ authority(selectedNode.authority) }}</p><time>{{ selectedNode.at ? new Date(selectedNode.at).toLocaleString() : t('Unknown time') }}</time>
       <p><button v-if="selectedNode.workKey" @click="emit('select', selectedNode.workKey)">{{ t('Work details') }}</button> <button v-if="selectedNode.sessionId" @click="emit('session', selectedNode.sessionId)">{{ t('Open conversation') }}</button></p>
       <details><summary>{{ t('Evidence') }} · {{ selectedEdges.length }}</summary><small>{{ selectedNode.evidence }}</small><ul><li v-for="(edge, index) in selectedEdges" :key="index"><strong>{{ label(edge.kind) }}</strong> · <button @click="selectedId = edge.from === selectedNode.id ? edge.to : edge.from">{{ graph.nodes.find(node => node.id === (edge.from === selectedNode?.id ? edge.to : edge.from))?.title }}</button><p>{{ edge.evidence }}</p></li></ul></details>
       <p v-if="historyError" role="alert">{{ t('Decision history unavailable') }} <button @click="loadContext(selectedNode.workKey, true)">{{ t('Retry') }}</button></p><p v-if="partial || data.focus?.historyPartial" class="notice">{{ t('History is partial: older records or unreadable segments are not shown.') }}</p><p v-if="loading" role="status">{{ t('Loading…') }}</p>
@@ -27,6 +27,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { markdownHighlight } from '../markdown-highlight.ts'
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core'

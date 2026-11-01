@@ -34,13 +34,14 @@
       </div>
       <div v-else-if="prompt" :class="embedded ? 'prompt-content' : 'flex-1 overflow-y-auto px-4 py-3 min-h-0'">
         <pre v-if="raw" class="system-prompt-raw">{{ prompt }}</pre>
-        <div v-else class="prose max-w-none system-prompt-content" v-html="rendered" />
+        <div v-else class="prose max-w-none system-prompt-content" v-markdown-link-hints v-html="rendered" />
       </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
+import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { markdownHighlight } from '../markdown-highlight.ts'
 import { t } from '../i18n.ts'
 import { computed } from 'vue'
