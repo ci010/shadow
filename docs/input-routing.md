@@ -12,9 +12,14 @@ queue, model classifier, or exactly-once delivery system.
   mandatory for arbitrary inputs. Deduplication keys are metadata only; source
   adapters retain their existing replay/deduplication responsibilities.
 - Source identity comes from an authenticated/authorized host entrypoint, never
-  payload fields. Router subscriptions match exact source, kind and topic (with
-  explicitly granted ancestry), and select a BOT or an entry-authorized Session.
-  There is no implicit recipient and no broadcast on conflicting owners.
+  payload fields. Host `InputListener` records match exact source, kind and topic
+  (with explicitly granted ancestry). **All** Web, Personal and Service inputs use
+  this matching path; `route(input)` has no direct-target override. Multiple
+  selectors for the same handler execute once; different matching handlers are
+  rejected. No listener means no delivery, not a default Agent or a broadcast.
+- Listener records are a live projection of host Session identities, current
+  Personal pairings and current BOT deployments. They are not registered for each
+  message, persisted in another registry, or installable by payload or a tool.
 - The router does not interpret content, decide mentions/participants, grant tools,
   run inference, or treat a program signal as a human instruction. The selected
   handler enforces reception policy, then selects/creates/wakes its Session.
@@ -38,11 +43,23 @@ Production composition in `runtime/main/project-runtime.ts` installs:
    This is security admission: trigger/processor declarations are returned as data,
    not executed at that boundary. QQ/Feishu source preflight can retain bounded
    unassigned-group discovery without evaluating a business trigger.
-2. `ChannelInputRouter` adapts admitted channel messages into generic envelopes.
-   Web has an explicit Session target. Personal ingress requires the exact verified
-   owner and bound direct conversation, then uses an ordinary Session target.
+2. `channels/input.ts` only validates/encodes admitted adapter data; it neither
+   selects a recipient nor registers a listener. Project composition creates one
+   `InputRouter` with both `sessionInputListeners` and `DirectoryBots.inputListeners`.
+   `WebChannel` checks the injected real host Request authorization before fork,
+   configuration, upload or Session preparation. It assigns the host `web-user`
+   identity/admin state; client `senderId`, `admin`, `source` or `listeners` fields
+   cannot choose authority or a handler. Reaching a Web address is not permission.
+   An authenticated new-chat request explicitly prepares durable Session identity
+   without inference, then routes through that Session's exact listener. This
+   preparation is separate from routing: a no-listener result never prepares one.
+   Existing/retired human Web Sessions project listeners from host state; deletion
+   removes them. Personal listeners derive only from an enabled connection's exact
+   verified-owner DM pairing. Groups, strangers, revoked pairings and Service
+   connections cannot use them. `handleSessionInput` rechecks current listener,
+   source/target and folder access before the ordinary AgentApp/Session boundary.
 3. Service adapters pass a **lazy strategy callback** to `runReceivePolicy`, not an
-   already-computed trigger verdict. `ChannelManager.routeServiceInput` enters the
+   already-computed trigger verdict. `ChannelManager.routeInputPolicy` enters the
    same InputRouter and selects a deployed BOT before `bots/input.ts`'s
    `handleBotReceivePolicy` checks its sender policy and invokes that strategy.
    Platform algorithms remain reusable in adapter methods, but their execution is
@@ -54,8 +71,9 @@ Production composition in `runtime/main/project-runtime.ts` installs:
    Unsubscribed/disabled/conflicting targets never execute the callback.
    `silent` output is filtered without creating Session/history or calling the
    main Agent model; it cannot fall back to an ordinary Agent.
-4. The strategy's normalized output passes `ChannelInputRouter.receive` for a live
-   subscription recheck, then retains its original `InboundMessage` fields through
+4. The strategy's normalized output routes through the same `InputRouter` again.
+   `handleBotInput` re-reads the deployed BOT and connection authority, then retains
+   its original `InboundMessage` fields through
    `AgentApp.receiveChannelMessage`, its command boundary, and `SessionManager`.
    Existing service policy/admission checks and restricted tools still apply;
    personal/Web sessions retain ordinary role tools and context. Bot-wide service
@@ -71,8 +89,17 @@ Production composition in `runtime/main/project-runtime.ts` installs:
    supplies live routing and revision/proof checks. Removing a subscription while
    work is buffered/stopped prevents stored code and classifiers from running on
    retry/recovery, not just the final wake. No queue, persistence format or scheduler
-   was added; standalone compatibility adapters without production composition
-   retain their direct policy execution.
+   was added. Managed connections missing their policy/observation routing callback
+   fail closed. Personal QQ/Feishu/Discord strategies also enter their exact pairing
+   listener before running; they retain Personal configuration, not Service BOT
+   trigger grants. Only independently constructed standalone adapters retain local
+   strategy execution without host routing; this is not a production fallback.
+
+Pairing proofs and native decision/owner-question responses remain existing host
+control-plane operations, not Agent input. A valid pending pairing proof alone
+neither installs a listener nor runs a strategy: the existing owner-confirmation
+operation establishes the verified pairing. These operations do not create a
+second Agent recipient or turn arbitrary message content into host authority.
 
 Channel stream collection is independent. An admitted but non-triggering message
 can remain in the bounded stream without becoming Session history. Sources that
@@ -80,7 +107,7 @@ never deliver an unmentioned message cannot be made observable by the router.
 
 ## Migration and internal boundaries
 
-See [BOT subscriptions](agent-authoring.md#external-input-subscriptions). Missing
+See [BOT subscriptions](bots.md#external-input-subscriptions). Missing
 `subscriptions` preserves the old binding-derived routes without broadening them;
 explicit `[]` closes input even when permission bindings remain configured.
 Deployment confirmation includes subscription and trigger changes. Original files

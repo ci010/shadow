@@ -18,7 +18,7 @@ after adding, changing, or removing the file. An invalid or unreadable PIN file
 fails startup rather than disabling authentication. Do not put the PIN in
 URLs, source, or logs.
 
-When a launch credential is configured, Electron Main's **Connect browser**
+When a launch credential is configured, Electron Main's **Connect phone or browser**
 control can issue a one-use pairing code. Without Electron, an authorized local
 terminal can issue one using a protected descriptor:
 
@@ -34,7 +34,9 @@ pnpm web:pair --url http://127.0.0.1:18800 --credential-file 'C:\ProgramData\Sha
 
 These are example paths; use the descriptor for your running backend. Open the
 browser URL and enter the code. Codes expire after five minutes and can be used
-once. Browser sessions last twelve hours and end on logout or backend restart.
+once. Codes are eight decimal digits (including any leading zero); issuing a new
+code invalidates the previous one. Pairing is limited globally to 20 attempts
+per minute, shared across clients and login methods. Browser sessions last twelve hours and end on logout or backend restart.
 PIN login grants application administrator access, **not** service-management
 or device-enrollment credentials. Keep both PINs and pairing codes private.
 
@@ -44,6 +46,34 @@ development to limit Vite to this computer. Do not port-forward Vite to the Inte
 HTTP is unencrypted. Browser login is not multi-user authorization, and host
 tools are not sandboxed. The [mobile client](mobile.md) has a separate HTTPS
 endpoint and pairing flow; do not expose the ordinary gateway as a substitute.
+
+## Phone/browser access on a trusted LAN
+
+In Main Electron's **Connect phone or browser** panel, explicitly select **Enable LAN
+HTTP access** after reading the adjacent risk warning. The ordinary gateway
+remains on loopback: Main starts separate browser-only listeners on the current
+RFC1918 IPv4 network interfaces, using OS-assigned ports. The panel lists real
+private interface addresses (including alternatives for multiple interfaces).
+Open one of those exact addresses on a phone on the same network and type the
+eight-digit code. Choose the interface reachable from that phone; VPN interfaces
+may also appear. No private IPv4 interface means LAN pairing is unavailable.
+
+HTTP encrypts nothing. Network observers can intercept the code, browser cookie,
+and conversations and may gain full application administrator access. Use only a
+trusted private network; never port-forward these ports. OS firewall permission,
+Wi-Fi client isolation, VPN routing, or an interface change can prevent access.
+Disable the checkbox to close LAN listeners and revoke LAN browser sessions;
+Main exit also closes them. Closing the panel alone does not disable LAN access.
+This is process-local opt-in, not a saved runtime configuration change.
+
+LAN listeners reject launch-credential headers, device/control ingress and
+unauthenticated business APIs. Browser login uses an origin-bound HttpOnly,
+SameSite cookie, five-minute single-use codes and shared brute-force limits.
+This is browser access, not Child enrollment or an execution sandbox. Phone HTTP
+origins are not secure contexts: PWA installation, service workers and some
+clipboard/browser capabilities may be unavailable. Real iOS/Android, router and
+firewall behavior must be checked on the target network; automated checks do not
+certify those devices.
 
 ## Install the web app
 

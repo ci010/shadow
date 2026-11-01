@@ -165,10 +165,12 @@ from the sidebar; conversations retain their document tabs. The Dashboard groups
 recent focus by inferred shared purpose, then shows separate topics with their latest
 reports and expandable evidence/decision history. Model interpretations are not
 confirmed user intent; legacy topics without inference remain unclassified.
-**Organize recent topics** explicitly calls the configured observation model once on
-bounded recent saved notes, including existing notes. Opening the page does not call
-it. Results show their time and source note versions; failed organization keeps previous
-results. Errors distinguish busy/changed notes, invalid model JSON or citations,
+When topic organization is enabled, relevant saved session changes are coalesced
+before a bounded automatic delta run. Existing topic versions determine what needs
+updating; no new metadata log is required. Opening the page itself does not call
+the model. **Organize recent topics** remains an explicit full run over bounded
+recent topics, including existing ones. Results show their time and source
+versions; failed organization keeps previously committed results. Errors distinguish busy/changed notes, invalid model JSON or citations,
 model availability and a failed overview refresh; the latter may follow a successful save.
 The main work views are **Dashboard** and an issue-style **Board**. Expanded topics
 show saved goal/approach/task/finding roles, parent links, supports/requires/assumption
@@ -203,9 +205,12 @@ Learning runs show **Applied**, **No change**, **Partial**, **Blocked**, or
 reason and recorded artifact/event/evaluation counts (artifacts are verified for
 Applied results). **Unverified** means an
 older completed run has no learning receipt, not that its effects were checked.
-Retry/paused notices explain when configuration needs attention. Use
-`/learn reflector`, `/learn encapsulator`, or `/learn soul-reflector` to explicitly
-retry a paused batch; existing effects are retained rather than blindly replayed.
+Failure/retry notices explain when configuration needs attention. Enabled
+learning continues scheduled fresh executions; an old failed batch does not
+silently disable the automation. Failed evidence remains pending rather than
+being marked reviewed. Use `/learn reflector`, `/learn encapsulator`, or
+`/learn soul-reflector` for an explicit retry; existing effects are retained
+rather than blindly replayed.
 See [learning outcomes and recovery](tools-and-automations.md#learning-outcomes-and-recovery).
 
 There is no standalone **File changes** tab. Expand a successful **Write**,
@@ -306,8 +311,10 @@ names the actual `model@copilot` and endpoint. Refresh the model list, check the
 exact ID and account access, and inspect any conversation or agent override as
 well as the Project default. Endpoint and reasoning-capability errors are also
 reported explicitly. These failures do not silently switch models or replay the
-generation request; learning pauses until configuration is corrected or retried
-explicitly. A historical failure does not prove the current selection is invalid.
+generation request. Learning retains the failed batch and retries with backoff
+rather than permanently pausing an enabled automation; correct configuration
+failures instead of expecting a retry to repair them. A historical failure does
+not prove the current selection is invalid.
 
 The **Agents** tab groups searchable role definitions by Built-in and Workspace.
 **Overview** shows the selected definition's default mode, explicit model
@@ -586,7 +593,7 @@ question workflows, **not permission or publication approvals**.
 For tool discovery, skill editing, MCP configuration, and scheduled
 conversations, see [tools and automations](tools-and-automations.md). For
 publishing restricted conversation agents, see
-[conversation agent authoring](agent-authoring.md). For project-owned bot
+[directory BOTs](bots.md). For project-owned bot
 instances and QQ delivery limits, see [messaging channels](channels.md).
 
 ### Freeform questions in conversation history

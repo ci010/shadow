@@ -1,6 +1,5 @@
-import { browseDirectories, parseDirectoryListing, pickerPath, FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from './picker.ts'
-import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
-import { parseLiveWorkdirRef } from '../sessions/locality.ts'
+import { FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from './picker.ts'
+import { pickFolder, type FolderPickerOptions } from './picker-service.ts'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from 'hono'
@@ -17,10 +16,10 @@ import { serveRemoteGit } from '../gateway/remote-git.ts'
 import { serveRemoteFolderFiles } from './remote-files.ts'
 import { RemoteFolderWorkdirUnavailableError } from './remote-ownership.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
-import { executeRemoteFilesystemText, executeRemoteNodeText, RemoteFilesystemError } from '../execution/remote-filesystem-client.ts'
+import { executeRemoteFilesystemText, RemoteFilesystemError } from '../execution/remote-filesystem-client.ts'
 
 export interface FolderServiceOptions {
-  picker?: { inventory: () => NodeInventoryResponse; executor: Executor }
+  picker?: FolderPickerOptions
   registry: FolderRegistry
   createSession: (folder: FolderRecord, requestId?: string) => Promise<{ sessionId: string; chatId: string }>
   gitRunner?: GitCloneRunner
@@ -104,30 +103,7 @@ export class FolderService {
         try {
           this.#assertOpen()
           const body = await objectBody(c)
-          if (Object.keys(body).sort().join(',') !== 'nodeId,path' || typeof body.nodeId !== 'string' ||
-            typeof body.path !== 'string' || body.path.length > 4096 || /[\0\r\n]/.test(body.path)) {
-            throw new FolderError('invalid_picker_request', 'Provide a device identity and directory path.')
-          }
-          const picker = this.#options.picker
-          const node = picker?.inventory().nodes.find(n => n.nodeId === body.nodeId)
-          if (!picker || !node || node.connection !== 'connected') throw new FolderError('picker_device_offline', 'The selected device is offline. Reconnect and retry.', 503)
-          if (node.role === 'main') {
-            if (action === 'browse') return c.json({ listing: await browseDirectories(body.path, c.req.raw.signal) })
-            return c.json({ folder: await this.#options.registry.register(pickerPath(body.path), c.req.raw.signal) })
-          }
-          if (node.executionProtocol !== 'compatible' || (!node.support.operations.includes(FOLDER_BROWSE_OPERATION) || !node.support.operations.includes(FOLDER_SELECT_OPERATION))) {
-            throw new FolderError('picker_unsupported', 'Update the selected device to support folder browsing, then reconnect.', 409)
-          }
-          // The path remains opaque on Main; only its owning Child validates/canonicalizes it.
-          const output = await executeRemoteNodeText({ executor: picker.executor, nodeId: node.nodeId,
-            sessionId: 'owner-folder-picker', turnId: crypto.randomUUID(),
-            signal: c.req.raw.signal }, action === 'browse' ? FOLDER_BROWSE_OPERATION : FOLDER_SELECT_OPERATION, { path: body.path }, 2_000_000)
-          if (output.length > 2_000_000) throw new Error('Picker result too large')
-          const value: unknown = JSON.parse(output)
-          if (action === 'browse') return c.json({ listing: parseDirectoryListing(value) })
-          const ref = parseLiveWorkdirRef(value)
-          if (!ref || !value || typeof value !== 'object' || !('version' in value) || value.version !== 2 || ref.nodeId !== node.nodeId || !/^picked-v1:[a-f0-9]{64}$/.test(ref.workdirId)) throw new Error('Invalid selected folder')
-          return c.json({ folder: await this.#options.registry.registerRemote(ref, c.req.raw.signal) })
+          return c.json(await pickFolder(this.#options, action, body, c.req.raw.signal))
         } catch (error) {
           if (error instanceof TypeError) return c.json({ error: 'invalid_directory', message: 'Check the directory path on the selected device and retry.' }, 400)
           if (error instanceof RemoteFilesystemError) return c.json({ error: 'picker_failed', message: 'The selected device could not access this directory. Check permissions and retry.' }, 503)

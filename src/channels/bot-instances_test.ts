@@ -16,8 +16,6 @@ import { AbstractChannel, type ChannelDecision } from './base.ts'
 import { unavailableCapabilities } from './capabilities.ts'
 import { BotInstanceStore, type BotInstance } from './bot-store.ts'
 import { botSetupPlugin } from './bot-setup.ts'
-import { AgentResourceStore } from '../agent-authoring/store.ts'
-import { ResourceBundleSchema } from '../agent-authoring/contracts.ts'
 import { ServiceDiscoveryStore } from './service-discovery.ts'
 import { ChannelManager } from './manager.ts'
 import type { ChannelId, ChannelState } from './setup-contract.ts'
@@ -27,7 +25,7 @@ import { sessionWorkspacePath } from '../utils/paths.ts'
 import { createProjectScope, getProjectScope, type ProjectScope } from '../projects/scope.ts'
 import { WebChannel } from './web.ts'
 import { QQChannel } from './qq.ts'
-import { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
+import { DirectoryBots } from '../bots/runtime.ts'
 import { BotDeployments } from '../bots/deployments.ts'
 
 function directory(t: TestContext): string {
@@ -66,7 +64,7 @@ class BotChannel extends AbstractChannel {
   sessionId(chatId: string) { return this.logicalSessionId(chatId) }
 }
 
-async function runtime(t: TestContext, root: string, projectId: string, bots: number, platform: ChannelId = 'discord', actualIdentity?: string, scope?: ProjectScope, assigned: boolean | ((address: ChannelAddress) => boolean) = true) {
+async function runtime(t: TestContext, root: string, projectId: string, bots: number, platform: ChannelId = 'discord', actualIdentity?: string, scope?: ProjectScope, assigned: boolean | ((address: ChannelAddress) => boolean) = true, observeCatalog = false) {
   const bus = new Bus()
   const store = new BotInstanceStore({ projectId, path: join(root, projectId, 'bots.json') })
   const instances = Array.from({ length: bots }, (_, index) => store.create(platform, `Bot ${index}`, platform === 'discord'
@@ -81,6 +79,7 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
     getState: sessionId => ({ sessionId, segmentIndex: 0 }),
     getPolicy: () => ({ timeoutMs: null }), notifyUser: async () => {}, notifyParent: async () => {},
   })
+  const channelInvalidations: string[] = []
   let promptInvalidations = 0
   const sessions: Pick<SessionManager, 'yields' | 'getActiveSession' | 'invalidateSystemPrompts' | 'retireIdleConversationContexts'> = {
     retireIdleConversationContexts: async () => {}, yields, getActiveSession: () => undefined,
@@ -90,7 +89,8 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
     received.push(message)
     receivedScopes.push(getProjectScope()?.projectId)
     return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
-  }, { projectId, instanceStore: store, serviceAssigned: address => typeof assigned === 'function' ? assigned(address) : assigned, serviceDiscovery: discovery, scope, factory: (id, _config, bot) => {
+  }, { projectId, instanceStore: store, realtime: observeCatalog ? { chat() {}, invalidateSessions() {}, invalidateActivity() {}, close() {},
+    invalidateResource(resource) { channelInvalidations.push(resource) } } : undefined, serviceAssigned: address => typeof assigned === 'function' ? assigned(address) : assigned, serviceDiscovery: discovery, scope, factory: (id, _config, bot) => {
     assert.ok(bot)
     const channel = new BotChannel(id, bus, bot, actualIdentity)
     created.push(channel)
@@ -113,7 +113,7 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
     event: 'response', content: bot.displayName, media: ['uploads/same-file.png'], done: true,
   })
   return { bus, store, instances, discovery, received, receivedScopes, created, manager, app, address, outbound, yields,
-    promptInvalidations: () => promptInvalidations }
+    channelInvalidations, promptInvalidations: () => promptInvalidations }
 }
 
 test('QQ connection trigger compatibility values persist but do not configure Service receive policy', async t => {
@@ -141,13 +141,13 @@ test('QQ connection trigger compatibility values persist but do not configure Se
       author: { member_openid: 'sender' }, timestamp: new Date().toISOString(),
     })
   }
-  await incoming(mention.id)
-  await incoming(all.id)
-  assert.deepEqual(received.map(message => message.silent), [true, true], 'A stored Service connection all setting is not a BOT trigger grant')
+  await assert.rejects(incoming(mention.id), /listener unavailable/)
+  await assert.rejects(incoming(all.id), /listener unavailable/)
+  assert.deepEqual(received, [], 'Stored connection settings and serviceAssigned cannot replace a Service input listener')
   const saved = await manager.updateBot(all.id, { config: { triggerMode: 'mention' } })
   assert.equal(saved.config.triggerMode, 'mention')
-  await incoming(all.id)
-  assert.equal(received.at(-1)?.silent, true)
+  await assert.rejects(incoming(all.id), /listener unavailable/)
+  assert.equal(received.length, 0)
   assert.equal(new BotInstanceStore({ projectId: 'A', path }).status(all.id).config.triggerMode, 'mention')
 })
 
@@ -232,13 +232,16 @@ test('Web bus callbacks retain org scope and stopping unsubscribes only their ow
   const scope = createProjectScope('A')
   const foreign = createProjectScope('B')
   const bus = new Bus()
-  const channel = scope.run(() => new WebChannel(bus, {}))
   const observed: Array<string | undefined> = []
+  const channel = scope.run(() => new WebChannel(bus, { realtime: {
+    chat(_id, payload) { observed.push(getProjectScope()?.projectId); assert.equal((payload as { content: string }).content, 'Hello') },
+    invalidateSessions() {}, invalidateActivity() {}, close() {},
+  } }))
   let otherCalls = 0
   const subscription = bus.on('message.outbound', () => { otherCalls++ })
   const message: OutboundMessage = {
     channel: 'web', chatId: 'chat', event: 'response', done: true,
-    get content() { observed.push(getProjectScope()?.projectId); return 'Hello' },
+    content: 'Hello',
   }
   foreign.run(() => bus.emit('message.outbound', message))
   assert.deepEqual(observed, ['A'])
@@ -604,17 +607,19 @@ test('unbound QQ service groups are display-only discoveries, isolated and prote
 
 test('disabled, revoked and never-bound service groups are discoverable without running an Agent or breaking valid groups', async t => {
   const root = directory(t)
-  const resources = new AgentResourceStore({ projectId: 'discovery-revoked', directory: join(root, 'resources') })
+  const deployments = new BotDeployments({ projectId: 'discovery-revoked', directory: join(root, 'deployments'), runGit: async () => { throw new Error('No git') } })
+  const resources = new DirectoryBots(deployments)
   const f = await runtime(t, root, 'discovery-revoked', 1, 'qq', undefined, undefined,
     address => !!resources.resolve(address)?.binding.enabled)
   const bot = f.instances[0]!
   const channel = f.created.at(-1)!
-  const binding = (conversationId: string, enabled = true) => ({ botInstanceId: bot.id, platform: 'qq', conversationId, enabled, agent: 'helper' })
+  const binding = (conversationId: string, enabled = true) => ({ botInstanceId: bot.id, platform: 'qq', conversationId, enabled, tools: [] })
   const publish = async (bindings: unknown[]) => {
-    const bundle = ResourceBundleSchema.parse({ version: 1,
-      files: { 'agents/helper/AGENT.md': '---\nname: helper\ndescription: Test helper\nallowedTools: []\n---\nHelp the group.' }, bindings })
-    const draft = await resources.stage({ expectedRevision: resources.draft().revision, bundle })
-    await resources.publish(draft.revision)
+    const frozen = deployments.freeze({
+      'BOT.md': '---\nid: helper\nconfig: bot.json\n---\nHelp the group.',
+      'bot.json': JSON.stringify({ mode: 'service', allowedModules: [], tools: [], bindings }),
+    })
+    await deployments.deploy({ id: 'helper', source: { folderId: 'fixture', directory: '' }, ...frozen, expectedRevision: deployments.read('helper')?.deployment.revision })
   }
   await publish([binding('valid'), binding('disabled'), binding('revoked')])
   await publish([binding('valid'), binding('disabled', false)])
@@ -696,16 +701,16 @@ test('directory-deployed QQ service assignment gates real ingress independently 
   }
   const received: InboundMessage[] = []
   const discovery = new ServiceDiscoveryStore(projectId, join(root, 'discovery.json'))
-  const { ChannelInputRouter } = await import('../input/channel-router.ts')
+  const { channelInputFixture } = await import('../testing/channel-input.ts')
   const order: string[] = []
-  const select = directoryBots.inputSubscriptions.bind(directoryBots)
-  t.mock.method(directoryBots, 'inputSubscriptions', () => { order.push('select'); return select() })
-  const inputs = new ChannelInputRouter({ projectId, bots: store, directory: directoryBots,
+  const select = directoryBots.inputListeners.bind(directoryBots)
+  t.mock.method(directoryBots, 'inputListeners', () => { order.push('select'); return select() })
+  const inputs = channelInputFixture({ projectId, bots: store, directory: directoryBots,
     receive: async message => { order.push('session'); received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } } })
   const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: root } }), new Bus(), {} as SessionManager,
     inputs.receive,
     { projectId, instanceStore: store, serviceAssigned: directoryBots.serviceAssigned, serviceDiscovery: discovery,
-      routeServiceInput: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
+      routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
   await manager.init()
   t.after(() => manager.stopAll())
   const incoming = async (id: string, group: string, mention = true) => {
@@ -733,4 +738,17 @@ test('directory-deployed QQ service assignment gates real ingress independently 
   assert.equal(order.length, policySteps, 'Unsubscribed groups do not execute the trigger policy')
   assert.equal(received.length, 1)
   assert.equal(existsSync(join(root, 'authoring', 'resources.json')), false)
+})
+
+
+test('bot transport states invalidate catalog after the authoritative health update', async t => {
+  const f = await runtime(t, directory(t), 'status-project', 1, 'discord', undefined, undefined, true, true)
+  const count = f.channelInvalidations.length
+  f.created[0].state('disconnected')
+  assert.equal(f.channelInvalidations.length, count + 1)
+  assert.equal(f.channelInvalidations.at(-1), 'channels')
+  assert.equal(f.manager.botStatuses()[0].state, 'disconnected')
+  f.created[0].state('connected')
+  assert.equal(f.channelInvalidations.length, count + 2)
+  assert.equal(f.manager.botStatuses()[0].state, 'connected')
 })

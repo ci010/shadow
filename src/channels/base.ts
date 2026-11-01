@@ -70,8 +70,8 @@ export interface BaseChannel {
   /** Configure explicit message admission before starting the channel. */
   setStreamCollector?(collector: (event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean) => Promise<void>): void
   setReceiver(receiver: ReceiveChannelMessage): void
-  /** Service strategies are lazy: source selection must precede execution. */
-  setReceivePolicy?(receiver: ReceiveChannelPolicy): void
+  /** Platform strategies are lazy: host listener selection precedes execution. */
+  setReceivePolicy?(receiver: ReceiveChannelPolicy, mode?: 'service' | 'personal'): void
 
   setStatusListener?(listener: (state: ChannelState) => void): void
   getCapabilities?(chatId: string): ChannelCapabilities | Promise<ChannelCapabilities>
@@ -113,21 +113,23 @@ export abstract class AbstractChannel implements BaseChannel {
   private streamCollector?: (event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean) => Promise<void>
   setStreamCollector(collector: NonNullable<AbstractChannel['streamCollector']>): void { this.streamCollector = collector }
   protected async collectStream(event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean): Promise<void> { this.assertConnection(); await this.streamCollector?.(event, isGroup) }
-  private servicePolicy?: ReceiveChannelPolicy
-  setReceivePolicy(receiver: ReceiveChannelPolicy): void { this.servicePolicy = receiver }
-  protected get hasReceivePolicy(): boolean { return !!this.servicePolicy }
-  /** Only normalize source metadata here; runPolicy owns trigger/processor work and
-   * is called only after the production router has selected its BOT handler.
-   * Standalone/personal adapters retain their existing direct policy execution.
-   */
+  private inputPolicy?: ReceiveChannelPolicy
+  private inputPolicyMode: 'service' | 'personal' = 'service'
+  setReceivePolicy(receiver: ReceiveChannelPolicy, mode: 'service' | 'personal' = 'service'): void {
+    this.inputPolicy = receiver; this.inputPolicyMode = mode
+  }
+  protected get hasReceivePolicy(): boolean { return !!this.inputPolicy }
+  /** Normalize source metadata only. In production, the selected BOT or Personal
+   * Session handler starts the strategy; only standalone adapters run it locally. */
   protected async runReceivePolicy(input: Pick<InboundMessage, 'senderId' | 'chatId' | 'messageId' | 'content'> & Partial<InboundMessage>, runPolicy: RunChannelPolicy): Promise<void> {
     this.assertConnection()
     const message: InboundMessage = { ...input, channel: this.name, timestamp: input.timestamp ?? new Date().toISOString(),
       ...(this.address(input.chatId) ? { channelAddress: this.address(input.chatId) } : {}) }
-    if (this.servicePolicy) await this.servicePolicy(message, async configuration => {
-      if (!configuration || configuration.platform !== this.name ||
-        ((configuration.platform === 'qq' || configuration.platform === 'feishu') && !['mention', 'all'].includes(configuration.trigger)))
+    if (this.inputPolicy) await this.inputPolicy(message, async configuration => {
+      if (this.inputPolicyMode === 'service' && (!configuration || configuration.platform !== this.name ||
+        ((configuration.platform === 'qq' || configuration.platform === 'feishu') && !['mention', 'all'].includes(configuration.trigger))))
         throw new ChannelAdmissionError('Selected BOT receive configuration required', 403)
+      if (this.inputPolicyMode === 'personal' && configuration !== undefined) throw new ChannelAdmissionError('Personal policy cannot use Service configuration', 403)
       await runPolicy(configuration)
     })
     else await runPolicy()

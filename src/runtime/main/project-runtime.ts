@@ -1,10 +1,13 @@
-import { ChannelInputRouter } from '../../input/channel-router.ts'
+import { InputRouter } from '../../input/router.ts'
+import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../../channels/input.ts'
+import { sessionInputListeners, handleSessionInput } from '../../sessions/input-listeners.ts'
+import { handleBotInput } from '../../bots/input.ts'
 import { ProposalInboxes } from '../../sessions/proposal-inbox.ts'
 import { createActivityInvalidator, sessionActivityFingerprint, sessionActivityReadModel } from '../../sessions/activity-invalidation.ts'
 import { BotDeployments } from '../../bots/deployments.ts'
 import { validateBotInference, parseBot, type BotDefinition } from '../../bots/sdk.ts'
-import { DirectoryBots, DirectoryBotService } from '../../agent-authoring/bot-runtime.ts'
-import { isOwnerAuthoringSession } from '../../agent-authoring/owner-session.ts'
+import { DirectoryBots, DirectoryBotService } from '../../bots/runtime.ts'
+import { isOwnerSession } from '../../sessions/owner-policy.ts'
 import { SourceResources } from '../../channels/source-resources.ts'
 import { discordReadMessage } from '../../channels/discord-operations.ts'
 import { collectDiscordHistory } from '../../channels/discord-stream.ts'
@@ -12,7 +15,6 @@ import { ChannelMessageStream } from '../../channels/message-stream.ts'
 import { ChannelStreamTool } from '../../tools/channel-stream.ts'
 import { DiscordPatrolTool } from '../../tools/discord-patrol.ts'
 import { WatermarkTool } from '../../tools/watermark.ts'
-import { profileBindings } from '../../agent-authoring/capability-profiles.ts'
 import { FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from '../../folders/picker.ts'
 import { bundledChromeAdapter } from '../../browser/chrome-adapter.ts'
 import { SessionProxyTool } from '../../tools/session-proxy.ts'
@@ -29,18 +31,13 @@ import { randomUUID } from 'node:crypto'
 import { writeFile as nodeWriteFile } from 'node:fs/promises'
 import { Hono } from 'hono'
 import { AgentTypesManager } from '../../agent/types/manager.ts'
-import { AgentResourceStore } from '../../agent-authoring/store.ts'
-import { AuthoringChanges } from '../../agent-authoring/changes.ts'
-import { authoringChangeTool, createAuthoringHandler, type ChangeManagementOptions } from '../../agent-authoring/change-management.ts'
-import { AuthoringProbeRequests, authoringProbesPlugin } from '../../agent-authoring/probe-requests.ts'
-import { AgentAuthoringService } from '../../agent-authoring/service.ts'
-import { CapabilityBroker } from '../../agent-authoring/capabilities.ts'
-import { AgentCredentialStore } from '../../agent-authoring/credentials.ts'
-import { CredentialRequests } from '../../agent-authoring/credential-requests.ts'
+import { CapabilityBroker } from '../../execution/grants.ts'
+import { CredentialStore } from '../../credentials/store.ts'
+import { CredentialRequests } from '../../credentials/requests.ts'
 import { agentToolTest } from '../../tools/agent-tool-test.ts'
-import { botPackagePlugin, botPackageTool } from '../../agent-authoring/bot-package-management.ts'
-import { PublicationBusyError, PublicationRequestError, PublicationRequests, authoringPublicationPlugin } from '../../agent-authoring/publication-requests.ts'
-import { authoringManagementTool, registerAuthoringCommands, authoringCredentialsPlugin, type AuthoringManagementOptions } from '../../agent-authoring/management.ts'
+import { credentialRequestTool } from '../../credentials/tool.ts'
+import { credentialsPlugin } from '../../credentials/routes.ts'
+import { botPackagePlugin, botPackageTool } from '../../bots/management.ts'
 import { AgentApp } from '../../agent/app.ts'
 import { BackgroundTaskManager } from '../../agent/background-task.ts'
 import { backgroundTasksPlugin } from '../../agent/background-task-routes.ts'
@@ -55,7 +52,7 @@ import { SessionTool } from '../../tools/session.ts'
 import { runtimeDiscoveryProvider, runtimeIdentityProvider, type RuntimeProviderDeps } from '../../agent/context/runtime.ts'
 import { workspaceProvider } from '../../agent/context/workspace.ts'
 import { IdentityManager } from '../../agent/identity.ts'
-import { inferenceSettings, validateInferenceCapabilities, type LlmRuntimeConfig } from '../../agent/llm-config.ts'
+import { inferenceSettings, type LlmRuntimeConfig } from '../../agent/llm-config.ts'
 import { MemoryStore } from '../../agent/memory.ts'
 import { agentTypesPlugin } from '../../agent/types/routes.ts'
 import { createConfigCommand } from '../../slash-commands/handlers/config.ts'
@@ -75,7 +72,7 @@ import { slashCommandsPlugin } from '../../slash-commands/routes.ts'
 import type { Config } from '../../config/schema.ts'
 import { HandoffManager } from '../../sessions/handoff/manager.ts'
 import { McpManager } from '../../mcp/manager.ts'
-import { ConversationContextsBusyError, SessionManager } from '../../sessions/session-manager.ts'
+import { SessionManager } from '../../sessions/session-manager.ts'
 import { SessionRetirement } from '../../sessions/retirement.ts'
 import { registerRetirementRoutes } from '../../sessions/retirement-routes.ts'
 import { SessionRetirementTool } from '../../tools/session-retirement.ts'
@@ -557,7 +554,9 @@ export async function createProjectRuntime(
     ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
   })
   const serviceDiscovery = new ServiceDiscoveryStore(project.id, resolve(workspace, 'config', 'service-discovery.json'), Date.now, () => realtime.invalidateResource?.('service-groups'))
-  const authoringDirectory = resolve(workspace, 'authoring')
+  // Compatibility location: retain credentials, grant idempotency and inbox state.
+  // Retired resource/Change/review files are neither loaded nor migrated.
+  const capabilityStateDirectory = resolve(workspace, 'authoring')
   const integrationDirectory = resolve(workspace, 'bots', 'runtime', 'discord-security')
   const botDeployments = new BotDeployments({directory:resolve(workspace,'bots'),projectId:project.id,validate:files => {parseBot({...files})}})
   const directoryBots = new DirectoryBots(botDeployments)
@@ -574,9 +573,7 @@ export async function createProjectRuntime(
   })
   cleanup.push(channelIntegrations.onChange(() => realtime.invalidateIntegrations?.()))
   cleanup.push(() => discordIntegration.stop())
-  const agentResources = new AgentResourceStore({ projectId: project.id, directory: authoringDirectory })
-  const authoringChanges = new AuthoringChanges({ projectId: project.id, directory: authoringDirectory, resources: agentResources })
-  const agentCredentials = new AgentCredentialStore(authoringDirectory)
+  const agentCredentials = new CredentialStore(capabilityStateDirectory)
   const credentialRequests = new CredentialRequests({ projectId: project.id, credentials: agentCredentials, changed: () => realtime.invalidateResource?.('interactions') })
   cleanup.push(() => credentialRequests.stop())
   const canDeliverAuthoredMessage = (id: string): boolean => {
@@ -584,7 +581,7 @@ export async function createProjectRuntime(
     return !!state && state.mode === 'session' && sessions.canReceiveSessionMessage(id)
   }
   const capabilityBroker = new CapabilityBroker({
-    projectId: project.id, directory: authoringDirectory,
+    projectId: project.id, directory: capabilityStateDirectory,
     resolveSecret: async ref => agentCredentials.resolve(ref),
     deliver: (id, input) => deliverInput(id, input),
     canDeliver: canDeliverAuthoredMessage,
@@ -592,13 +589,13 @@ export async function createProjectRuntime(
     admitProposalInbox: (name, repository, target, deliver) => proposalInboxes.admit(name, repository, target, deliver),
   })
   directoryBots.setBroker(capabilityBroker)
-  const authoring = new DirectoryBotService({
-    projectId: project.id, workspace, store: agentResources, broker: capabilityBroker,
+  const botPolicies = new DirectoryBotService({
+    projectId: project.id, workspace,
     folders: folderRegistry, remoteExecutor,
 
   }, directoryBots)
   const sessions: SessionManager = new SessionManager({
-    conversationPolicies: botConversationPolicies(botStore, combineConversationPolicies(discordIntegration, authoring), directoryBots),
+    conversationPolicies: botConversationPolicies(botStore, combineConversationPolicies(discordIntegration, botPolicies), directoryBots),
     projectId: project.id,
     promptCaptures,
     hasInitiative: id => initiatives.getSummary(id) !== null,
@@ -822,17 +819,23 @@ export async function createProjectRuntime(
     },
   })
   cleanup.push(async () => { await sessions.stop(); initiatives.close() })
+  const folderPicker = { inventory: () => mainCluster.getNodeInventory(), executor: new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+      if (request.workdirId !== undefined || ![FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation)) denyAccess()
+    }, recordRemoteJob) }
+  let organizationTopicChanged: ((id: string) => void) | undefined
   const topics = new TopicService({
     projectId: project.id,
     sessions,
     folders: folderRegistry,
+    picker: folderPicker,
+    registerRemote: (ref, signal) => folderRegistry.registerRemote(ref, signal),
     listStates: async () => (await sessions.listSessions())
       .flatMap(entry => { const state = sessions.getSessionState(entry.sessionId); return state ? [state] : [] }),
     firstMessage: id => sessions.getFirstUserMessage(id),
     resolveAgent: name => agentTypes.resolve(name),
-    changed: id => realtime.invalidateSessions(id),
+    changed: id => { realtime.invalidateSessions(id); if (id) organizationTopicChanged?.(id) },
   })
-  const proposalInboxes = new ProposalInboxes({ projectId: project.id, directory: resolve(authoringDirectory, 'proposal-inboxes'), topics, sessions })
+  const proposalInboxes = new ProposalInboxes({ projectId: project.id, directory: resolve(capabilityStateDirectory, 'proposal-inboxes'), topics, sessions })
   importTool.registerBuiltin('session', new SessionTool(topics))
   tools.register(new TaskTool(sessions))
   importTool.registerBuiltin('watermark', new WatermarkTool(workspace, project.id))
@@ -893,8 +896,9 @@ export async function createProjectRuntime(
     evidence:(id,signal)=>sessions.getPresentationEvidence(id,signal),
     activity:id=>sessions.getSessionState(id)?.lastActivityAt??'', physical:id=>{const state=sessions.getSessionState(id);return state?physicalSessionId(state):undefined}, changed:()=>realtime.invalidateSessions()})
   for(const tool of workOrganizer.tools()) { tools.register(tool); coordinator?.allow(tool) }
-  const runOrganization = async (mode:'full'|'delta',signal:AbortSignal) => {
-    const chatId = randomUUID(), sessionId = 'work-organizer:'+chatId
+  // Build admission and execution from the same current store view. Session topic
+  // sequences already fingerprint metadata/completion; no new metadata log is needed.
+  const organizationTopics = async () => {
     const topicStates = (await sessions.listHistoryStates()).filter(isLightweightTopic)
     const records = initiatives.workRecords()
     const associations = new Map(topicStates.map(state => [state.sessionId, initiatives.workSessionKeys(state.sessionId, records)]))
@@ -905,6 +909,14 @@ export async function createProjectRuntime(
       definition: { objective: sessionTopicDescription(state) || sessionTopicTitle(state) }, workflow: { title: sessionTopicTitle(state) },
       observation: { sessionId: state.sessionId },
     }))
+    return topics
+  }
+  const runOrganization = async (mode:'full'|'delta',signal:AbortSignal) => {
+    const topics = await organizationTopics()
+    signal.throwIfAborted()
+    // A queued hint may be obsolete by execution time; delta never calls the model empty.
+    if (mode === 'delta' && !workOrganizer.hasDelta(topics)) return
+    const chatId = randomUUID(), sessionId = 'work-organizer:'+chatId
     const manifest = workOrganizer.begin(sessionId,mode,signal,topics)
     let problem: 'execution_failed' | 'unfinished' | undefined
     try {
@@ -921,10 +933,32 @@ export async function createProjectRuntime(
     } finally { workOrganizer.end(); await sessions.updateAutomationOrganization(sessionId,workOrganizer.status(),problem); await sessions.finalizeAutomation(sessionId) }
   }
   const organizationController = new OrganizationController({
-    scope, organize: runOrganization, organizationStatus: () => workOrganizer.status(),
+    scope, organize: runOrganization, hasDelta: async () => workOrganizer.hasDelta(await organizationTopics()), organizationStatus: () => workOrganizer.status(),
     changed: () => realtime.invalidateSessions(),
   }, config.organization.enabled)
   cleanup.push(() => organizationController.stop())
+  const organizationHints = new Map<string, string>()
+  const hintOrganization = (sessionId: string, ended = false) => {
+    const state = sessions.getSessionState(sessionId)
+    // Excludes automation workers and temporary child executions: presentation
+    // writes and organizer lifecycle notifications cannot feed back into admission.
+    if (!state || !isLightweightTopic(state)) return
+    const key = `${ended ? 'ended' : 'metadata'}:${sessionId}`
+    const fingerprint = ended ? String(sessionTopicSequence(state)) : JSON.stringify([
+      state.name, state.description, state.topic, state.generatedTitle, state.completed,
+    ])
+    if (organizationHints.get(key) === fingerprint) return
+    organizationHints.set(key, fingerprint)
+    organizationController.notify()
+  }
+  const organizationSubscriptions = [bus.on('session.changed', fact => {
+    if (fact.metadataOnly) hintOrganization(fact.sessionId)
+  }), bus.on('session.renamed', fact => hintOrganization(fact.sessionId)),
+  bus.on('session.ended', fact => hintOrganization(fact.sessionId, true)),
+  bus.on('session.turn.finished', fact => hintOrganization(fact.sessionId, true))]
+  cleanup.push(() => { for (const subscription of organizationSubscriptions) bus.off(subscription) })
+  organizationTopicChanged = id => hintOrganization(id)
+  cleanup.push(() => { organizationTopicChanged = undefined; organizationHints.clear() })
   const github = new GitHubService(new GitHubStore(workspace), new GitHubClient(), {
     alignment,
     durableSession: id => {
@@ -1101,48 +1135,18 @@ export async function createProjectRuntime(
     defaults: { ...llm },
     models: provider.listModelInfos ? await provider.listModelInfos() : (await provider.listModels()).map(id => ({ id })),
   })
-  const authoringOptions: Omit<AuthoringManagementOptions, 'publicationRequests'> = {
-    service: authoring, credentials: agentCredentials, credentialRequests,
-    inventory: () => ({
+  const botInventory = () => ({
       bots: botStore.list().map(({ id, platform, displayName, enabled, legacySessionId }) => ({ id, platform, displayName, enabled, legacySessionId })),
       conversations: sessions.listSessions().map(session => ({
-        sessionId: session.sessionId, address: authoring.address(session.sessionId),
+        sessionId: session.sessionId, address: botPolicies.address(session.sessionId),
         inferenceOverrides: inferenceSettings(sessions.getSessionState(session.sessionId)?.config),
       })),
       pendingServiceGroups: botStore.list().flatMap(bot => channels.pendingServiceGroups(bot.id)).map(({ messages: _messages, ...metadata }) => metadata),
       folders: folderRegistry.list(),
-    }),
-    retire: async matches => {
-      try { await sessions.retireIdleConversationContexts(matches) } catch (error) {
-        if (error instanceof ConversationContextsBusyError) throw new PublicationBusyError(error.message)
-        throw error
-      }
-    },
-    validateLive: async snapshot => {
-      if(snapshot.bundle.bindings.length)throw new Error('BOT bindings must be configured and deployed from a registered source directory with bot_package.')
-      const catalog = snapshot.bundle.bindings.some(binding => binding.enabled) ? await inferenceCatalog() : undefined
-      for (const binding of [...snapshot.bundle.bindings.filter(binding => binding.enabled), ...profileBindings(snapshot)]) {
-        if (binding.platform === 'discord') throw new Error('Discord assignments are managed in Project Bots > Discord access. Disable legacy bindings before publishing this bundle.')
-        const bot = botStore.get(binding.botInstanceId)
-        if (bot.platform !== binding.platform) throw new Error('Binding platform does not match its bot instance.')
-        const policy = agentResources.preview({ ...binding, projectId: project.id }, snapshot)
-        if (policy && catalog) validateInferenceCapabilities(policy.agent, catalog.defaults, catalog.models,
-          provider.qualifiedModelId(policy.agent.model ?? catalog.defaults.model))
-        for (const id of binding.readFolders) {
-          if (!folderRegistry.get(id)) throw new Error(`Read folder ${id} is not registered in this Project.`)
-        }
-        for (const grant of binding.grants) {
-          if (grant.kind === 'http' && grant.credential && !agentCredentials.names().includes(grant.credential.secretRef)) {
-            throw new Error(`Credential reference ${grant.credential.secretRef} must be provisioned outside the conversation before publication.`)
-          }
-          if (grant.kind === 'inbox' && !canDeliverAuthoredMessage(grant.sessionId)) throw new Error('Inbox target must be a durable conversation in this Project.')
-        }
-      }
-    },
-  }
+    })
   const canAuthor = (id: string): boolean => {
     const state = sessions.getSessionState(id)
-    if (!isOwnerAuthoringSession(state, project.id) || !state || sessions.isManagedConversation(id)) return false
+    if (!isOwnerSession(state, project.id) || !state || sessions.isManagedConversation(id)) return false
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirLookup)
     return locations.workdir.available && locations.workdir.locality === 'local'
   }
@@ -1153,61 +1157,6 @@ export async function createProjectRuntime(
     ref => agentCredentials.names().includes(ref),
   )
   cleanup.push(() => pollingSources.stop())
-  const publicationRequests = new PublicationRequests({
-    changed: () => realtime.invalidateResource?.('interactions'),
-    ...authoringOptions,
-    validateRequest: request => {
-      if (!request.change) return
-      const change = authoringChanges.get(request.change.id)
-      if (change.closed || change.snapshot.revision !== request.revision ||
-        change.accessRevision !== request.change.accessRevision ||
-        change.base.revision !== request.baseRevision ||
-        !(canAuthor(request.change.sourceSessionId) ||
-          request.change.sourceSessionId === 'owner:service-groups' && change.ownerSessionId === 'owner:service-groups')) {
-        throw new PublicationRequestError('stale_request', 409, 'The reviewed Change or authoring session is no longer current. Request a new review.')
-      }
-      authoringChanges.authorize(change.id, request.change.sourceSessionId)
-    },
-  })
-  const probeRequests = new AuthoringProbeRequests({
-    changed: () => realtime.invalidateResource?.('interactions'),
-    projectId: project.id, directory: authoringDirectory, changes: authoringChanges,
-    service: authoring, credentials: agentCredentials, canAuthor,
-    notify: async request => {
-      await events.emit({
-        type: 'authoring.probe.completed', source: 'system', targetSessionId: request.sourceSessionId,
-        delivery: { urgency: 'queue' },
-        content: `Authoring probe ${request.id}: ${request.status}. Change ${request.changeId}, revision ${request.revision}. ` +
-          (request.runId ? `Read saved run ${request.runId} with authoring_change; no publication or write was performed.`
-            : 'No live request ran. Do not automatically request another approval.'),
-        meta: { changeId: request.changeId, requestId: request.id, runId: request.runId ?? '' },
-      })
-    },
-  })
-  let publicationRetryTimer: ReturnType<typeof setInterval> | undefined
-  let publicationRetry: Promise<void> | undefined
-  const resumeApprovedPublications = () => {
-    if (publicationRetry) return
-    publicationRetry = publicationRequests.retryWaiting().then(() => {}, error => {
-      console.error('[authoring-publication] Could not resume reviewed publication', {
-        error: error instanceof PublicationRequestError ? error.code : error instanceof Error ? error.name : 'Error',
-      })
-    }).finally(() => { publicationRetry = undefined })
-  }
-  const stopPublicationReviews = async () => {
-    clearInterval(publicationRetryTimer)
-    publicationRequests.stop()
-    await publicationRetry
-  }
-  const changeManagement: ChangeManagementOptions = {
-    changes: authoringChanges, service: authoring, credentials: agentCredentials,
-    publications: publicationRequests, probes: probeRequests, canAuthor,
-    inventory: authoringOptions.inventory, validateLive: authoringOptions.validateLive,
-    inference: inferenceCatalog,
-    evaluateScenario: (prompt, tools, input, signal, llmOverrides) =>
-      sessions.evaluateAuthoringScenario({ prompt, tools, input, signal, llmOverrides }),
-  }
-  const changeTool = authoringChangeTool(changeManagement)
   const learningRuntime = new LearningRuntime(sessions, project.id, skills)
   const discordLearning = new DiscordLearning({
     projectId: project.id, directory: resolve(integrationDirectory, 'learning'), runtime: discordIntegration,
@@ -1223,17 +1172,7 @@ export async function createProjectRuntime(
     tools.register(tool)
     importTool.registerBuiltin(tool.name, tool)
   }
-  tools.register(changeTool)
-  importTool.registerBuiltin(changeTool.name, changeTool)
-  const authoringVfs = createAuthoringHandler(changeManagement)
-  vfs.mount('v:authoring', 'scoped agent/skill Change files; exact-revision edits and saved check runs', authoringVfs.read, undefined, authoringVfs.write)
-  const authoringManagement: AuthoringManagementOptions = { ...authoringOptions, publicationRequests, canAuthor }
-  cleanup.push(stopPublicationReviews)
-  cleanup.push(() => probeRequests.stop())
-  const projectConfigTool = authoringManagementTool(authoringManagement)
-  tools.register(projectConfigTool)
-  importTool.registerBuiltin(projectConfigTool.name, projectConfigTool)
-  registerAuthoringCommands(commandDispatcher, authoringManagement)
+  importTool.registerBuiltin('credential_request', credentialRequestTool({ projectId: project.id, requests: credentialRequests, canManage: canAuthor }))
 
   tools.register(
     new MessageTool(
@@ -1268,8 +1207,7 @@ export async function createProjectRuntime(
     },
     protected: id => backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs ||
       processManager.list().some(process => !process.exitedAt) ||
-      !!credentialRequests.pending() || !!publicationRequests.pending() ||
-      probeRequests.list().some(request => request.status === 'pending' || request.status === 'running') ||
+      !!credentialRequests.pending() ||
       cronService.listJobs().some(job => job.enabled !== false &&
         (job.target?.sessionId === id || job.originSessionId === id || job.workspaceRoot === id)),
   })
@@ -1309,7 +1247,7 @@ export async function createProjectRuntime(
   })
   const automationProfiles = new AutomationProfileService(cronService, sessions, project.id, id => {
     if (id === 'system:work-organizer') return { kind: 'event', scope: 'current_runtime',
-      description: 'Full or delta organization starts only on explicit request. No observation subscription or periodic schedule.' }
+      description: 'Automatic delta reconciliation after topic metadata, creation, turn-finished or ended notifications: 30-second debounce, at most 2-minute wait, persisted source-sequence preflight and rate-limited retry. Startup checks unfinished delta. Explicit full or delta remains available.' }
     if (id.startsWith('learning:')) {
       const policy = configStore.current().learning
       const intervalMs = id === 'learning:reflector' ? policy.reflectIntervalMs : id === 'learning:encapsulator' ? policy.encapsulateIntervalMs
@@ -1367,7 +1305,7 @@ export async function createProjectRuntime(
 
   const runLearning = (pipeline: Pipeline): LearningCallbacks['reflector'] => async (signal, job, accepted, manual) => {
     const scoped = await discordLearning.run(pipeline, signal, accepted, manual)
-    const privateRun = await learningRuntime.run(pipeline, signal, job, accepted, cronDispatcher)
+    const privateRun = await learningRuntime.run(pipeline, signal, job, accepted, cronDispatcher, manual)
     return privateRun || scoped
   }
   const learning = new LearningService(bus, scope, {
@@ -1409,12 +1347,19 @@ export async function createProjectRuntime(
       realtime.invalidateResource?.('config')
       realtime.invalidateResource?.('channels')
   }
-  const inputs = new ChannelInputRouter({ projectId: project.id, bots: botStore, directory: directoryBots,
-    receive: message => agent.receiveChannelMessage(message) })
-  const channels: ChannelManager = new ChannelManager(config, bus, sessions, inputs.receive, {
+  const inputHandlers = { sessions, bots: botStore, directory: directoryBots,
+    receive: (message: import('../../bus/events.ts').InboundMessage) => agent.receiveChannelMessage(message) }
+  const inputs = new InputRouter<ChannelInputPayload, ChannelInputResult>(project.id, {
+    listeners: () => [...sessionInputListeners(project.id, sessions, botStore), ...directoryBots.inputListeners()],
+    deliver: (target, input) => target.kind === 'session'
+      ? handleSessionInput(target.id, input, inputHandlers) : handleBotInput(target.id, input, inputHandlers),
+  })
+  const channels: ChannelManager = new ChannelManager(config, bus, sessions,
+    async message => requireChannelReceipt(await inputs.route(channelMessageEnvelope(botStore, message))), {
     projectId: project.id, instanceStore: botStore, realtime, discordIntegration, serviceDiscovery, messageStream: new ChannelMessageStream(workspace,project.id),
-    routeServiceInput: (message, runPolicy) => inputs.policy(message, runPolicy),
-    routeObservation: (connection, bindingId, runPolicy) => inputs.observation(connection, bindingId, runPolicy),
+    authorizeWebRequest: dependencies.authorize,
+    routeInputPolicy: async (message, runPolicy) => requirePolicyReceipt(await inputs.route(channelMessageEnvelope(botStore, message, runPolicy))),
+    routeObservation: async (connection, bindingId, runPolicy) => requirePolicyReceipt(await inputs.route(observationEnvelope(botStore, connection, bindingId, runPolicy))),
     // Admission checks must not invoke the throwing managed-conversation policy resolver.
     serviceAssigned: directoryBots.serviceAssigned,
   })
@@ -1469,7 +1414,7 @@ export async function createProjectRuntime(
   directoryBots.setChannelOperations((request,context)=>channels.executeOperation(request,context))
   const botPackageOptions = {
     projectId:project.id,deployments:botDeployments,runtime:directoryBots,folders:folderRegistry,
-    ask:tools.get('ask')!,canAuthor,inventory:authoringOptions.inventory,pending:new Map<string,unknown>(),
+    ask:tools.get('ask')!,canAuthor,inventory:botInventory,pending:new Map<string,unknown>(),
     validate:async (files:Record<string,string>,signal:AbortSignal) => {
       const bot = parseBot(files)
       if (bot.mode === 'service' && (bot.model !== undefined || bot.reasoningEffort !== undefined)) {
@@ -1505,7 +1450,7 @@ export async function createProjectRuntime(
       const personalConnections = [...definitions.filter(item=>item.bot.mode==='personal').map(item=>item.bot.connection), ...(candidate?.mode === 'personal' ? [candidate.connection] : [])].filter((id): id is string => !!id)
       const bindings = definitions.flatMap(item=>item.bot.bindings)
       const beforeRevision = botDeployments.read(id)?.deployment.revision
-      const result = await authoring.changePublished(async () => { await sessions.retireIdleConversationContexts(sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
+      const result = await botPolicies.changePublished(async () => { await sessions.retireIdleConversationContexts(sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
         ? sessions.getSessionState(sessionId)?.channelBoundary?.bindingId === binding.id
         : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId}))) },async () => {
         channelIntegrations.setBotPublication(true)
@@ -1525,9 +1470,7 @@ export async function createProjectRuntime(
   for (const tool of channelTools(channels)) importTool.registerBuiltin(tool.name, tool)
   const folders = new FolderService({
     registry: folderRegistry,
-    picker: { inventory: () => mainCluster.getNodeInventory(), executor: new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
-      if (request.workdirId !== undefined || ![FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation)) denyAccess()
-    }, recordRemoteJob) },
+    picker: folderPicker,
     remoteExecutor,
     createSession: async (folder, requestId) => {
       const chatId = `chat-${requestId ?? randomUUID()}`
@@ -1571,10 +1514,8 @@ export async function createProjectRuntime(
     discordIntegrationPlugin({ store: channelIntegrations, runtime: discordIntegration, transport: channels.discordTransport(),
       bots: botStore, memory: memoryDomains, agents: agentTypes, sessions, learning: discordLearning, authorize: dependencies.authorize }),
     slashCommandsPlugin(commandDispatcher, sessions, dependencies.authorize),
-    authoringCredentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
-    authoringPublicationPlugin(publicationRequests, dependencies.authorize),
+    credentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
     botPackagePlugin(botPackageOptions, dependencies.authorize),
-    authoringProbesPlugin(probeRequests, dependencies.authorize),
     otelPlugin(otelStore),
     agentTypesPlugin(sessions, agentTypes),
     sessionDiagnosisPlugin({
@@ -1653,8 +1594,6 @@ export async function createProjectRuntime(
       () => audioRoutes.close(),
       () => a2a.close(),
       () => credentialRequests.stop(),
-      stopPublicationReviews,
-      () => probeRequests.stop(),
       () => io.shutdown(),
       () => microApps.shutdown(),
       () => knowledgeSchedule.stop(),
@@ -1707,6 +1646,7 @@ export async function createProjectRuntime(
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
     await learningRuntime.recover()
     learning.start()
+    organizationController.start()
   })
   await ready
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
@@ -1715,9 +1655,6 @@ export async function createProjectRuntime(
   github.start()
   a2a.validate()
   void knowledgeSchedule.start().catch(error => console.error('[knowledge] Scheduled scan failed', error))
-  resumeApprovedPublications()
-  publicationRetryTimer = setInterval(resumeApprovedPublications, 2000)
-  publicationRetryTimer.unref()
   // Local readiness must not wait for external platform authentication or networking.
   // Admission starts only after the session runtime can receive channel messages.
   await channels.startAll(app, { waitForConnections: false })

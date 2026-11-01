@@ -136,8 +136,21 @@ gap**, never silently skip and ack missing events. For intentional recovery, cho
 a new consumer and pass `initialAfter` equal to an inspected directory floor (or
 another explicitly chosen position below `next`). This initializes a new scope
 only; it cannot reset existing progress. Record the lost range in your workflow.
-Journal conflicts/locks fail closed; do not delete live lock directories. After a
-crash, stop writers and investigate before operator recovery.
+Journal conflicts/locks fail closed; do not delete live lock directories. New
+locks contain `owner.json` with the acquiring PID, hostname and acquisition time
+for diagnosis. This is not a lease: neither age nor a PID alone authorizes stealing
+a lock. Legacy locks can be empty, and a crash between acquisition and ownership
+recording can also leave an empty lock. After a crash, stop all writers and
+investigate before operator recovery. Preserve `events.json`; move an abandoned
+lock aside only while writers are stopped. Restarting alone does not clear locks.
+
+Transport-state gap recording is best-effort: a failure to read the directory or
+append a gap logs `phase=stream-gap` and exposes an event-stream-degraded message
+on the Bot status, without failing connection startup or cleanup. The warning
+persists for that adapter instance because a later successful connection cannot
+prove that the missing gap was recovered. Actual message collection and consumer
+journals still fail closed; this isolation does not restore storage or guarantee
+that messages were collected.
 
 All verification used synthetic adapters/REST mocks. Live Discord API behavior,
 Gateway reconnect/resume and deployed permission configurations are not validated

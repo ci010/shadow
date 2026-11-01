@@ -9,7 +9,7 @@ The existing components are sufficient execution/delivery substrates, but **not 
 - `src/events/service.ts`, `publishChannelMessage` / `resolveDelivery`: publication excludes the original session, and legacy `silent` overrides subscription urgency. Existing debounce delivers the latest payload plus coalescing metadata, not a full content batch.
 - `src/channels/integration.ts`, `authorize`: managed channels accept verified platform user inputs, not arbitrary events. Turning a script event into a user input would break this boundary.
 - `src/script-runtime/bridge.ts`: interactive exec tool/infer bridges require bound session authorization; infer is explicitly restricted to local Node exec. Do not manufacture an exec identity for ambient events.
-- `src/agent-authoring/tool-runtime.ts` already executes reviewed modules in disposable restricted children; reuse it with frozen bundled local modules and without host imports or capability grants.
+- `src/script-runtime/granted-script.ts` already executes reviewed modules in disposable restricted children; reuse it with frozen bundled local modules and without host imports or capability grants.
 
 The new generic `InputProcessor<T>` selects ignore / buffer / emit and owns bounded fixed windows, independently of EventService subscription delivery. The first integration is managed Discord's already-authorized ingress. No parallel event bus, scheduler service, arbitrary tool execution grant, or new authoring tool is introduced.
 

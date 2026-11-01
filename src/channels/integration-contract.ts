@@ -1,6 +1,6 @@
 import { InputProcessorSchema } from '../events/input-processor-contract.ts'
 import { z } from 'zod'
-import { CapabilityGrantSchema } from '../agent-authoring/contracts.ts'
+import { CapabilityGrantSchema } from '../execution/grant-contract.ts'
 import { MemorySourceSchema, MemoryDomainSchema, MemoryResourceSchema } from '../memory/contracts.ts'
 
 const snowflake = z.string().regex(/^[0-9]{1,20}$/)

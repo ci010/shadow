@@ -98,10 +98,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const tools = new SessionTools(baseTools, workspace)
       const context = { projectId: 'p', sessionId: 'web:self', tools, signal: new AbortController().signal } as ExecutionContext
       const paths = JSON.parse(await self.read('self.json', context))
-      equal(paths.projectDir, null)
-      assert(typeof paths.cwd === 'string' && paths.cwd.includes('workdirs'))
-      await assert.rejects(writeSelf({ cwd: workspace }), /read-only/)
-      await assert.rejects(writeSelf({ projectDir: workspace }), /read-only/)
+      deepEqual(Object.keys(paths).sort(), ['completed', 'description', 'title'])
+      for (const key of ['cwd', 'projectDir', 'workdir']) {
+        await assert.rejects(writeSelf({ [key]: workspace }), /Unknown/)
+      }
       const topic = { title: 'Explicit title', goal: 'Verify explicit state', scope: 'Current work' }
       const receipt = await writeSelf({ title: topic.title, description: 'Discovery', completed: true })
       equal(JSON.parse(receipt as string).completed, true)
@@ -632,7 +632,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await sessions.start()
       const app = new Hono()
       sessionsApiPlugin(sessions)(app)
-      const channel = new WebChannel(new Bus(), { workspace, sessionManager: sessions })
+      const channel = new WebChannel(new Bus(), { authorize: () => true, workspace, sessionManager: sessions })
       const admitted: Array<unknown> = []
       channel.setReceiver(async (message) => {
         const id = `web:${message.chatId}`
@@ -735,7 +735,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         },
       })
       await sessions.start()
-      const channel = new WebChannel(new Bus(), { workspace, sessionManager: sessions })
+      const channel = new WebChannel(new Bus(), { authorize: () => true, workspace, sessionManager: sessions })
       channel.setReceiver(async (message) => {
         await sessions.dispatch(message, {
           model: 'fixture', contextWindow: 8000, temperature: 0,

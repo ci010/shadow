@@ -88,6 +88,17 @@ test('reflection guidance asks for evidence-backed behavioral learning without f
     assert.match(task, /A truncated source is not fully reviewed/)
     assert.match(task, /attachment marker as image understanding/)
     assert.match(task, /downstream usefulness is not yet observed/)
+    assert.match(task, /Use different retention thresholds/)
+    assert.match(task, /Unresolved challenges can be retained/)
+    assert.match(task, /Do not apply this extra test to Wiki facts or significant events/)
+    assert.match(task, /candidates retained or omitted/)
+    assert.doesNotMatch(task, /Before retaining a candidate, answer/)
+    const guideline = await readFile(new URL('../types/builtin/reflector/AGENT.md', import.meta.url), 'utf8')
+    assert.match(guideline, /it need not change a future action/)
+    assert.match(guideline, /An unresolved challenge is eligible/)
+    assert.match(guideline, /use a higher bar/)
+    assert.match(guideline, /publishable skill needs a reusable procedure/)
+    assert.doesNotMatch(guideline, /Retain only facts, stated goals or conditional principles that affect future/)
     const downstream = learningTask({ ...batch, pipeline: 'encapsulator' })
     assert.doesNotMatch(downstream, /Look for learning signals/)
     assert.match(downstream, /Use learning_memory for decisions and learned_skill/)
@@ -103,7 +114,7 @@ test('missing, blocked and unverified receipts do not acknowledge source ranges'
     f.onRun(async id => {
       await f.tools.result.execute({ status: 'blocked', summary: 'Source page could not be read.' }, f.context(id))
     })
-    await assert.rejects(f.runtime.run('reflector', signal()), /blocked/)
+    await assert.rejects(f.runtime.run('reflector', signal(), undefined, undefined, undefined, true), /blocked/)
     assert.equal(f.runtime.ledger.pending('reflector')!.id, pending)
     assert.equal(f.runtime.ledger.eventsFor('encapsulator').length, 0)
   })
@@ -114,7 +125,7 @@ test('unsupported models, endpoints and reasoning settings are nonretryable lear
     const f = fixture(workspace)
     for (const code of ['model_not_supported', 'unsupported_api_for_model', 'unsupported_reasoning_effort']) {
       f.onRun(async () => { throw new Error(`[copilot] ${code}: model "fixture@copilot". Check model settings.`) })
-      await assert.rejects(f.runtime.run('reflector', signal()), error =>
+      await assert.rejects(f.runtime.run('reflector', signal(), undefined, undefined, undefined, true), error =>
         error instanceof LearningRunError && !error.retryable && error.message.includes(code))
       const batch = f.runtime.ledger.pending('reflector')!
       assert.equal(f.runtime.ledger.cursor(batch.sources[0]), 0)
@@ -172,7 +183,7 @@ test('partial effects survive restart and stable event keys prevent duplicate lo
       assert.match(tools.appendEvent({ who: 'user', what: 'Selected contextual results', origin: 'web:source' }, 'message-3-choice', f.context(id))!, /already recorded/)
       await tools.result.execute({ status: 'applied', summary: 'Recovered the persisted event.' }, f.context(id))
     })
-    await runtime.run('reflector', signal())
+    await runtime.run('reflector', signal(), undefined, undefined, undefined, true)
     const rows = (await readFile(join(workspace, batch.events[0].path), 'utf8')).trim().split('\n')
     assert.equal(rows.length, 1)
     assert.equal(runtime.ledger.eventsFor('encapsulator').length, 1)
@@ -241,7 +252,7 @@ test('direct writes and unresolved tool failures cannot masquerade as no-change,
         await assert.rejects(f.tools.result.execute({ status: 'no_change', summary: 'Nothing retained' }, f.context(id)), /Unresolved/)
         await f.tools.result.execute({ status: 'blocked', summary: 'Writing failed.' }, f.context(id))
       })
-      await assert.rejects(f.runtime.run('reflector', signal()), /blocked/)
+      await assert.rejects(f.runtime.run('reflector', signal(), undefined, undefined, undefined, true), /blocked/)
       f.onRun(async id => {
         const ctx = { ...f.context(id), toolCallId: 'write-0', recordFileChange: async (change: RecordedFileChange) => { writes.set(id, [change]) } }
         const path = join(workspace, 'memory', 'topics', 'outcomes.md')
@@ -255,7 +266,7 @@ test('direct writes and unresolved tool failures cannot masquerade as no-change,
         f.tools.appendEvent({ who: 'reflector', what: 'Retained a useful note', origin: 'web:source' }, 'outcomes', ctx)
         await f.tools.result.execute({ status: 'applied', summary: 'Recovered the direct write.' }, ctx)
       })
-      const id = String(await f.runtime.run('reflector', signal()))
+      const id = String(await f.runtime.run('reflector', signal(), undefined, undefined, undefined, true))
       assert.equal(f.runtime.ledger.outcome(id)?.artifacts, 1)
       assert.equal((await f.runtime.sources(signal())).length, 0)
     })
@@ -283,12 +294,12 @@ test('direct writes and unresolved tool failures cannot masquerade as no-change,
         total = 14
         await tools.result.execute({ status: 'no_change', summary: 'No durable signal in the original ranges.' }, context(id))
       })
-      await runtime.run('reflector', signal())
+      await runtime.run('reflector', signal(), undefined, undefined, undefined, true)
       assert.deepEqual((await runtime.sources(signal())).map(source => [source.segmentIndex, source.offset, source.end]), [[2, 10, 14]])
     })
   })
 
-  test('cancellation and recovered partial proposals preserve input and pause incomplete outcomes', async () => {
+  test('cancellation and recovered partial proposals preserve input and defer incomplete outcomes', async () => {
     await withTempWorkspace(async workspace => {
       const f = fixture(workspace)
       const controller = new AbortController()
@@ -305,7 +316,7 @@ test('direct writes and unresolved tool failures cannot masquerade as no-change,
       const restarted = new LearningRuntime(f.sessions, 'a')
       await restarted.recover()
       assert.equal(restarted.ledger.outcome('cron:partial')?.status, 'partial')
-      assert(restarted.ledger.retry('reflector').paused)
+      assert(restarted.ledger.pending('reflector')!.retry!.notBefore > Date.now())
       assert.equal((await restarted.sources(signal()))[0].offset, 0)
     })
   })

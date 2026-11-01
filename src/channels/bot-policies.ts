@@ -1,6 +1,6 @@
 import { channelAddressFromSessionId, channelSessionId } from '../bus/events.ts'
-import type { ConversationPolicies } from '../agent-authoring/service.ts'
-import type { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
+import type { ConversationPolicies } from '../bots/conversation-policy.ts'
+import type { DirectoryBots } from '../bots/runtime.ts'
 import type { BotInstanceStore } from './bot-store.ts'
 
 /** Enforced on session admission and policy refresh, including non-adapter inputs. */

@@ -1,3 +1,4 @@
+import { lifecycleErrorDetail } from './lifecycle-diagnostic.ts'
 import { IntegrationError } from './integration-store.ts'
 import { ChannelMessageStream } from './message-stream.ts'
 import { onBackendNetworkChanged } from '../execution/network/backend.ts'
@@ -45,7 +46,9 @@ export interface ChannelManagerOptions {
   discordIntegration?: DiscordIntegration
   /** External observation subscriptions share the same router as ordinary platform input. */
   routeObservation?: (connection: string, bindingId: string, runPolicy: () => Promise<void>) => Promise<void>
-  routeServiceInput?: ReceiveChannelPolicy
+  routeInputPolicy?: ReceiveChannelPolicy
+  /** Real host Request authorization, checked before Web state preparation. */
+  authorizeWebRequest?: (request: Request) => boolean | Promise<boolean>
 }
 
 // Host-wide ownership, not a routing registry. Failed cleanup retains its claim.
@@ -143,6 +146,12 @@ export class ChannelManager {
         workspace: this.config.agent.workspace,
         sessionManager: this.sessionManager,
         realtime: this.options?.realtime,
+        authorize: this.options?.authorizeWebRequest,
+        prepareSession: async id => {
+          this.sessionManager.assertFolderAccess(id)
+          await this.sessionManager.prepareCommandSession(id)
+          this.sessionManager.assertFolderAccess(id)
+        },
       })
       this.channels.set('web', web)
     }
@@ -199,17 +208,30 @@ export class ChannelManager {
         throw error
       }
     })
+    let streamDegraded = false
     channel.setStatusListener?.(state => {
       if (this.options?.messageStream && this.channels.get(bot.id) === channel && ['connecting','disconnected','error'].includes(state)) {
-        const stream = this.options.messageStream
-        for (const entry of stream.directory().filter(e=>e.connection===bot.id)) stream.append({connection:bot.id,conversation:entry.conversation,platform:bot.platform,kind:'gap',detail:`Transport ${state}; messages may be missing. Offline edits/deletes are not recoverable.`,...(entry.parent?{parent:entry.parent}:{})})
+        // Gap logging is diagnostic only: storage failures must not escape into
+        // transport callbacks or prevent health updates and lifecycle cleanup.
+        try {
+          const stream = this.options.messageStream
+          for (const entry of stream.directory().filter(e=>e.connection===bot.id)) stream.append({connection:bot.id,conversation:entry.conversation,platform:bot.platform,kind:'gap',detail:`Transport ${state}; messages may be missing. Offline edits/deletes are not recoverable.`,...(entry.parent?{parent:entry.parent}:{})})
+        } catch (error) {
+          streamDegraded = true
+          this.logLifecycleFailure(bot.id, 'stream-gap', error)
+        }
       }
       if (this.channels.get(bot.id) === channel && state !== 'connected' && state !== 'running') this.ownerChallenges.delete(bot.id)
-      if (this.channels.get(bot.id) === channel && !this.cleanupFailed.has(bot.id)) this.health.set(bot.id, {
-        state: identityFailure ? 'error' : state,
-        ...(identityFailure ? { message: identityFailure }
-          : state === 'running' ? { message: 'The platform SDK is running; transport readiness is not verified.' } : {}),
-      })
+      if (this.channels.get(bot.id) === channel && !this.cleanupFailed.has(bot.id)) {
+        this.health.set(bot.id, {
+          state: identityFailure ? 'error' : state,
+          ...(identityFailure ? { message: identityFailure }
+            : streamDegraded ? { message: 'Channel event stream degraded: transport gap could not be recorded; messages may be missing.' }
+            : state === 'running' ? { message: 'The platform SDK is running; transport readiness is not verified.' } : {}),
+        })
+        // Notify after publishing the authoritative snapshot, not just on config writes.
+        this.options?.realtime?.invalidateResource?.('channels')
+      }
     })
     this.channels.set(bot.id, channel)
     return channel
@@ -356,6 +378,13 @@ export class ChannelManager {
     })
   }
 
+  private logLifecycleFailure(id: string, phase: string, error: unknown): void {
+    const bot = this.options?.instanceStore.get(id)
+    const context = `project=${this.options?.projectId ?? this.scope?.projectId ?? 'legacy'} bot=${id} platform=${bot?.platform ?? id} phase=${phase}`
+    const detail = lifecycleErrorDetail(error, bot?.config ?? this.config.channels)
+    console.error(`[channel-manager] Lifecycle failure ${context}\n${detail}`)
+  }
+
   private async stopBot(id: string): Promise<boolean> {
     this.ownerChallenges.delete(id)
     this.options?.discordIntegration?.invalidateBot(id)
@@ -368,7 +397,8 @@ export class ChannelManager {
       await previous.stop()
       this.releaseIdentity(previous)
       return true
-    } catch {
+    } catch (error) {
+      this.logLifecycleFailure(id, 'stop', error)
       this.channels.set(id, previous)
       this.cleanupFailed.add(id)
       previous.setStatusListener?.(() => {})
@@ -384,22 +414,42 @@ export class ChannelManager {
       ...(bot.legacySessionId ? { legacySessionId: true } : {}),
     } : undefined
     if (scope) channel.setBotScope?.(scope)
-    if (bot?.purpose === 'service' && scope && this.options?.routeServiceInput) {
-      if (!channel.setReceivePolicy) throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
-      channel.setReceivePolicy(async (message, runPolicy) => {
+    if (bot && bot.purpose !== 'legacy' && scope) {
+      if (!channel.setReceivePolicy && this.options?.routeInputPolicy) throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
+      channel.setReceivePolicy?.(async (message, runPolicy) => {
         const verify = this.options!.instanceStore.accessGuard(bot.id)
         const guard = channel.connectionGuard?.()
         const assertSource = () => {
           verify(); guard?.()
           const current = this.options!.instanceStore.get(bot.id)
           if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key) ||
-            !current.enabled || current.purpose !== 'service' || message.channel !== channel.name || !channel.isAllowed(message.senderId))
-            throw new ChannelAdmissionError('Service source is unavailable', 403)
+            !current.enabled || current.purpose !== bot.purpose || message.channel !== channel.name || !channel.isAllowed(message.senderId))
+            throw new ChannelAdmissionError('Platform source is unavailable', 403)
         }
         assertSource()
-        await this.options!.routeServiceInput!({ ...message, channelAddress: { ...scope, conversationId: message.chatId }, admin: false },
+        if (bot.purpose === 'personal') {
+          if (message.isGroup !== false) throw new ChannelAdmissionError('Verified owner direct messages only', 403)
+          if (bot.platform === 'discord') {
+            if (!(channel instanceof DiscordChannel)) throw new ChannelAdmissionError('Private Discord DM required', 403)
+            const inspection = await channel.inspectConversation(message.chatId, message.senderId, new AbortController().signal)
+            assertSource()
+            if (inspection.location.type !== 1 || inspection.location.recipientId !== message.senderId) throw new ChannelAdmissionError('Private Discord DM required', 403)
+          }
+          // Pairing is host control-plane authentication, not Agent input. Record
+          // only the pending challenge proof; it installs no listener, executes no
+          // strategy and still requires the existing owner confirmation operation.
+          const pair = /^\/shadow-pair ([a-f0-9]{48})\s*$/.exec(message.content)
+          if (pair) {
+            const challenge = this.ownerChallenges.get(bot.id)
+            if (!challenge || challenge.expires <= Date.now() || challenge.senderId || pair[1] !== challenge.token) throw new ChannelAdmissionError('Pairing rejected', 403)
+            challenge.senderId = message.senderId; challenge.chatId = message.chatId
+            return
+          }
+        }
+        if (!this.options?.routeInputPolicy) throw new ChannelAdmissionError('Platform input listener unavailable', 403)
+        await this.options.routeInputPolicy({ ...message, channelAddress: { ...scope, conversationId: message.chatId }, admin: bot.purpose === 'personal' },
           async configuration => { assertSource(); await runPolicy(configuration); assertSource() })
-      })
+      }, bot.purpose)
     }
     if (bot && scope && ['qq', 'feishu'].includes(bot.platform)) channel.setGroupPreflight?.((chatId, name, message) => {
       if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key)) return false
@@ -429,13 +479,14 @@ export class ChannelManager {
             await runPolicy()
             verify(); guard?.()
           }
-          if (this.options?.routeObservation) await this.options.routeObservation(bot.id, scopeId, run)
-          else await run() // Standalone legacy integration fixtures, not production composition.
+          if (!this.options?.routeObservation) throw new ChannelAdmissionError('Observation input listener unavailable', 403)
+          await this.options.routeObservation(bot.id, scopeId, run)
         },
         observe: (data,signal,scopeId) => integration.observe(bot.id,data,signal,scopeId),
         wakeObservation: (proof,items,semantic,signal) => {
           const wake = () => integration.wakeObservation(bot.id,proof,items,semantic,signal)
-          return this.options?.routeObservation ? this.options.routeObservation(bot.id,proof.scopeId,wake) : wake()
+          if (!this.options?.routeObservation) throw new ChannelAdmissionError('Observation input listener unavailable', 403)
+          return this.options.routeObservation(bot.id,proof.scopeId,wake)
         },
         discard: id => integration.discardAdmission(id),
         confirm: async (chatId, senderId, draftId, hash, signal) => { await integration.confirmChat(bot.id, chatId, senderId, draftId, hash, signal) },
@@ -877,7 +928,8 @@ export class ChannelManager {
         this.channels.delete(id)
         try {
           await previous.stop()
-        } catch {
+        } catch (error) {
+          this.logLifecycleFailure(id, 'stop', error)
           this.cleanupFailed.add(id)
           this.channels.set(id, previous)
           previous.setStatusListener?.(() => {})
@@ -911,7 +963,7 @@ export class ChannelManager {
       // Only transport callbacks can claim connection readiness.
       if (!channel.setStatusListener) this.health.set(id, { state: 'running' })
     } catch (error) {
-      console.error(`[channel-manager] Channel failed to start: ${id}`)
+      this.logLifecycleFailure(id, 'start', error)
       try {
         await channel.stop()
         this.releaseIdentity(channel)
@@ -919,7 +971,8 @@ export class ChannelManager {
         this.health.set(id, { state: 'error', message: error instanceof ChannelSetupError
           ? error.code : error instanceof ChannelConnectionError ? error.message
           : 'Connection failed. Check credentials, platform permissions, and network access.' })
-      } catch {
+      } catch (cleanupError) {
+        this.logLifecycleFailure(id, 'cleanup-after-start-failure', cleanupError)
         this.cleanupFailed.add(id)
         channel.setStatusListener?.(() => {})
         this.health.set(id, { state: 'restart-required', message: 'Connection cleanup failed. Restart the backend before reconnecting.' })

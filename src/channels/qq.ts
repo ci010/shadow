@@ -526,10 +526,11 @@ export class QQChannel extends AbstractChannel {
       body: JSON.stringify({
         file_type: fileType,
         file_name: filename,
-        file_size: data.byteLength,
+        file_size: String(data.byteLength),
         md5: digest('md5', data),
         sha1: digest('sha1', data),
-        md5_10m: digest('md5', data.subarray(0, 10 * 1024 * 1024)),
+        // QQ's protocol prefix is 10,002,432 bytes, not 10 MiB.
+        md5_10m: digest('md5', data.subarray(0, 10_002_432)),
       }),
     })
     if (!prepareRes.ok) {
@@ -540,8 +541,8 @@ export class QQChannel extends AbstractChannel {
       throw new Error('QQ media upload preparation returned invalid JSON')
     }) as {
       upload_id?: string
-      block_size?: number
-      parts?: Array<{ index?: number; presigned_url?: string }>
+      block_size?: string | number
+      parts?: Array<{ index?: number | string; presigned_url?: string }>
     }
     if (
       !prepared.upload_id || !prepared.block_size || !prepared.parts?.length
@@ -551,14 +552,37 @@ export class QQChannel extends AbstractChannel {
       )
     }
 
-    for (let offset = 0; offset < prepared.parts.length; offset++) {
-      const part = prepared.parts[offset]
-      if (part.index === undefined || !part.presigned_url) {
+    const blockSize = Number(prepared.block_size)
+    if (!Number.isSafeInteger(blockSize) || blockSize <= 0
+      || prepared.parts.length !== Math.ceil(data.byteLength / blockSize)) {
+      throw new Error('Media upload preparation response has invalid block sizing')
+    }
+    const indices = new Set<number>()
+    const parts = prepared.parts.map(part => {
+      // Integer fields may be serialized as decimal strings by the API.
+      const index = typeof part.index === 'string' && /^\d+$/.test(part.index)
+        ? Number(part.index) : part.index
+      if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0
+        || index >= prepared.parts!.length || indices.has(index)
+        || typeof part.presigned_url !== 'string' || !part.presigned_url) {
+        // Wire shape only: never expose signed upload URLs or response bodies.
+        console.warn('[qq] Invalid upload part metadata', {
+          indexType: typeof part.index, validInteger: typeof index === 'number' && Number.isSafeInteger(index),
+          inRange: typeof index === 'number' && index >= 0 && index < prepared.parts!.length,
+          duplicate: typeof index === 'number' && indices.has(index),
+          hasUploadUrl: typeof part.presigned_url === 'string' && !!part.presigned_url,
+          parts: prepared.parts!.length,
+        })
         throw new Error('Media upload preparation response has an invalid part')
       }
+      indices.add(index)
+      return { index, presigned_url: part.presigned_url }
+    })
+
+    for (const part of parts) {
       const bytes = data.subarray(
-        offset * prepared.block_size,
-        (offset + 1) * prepared.block_size,
+        part.index * blockSize,
+        (part.index + 1) * blockSize,
       )
       const uploadBytes = new Uint8Array(new ArrayBuffer(bytes.byteLength))
       uploadBytes.set(bytes)
@@ -577,7 +601,7 @@ export class QQChannel extends AbstractChannel {
         body: JSON.stringify({
           upload_id: prepared.upload_id,
           part_index: part.index,
-          block_size: bytes.byteLength,
+          block_size: String(bytes.byteLength),
           md5: digest('md5', bytes),
         }),
       })

@@ -299,14 +299,6 @@
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-submit="true" />
-        <PublicationRequest :api-base="apiBase"
-          :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
-          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :stage="sessionStage" :can-submit="true" />
-        <AuthoringProbeRequest :api-base="apiBase"
-          :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
-          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :stage="sessionStage" :can-submit="true" />
 
         <AutomationConversationSettings v-if="automationConversation?.automation.value"
           :key="automationConversation.automation.value.id" :api-base="apiBase" :job="automationConversation.automation.value" :active="paneActive" @saved="automationConversation.refresh()" />
@@ -557,10 +549,8 @@ import { isInputRequest, MAX_YIELD_CUSTOM_TEXT_LENGTH, type AskRequest } from '.
 import { MAX_ANSWER_ATTACHMENTS } from '../../../src/sessions/answer-media.ts'
 import CredentialRequest from './CredentialRequest.vue'
 import BotChatSetup from './BotChatSetup.vue'
-import PublicationRequest from './PublicationRequest.vue'
 import ChannelGroupContext from './ChannelGroupContext.vue'
 import { serviceGroupKey } from '../service-groups.ts'
-import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
 import ExecutionMessage from './ExecutionMessage.vue'
 import ConversationSkeleton from './ConversationSkeleton.vue'
 import MessageAction from './MessageAction.vue'

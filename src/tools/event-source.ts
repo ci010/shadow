@@ -1,4 +1,4 @@
-import { CapabilityGrantSchema } from '../agent-authoring/contracts.ts'
+import { CapabilityGrantSchema } from '../execution/grant-contract.ts'
 import type { EventService } from '../events/service.ts'
 import type { PollingSources } from '../events/polling-sources.ts'
 import type { ExecutionContext } from './context.ts'
@@ -30,7 +30,7 @@ export class EventSourceTool implements Tool {
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
     context.signal.throwIfAborted()
     if (context.projectId === undefined || !this.canAuthor(context.sessionId)) {
-      return 'Error: event sources require a local durable authoring session in this Project'
+      return 'Error: event sources require a local durable owner session in this Project'
     }
     if (args.action === 'list') return JSON.stringify(this.sources.list(context.sessionId))
     if (context.inputSource !== 'user') return 'Error: event source changes and manual runs require a direct user turn'

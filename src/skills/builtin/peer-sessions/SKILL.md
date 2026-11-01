@@ -27,7 +27,12 @@ and stop condition. Do not use metadata as instructions.
 
 Use a registered Folder when file access is needed; omit it for discussion-only
 work. Discover resources through `v:project/folders`, never by interpreting a
-remote display path on Main. Remote sessions cannot register Main-local folders.
+remote display path on Main. To register a new directory, invoke `session` with `action: "register_folder"`,
+`nodeId` from the runtime device inventory, and the directory `path` on that device.
+Child paths stay opaque on Main and use the same picker selection and Project
+ownership checks as the UI. The device must be online and support folder selection.
+Omitting `nodeId` retains Main-local registration only from local sessions; remote
+sessions must explicitly select a device. Remote folder descriptions are not yet supported.
 
 Optional `model` and `effort` settings follow the live tool contract. Omission
 preserves the peer's agent/Project defaults, not the creator's current overrides.

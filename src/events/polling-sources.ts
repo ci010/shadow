@@ -3,10 +3,10 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { CapabilityGrantSchema, type CapabilityGrant } from '../agent-authoring/contracts.ts'
-import { CapabilityBroker } from '../agent-authoring/capabilities.ts'
+import { CapabilityGrantSchema, type CapabilityGrant } from '../execution/grant-contract.ts'
+import { CapabilityBroker } from '../execution/grants.ts'
 import { writePrivateFile } from '../config/store.ts'
-import { executeAuthoredTool } from '../agent-authoring/tool-runtime.ts'
+import { executeGrantedScript } from '../script-runtime/granted-script.ts'
 import type { EventService } from './service.ts'
 
 const identifier = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)
@@ -194,7 +194,7 @@ export class PollingSources {
       !subscription.channel && !subscription.chatId)) {
       throw new Error(`Subscribe this session to custom:${source.id} before polling`)
     }
-    const output = await executeAuthoredTool({
+    const output = await executeGrantedScript({
       code: source.code, args: { checkpoint: structuredClone(source.checkpoint) },
       signal, imports: ['@shadow/fetch'], allowedModules: ['@shadow/fetch'],
       callModule: (name, input, callSignal) => {

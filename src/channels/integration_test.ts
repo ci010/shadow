@@ -1,6 +1,5 @@
 import { isRuntimeContextEvent } from '../sessions/runtime-context-contract.ts'
-import { AgentResourceStore } from '../agent-authoring/store.ts'
-import { botPackageTool } from '../agent-authoring/bot-package-management.ts'
+import { botPackageTool } from '../bots/management.ts'
 import { FolderRegistry } from '../folders/registry.ts'
 import { SourceResources } from './source-resources.ts'
 import { stringify } from 'yaml'
@@ -1274,7 +1273,7 @@ test('restricted history runtime uses real Discord permission proof and blocks c
 
 test('directory Discord SDK tools run in the existing session loop with per-binding exposure and live callback checks',async t=>{
   const {BotDeployments}=await import('../bots/deployments.ts')
-  const {DirectoryBots}=await import('../agent-authoring/bot-runtime.ts')
+  const {DirectoryBots}=await import('../bots/runtime.ts')
   const f=await fixture(t)
   const deployments=new BotDeployments({directory:join(f.root,'directory-deployments'),projectId:f.projectId,runGit:async()=>{throw new Error('Git unavailable')}})
   const runtime=new DirectoryBots(deployments)
@@ -1291,8 +1290,8 @@ test('directory Discord SDK tools run in the existing session loop with per-bind
   const original=f.transport.inspect
   f.transport.inspect=async(...args)=>{inspections++;return original(...args)}
   f.responses.push({content:'',toolCalls:[{id:'sdk-call',name:'sdk_probe',arguments:{}}]},{content:'Stored',toolCalls:[]})
-  const { ChannelInputRouter } = await import('../input/channel-router.ts')
-  const inputs = new ChannelInputRouter({ projectId: f.projectId, bots: f.bots, directory: runtime,
+  const { channelInputFixture } = await import('../testing/channel-input.ts')
+  const inputs = channelInputFixture({ projectId: f.projectId, bots: f.bots, directory: runtime,
     receive: async message => { const id = f.id(message.chatId); await f.deliver(id, channelMessageInput(message)); return { status: 'accepted', sessionId: id, inputId: message.messageId } } })
   const input = await f.input('205')
   assert.ok(input.kind === 'message' && input.source.kind === 'user')

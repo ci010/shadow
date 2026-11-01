@@ -11,7 +11,7 @@ import type { WindowControlsIpc } from './window-controls.js'
 const token = 'synthetic-desktop-pairing-management-credential-123'
 const origin = 'http://127.0.0.1:43123'
 const offer = () => ({
-  version: 1, code: 'AAAA-BBBB-CCCC-DDDD-EEEE-FFFF',
+  version: 1, code: '12345678',
   expiresAt: new Date(Date.now() + 300_000).toISOString(), url: `${origin}/`,
 })
 

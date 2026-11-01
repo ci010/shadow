@@ -16,15 +16,17 @@ test('ordinary Web sessions discover administration on demand', async () => {
   }
   const skill = (await getBuiltinSkills()).get('project-administration')!
   assert.equal(skill.meta.admin, true)
-  assert.match(skill.body, /Reading this Skill grants no authority/)
-  assert.match(skill.body, /Only the owner's Publish\/Cancel/)
-  assert.match(skill.body, /Never put secrets in chat or source/)
+  assert.match(skill.body, /Reading this\s+Skill grants no authority/)
+  assert.match(skill.body, /native Deploy\/Cancel confirmation/)
+  assert.match(skill.body, /Never request\/pass secret values through chat/)
+  assert.match(skill.body, /credential_request/)
+  assert.doesNotMatch(skill.body, /`authoring_change`|`project_config`|v:authoring/)
 })
 
 test('administration builtins use existing dynamic catalog and invoke gateway, not full resident schemas', async () => {
   const base = new Tools('.')
   let calls = 0
-  const tool = { name: 'project_config', optIn: true, description: 'fixture',
+  const tool = { name: 'fixture_admin_tool', optIn: true, description: 'fixture',
     parameters: { type: 'object' as const, properties: { action: { type: 'string' } }, required: ['action'] },
     execute: async () => { calls++; return 'schema' } }
   base.register(tool)
@@ -36,13 +38,13 @@ test('administration builtins use existing dynamic catalog and invoke gateway, n
   const context: ExecutionContext = { projectId: 'p', sessionId: 'web:ordinary', physicalSessionId: 'ordinary-0',
     channel: 'web', chatId: 'ordinary', senderId: 'owner', messageId: 'input', inputSource: 'user', admin: true,
     tools, signal: new AbortController().signal }
-  assert(!tools.getDefinitions().some(def => def.function.name === 'project_config'))
-  assert.match(importer.readCatalog('project_config', tools), /v:tools\/project_config/)
-  await tools.execute('invoke_tool', { name: 'project_config', args: {} }, context)
+  assert(!tools.getDefinitions().some(def => def.function.name === 'fixture_admin_tool'))
+  assert.match(importer.readCatalog('fixture_admin_tool', tools), /v:tools\/fixture_admin_tool/)
+  await tools.execute('invoke_tool', { name: 'fixture_admin_tool', args: {} }, context)
   assert.equal(calls, 0, 'invalid arguments return contract without execution')
-  assert.equal(await tools.execute('invoke_tool', { name: 'project_config', args: { action: 'schema' } }, context), 'schema')
+  assert.equal(await tools.execute('invoke_tool', { name: 'fixture_admin_tool', args: { action: 'schema' } }, context), 'schema')
   assert.equal(calls, 1)
-  assert(!tools.getDefinitions().some(def => def.function.name === 'project_config'))
+  assert(!tools.getDefinitions().some(def => def.function.name === 'fixture_admin_tool'))
   await tools.resetDynamicAndWait()
-  assert.equal(tools.hasDynamic('project_config'), false)
+  assert.equal(tools.hasDynamic('fixture_admin_tool'), false)
 })

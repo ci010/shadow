@@ -1,3 +1,4 @@
+import { pickFolder, type FolderPickerOptions } from '../folders/picker-service.ts'
 import { isLightweightTopic } from './lightweight-topic.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -57,6 +58,8 @@ export interface TopicSummary {
 
 export interface TopicServiceOptions {
   projectId: string
+  picker?: FolderPickerOptions
+  registerRemote?: FolderRegistry['registerRemote']
   sessions: Pick<SessionManager, 'getSessionState' | 'buildSession' | 'assertFolderAccess' |
     'assertInitiativeAccess' | 'updateConversationMetadata' | 'deliver' | 'alignment' | 'validateExecutionInference'>
   listStates: () => Promise<SessionState[]>
@@ -227,8 +230,13 @@ export class TopicService {
     return this.requireSummary(sessionId)
   }
 
-  async registerFolder(path: unknown, signal?: AbortSignal, description?: string) {
-    const folder = await this.options.folders.register(absoluteDirectoryPath(path), signal, description)
+  async registerFolder(path: unknown, signal?: AbortSignal, description?: string, nodeId?: unknown) {
+    const folder = nodeId === undefined
+      ? await this.options.folders.register(absoluteDirectoryPath(path), signal, description)
+      : (await pickFolder({ picker: this.options.picker, registry: { register: this.options.folders.register.bind(this.options.folders), registerRemote: (ref, signal) => {
+        if (!this.options.registerRemote) throw new TopicError('Remote folder registration is unavailable.', 409)
+        return this.options.registerRemote(ref, signal)
+      } } }, 'select', { nodeId, path }, signal ?? new AbortController().signal, description)).folder
     this.options.changed()
     return { folder }
   }

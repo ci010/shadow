@@ -98,6 +98,8 @@ export class WebChannel extends AbstractChannel {
   }>()
 
   private sessionManager?: SessionManager
+  private readonly authorize: (request: Request) => boolean | Promise<boolean>
+  private readonly prepareSession?: (sessionId: string) => Promise<void>
   private readonly subscriptions: string[] = []
 
   constructor(
@@ -106,6 +108,10 @@ export class WebChannel extends AbstractChannel {
       allowFrom?: string[]
       workspace?: string
       sessionManager?: SessionManager
+      /** Host authentication, never inferred from a Web address or body fields. */
+      authorize?: (request: Request) => boolean | Promise<boolean>
+      /** Prepare durable host identity only after authentication, before routing. */
+      prepareSession?: (sessionId: string) => Promise<void>
       realtime?: RealtimePublisher
       /** Main-only OS folder resolver; never supplied by an HTTP request. */
       durableMediaRoots?: () => Promise<string[]>
@@ -115,6 +121,8 @@ export class WebChannel extends AbstractChannel {
     this.workspace = opts.workspace ?? '.'
     this.outputRoots = opts.durableMediaRoots ?? durableMediaRoots
     this.sessionManager = opts.sessionManager
+    this.authorize = opts.authorize ?? (() => false)
+    this.prepareSession = opts.prepareSession
 
     this.acceptToolResults = true
 
@@ -141,6 +149,13 @@ export class WebChannel extends AbstractChannel {
   }
 
   async start(app: Hono): Promise<void> {
+    // This guard precedes body-derived Session/fork/config/upload operations. The
+    // gateway also authenticates, but merely reaching a project route is no grant.
+    for (const path of ['/api/chat/*', '/api/media']) app.use(path, async (c, next) => {
+      if (!await this.authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
+      if (!this.isAllowed('web-user')) return c.json({ error: 'Sender is not authorized' }, 403)
+      return next()
+    })
     for (const path of ['/api/chat/send', '/api/chat/message', '/api/chat/upload', '/api/chat/uploads/*', '/api/media']) {
       app.use(path, async (c, next) => {
         const ids: string[] = []
@@ -286,6 +301,13 @@ export class WebChannel extends AbstractChannel {
         timeoutMs?: number
       }>()
 
+      if (!isConfigObject(body) ||
+        (body.chatId !== undefined && (typeof body.chatId !== 'string' || !body.chatId)) ||
+        (body.content !== undefined && typeof body.content !== 'string') ||
+        (body.media !== undefined && (!Array.isArray(body.media) || !body.media.every(item => typeof item === 'string'))) ||
+        (body.timeoutMs !== undefined && (typeof body.timeoutMs !== 'number' || !Number.isFinite(body.timeoutMs) || body.timeoutMs < 1 || body.timeoutMs > 600_000))) {
+        return c.json({ error: 'invalid_request' }, 400)
+      }
       if (!body.content && (!body.media || body.media.length === 0)) {
         return c.json({ error: 'content or media is required' }, 400)
       }
@@ -295,6 +317,8 @@ export class WebChannel extends AbstractChannel {
       const timeoutMs = body.timeoutMs ?? 120_000
 
       try {
+        await this.prepareSession?.(`${this.name}:${chatId}`)
+        if (!await this.authorize(c.req.raw)) throw new ChannelAdmissionError('Web authorization revoked', 403)
         const completed = new Promise<
           { content: string; media?: string[] }
         >(
@@ -315,11 +339,11 @@ export class WebChannel extends AbstractChannel {
         )
         const [, response] = await Promise.all([
           this.handleIncoming(
-            body.senderId ?? 'web-user',
+            'web-user',
             chatId,
             body.content,
             requestId,
-            { senderName: body.senderId ?? 'web-user' },
+            { senderName: 'web-user' },
             body.media,
           ),
           completed,
@@ -423,13 +447,15 @@ export class WebChannel extends AbstractChannel {
       }
 
       try {
+        await this.prepareSession?.(sessionId)
+        if (!await this.authorize(c.req.raw)) throw new ChannelAdmissionError('Web authorization revoked', 403)
         const receipt = await this.handleIncoming(
-          senderId ?? 'web-user',
+          'web-user',
           chatId,
           content ?? '',
           requestId,
           {
-            senderName: senderId ?? 'web-user',
+            senderName: 'web-user',
             ...(retry ? { retry: true } : {}),
             ...(delivery === 'queue' ? { delivery } : {}),
           },

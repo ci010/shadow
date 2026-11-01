@@ -113,7 +113,7 @@ export type ChannelReceiveConfiguration =
   | Readonly<{ platform: 'discord' }>
 /** Undefined configuration is only for standalone/personal adapter compatibility. */
 export type RunChannelPolicy = (configuration?: ChannelReceiveConfiguration) => Promise<void>
-/** Host-owned lazy platform policy, invoked by the subscribed BOT handler, not the adapter entry. */
+/** Host-owned lazy platform policy, invoked by the selected BOT or Personal Session handler, not the adapter entry. */
 export type ReceiveChannelPolicy = (message: InboundMessage, runPolicy: RunChannelPolicy) => Promise<void>
 
 /** Compatibility belongs at the channel boundary, not in the mailbox. */

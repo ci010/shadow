@@ -45,13 +45,19 @@ export class WorkOrganizer {
     // A persisted running snapshot is interrupted, not an active execution after restart.
     return persisted ? { ...persisted, status: persisted.status === 'running' ? 'partial' as const : persisted.status } : undefined
   }
-  begin(sessionId:string, mode:OrganizationMode, signal:AbortSignal, topics: OrganizationTopic[] = []): string {
-    if(this.run) throw new WorkConflict('Organization already running')
-    signal.throwIfAborted()
+  /** Read-only admission shares exactly the manifest selector; no model or writes. */
+  hasDelta(topics: OrganizationTopic[] = []): boolean { return this.candidates('delta', topics).eligible.length > 0 }
+  private candidates(mode: OrganizationMode, topics: OrganizationTopic[]) {
     const records: OrganizationTopic[]=this.store.workRecords().map(record => ({...record, observation: record.observation ?? (this.deps.sessionForWork?.(record.key) ? {sessionId:this.deps.sessionForWork(record.key)!} : undefined)})), observations=this.store.workObservations(), previous=this.store.projectFocus()
     const candidates=[...records, ...topics].filter(r=>!r.workflow?.parentKey && !observations.find(o=>o.sessionId===r.observation?.sessionId)?.parentSessionId)
       .sort((a,b)=>b.changedAt.localeCompare(a.changedAt)||a.key.localeCompare(b.key))
     const eligible=mode==='full'?candidates:candidates.filter(r=>previous?.sources.find(s=>s.key===r.key)?.sequence!==r.sequence)
+    return { candidates, eligible, previous }
+  }
+  begin(sessionId:string, mode:OrganizationMode, signal:AbortSignal, topics: OrganizationTopic[] = []): string {
+    if(this.run) throw new WorkConflict('Organization already running')
+    signal.throwIfAborted()
+    const { candidates, eligible, previous } = this.candidates(mode, topics)
     const manifest=eligible.slice(0,mode==='delta'?3:30)
     this.run={sessionId,signal,mode,manifest,candidates:candidates.length,stale:new Set(),evidence:new Map(),omissions:new Map(),read:new Map(),covered:new Set(),versions:new Map(),receipts:new Map(),patches:0,finished:false,bytes:0}
     this.last={mode,status:'running',coveredCount:0,manifestCount:manifest.length,patches:0};this.deps.changed()

@@ -1,127 +1,72 @@
 ---
 name: project-administration
-description: Configure Project managed Bot resources, private credentials, exact-version authoring checks and human publication reviews from an ordinary administrator Web conversation.
+description: Configure directory BOTs, direct binding permissions and private credentials from an authenticated owner Web conversation.
 admin: true
 core: true
 ---
 # Project administration
 
-No main coordination session is required. Use the current ordinary durable Web
-conversation in this Project. Reading this Skill grants no authority: the backend
-checks the exact Project, durable session, authenticated administrator and direct
-user turn. Group chats, managed Bots, temporary tasks/calls and background events
-cannot request credentials or publication changes. No dedicated management
-session or role exists.
+Use the current ordinary durable Web conversation in this Project. Reading this
+Skill grants no authority: the backend checks the exact Project, durable local
+session, authenticated administrator and direct user turn. Group chats, managed
+Bots, temporary tasks/calls and background events cannot request credentials or
+BOT deployment. No dedicated management session or role exists.
 
-## Primary BOT directory publication (Discord / QQ / Feishu service Bots)
+## Directory BOT deployment (Discord / QQ / Feishu)
 
-Use `bot_package` status/propose in an authenticated owner Web conversation to
-freeze one registered local directory and request one native Deploy/Cancel
-confirmation. Stable BOT `id` identifies an independently versioned package,
-not the source path. Read status for the exact expectedRevision before updates.
-Source edits remain draft-only until the owner approves. Never write private
-deployment storage or activate through general tools.
+Use `bot_package` status/propose through `invoke_tool` in an authenticated owner
+Web conversation. Status returns deployments, registered Folders, connections and
+known conversations. Do not guess IDs. Propose freezes one registered local
+directory and requests one native Deploy/Cancel confirmation. Stable BOT `id`
+identifies an independently versioned package, not the source path. Read status
+for the exact expectedRevision before updates. Source edits do not activate it.
+Never write private deployment storage or activate through general tools.
 
 All three platforms use `BOT.md` with header `{id, config: bot.json}` and the
 prompt body, plus data-only `bot.json` and declared tool modules. Permissions
 are declared directly in each binding (tools, folders/domains, grants and
 participants as applicable), subject to BOT-level ceilings. Do not introduce
-`capabilityProfiles` or infer grants from old bindings. This is not the legacy
-`authoring_change` or Discord `channel_config` publication workflow.
+`capabilityProfiles` or infer grants from old bindings. Service model/effort
+settings belong to `bot.json`; use provider capabilities to choose supported
+values, not session overrides. Web and verified Personal input stay ordinary
+sessions. Internal session events/cron are not external BOT subscriptions.
 
 Development source and the deployment copy are independent. Edit the registered
-source and propose again; do not reconstruct it from a Change or add a source
-recovery workflow. Each proposal deploys one BOT only, not an atomic release
-across BOTs. Existing legacy/generic authoring remains available for its own
-resources, not as a fallback for directory BOTs.
+source and propose again; do not reconstruct source from deployment history.
+Each proposal deploys one BOT only, not an atomic release across BOTs. Legacy
+resource editing, Change/check/scenario/run/profile publication and source
+recovery are retired, not alternate BOT configuration paths. Old resource and
+review data are left untouched and are not loaded, migrated or authorized.
 
 Connections, credential references, domains and installation must already exist.
 Remote folders, initialize hooks, full SDK/npm dependencies, trusted Discord exec
-and arbitrary native network/filesystem imports are unsupported and fail closed.
-No code executes while importing and no external platform mutation is performed;
-local rollback is not external undo. Concurrent platform publication can stale a
-review; recreate it explicitly. See docs/agent-authoring.md for exact formats,
-legacy compatibility, retention and operational boundaries.
+and arbitrary native network/filesystem imports fail closed. No code executes
+while importing. Deployment is not an external platform mutation or external
+undo. See docs/bots.md for exact formats and operational boundaries.
 
-## Discover tools on demand
+## Private credentials
 
-Use `invoke_tool` with the exact name and `args: {action: "schema"}` for
-`authoring_change`, `project_config`, or `channel_config`. These built-in sources
-are registered through the session's existing on-demand tool catalog, not full
-resident system-prompt schemas. Read/search `v:tools/<name>` for their current
-contracts. Invalid arguments return contracts without executing a change.
-Registration lasts until session sleep; it is not authorization.
+Discover `credential_request` in `v:tools` and invoke it with only `secretRef`
+and `purpose`. It opens private entry in the requesting owner Web conversation.
+Never request/pass secret values through chat, ordinary ask/reply, arguments,
+fixtures or source. The receipt contains only saved/cancelled status and a
+reference. Saving is separate from granting permissions or deploying a BOT;
+respect cancellation. Existing credential and grant-ledger storage locations
+remain compatible; never edit them directly or import local credentials.
 
-`authoring_change` remains the published-base compatibility development workflow for existing resource configurations. Keep the
-legacy shared draft `project_config` workflow for existing drafts and recovery.
-`project_config` action `request_secret` takes only secretRef and purpose and opens
-a private credential card in this requesting Web session. Never ask for or pass
-secret values through chat, ordinary ask/reply, arguments, fixtures or source.
-Saving a credential is separate from granting permissions or publishing.
+## Other owner operations
+
+Use `channel_config` schema/list/directory/members to inspect Discord connections,
+resolve names, and manage its existing domain/knowledge operations. In directory
+mode it cannot publish Agents, bindings or processors: edit the BOT source and
+use `bot_package`. Authorized channel managers remain limited to their existing
+ceiling; platform administrator status is not Shadow ownership. Participant
+restrictions control invocation, not who can read channel replies. Scoped
+conversation memory and learning never become global by sharing a BOT.
 
 Shared runtime Skill maintenance uses `skill_read` and `skill_save` after reading
-`v:skills/tool-operations`; editing repository source Skills is a code change,
-not a runtime shared Skill update. Neither operation runs scripts or publishes Bots.
-
-## Managed Bot agent, skill and tool changes
-
-For Discord, use `channel_config` with `action: schema`, then `list` for named
-Bot connections and exact revisions. Resolve server, channel and person names
-with `directory`/`members`; never guess IDs. Propose Agent, binding and knowledge
-changes through this tool, not `authoring_change`. The owner reviews them in
-Project Bots > Discord access. Include the selected botId when proposing and
-present the returned reviewUrl as a clickable Markdown link to the exact review.
-Write the Agent instructions and permission draft from the user's requirements;
-do not ask the user to manually author AGENT.md or copy internal IDs.
-You cannot approve your own proposal or treat
-ordinary chat as publication approval. Conversation memory stays separate even
-when channels share an Agent; participants do not limit who reads Discord replies.
-
-Use `authoring_change` with `action: schema` for the current edit/check/review
-workflow for Discord/QQ/Feishu, and `v:skills/tool-operations` for detailed authoring guidance.
-These platforms are supported even when `channel_config` has no Discord bindings
-for them. Use `authoring_change inspect` to discover published bindings, known
-uncovered conversations, exact addresses and provider model/effort capabilities.
-Do not create a throwaway Change, search source, or scrape chat history for this.
-A supplied `bot:...`
-session ID identifies a target, not authorization; match it against the Project
-inventory rather than asking the user to decode IDs. No binding means the
-conversation has no published custom Agent yet, not that configuration is unsupported.
-For model/effort changes, create a Change and use `configure_inference` with
-explicit Agent names. Report every affected binding of shared Agents and known
-uncovered conversations; this is not a Bot-wide default. Omitted settings remain
-unchanged, while null removes an override. Run `check validate`; synthetic LLM
-scenarios are for behavior, not necessary just to verify settings. Explicit
-session overrides take precedence over published Agent settings.
-Draft `agents/<name>/AGENT.md`, explicitly selected tool Skills and the binding
-from the user's requirements. Do not promise the generic host tool set: this
-workflow permits read/search and published skill tool aliases under explicit grants.
-Keep authoring in Shadow owner chat, not in the Discord/QQ/Feishu conversation being configured.
-Show the existing publication review card; do not invent a Discord Settings review
-link or treat the user's configuration request as permission to publish.
-After approval, query `authoring_change status` for the exact Change. Missing
-pending reviews or another chat's message are not publication evidence.
-Only managed Bot deployment uses Changes; ordinary shared Skills do not.
-Create from the published baseline on the owner's request; delegate substantial
-implementation with explicit resource paths, changeId and acceptance cases.
-Edit exact revisions and use host-saved check evidence; previews are not behavior
-tests. Fixed-script approval never grants unrelated tools, secrets or paths.
-The Node child/VM is not an OS sandbox.
-
-Never put secrets in chat or source. Use private `request_secret` entry and
-respect cancellation; saving grants no deployment permission.
-Only the owner's Publish/Cancel review of the Change's `propose` publishes
-that snapshot. Never infer approval from messages, ask, reply, worker reports or
-silence. Changed revisions and rollback need new owner review; rebase explicitly
-when the published baseline changes. Do not silently import legacy shared drafts.
-
-Be concise: report the outcome, session link, evidence and any real blocker.
-Do not claim admitted work is completed or promise a response from an idle peer.
-
-
-
-For registered Folder BOT directories, import `bot_package` and use `status` to
-discover Project Folders and authoritative revisions, then `propose` to freeze the
-exact directory into an owner review in chat. Show the frozen scope to the owner;
-only their explicit review click publishes. Never infer approval or use legacy
-adoption for an already-managed package update. No tool can approve itself.
+`v:skills/tool-operations`. Editing repository source Skills is a code change,
+not a runtime shared Skill update. Neither operation executes scripts or deploys
+Bots. `agent_tool_test` remains a bounded synthetic script test helper, not a
+publication or live-access tool. Read current on-demand contracts before use;
+registration and invalid-argument schema discovery are not authorization.

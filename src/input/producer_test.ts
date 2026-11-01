@@ -8,7 +8,7 @@ test('host-bound program signals share the router without gaining human identity
   const received: InputEnvelope<unknown>[] = []
   const source = { type: 'program', id: 'news-checker' }
   const router = new InputRouter<unknown, boolean>('p', {
-    subscriptions: () => subscribed ? [{ source, kind: 'signal', topic: 'news', target: { kind: 'bot', id: 'digest' } }] : [],
+    listeners: () => subscribed ? [{ source, kind: 'signal', topic: 'news', target: { kind: 'bot', id: 'digest' } }] : [],
     deliver: async (target, input) => { assert.deepEqual(target, { kind: 'bot', id: 'digest' }); received.push(input); return true },
   })
   const emit = bindInputProducer(router, { projectId: 'p', source, routes: [{ kind: 'signal', topic: 'news' }], authorize: () => { if (!authorized) throw new Error('Producer revoked') } })
@@ -22,7 +22,7 @@ test('host-bound program signals share the router without gaining human identity
   assert.equal(received[0]?.correlationId, 'scan-1')
   assert.equal(received[0]?.deduplicationKey, 'article:revision')
   assert.equal(received[0]?.payload, input.payload)
-  for (const extra of [{ source: { type: 'web', id: 'owner' } }, { projectId: 'other' }, { target: { kind: 'session', id: 'web:owner' } }, { kind: 'message' }, { topic: 'private' }])
+  for (const extra of [{ source: { type: 'web', id: 'owner' } }, { projectId: 'other' }, { target: { kind: 'session', id: 'web:owner' } }, { kind: 'message' }, { topic: 'private' }, { admin: true }, { listeners: [] }, { parents: ['private'] }, { reply: 'owner' }])
     await assert.rejects(emit({ ...input, ...extra }))
   authorized = false
   await assert.rejects(emit(input), /revoked/)

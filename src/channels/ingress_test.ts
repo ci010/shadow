@@ -104,7 +104,7 @@ test('a verified managed channel admission never inherits legacy group or DM adm
 
 test('nonstreaming web send waits only for admission and preserves its response shape', async (t) => {
   const bus = new Bus()
-  const channel = new WebChannel(bus, {})
+  const channel = new WebChannel(bus, { authorize: () => true,})
   const app = new Hono()
   const gate = Promise.withResolvers<DeliveryReceipt>()
   const entered = Promise.withResolvers<InboundMessage>()
@@ -127,7 +127,7 @@ test('nonstreaming web send waits only for admission and preserves its response 
 })
 
 test('web admission rejection is an HTTP error for both send modes and sync requests', async (t) => {
-  const channel = new WebChannel(new Bus(), {})
+  const channel = new WebChannel(new Bus(), { authorize: () => true,})
   const app = new Hono()
   channel.setReceiver(async () => { throw new Error('Mailbox unavailable') })
   await channel.start(app)
@@ -145,7 +145,7 @@ test('web admission rejection is an HTTP error for both send modes and sync requ
 })
 
 test('web missing receiver and unauthorized sender never return accepted responses', async (t) => {
-  const channel = new WebChannel(new Bus(), { allowFrom: ['allowed'] })
+  const channel = new WebChannel(new Bus(), { authorize: () => true, allowFrom: ['allowed'] })
   const app = new Hono()
   await channel.start(app)
   t.after(() => channel.stop())
@@ -156,8 +156,8 @@ test('web missing receiver and unauthorized sender never return accepted respons
     const unconfigured = await post(app, path, {
       chatId: 'chat', content: 'hello', senderId: 'allowed',
     })
-    assert.equal(unconfigured.status, 503)
-    assert.match((await unconfigured.json()).error, /not configured/)
+    assert.equal(unconfigured.status, 403)
+    assert.match((await unconfigured.json()).error, /not authorized/, 'Client senderId cannot override the host identity')
   }
   assert.equal(webInternals(channel).syncPending.size, 0)
 })
@@ -165,7 +165,7 @@ test('web missing receiver and unauthorized sender never return accepted respons
 test('send waits for admission and fast replies remain replayable on shared realtime', async (t) => {
   const bus = new Bus()
   const hub = new RealtimeHub()
-  const channel = new WebChannel(bus, { realtime: hub.registerProject('one') })
+  const channel = new WebChannel(bus, { authorize: () => true, realtime: hub.registerProject('one') })
   t.after(() => hub.close())
   const cursor = hub.cursor
   const app = new Hono()
@@ -199,7 +199,7 @@ test('send waits for admission and fast replies remain replayable on shared real
 
 test('retired per-send streaming fails before session creation, configuration or admission', async (t) => {
   const unexpected = () => { assert.fail('Retired stream must not create or submit work') }
-  const channel = new WebChannel(new Bus(), {
+  const channel = new WebChannel(new Bus(), { authorize: () => true,
     sessionManager: {
       getSessionState: unexpected, buildSession: unexpected, applySessionConfigPatch: unexpected,
     } as unknown as SessionManager,
@@ -218,7 +218,7 @@ test('retired per-send streaming fails before session creation, configuration or
 
 test('sync web requests await admission plus full response and clean timers on rejection', async (t) => {
   const bus = new Bus()
-  const channel = new WebChannel(bus, {})
+  const channel = new WebChannel(bus, { authorize: () => true,})
   const app = new Hono()
   const entered = Promise.withResolvers<InboundMessage>()
   channel.setReceiver(async (message) => { entered.resolve(message); return accepted(message) })
@@ -254,7 +254,7 @@ test('sync web requests await admission plus full response and clean timers on r
 
 test('sync web timeout keeps 504 and stop rejects pending work instead of returning empty success', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  const channel = new WebChannel(new Bus(), {})
+  const channel = new WebChannel(new Bus(), { authorize: () => true,})
   const app = new Hono()
   await channel.start(app)
   t.after(() => channel.stop())
@@ -285,7 +285,7 @@ test('web parent linkage precedes admission', async (t) => {
       parents.push([sessionId, parent])
     },
   } as unknown as SessionManager
-  const channel = new WebChannel(bus, { sessionManager })
+  const channel = new WebChannel(bus, { authorize: () => true, sessionManager })
   channel.setReceiver(async (message) => { order.push('receive'); return accepted(message) })
   const app = new Hono()
   await channel.start(app)
@@ -325,8 +325,10 @@ test('ChannelManager configures receivers during init and web outbound is projec
   const manager = new ChannelManager(
     { channels: {}, agent: { workspace: '.' } } as Config,
     bus,
-    { getSessionState: () => null } as unknown as SessionManager,
+    { getSessionState: () => null, assertFolderAccess() {}, async prepareCommandSession() {} } as unknown as SessionManager,
     receive,
+    { projectId: 'fixture', authorizeWebRequest: () => true,
+      instanceStore: { projectId: 'fixture', list: () => [] } as unknown as import('./bot-store.ts').BotInstanceStore },
   )
   await manager.init()
   const app = new Hono()

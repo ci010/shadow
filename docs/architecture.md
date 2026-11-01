@@ -294,7 +294,7 @@ standalone callers fall back to `agent.workspace`. Pure helpers in
       bots.v1.json                    private bot-instance configuration
       skills/  agents/  SOUL.md       project-owned learned content
       # Former BOT resource/configuration paths are not read by directory runtime.
-    authoring/                        non-BOT resources and credential provisioning
+    authoring/                        compatibility: credentials, grant receipts, inbox state
     bots/<botId>/                   current/, previous/, data/, history.git/; metadata outside source
     bots/runtime/discord-security/    mutable Discord security/memory state
     memory/                          wiki, identities, events and indexes
@@ -456,18 +456,27 @@ cross-node filesystem identity guarantees, or distributed release readiness.
 
 1. **Route external input before Session entry.** Authenticated platform adapters
    and `ChannelManager` validate source/Project/connection authority.
-   `ChannelInputRouter` adapts channel messages into the generic `input/router.ts`
+   `channels/input.ts` encodes admitted messages into the generic `input/router.ts`
    envelope (source identity, kind/topic, payload, correlation and optional reply).
-   Service inputs route a lazy platform strategy to a deployed BOT subscription;
+   One `InputRouter` matches Web, Personal and Service against host listeners;
+   there is no direct-target override or payload-installed listener. Web Request
+   authentication precedes state/configuration changes and new-chat preparation;
+   only the prepared host Session identity yields a Web listener. Personal listeners
+   derive from current verified-owner DM pairings; Service listeners derive from
+   current BOT deployments. No listener means no handler or fallback, and different
+   matching handlers conflict rather than fan out.
+   Service inputs route a lazy platform strategy to a deployed BOT listener;
    the selected BOT handler, not the adapter entry, executes business triggers,
    processors and optional authorized classifiers before selecting/creating/waking
    a Session. Discord security admission may precede routing, but never executes
    that business strategy. Buffered/recovered processor attempts reacquire this
    handler scope before running stored code. QQ/Feishu receive configuration is
    binding-owned (`trigger`, default `mention`) and passed read-only by the selected
-   BOT; Service connections do not supply business trigger settings. Web and exact verified
-   personal-owner DMs have explicit ordinary Session targets, never a service
-   fallback. `AgentApp.receiveChannelMessage` then translates accepted channel
+   BOT; Service connections do not supply business trigger settings. Personal
+   strategies also run after matching the exact pairing listener, retaining their
+   ordinary configuration. Selected Session/BOT handlers recheck live source,
+   listener and receipt permission; Web/Personal are never a Service fallback.
+   `AgentApp.receiveChannelMessage` then translates accepted channel
    messages into `SessionInput`, preserving legacy IDs and native reply/thread
    addresses. [External input routing](input-routing.md) describes migration and
    the host-only program-signal extension point; no new connector is implied.
@@ -520,8 +529,8 @@ cross-node filesystem identity guarantees, or distributed release readiness.
 
 ```mermaid
 flowchart LR
-  Channel["Authorized channel / web entry"] --> Router["InputRouter: source / subscription / target"]
-  Router --> Handler["BOT receive policy or explicit Session target"]
+  Channel["Authorized channel / web entry"] --> Router["InputRouter: source / host listener / single handler"]
+  Router --> Handler["Selected BOT or Session handler: live permission checks"]
   Handler --> Ingress["AgentApp channel boundary"]
   Ingress --> Delivery["SessionManager.deliver(target, typed input)"]
   Producers["Internal cron / background completion / domain reports"] --> Events["EventService: match / dedupe / debounce"]
@@ -1197,7 +1206,8 @@ and managed fresh jobs on its existing `CronService`:
   New batches target at most four sources and an overview reading budget of
   12,000 characters / 160 lines, retaining message-based consumption cursors.
   A single oversized atomic message is isolated rather than skipped; it can
-  still require a partial result and manual recovery. Existing pending batches
+  still require a partial result and source repair; that batch is retried without
+  pausing unrelated new evidence. Existing pending batches
   retain their original scope and effects.
   Independently assess Wiki knowledge updates, key events/corrections/challenges,
   long-term memory and downstream skill material. Valuable unresolved evidence
@@ -1225,11 +1235,14 @@ receipt acknowledges input. Historical runs have no fabricated receipt.
 Failures retain their batch and effects; event keys are idempotent within the
 batch. No-op reflections do not start downstream model calls.
 
-`/learn` explicitly retries a paused pipeline. Configuration/authentication
-errors pause automatic retries; transient failures back off (one minute,
-doubling) and pause after three attempts. Retry state and unconsumed batches
-survive restart. Valid legacy watermarks are retained, not reset to reprocess
-private history. Corrupt progress is surfaced rather than silently discarded.
+Enabled Project pipelines continue scheduled fresh executions; a failed batch
+is retained with retry backoff rather than permanently pausing the automation.
+New source selection reserves unfinished ranges without acknowledging them;
+out-of-order successful ranges cannot move the acknowledged cursor across a
+failed gap. Retry state and unconsumed batches survive restart. Old pipeline-level
+paused records are normalized on load. `/learn` remains an explicit retry path.
+Valid legacy watermarks are retained, not reset to reprocess private history.
+Corrupt progress is surfaced rather than silently discarded.
 
 These are model-driven external-memory updates, not weight training. Verified
 persistence/discovery is not proof of semantic truth or improved performance.
@@ -1795,8 +1808,8 @@ validates the complete candidate, rejects unsafe paths/symlinks and invalid
 declarations, stages files, and swaps directories with rollback on ordinary
 commit failures. This is not crash-recovery infrastructure or an OS sandbox.
 There is no retained backup/history, Git repository, or bounded-session pinning.
-Built-in-only entries cannot be edited through this API. Existing Bot
-authoring/publication is unchanged and remains a separate resource system.
+Built-in-only entries cannot be edited through this API. Directory BOT deployment
+uses `bot_package` independently of shared Skill editing.
 Watcher scans discard reads racing direct manager mutations; exact Skill reads
 also reload current instructions instead of waiting for the watcher debounce.
 
@@ -1810,76 +1823,40 @@ JavaScript/erasable TypeScript tools require an owning skill's frontmatter
 skill directory and pass realpath containment checks; absolute paths and
 standalone external modules are not accepted.
 
-Published conversation tools use a separate immutable resource path under
-`src/agent-authoring`, with the same shared execution engine as generic skill
-tools. Their SKILL.md tool declaration specifies exact
-`imports: [node:path, '@shadow/service-read']`; the authored role's AGENT.md must
-explicitly allow each import in `allowedModules`. Absent/empty module lists
-deny imports. This authored role ceiling adds to controlled skill-tool import
-policy; ordinary host exec does not use the authored role ceiling.
-Runtime selectors, duplicate capabilities declarations and legacy
-`run(args, capabilities)` entrypoints are unsupported. Owners recreate old
-tools; no local runtime data or configuration is migrated.
-`@shadow/<grant-id>` exports named `call` and the same
-function as default; selected bindings still grant exact HTTP targets/routes/
-secretRefs and inbox IDs, never all main tools.
+Directory conversation policies and package management live in `src/bots`.
+`BOT.md`, data-only JSON and declared tool modules form one independent frozen
+package. Binding permissions directly select tools, resources and named service
+grants inside BOT ceilings; there are no reusable capability profiles or legacy
+resource-loader fallback. One exact-content native owner confirmation deploys
+one BOT. Source and deployment remain separate; there is no cross-BOT atomic
+release or development-source recovery. See [Directory BOTs](bots.md).
 
-The shared `src/script-runtime/runtime.ts` core executes authored tools, generic
-skill tools and host exec in disposable Node children. Controlled tools use
-`vm.SourceTextModule`, with controlled
-static/dynamic import resolution, no global process/require/fetch or default
-Node loader; exec retains host authority under a separate host policy, not a
-separate engine. The catalog in `src/script-runtime/module-policy.ts` permits exact
-supported node: identifiers, not wildcards, npm installs or arbitrary package/
-file/data/http imports. Defaults are 15 seconds wall including startup, 64 MiB
-V8 old-space (not RSS/total OS memory), 32 capability calls and 256 KiB source/
-JSON bounds; timeout, cancellation, completion and crash clean up the child.
-Module policy and the child process are not an OS sandbox for hostile code.
-Approved immutable main/developer-authored tools are trusted implementations.
-Raw fs/network modules require explicit author/owner approval and carry the
-child user's OS authority: they are not readFolders-limited and bypass named
-HTTP-grant restrictions by design when granted. Prefer @shadow grants for scoped
-HTTP/credentials. Production native filesystem tools run on Main with cwd set
-to Project Home; remote workdir sessions reject them without fallback.
-Raw native I/O can have nontransactional side effects even when cancellation or
-a revision change later rejects the result; process isolation does not roll
-those effects back.
+The shared `src/script-runtime/runtime.ts` executes controlled scripts, generic
+Skill tools and host exec in disposable Node children. BOT code has no native
+imports, process/require/fetch or default host loader. Generic scripts use their
+own explicit module policy; host exec retains host authority. The VM and child
+process are not an OS sandbox. Timeout, cancellation, completion and crash clean
+up children, but cannot undo an already performed external mutation.
 
-Tests/live use the shared runner but explicit test/probe policy permits only
-`PURE_NODE_MODULES`, rejecting effectful native imports even unused. Authoring
-tests use synthetic @shadow receipts (including sequences and safe thrown
-errors). `authoring_change` maintains independent published-base Changes with
-scoped, revocable editor assignments and immutable-version check evidence.
-Virtual authoring files never become live loader files. The authoring session can
-edit a small prompt directly or delegate explicit paths without relaying source
-bundles. Rebase is explicit and conflicts on divergent file/binding changes.
+`src/execution/grants.ts` owns named HTTPS/inbox grants, transport restrictions,
+private header injection, redaction and durable mutation receipts. It is shared
+by BOTs and polling rather than owned by a retired authoring service. Synthetic
+`agent_tool_test` and its mock responders remain in the shared script path;
+they do not grant live access or deployment rights. Internal Session events and
+cron do not enter the external input/BOT subscription router.
 
-Change probe reviews pin exact source/arguments, expose only GET grant scope,
-expire and authorize one bounded execution after an authenticated owner click
-in the topic or coordination. New test connections need no production release.
-Legacy `project_config` probes retain their unchanged-published-grant rule.
-Neither route permits writes/inbox delivery. Source revision/hash and authorization
-revision are distinct; no staging or publication is needed for candidate tests.
-Only an explicit published target tests deployed code. Probe receipts retain
-failures and transport/response evidence even when guest code catches errors.
-Developers test native fs/http with
-normal exec and project-local disposable fixtures, not synthetic tests.
-Prompt scenarios use the ordinary ephemeral session loop with only synthetic
-tools and bounded model execution, not a separate provider/tool implementation.
-Preview is assembly evidence, not a model behavior test. Runs are persisted by
-identity instead of recovered from chat logs or manually maintained reports.
+`src/credentials` owns private entry and host-only secret storage. The
+`credential_request` tool requires a direct administrator turn in a local durable
+Web session in the exact Project. `/api/credential-requests` and `/api/credentials`
+retain owner authentication, browser origin/CSRF checks and no-store responses.
+Only names/status metadata reach tools and public session events.
 
-Publication remains owner-reviewed. Durable review stores pin exact snapshots,
-base revisions and affected bindings; Change publication does not overwrite a
-legacy shared draft. Delegated Change operations do not confer live or deployment
-rights. `project_config` requires a direct administrator user turn in an ordinary
-durable local Web session in the bound Project. The Change tool validates Project,
-durable authoring session and assigned paths on every operation; proposal changes
-require direct owner input. Credentials and proposals never gain authority from
-a session name, background event, tool registration or Skill read. Reads never
-return stored credential values.
-See [Conversation agent authoring](agent-authoring.md) for formats, test inputs,
-source hashes, approval and credential boundaries.
+The old resource/Change/check/scenario/run/profile stores, virtual editing,
+publication/probe APIs, commands and review cards are retired. Startup does not
+load or migrate their data. The physical `authoring/` location remains for existing
+`credentials.json`, grant receipt/lock files and `proposal-inboxes/` data to avoid losing
+credentials or replaying external operations. Other old files remain untouched
+and inert; no approval or binding is converted into a directory BOT implicitly.
 
 `search({ handler: "grep", path: "v:skills", query: "CSV", limit: 5, offset: 0 })` returns
 matching lines and read paths. Scope to `v:skills/<name>` or grep frontmatter in

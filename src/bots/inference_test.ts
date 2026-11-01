@@ -6,7 +6,7 @@ import { rmSync } from 'node:fs'
 import { parseBot, validateBotInference, botInferenceSettings } from './sdk.ts'
 import { botFiles } from './sdk-test-fixture.ts'
 import { BotDeployments } from './deployments.ts'
-import { DirectoryBots } from '../agent-authoring/bot-runtime.ts'
+import { DirectoryBots } from './runtime.ts'
 import { parseAgentFile } from '../agent/types/parse.ts'
 import { inferenceSettings, resolveInferenceSettings } from '../agent/llm-config.ts'
 

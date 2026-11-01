@@ -3,12 +3,10 @@ import { test } from 'node:test'
 import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { BotDeployments } from './deployments.ts'
-import { DirectoryBots, DirectoryBotService } from '../agent-authoring/bot-runtime.ts'
-import { AgentResourceStore } from '../agent-authoring/store.ts'
-import type { CapabilityBroker } from '../agent-authoring/capabilities.ts'
+import { DirectoryBots, DirectoryBotService } from './runtime.ts'
 import { botConversationPolicies } from '../channels/bot-policies.ts'
 import { BotInstanceStore } from '../channels/bot-store.ts'
-import { ChannelInputRouter } from '../input/channel-router.ts'
+import { channelInputFixture } from '../testing/channel-input.ts'
 import { channelSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
 import { channelMessageInput } from '../sessions/input.ts'
 import { Bus } from '../bus/bus.ts'
@@ -35,7 +33,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`service filte
         bindings: [{ platform: 'qq', botInstanceId: bot.id, conversationId: 'group:one', tools: [], allowFrom: ['owner'] }], ...(subscriptions ? { subscriptions } : {}) }) })
       await deployments.deploy({ id: 'support', source: { folderId: 'fixture', directory: '' }, ...frozen, expectedRevision: deployments.read('support')?.deployment.revision })
     }
-    const authoring = new DirectoryBotService({ projectId, workspace, store: new AgentResourceStore({ projectId, directory: join(workspace, 'authoring') }), broker: {} as CapabilityBroker,
+    const policy = new DirectoryBotService({ projectId, workspace,
       folders: { get: () => undefined, requireAvailable: async () => { throw new Error('No folders') }, acquireAccess: () => () => {} } }, directory)
     const bus = new Bus(), agents = new AgentTypesManager(workspace); await agents.load()
     const tools = new Tools(workspace)
@@ -50,8 +48,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`service filte
     const backgroundTasks = new BackgroundTaskManager(bus, events)
     const handoff = new HandoffManager(provider, 128000, { autoHandoff: false }, workspace, store)
     const sessions = new SessionManager({ projectId, workspace, store, bus, provider, tools, agentTypes: agents, context, identity: new IdentityManager(workspace), handoffManager: handoff, events, backgroundTasks,
-      conversationPolicies: botConversationPolicies(bots, authoring, directory), getLlmRuntimeConfig: () => ({ model: 'default', temperature: 0, contextWindow: 128000 }) })
-    const inputs = new ChannelInputRouter({ projectId, bots, directory, receive: message => sessions.deliver(deriveSessionId(message), channelMessageInput(message)) })
+      conversationPolicies: botConversationPolicies(bots, policy, directory), getLlmRuntimeConfig: () => ({ model: 'default', temperature: 0, contextWindow: 128000 }) })
+    const inputs = channelInputFixture({ projectId, sessions, bots, directory, receive: message => sessions.deliver(deriveSessionId(message), channelMessageInput(message)) })
     const address = { projectId, botInstanceId: bot.id, platform: 'qq', conversationId: 'group:one' }
     const message: InboundMessage = { channelAddress: address, channel: 'qq', chatId: address.conversationId, isGroup: true, admin: false, senderId: 'owner', content: 'hello', messageId: 'native', platformMessageId: 'native', timestamp: new Date().toISOString() }
     try {

@@ -120,7 +120,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     const tools = new Tools(home)
     let store: SessionStore = new Store(join(home, 'sessions'))
     let sessions = manager(home, store, tools, provider, lookup)
-    let channel = new WebChannel(new Bus(), { workspace: home, sessionManager: sessions })
+    let channel = new WebChannel(new Bus(), { authorize: () => true, workspace: home, sessionManager: sessions })
     channel.setReceiver(async (msg) => ({
       status: 'accepted', sessionId: `web:${msg.chatId}`, inputId: msg.messageId,
     }))
@@ -210,7 +210,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       sessions = manager(home, store, tools, provider, lookup)
       await sessions.start()
       app = new Hono()
-      channel = new WebChannel(new Bus(), { workspace: home, sessionManager: sessions })
+      channel = new WebChannel(new Bus(), { authorize: () => true, workspace: home, sessionManager: sessions })
       channel.setReceiver(async (msg) => ({
         status: 'accepted', sessionId: `web:${msg.chatId}`, inputId: msg.messageId,
       }))

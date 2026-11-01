@@ -420,8 +420,8 @@ test('directory Feishu ingress routes after native mention policy; unsubscribed 
   const { withTempWorkspace } = await import('../testing/workspace.ts')
   const { BotDeployments } = await import('../bots/deployments.ts')
   const { BotInstanceStore } = await import('./bot-store.ts')
-  const { DirectoryBots } = await import('../agent-authoring/bot-runtime.ts')
-  const { ChannelInputRouter } = await import('../input/channel-router.ts')
+  const { DirectoryBots } = await import('../bots/runtime.ts')
+  const { channelInputFixture } = await import('../testing/channel-input.ts')
   const { deriveSessionId } = await import('../bus/events.ts')
   await withTempWorkspace(async workspace => {
     const f = await fixture(t)
@@ -431,14 +431,14 @@ test('directory Feishu ingress routes after native mention policy; unsubscribed 
     const frozen = deployments.freeze({ 'BOT.md': '---\nid: support\nconfig: bot.json\n---\nSupport', 'bot.json': JSON.stringify({ mode: 'service', allowedModules: [], tools: [], bindings: [{ platform: 'feishu', botInstanceId: bot.id, conversationId: 'oc_group', tools: [], allowFrom: ['ou_user'] }] }) })
     await deployments.deploy({ id: 'support', source: { folderId: 'fixture', directory: '' }, ...frozen })
     const directory = new DirectoryBots(deployments), received: InboundMessage[] = [], order: string[] = []
-    const select = directory.inputSubscriptions.bind(directory)
-    t.mock.method(directory, 'inputSubscriptions', () => { order.push('select'); return select() })
+    const select = directory.inputListeners.bind(directory)
+    t.mock.method(directory, 'inputListeners', () => { order.push('select'); return select() })
     const admit = f.channel['admitGroup'].bind(f.channel)
     f.channel['admitGroup'] = (chatId, name, message) => { if (message?.triggerEligible !== undefined) order.push('trigger'); return admit(chatId, name, message) }
-    const inputs = new ChannelInputRouter({ projectId, bots, directory, receive: async message => { order.push('session'); received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } } })
+    const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => { order.push('session'); received.push(message); return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId } } })
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), {} as SessionManager, inputs.receive,
       { projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned,
-        routeServiceInput: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
+        routeInputPolicy: (message, run) => inputs.policy(message, async configuration => { order.push('handler'); await run(configuration) }) })
     try {
       await manager.init()
       await f.incoming() // Unmentioned message: accepted by transport, no Session entry.
@@ -463,8 +463,8 @@ test('two directory Feishu BOTs on one connection own independent mention/all re
   const { withTempWorkspace } = await import('../testing/workspace.ts')
   const { BotDeployments } = await import('../bots/deployments.ts')
   const { BotInstanceStore } = await import('./bot-store.ts')
-  const { DirectoryBots } = await import('../agent-authoring/bot-runtime.ts')
-  const { ChannelInputRouter } = await import('../input/channel-router.ts')
+  const { DirectoryBots } = await import('../bots/runtime.ts')
+  const { channelInputFixture } = await import('../testing/channel-input.ts')
   const { deriveSessionId } = await import('../bus/events.ts')
   await withTempWorkspace(async workspace => {
     const f = await fixture(t), projectId = 'feishu-trigger'
@@ -478,13 +478,13 @@ test('two directory Feishu BOTs on one connection own independent mention/all re
       await deployments.deploy({ id, source: { folderId: 'fixture', directory: '' }, ...frozen })
     }
     const directory = new DirectoryBots(deployments), delivered: string[] = [], configured: string[] = []
-    const inputs = new ChannelInputRouter({ projectId, bots, directory, receive: async message => {
+    const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => {
       delivered.push(message.chatId); assert.equal(message.channelAddress?.botInstanceId, connection.id)
       return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
     } })
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), new Bus(), {} as SessionManager, inputs.receive, {
       projectId, instanceStore: bots, factory: () => f.channel, serviceAssigned: directory.serviceAssigned,
-      routeServiceInput: (message, run) => inputs.policy(message, async configuration => {
+      routeInputPolicy: (message, run) => inputs.policy(message, async configuration => {
         assert.ok(configuration?.platform === 'feishu' && Object.isFrozen(configuration))
         configured.push(`${message.chatId}:${configuration.trigger}`)
         await run(configuration)

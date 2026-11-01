@@ -13,19 +13,20 @@ import type {SessionManager} from '../sessions/session-manager.ts'
 import type {StreamInput} from './message-stream.ts'
 class Adapter extends AbstractChannel {
  readonly name='qq';update=undefined
- async start(){this.reportState('connected')}
- async stop(){this.setAccepting(false)}
+ async start(){this.reportState('connecting');this.reportState('connected')}
+ async stop(){this.reportState('disconnected');this.setAccepting(false)}
  async send(){return null}
  push(sender='owner',chat='10',group=true){return this.handleIncoming(sender,chat,'synthetic','1',{isGroup:group})}
  passive(event:Omit<StreamInput,'connection'|'platform'>,group=true){return this.collectStream(event,group)}
  lost(){this.reportState('disconnected')}
 }
-async function fixture(t:{after(fn:()=>unknown):void},injected:boolean,purpose:'personal'|'service'='service'){
+async function fixture(t:{after(fn:()=>unknown):void},injected:boolean,purpose:'personal'|'service'='service',configure?:(stream:ChannelMessageStream,botId:string)=>void){
  const root=mkdtempSync(join(process.cwd(),'.stream-manager-test-'));t.after(()=>rmSync(root,{recursive:true,force:true}))
  const defaultHome=join(root,'must-not-be-created'),home=join(root,'explicit-stream-home')
  const store=new BotInstanceStore({projectId:'p',path:join(root,'bots.json')}),bot=store.create('qq','synthetic',{appId:'synthetic-'+root,secret:'synthetic',enabled:true},undefined,purpose)
  const adapter=new Adapter(new Bus());let received=0,assigned=true
  const stream=new ChannelMessageStream(home,'p')
+ configure?.(stream,bot.id)
  const sessions={getSessionState:()=>undefined,listSessions:()=>[],retireIdleConversationContexts:async()=>{}} as unknown as SessionManager
  const manager=new ChannelManager(ConfigSchema.parse({agent:{workspace:defaultHome}}),new Bus(),sessions,async m=>{received++;return {status:'accepted',sessionId:'mock',inputId:m.messageId}}, {projectId:'p',instanceStore:store,factory:()=>adapter,serviceAssigned:a=>assigned&&a.conversationId==='10',...(injected?{messageStream:stream}:{})})
  await manager.init();await manager.startAll(new Hono());t.after(()=>manager.stopAll())
@@ -61,4 +62,29 @@ test('personal passive collection rejects strangers and groups; verified owner D
  assert.equal(f.stream.snapshot().events.length,0)
  await f.adapter.passive({conversation:'10',message:'owner',sender:'owner',kind:'created',content:'private'},false)
  assert.equal(f.stream.snapshot().events.length,1)
+})
+
+for(const failure of ['directory','append'] as const)test(`transport ${failure} failure is diagnostic only during start, status and stop`,async t=>{
+ const logs:string[]=[]
+ t.mock.method(console,'error',(...args:unknown[])=>{logs.push(args.map(String).join(' '))})
+ const f=await fixture(t,true,'service',(stream,botId)=>{
+  t.mock.method(stream,'directory',()=>{
+   if(failure==='directory')throw new Error('synthetic journal read failure')
+   return [{connection:botId,conversation:'10',parent:'parent',platform:'qq',capabilities:{received:true,history:false,changes:false,send:false},notice:''}]
+  })
+  if(failure==='append')t.mock.method(stream,'append',()=>{throw new Error('synthetic journal write failure')})
+ })
+ assert.ok(logs.some(line=>line.includes('phase=stream-gap')), 'startup gap failure must be logged')
+ assert.equal(f.manager.botStatuses()[0].state,'connected')
+ assert.match(f.manager.botStatuses()[0].message??'',/event stream degraded/)
+ const startupLogs=logs.length
+ assert.doesNotThrow(()=>f.adapter.lost())
+ assert.equal(f.manager.botStatuses()[0].state,'disconnected')
+ assert.match(f.manager.botStatuses()[0].message??'',/event stream degraded/)
+ const beforeStop=logs.length
+ assert.ok(beforeStop>startupLogs, 'status callback failure must be logged')
+ await assert.doesNotReject(f.manager.stopAll())
+ assert.ok(logs.length>beforeStop, 'shutdown gap failure must be logged')
+ assert.ok(logs.some(line=>line.includes('phase=stream-gap')&&line.includes(`bot=${f.bot.id}`)))
+ assert.ok(!logs.some(line=>/phase=(start|stop|cleanup-after-start-failure)\b/.test(line)))
 })
