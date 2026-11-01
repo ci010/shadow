@@ -71,7 +71,7 @@
           </div>
           <article v-else-if="isMarkdown && !sourceView" ref="selectionRoot" class="file-markdown selectable-text" :aria-label="t('Markdown preview')">
             <div v-for="(block, index) in renderedMarkdown" :key="index" class="file-source-block"
-              :data-source-start="block.start" :data-source-end="block.end" :data-source-provenance="block.provenance" v-html="block.html" />
+              :data-source-start="block.start" :data-source-end="block.end" :data-source-provenance="block.provenance" v-markdown-link-hints v-html="block.html" />
           </article>
           <pre v-else ref="selectionRoot" class="file-modal-text"><FileHighlightText :key="selectionKey" ref="highlight" :source="textContent" :path="path" :active="active && loaded && !loading && !binary" @error="highlightError = $event" /></pre>
           <div v-if="highlightError && ((!isMarkdown && !isMemoryEvents) || sourceView)" class="file-modal-note file-highlight-notice" role="status">{{ highlightError }} <button class="file-modal-btn" @click="highlight?.retry()">{{ t('Retry') }}</button></div>
@@ -87,6 +87,7 @@
 </template>
 
 <script setup lang="ts">
+import { vMarkdownLinkHints } from '../../markdown-link-hints'
 import { readAttachmentBytes } from '../../attachment-preview.ts'
 import UiSelect from '../UiSelect.vue'
 import { t } from '../../i18n.ts'

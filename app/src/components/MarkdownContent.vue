@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div ref="content" class="markdown-body" v-answer-html v-html="html" />
+    <div ref="content" class="markdown-body" v-answer-html v-markdown-link-hints v-html="html" />
     <Teleport v-for="(block, index) in blocks" :key="index" :to="block.target">
       <CopyIconButton class="code-copy" :value="block.text" :label="t('Copy code block')" />
     </Teleport>
@@ -8,6 +8,7 @@
 </template>
 
 <script setup lang="ts">
+import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { vAnswerHtml } from '../answer-html'
 import CopyIconButton from './CopyIconButton.vue'

@@ -21,6 +21,7 @@
 
 <script lang="ts">
 let dismissCurrent: (() => void) | undefined
+let externalTriggerId = 0
 </script>
 
 <script setup lang="ts">
@@ -32,10 +33,11 @@ import { registerTooltipHost, sharedTooltip, unregisterTooltipHost } from '../sh
 import OverlayTransition from './OverlayTransition.vue'
 
 defineOptions({ inheritAttrs: false })
-const props = withDefaults(defineProps<{ text?: string; label?: string; interactive?: boolean; disabled?: boolean }>(), {
+const props = withDefaults(defineProps<{ text?: string; label?: string; interactive?: boolean; disabled?: boolean; target?: HTMLElement }>(), {
   text: '', label: '', interactive: false, disabled: false,
 })
-const id = `hover-info-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
+const vueId = useId().replace(/[^a-zA-Z0-9_-]/g, '')
+const id = props.target ? `hover-info-dom-${++externalTriggerId}` : `hover-info-${vueId}`
 const token = Symbol(id)
 const slots = useSlots()
 const anchor = ref<HTMLElement>()
@@ -65,10 +67,10 @@ let closeTimer: ReturnType<typeof setTimeout> | undefined
 let observer: ResizeObserver | undefined
 let suppressFocus = false
 const focusable = 'button:not(:disabled), a[href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
-const trigger = () => anchor.value?.querySelector<HTMLElement>(`[data-hover-info-trigger="${id}"]`)
+const trigger = () => props.target ?? anchor.value?.querySelector<HTMLElement>(`[data-hover-info-trigger="${id}"]`)
   ?? anchor.value?.querySelector<HTMLElement>(focusable) ?? anchor.value?.firstElementChild as HTMLElement | undefined
 function contains(target: EventTarget | null) {
-  return target instanceof Node && (!!anchor.value?.contains(target) || !!popupElement()?.contains(target))
+  return target instanceof Node && (!!props.target?.contains(target) || !!anchor.value?.contains(target) || !!popupElement()?.contains(target))
 }
 function cancelClose() { clearTimeout(closeTimer); closeTimer = undefined }
 function clearTimers() { clearTimeout(openTimer); openTimer = undefined; cancelClose() }
@@ -187,6 +189,35 @@ function popupKey(event: KeyboardEvent) {
     close(true)
   }
 }
+// Sanitized Markdown links are DOM nodes, not Vue slot children. Keep the same
+// shared tooltip behavior without replacing the link or changing its navigation.
+watch(() => props.target, (target, _previous, onCleanup) => {
+  close()
+  if (!target) return
+  target.addEventListener('pointerenter', pointerEnter)
+  target.addEventListener('pointerleave', scheduleClose)
+  target.addEventListener('focusin', focusIn)
+  target.addEventListener('focusout', focusOut)
+  target.addEventListener('keydown', anchorKey)
+  target.addEventListener('click', anchorClick)
+  onCleanup(() => {
+    target.removeEventListener('pointerenter', pointerEnter)
+    target.removeEventListener('pointerleave', scheduleClose)
+    target.removeEventListener('focusin', focusIn)
+    target.removeEventListener('focusout', focusOut)
+    target.removeEventListener('keydown', anchorKey)
+    target.removeEventListener('click', anchorClick)
+  })
+}, { immediate: true })
+watch([() => props.target, opened], ([target, isOpen], _previous, onCleanup) => {
+  if (!target || !isOpen || props.interactive) return
+  const previous = target.getAttribute('aria-describedby')
+  target.setAttribute('aria-describedby', [previous, id].filter(Boolean).join(' '))
+  onCleanup(() => {
+    if (previous === null) target.removeAttribute('aria-describedby')
+    else target.setAttribute('aria-describedby', previous)
+  })
+})
 watch(() => props.disabled, value => { if (value) dismiss() })
 watch(sharedTooltip.element, () => {
   if (!opened.value) return

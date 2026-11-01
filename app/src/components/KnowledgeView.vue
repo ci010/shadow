@@ -58,7 +58,7 @@
               </div>
               <p v-if="linkError" role="alert" class="error">{{ linkError }}</p>
               <pre v-if="raw || detail.entry.path.endsWith('.jsonl')" class="source">{{ detail.content }}</pre>
-              <div v-else ref="previewElement" class="prose max-w-none knowledge-preview" @click="followPreviewLink" v-html="preview" />
+              <div v-else ref="previewElement" class="prose max-w-none knowledge-preview" @click="followPreviewLink" v-markdown-link-hints v-html="preview" />
             </template>
             <template v-else-if="!detailLoading && !detailError">
               <h2>{{ t('Unresolved reference') }}</h2><code>{{ selectedId }}</code>
@@ -87,6 +87,7 @@
 </template>
 
 <script setup lang="ts">
+import { vMarkdownLinkHints } from '../markdown-link-hints'
 import { enumLabel } from '../display-labels.ts'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
