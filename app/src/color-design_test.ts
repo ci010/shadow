@@ -320,7 +320,8 @@ test('nested Markdown quotes use smaller transparent insets in global and preset
 test('Markdown structure accents share blue tokens across prose, knowledge and file previews', async () => {
   const scope = ':is(.prose, .markdown-body, .file-markdown)'
   assert.equal(declarations(globalStyles, ':root').get('--c-markdown-rule'), 'var(--c-selection-border)')
-  assert.equal(declarations(globalStyles, ':root').get('--c-markdown-table-bg'), 'color-mix(in srgb, var(--c-info-bg) 35%, var(--c-bg-card))')
+  assert.equal(declarations(globalStyles, ':root').get('--c-markdown-table-bg'), 'color-mix(in srgb, var(--c-info-bg) 15%, var(--c-bg-card))')
+  assert.equal(declarations(globalStyles, ':root').get('--c-markdown-table-header'), 'color-mix(in srgb, var(--c-info-bg) 35%, var(--c-bg-card))')
   const table = declarations(globalStyles, `${scope} table`)
   assert.equal(table.get('border'), '1px solid var(--c-markdown-rule)')
   assert.equal(table.get('background'), 'var(--c-markdown-table-bg)')
@@ -345,9 +346,10 @@ for (const { name, tokens } of themes) {
   test(`${name}: Markdown blue tint retains readable neutral body and heading ink`, () => {
     const info = tokenColor('--c-info-bg', tokens)
     const card = tokenColor('--c-bg-card', tokens)
-    // CSS color-mix(in srgb, info 35%, card) on opaque theme surfaces.
-    const tint: Color = [0, 1, 2].map(i => info[i]! * .35 + card[i]! * .65).concat(1) as Color
-    for (const bg of [tint, info]) {
+    // Match the body (15%) and header/hover (35%) mixes on opaque surfaces.
+    const tints = [.15, .35].map(weight =>
+      [0, 1, 2].map(i => info[i]! * weight + card[i]! * (1 - weight)).concat(1) as Color)
+    for (const bg of tints) {
       for (const ink of ['--c-text', '--c-text-body', '--c-text-secondary']) {
         assert.ok(contrast(tokenColor(ink, tokens), bg) >= 4.5, `${name} ${ink} on Markdown tint`)
       }
