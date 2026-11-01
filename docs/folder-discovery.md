@@ -48,3 +48,23 @@ an explicit empty message and the same safety notice.
 Implementation: `src/folders/discovery.ts`, `src/folders/identifier.ts`,
 `src/cluster/node-inventory.ts`; Main wires the live session node inventory in
 `src/runtime/main/project-runtime.ts`.
+
+## Historical remote ownership recovery
+
+An online Child advertisement does not itself verify directory ownership. Startup
+reserves historical session workdir references, which can initially lack verified
+identities. Existing registered-folder execution first verifies its exact target.
+If unknown claims on the same device block that verification, it lazily requests
+Child-authenticated `workdir.identity` for those unidentified claims and retries
+catalog validation. Claims are retained; Main never interprets remote display paths.
+Already identified claims and unrelated folders/devices are not refreshed by this
+recovery. Registration and ownership changes still use the full device refresh.
+
+Missing, offline, unsupported or conflicting historical capabilities fail closed;
+restoring their original capabilities is required, not merely reconnecting the
+node. A changed registered root or cross-Project overlap is still rejected.
+Successful claim resolutions are saved and can be reused on a later attempt even
+if another claim fails. This is source behavior, not a guarantee that a currently
+running backend has deployed it.
+
+Implementation: `src/folders/remote-ownership.ts`, `src/projects/catalog.ts`.

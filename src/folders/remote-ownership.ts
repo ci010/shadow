@@ -82,7 +82,26 @@ export class RemoteFolderOwnership {
     const identity = await this.#identity(folder.workdir, signal)
     // Keeps the saved root binding and checks current ancestry against retained
     // ownership facts; registration still refreshes the whole device separately.
-    await this.options.catalog.refreshRemoteFolderIdentity(folder.id, identity)
+    try {
+      await this.options.catalog.refreshRemoteFolderIdentity(folder.id, identity)
+    } catch (error) {
+      if (!(error instanceof FolderError) || error.code !== 'remote_claim_identity_unavailable') throw error
+      // Startup reserves historical session capabilities without identities; a
+      // transport reconnect only restores advertisements, not ownership facts.
+      // Resolve just the missing facts on this device through authenticated Child
+      // execution. Never discard unavailable claims or refresh unrelated folders.
+      for (const claim of this.options.catalog.remoteClaims(folder.workdir.nodeId)) {
+        if (claim.identity) continue
+        signal.throwIfAborted()
+        const verified = await this.#identity(claim.workdir, signal)
+        signal.throwIfAborted()
+        await this.options.catalog.resolveRemoteClaim(claim.workdir, verified)
+      }
+      signal.throwIfAborted()
+      // The transaction rechecks all claims and cross-project overlaps, including
+      // reservations added during recovery. Any unresolved fact still fails closed.
+      await this.options.catalog.refreshRemoteFolderIdentity(folder.id, identity)
+    }
     signal.throwIfAborted()
     const current = this.options.catalog.folders(this.options.projectId).find(item => item.id === folder.id)
     if (!current || current.kind !== 'remote') throw new FolderError('folder_access_revoked', 'This folder is no longer available to this project.', 409)
