@@ -35,7 +35,7 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
           import { createApp, h } from 'vue';
           import Usage from '/src/components/ProjectUsage.vue';
           import { i18n, setLocalePreference } from '/src/i18n.ts';
-          const metrics = { calls: 120, tokens: 1234567, unknownTokenCalls: 0, costs: [{currency:'USD',amount:12.34}], unknownCostCalls:0, durationMs:293000, unknownDurationCalls:0 };
+          const metrics = { calls: 120, tokens: 1234567, unknownTokenCalls: 0, costs: [{currency:'USD',amount:12.34},{currency:'AI_CREDITS',amount:48400},{currency:'CNY',amount:10}], unknownCostCalls:0, durationMs:293000, unknownDurationCalls:0 };
           const data = { projectId:'fixture', asOf:'2026-10-01T12:00:00Z', timeZone:'UTC', total:metrics, today:metrics, past7Days:metrics, month:metrics,
             daily: Array.from({length:31}, (_,i) => ({date:new Date(Date.UTC(2026,9,1-i)).toISOString().slice(0,10), usage:{...metrics,tokens:10000*(i+1)}})),
             scanLimitReached:false, untrackedSessions:0, undatedCalls:0 };
@@ -72,10 +72,10 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
         try {
           await win.loadURL(${JSON.stringify(url)});
           for (let i=0;i<200;i++) {
-            if (await win.webContents.executeJavaScript('document.querySelectorAll(".chart-card > svg").length===4')) break;
+            if (await win.webContents.executeJavaScript('document.querySelectorAll(".chart-card > svg").length===3')) break;
             await new Promise(r=>setTimeout(r,50));
           }
-          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".chart-card > svg").length'),4,await win.webContents.executeJavaScript('document.body.innerText'));
+          assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".chart-card > svg").length'),3,await win.webContents.executeJavaScript('document.body.innerText'));
           for (const locale of ['en','zh-CN']) for (const dark of [false,true]) for (const width of [1180,700,350]) {
             await win.webContents.executeJavaScript('document.documentElement.classList.toggle("dark",'+dark+'); document.querySelector("#app").style.width="'+width+'px"; window.usageLocale('+JSON.stringify(locale)+');');
             await new Promise(r=>setTimeout(r,80));
@@ -86,18 +86,26 @@ test('usage theme, fixed plots and responsive panel layout render in an isolated
                 const panel=document.querySelector('.project-usage');
                 return {charts:all('.chart-card').map(box), plots:all('.chart-card > svg').map(box),
                   kpis:all('.metric-card').map(box), panel:box(panel), overflow:panel.scrollWidth>panel.clientWidth,
+                  axisSizes:all('.axis').map(e=>parseFloat(getComputedStyle(e).fontSize)*e.getScreenCTM().a),
+                  barLabelsAligned:all('.token-card svg text[y="192"]').every(label=>{
+                    const date=label.textContent;
+                    const bar=all('.token-bar').find(e=>e.getAttribute('aria-label').includes(date+':'));
+                    return bar && Math.abs(Number(label.getAttribute('x'))-(Number(bar.getAttribute('x'))+Number(bar.getAttribute('width'))/2))<1;
+                  }),
                   radius:all('.chart-card,.metric-card,button').map(e=>getComputedStyle(e).borderRadius),
                   background:getComputedStyle(all('.chart-card')[0]).backgroundColor,
                   token:getComputedStyle(all('.token-bar')[0]).fill, primary:getComputedStyle(panel).getPropertyValue('--c-primary').trim(),
                   headingOverlap:all('.chart-card').some(card=>{const head=card.querySelector('.cost-heading') || card.querySelector('h3');const caption=card.querySelector('p');return head.getBoundingClientRect().bottom>caption.getBoundingClientRect().top+1;})};
               }).toString()+')()');
-            assert.equal(info.charts.length,4); assert.equal(info.plots.length,4);
+            assert.equal(info.charts.length,3); assert.equal(info.plots.length,3);
             assert.ok(info.plots.every(p=>p.height===210));
+            assert.ok(info.axisSizes.every(size=>size>=10.5 && size<=11.5),JSON.stringify({width,axisSizes:info.axisSizes}));
+            assert.equal(info.barLabelsAligned,true);
             assert.ok(info.radius.every(r=>r==='0px')); assert.equal(info.overflow,false);
             assert.equal(info.headingOverlap,false,JSON.stringify({locale,dark,width,info}));
-            assert.equal(new Set(info.charts.map(c=>c.height)).size,1);
+            assert.ok(info.charts[0].top < info.charts[1].top);
             assert.equal(info.kpis[0].top===info.kpis[2].top,width>850);
-            assert.equal(info.charts[0].top===info.charts[3].top,width>850);
+            assert.equal(info.charts[1].top===info.charts[2].top,width>850);
             assert.equal(info.background,dark?'rgb(32, 32, 32)':'rgb(255, 255, 255)');
             assert.equal(info.token,dark?'rgb(139, 183, 255)':'rgb(36, 91, 193)');
             if (process.env.SHADOW_USAGE_SCREENSHOTS) {

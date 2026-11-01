@@ -11,32 +11,34 @@ export function usageWindow(data: ProjectUsage, days: number): UsagePoint[] {
     return { date, usage, tokens: usage?.tokens ?? null, seconds: usage?.durationMs == null ? null : usage.durationMs / 1000 }
   })
 }
-export function lineSegments(points: UsagePoint[], maximum: number): string[] {
+export function lineSegments(points: UsagePoint[], maximum: number, plotWidth = 540): string[] {
   const segments: string[] = []
   let current: string[] = []
   points.forEach((point, i) => {
     if (point.seconds === null) { if (current.length) segments.push(current.join(' ')); current = []; return }
-    current.push(`${30 + i * 540 / Math.max(1, points.length - 1)},${160 - point.seconds / maximum * 130}`)
+    current.push(`${30 + i * plotWidth / Math.max(1, points.length - 1)},${160 - point.seconds / maximum * 130}`)
   })
   if (current.length) segments.push(current.join(' '))
   return segments
 }
-export function tokenShares(points: UsagePoint[]) {
-  const positive = points.filter(p => p.tokens !== null && p.tokens > 0).sort((a, b) => b.tokens! - a.tokens!)
-  const groups = positive.slice(0, 5).map(p => ({ label: p.date, value: p.tokens! }))
-  if (positive.length > 5) groups.push({ label: 'Other days', value: positive.slice(5).reduce((sum, p) => sum + p.tokens!, 0) })
-  const total = groups.reduce((sum, p) => sum + p.value, 0)
-  let offset = 0
-  return groups.map(group => { const share = group.value / total; const result = { ...group, share, offset }; offset += share; return result })
+export type CostUnit = 'USD' | 'CNY'
+export const costUnits: CostUnit[] = ['USD', 'CNY']
+/** Presentation only: retain raw provider estimates, convert credits at 100:1,
+ * and never infer an exchange rate for CNY. Used by summaries, plots and history. */
+export function displayCosts(costs: ProjectUsageMetrics['costs']): Array<{ currency: CostUnit; amount: number }> {
+  const totals = new Map<CostUnit, number>()
+  for (const cost of costs) {
+    const currency = cost.currency === 'AI_CREDITS' ? 'USD' : cost.currency
+    const amount = cost.currency === 'AI_CREDITS' ? cost.amount / 100 : cost.amount
+    totals.set(currency, (totals.get(currency) ?? 0) + amount)
+  }
+  return costUnits.filter(currency => totals.has(currency)).map(currency => ({ currency, amount: totals.get(currency)! }))
 }
-
-export type CostUnit = ProjectUsageMetrics['costs'][number]['currency']
-export const costUnits: CostUnit[] = ['USD', 'CNY', 'AI_CREDITS']
 /** A missing unit is zero only with complete daily cost coverage. */
 export function costWindow(points: UsagePoint[], unit: CostUnit) {
   return points.map(point => {
     const usage = point.usage
-    const cost = usage?.costs.find(cost => cost.currency === unit)
+    const cost = usage && displayCosts(usage.costs).find(cost => cost.currency === unit)
     const partial = !!usage?.unknownCostCalls
     return { date: point.date, amount: cost?.amount ?? (usage && !partial ? 0 : null), partial }
   })
