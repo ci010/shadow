@@ -725,3 +725,42 @@ unavailable publication service is 503. Refresh is local; existing reviews open
 in place. Live validation problems offer an ordinary administrator Web conversation for configuration repair. Repeating an identical proposal returns its existing exact review;
 it never replaces another pending review or unrelated draft. Live validation
 categories never expose credential values or arbitrary server exception text.
+
+### Directory Service BOT inference
+
+A directory-backed Service BOT may set `model`, `temperature` (0–2),
+`maxTokens` (positive integer), `thinking` (`{"type":"enabled"}` or
+`{"type":"disabled"}`), and `reasoningEffort` (`low`, `medium`, `high`,
+`xhigh`, `max`) at the top level of its data-only `bot.json`:
+
+```json
+{
+  "mode": "service",
+  "model": "configured-model@provider",
+  "temperature": 0.4,
+  "maxTokens": 4096,
+  "thinking": { "type": "enabled" },
+  "reasoningEffort": "high",
+  "allowedModules": [],
+  "tools": [],
+  "bindings": []
+}
+```
+
+These overrides apply to every QQ, Feishu and Discord binding of that BOT.
+Omitted fields inherit runtime defaults; ordinary session overrides remain the
+last layer. Remove a field to inherit again (JSON `null` is not accepted).
+Personal BOTs select an existing role and cannot set these Service overrides.
+Deployment validates explicit model/effort choices against the current provider
+catalog, including the inherited effort when changing model. Non-selectable or
+unknown models and explicitly unsupported efforts are rejected. Missing effort
+capability metadata means unknown, not unsupported; temperature, token budget
+and thinking receive structural validation, not a guarantee of provider support.
+Use the exact configured catalog model ID. Source edits take effect only after
+normal `bot_package` proposal and owner-confirmed deployment; no authoring
+check/scenario/run evidence workflow is required.
+
+QQ/Feishu directory bindings do not accept a `skills` field, even an empty one.
+Optional BOT-level `skills: [{"name":"help","content":"…"}]` still supplies
+skill prompts to the BOT. This does not select session skills or remove the old
+compatibility resource format; its internal binding contract remains separate.

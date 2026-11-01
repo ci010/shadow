@@ -5,7 +5,8 @@ import { z } from 'zod'
 import { writePrivateFile } from '../config/store.ts'
 import { parseFrontmatter } from '../utils/frontmatter.ts'
 import { parseAgentFile } from '../agent/types/parse.ts'
-import { REASONING_EFFORTS } from '../agent/llm-config.ts'
+import { agentInferenceSchema } from '../agent/inference-schema.ts'
+export { agentInferenceSchema } from '../agent/inference-schema.ts'
 import { channelSessionId, type ChannelAddress } from '../bus/events.ts'
 import { assertSupportedJsonSchema } from './capabilities.ts'
 import {
@@ -31,12 +32,6 @@ const reservedTools = new Set([
   'sql', 'update_convention', 'io_surface', 'io_capabilities', 'io_run', 'log',
   'plan_write', 'web_search', 'search_tools',
 ])
-export const agentInferenceSchema = z.object({
-  model: z.string().min(1).optional(), temperature: z.number().finite().min(0).max(2).optional(),
-  maxTokens: z.number().int().positive().optional(),
-  thinking: z.object({ type: z.enum(['enabled', 'disabled']) }).strict().optional(),
-  reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
-}).strict()
 const agentFrontmatter = z.object({
   name: ResourceName.optional(), description: z.string().optional(),
   capabilityProfiles: AgentCapabilityProfilesSchema.optional(),

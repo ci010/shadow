@@ -1,7 +1,7 @@
 import { ProposalInboxes } from '../../sessions/proposal-inbox.ts'
 import { createActivityInvalidator, sessionActivityFingerprint, sessionActivityReadModel } from '../../sessions/activity-invalidation.ts'
 import { BotDeployments } from '../../bots/deployments.ts'
-import { parseBot, type BotDefinition } from '../../bots/sdk.ts'
+import { validateBotInference, parseBot, type BotDefinition } from '../../bots/sdk.ts'
 import { DirectoryBots, DirectoryBotService } from '../../agent-authoring/bot-runtime.ts'
 import { isOwnerAuthoringSession } from '../../agent-authoring/owner-session.ts'
 import { SourceResources } from '../../channels/source-resources.ts'
@@ -1468,6 +1468,11 @@ export async function createProjectRuntime(
     ask:tools.get('ask')!,canAuthor,inventory:authoringOptions.inventory,pending:new Map<string,unknown>(),
     validate:async (files:Record<string,string>,signal:AbortSignal) => {
       const bot = parseBot(files)
+      if (bot.mode === 'service' && (bot.model !== undefined || bot.reasoningEffort !== undefined)) {
+        const catalog = await inferenceCatalog()
+        signal.throwIfAborted()
+        validateBotInference(bot, catalog.defaults, catalog.models, id => provider.qualifiedModelId(id))
+      }
       if (bot.mode === 'personal') {
         const connection = botStore.get(bot.connection!)
         botStore.assertAccess(connection.id)

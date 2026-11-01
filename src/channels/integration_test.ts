@@ -107,14 +107,14 @@ async function fixture(t: TestContext, Store = JsonlSessionStore as typeof Jsonl
     execute: async () => { escaped = true; return 'PRIVATE_TOOL_CANARY' },
   })
   const integration = new DiscordIntegration({ projectId, workspace: home, store: config, bots, memory, baseTools: tools })
-  const requests: Array<{ messages: ChatMessage[]; tools: string[] }> = []
+  const requests: Array<{ messages: ChatMessage[]; tools: string[]; inference: import('../agent/llm-config.ts').InferenceSettings }> = []
   const responses: LLMResponse[] = []
   let respond: ((messages: ChatMessage[], tools: string[]) => LLMResponse) | undefined
   let held: Promise<LLMResponse> | undefined
   const provider: LLMProvider = {
     name: 'fixture', listModels: () => ['fixture'],
     chat: async (messages, definitions, options) => {
-      requests.push({ messages: structuredClone(messages), tools: definitions.map(tool => tool.function.name) })
+      requests.push({ messages: structuredClone(messages), tools: definitions.map(tool => tool.function.name), inference: { model: options.model, temperature: options.temperature, maxTokens: options.maxTokens, thinking: options.thinking, reasoningEffort: options.reasoningEffort } })
       if (held) {
         const pending = held; held = undefined
         return Promise.race([pending, new Promise<never>((_, reject) => {
@@ -1279,7 +1279,8 @@ test('directory Discord SDK tools run in the existing session loop with per-bind
   const deployments=new BotDeployments({directory:join(f.root,'directory-deployments'),projectId:f.projectId,runGit:async()=>{throw new Error('Git unavailable')}})
   const runtime=new DirectoryBots(deployments)
   const {agentId: _agent,epochRevision:_epoch,...data}=f.a
-  const files={'BOT.md':'---\nid: sdk-helper\nconfig: bot.json\n---\nSDK_DIRECTORY_PROMPT','bot.json':JSON.stringify({mode:'service',allowedModules:[],tools:[{name:'sdk_probe',description:'Read and save conversation value',parameters:{type:'object',properties:{},additionalProperties:false},module:'tools/probe.ts',imports:[]}],bindings:[{...data,id:randomUUID(),platform:'discord',target:{kind:'channel',guildId:'100',channelId:'205'},tools:['sdk_probe'],readDomains:[],inheritThreads:false}]}),'tools/probe.ts':`import {defineTool} from '@shadow/bot-sdk'; export default defineTool({async execute(args,ctx){await ctx.storage.set('value','SDK_SCOPED_RECEIPT');return await ctx.storage.get('value')}});`}
+  const inference = { model: 'chosen', temperature: 0.4, maxTokens: 321, thinking: { type: 'enabled' }, reasoningEffort: 'high' }
+  const files={'BOT.md':'---\nid: sdk-helper\nconfig: bot.json\n---\nSDK_DIRECTORY_PROMPT','bot.json':JSON.stringify({mode:'service',...inference,allowedModules:[],tools:[{name:'sdk_probe',description:'Read and save conversation value',parameters:{type:'object',properties:{},additionalProperties:false},module:'tools/probe.ts',imports:[]}],bindings:[{...data,id:randomUUID(),platform:'discord',target:{kind:'channel',guildId:'100',channelId:'205'},tools:['sdk_probe'],readDomains:[],inheritThreads:false}]}),'tools/probe.ts':`import {defineTool} from '@shadow/bot-sdk'; export default defineTool({async execute(args,ctx){await ctx.storage.set('value','SDK_SCOPED_RECEIPT');return await ctx.storage.get('value')}});`}
   const frozen=deployments.freeze(files)
   await deployments.deploy({id:'sdk-helper',source:{folderId:'fixture',directory:''},...frozen})
   f.config.setBotDeployments(()=>runtime.discord())
@@ -1292,6 +1293,7 @@ test('directory Discord SDK tools run in the existing session loop with per-bind
   f.responses.push({content:'',toolCalls:[{id:'sdk-call',name:'sdk_probe',arguments:{}}]},{content:'Stored',toolCalls:[]})
   await f.send('205')
   assert(f.requests.some(request=>request.tools.includes('sdk_probe')))
+  for (const request of f.requests.filter(request => request.tools.includes('sdk_probe'))) assert.deepEqual(request.inference, inference)
   assert(JSON.stringify(f.requests).includes('SDK_SCOPED_RECEIPT'))
   assert(inspections>=6,'live authorization runs around inference/tool and each SDK callback')
   assert(!JSON.stringify(await readFile(join(f.root,'config','channel-integrations.json'),'utf8')).includes('SDK_DIRECTORY_PROMPT'))

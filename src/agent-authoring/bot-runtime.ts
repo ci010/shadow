@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { assertPrivateFileBoundary } from '../utils/private-document.ts'
 import { BotDeployments } from '../bots/deployments.ts'
-import { parseBot, type BotDefinition } from '../bots/sdk.ts'
+import { botInferenceSettings, parseBot, type BotDefinition } from '../bots/sdk.ts'
 import { executeBotTool } from '../bots/tool-runtime.ts'
 import { parseAgentFile } from '../agent/types/parse.ts'
 import { conversationBindingKey, type ResolvedConversationPolicy } from './contracts.ts'
@@ -47,8 +47,8 @@ export class DirectoryBots {
     const matches = this.definitions().flatMap(({ bot, deployment }) => bot.bindings.flatMap(binding => {
       if (binding.platform === 'discord' || conversationBindingKey(binding) !== conversationBindingKey(address)) return []
       const { tools, ...data } = binding
-      const agent = parseAgentFile(`---\n${stringify({name:agentName(bot.id), defaultMode:'session', allowedTools:tools, allowedModules:bot.allowedModules})}---\n${bot.prompt}`, agentName(bot.id), this.deployments.runtimeDirectory(bot.id))
-      return [{ revision: deployment.revision, binding: { ...data, agent: agentName(bot.id) }, agent,
+      const agent = parseAgentFile(`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id), defaultMode:'session', allowedTools:tools, allowedModules:bot.allowedModules})}---\n${bot.prompt}`, agentName(bot.id), this.deployments.runtimeDirectory(bot.id))
+      return [{ revision: deployment.revision, binding: { ...data, skills: [], agent: agentName(bot.id) }, agent,
         skillPrompts: bot.skills ?? [], tools: bot.tools.filter(tool => tools.includes(tool.name)).map(tool => ({...tool,source:tool.module,skill:bot.id,code:''})) }]
     }))
     if (matches.length > 1) throw new Error('Conversation is owned by multiple BOT deployments.')
@@ -63,7 +63,7 @@ export class DirectoryBots {
       if (!selected.length) continue
       const id = uuid(bot.id)
       const tools = [...new Set(selected.flatMap(binding => binding.tools))]
-      agents.push({ id,name:agentName(bot.id),displayName:bot.id,markdown:`---\n${stringify({name:agentName(bot.id),defaultMode:'session',allowedTools:tools})}---\n${bot.prompt}`,
+      agents.push({ id,name:agentName(bot.id),displayName:bot.id,markdown:`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id),defaultMode:'session',allowedTools:tools})}---\n${bot.prompt}`,
         execution:'restricted',tools,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders,discordHistory:bot.discordHistory,skills:bot.skills ?? [],
         version:deployment.revision,publishedAt:new Date(0).toISOString() })
       for (const binding of selected) {
