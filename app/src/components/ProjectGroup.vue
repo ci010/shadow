@@ -89,6 +89,20 @@ watch(() => [sessions.value, loading.value, props.selectedProjectId, props.selec
   emit('session-automation', props.selectedSessionId, automationSessionOwners(sessions.value).get(props.selectedSessionId)?.jobId)
 })
 let controller: AbortController | undefined
+let catalogRetry: ReturnType<typeof setTimeout> | undefined
+let catalogRetryMs = 3_000
+function cancelCatalogRetry() {
+  clearTimeout(catalogRetry)
+  catalogRetry = undefined
+}
+function retryCatalog(snapshot: ProjectLiveLease) {
+  if (catalogRetry !== undefined || disposed || !active) return
+  catalogRetry = setTimeout(() => {
+    catalogRetry = undefined
+    if (lease === snapshot && active && !disposed) void refreshMetadata(snapshot)
+  }, catalogRetryMs)
+  catalogRetryMs = Math.min(catalogRetryMs * 2, 30_000)
+}
 const lifetime = new AbortController()
 let lease: ProjectLiveLease | undefined
 let stopWatching: (() => void) | undefined
@@ -109,19 +123,16 @@ function subscribe() {
     error.value = detail && runtimeState.value === 'failed'
       ? t('This project could not start. Use Retry project startup beside its name.') : detail
   }, { immediate: true })
-  // Session graph revisions (including turn start/end) are not catalog changes.
-  const stopMetadata = watch([() => !!current.graph.state.value,
-    () => !!current.graph.state.value?.some(session => session.channelAddress), () => current.graph.state.error], () => {
-    if (current.graph.state.value || current.graph.state.error) void refreshMetadata(current)
-  }, { immediate: true })
-  let initialCatalog = true
+  // Graph failure/recovery changes availability, but ordinary session revisions
+  // (including turn start/end) are not catalog changes.
+  const stopMetadata = watch(() => current.graph.state.error, () => {
+    void refreshMetadata(current)
+  })
   const catalog = createLiveResourceRefresh(livePool, {
     base: props.apiBase, projectId: props.project.id, resource: 'channels',
-    refresh: () => {
-      // Graph readiness owns the first snapshot; do not duplicate it at resource ready.
-      if (initialCatalog) { initialCatalog = false; return }
-      void refreshMetadata(current)
-    },
+    // Resource readiness owns the initial snapshot and reconnect retries. A
+    // session graph (especially observed groups) need not have channelAddress.
+    refresh: () => { void refreshMetadata(current) },
   })
   stopWatching = () => { stopGraph(); stopActivity(); stopMetadata(); catalog.dispose() }
 }
@@ -136,16 +147,20 @@ async function refreshMetadata(snapshot: ProjectLiveLease) {
   const current = new AbortController()
   controller = current
   try {
-    if (!snapshot.graph.state.error && sessions.value.some(session => session.channelAddress)) {
+    if (!snapshot.graph.state.error) {
       try {
-        const catalog = await createBotSettingsClient(scope.value, props.project.id).list(current.signal)
+        const catalog = await createBotSettingsClient(scope.value, props.project.id).catalog(current.signal)
         if (current.signal.aborted) return
-        bots.value = catalog.map(({ id, projectId, platform, displayName, state, configured }) =>
-          ({ id, projectId, platform, displayName, connection: { state, configured } }))
+        bots.value = catalog
+        cancelCatalogRetry()
+        catalogRetryMs = 3_000
       } catch {
         // Bot settings may be unavailable to a conversation reader; retain scoped names and usable chats.
         if (current.signal.aborted) return
         clearBotConnections()
+        // A healthy resource stream does not retry a failed HTTP snapshot.
+        // Recover independently: no further channel event may arrive.
+        retryCatalog(snapshot)
       }
     } else if (snapshot.graph.state.error) clearBotConnections()
     error.value = [...new Set([snapshot.graph.state.error, snapshot.activity.state.error].filter(Boolean))].join(' ')
@@ -191,6 +206,8 @@ async function sessionsDeleted(ids: string[]) {
   await refresh()
 }
 function stop() {
+  cancelCatalogRetry()
+  catalogRetryMs = 3_000
   clearBotConnections()
   stopWatching?.()
   stopWatching = undefined

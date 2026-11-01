@@ -59,6 +59,27 @@ export function parseBotList(value: unknown, projectId: string): BotInstanceStat
   return bots
 }
 
+/** Sidebar facts do not depend on the editable configuration schema/version. */
+export function parseBotCatalog(value: unknown, projectId: string): import('./bot-sidebar.ts').SidebarBot[] {
+  if (!isRecord(value) || !Array.isArray(value.channels)) throw new Error(t('Main returned an invalid bot list. Refresh to retry.'))
+  const bots = value.channels.map(value => {
+    if (!isRecord(value) || typeof value.id !== 'string' || !value.id || value.projectId !== projectId
+      || !channelDefinitions.some(item => item.id === value.platform)
+      || typeof value.displayName !== 'string' || !value.displayName.trim()) {
+      throw new Error(t('Main returned invalid bot ownership or status. Refresh before retrying.'))
+    }
+    // Unknown/malformed status must not turn into a connected indicator. Names
+    // remain useful even if this server's settings contract is newer than ours.
+    const states = ['disabled', 'unconfigured', 'connecting', 'connected', 'disconnected', 'error', 'running', 'restart-required']
+    const connection = typeof value.configured === 'boolean' && states.includes(value.state as string)
+      ? { configured: value.configured, state: value.state as BotInstanceStatus['state'] } : undefined
+    return { id: value.id, projectId, platform: value.platform as BotInstanceStatus['platform'], displayName: value.displayName,
+      ...(connection ? { connection } : {}) }
+  })
+  if (new Set(bots.map(bot => bot.id)).size !== bots.length) throw new Error(t('Main returned duplicate bot IDs. Refresh to retry.'))
+  return bots
+}
+
 export function createBotSettingsClient(base: string, projectId: string, request: typeof fetch = fetch) {
   async function json(path: string, init?: RequestInit): Promise<unknown> {
     const response = await request(apiUrl(base, `/api/channels${path}`), {
@@ -81,6 +102,7 @@ export function createBotSettingsClient(base: string, projectId: string, request
   }
   return {
     async list(signal?: AbortSignal) { return parseBotList(await json('', { signal }), projectId) },
+    async catalog(signal?: AbortSignal) { return parseBotCatalog(await json('', { signal }), projectId) },
     async create(platform: ChannelId, displayName: string, signal: AbortSignal | undefined, purpose: 'personal' | 'service') {
       if (purpose !== 'personal' && purpose !== 'service') throw new Error('Select a Bot role.')
       if (platform === 'wechat' && purpose !== 'personal') throw new Error(t('WeChat supports personal Bots only.'))
