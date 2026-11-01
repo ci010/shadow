@@ -34,3 +34,24 @@ test('QQ and Discord bindings accept explicit validated custom names, no legacy 
   assert.throws(() => parseBot(botFiles('', { bindings: [{ platform: 'qq', botInstanceId: 'bot', conversationId: 'chat', tools: ['bad.name'] }] })))
   assert.throws(() => parseBot(botFiles('', { bindings: [{ platform: 'qq', botInstanceId: 'bot', conversationId: 'chat', tools: [], agent: 'legacy' }] })))
 })
+
+
+test('Service inference overrides are strict; personal roles inherit their own settings', () => {
+  const settings = { model: 'fixture', temperature: 0, maxTokens: 321, thinking: { type: 'enabled' }, reasoningEffort: 'high' }
+  const bot = parseBot(botFiles('', settings))
+  for (const [key, value] of Object.entries(settings)) assert.deepEqual((bot as unknown as Record<string, unknown>)[key], value)
+  for (const invalid of [{ model: '' }, { temperature: -1 }, { temperature: 3 }, { maxTokens: 0 }, { maxTokens: 1.5 }, { thinking: { type: 'adaptive' } }, { thinking: { type: 'enabled', budget: 1 } }, { reasoningEffort: 'extreme' }, { model: null }]) {
+    assert.throws(() => parseBot(botFiles('', invalid)))
+  }
+  const personal = { mode: 'personal', connection: '11111111-1111-4111-8111-111111111111', agent: 'general', tools: [] }
+  assert.doesNotThrow(() => parseBot(botFiles('', personal)))
+  assert.throws(() => parseBot(botFiles('', { ...personal, model: 'fixture' })))
+})
+
+test('QQ/Feishu binding skills are rejected while Bot-level skill prompts remain supported', () => {
+  for (const platform of ['qq', 'feishu']) {
+    const binding = { platform, botInstanceId: 'bot', conversationId: 'chat', tools: [] }
+    assert.doesNotThrow(() => parseBot(botFiles('', { bindings: [binding], skills: [{ name: 'help', content: 'Helpful context' }] })))
+    for (const skills of [[], ['help']]) assert.throws(() => parseBot(botFiles('', { bindings: [{ ...binding, skills }] })))
+  }
+})

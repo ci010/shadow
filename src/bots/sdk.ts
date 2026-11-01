@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import { agentInferenceSchema } from '../agent/inference-schema.ts'
+import { inferenceSettings, validateInferenceCapabilities, type LlmRuntimeConfig } from '../agent/llm-config.ts'
+import type { ModelInfo } from '../providers/provider.ts'
 import { parseDocument } from 'yaml'
 import { ConversationBindingSchema, ResourceName } from '../agent-authoring/contracts.ts'
 import { assertSupportedJsonSchema } from '../agent-authoring/capabilities.ts'
@@ -11,7 +14,7 @@ const moduleName = z.string().regex(/^@shadow\/[A-Za-z][A-Za-z0-9_-]{0,127}$/).r
 const imports = z.array(moduleName).max(31).refine(a => new Set(a).size === a.length, 'Duplicate imports')
 export const BotSourcePathSchema = z.string().min(1).max(256).refine(s =>
   !s.startsWith('/') && !s.includes('\\') && s.split('/').every(p => p !== '' && p !== '.' && p !== '..') && !/[\x00-\x1f\x7f:]/.test(s), 'Use a relative package path without traversal')
-const binding = ConversationBindingSchema.omit({ agent: true }).extend({ platform: z.enum(['qq', 'feishu']), tools: names }).strict()
+const binding = ConversationBindingSchema.omit({ agent: true, skills: true }).extend({ platform: z.enum(['qq', 'feishu']), tools: names }).strict()
 const discord = DiscordBindingSchema.omit({ agentId: true, epochRevision: true }).extend({ platform: z.literal('discord'), tools: names }).strict()
 export const BotBindingSchema = z.discriminatedUnion('platform', [binding, discord])
 const baseDefinition = z.object({
@@ -34,7 +37,7 @@ const baseDefinition = z.object({
   skills: z.array(z.object({ name: ResourceName, content: z.string().min(1).max(64_000) }).strict()).max(32).optional(),
 }).strict()
 const definition = z.discriminatedUnion('mode', [
-  baseDefinition.extend({ mode: z.literal('service'), connection: z.never().optional(), agent: z.never().optional() }),
+  baseDefinition.extend({ ...agentInferenceSchema.shape, mode: z.literal('service'), connection: z.never().optional(), agent: z.never().optional() }),
   baseDefinition.extend({ mode: z.literal('personal'), connection: z.string().uuid(), agent: ResourceName }),
 ]).superRefine((bot, ctx) => {
   if (bot.mode === 'personal') {
@@ -51,6 +54,15 @@ const definition = z.discriminatedUnion('mode', [
 })
 export const BotDefinitionSchema = definition
 export type BotDefinition = z.infer<typeof BotDefinitionSchema>
+
+/** Service inference is Bot-wide, not a binding/session selector. */
+export function botInferenceSettings(bot: BotDefinition) {
+  return bot.mode === 'service' ? inferenceSettings(bot) : {}
+}
+
+export function validateBotInference(bot: BotDefinition, defaults: LlmRuntimeConfig, models: ModelInfo[], qualify: (id: string) => string): void {
+  if (bot.mode === 'service') validateInferenceCapabilities(bot, defaults, models, qualify(bot.model ?? defaults.model))
+}
 
 /** Validate generated data. Deployed bot configuration is JSON, never executable TS. */
 export function defineBot(definition: BotDefinition): BotDefinition { return BotDefinitionSchema.parse(definition) }
