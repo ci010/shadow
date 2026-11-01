@@ -140,6 +140,12 @@ const botHeader = z.union([
  * No module is imported, evaluated or compiled by this pure parser.
  */
 export function parseBot(files: Record<string, string>): BotDefinition {
+  return parseBotPackage(files).bot
+}
+
+/** Format is reported only after the complete strict parse succeeds. These names
+ * describe supported layouts, not a new persisted format-version field. */
+export function parseBotPackage(files: Record<string, string>): { bot: BotDefinition; format: 'frontmatter' | 'legacy-json' } {
   validateBotFiles(files)
   const markdown = files['BOT.md']
   const match = typeof markdown === 'string' && /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/.exec(markdown)
@@ -157,5 +163,5 @@ export function parseBot(files: Record<string, string>): BotDefinition {
   const { config: _configPath, ...metadata } = header
   const bot = BotDefinitionSchema.parse({ ...config, ...metadata, prompt: match[2] })
   for (const tool of bot.tools) if (!Object.hasOwn(files, tool.module)) throw new Error(`Tool source missing: ${tool.module}`)
-  return bot
+  return { bot, format: 'mode' in header ? 'frontmatter' : 'legacy-json' }
 }

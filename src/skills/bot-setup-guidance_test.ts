@@ -46,3 +46,14 @@ test('Directory BOT guidance keeps direct bindings and independent source public
     assert.doesNotMatch(skill.body, /`authoring_change`|`project_config`|v:authoring/)
   }
 })
+
+
+test('Bot state guidance prefers owner-only VFS reads without activating operation tools', async () => {
+  const skills = await getBuiltinSkills()
+  const setup = skills.get('bot-setup')!
+  assert.equal(setup.meta.tools, undefined)
+  for (const rule of [/v:bots\/overview/, /v:bots\/connections\/index/, /v:bots\/deployments\/<id>\/status/,
+    /v:bots\/deployments\/<id>\/listeners/, /processing success is unknown/, /old `bot_setup` \/ `bot_package`/,
+    /owner durable Web management boundary/, /do not start connections/, /No status read repairs/]) assert.match(setup.body, rule)
+  for (const name of ['project-administration', 'tool-operations']) assert.match(skills.get(name)!.body, /v:bots\/overview/)
+})

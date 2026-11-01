@@ -114,6 +114,10 @@ export class BotInstanceStore {
     return { ...raw, config, enabled: config.enabled }
   }
 
+  /** Names only: status discovery must not resolve or expose every credential record. */
+  ids(limit: number): { ids: string[]; truncated: boolean } {
+    return { ids: this.document.bots.slice(0, limit).map(bot => bot.id).sort(), truncated: this.document.bots.length > limit }
+  }
   list(): BotInstance[] { return this.document.bots.map(bot => this.resolve(bot)) }
   get(id: string): BotInstance {
     const raw = this.document.bots.find(bot => bot.id === id)

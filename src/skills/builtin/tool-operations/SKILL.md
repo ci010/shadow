@@ -205,7 +205,9 @@ The workflows below configure service Bots, not personal Project entry points.
 ### Directory BOTs
 
 For registered local BOT directories on QQ, Feishu and Discord, read
-`v:skills/project-administration` and use `bot_package` status/propose. All use
+`v:skills/project-administration`. Read `v:bots/overview` and its connection/deployment
+indexes for state; use `bot_package` propose for publication (legacy status remains
+compatible). Read/search never connect, publish or execute source. All use
 `BOT.md` `{id, config, mode}` plus prompt body, with Service inference
 (`model`, `temperature`, `maxTokens`, `thinking`, `reasoningEffort`) or Personal
 `agent` in frontmatter. JSON retains connection, subscriptions, bindings, tools,

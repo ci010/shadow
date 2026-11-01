@@ -250,7 +250,13 @@ export class ChannelManager {
 
   botStatuses(): BotInstanceStatus[] {
     if (!this.options) throw new ChannelSetupError('bot_instances_unavailable', 503)
-    return this.options.instanceStore.list().map(bot => this.options!.instanceStore.status(bot.id, this.health.get(bot.id)))
+    return this.options.instanceStore.list().map(bot => this.botStatus(bot.id))
+  }
+
+  /** Same live status as the compatibility inventory, without expanding all Bots. */
+  botStatus(id: string): BotInstanceStatus {
+    if (!this.options) throw new ChannelSetupError('bot_instances_unavailable', 503)
+    return this.options.instanceStore.status(id, this.health.get(id))
   }
 
   private botOperation<T>(operation: () => Promise<T>): Promise<T> {
