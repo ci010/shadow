@@ -472,8 +472,17 @@ client merges them into its retained wire graph before resolving cross-session
 parents. Initial reads, unknown/new sessions, broad or legacy invalidations,
 manual refresh and recovery use the full graph. Missing/deleted or malformed
 partial rows trigger a full read, rather than guessing membership/topology.
+Graph `name` and `title` are label previews capped at 160 UTF-16 code units
+(with an ellipsis and no split surrogate pair). Their existing naming/fallback
+priority is retained; persisted names and full task descriptions are unchanged.
+Named rows do not read message history just to compute an unused fallback.
+Graph automation metadata contains only association IDs, preview name, start time,
+context mode, source/schedule classification and the legacy marker; it omits
+snapshot task prompts and organization outcomes. Automation settings and run
+outcomes remain available through the on-demand automation APIs.
 This narrows transfer and per-session enrichment work; it does not eliminate
-the inventory lookup or replace authoritative reads with event payloads.
+the inventory lookup (including archived inventory paging) or replace
+authoritative reads with event payloads.
 
 Activity notifications are deduplicated per Project/session against the visible
 stage, waiting-for-call flag, active request ID, recovery state and pending

@@ -668,3 +668,69 @@ test('remote file and Git routes retain registered and legacy identity admission
     }
   }
 })
+
+
+test('graph bounds label previews and omits automation prompts/outcomes without reading named histories', async () => {
+  const long = '😀'.repeat(10_000)
+  const automation = { jobId: 'system:work-organizer', name: 'Topic organization', runId: 'run',
+    startedAt: '2026-10-01T00:00:00Z', contextMode: 'fresh' as const,
+    config: { source: 'system' as const, schedule: 'Event driven', task: long },
+    organizationProblem: 'unfinished' as const }
+  const states = [
+    { sessionId: 'web:named', name: long },
+    { sessionId: 'task:one', mode: 'task', description: long },
+    { sessionId: 'web:unnamed' },
+    { sessionId: 'system:one', automation },
+  ]
+  const messageReads: string[] = []
+  const manager = {
+    listHistorySessions: async () => states.map(state => ({ ...state, segmentIndex: 0 })),
+    readSessionState: async (id: string) => states.find(state => state.sessionId === id),
+    getFirstUserMessage: async (id: string) => { messageReads.push(id); return long },
+    getSessionInferenceDefaults: () => ({ model: 'test' }),
+    yields: new Map(), inputs: new Map(),
+  } as unknown as SessionManager
+  const app = new Hono()
+  sessionsApiPlugin(manager)(app)
+  const graph = await (await app.request('/api/sessions/graph')).json()
+  assert.deepEqual(messageReads, ['web:unnamed'])
+  for (const row of graph.sessions) {
+    assert.ok(row.title.length <= 160)
+    assert.ok(!/[\uD800-\uDBFF]…$/.test(row.title))
+    if (row.name) assert.ok(row.name.length <= 160)
+  }
+  assert.deepEqual(graph.sessions[3].automation, {
+    jobId: automation.jobId, name: automation.name, runId: 'run', startedAt: automation.startedAt,
+    contextMode: 'fresh', config: { source: 'system', schedule: 'Event driven' },
+  })
+  // Summarization never mutates persisted identity or the original automation snapshot.
+  assert.equal(states[0].name, long)
+  assert.equal(automation.config.task, long)
+})
+
+
+test('readonly shallow snapshots are opt-in and segment rollover is never mislabeled', async () => {
+  let segmentIndex = 0
+  let rollover = false
+  const app = new Hono()
+  testSessionsApiPlugin({
+    listHistorySessions: async () => [{ sessionId: 'logical' }],
+    readSessionState: async () => ({ sessionId: 'logical', segmentIndex }),
+    getHistory: async () => {
+      if (rollover) segmentIndex++
+      return { messages: [{ role: 'user', content: 'hello' }], total: 1 }
+    },
+    getCommandResults: async () => [], getYieldRecords: async () => [],
+  } as unknown as SessionManager)(app)
+  const full = await (await app.request('/api/sessions/logical?shallow=true&snapshot=')).json()
+  assert.ok(full.data.messages)
+  const query = new URLSearchParams({ shallow: 'true', snapshot: full.revision, historyCount: '1', historyRevision: full.historyRevision, metadataRevision: full.metadataRevision })
+  const unchanged = await (await app.request(`/api/sessions/logical?${query}`)).json()
+  assert.equal(unchanged.unchanged, true)
+  const legacy = await (await app.request('/api/sessions/logical?shallow=true')).json()
+  assert.ok(legacy.messages)
+  const page = await (await app.request('/api/sessions/logical?shallow=true&pageSize=1&snapshot=')).json()
+  assert.ok(page.messages)
+  rollover = true
+  assert.equal((await app.request('/api/sessions/logical?shallow=true&snapshot=')).status, 409)
+})

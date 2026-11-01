@@ -1,3 +1,4 @@
+import { readonlyHistorySnapshot } from './history-snapshot.ts'
 import { projectUsagePageQuerySchema } from '../projects/usage-contract.ts'
 import { sessionActivityReadModel } from './activity-invalidation.ts'
 import { SessionProfileService } from './profile.ts'
@@ -20,6 +21,7 @@ import { FolderError } from '../folders/registry.ts'
 import { RemoteWorkdirIdentityError } from '../execution/remote-workdir-identity-client.ts'
 import { isLearningAutomationSession } from './session-purpose.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
+import { graphAutomation, graphTitle } from './graph-summary.ts'
 import { cronContextMode, type CronService } from '../cron/service.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
@@ -326,7 +328,12 @@ export function sessionsApiPlugin(
           executionStatus: sessions.isWaitingForCall?.(session.sessionId) || sessions.yields.get(session.sessionId) || sessions.inputs.get(session.sessionId)
             ? 'waiting' : state?.executionStatus ?? (state?.lastActivityAt ? 'completed' : 'pending'),
         }
-        const firstMsg = await sessions.getFirstUserMessage(session.sessionId)
+        const automation = state ? resolveAutomationSession(state) : undefined
+        const namedTitle = automation?.config?.source === 'system' ? automation.name
+          : state?.name ?? state?.topic?.title ?? state?.generatedTitle ?? state?.chatName
+            ?? (execution.mode !== 'session' ? state?.description : undefined)
+        // Message history can be expensive; only unnamed rows need that fallback.
+        const title = graphTitle(namedTitle ?? await sessions.getFirstUserMessage(session.sessionId) ?? undefined)
         let inferenceDefaults: ReturnType<SessionManager['getSessionInferenceDefaults']> | null
         if (state && execution.mode === 'session') {
           try {
@@ -336,15 +343,16 @@ export function sessionsApiPlugin(
             inferenceDefaults = null
           }
         }
-        const automation = state ? resolveAutomationSession(state) : undefined
         enrichedSessions.push({
           ...session,
           ...execution,
-          automation,
+          // The renderer prioritizes name over title, so bound both preview fields.
+          name: graphTitle(session.name),
+          automation: graphAutomation(automation),
           completed: state?.completed ?? false,
           hasCron: cronTargets.has(session.sessionId),
           hasBackgroundTasks: backgroundOwners.has(session.sessionId),
-          title: automation?.config?.source === 'system' ? automation.name : state?.name ?? state?.topic?.title ?? state?.generatedTitle ?? state?.chatName ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
+          title,
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,
           inferenceDefaults,
@@ -1046,6 +1054,7 @@ export function sessionsApiPlugin(
       const isLogicalKey = chain.some((s) => s.sessionId === key)
 
       if (isLogicalKey) {
+        const beforeState = await sessions.readSessionState(key)
         const { messages, total } = await sessions.getHistory(
           key,
           { offset, pageSize, shallow },
@@ -1058,7 +1067,7 @@ export function sessionsApiPlugin(
         if (segmentIndex > 0) {
           previousPhysicalId = physicalSessionId(state ?? { sessionId: key, segmentIndex }, segmentIndex - 1)
         }
-        return c.json({
+        const data = {
           key,
           total,
           offset,
@@ -1069,7 +1078,19 @@ export function sessionsApiPlugin(
           segmentIndex,
           currentPhysicalId,
           previousPhysicalId,
-        })
+        }
+        if (shallow && pageSize === undefined && url.searchParams.has('snapshot')) {
+          // Do not label a history read with a segment that rolled over while
+          // messages/receipts were being fetched. The next read starts fresh.
+          const afterState = await sessions.readSessionState(key)
+          if (!beforeState || !afterState || physicalSessionId(beforeState) !== currentPhysicalId
+            || physicalSessionId(afterState) !== currentPhysicalId) {
+            return c.json({ error: 'history_conflict', message: 'Session segment changed during history read. Retry.' }, 409)
+          }
+          c.header('Cache-Control', 'no-store')
+          return c.json(readonlyHistorySnapshot(data, url.searchParams))
+        }
+        return c.json(data)
       }
 
       // Fall back to physical session ID

@@ -232,3 +232,14 @@ test('sidebar completion only replaces idle/inactive activity, not live or execu
     assert.equal(sidebarSessionIconStage(stage, false), stage)
   }
 })
+
+
+test('graph automation summaries preserve source classification and navigation without prompt snapshots', () => {
+  const automation = { jobId: 'learning:encapsulator', name: 'Encapsulation', runId: 'run',
+    startedAt: '2026-10-01T00:00:00Z', contextMode: 'fresh',
+    config: { source: 'learning', schedule: 'every 2h' } }
+  const sessions = parseSessionGraph({ sessions: [{ sessionId: 'opaque-run', automation }], nodes: [] })
+  assert.deepEqual(sessions[0].automation, automation)
+  assert.equal(groupFolderSessions([], sessions).automations[0].id, automation.jobId)
+  assert.equal(groupFolderSessions([], sessions).automations[0].name, automation.name)
+})

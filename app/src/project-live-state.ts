@@ -15,7 +15,7 @@ import { parseSessionActivityReadModel, type SessionActivityReadModel } from '..
  * initialLoading represents an external readiness gate; its owner must invalidate
  * when ready (or dispose to settle readers), without starting HTTP early. */
 export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: number, options: { initialLoading?: boolean; reconcile?: (value: T) => T } = {}) {
-  const state = shallowReactive({ value: undefined as T | undefined, loading: options.initialLoading ?? false, error: '', revision: 0, readRevision: 0 })
+  const state = shallowReactive({ value: undefined as T | undefined, loading: options.initialLoading ?? false, error: '', revision: 0, readRevision: 0, refreshReason: 'initial', readReason: 'initial' })
   let controller: AbortController | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let pending = false
@@ -32,6 +32,7 @@ export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, del
     pending = false
     const current = controller = new AbortController()
     state.readRevision++
+    state.readReason = state.refreshReason
     try {
       const value = await load(current.signal)
       if (closed || current.signal.aborted || controller !== current) return
@@ -50,15 +51,16 @@ export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, del
       }
     }
   }
-  function invalidate() {
+  function invalidate(reason = 'invalidation') {
     if (closed) return
+    state.refreshReason = reason
     pending = true
     state.loading = true
     schedule()
   }
   function read(): Promise<void> {
     if (closed) return Promise.resolve()
-    if (state.value === undefined && !state.error && !state.loading) invalidate()
+    if (state.value === undefined && !state.error && !state.loading) invalidate('initial-read')
     if (!state.loading) return Promise.resolve()
     return new Promise(resolve => waiters.add(resolve))
   }
@@ -70,11 +72,11 @@ export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, del
       state.revision++
       return true
     },
-    refresh() { invalidate(); return read() },
-    reset() {
+    refresh() { invalidate('manual'); return read() },
+    reset(reason = 'recovery') {
       controller?.abort()
       controller = undefined
-      invalidate()
+      invalidate(reason)
     },
     pause() {
       clearTimeout(timer)

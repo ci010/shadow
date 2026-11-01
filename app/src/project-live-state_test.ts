@@ -563,3 +563,24 @@ test('live activity after failed initial HTTP retries inventory instead of inven
   assert.equal(lease.activity.state.value?.stages['web:one'], 'idle', 'GET started after event and remains authoritative')
   assert.equal(lease.activity.state.error, '')
 })
+
+
+test('shared recovery inventory remains single-owner when chat readiness reads again', async t => {
+  const f = fixture(t)
+  const lease = f.store.acquireProject('http://fixture', 'a')
+  await f.tick()
+  f.requests.find(r => r.path.endsWith('/graph'))!.finish(graph('One'))
+  f.requests.find(r => r.path.endsWith('/stages'))!.finish({ stages: {} })
+  await flush()
+  f.observers.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!.reconnected!()
+  const chatRead = lease.activity.read()
+  await f.tick()
+  assert.equal(f.requests.filter(r => r.path.endsWith('/stages')).length, 2)
+  assert.equal(lease.activity.state.readReason, 'recovery')
+  f.requests.filter(r => r.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
+  f.requests.filter(r => r.path.endsWith('/graph')).at(-1)!.finish(graph('One'))
+  await chatRead
+  await f.tick()
+  assert.equal(f.requests.filter(r => r.path.endsWith('/stages')).length, 2)
+  lease.release()
+})
