@@ -23,42 +23,21 @@
         <article class="chart-card token-card">
           <h3>{{ t('Daily tokens') }}</h3><p>{{ t('Daily known tokens; dashed bars are partial, gaps are unavailable.') }}</p>
           <p v-if="!points.some(p => p.tokens !== null)" class="empty-chart">{{ t('No known tokens in this window.') }}</p>
-          <svg v-else :ref="el => setPlot('tokens', el)" :viewBox="`0 0 ${plotWidths.tokens} 210`" role="img" :aria-label="t('Daily tokens')">
-            <text x="30" y="16" class="axis">{{ compactNumber(points.some(p => (p.tokens ?? 0) > 0) ? tokenMax : 0) }}</text><line x1="30" y1="160" :x2="plotWidths.tokens - 20" y2="160" class="grid-line" />
-            <line x1="30" y1="95" :x2="plotWidths.tokens - 20" y2="95" class="grid-line grid-guide" /><line x1="30" y1="30" :x2="plotWidths.tokens - 20" y2="30" class="grid-line grid-guide" />
-            <template v-for="(point, i) in points" :key="point.date">
-              <rect v-if="point.tokens !== null" :x="barX('tokens', i)" :y="160 - point.tokens / tokenMax * 130" :width="barWidth('tokens')" :height="Math.max(point.tokens === 0 ? 1 : 0, point.tokens / tokenMax * 130)" class="token-bar" :class="{ 'cost-partial': point.usage?.unknownTokenCalls }" tabindex="0" :aria-label="pointLabel(point, 'tokens')"><title>{{ pointLabel(point, 'tokens') }}</title></rect>
-              <text v-else :x="30 + (i + 0.5) * plotSpan('tokens') / windowDays" text-anchor="middle" y="157" class="missing" :aria-label="`${point.date}: ${t('Unavailable')}`">·</text>
-            </template>
-            <text v-for="i in dateTicks('tokens')" :key="`date-${i}`" :x="30 + (i + 0.5) * plotSpan('tokens') / windowDays" y="192" text-anchor="middle" class="axis">{{ points[i]?.date.slice(5) }}</text>
-          </svg>
+          <UsageTrendChart v-else :title="t('Daily tokens')" kind="bar" :points="tokenSeries" :format-axis="compactNumber" :min-interval="1" />
           <p class="chart-stat">{{ t('{count} of {days} days available', { count: points.filter(p => p.tokens !== null).length, days: windowDays }) }}</p>
         </article>
         <article class="chart-card cost-card">
           <div class="cost-heading"><h3>{{ t('Daily estimated cost') }}</h3><label v-if="hasCny">{{ t('Cost unit') }} <UiSelect :value="costUnit" :aria-label="t('Cost unit')" @change="costChosen = true; costUnit = ($event.target as HTMLSelectElement).value as CostUnit"><option v-for="unit in costUnits" :key="unit" :value="unit">{{ unit }}</option></UiSelect></label></div>
           <p>{{ t('Includes converted AI credits in USD; dashed bars indicate partial data.') }}</p>
           <p v-if="!costPoints.some(p => p.amount !== null)" class="empty-chart">{{ t('No known cost in this window for this unit.') }}</p>
-          <svg v-else :ref="el => setPlot('cost', el)" :viewBox="`0 0 ${plotWidths.cost} 210`" role="img" :aria-label="`${t('Daily estimated cost')} (${costUnit})`">
-            <text x="30" y="16" class="axis">{{ formatNumber(costPoints.some(p => (p.amount ?? 0) > 0) ? costMax : 0, { maximumSignificantDigits: 6 }) }} {{ costUnit }}</text><line x1="30" y1="160" :x2="plotWidths.cost - 20" y2="160" class="grid-line" />
-            <line x1="30" y1="95" :x2="plotWidths.cost - 20" y2="95" class="grid-line grid-guide" /><line x1="30" y1="30" :x2="plotWidths.cost - 20" y2="30" class="grid-line grid-guide" />
-            <template v-for="(point, i) in costPoints" :key="point.date">
-              <rect v-if="point.amount !== null" :x="barX('cost', i)" :y="160 - point.amount / costMax * 130" :width="barWidth('cost')" :height="Math.max(point.amount === 0 ? 1 : 0, point.amount / costMax * 130)" class="cost-bar" :class="{ 'cost-partial': point.partial }" tabindex="0" :aria-label="costLabel(point)"><title>{{ costLabel(point) }}</title></rect>
-              <text v-else :x="30 + (i + 0.5) * plotSpan('cost') / windowDays" text-anchor="middle" y="157" class="missing" :aria-label="`${point.date}: ${t('Unavailable')}`">·</text>
-            </template>
-            <text v-for="i in dateTicks('cost')" :key="`date-${i}`" :x="30 + (i + 0.5) * plotSpan('cost') / windowDays" y="192" text-anchor="middle" class="axis">{{ points[i]?.date.slice(5) }}</text>
-          </svg>
+          <UsageTrendChart v-else :title="`${t('Daily estimated cost')} (${costUnit})`" kind="bar" :points="costSeries" :format-axis="compactCost" />
           <p class="chart-stat">{{ t('{count} of {days} days available', { count: costPoints.filter(p => p.amount !== null).length, days: windowDays }) }} · {{ costUnit }}</p>
 
         </article>
         <article class="chart-card">
           <h3>{{ t('Daily provider time') }}</h3><p>{{ t('Cumulative call time, not work duration; gaps are not interpolated.') }}</p>
           <p v-if="!points.some(p => p.seconds !== null)" class="empty-chart">{{ t('No known call time in this window.') }}</p>
-          <svg v-else :ref="el => setPlot('time', el)" :viewBox="`0 0 ${plotWidths.time} 210`" role="img" :aria-label="t('Daily provider time')">
-            <text x="30" y="16" class="axis">{{ t('{seconds} s', { seconds: formatNumber(points.some(p => (p.seconds ?? 0) > 0) ? timeMax : 0, { maximumFractionDigits: 1 }) }) }}</text><line x1="30" y1="160" :x2="plotWidths.time - 20" y2="160" class="grid-line" />
-            <polyline v-for="(segment, i) in segments" :key="i" :points="segment" class="time-line" />
-            <template v-for="(point, i) in points" :key="point.date"><circle v-if="point.seconds !== null" :cx="30 + i * plotSpan('time') / (windowDays - 1)" :cy="160 - point.seconds / timeMax * 130" r="4" class="time-point" tabindex="0" :aria-label="pointLabel(point, 'seconds')"><title>{{ pointLabel(point, 'seconds') }}</title></circle></template>
-            <text v-for="i in dateTicks('time')" :key="`date-${i}`" :x="30 + i * plotSpan('time') / (windowDays - 1)" y="192" :text-anchor="i === 0 ? 'start' : i === windowDays - 1 ? 'end' : 'middle'" class="axis">{{ points[i]?.date.slice(5) }}</text>
-          </svg>
+          <UsageTrendChart v-else :title="t('Daily provider time')" kind="line" :points="timeSeries" :format-axis="timeAxis" />
           <p class="chart-stat">{{ t('{count} of {days} days available', { count: points.filter(p => p.seconds !== null).length, days: windowDays }) }}</p>
         </article>
       </div>
@@ -94,8 +73,10 @@
 </template>
 <script setup lang="ts">
 import UiSelect from './UiSelect.vue'
+import UsageTrendChart from './UsageTrendChart.vue'
 import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
-import { compactUsageNumber, compactUsageCost, durationParts, usageWindow, lineSegments, displayCosts, costWindow, costUnits, type CostUnit, type UsagePoint } from '../project-usage-charts.ts'
+import { compactUsageNumber, compactUsageCost, durationParts, usageWindow, displayCosts, costWindow, costUnits, type CostUnit, type UsagePoint } from '../project-usage-charts.ts'
+import type { UsageChartDatum } from '../usage-chart-options.ts'
 import { apiUrl } from '../api-url.ts'
 import { t, formatDateTime, formatNumber } from '../i18n.ts'
 import { projectUsageSchema, projectUsagePageSchema, type ProjectUsagePage, type ProjectUsage, type ProjectUsageMetrics } from '../../../src/projects/usage-contract.ts'
@@ -116,30 +97,6 @@ function compactDuration(ms: number | null) {
   if (minutes) return t('{minutes}m {seconds}s', { minutes, seconds })
   return t('{seconds} s', { seconds: formatNumber(seconds, { maximumFractionDigits: 1 }) })
 }
-// Match the SVG coordinate space to its actual panel width so labels never shrink
-// on narrow panels and the main chart uses all of the available horizontal space.
-type PlotKey = 'tokens' | 'cost' | 'time'
-const plotWidths = ref<Record<PlotKey, number>>({ tokens: 600, cost: 600, time: 600 })
-const plots = new Map<PlotKey, Element>()
-const plotObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(entries => {
-  for (const entry of entries) {
-    const key = [...plots].find(([, element]) => element === entry.target)?.[0]
-    if (key && entry.contentRect.width > 0) plotWidths.value[key] = Math.max(100, entry.contentRect.width)
-  }
-})
-function setPlot(key: PlotKey, element: unknown) {
-  const previous = plots.get(key)
-  if (previous === element) return
-  if (previous) { plotObserver?.unobserve(previous); plots.delete(key) }
-  if (typeof Element !== 'undefined' && element instanceof Element) { plots.set(key, element); plotObserver?.observe(element) }
-}
-function plotSpan(key: PlotKey) { return Math.max(1, plotWidths.value[key] - 60) }
-function barWidth(key: PlotKey) { return Math.max(1, Math.min(56, plotSpan(key) / windowDays.value - 4)) }
-function barX(key: PlotKey, index: number) { return 30 + (index + 0.5) * plotSpan(key) / windowDays.value - barWidth(key) / 2 }
-function dateTicks(key: PlotKey) {
-  const count = plotWidths.value[key] < 480 ? 3 : 7
-  return Array.from({ length: count }, (_, i) => Math.round(i * (windowDays.value - 1) / (count - 1)))
-}
 const windowDays = ref(7)
 const points = computed(() => data.value ? usageWindow(data.value, windowDays.value) : [])
 const costUnit = ref<CostUnit>('USD')
@@ -152,15 +109,15 @@ watch(points, () => {
   }
 })
 const costPoints = computed(() => costWindow(points.value, costUnit.value))
-const costMax = computed(() => Math.max(1e-12, ...costPoints.value.map(p => p.amount ?? 0)))
 function costLabel(point: ReturnType<typeof costWindow>[number]) {
   const value = point.amount === null ? t('Unavailable') : `${formatNumber(point.amount, { maximumSignificantDigits: 15 })} ${costUnit.value}`
   const missing = points.value.find(p => p.date === point.date)?.usage?.unknownCostCalls ?? 0
   return `${point.date}: ${partial(value, missing)}`
 }
-const tokenMax = computed(() => Math.max(1, ...points.value.map(p => p.tokens ?? 0)))
-const timeMax = computed(() => Math.max(1, ...points.value.map(p => p.seconds ?? 0)))
-const segments = computed(() => lineSegments(points.value, timeMax.value, plotSpan('time')))
+const tokenSeries = computed<UsageChartDatum[]>(() => points.value.map(p => ({ date: p.date, value: p.tokens, label: pointLabel(p, 'tokens'), partial: !!p.usage?.unknownTokenCalls })))
+const timeSeries = computed<UsageChartDatum[]>(() => points.value.map(p => ({ date: p.date, value: p.seconds, label: pointLabel(p, 'seconds'), partial: !!p.usage?.unknownDurationCalls })))
+const costSeries = computed<UsageChartDatum[]>(() => costPoints.value.map(p => ({ date: p.date, value: p.amount, label: costLabel(p), partial: p.partial })))
+function timeAxis(seconds: number) { return compactDuration(seconds * 1000) }
 function pointLabel(point: UsagePoint, metric: 'tokens' | 'seconds') {
   return `${point.date}: ${point.usage ? metric === 'tokens' ? tokens(point.usage) : duration(point.usage) : t('Unavailable')}`
 }
@@ -217,7 +174,7 @@ watch(() => [props.apiBase, props.projectId, props.active] as const, (_, previou
   if (props.apiBase !== previous?.[0] || props.projectId !== previous?.[1]) { data.value = undefined; error.value = false }
   if (props.active) void refresh()
 }, { immediate: true })
-onUnmounted(() => { controller?.abort(); resetPage(); plotObserver?.disconnect() })
+onUnmounted(() => { controller?.abort(); resetPage() })
 </script>
 <style scoped>
 .project-usage { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 24px; color: var(--c-text); background: var(--c-bg-soft); container: usage / inline-size; }
@@ -250,20 +207,11 @@ p { margin: 8px 0; font-size: 12px; line-height: 1.5; color: var(--c-text-second
 .chart-card { min-width: 0; border: 1px solid var(--c-border); background: var(--c-bg-card); padding: 16px 20px; display: flex; flex-direction: column; }
 .token-card { grid-column: 1 / -1; }
 .chart-card > p { margin: 6px 0 12px; }
-.chart-card > svg { display: block; width: 100%; height: 210px; overflow: hidden; margin-top: auto; }
 .chart-card > .chart-stat { margin: 12px 0 0; font-variant-numeric: tabular-nums; }
 .cost-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .cost-heading label { display: flex; align-items: center; gap: 6px; color: var(--c-text-secondary); font-size: 12px; white-space: nowrap; }
 .cost-heading .ui-select { width: 90px; font-size: 12px; }
 .empty-chart { display: grid; place-content: center; min-height: 210px; text-align: center; }
-.axis { fill: var(--c-text-secondary); font-size: 11px; }
-.grid-line { stroke: var(--c-border); }
-.grid-guide { stroke-dasharray: 2 4; }
-.token-bar, .cost-bar { fill: var(--c-primary); }
-.time-line { fill: none; stroke: var(--c-primary); stroke-width: 2.5; }
-.time-point { fill: var(--c-primary); stroke: var(--c-bg-card); stroke-width: 1; }
-.missing { fill: var(--c-text-muted); }
-.cost-partial { fill-opacity: .55; stroke: var(--c-text); stroke-width: 1; stroke-dasharray: 3 2; }
 .pagination { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; color: var(--c-text-secondary); font-size: 12px; }
 .daily-table { overflow-x: auto; margin: 12px 0 24px; }
 table { width: 100%; border-collapse: collapse; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -278,7 +226,7 @@ details { border-top: 1px solid var(--c-border); padding: 12px 0; font-size: 12p
 summary { cursor: pointer; color: var(--c-text-secondary); }
 details li { line-height: 1.8; color: var(--c-text-secondary); }
 .coverage-table { width: auto; font-size: 11px; }
-svg [tabindex]:focus-visible, .daily-table:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.daily-table:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 @container usage (max-width: 850px) {
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 24px; }
   .metric-card:nth-child(3) { border-left: 0; }

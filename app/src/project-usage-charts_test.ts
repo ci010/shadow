@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { ProjectUsage, ProjectUsageMetrics } from '../../src/projects/usage-contract.ts'
-import { usageWindow, lineSegments, displayCosts } from './project-usage-charts.ts'
+import { usageWindow, displayCosts } from './project-usage-charts.ts'
 const usage = (tokens: number | null, durationMs: number | null = tokens): ProjectUsageMetrics => ({ calls: 1, tokens, durationMs, unknownTokenCalls: tokens === null ? 1 : 0, unknownDurationCalls: durationMs === null ? 1 : 0, costs: [{ currency: 'USD', amount: 2 }, { currency: 'CNY', amount: 3 }, { currency: 'AI_CREDITS', amount: 10 }], unknownCostCalls: 0 })
 const fixture = { asOf: '2026-01-02T00:01:00Z', daily: [{ date: '2026-01-02', usage: usage(0, 0) }, { date: '2026-01-01', usage: usage(100, 2000) }, { date: '2025-12-30', usage: usage(null) }] } as ProjectUsage
 
@@ -16,12 +16,6 @@ test('UTC windows include today across year boundary, preserve zeros and missing
   assert.equal(points[3].tokens, null)
   assert.equal(points[5].seconds, 2)
   assert.equal(usageWindow(fixture, 30).length, 30)
-})
-test('line never bridges missing values; zero and isolated points remain coordinates', () => {
-  const points = usageWindow(fixture, 7)
-  assert.deepEqual(lineSegments(points, 2), ['480,30 570,160'])
-  assert.deepEqual(lineSegments(points, 2, 240), ['230,30 270,160'])
-  assert.deepEqual(lineSegments(points.map((p, i) => i === 5 ? { ...p, seconds: null } : p), 2), ['570,160'])
 })
 test('display costs converts credits at 100:1, merges USD and preserves CNY and source records', () => {
   const costs = usage(1).costs
