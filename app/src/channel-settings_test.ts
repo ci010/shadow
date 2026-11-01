@@ -112,13 +112,15 @@ test('client patches only selected channel and refuses unexpected success payloa
 test('Settings shell and channel forms compile and preserve accessible navigation and hidden drafts', async () => {
   const require = createRequire(new URL('./package.json', import.meta.url))
   const compiler = require('vue/compiler-sfc') as typeof import('vue/compiler-sfc')
-  for (const filename of ['SettingsView.vue', 'ProjectSettings.vue', 'ChannelsView.vue', 'BotPackage.vue']) {
+  for (const filename of ['SettingsView.vue', 'ProjectSettings.vue', 'ChannelsView.vue', 'BotPackage.vue', 'BotConnectionSetup.vue', 'BotChatSetup.vue', 'BotServiceStatus.vue']) {
     const source = await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8')
     const { descriptor, errors } = compiler.parse(source, { filename })
     assert.deepEqual(errors, [])
     const script = compiler.compileScript(descriptor, { id: filename })
     assert.deepEqual(compiler.compileTemplate({ source: descriptor.template!.content, filename, id: filename,
       compilerOptions: { bindingMetadata: script.bindings } }).errors, [])
+    for (const style of descriptor.styles) assert.deepEqual(compiler.compileStyle({ source: style.content, filename, id: filename, scoped: style.scoped }).errors, [])
+    if (filename.startsWith('Bot')) assert.doesNotMatch(source, /\btitle=/, 'Bot controls use visible labels, not native action tooltips')
     if (filename === 'SettingsView.vue') {
       assert.match(source, /:aria-label="t\('Settings sections'\)"/)
       assert.match(source, /<ProvidersView\b[^>]*\bv-show=/)

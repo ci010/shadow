@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { join } from 'node:path'
 import { BotDeployments } from './deployments.ts'
 import { parseBot } from './sdk.ts'
+import { migrateBotFrontmatter } from './format.ts'
 import { DirectoryBots } from './runtime.ts'
 import { botConversationPolicies } from '../channels/bot-policies.ts'
 import { BotInstanceStore } from '../channels/bot-store.ts'
@@ -38,7 +39,7 @@ test('personal deployment uses real normal SessionManager prompt/tools, live own
     const bot=store.create('qq','Owner',{appId:'synthetic',secret:'synthetic',enabled:true},undefined,'personal')
     store.bindOwner(bot.id,'owner','dm')
     const deployments=new BotDeployments({directory:join(workspace,'deployments'),projectId,runGit:async()=>{throw new Error('No git')}})
-    const frozen=deployments.freeze(files(bot.id,{agent:'personal-role'}))
+    const frozen=deployments.freeze(migrateBotFrontmatter(files(bot.id,{agent:'personal-role'})))
     await deployments.deploy({id:'shadow',source:{folderId:'f',directory:'shadow'},files:frozen.files,revision:frozen.revision,signal:new AbortController().signal})
     const runtime=new DirectoryBots(deployments)
     const existing={managed:()=>true,resolve:()=>undefined,authorize:()=>{},tools:()=>{throw new Error('Restricted service tools')},prompt:()=>{throw new Error('Restricted prompt')}} as unknown as ConversationPolicies

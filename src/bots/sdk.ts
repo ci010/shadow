@@ -99,7 +99,7 @@ export function validateBotInference(bot: BotDefinition, defaults: LlmRuntimeCon
   if (bot.mode === 'service') validateInferenceCapabilities(bot, defaults, models, qualify(bot.model ?? defaults.model))
 }
 
-/** Validate generated data. Deployed bot configuration is JSON, never executable TS. */
+/** Validate generated data. Deployed configuration is declarative YAML/JSON, never executable TS. */
 export function defineBot(definition: BotDefinition): BotDefinition { return BotDefinitionSchema.parse(definition) }
 export interface BotToolContext {
   services: { call(name: string, input: Record<string, unknown>): Promise<unknown> }
@@ -124,8 +124,19 @@ export function validateBotFiles(files: Record<string, string>): void {
   if (bytes > 2_000_000) throw new Error('Bot package exceeds size limit')
 }
 
-/** BOT.md: YAML frontmatter {id, config: bot.json}, followed by the prompt.
- * JSON config contains allowedModules, tools, bindings and optional scopes/skills.
+const identityHeader = z.object({ id: ResourceName, config: BotSourcePathSchema.refine(s => s.endsWith('.json')) }).strict()
+const behaviorFields = ['mode', ...Object.keys(agentInferenceSchema.shape), 'agent']
+const botHeader = z.union([
+  identityHeader.extend({ mode: z.literal('service'), ...agentInferenceSchema.shape }),
+  identityHeader.extend({ mode: z.literal('personal'), agent: ResourceName }),
+  // Transitional, whole legacy format only: every behavior field stays in JSON.
+  identityHeader,
+])
+
+/** BOT.md owns id/config, mode, Service inference or Personal agent, then the prompt.
+ * JSON owns connection, subscriptions, bindings, modules, tools and scopes/skills.
+ * Whole legacy packages are still read without rewriting frozen deployment bytes.
+ * Split/duplicate behavior fields are rejected; neither file overrides the other.
  * No module is imported, evaluated or compiled by this pure parser.
  */
 export function parseBot(files: Record<string, string>): BotDefinition {
@@ -135,11 +146,16 @@ export function parseBot(files: Record<string, string>): BotDefinition {
   if (!match) throw new Error('BOT.md requires YAML frontmatter and a prompt')
   const document = parseDocument(match[1]!, { uniqueKeys: true })
   if (document.errors.length) throw new Error('Invalid BOT.md frontmatter')
-  const header = z.object({ id: ResourceName, config: BotSourcePathSchema.refine(s => s.endsWith('.json')) }).strict().parse(document.toJS({ maxAliasCount: 0 }))
+  const header = botHeader.parse(document.toJS({ maxAliasCount: 0 }))
   if (!Object.hasOwn(files, header.config)) throw new Error('Bot config file missing')
   const config: unknown = JSON.parse(files[header.config]!)
   if (!config || typeof config !== 'object' || Array.isArray(config) || Object.hasOwn(config, 'id') || Object.hasOwn(config, 'prompt')) throw new Error('Bot JSON config must not override identity or prompt')
-  const bot = BotDefinitionSchema.parse({ ...config, id: header.id, prompt: match[2] })
+  if ('mode' in header) {
+    for (const key of behaviorFields) if (Object.hasOwn(config, key))
+      throw new Error(`Bot field ${key} belongs only in BOT.md; duplicate or mixed formats are not supported`)
+  }
+  const { config: _configPath, ...metadata } = header
+  const bot = BotDefinitionSchema.parse({ ...config, ...metadata, prompt: match[2] })
   for (const tool of bot.tools) if (!Object.hasOwn(files, tool.module)) throw new Error(`Tool source missing: ${tool.module}`)
   return bot
 }

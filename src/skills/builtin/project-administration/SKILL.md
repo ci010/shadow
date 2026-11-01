@@ -22,13 +22,21 @@ identifies an independently versioned package, not the source path. Read status
 for the exact expectedRevision before updates. Source edits do not activate it.
 Never write private deployment storage or activate through general tools.
 
-All three platforms use `BOT.md` with header `{id, config: bot.json}` and the
-prompt body, plus data-only `bot.json` and declared tool modules. Permissions
-are declared directly in each binding (tools, folders/domains, grants and
-participants as applicable), subject to BOT-level ceilings. Do not introduce
-`capabilityProfiles` or infer grants from old bindings. Service model/effort
-settings belong to `bot.json`; use provider capabilities to choose supported
-values, not session overrides. Web and verified Personal input stay ordinary
+All three platforms use `BOT.md` with header `{id, config: bot.json, mode}` and
+prompt body. Service `model`, `temperature`, `maxTokens`, `thinking` and
+`reasoningEffort`, or Personal `agent`, belong only in this frontmatter. Use
+provider capabilities to choose supported settings, not session overrides.
+Data-only JSON retains `connection`, `subscriptions`, `bindings`, `tools`,
+`allowedModules`, `skills` and read scopes; mode-specific restrictions still apply.
+Whole legacy packages (header only `id/config`, all behavior fields in JSON) remain
+readable temporarily. Never mix formats or duplicate fields, even identical values:
+there is no priority/override rule. Format upgrades preserve all raw policy values,
+require a source/active-revision comparison and backup outside the package, and
+still use the owning Project's exact-content deployment confirmation. Do not
+rewrite private deployment slots/hashes or repair invalid policy as a format change.
+Permissions are declared directly in each binding (tools, folders/domains, grants
+and participants as applicable), subject to BOT-level ceilings. Do not introduce
+`capabilityProfiles` or infer grants from old bindings. Web and verified Personal input stay ordinary
 sessions. Internal session events/cron are not external BOT subscriptions.
 
 Development source and the deployment copy are independent. Edit the registered
