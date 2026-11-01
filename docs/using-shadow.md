@@ -612,9 +612,13 @@ recent 31 calendar days (including inactive days) and older active dates, with b
 for known tokens. **Refresh** recomputes the statistics; opening this view does not
 make model requests. The summary defaults to **Past 7 days**; choose a period to
 update the four cards (tokens, estimated cost, model call time, and call count).
-Large values are compact; hover a value for its precise known subtotal. Currency
-and credit amounts stay on separate lines. The trend charts have their own **7/30
-day** window, independent of the summary selection. **Data completeness** expands
+Large values are compact; hover a value for its precise known subtotal. AI credits
+are converted at **100 credits = 1 USD** and combined with native USD estimates in
+the summary, daily cost chart and history table. CNY stays separate (no exchange
+rate is assumed). The trend charts have their own **7/30 day** window, independent
+of the summary selection, with the exact UTC range shown above the plots. Daily
+tokens use the main bar chart; estimated cost and cumulative call time appear
+below it. There is no date-share pie chart. **Data completeness** expands
 missing-call counts and tracking coverage; **How usage is measured** expands the
 statistical definitions below. Both are collapsed initially.
 
@@ -626,8 +630,10 @@ statistical definitions below. Both are collapsed initially.
   child calls and automations are included once; inherited assistant snapshots are
   not summed. No other Project's history is included.
 - Costs reuse the provider/model estimates recorded at call time, not today's price
-  list. They are not invoices; USD, CNY and AI credits remain separate. Unpriced or
-  incompletely priced calls are marked partial. Missing estimates are not zero.
+  list. They are not invoices. Raw API/storage amounts retain USD, CNY and AI credits;
+  this page converts credits to USD for display without rewriting source records.
+  Unpriced or incompletely priced calls are marked partial. Missing estimates are
+  not zero; dashed token/cost bars identify partial daily subtotals.
 - Provider time is the sum of elapsed model-call durations, including failed calls,
   excluding tool execution, user waiting and persistence. Concurrent calls overlap,
   so this is **not elapsed Project work time**. New calls record duration in both

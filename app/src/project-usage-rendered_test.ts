@@ -137,19 +137,19 @@ test('inactive usage never fetches; mismatched Project responses are rejected', 
 })
 
 
-test('four charts expose known values, keyboard targets and 7/30 day switching without refetch', async t => {
+test('three chronological charts expose known values, keyboard targets and 7/30 day switching without refetch', async t => {
   let requests = 0
   const result = response()
   result.daily[0].usage = { ...metrics, costs: [...metrics.costs, { currency: 'AI_CREDITS', amount: 12 }] }
   t.mock.method(globalThis, 'fetch', async () => { requests++; return Response.json(result) })
   const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture/projects/p', projectId: 'p', active: true })
   await settle()
-  assert.equal(view.nodes().filter(n => n.tag === 'svg' && n.props.role === 'img').length, 4)
+  assert.equal(view.nodes().filter(n => n.tag === 'svg' && n.props.role === 'img').length, 3)
   assert.match(view.text(), /1 of 7 days available/)
   const bar = view.nodes().find(n => n.tag === 'rect')!
   assert.equal(bar.props.tabindex, '0')
   assert.match(String(bar.props['aria-label']), /2026-10-01: 1,234 \(partial/)
-  assert.match(view.text(), /100%/)
+  assert.doesNotMatch(view.text(), /Token share by day/)
   const change = view.nodes().find(n => n.tag === 'button' && n.text === 'Last 30 days')!
   ;(change.props.onClick as () => void)(); await settle()
   assert.equal(change.props['aria-pressed'], true)
@@ -165,7 +165,7 @@ test('zero charts remain real zero and missing telemetry has no donut or fabrica
   t.mock.method(globalThis, 'fetch', async () => Response.json(result))
   const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture/projects/p', projectId: 'p', active: true })
   await settle()
-  assert.match(view.text(), /No positive known tokens/)
+  assert.doesNotMatch(view.text(), /Token share by day/)
   assert.equal(view.nodes().filter(n => n.tag === 'rect').length, 2)
   assert.equal(view.nodes().filter(n => n.tag === 'circle').length, 1)
   assert.match(String(view.nodes().find(n => n.tag === 'circle')!.props['aria-label']), /0 s/)
@@ -190,16 +190,14 @@ test('cost chart switches units without mixing totals and preserves partial/abse
   await settle()
   const bars = () => view.nodes().filter(n => n.tag === 'rect' && String(n.props.class).includes('cost-bar'))
   assert.equal(bars().length, 3)
-  assert.match(String(bars().at(-1)?.props['aria-label']), /2 USD \(partial/)
+  assert.match(String(bars().at(-1)?.props['aria-label']), /6 USD \(partial/)
   const select = view.nodes().find(n => n.tag === 'select')!
   ;(select.props.onChange as (event: unknown) => void)({ target: { value: 'CNY' } }); await settle()
   assert.equal(bars().length, 2)
   assert.match(String(bars()[0].props['aria-label']), /2026-09-30: 0 CNY$/)
   assert.match(String(bars()[1].props['aria-label']), /30 CNY \(partial/)
   assert.ok(bars().every(n => !String(n.props['aria-label']).includes('USD')))
-  ;(select.props.onChange as (event: unknown) => void)({ target: { value: 'AI_CREDITS' } }); await settle()
-  assert.match(String(bars().at(-1)?.props['aria-label']), /400 AI_CREDITS \(partial/)
-  assert.doesNotMatch(String(bars().at(-1)?.props['aria-label']), /432/)
+  assert.ok(select.children.every(n => n.props.value !== 'AI_CREDITS'))
   const change = view.nodes().find(n => n.tag === 'button' && n.text === 'Last 30 days')!
   ;(change.props.onClick as () => void)(); await settle()
   assert.equal(bars().length, 2)
@@ -227,7 +225,7 @@ test('four KPI cards follow summary selection independently of the trend window;
   assert.match(flatten(cards()[2]), /1h 0m 0s/)
   assert.match(flatten(cards()[3]), /10K/)
   assert.match(view.text(), /1 of 7 days available/)
-  assert.match(view.text(), /Trend window is independent/)
+  assert.match(view.text(), /Daily trends have their own date range/)
   const details = view.nodes().filter(n => n.tag === 'details')
   assert.equal(details.length, 2)
   assert.ok(details.every(n => !n.props.open))
@@ -348,25 +346,52 @@ test('usage styling inherits real light/dark theme tokens and panel-width layout
   assert.match(css, /container:\s*usage \/ inline-size/)
   assert.match(css, /@container usage \(max-width: 850px\)/)
   assert.doesNotMatch(css, /@media|\dvw/)
-  assert.match(css, /grid-template-rows: 40px 46px 210px 72px/)
-  assert.equal((css.match(/^\s*\.chart-card \{/gm) ?? []).length, 2) // base and narrow-container override only
+  assert.match(css, /\.token-card \{ grid-column: 1 \/ -1;/)
+  assert.doesNotMatch(css, /donut|share-card/)
   assert.match(source, /<UiSelect :value="costUnit"/)
   assert.equal((source.match(/<button /g) ?? []).length, (source.match(/<button class="btn btn-sm"/g) ?? []).length)
 })
 
-test('four chart slots use theme-derived marks and matching accessible titles', async t => {
+test('three chart slots use theme-derived marks and matching accessible titles', async t => {
   t.mock.method(globalThis, 'fetch', async () => Response.json(response()))
   const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture/projects/p', projectId: 'p', active: true })
   await settle()
   const charts = view.nodes().filter(n => n.tag === 'article' && String(n.props.class).includes('chart-card'))
-  assert.equal(charts.length, 4)
+  assert.equal(charts.length, 3)
   for (const chart of charts) {
     const heading = chart.children.flatMap(n => [n, ...n.children]).find(n => n.tag === 'h3')!
     const svg = chart.children.find(n => n.tag === 'svg')!
     assert.ok(String(svg.props['aria-label']).startsWith(heading.text))
   }
-  const segment = view.nodes().find(n => n.tag === 'circle' && typeof n.props.stroke === 'string')!
-  assert.match(String(segment.props.stroke), /var\(--c-/)
   const select = view.nodes().find(n => n.tag === 'select')!
   assert.equal(select.props['aria-label'], 'Cost unit')
+})
+
+
+test('credit-only and mixed USD estimates use one conversion across summary, chart, history and refresh', async t => {
+  const result = response()
+  const converted = { ...metrics, costs: [{ currency: 'AI_CREDITS' as const, amount: 48400 }, { currency: 'USD' as const, amount: 0.02 }] }
+  Object.assign(result, { total: converted, today: converted, past7Days: converted, month: converted })
+  result.daily = [{ date: '2026-10-01', usage: converted }]
+  t.mock.method(globalThis, 'fetch', async url => Response.json(String(url).includes('/daily?')
+    ? { projectId: 'p', asOf: result.asOf, page: 1, pageSize: 10, total: 1, hasMore: false, daily: result.daily }
+    : result))
+  const view = mount(t, 'ProjectUsage.vue', { apiBase: 'http://fixture/projects/p', projectId: 'p', active: true })
+  const costBars = () => view.nodes().filter(n => n.tag === 'rect' && String(n.props.class).includes('cost-bar'))
+  await settle()
+  assert.match(view.text(), /484.02\s+USD/)
+  assert.equal(view.nodes().filter(n => n.tag === 'select').length, 0) // no irrelevant unit selector for USD/credits
+  assert.match(String(costBars()[0].props['aria-label']), /484.02 USD \(partial; 1 calls missing\)/)
+  assert.ok(String(costBars()[0].props.class).includes('cost-partial'))
+  assert.match(view.text(), /100 AI credits = 1 USD/)
+  assert.doesNotMatch(view.text(), /AI_CREDITS|not converted or added/)
+  ;(view.nodes().find(n => n.tag === 'button' && n.text === 'Load daily history')!.props.onClick as () => void)()
+  await settle()
+  assert.ok(view.nodes().some(n => n.tag === 'td' && n.props.title === '484.02 USD (partial; 1 calls missing)'))
+  await view.button().click(); await settle()
+  assert.match(String(costBars()[0].props['aria-label']), /484.02 USD/)
+  converted.costs = [{ currency: 'AI_CREDITS', amount: 100 }]
+  await view.button().click(); await settle()
+  assert.match(view.text(), /1.00\s+USD/)
+  assert.match(String(costBars()[0].props['aria-label']), /1 USD/)
 })
