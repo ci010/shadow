@@ -450,8 +450,8 @@ input:not([type]), textarea {
    Heading color alone never creates a divider where none existed. */
 :root {
   --c-markdown-rule: var(--c-selection-border);
-  --c-markdown-table-bg: color-mix(in srgb, var(--c-info-bg) 35%, var(--c-bg-card));
-  --c-markdown-table-header: var(--c-info-bg);
+  --c-markdown-table-bg: color-mix(in srgb, var(--c-info-bg) 15%, var(--c-bg-card));
+  --c-markdown-table-header: color-mix(in srgb, var(--c-info-bg) 35%, var(--c-bg-card));
 }
 :is(.prose, .markdown-body, .file-markdown) :is(h1, h2, h3, h4, h5, h6) {
   border-color: var(--c-markdown-rule);
