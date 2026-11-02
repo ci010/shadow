@@ -3213,6 +3213,9 @@ function resendLastMessage() {
 .conversation-find { margin-left: 0; }
 .conversation-find:hover, .conversation-actions:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .conversation-find:focus-visible, .conversation-actions:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+/* The timeline is a programmatic focus target, not a control. Keep the
+   browser's default focus ring from framing the entire conversation canvas. */
+.chat-messages:focus { outline: none; }
 .chat-messages { position: relative; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding-block: 12px calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
 .session-status-row { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0 8px; width: calc(100% - 40px); max-width: var(--conversation-max-width); min-width: 0; margin: 0 auto; }
 .chat-working { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: min(240px, 100%); min-height: 32px; margin: 8px 0 0 auto; padding: 5px 10px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-control); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }
