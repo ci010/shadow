@@ -5,23 +5,22 @@ import { t, setLocalePreference } from '../../i18n.ts'
 import AlignmentIntentInspector from './AlignmentIntentInspector.vue'
 import { parseAlignmentTarget, type AlignmentLabDocument, type AlignmentSource, type AlignmentTarget, type AlignmentViewKind } from '../../alignment-lab-model.ts'
 
-const kinds: AlignmentViewKind[] = ['timeline', 'storyboard', 'graph', 'spatial']
-type Tab = 'image' | AlignmentViewKind
+type VisibleKind = Exclude<AlignmentViewKind, 'spatial'>
+const kinds: VisibleKind[] = ['timeline', 'storyboard', 'graph']
+type Tab = 'image' | VisibleKind
 const tabs = computed(() => [
   { id: 'image' as Tab, label: t('Image regions'), subtitle: t('Where in the picture?') },
   { id: 'storyboard' as Tab, label: t('Edit workspace'), subtitle: t('Storyboard · Video · Audio') },
   { id: 'graph' as Tab, label: t('Graph'), subtitle: t('Which relationship or dependency?') },
-  { id: 'spatial' as Tab, label: t('3D space'), subtitle: t('Which surface and viewpoint?') },
 ])
 const requested = new URL(window.location.href).searchParams.get('view')
-const active = ref<Tab>(requested === 'image' || kinds.includes(requested as AlignmentViewKind) ? (requested === 'timeline' ? 'storyboard' : requested) as Tab : 'image')
+const active = ref<Tab>(requested === 'image' || kinds.includes(requested as VisibleKind) ? (requested === 'timeline' ? 'storyboard' : requested) as Tab : 'image')
 const opened = ref<Tab[]>([active.value])
 const views: Record<Tab, Component> = {
   image: defineAsyncComponent(() => import('./ImageAlignmentLab.vue')),
   timeline: defineAsyncComponent(() => import('./TimelineAlignmentSurface.vue')),
   storyboard: defineAsyncComponent(() => import('./EditorAlignmentSurface.vue')),
   graph: defineAsyncComponent(() => import('./GraphAlignmentSurface.vue')),
-  spatial: defineAsyncComponent(() => import('./SpatialAlignmentSurface.vue')),
 }
 function empty(kind: AlignmentViewKind, source: AlignmentSource = { id: '', label: '', revision: '', context: '' }): AlignmentLabDocument {
   return { schema: 'shadow.alignment/v1', kind, source, description: '', constraints: '', annotations: [] }
@@ -77,14 +76,14 @@ function clear(kind: AlignmentViewKind) {
 
 <template>
   <main class="alignment-workbench">
-    <header class="lab-header"><div><span class="lab-eyebrow">SHADOW · USER ALIGNMENT</span><h1>{{ t('Alignment Lab') }}</h1><p>{{ t('Locate intent in time, space and relationships. These views describe changes; they do not pretend to execute them.') }}</p></div><div class="lab-languages"><button class="btn" @click="setLocalePreference('zh-CN')">中文</button><button class="btn" @click="setLocalePreference('en')">English</button></div></header>
+    <header class="lab-header"><div><span class="lab-eyebrow">SHADOW · USER ALIGNMENT</span><h1>{{ t('Alignment Lab') }}</h1><p>{{ t('Locate intent in time, space and relationships. These views describe changes; they do not pretend to execute them.') }}</p></div><div class="lab-languages"><a class="btn" href="?view=components">{{ t('Component compositions') }}</a><button class="btn" @click="setLocalePreference('zh-CN')">中文</button><button class="btn" @click="setLocalePreference('en')">English</button></div></header>
     <p class="lab-boundary">{{ t('Local experiment: no uploads, no agent calls. Copy a prepared request into chat and attach any source files when you are ready.') }}</p>
     <nav class="lab-tabs" role="tablist" :aria-label="t('Alignment views')"><button v-for="tab in tabs" :id="`tab-${tab.id}`" :key="tab.id" role="tab" :aria-selected="active === tab.id" :aria-controls="`view-${tab.id}`" :data-view="tab.id" :tabindex="active === tab.id ? 0 : -1" @keydown="tabKey($event, tab.id)" @click="activate(tab.id)"><strong>{{ tab.label }}</strong><span>{{ tab.subtitle }}</span></button></nav>
     <p v-if="error" role="alert" class="lab-error">{{ error }}</p>
     <section v-for="kind in opened" v-show="active === kind" :id="`view-${kind}`" :key="kind" role="tabpanel" :aria-labelledby="`tab-${kind}`" class="lab-view" :class="{ 'image-view': kind === 'image', 'editor-view': kind === 'storyboard' }">
       <component v-if="kind === 'image'" :is="views.image" :embedded="true" />
       <template v-else>
-        <div class="lab-surface"><component :is="views[kind]" :targets="targets[kind]" :selected-id="selected[kind]" :active="active === kind" :has-instructions="!!(drafts[kind].description.trim() || drafts[kind].constraints.trim() || drafts[kind].annotations.length)" @source="source(kind, $event)" @target="target(kind, $event)" @select="selected[kind] = $event" @remove="remove(kind, $event)" /></div>
+        <div class="lab-surface"><component :is="views[kind]" :targets="targets[kind]" :annotations="drafts[kind].annotations" :selected-id="selected[kind]" :active="active === kind" :has-instructions="!!(drafts[kind].description.trim() || drafts[kind].constraints.trim() || drafts[kind].annotations.length)" @source="source(kind, $event)" @target="target(kind, $event)" @select="selected[kind] = $event" @remove="remove(kind, $event)" /></div>
         <AlignmentIntentInspector v-model="drafts[kind]" :selected-id="selected[kind]" @select="selected[kind] = $event" @remove="remove(kind, $event)" @clear="clear(kind)" />
       </template>
     </section>
@@ -98,7 +97,7 @@ function clear(kind: AlignmentViewKind) {
 .lab-eyebrow { font-size: 10px; letter-spacing: .15em; color: var(--c-text-secondary); } h1 { margin: 8px 0; font-size: 28px; }
 .lab-header p { max-width: 850px; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
 .lab-languages { display: flex; gap: 6px; }.lab-boundary { max-width: 1560px; margin: 16px auto; padding: 10px 12px; background: var(--c-bg-muted); border-inline-start: 3px solid var(--c-blue); font-size: 12px; line-height: 1.6; }
-.lab-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; max-width: 1560px; margin: 20px auto; }
+.lab-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-width: 1560px; margin: 20px auto; }
 .lab-tabs button { display: flex; flex-direction: column; align-items: start; gap: 6px; padding: 14px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); cursor: pointer; text-align: start; }.lab-tabs strong { font-size: 13px; }.lab-tabs span { font-size: 11px; color: var(--c-text-secondary); line-height: 1.5; }
 .lab-tabs button[aria-selected="true"] { border-color: var(--c-blue); background: var(--c-bg-muted); box-shadow: inset 0 -2px var(--c-blue); }
 .lab-view { max-width: 1560px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); gap: 20px; align-items: start; }.lab-view.image-view { display: block; }.lab-surface { min-width: 0; padding: 18px; border: 1px solid var(--c-border); background: var(--c-bg-card); }

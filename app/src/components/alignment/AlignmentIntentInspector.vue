@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import './alignment-controls.css'
 import { computed, ref } from 'vue'
 import { t, type MessageKey } from '../../i18n.ts'
 import { formatAlignmentLabRequest, parseAlignmentLabDocument, type AlignmentAnnotation, type AlignmentLabDocument } from '../../alignment-lab-model.ts'
@@ -7,7 +8,7 @@ const props = defineProps<{ modelValue: AlignmentLabDocument; selectedId?: strin
 const emit = defineEmits<{ 'update:modelValue': [document: AlignmentLabDocument]; select: [id: string]; remove: [id: string]; clear: [] }>()
 function sourceLabel(label: string) { return ['Animatic · simulated video shots','Synthesized PCM · 12 seconds'].includes(label) ? t(label as MessageKey) : label }
 const selected = computed(() => props.modelValue.annotations.find(annotation => annotation.target.id === props.selectedId))
-const summary = computed(() => { const s = selected.value?.target.selector; if (!s) return ''; if(s.type==='time-range') return `${t('Time range')} · ${s.start.toFixed(2)}–${s.end.toFixed(2)} s · ${s.trackId}`; if(s.type==='sequence') return `${t('Selected shots')} · ${s.itemIds.length} · ${s.shots?.at(-1)?.end.toFixed(1) ?? '—'} s`; return selected.value?.target.label ?? '' })
+const summary = computed(() => { const s = selected.value?.target.selector; if (!s) return ''; if(s.type==='time-range') return `${t('Time range')} · ${s.start.toFixed(2)}–${s.end.toFixed(2)} s · ${s.trackId} · ${t(s.timeBasis==='sequence'?'Sequence time':'Source time')}`; if(s.type==='sequence') return `${t('Selected shots')} · ${s.itemIds.length} · ${s.shots?.at(-1)?.end.toFixed(1) ?? '—'} s`; return selected.value?.target.label ?? '' })
 const ready = computed(() => !!props.modelValue.source.id)
 const valid = computed(() => { try { return !!parseAlignmentLabDocument(props.modelValue) } catch { return false } })
 const prepared = ref('')
@@ -46,7 +47,7 @@ function download() {
 </script>
 
 <template>
-  <aside class="intent-inspector" :aria-label="t('Alignment intent and constraints')">
+  <aside class="alignment-content intent-inspector" :aria-label="t('Alignment intent and constraints')">
     <header><h2>{{ t('Intent and constraints') }}</h2><p>{{ t('Views locate the target. Describe the outcome here; the agent handles execution.') }}</p></header>
     <div v-if="ready" class="intent-source"><strong>{{ sourceLabel(modelValue.source.label) }}</strong><code :title="modelValue.source.revision">{{ modelValue.source.revision.slice(0, 16) }}</code></div>
     <label>{{ t('Overall requested change') }}<textarea class="intent-overall" :value="modelValue.description" rows="3" maxlength="8000" :disabled="!ready" :placeholder="t('What outcome do you want?')" @input="change('description', ($event.target as HTMLTextAreaElement).value)" /></label>
@@ -56,8 +57,8 @@ function download() {
     <ol class="intent-targets"><li v-for="annotation in modelValue.annotations" :key="annotation.target.id"><button class="intent-target" :aria-pressed="selectedId === annotation.target.id" @click="emit('select', annotation.target.id)"><strong>{{ annotation.target.label }}</strong><span>{{ annotation.intent === 'preserve' ? t('Keep unchanged') : annotation.intent === 'reference' ? t('Use as reference') : t('Requested change') }}</span></button></li></ol>
     <div v-if="selected" class="intent-selected">
       <p class="intent-summary">{{ summary }}</p><details class="intent-anchor"><summary>{{ t('Selector details') }}</summary><code>{{ JSON.stringify(selected.target.selector) }}</code></details>
-      <label>{{ t('Target intent') }}<select class="intent-kind" :value="selected.intent" @change="changeAnnotation('intent', ($event.target as HTMLSelectElement).value)"><option value="change">{{ t('Requested change') }}</option><option value="preserve">{{ t('Keep unchanged') }}</option><option value="reference">{{ t('Use as reference') }}</option></select></label>
-      <label>{{ t('Target description') }}<textarea class="intent-description" :value="selected.description" maxlength="4000" rows="4" :placeholder="t('Describe the change, protection or reference for this target.')" @input="changeAnnotation('description', ($event.target as HTMLTextAreaElement).value)" /></label>
+      <label v-if="selected.target.selector.type !== 'time-range'">{{ t('Target intent') }}<select class="intent-kind" :value="selected.intent" @change="changeAnnotation('intent', ($event.target as HTMLSelectElement).value)"><option value="change">{{ t('Requested change') }}</option><option value="preserve">{{ t('Keep unchanged') }}</option><option value="reference">{{ t('Use as reference') }}</option></select></label>
+      <label>{{ t(selected.target.selector.type === 'time-range' ? 'Note description' : 'Target description') }}<textarea class="intent-description" :value="selected.description" maxlength="4000" rows="4" :placeholder="t('Describe the change, protection or reference for this target.')" @input="changeAnnotation('description', ($event.target as HTMLTextAreaElement).value)" /></label>
       <button class="btn intent-remove" @click="emit('remove', selected.target.id)">{{ t('Remove instruction') }}</button>
     </div>
     <p v-if="!valid" class="intent-hint">{{ t('Select a valid target and describe the requested change, or add an overall change.') }}</p>

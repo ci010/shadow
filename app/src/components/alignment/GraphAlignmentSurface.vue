@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import './alignment-controls.css'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { VueFlow, MarkerType, type Connection, type Edge, type Node } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -108,7 +109,7 @@ onBeforeUnmount(() => { disposed = true })
 </script>
 
 <template>
-  <section class="graph-surface" :aria-label="t('Workflow relationship alignment')">
+  <section class="alignment-content graph-surface" :aria-label="t('Workflow relationship alignment')">
     <p class="surface-hint">{{ t('Select nodes or edges to explain a dependency. Connect handles to propose a relationship; no workflow is executed.') }}</p>
     <div class="surface-toolbar"><button class="btn graph-annotate" :disabled="!ready || (!nodeIds.length && !edgeIds.length)" @click="selectGraph">{{ t('Annotate graph selection') }}</button><label>{{ t('Load graph JSON') }}<input type="file" accept="application/json,.json" :disabled="loading" @change="loadGraph"></label><button class="btn" :disabled="loading" @click="reset">{{ t('Reset sample') }}</button></div>
     <p v-if="error" role="alert">{{ error }}</p>

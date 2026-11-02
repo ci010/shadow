@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createUuid } from '../../uuid.ts'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ImageAlignmentPanel from './ImageAlignmentPanel.vue'
 import ImagePromptDetails from './ImagePromptDetails.vue'
@@ -11,7 +12,7 @@ const mode = ref<'overview' | 'detail'>('overview')
 const selected = computed(() => images.value.find(image => image.id === selectedId.value))
 const importError = ref('')
 function add(file: File, demo = false, prompt = '', keywords: string[] = []) {
-  const image: LibraryImage = { id: crypto.randomUUID(), file, url: URL.createObjectURL(file), prompt, keywords, demo, visited: false }
+  const image: LibraryImage = { id: createUuid(), file, url: URL.createObjectURL(file), prompt, keywords, demo, visited: false }
   images.value.push(image)
   if (!selectedId.value) selectedId.value = image.id
 }
@@ -57,7 +58,7 @@ onBeforeUnmount(() => images.value.forEach(image => releaseLibraryImage(image)))
 </script>
 
 <template>
-  <main class="alignment-lab" :class="{ embedded }">
+  <main class="alignment-content alignment-lab" :class="{ embedded }">
     <header v-if="!embedded"><div><h1>{{ t('Image alignment lab') }}</h1><p>{{ t('Local UI experiment. Nothing is uploaded or sent to an agent here; use the chat attachment preview for real requests.') }}</p></div><div class="lab-languages"><button class="btn" @click="setLocalePreference('zh-CN')">中文</button><button class="btn" @click="setLocalePreference('en')">English</button></div></header>
     <nav class="library-toolbar"><button class="btn overview-button" :aria-pressed="mode === 'overview'" @click="mode = 'overview'">{{ t('Image overview') }}</button><button class="btn detail-button" :disabled="!selected" :aria-pressed="mode === 'detail'" @click="selected && open(selected)">{{ t('View selected image') }}</button><label class="lab-file">{{ t('Import local images') }}<input type="file" multiple accept="image/png,image/jpeg,image/webp" @change="chooseFile"></label></nav>
     <p role="alert" v-if="importError">{{ importError }}</p>
@@ -90,3 +91,5 @@ header { display:flex;justify-content:space-between;gap:24px;align-items:start; 
 .library-layout { display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;align-items:start; } .library-layout.detail-layout { grid-template-columns:minmax(0,1fr); } .library-content { min-width:0; } .image-masonry { columns:3 180px;column-gap:16px; } .library-card { break-inside:avoid;margin:0 0 16px;border:2px solid transparent;border-radius:12px;overflow:hidden;background:var(--c-bg-muted);padding-bottom:10px; } .library-card.selected { border-color:#9673ce;box-shadow:0 0 0 2px #9673ce33; } .select-image { border:0;background:none;color:inherit;padding:0;width:100%;text-align:left;cursor:pointer; } .select-image img { display:block;width:100%;height:auto; } .select-image span,.select-image small { display:block;margin:10px;overflow-wrap:anywhere; } .select-image small { font-size:11px;color:var(--c-text-secondary);line-height:1.5; } .open-image { margin:0 10px; } .detail-large-image { display:block;width:100%;max-height:70vh;object-fit:contain;background:var(--c-bg-muted);border-radius:12px; } .region-tools { margin-top:20px; } summary { cursor:pointer;padding:12px 0; } .lab-output { border-top:1px solid var(--c-border);padding-top:16px;margin-top:20px; } pre { max-height:260px;overflow:auto;padding:16px;background:var(--c-bg-muted);font-size:12px; } .lab-compare { display:grid;grid-template-columns:1fr 1fr;gap:16px; } figure { margin:0;min-width:0; } figure img { max-width:100%;max-height:400px;object-fit:contain; } figcaption { margin-bottom:8px; }
 @media(max-width:850px) { .library-layout { grid-template-columns:1fr; } .alignment-lab { padding:12px; } header { flex-wrap:wrap; } } @media(max-width:500px) { .image-masonry { columns:2;column-gap:10px; } .lab-compare { grid-template-columns:1fr; } }
 </style>
+
+<style scoped>.library-card{transition:border-color 140ms ease,background-color 140ms ease,box-shadow 140ms ease}.library-card.selected{border-color:var(--c-selection-border);box-shadow:none}.select-image[aria-pressed=true]{color:var(--c-primary)}@media(hover:hover){.library-card:hover{border-color:var(--c-border-hover);background:var(--c-bg-card)}}.library-card:focus-within{outline:2px solid var(--c-blue);outline-offset:2px}@media(prefers-reduced-motion:reduce){.library-card{transition:none}}</style>

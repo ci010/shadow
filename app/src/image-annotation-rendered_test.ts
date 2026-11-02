@@ -61,13 +61,13 @@ test('attachment undo receives native Ctrl+Z even when a modal stops bubbling', 
         win.webContents.sendInputEvent({type:'mouseDown',...point,button:'left',clickCount:1});
         win.webContents.sendInputEvent({type:'mouseUp',...point,button:'left',clickCount:1});
         await wait();
-        assert.equal(await run(()=>document.querySelector('.image-annotation-undo').disabled),false);
+        assert.equal(await run(()=>document.querySelector('.image-drawing-undo').disabled),false);
       };
       const undo=async()=>{
         win.webContents.sendInputEvent({type:'keyDown',keyCode:'Z',modifiers:['control']});
         win.webContents.sendInputEvent({type:'keyUp',keyCode:'Z',modifiers:['control']});
         await wait();
-        assert.equal(await run(()=>document.querySelector('.image-annotation-undo').disabled),true);
+        assert.equal(await run(()=>document.querySelector('.image-drawing-undo').disabled),true);
         assert.equal(await run(()=>window.updates.at(-1).file===null),true);
       };
       await draw();await undo();
@@ -91,7 +91,7 @@ test('attachment undo receives native Ctrl+Z even when a modal stops bubbling', 
         await wait();
         assert.ok(await run(()=>document.querySelector('.image-annotation-stage').scrollLeft)>40,'pan should scroll the zoomed image');
         assert.equal(await run(()=>window.updates.length),before,'pan must not update the attachment');
-        assert.equal(await run(()=>document.querySelector('.image-annotation-undo').disabled),true);
+        assert.equal(await run(()=>document.querySelector('.image-drawing-undo').disabled),true);
         assert.equal(await run(()=>document.querySelector('.is-panning')===null),true);
       }
       await run(()=>document.querySelector('.image-annotation-stage').scrollLeft=0);

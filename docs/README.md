@@ -21,6 +21,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Directory BOTs](bots.md), [external input routing](input-routing.md)
 - [Project Micro Apps](microapps.md)
 - [Inline visual answers](inline-visual-answers.md)
+- [Annotation components and Agent handoff](annotation-components.md) — implemented image boundary and proposed overlay/video protocol
 - [Windows computer use](computer-use.md)
 - [Audio setup](audio-setup.md)
 - [Mobile client](mobile.md)
@@ -70,3 +71,7 @@ Runtime prompts under `src/agent/types/builtin/`, `src/agent/context/`,
 documentation. Editing them changes runtime behavior.
 
 - [Git and GitHub agent workflow](git-github.md): bundled safegit commit/push policy, platform limitations and optional gh setup.
+
+## Frontend engineering reviews
+
+- [Frontend componentization audit](frontend-component-audit.md) — source-backed reuse, duplication and extraction priorities; not a full runtime accessibility audit.

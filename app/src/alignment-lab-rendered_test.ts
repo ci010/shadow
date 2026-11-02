@@ -62,7 +62,7 @@ app.whenReady().then(async()=>{
  win.setContentSize(1440,900);
  await win.loadURL(${JSON.stringify(new URL('__lab?view=timeline', server.resolvedUrls!.local[0]).href)});
  await until(()=>document.querySelectorAll('#view-storyboard .clip').length===4 && document.querySelector('#view-storyboard .editor')?.getAttribute('aria-busy')==='false' && !!document.querySelector('#view-storyboard .intent-source'));
- assert.equal(await run(()=>document.querySelectorAll('[role="tab"]').length),4);
+ assert.equal(await run(()=>document.querySelectorAll('[role="tab"]').length),3);
  // Native range semantics, real units, buttons, endpoints, and actual keyboard input.
  assert.equal(await run(()=>document.querySelector('.alignment-zoom output').textContent.trim()),'48 px/s');
  await click('.zoom-plus'); assert.equal(await run(()=>document.querySelector('.alignment-zoom input').value),'52');
@@ -110,6 +110,26 @@ app.whenReady().then(async()=>{
  await until(()=>!!document.querySelector('#view-storyboard .intent-description'));
  await fill('#view-storyboard .intent-description','Soften the first tone');
  const time=await prepare('storyboard');assert.equal(time.annotations[0].target.selector.type,'time-range');
+ assert.equal(time.annotations[0].target.selector.timeBasis,'source');
+ const noteId=time.annotations[0].target.id;
+ assert.equal(await run(()=>document.querySelector('.note-clip').style.width),'96px','Note width uses source duration and zoom');
+ await dragEditor('#view-storyboard .note-end',96);
+ let editedNote=(await prepare('storyboard')).annotations.find(a=>a.target.id===noteId);
+ assert.equal(editedNote.target.selector.end,4);assert.equal(editedNote.description,'Soften the first tone');
+ await dragEditor('#view-storyboard .note-start',24);
+ editedNote=(await prepare('storyboard')).annotations.find(a=>a.target.id===noteId);assert.equal(editedNote.target.selector.start,.5);
+ await dragEditor('#view-storyboard .note-body',48);
+ editedNote=(await prepare('storyboard')).annotations.find(a=>a.target.id===noteId);assert.equal(editedNote.target.selector.start,1.5);assert.equal(editedNote.target.selector.end,5);
+ await run(()=>document.querySelector('.note-start').focus());
+ win.webContents.sendInputEvent({type:'keyDown',keyCode:'Right'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Right'});
+ await until(()=>document.querySelector('.note-body small').textContent.startsWith('1.60'));
+ editedNote=(await prepare('storyboard')).annotations.find(a=>a.target.id===noteId);assert.ok(Math.abs(editedNote.target.selector.start-1.6)<.001);assert.equal(editedNote.description,'Soften the first tone');
+ await click('#view-storyboard .add-note');await fill('#view-storyboard .intent-description','Overlapping annotation');
+ assert.equal((await prepare('storyboard')).annotations.length,2);
+ const noteRows=await run(()=>[...document.querySelectorAll('.note-clip')].map(e=>e.style.top));assert.equal(new Set(noteRows).size,2,'Overlapping notes must not hide each other');
+ await require('node:fs/promises').mkdir(${JSON.stringify(resolve(root,'.test-artifacts','note-track'))},{recursive:true});
+ await require('node:fs/promises').writeFile(${JSON.stringify(resolve(root,'.test-artifacts','note-track','audio.png'))},(await win.webContents.capturePage()).toPNG());
+
  await require('node:fs/promises').writeFile(${JSON.stringify(resolve(root,'.test-artifacts','editor-audio.png'))},(await win.webContents.capturePage()).toPNG());
  assert.equal(await run(()=>Math.round(document.querySelector('#view-storyboard .audio-lane').getBoundingClientRect().width)),576,'12 seconds at 48 px/sec, not viewport width');
  assert.equal(await run(()=>document.querySelectorAll('#view-storyboard .clip').length),0,'Audio must not show unrelated picture clips');
@@ -133,6 +153,11 @@ app.whenReady().then(async()=>{
  await exec('Array.from(document.querySelectorAll("#view-storyboard button")).find(b=>b.textContent==="Anchor range").click()');
  await fill('#view-storyboard .intent-description','Local video range');
  const nativeVideo=await prepare('storyboard');assert.equal(nativeVideo.annotations[0].target.selector.trackId,'video');assert.ok(nativeVideo.annotations[0].target.selector.end<=1);
+ const videoNoteId=nativeVideo.annotations[0].target.id;
+ await dragEditor('#view-storyboard .note-end',-10);
+ const resizedVideo=(await prepare('storyboard')).annotations[0];assert.equal(resizedVideo.target.id,videoNoteId);assert.equal(resizedVideo.description,'Local video range');assert.equal(resizedVideo.target.selector.timeBasis,'source');assert.ok(resizedVideo.target.selector.end<nativeVideo.annotations[0].target.selector.end);
+ await require('node:fs/promises').writeFile(${JSON.stringify(resolve(root,'.test-artifacts','note-track','video.png'))},(await win.webContents.capturePage()).toPNG());
+
  await exec('Array.from(document.querySelectorAll("#view-storyboard .transport button")).find(b=>b.textContent==="Play").click()');
  await until(()=>!document.querySelector('#view-storyboard video').paused);
  await tab('image');await tab('storyboard');assert.equal(await run(()=>document.querySelector('#view-storyboard video').paused),true);
@@ -175,21 +200,7 @@ app.whenReady().then(async()=>{
  await until(()=>document.querySelectorAll('#view-graph .vue-flow__node').length===2);
  assert.equal(await run(()=>document.querySelectorAll('#view-graph .intent-target').length),0,'Accepted source replacement clears old graph anchors');
  await run(()=>{window.confirm=window.originalConfirm});
- await tab('spatial');
- await until(()=>!!document.querySelector('#view-spatial model-viewer')?.loaded);
- await exec('Array.from(document.querySelectorAll("#view-spatial button")).find(b=>b.textContent==="Add surface hotspots").click()');
- const hit=await run(()=>{const model=document.querySelector('#view-spatial model-viewer'),r=model.getBoundingClientRect();for(const fy of [.5,.4,.6])for(const fx of [.5,.4,.6,.3,.7]){const x=Math.round(r.left+r.width*fx),y=Math.round(r.top+r.height*fy);if(model.positionAndNormalFromPoint(x,y))return {x,y}}return null});
- assert.ok(hit,'The generated GLB must expose an actual rendered surface');
- win.webContents.sendInputEvent({type:'mouseDown',...hit,button:'left',clickCount:1});
- win.webContents.sendInputEvent({type:'mouseUp',...hit,button:'left',clickCount:1});
- await until(()=>document.querySelectorAll('#view-spatial .intent-target').length===1);
- await fill('#view-spatial .intent-description','Change the finish on this face, preserving the geometry');
- const spatial=await prepare('spatial');
- assert.equal(spatial.annotations[0].target.selector.position.length,3);
- assert.ok(spatial.annotations[0].target.selector.position.every(n=>Number.isFinite(n)&&Math.abs(n)<10),'Points are model-space, not screen coordinates');
- assert.ok(spatial.annotations[0].target.selector.camera.orbit);
- await tab('spatial');await until(()=>!!document.querySelector('#view-spatial model-viewer')?.loaded);
- assert.equal(await run(()=>document.querySelectorAll('#view-spatial .intent-target').length),1,'Hotspot survives switching views');
+ assert.equal(await run(()=>document.querySelector('[data-view=spatial]')),null,'3D preview is excluded from this iteration');
  win.setContentSize(430,940);await wait();
  assert.equal(await run(()=>document.documentElement.scrollWidth<=window.innerWidth+1),true,'Narrow layout must not overflow the viewport');
  assert.equal(network.some(url=>new URL(url).pathname.startsWith('/api/') || /^\\/projects\\/[^/]+\\/api\\//.test(new URL(url).pathname)),false,'Lab must not call the backend: '+JSON.stringify(network.filter(url=>new URL(url).pathname.startsWith('/api/'))));

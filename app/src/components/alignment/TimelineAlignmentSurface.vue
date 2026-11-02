@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createUuid } from '../../uuid.ts'
 import AlignmentZoom from './AlignmentZoom.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import WaveSurfer from 'wavesurfer.js'
@@ -104,7 +105,7 @@ function choose(event: Event) { const input = event.target as HTMLInputElement; 
 function demo() { void load(new File([timelineDemoWav()], 'timeline-demo.wav', { type: 'audio/wav' })) }
 function add(a = start.value, b = end.value) {
   if (!props.active || !ready.value || a < 0 || a >= b || b > duration.value) return
-  const id = crypto.randomUUID()
+  const id = createUuid()
   emit('target', timelineRange(a, b, duration.value, track.value, id, `${track.value} ${a.toFixed(2)}–${b.toFixed(2)} s`)); emit('select', id)
 }
 function select(target: AlignmentTarget) { if (!props.active || target.selector.type !== 'time-range') return; emit('select', target.id); start.value = target.selector.start; end.value = target.selector.end; track.value = target.selector.trackId as TimelineTrack; ws?.setTime(start.value) }

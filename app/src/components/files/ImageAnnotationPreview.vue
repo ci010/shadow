@@ -1,7 +1,7 @@
 <template>
   <section ref="preview" class="image-annotation-preview" :aria-label="t('Image preview: {name}', { name: name })" :aria-busy="loading || busy">
-    <div class="image-annotation-toolbar">
-      <div class="image-annotation-colors" role="group" :aria-label="t('Marker color')">
+    <ImageDrawingToolbar class="image-annotation-toolbar" v-model="tool" :tools="['freehand','line','select']" :disabled="!canEdit" :can-undo="canUndo" @undo="undoStroke">
+      <template #colors>      <div class="image-annotation-colors" role="group" :aria-label="t('Marker color')">
         <HoverInfo v-for="swatch in palette" :key="swatch.color" :text="t('{label} marker', { label: swatch.label })">
           <template #default="{ triggerProps }">
             <button v-bind="triggerProps" type="button" class="image-annotation-swatch"
@@ -20,25 +20,9 @@
           </template>
         </HoverInfo>
       </div>
-      <div class="image-annotation-tools" role="group" :aria-label="t('Drawing tool')">
-        <button type="button" class="image-annotation-tool" :aria-pressed="tool === 'freehand'" :disabled="!canEdit" @click="tool = 'freehand'">{{ t('Freehand') }}</button>
-        <button type="button" class="image-annotation-tool" :aria-pressed="tool === 'line'" :disabled="!canEdit" @click="tool = 'line'">{{ t('Straight line') }}</button>
-      </div>
-      <div class="image-annotation-actions">
-        <HoverInfo text="Undo the last stroke (Ctrl+Z)">
-          <template #default="{ triggerProps }">
-            <button v-bind="triggerProps" type="button" class="image-annotation-undo" :aria-label="t('Undo last stroke')" aria-keyshortcuts="Control+Z"
-              :disabled="!canUndo" @click="undoStroke">{{ t('Undo') }}</button>
-          </template>
-        </HoverInfo>
-        <HoverInfo text="Remove all marks and the marked image from the next message">
-          <template #default="{ triggerProps }">
-            <button v-bind="triggerProps" type="button" class="image-annotation-clear"
-              :disabled="!editable || !active || !hasMarks" @click="clearMarks">{{ t('Clear') }}</button>
-          </template>
-        </HoverInfo>
-      </div>
-    </div>
+</template>
+      <template #actions><button type="button" class="btn image-annotation-clear" :disabled="!editable || !active || !hasMarks" @click="clearMarks">{{ t('Clear') }}</button></template>
+    </ImageDrawingToolbar>
     <p class="image-annotation-hint">
       {{ sourceError ? t('Image preview · References unavailable') : editable ? localFile ? t('Draw to mark · Shift-drag for a straight line') : t('Draw to mark · Ctrl-drag to attach') : t('Marking unavailable in this chat · Ctrl-drag to attach elsewhere') }}
     </p>
@@ -72,6 +56,8 @@
 </template>
 
 <script setup lang="ts">
+import ImageDrawingToolbar from './ImageDrawingToolbar.vue'
+import { appendImageDrawingPoint, isStraightImageGesture, type ImageDrawingTool } from '../../image-drawing.ts'
 import { t } from '../../i18n.ts'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import HoverInfo from '../HoverInfo.vue'
@@ -141,7 +127,7 @@ function panLostCapture(event: PointerEvent) {
   if (pan?.id === event.pointerId) stopPan()
 }
 const color = ref(palette[0]!.color)
-const tool = ref<'freehand' | 'line'>('freehand')
+const tool = ref<ImageDrawingTool>('freehand')
 let strokeIsLine = false
 const loading = ref(false)
 const loaded = ref(false)
@@ -347,7 +333,7 @@ function pointerDown(event: PointerEvent) {
     if (canvas.value) canvas.value.draggable = dragReady.value
     return
   }
-  if (!pointer.start(event, canEdit.value)) return
+  if (!pointer.start(event, canEdit.value && tool.value !== 'select')) return
   const point = eventPoint(event)
   const target = canvas.value
   const context = target?.getContext('2d')
@@ -363,7 +349,7 @@ function pointerDown(event: PointerEvent) {
   strokeWidth = 4 * target.width / target.getBoundingClientRect().width
   strokeColor = color.value
   lastPoint = point
-  strokeIsLine = tool.value === 'line' || event.shiftKey
+  strokeIsLine = isStraightImageGesture(tool.value, event.shiftKey)
   strokes.push({ color: strokeColor, width: strokeWidth, points: strokeIsLine ? [point, point] : [point] })
   context.fillStyle = strokeColor
   context.beginPath()
@@ -389,7 +375,7 @@ function drawSegment(event: PointerEvent) {
   if (strokeIsLine) {
     const stroke = strokes.at(-1)
     if (!stroke) return
-    stroke.points[1] = point
+    appendImageDrawingPoint(stroke.points, point, true)
     // Replace the old endpoint preview, retaining earlier strokes underneath.
     renderOriginal()
     for (const mark of strokes) drawAnnotationStroke(context, mark)
@@ -404,7 +390,8 @@ function drawSegment(event: PointerEvent) {
   context.moveTo(lastPoint.x, lastPoint.y)
   context.lineTo(point.x, point.y)
   context.stroke()
-  strokes.at(-1)?.points.push(point)
+  const current = strokes.at(-1)
+  if (current) appendImageDrawingPoint(current.points, point, false)
   lastPoint = point
 }
 function pointerUp(event: PointerEvent) {

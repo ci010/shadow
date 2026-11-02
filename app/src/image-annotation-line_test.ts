@@ -1,3 +1,4 @@
+import { appendImageDrawingPoint, isStraightImageGesture } from './image-drawing.ts'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
@@ -34,7 +35,7 @@ async function harness(local = true, mime = 'image/png') {
     withDefaults: (value: object, defaults: object) => Object.assign({}, defaults, value), defineProps: () => props, defineEmits: () => (name: string, payload: unknown) => updates.push([name, payload]),
     ref: (value?: unknown) => ({ value }), computed: (getter: Function) => ({ get value() { return getter() } }),
     watch: (getter: Function) => watches.push(getter), onMounted() {}, onBeforeUnmount() {},
-    t: (text: string) => text, AnnotationPointer, annotationPoint, annotationSizeError, AnnotationLoadError,
+    t: (text: string) => text, appendImageDrawingPoint, isStraightImageGesture, AnnotationPointer, annotationPoint, annotationSizeError, AnnotationLoadError,
     annotationLoadErrorMessage, drawAnnotationStroke, markedImageName, isAnnotationUndo,
     imageSourcePath: () => '/original.png', startImageReferenceDrag() { throw new Error('must not reference-drag local images') },
     fetch: async () => { fetched++; return { ok: true, headers: new Headers(), blob: async () => file } },

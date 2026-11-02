@@ -24,7 +24,7 @@ test('region alignment uses native selection, keeps original bytes, restores ins
       resolveId: id => id === '/alignment-entry.ts' ? '\0alignment-entry' : undefined,
       load(id) {
         if (id !== '\0alignment-entry') return
-        return `import {createApp,h,ref} from 'vue';
+        return `import '/src/styles.css';import {createApp,h,ref} from 'vue';
           import ImageViewer from '/src/components/ImageViewer.vue';
           const canvas=document.createElement('canvas');canvas.width=640;canvas.height=400;
           const context=canvas.getContext('2d'); context.fillStyle='#d4e6ea';context.fillRect(0,0,640,400);
@@ -65,11 +65,14 @@ test('region alignment uses native selection, keeps original bytes, restores ins
       const until=async(fn)=>{for(let i=0;i<120;i++){if(await run(fn))return;await wait()}throw new Error('Timed out: '+fn)};
       await win.loadURL(${JSON.stringify(new URL('__alignment', server.resolvedUrls!.local[0]).href)});
       await until(()=>!!document.querySelector('.viewer-modes'));
+      await until(()=>!!document.querySelector('.viewer-annotation .image-drawing-toolbar select'));
+      assert.equal(await run(()=>document.querySelector('.viewer-annotation .image-drawing-toolbar select').value),'freehand','Dialog uses the shared default drawing control');
       await run(()=>document.querySelectorAll('.viewer-modes button')[1].click());
-      await until(()=>document.querySelector('.alignment-add')?.disabled===false);
+      await until(()=>document.querySelector('.image-drawing-select')?.disabled===false);
       assert.equal(await run(()=>window.updates.length),0,'Opening alignment must not attach or send');
+      assert.equal(await run(()=>document.querySelector('.alignment-panel .image-drawing-toolbar select').value),'freehand','Region mode follows the same default');
       const draw=async(left,top,right,bottom)=>{
-        await run(()=>document.querySelector('.alignment-add').click());
+        await run(()=>{const e=document.querySelector('.image-drawing-toolbar select');e.value='rectangle';e.dispatchEvent(new Event('change',{bubbles:true}))});
         const bounds=await run(()=>{const r=document.querySelector('.alignment-image-host img').getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height}});
         const start={x:Math.round(bounds.left+bounds.width*left),y:Math.round(bounds.top+bounds.height*top)};
         const end={x:Math.round(bounds.left+bounds.width*right),y:Math.round(bounds.top+bounds.height*bottom)};
@@ -87,18 +90,21 @@ test('region alignment uses native selection, keeps original bytes, restores ins
       await draw(.6,.55,.9,.85);
       await until(()=>document.querySelectorAll('.alignment-region').length===2);
       await run(()=>document.querySelectorAll('.alignment-region')[1].click());
-      await run(()=>{const el=document.querySelector('.alignment-region-editor select');el.value='preserve';el.dispatchEvent(new Event('change',{bubbles:true}))});
       await run(()=>{const el=document.querySelector('.alignment-region-description');el.value='Keep the table unchanged';el.dispatchEvent(new Event('input',{bubbles:true}))});
       assert.equal(await run(()=>window.updates.length),0,'Drawing and typing must not attach or send');
       await run(()=>document.querySelector('.alignment-apply').click());
       await until(()=>window.updates.length===1);
+      await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      await require('node:fs/promises').mkdir(${JSON.stringify(resolve(root,'.test-artifacts','unified-image'))},{recursive:true});
+      await require('node:fs/promises').writeFile(${JSON.stringify(resolve(root,'.test-artifacts','unified-image','dialog.png'))},(await win.webContents.capturePage()).toPNG());
       const result=await run(()=>({sameFile:window.updates[0].file===window.original,doc:window.updates[0].alignment}));
       assert.equal(result.sameFile,true,'Instructions must not burn rectangles into input pixels');
       assert.equal(result.doc.asset.width,640);assert.equal(result.doc.asset.height,400);
       assert.match(result.doc.asset.sha256,/^[a-f0-9]{64}$/);
       assert.equal(result.doc.regions.length,2);
       assert.equal(result.doc.regions[0].description,'把窗户改成圆形，保留自然光');
-      assert.equal(result.doc.regions[1].intent,'preserve');
+      assert.equal(result.doc.regions[1].description,'Keep the table unchanged');
+      assert.equal(result.doc.regions[1].intent,'change','New annotations use the compatible default; no intent picker is needed');
       assert.ok(Math.abs(result.doc.regions[0].x-64)<4,'Geometry must use natural pixels');
       assert.ok(Math.abs(result.doc.regions[0].width-192)<4);
       await run(()=>document.querySelector('[aria-label="Close image viewer"]').click());
@@ -108,6 +114,8 @@ test('region alignment uses native selection, keeps original bytes, restores ins
       assert.equal(await run(()=>window.updates.length),1,'Restoring instructions must not resend');
       await run(()=>document.querySelector('.alignment-region').click());
       assert.equal(await run(()=>document.querySelector('.alignment-region-description').value),'把窗户改成圆形，保留自然光');
+      await run(()=>document.querySelector('.image-drawing-select').click());
+      await until(()=>!!document.querySelector('.a9s-corner-handle-bottomright .a9s-handle-buffer'));
       assert.equal(await run(()=>getComputedStyle(document.querySelector('.a9s-rotation-handle-group')).display),'none','v1 does not expose unsupported rotated anchors');
       const handle=await run(()=>{const r=document.querySelector('.a9s-corner-handle-bottomright .a9s-handle-buffer').getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)}});
       win.webContents.sendInputEvent({type:'mouseDown',...handle,button:'left',clickCount:1});
@@ -124,7 +132,7 @@ test('region alignment uses native selection, keeps original bytes, restores ins
       await until(()=>!document.querySelector('dialog'));
       await run(()=>window.reopen(true));
       await until(()=>document.querySelectorAll('.alignment-region').length===2);
-      assert.equal(await run(()=>document.querySelector('.alignment-add').disabled),true);
+      assert.equal(await run(()=>document.querySelector('.image-drawing-select').disabled),true);
       assert.equal(await run(()=>document.querySelector('.alignment-apply').disabled),true);
       assert.equal(await run(()=>document.querySelector('.alignment-clear').disabled),true);
       console.log('IMAGE_ALIGNMENT_OK');app.exit(0);

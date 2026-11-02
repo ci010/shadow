@@ -56,27 +56,51 @@ test('image library renders masonry, shared prompt state, imports and retained r
       assert.equal(await run(()=>document.querySelector('.full-prompt').value),'My manual prompt');
       assert.equal(await run(()=>document.querySelector('.keyword-tags').textContent.includes('green')),true);
       await run(()=>document.querySelector('.detail-button').click());
-      await until(()=>document.querySelector('.alignment-add')?.disabled===false);
+      await until(()=>document.querySelector('.image-drawing-select')?.disabled===false);
 
       await edit('.alignment-description','Keep this unsaved region draft');
       const wait=()=>new Promise(r=>setTimeout(r,120));
-      const draw=async(tool,points)=>{
-        await edit('.alignment-controls select',tool);
-        await run(()=>document.querySelector('.alignment-add').click());
+      const draw=async(tool,points,shift=false)=>{
+        if(tool) await edit('.alignment-controls select',tool);
         const b=await run(()=>{const r=document.querySelector('.alignment-image-host img').getBoundingClientRect();return {x:r.left,y:r.top,w:r.width,h:r.height}});
         const at=p=>({x:Math.round(b.x+p[0]*b.w),y:Math.round(b.y+p[1]*b.h)});
-        win.webContents.sendInputEvent({type:'mouseDown',...at(points[0]),button:'left',clickCount:1});
-        await wait();for(const p of points.slice(1)){win.webContents.sendInputEvent({type:'mouseMove',...at(p),modifiers:['leftButtonDown']});await wait()}
+        win.webContents.sendInputEvent({type:'mouseDown',...at(points[0]),button:'left',clickCount:1,modifiers:shift?['shift']:[]});
+        await wait();for(const p of points.slice(1)){win.webContents.sendInputEvent({type:'mouseMove',...at(p),modifiers:shift?['leftButtonDown','shift']:['leftButtonDown']});await wait()}
         win.webContents.sendInputEvent({type:'mouseUp',...at(points.at(-1)),button:'left',clickCount:1});
         await wait();
       };
+      assert.equal(await run(()=>document.querySelector('.image-drawing-toolbar select').value),'freehand','Opening an image immediately arms freehand');
+      await draw(undefined,[[.12,.12],[.12,.12]]);
+      await until(()=>document.querySelectorAll('.alignment-region').length===1);
+      assert.equal(await run(()=>document.querySelectorAll('.annotation-dot').length),1,'A click has a visible result');
+      await run(()=>document.querySelector('.image-drawing-undo').click());
+      await until(()=>document.querySelectorAll('.alignment-region').length===0);
+      await draw(undefined,[[.15,.2],[.25,.25],[.35,.2]]);
+      await until(()=>document.querySelectorAll('.alignment-region').length===1);
+      await draw(undefined,[[.15,.4],[.25,.5],[.4,.45]],true);
+      await until(()=>document.querySelectorAll('.alignment-region').length===2);
+      await run(()=>{const e=document.querySelector('.alignment-region-description');e.value='Direct and Shift marking';e.dispatchEvent(new Event('input',{bubbles:true}))});
+      await run(()=>document.querySelector('.alignment-apply').click());
+      const direct=await run(()=>JSON.parse(document.querySelector('.lab-output pre').textContent));
+      assert.ok(direct.regions[0].geometry.points.length>=3,'Default stroke retains freehand samples');
+      assert.equal(direct.regions[1].geometry.points.length,2,'Shift gesture stores only straight-line endpoints');
+      await run(()=>document.querySelector('.stroke-surface').focus());
+      win.webContents.sendInputEvent({type:'keyDown',keyCode:'Z',modifiers:['control']});
+      win.webContents.sendInputEvent({type:'keyUp',keyCode:'Z',modifiers:['control']});
+      await until(()=>document.querySelectorAll('.alignment-region').length===1);
+      await run(()=>document.querySelector('.image-drawing-undo').click());
+      await until(()=>document.querySelectorAll('.alignment-region').length===0);
       await draw('rectangle',[[.1,.1],[.4,.4]]);
       await until(()=>document.querySelectorAll('.alignment-region').length===1);
-      await edit('.alignment-region-label','Window');
-      await edit('.alignment-region-description','Make this blue');
-      await draw('stroke',[[.2,.65],[.35,.55],[.55,.7],[.7,.5]]);
+      await draw(undefined,[[.6,.1],[.8,.3]]);
       await until(()=>document.querySelectorAll('.alignment-region').length===2);
-      await edit('.alignment-region-label','Contour');
+      await run(()=>document.querySelector('.image-drawing-undo').click());
+      await until(()=>document.querySelectorAll('.alignment-region').length===1);
+      await run(()=>document.querySelector('.alignment-region').click());
+      await until(()=>document.querySelector('.alignment-region-description'));
+      await edit('.alignment-region-description','Make this blue');
+      await draw('freehand',[[.2,.65],[.35,.55],[.55,.7],[.7,.5]]);
+      await until(()=>document.querySelectorAll('.alignment-region').length===2);
       await edit('.alignment-region-description','Follow this open contour');
       assert.equal(await run(()=>document.querySelectorAll('.stroke-surface polyline.selected').length),1);
       await run(()=>document.querySelector('.alignment-apply').click());
@@ -85,13 +109,13 @@ test('image library renders masonry, shared prompt state, imports and retained r
       assert.deepEqual(doc,await run(()=>JSON.parse(document.querySelector('.lab-output pre').textContent)));
       assert.equal(doc.regions.length,2);
       const line=doc.regions.find(r=>r.geometry?.type==='stroke');
-      assert.equal(line.label,'Contour');assert.ok(line.geometry.points.length>=4);
+      assert.equal(line.label,undefined);assert.ok(line.geometry.points.length>=4);
       assert.ok(Math.abs(line.geometry.points[0][0]-192)<5,'Stroke uses original pixels');
       assert.equal(line.geometry.points[0][0]===line.geometry.points.at(-1)[0],false,'Stroke stays open');
       await run(()=>document.querySelector('.alignment-region').click());
-      await edit('.alignment-region-label','Window edited');
+      await edit('.alignment-region-description','Window edited');
       await run(()=>document.querySelector('.stroke-surface polyline').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})));
-      assert.equal(await run(()=>document.querySelector('.alignment-region-label').value),'Contour');
+      await until(()=>document.querySelector('.alignment-region-description').value==='Follow this open contour');
       await run(()=>document.querySelector('.alignment-details button:last-of-type'));
       await win.webContents.executeJavaScript('document.querySelector(".alignment-panel").scrollIntoView()');
       await require('node:fs/promises').mkdir(${JSON.stringify(resolve(root,'.test-artifacts','image-annotation-visual'))},{recursive:true});
@@ -115,31 +139,54 @@ test('image library renders masonry, shared prompt state, imports and retained r
       await until(()=>getComputedStyle(document.querySelector('.library-layout')).gridTemplateColumns.split(' ').length===1);
       assert.equal(await run(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
       await run(()=>document.querySelectorAll('.open-image')[0].click());
-      await until(()=>!!document.querySelector('.alignment-region-label'));
+      await until(()=>!!document.querySelector('.alignment-region-description'));
       await run(()=>document.querySelector('.alignment-panel').scrollIntoView());
       await wait();
       assert.equal(await run(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
       await require('node:fs/promises').writeFile(${JSON.stringify(resolve(root,'.test-artifacts','image-annotation-visual','narrow.png'))},(await win.webContents.capturePage()).toPNG());
-      await edit('.alignment-controls select','polygon');
-      await run(()=>document.querySelector('.alignment-add').click());
-      const pb=await run(()=>{const r=document.querySelector('.alignment-image-host img').getBoundingClientRect();return {x:r.left,y:r.top,w:r.width,h:r.height}});
-      for(const [x,y,count] of [[.5,.1,1],[.8,.1,1],[.8,.35,1],[.5,.35,2]]) {
-        const pos={x:Math.round(pb.x+pb.w*x),y:Math.round(pb.y+pb.h*y)};
-        win.webContents.sendInputEvent({type:'mouseMove',...pos});await wait();
-        win.webContents.sendInputEvent({type:'mouseDown',...pos,button:'left',clickCount:count});
-        win.webContents.sendInputEvent({type:'mouseUp',...pos,button:'left',clickCount:count});await wait();
-      }
-      await until(()=>document.querySelectorAll('.alignment-region').length===3);
-      await edit('.alignment-region-description','Polygon annotation');
-      await run(()=>document.querySelector('.alignment-apply').click());
-      const poly=await run(()=>JSON.parse(document.querySelector('.lab-output pre').textContent).regions.find(r=>r.geometry?.type==='polygon'));
-      assert.ok(poly.geometry.points.length>=3);assert.ok(Math.abs(poly.x-480)<5);
-      await run(()=>document.querySelector('.alignment-remove').click());
-      assert.equal(await run(()=>document.querySelectorAll('.alignment-region').length),2);
-      await edit('.alignment-controls select','stroke');
-      await run(()=>document.querySelector('.alignment-add').click());
-      await run(()=>[...document.querySelectorAll('.alignment-controls button')].find(b=>b.textContent.trim()==='Cancel').click());
+      assert.equal(await run(()=>!!document.querySelector('.image-drawing-toolbar option[value=polygon]')),false,'No polygon tool is offered');
+      assert.equal(await run(()=>document.querySelector('.alignment-region-label') || document.querySelector('.alignment-region-editor select')),null,'Only the description remains');
+      await edit('.alignment-controls select','freehand');
+      await run(()=>document.querySelector('.image-drawing-select').click());
       assert.equal(await run(()=>document.querySelector('.stroke-surface').classList.contains('drawing')),false);
+      win.setContentSize(1440,1000);
+      await run(()=>document.querySelector('.alignment-clear').click());
+      await until(()=>document.querySelectorAll('.alignment-region').length===0);
+      await run(()=>document.querySelector('.alignment-panel').scrollIntoView({block:'start'}));
+      const boxes=[[[.15,.15],[.65,.65]],[[.25,.25],[.5,.5]],[[.15,.15],[.4,.4]],[[.7,.1],[.85,.25]],[[.03,.5],[.3,.95]]];
+      const notes=['Keep the window frame','Replace the inner pane','Adjust the reflected light','Preserve the upper corner','Clean up the foreground'];
+      for(let i=0;i<boxes.length;i++){
+        await draw(i===0?'rectangle':undefined,boxes[i]);
+        await win.webContents.executeJavaScript('window.expectedCount='+String(i+1));
+        await until(()=>document.querySelectorAll('.alignment-region').length===window.expectedCount);
+        await edit('.alignment-region-description',notes[i]);
+        if(i===2){
+          await run(()=>document.querySelector('.alignment-region').click());
+          await until(()=>document.querySelector('.alignment-region-description').value==='Keep the window frame');
+          assert.equal(await run(()=>document.querySelector('.image-drawing-toolbar select').value),'rectangle','Inspecting a card must not disarm the drawing tool');
+        }
+      }
+      assert.equal(await run(()=>document.querySelectorAll('.annotation-number').length),5);
+      assert.deepEqual(await run(()=>[...document.querySelectorAll('.annotation-index')].map(e=>e.textContent.trim())),['1','2','3','4','5']);
+      await run(()=>document.querySelector('.alignment-apply').click());
+      const multi=await run(()=>JSON.parse(document.querySelector('.lab-output pre').textContent));
+      assert.equal(multi.regions.length,5);assert.equal(new Set(multi.regions.map(r=>r.id)).size,5);
+      assert.deepEqual(multi.regions.map(r=>r.description),notes);
+      assert.ok(Math.abs(multi.regions[0].x-multi.regions[2].x)<5,'Repeated start points are supported');
+      const shots=${JSON.stringify(resolve(root,'.test-artifacts/multi-annotation'))};await require('node:fs/promises').mkdir(shots,{recursive:true});
+      await run(()=>document.querySelector('.alignment-panel').scrollIntoView({block:'start'}));
+      await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      await require('node:fs/promises').writeFile(shots+'/five-boxes.png',(await win.webContents.capturePage()).toPNG());
+      await run(()=>document.querySelector('.image-drawing-select').click());
+      await run(()=>document.querySelectorAll('.annotation-number')[1].click());
+      await until(()=>document.querySelector('.alignment-region-description').value==='Replace the inner pane');
+      assert.equal(await run(()=>document.querySelectorAll('.annotation-card.selected').length),1);
+      await run(()=>document.querySelectorAll('.annotation-delete')[2].click());
+      await until(()=>document.querySelectorAll('.annotation-number').length===4);
+      await run(()=>document.querySelector('.alignment-apply').click());
+      const afterDelete=await run(()=>JSON.parse(document.querySelector('.lab-output pre').textContent));
+      assert.deepEqual(afterDelete.regions.map(r=>r.id),multi.regions.filter((_,i)=>i!==2).map(r=>r.id));
+      assert.deepEqual(afterDelete.regions.map(r=>r.description),notes.filter((_,i)=>i!==2));
       console.log('IMAGE_LIBRARY_OK');app.exit(0);
     }).catch(error=>{console.error(error);app.exit(1)});
   `)
