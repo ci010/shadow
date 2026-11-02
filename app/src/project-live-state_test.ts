@@ -9,7 +9,7 @@ function fixture(t: TestContext, manualReady = false) {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const observers = new Map<string, LiveObserver>()
   const ready = new Map<string, () => void>()
-  const requests: Array<{ path: string; url: URL; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
+  const requests: Array<{ path: string; url: URL; signal: AbortSignal; headers: Headers; finish: (value: unknown, status?: number, etag?: string) => void }> = []
   const store = createProjectLiveState({ client: () => ({
     subscribe(topic, observer) {
       const key = realtimeTopicKey(topic)
@@ -21,8 +21,9 @@ function fixture(t: TestContext, manualReady = false) {
     },
   }) }, {
     request: async (url, init) => new Promise(resolve => requests.push({
-      path: new URL(String(url)).pathname, url: new URL(String(url)), signal: init!.signal!,
-      finish: (value, status = 200) => resolve(Response.json(value, { status })),
+      path: new URL(String(url)).pathname, url: new URL(String(url)), signal: init!.signal!, headers: new Headers(init?.headers),
+      finish: (value, status = 200, etag) => resolve(status === 304 ? new Response(null, { status })
+        : Response.json(value, { status, headers: etag ? { ETag: etag } : undefined })),
     })),
   })
   t.after(() => store.dispose())
@@ -583,4 +584,30 @@ test('shared recovery inventory remains single-owner when chat readiness reads a
   await f.tick()
   assert.equal(f.requests.filter(r => r.path.endsWith('/stages')).length, 2)
   lease.release()
+})
+
+
+test('304 activity revalidation preserves newer in-flight SSE overlays and clears old request IDs', async t => {
+  const f = fixture(t)
+  const lease = f.store.acquireProject('http://fixture', 'a')
+  await f.tick()
+  f.requests[0].finish(graph('A'), 200, '"graph-a"')
+  f.requests[1].finish({ stages: { 'web:one': 'llm' }, activeRequestIds: { 'web:one': 'old' } }, 200, '"activity-a"')
+  await lease.read()
+  const refresh = lease.activity.refresh()
+  await f.tick()
+  const pending = f.requests.at(-1)!
+  assert.equal(pending.headers.get('If-None-Match'), '"activity-a"')
+  f.event(activityTopic, { event: 'activity', sessionId: 'web:one', activity: model('idle') })
+  pending.finish(undefined, 304)
+  await refresh
+  assert.deepEqual(lease.activity.state.value, { stages: { 'web:one': 'idle' }, activeRequestIds: {}, recoveries: {} })
+  // The overlay must not mutate the cached HTTP representation: a later 304
+  // without a newer event validates the original authoritative HTTP body.
+  const next = lease.activity.refresh()
+  await f.tick()
+  f.requests.at(-1)!.finish(undefined, 304)
+  await next
+  assert.equal(lease.activity.state.value?.stages['web:one'], 'llm')
+  assert.equal(lease.activity.state.value?.activeRequestIds['web:one'], 'old')
 })

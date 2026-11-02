@@ -5,7 +5,7 @@ import { t } from './i18n.ts'
 import { shallowReactive, shallowReadonly } from 'vue'
 import { hostBase, projectBase } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
-import { createProjectsClient, projectJson } from './projects.ts'
+import { createConditionalProjectJson, createProjectsClient, projectJson } from './projects.ts'
 import { parseActiveRequestIds, parseSessionRecoveries, parseSessionStages } from './session-activity.ts'
 import type { LiveClient, LiveObserver } from './live-client.ts'
 import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
@@ -139,14 +139,14 @@ export function createProjectLiveState(
       if (model.recovery !== null) next.recoveries[id] = model.recovery
       return next
     }
+    const activityReader = createConditionalProjectJson<Activity>(scope, '/api/sessions/stages', value => ({
+      stages: parseSessionStages(value),
+      activeRequestIds: parseActiveRequestIds(value),
+      recoveries: parseSessionRecoveries(value),
+    }), request)
     const activity = createSnapshot<Activity>(async signal => {
       overlay = new Map()
-      const value = await projectJson(scope, '/api/sessions/stages', { signal }, request)
-      return {
-        stages: parseSessionStages(value),
-        activeRequestIds: parseActiveRequestIds(value),
-        recoveries: parseSessionRecoveries(value),
-      }
+      return activityReader.load(signal)
     }, delay, { initialLoading: true, reconcile(result: Activity) {
       let unknownSession = false
       for (const [id, model] of overlay) {

@@ -163,7 +163,8 @@ export class WebChannel extends AbstractChannel {
       if (!report.success) return c.json({ error: 'Invalid presence report' }, 400)
       if (!this.sessionManager) return c.json({ error: 'Unavailable' }, 503)
       this.sessionManager.presence.report('web:web-user', report.data)
-      return c.json({ ok: true })
+      // Heartbeats need acknowledgement only, not a response stream/body.
+      return c.body(null, 204)
     })
     for (const path of ['/api/chat/send', '/api/chat/message', '/api/chat/upload', '/api/chat/uploads/*', '/api/media']) {
       app.use(path, async (c, next) => {

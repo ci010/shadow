@@ -1,3 +1,4 @@
+import { conditionalSessionJson } from './conditional-json.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
 import { projectUsagePageQuerySchema } from '../projects/usage-contract.ts'
 import { sessionActivityReadModel } from './activity-invalidation.ts'
@@ -377,7 +378,7 @@ export function sessionsApiPlugin(
         }
       }
 
-      return c.json({ sessions: enrichedSessions, nodes,
+      return conditionalSessionJson(c, sessions.projectId, { sessions: enrichedSessions, nodes,
         ...(requestedIds ? { partial: true, sessionIds: requestedIds } : {}),
       })
     })
@@ -990,7 +991,7 @@ export function sessionsApiPlugin(
         if (model.activeRequestId !== null) activeRequestIds[s.sessionId] = model.activeRequestId
         if (model.recovery !== null) recoveries[s.sessionId] = model.recovery
       }
-      return c.json({ stages, waitingForCalls, activeRequestIds, recoveries })
+      return conditionalSessionJson(c, sessions.projectId, { stages, waitingForCalls, activeRequestIds, recoveries })
     })
 
     app.get('/api/sessions/:key/stage', async (c) => {

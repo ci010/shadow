@@ -59,3 +59,35 @@ test('native collection failure is capability-unknown, not away', async () => {
   try { await setImmediate(); assert.equal(sent?.system, null); assert.equal(sent?.interactionAgeMs, null) }
   finally { stop() }
 })
+
+for (const status of [200, 401]) {
+  test(`presence drains ${status} response and keeps one request in flight until body ends`, async () => {
+    const window = target(), document = { ...target(), visibilityState: 'visible', hasFocus: () => true }
+    let requests = 0
+    let response: Response | undefined
+    let finish!: () => void
+    const stop = startPresence('http://localhost', window as unknown as Window, document as unknown as Document,
+      undefined, async () => {
+        requests++
+        response = new Response(new ReadableStream({ start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"ok":true}'))
+          finish = () => controller.close()
+        } }), { status })
+        return response
+      })
+    try {
+      await setImmediate()
+      assert.equal(response?.bodyUsed, true, 'fetch headers alone must not finish the heartbeat')
+      window.listeners.get('focus')!({} as Event)
+      await setImmediate()
+      assert.equal(requests, 1)
+      finish()
+      await setImmediate()
+      window.listeners.get('blur')!({} as Event)
+      await setImmediate()
+      assert.equal(requests, 2, 'body completion releases the in-flight guard')
+      finish()
+      await setImmediate()
+    } finally { stop() }
+  })
+}
