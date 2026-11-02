@@ -626,3 +626,55 @@ sensitive text entering model context. They are diagnostic data, not instruction
 or authorization. Logs retain the existing conservative redaction limitations.
 This deliberately broadens development default-Project visibility: use development
 mode only when that Project's permitted sessions/providers may receive other Projects' data.
+
+### Sandboxed HTML file previews
+
+Browser file-tree HTML previews use a separate five-minute, revocable read-only
+lease, created by an authenticated POST to the owning session (including explicit
+session storage) or Folder `html-preview?path=…` route. The lease URL is not a
+browser cookie, launch credential, or authorization for business APIs. It grants
+access only to the selected HTML file's containing directory and descendants;
+`../` references outside that directory, root-relative URLs, external resources,
+forms, nested frames and network API calls are not supported. Ordinary relative
+CSS, JavaScript (including module imports), images, fonts and CSS `url()` assets
+retain the lease URL prefix. Script execution remains untrusted: the iframe and
+response sandbox both omit `allow-same-origin`.
+
+Only the dedicated GET/HEAD preview entry accepts unauthenticated opaque-origin
+reads, after validating the lease. Existing static/file APIs remain authenticated.
+Preview responses are no-store, no-referrer and nosniff, with path-scoped CSP asset
+sources and non-credentialed CORS for module/font loads. LAN transport admission
+still requires an enabled LAN origin and a private/loopback peer, rejects bearer
+headers, and delegates final resource authorization to the lease validator.
+
+Leases are origin-bound and retain the Project-local session/Folder resolver;
+each read revalidates that the resource still resolves to the same local root.
+Browser-session revocation/expiry invalidates its leases. Closing, switching or
+reloading the preview requests explicit revocation; expiry is the backstop for
+lost requests or a disconnected browser. The UI offers retry after expiry rather
+than silently keeping a directory capability alive. Leases are in-memory only,
+expire with timer cleanup, and are limited to 128 per gateway, eight concurrent
+reads and 32 MiB per file. Paths are decoded once, traversal is rejected and
+symlinks are not supported. Preview leases do not implement a remote executor:
+remote/unavailable resources fail explicitly, never falling back to Main.
+Mobile and attachment HTML remain source-only. Real-browser asset loading and
+CSP behavior require browser verification in addition to the gateway tests.
+
+The opt-in browser regression uses an **existing Chromium-family executable and a
+fresh disposable profile**, never the user's profile or a running application:
+
+```sh
+SHADOW_TEST_BROWSER='/absolute/path/to/chromium-family-executable' \
+SHADOW_TEST_FONT='/absolute/path/to/an/existing.ttf' \
+pnpm exec node --import tsx --test src/gateway/html-preview-browser_test.ts
+```
+
+Without both variables this test skips; it does not install dependencies or
+fetch a browser/font. It starts an isolated loopback gateway, pairs an actual
+browser cookie, creates a sandbox iframe and verifies classic JS, module imports,
+computed CSS, image decoding, CSS background requests and a loaded font. It also
+checks opaque-origin isolation, CSP-blocked API access, real `Origin: null`
+business/static requests rejected by global authentication, directory escape
+rejection and lease revocation. Diagnostic output redacts lease tokens. The test
+was exercised with installed Brave (Chromium 156.0.8078.80) on macOS; other browser
+engines and a full interactive application session are separate verification.

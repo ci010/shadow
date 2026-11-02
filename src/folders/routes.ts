@@ -1,3 +1,4 @@
+import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from './picker.ts'
 import { pickFolder, type FolderPickerOptions } from './picker-service.ts'
 import { mkdir } from 'node:fs/promises'
@@ -163,6 +164,14 @@ export class FolderService {
         }
       })
     }
+    app.post('/api/folders/:id/html-preview', c => {
+      const id = c.req.param('id')
+      return createHtmlPreview(c, async () => {
+        this.#assertOpen()
+        const folder = await this.#options.registry.requireAvailable(id)
+        return folder.kind === 'remote' ? undefined : folder.path
+      })
+    })
     // Read-only /:id/{files,raw,preview,static/*} uses the registered folder,
     // independently of sessions. Only POST /:id/sessions materializes a conversation.
     for (const operation of ['files', 'raw', 'preview', 'static'] as const) {

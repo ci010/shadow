@@ -50,10 +50,13 @@
           @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
         <video v-else-if="kind === 'video' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`video:${rawSource}`" :src="raw" class="file-modal-media" controls autoplay @error="archiveMediaError" />
         <audio v-else-if="kind === 'audio' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`audio:${rawSource}`" :src="raw" controls class="file-modal-audio" @error="archiveMediaError" />
+        <div v-else-if="kind === 'html' && !textMode && (previewError || !previewUrl)" class="file-modal-note" :role="previewError ? 'alert' : 'status'">
+          {{ previewError || t('Loading…') }} <button v-if="previewError" class="file-modal-btn" @click="reloadFrame">{{ t('Retry') }}</button>
+        </div>
         <iframe
           v-else-if="kind === 'html' && active && !textMode"
           :key="frameNonce"
-          :src="staticSrc"
+          :src="previewUrl"
           class="file-modal-frame"
           sandbox="allow-scripts allow-forms allow-popups"
           referrerpolicy="no-referrer"
@@ -332,6 +335,27 @@ watch(() => props.active, active => {
 watch(sourceView, () => {
   if (kind.value === 'html') void loadText()
 })
+const previewUrl = ref('')
+const previewError = ref('')
+watch(() => [props.active, props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, props.remote, path.value, kind.value, textMode.value, frameNonce.value], async (_, __, onCleanup) => {
+  let cancelled = false
+  let lease: Awaited<ReturnType<ReturnType<typeof useSessionFiles>['htmlPreview']>> | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => { cancelled = true; clearTimeout(timer); lease?.release() })
+  previewUrl.value = ''
+  previewError.value = ''
+  if (!props.active || kind.value !== 'html' || textMode.value) return
+  if (props.remote && !props.sessionWorkspace) { previewError.value = t('This remote workdir does not support this file operation yet. No local folder was used.'); return }
+  try {
+    lease = await files.value.htmlPreview(props.sessionId, path.value)
+    if (cancelled) { lease.release(); return }
+    previewUrl.value = lease.url
+    timer = setTimeout(() => { previewUrl.value = ''; previewError.value = t('Could not load preview. Retry.'); lease?.release() }, Math.max(0, lease.expiresAt - Date.now()))
+  } catch (cause) {
+    if (!cancelled) previewError.value = cause instanceof Error ? cause.message : t('Could not load preview. Retry.')
+  }
+}, { immediate: true })
+
 onUnmounted(() => { request?.abort(); releaseArchive() })
 </script>
 

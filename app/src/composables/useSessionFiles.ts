@@ -111,6 +111,20 @@ export function useSessionFiles(apiBase: string, folderId?: string, sessionWorks
     ? `/api/folders/${encodeURIComponent(folderId)}`
     : `/api/sessions/${encodeURIComponent(sessionId)}${sessionWorkspace ? "/workspace" : ""}`
 
+  async function htmlPreview(sessionId: string, path: string): Promise<{ url: string; expiresAt: number; release: () => void }> {
+    const requestUrl = buildUrl(apiBase, `${root(sessionId)}/html-preview`, { path })
+    const response = await fetch(requestUrl, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(30_000) })
+    if (!response.ok) throw await fileRequestError(response)
+    const data: unknown = await response.json()
+    if (!isRecord(data) || typeof data.url !== 'string' || typeof data.revokeUrl !== 'string' || typeof data.expiresAt !== 'number'
+      || !/^\/api\/html-preview\/[\w-]{43}\/[^/]+$/.test(data.url)
+      || !/^\/api\/html-preview-leases\/[\w-]{43}$/.test(data.revokeUrl)) throw new Error(t('Could not load preview. Retry.'))
+    const origin = new URL(requestUrl).origin
+    const revokeUrl = new URL(data.revokeUrl, origin).href
+    return { url: new URL(data.url, origin).href, expiresAt: data.expiresAt,
+      release: () => { void fetch(revokeUrl, { method: 'DELETE', keepalive: true }).catch(() => {}) } }
+  }
+
   async function listDir(sessionId: string, path = '', signal?: AbortSignal): Promise<DirListing> {
     const url = buildUrl(apiBase, `${root(sessionId)}/files`, { path })
     const res = await requestFile(url, signal)
@@ -252,5 +266,5 @@ export function useSessionFiles(apiBase: string, folderId?: string, sessionWorks
     return new Error(t('Could not load files ({status}). Retry when Main is available.', { status: response.status }))
   }
 
-  return { listDir, searchPaths, rawUrl, staticUrl, preview, readBlob }
+  return { listDir, searchPaths, rawUrl, staticUrl, htmlPreview, preview, readBlob }
 }

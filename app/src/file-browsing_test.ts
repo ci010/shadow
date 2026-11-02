@@ -29,7 +29,7 @@ function component(name: string, modules: Record<string, unknown> = {}): Compone
   const module = { exports: {} as { default: Component & { render?: () => null } } }
   const require = createRequire(url)
   new Function('require', 'module', 'exports', outputText)((id: string) =>
-    id in modules ? modules[id] : id.endsWith('.vue') || id.endsWith('.css') ? {} : /\/composables\/useSessionFiles(?:\.ts)?$/.test(id) ? fileHelpers
+    id in modules ? modules[id] : id.endsWith('/markdown-link-hints') ? {} : id.endsWith('.vue') || id.endsWith('.css') ? {} : /\/composables\/useSessionFiles(?:\.ts)?$/.test(id) ? fileHelpers
       : id.endsWith('/workdir-request-error.ts') ? workdirRequestErrors
       : id.endsWith('/git-files.ts') ? gitFiles
       : id.endsWith('/home-tree-cache.ts') ? homeTreeCacheModule : require(id),
@@ -1154,8 +1154,11 @@ test('unknown text previews reset, cancel and never display data from a previous
   await nextTick()
   assert.equal(state().kind, 'html')
   assert.equal(state().binary, false)
-  assert.equal(pending.length, 3)
-  assert.equal(new URL(state().staticSrc).pathname, '/api/folders/folder-c/static/page.html')
+  assert.equal(pending.length, 4)
+  assert.equal(pending[3]!.url.pathname, '/api/folders/folder-c/html-preview')
+  pending[3]!.finish({ url: '/api/html-preview/' + 'a'.repeat(43) + '/page.html', revokeUrl: '/api/html-preview-leases/' + 'a'.repeat(43), expiresAt: Date.now() + 300_000 })
+  await settle()
+  assert.equal(new URL(state().previewUrl).pathname, '/api/html-preview/' + 'a'.repeat(43) + '/page.html')
 })
 
 test('explicit session tree discards Home state and scopes child previews and context menu paths to Main storage', async t => {
@@ -1263,4 +1266,36 @@ test('attachment reveal is absent on Web and remote Electron and shown only afte
   owned.state().openAttachment(owned.state().items[0])
   assert.match(owned.state().preview.url, /api\/media/)
   assert.equal(owned.state().preview.entry.name, 'report.txt')
+})
+
+test('HTML preview leases discard and revoke stale source responses, release on source view and never expose static API URLs', async t => {
+  const creates: Array<{ url: URL; finish: (token: string) => void }> = []
+  const revoked: string[] = []
+  t.mock.method(globalThis, 'fetch', (input: string, init: RequestInit) => {
+    const url = new URL(input)
+    if (init.method === 'DELETE') { revoked.push(url.pathname); return Promise.resolve(new Response(null, { status: 204 })) }
+    if (init.method === 'POST') return new Promise<Response>(resolve => creates.push({ url,
+      finish: token => resolve(Response.json({ url: `/api/html-preview/${token}/page.html`, revokeUrl: `/api/html-preview-leases/${token}`, expiresAt: Date.now() + 300_000 })),
+    }))
+    return Promise.resolve(Response.json({ binary: false, size: 6, content: 'source' }))
+  })
+  const { props, state } = mount(t, 'FilePreviewModal', { ...base, dir: 'page', entry: { ...entry, name: 'page.html', ext: '.html' } })
+  assert.equal(creates.length, 1)
+  assert.equal(creates[0]!.url.pathname, '/api/folders/folder-a/html-preview')
+  props.folderId = 'folder-b'
+  await nextTick()
+  assert.equal(creates.length, 2)
+  creates[0]!.finish('a'.repeat(43))
+  await settle()
+  assert.equal(state().previewUrl, '')
+  assert.deepEqual(revoked, ['/api/html-preview-leases/' + 'a'.repeat(43)])
+  creates[1]!.finish('b'.repeat(43))
+  await settle()
+  assert.equal(state().previewUrl, 'http://localhost/api/html-preview/' + 'b'.repeat(43) + '/page.html')
+  state().sourceView = true
+  await settle()
+  assert.equal(state().previewUrl, '')
+  assert.equal(revoked.at(-1), '/api/html-preview-leases/' + 'b'.repeat(43))
+  props.active = false
+  await nextTick()
 })

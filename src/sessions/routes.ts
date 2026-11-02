@@ -1,3 +1,4 @@
+import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { sessionTopic } from './session-metadata.ts'
 import { conditionalSessionJson } from './conditional-json.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
@@ -895,6 +896,16 @@ export function sessionsApiPlugin(
         return c.json(remoteWorkdirRequiresExecutorApiResult(key, base), 501)
       }
       return serveLocalFiles(c, base.path, { key }, 'raw', relPath)
+    })
+
+    for (const route of ['/api/sessions/:key/html-preview', '/api/sessions/:key/workspace/html-preview']) app.post(route, c => {
+      const key = c.req.param('key')!
+      return createHtmlPreview(c, async () => {
+        if (!sessions || !await sessions.readSessionState(key)) return undefined
+        await sessions.assertHistoricalFolderAccess(key)
+        const base = await sessionFileBase(sessions, key, route.includes('/workspace/'))
+        return base.available && base.locality === 'local' ? base.path : undefined
+      })
     })
 
     // Static file serving: like opening a local file directly, so an HTML page's

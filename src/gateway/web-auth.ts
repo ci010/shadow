@@ -95,9 +95,13 @@ export class BrowserAuth {
   }
 
   guardLanRequest(request: Request): Response | undefined {
+    // Transport admission only: the gateway subsequently validates the preview lease.
+    // Not a public/business-API exemption, and never authorizes other static routes.
+    const previewRead = ['GET', 'HEAD'].includes(request.method)
+      && /^\/api\/html-preview\/[\w-]{43}\/.+$/.test(new URL(request.url).pathname)
     if (!this.lanOrigins.has(new URL(request.url).origin) || !this.acceptsBrowser(request)
       || request.headers.has('authorization')
-      || (!this.isPublicRequest(request) && !this.authorize(request))) {
+      || (!previewRead && !this.isPublicRequest(request) && !this.authorize(request))) {
       return Response.json({ error: 'unauthorized' }, { status: 403 })
     }
   }
