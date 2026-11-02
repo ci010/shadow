@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import childProcess, { type ForkOptions } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -9,9 +9,70 @@ import { z } from 'zod'
 import { contentText, type ChatMessage, type LLMResponse } from '../src/providers/provider.ts'
 import type { ToolDefinition } from '../src/tools/tool.ts'
 import { CopilotProvider } from '../src/providers/copilot.ts'
-import { appRecordSchema } from '../src/microapps/contracts.ts'
+import { appId, revisionId, appRecordSchema, appWorkScopeSchema } from '../src/microapps/contracts.ts'
+import { MicroApps } from '../src/microapps/service.ts'
+import { microAppReceipt } from '../src/tools/micro-app.ts'
+import { workDefinitionSchema } from '../src/initiatives/work-contract.ts'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
 import { runAcceptance, writeAcceptanceArtifact } from './microapp-a2a.ts'
+
+const fixtureDefinition = {
+  objective: 'Publish inert fixture',
+  acceptance: ['Publish the inert Timeline fixture without claiming runtime verification.'],
+}
+
+// Work permits empty criteria, but publication snapshots require at least one per selected goal.
+// Keep the synthetic provider's input compatible with both contracts.
+test('timeline fixture Work can be snapshotted for app publication', async () => withTempWorkspace(async home => {
+  const scope = (definition: unknown) => ({ key: 'fixture', revision: 1,
+    acceptance: workDefinitionSchema.parse(definition).acceptance })
+  let work = scope({ objective: fixtureDefinition.objective })
+  assert.equal(appWorkScopeSchema.safeParse(work).success, false)
+  const service = new MicroApps('fixture', home, () => { throw new Error('No model expected') }, () => 'fixture', {
+    ownerSession: id => id, ask: async () => { throw new Error('No approval expected') },
+    notify: async () => {}, evidence: async () => {}, work: () => [work],
+  })
+  try {
+    await service.init()
+    const source = join(home, 'source')
+    await mkdir(source)
+    await writeFile(join(source, 'index.html'), '<!doctype html><title>Fixture</title>')
+    const publish = () => service.publish(source, { version: 1, name: 'Timeline fixture', description: 'Inert fixture',
+      entry: 'index.html', files: ['index.html'] }, 'fixture-author', new AbortController().signal)
+    await assert.rejects(publish(), /acceptance/)
+    assert.deepEqual(service.list(), [], 'The old fixture leaves apps.json empty, even when its author turn completes')
+    work = scope(fixtureDefinition)
+    const record = await publish()
+    assert.deepEqual(record.work, [work])
+    const receipt = microAppReceipt(record)
+    const parsed = publishedReceipt([{ role: 'tool', name: 'invoke_tool', content: JSON.stringify(receipt) }])
+    assert.equal(parsed.id, record.id)
+    assert.equal(service.list().length, 1)
+  } finally { await service.shutdown() }
+}))
+
+function publishedReceipt(messages: ChatMessage[]) {
+  const result = messages.findLast(message => message.role === 'tool' && message.name === 'invoke_tool')
+  const text = result ? contentText(result.content) : '<missing invoke_tool result>'
+  try {
+    return z.object({ id: appId, revision: revisionId,
+      workRefs: z.array(z.object({ acceptanceCount: z.literal(fixtureDefinition.acceptance.length) })).length(1),
+    }).parse(JSON.parse(text))
+  } catch (error) {
+    assert.fail(`Fixture publication failed; invoke_tool result: ${text.slice(0, 4000)}\n${String(error)}`)
+  }
+}
+
+test('timeline provider rejects failed publication instead of claiming success', () => {
+  const receipt = { id: '11111111-1111-4111-8111-111111111111', revision: 'a'.repeat(64),
+    workRefs: [{ acceptanceCount: 1 }] }
+  assert.deepEqual(publishedReceipt([{ role: 'tool', name: 'invoke_tool', content: JSON.stringify(receipt) }]), receipt)
+  assert.throws(() => publishedReceipt([]), /missing invoke_tool result/)
+  assert.throws(() => publishedReceipt([{ role: 'tool', name: 'invoke_tool', content: 'Error: invalid acceptance criteria' }]),
+    /Fixture publication failed; invoke_tool result: Error: invalid acceptance criteria/)
+  assert.throws(() => publishedReceipt([{ role: 'tool', name: 'invoke_tool', content: JSON.stringify({ tools: [] }) }]),
+    /Fixture publication failed/)
+})
 
 test('isolated Node-only fixture reaches separate review and timed author confirmation without real model calls', { timeout: 150_000 }, async t =>
   withTempWorkspace(async home => {
@@ -50,7 +111,7 @@ test('isolated Node-only fixture reaches separate review and timed author confir
       assert.ok(messages.some(message => message.role === 'user' &&
         contentText(message.content).includes('Publish only the inert synthetic fixture.')))
       if (calls === 1) return tools({ name: 'work', arguments: { action: 'create', data: {
-        title: 'Timeline fixture', definition: { objective: 'Publish inert fixture' }, notes: { kind: 'task' },
+        title: 'Timeline fixture', definition: fixtureDefinition, notes: { kind: 'task' },
       } } })
       if (calls === 2) {
         const value = messages.findLast(message => message.role === 'tool' && message.name === 'work')?.content
@@ -88,6 +149,7 @@ test('isolated Node-only fixture reaches separate review and timed author confir
         return tools({ name: 'invoke_tool', arguments: { name: 'micro_app', args: { action: 'publish', directory: 'app' } } })
       }
       assert.equal(calls, 7)
+      publishedReceipt(messages)
       return { content: 'Fixture published; exact version still requires owner review.', toolCalls: [] }
     }
     t.mock.method(CopilotProvider.prototype, 'chat', async (messages: ChatMessage[], definitions: ToolDefinition[]) => {
@@ -103,16 +165,19 @@ test('isolated Node-only fixture reaches separate review and timed author confir
       .then(() => { outcome = {} }, error => { outcome = { error } })
     async function waitFile<T>(name: string, schema: z.ZodType<T>, predicate: (value: T) => boolean, timeout = 30_000) {
       const deadline = Date.now() + timeout
+      let lastValue: unknown = '<artifact not yet written>'
       while (Date.now() < deadline) {
         if (providerFailure) throw providerFailure
         if (outcome) throw outcome.error ?? new Error('Controller ended before the expected fixture outcome')
         try {
           const value = schema.parse(JSON.parse(await readFile(join(output, name), 'utf8')))
+          lastValue = value
           if (predicate(value)) return value
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
         await delay(100)
       }
-      throw new Error(`Timed out waiting for fixture artifact ${name}`)
+      const progress = await readFile(join(output, 'progress.json'), 'utf8').catch(error => `Unavailable: ${String(error)}`)
+      throw new Error(`Timed out waiting for fixture artifact ${name}; provider calls=${calls}; last value=${JSON.stringify(lastValue).slice(0, 4000)}; progress=${progress.slice(0, 4000)}`)
     }
     let controlId = 0
     async function control(action: string, fields: Record<string, unknown> = {}) {
