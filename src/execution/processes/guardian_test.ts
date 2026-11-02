@@ -121,6 +121,21 @@ cp.spawn(process.execPath, ['-e', "setTimeout(() => require('node:fs').writeFile
   })
 })
 
+test('Windows guardian accepts inherited environment keys that differ only by case', {
+  skip: process.platform !== 'win32', timeout: 15_000,
+}, async () => {
+  await withTempWorkspace(async root => {
+    const manager = new ProcessManager()
+    const managed = await manager.spawn('echo %SHADOW_GUARDIAN_CASE%', root,
+      { SHADOW_GUARDIAN_CASE: 'inherited', shadow_guardian_case: 'ignored' }, 'cmd', [],
+      { isolated: true, supervision: { deadlineAt: Date.now() + 10000 } })
+    const result = await managed.exitPromise
+    assert.equal(result.success, true, result.guardian?.error)
+    assert.equal(Buffer.concat(managed.stdoutChunks).toString().trim(), 'inherited')
+    manager.remove(managed.pid)
+  })
+})
+
 describe('supervision layer failures', () => {
   for (const fault of ['guardian', 'guardian-and-owner', 'posix-controller'] as const) {
     test(`${fault} loss stops finite descendants without replay`, {
