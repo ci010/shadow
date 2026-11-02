@@ -9,6 +9,12 @@ Default-model choices also show these labels while persisting only the qualified
 Use **Rename** to change the label without changing credentials or model references.
 API-key edits retain the existing key when the key field is left blank.
 
+New connections prefill an editable, required display name: GitHub Copilot,
+GitHub Copilot with the selected GHE host, the API provider's display name, or
+the custom provider name (initially `local`). The suggestion follows connection
+choices until you edit it. After an edit, switching methods or hosts preserves
+your text; clearing the name blocks saving/sign-in. Existing names are preserved.
+
 ## Configuration and compatibility
 
 The `providers` record key is the stable instance ID. Optional `type` chooses the

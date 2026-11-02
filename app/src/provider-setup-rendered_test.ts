@@ -392,3 +392,53 @@ test('retired authentication status explains reconfiguration without offering th
   assert.match(view.text(), /change its configured type to copilot or copilot-v2/)
   assert.doesNotMatch(view.text(), /GitHub Copilot v1/)
 })
+
+
+test('new provider names follow Copilot, GHE and API choices until manually edited', async t => {
+  const view = mount(t, { apiBase: 'http://fixture.invalid', status: null, mode: 'add' })
+  const name = () => view.nodes().find(node => node.tag === 'input')!
+  const select = () => view.nodes().find(node => node.tag === 'select')!
+  const choose = async (value: string) => {
+    const handlers = select().props.onChange
+    for (const handler of Array.isArray(handlers) ? handlers : [handlers]) {
+      ;(handler as (value: string) => void)(value)
+    }
+    await nextTick()
+  }
+  assert.equal(name().value, 'OpenAI')
+  await choose('anthropic')
+  assert.equal(name().value, 'Anthropic')
+  await choose('custom')
+  assert.equal(name().value, 'local')
+  const custom = view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'local')!
+  ;(custom.props['onUpdate:modelValue'] as (value: string) => void)('my-api')
+  await nextTick()
+  assert.equal(name().value, 'my-api')
+  await view.click('GitHub Copilot')
+  assert.equal(name().value, 'GitHub Copilot')
+  await choose('enterprise')
+  assert.equal(name().value, 'GitHub Copilot (GHE)')
+  const host = view.nodes().find(node => node.tag === 'input' && node.props.placeholder === 'octocat')!
+  ;(host.props['onUpdate:modelValue'] as (value: string) => void)('octocat')
+  await nextTick()
+  assert.equal(name().value, 'GitHub Copilot (octocat.ghe.com)')
+  ;(name().props['onUpdate:modelValue'] as (value: string) => void)('My connection')
+  await choose('github')
+  assert.equal(name().value, 'My connection')
+  await view.click('API key / local provider')
+  assert.equal(name().value, 'My connection')
+  ;(name().props['onUpdate:modelValue'] as (value: string) => void)(' ')
+  await nextTick()
+  assert.equal(view.button('Save provider connection').props.disabled, true)
+  await view.click('GitHub Copilot')
+  assert.equal(name().value, ' ')
+  assert.equal(view.button('Sign in with GitHub Copilot').props.disabled, true)
+})
+
+test('existing provider names are not replaced by host defaults', async t => {
+  const view = mount(t, { apiBase: 'http://fixture.invalid', status: { ...status, name: 'GitHub Copilot' }, mode: 'edit' })
+  const select = view.nodes().find(node => node.tag === 'select')!
+  ;(select.props.onChange as (value: string) => void)('enterprise')
+  await nextTick()
+  assert.equal(view.nodes().find(node => node.tag === 'input')!.value, 'GitHub Copilot')
+})

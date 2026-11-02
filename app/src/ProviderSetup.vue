@@ -5,7 +5,7 @@
       {{ mode === 'edit' ? t('{value1} settings', { value1: editingLabel }) : mode === 'add' ? t('Add provider') : t('Connect a model provider') }}
     </h2>
     <p class="lead">{{ lead }}</p>
-    <label>{{ t('Display name') }} <input v-model="displayName" maxlength="100" :disabled="busy || saving"></label>
+    <label>{{ t('Display name') }} <input v-model="displayName" required maxlength="100" :disabled="busy || saving"></label>
     <p v-if="mode === 'edit'" class="help">{{ status?.provider }}</p>
     <button v-if="mode === 'edit'" :disabled="busy || saving || !displayName.trim()" @click="renameInstance">{{ t('Rename') }}</button>
     <p v-if="error || message" class="notice error" role="alert">{{ error || message }}</p>
@@ -44,7 +44,7 @@
         <button v-if="busy" :disabled="login.state === 'cancelling'" @click="cancelLogin">
           {{ login.state === 'cancelling' ? t('Cancelling...') : t('Cancel login') }}
         </button>
-        <button v-else class="primary" :disabled="saving || !!hostError" @click="startLogin">
+        <button v-else class="primary" :disabled="saving || !!hostError || !displayName.trim()" @click="startLogin">
           {{ login.state === 'idle' ? t('Sign in with GitHub Copilot') : t('Retry GitHub Copilot login') }}
         </button>
         <button v-if="mode === 'edit' && !confirmSignOut && !signedOut" :disabled="saving" @click="confirmSignOut = true">{{ t('Sign out of GitHub Copilot') }}</button>
@@ -74,7 +74,7 @@
       <label>{{ t('API key') }} <input v-model="apiKey" type="password" autocomplete="off" spellcheck="false" :disabled="saving"
         :required="provider !== 'custom' && !hasSavedKey" :placeholder="hasSavedKey ? t('Leave blank to keep the saved key') : provider === 'custom' ? t('Optional for local endpoints') : t('Enter your provider API key')"></label>
       <p class="help">{{ t('Keys are saved by Main in this installation\'s configuration, never in browser storage. Keyless local endpoints do not require a key.') }}</p>
-      <div class="actions"><button class="primary" :disabled="saving">{{ saving ? t('Saving...') : t('Save provider connection') }}</button></div>
+      <div class="actions"><button class="primary" :disabled="saving || !displayName.trim()">{{ saving ? t('Saving...') : t('Save provider connection') }}</button></div>
     </form>
     <div class="footer-actions">
       <button :disabled="busy || saving" @click="$emit('retry')">{{ t('Recheck configuration') }}</button>
@@ -146,7 +146,23 @@ const instanceId = computed(() => {
   if (method.value === 'copilot') return 'copilot'
   return provider.value === 'custom' ? customProvider.value.trim() : provider.value
 })
-const displayName = ref(props.mode !== 'add' ? props.status?.name ?? '' : '')
+// Follow connection choices until the user edits the name (including clearing it).
+// Existing names are always user-owned, even if they happen to match a default.
+const suggestedName = computed(() => {
+  if (method.value === 'copilot') {
+    return copilotHostType.value === 'enterprise'
+      ? `GitHub Copilot (${selectedCopilotHost.value || 'GHE'})`
+      : 'GitHub Copilot'
+  }
+  return provider.value === 'custom'
+    ? customProvider.value.trim() || 'local'
+    : providerDisplayName(provider.value)
+})
+const editedName = ref<string | null>(props.mode !== 'add' ? props.status?.name ?? null : null)
+const displayName = computed({
+  get: () => editedName.value ?? suggestedName.value,
+  set: (value: string) => { editedName.value = value },
+})
 const apiKey = ref('')
 const message = ref('')
 const saving = ref(false)
@@ -193,6 +209,7 @@ function changeProvider() {
   message.value = ''
 }
 async function saveProvider() {
+  if (!displayName.value.trim()) return
   const name = provider.value === 'custom' ? customProvider.value.trim() : provider.value
   saving.value = true
   message.value = ''
@@ -217,7 +234,7 @@ async function saveProvider() {
   }
 }
 async function startLogin() {
-  if (hostError.value || busy.value) return
+  if (hostError.value || busy.value || !displayName.value.trim()) return
   message.value = ''
   copied.value = false
   confirmSignOut.value = false
