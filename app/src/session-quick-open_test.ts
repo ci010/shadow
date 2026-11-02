@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { isSessionQuickOpenShortcut, matchesSessionTitle, searchQuickOpenSessions } from './session-quick-open.ts'
+import { isQuickOpenBackdropPoint, isSessionQuickOpenShortcut, matchesSessionTitle, searchQuickOpenSessions } from './session-quick-open.ts'
 
 test('title matching uses every case-insensitive token across title and label, not IDs', () => {
   const session = { title: 'Release Review', label: 'Worker Alpha' }
@@ -56,5 +56,29 @@ test('quick open excludes tasks, calls, child sessions, spawned agents and autom
   ]
   for (const query of ['', 'review']) {
     assert.deepEqual(searchQuickOpenSessions(rows, query).map(s => s.sessionId), ['legacy', 'regular'])
+  }
+})
+
+test('project filter combines with title search and regular-session filtering', () => {
+  const rows = [
+    { projectId: 'default', sessionId: 'a', label: 'Review' },
+    { projectId: 'xmcl', sessionId: 'b', label: 'Review XMCL' },
+    { projectId: 'xmcl', sessionId: 'c', label: 'Other' },
+    { projectId: 'xmcl', sessionId: 'd', label: 'Review task', mode: 'task' as const },
+  ]
+  assert.deepEqual(searchQuickOpenSessions(rows, '', ['default', 'xmcl'], 'xmcl').map(s => s.sessionId), ['b', 'c'])
+  assert.deepEqual(searchQuickOpenSessions(rows, 'review', ['default', 'xmcl'], 'xmcl').map(s => s.sessionId), ['b'])
+  assert.deepEqual(searchQuickOpenSessions(rows, 'review', ['default', 'xmcl'], '').map(s => s.sessionId), ['a', 'b'])
+  assert.deepEqual(searchQuickOpenSessions(rows, '', ['default', 'xmcl'], 'missing'), [])
+})
+
+test('backdrop detection excludes the dialog content, padding and border', () => {
+  const bounds = { left: 100, right: 700, top: 80, bottom: 500 }
+  for (const point of [{ clientX: 99, clientY: 100 }, { clientX: 701, clientY: 100 },
+    { clientX: 300, clientY: 79 }, { clientX: 300, clientY: 501 }]) {
+    assert.equal(isQuickOpenBackdropPoint(point, bounds), true)
+  }
+  for (const point of [{ clientX: 100, clientY: 80 }, { clientX: 700, clientY: 500 }, { clientX: 300, clientY: 200 }]) {
+    assert.equal(isQuickOpenBackdropPoint(point, bounds), false)
   }
 })

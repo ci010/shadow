@@ -4114,5 +4114,7 @@
   "Loading sessions…": "Loading sessions…",
   "No matching sessions": "No matching sessions",
   "Could not load sessions for {project}": "Could not load sessions for {project}",
-  "Sessions": "Sessions"
+  "Sessions": "Sessions",
+  "Filter by project": "Filter by project",
+  "All projects": "All projects"
 }

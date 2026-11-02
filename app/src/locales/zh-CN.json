@@ -4114,5 +4114,7 @@
   "Loading sessions…": "正在加载会话…",
   "No matching sessions": "没有匹配的会话",
   "Could not load sessions for {project}": "无法加载项目 {project} 的会话",
-  "Sessions": "会话"
+  "Sessions": "会话",
+  "Filter by project": "按项目筛选",
+  "All projects": "所有项目"
 }
