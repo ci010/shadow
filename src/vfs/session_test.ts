@@ -20,10 +20,10 @@ test('current session JSON uses dedicated virtual write routing and validates ex
   const context = { projectId: 'p', sessionId: 'web:self', tools: { executionMode: 'session' }, signal: new AbortController().signal } as ExecutionContext
   const writer = new WriteTool('/workspace', false, vfs)
   const original = await vfs.resolve('v:session/self.json', context)
-  assert.deepEqual(JSON.parse(original!), { title: 'Current', description: 'Purpose', completed: false })
+  assert.deepEqual(JSON.parse(original!), { topic: 'Current', focus: '', completed: false })
   const result = await writer.execute({ path: 'v:session/self.json', match: 'false', content: 'true' }, context)
   assert.equal(JSON.parse(result).completed, true)
-  assert.deepEqual(writes, [{ value: { title: 'Current', description: 'Purpose', completed: true }, expected: original }])
+  assert.deepEqual(writes, [{ value: { topic: 'Current', focus: '', completed: true }, expected: original }])
   await assert.rejects(writer.execute({ path: 'v:session/self.json', content: '{' }, context), /Invalid JSON/)
   await assert.rejects(writer.execute({ path: 'v:session/self.json', match: 'true', content: 'invalid' }, context), /Invalid JSON/)
   await assert.rejects(writer.execute({ path: 'v:session/self.json', match: 'absent', content: 'x' }, context), /Exact match/)

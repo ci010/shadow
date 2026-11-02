@@ -827,7 +827,7 @@ See [GitHub collaboration](github.md) for setup, recovery and polling limitation
 Durable conversations are `web:chat-UUID` root peers. Topic is no longer a
 separate business object. Project-scoped `search({handler: "grep", path: "v:sessions", query})`
 searches histories and session metadata.
-Read `v:sessions/<session-id>/brief` for title/description, folderId,
+Read `v:sessions/<session-id>/brief` for topic/focus, folderId,
 initiativeId, createdBySessionId, status and conversationUrl.
 Prefer reuse before creating a session. Metadata and create/update receipts return `conversationUrl` in
 `/projects/<encodedProjectId>/chat/<encodedLogicalSessionId>` form. Coordinator
@@ -836,13 +836,13 @@ directly accessible rather than merely reporting an ID.
 Remote-workdir sessions may use `v:sessions` search and typed Project messaging
 as control-plane operations. This does not enable other remote search spaces,
 which remain explicitly rejected.
-`session` creation requires only title; optional description, folderId,
+`session` creation requires only topic; optional focus, folderId,
 agentType, initiativeId, initialMessage, and requestId refine it. Kickoff admission
 is optional and never creates a work item or transfers an assignment. Idempotent requestId
 retries do not replay kickoff; initialMessageStatus distinguishes accepted,
 not_requested, and not_replayed.
 
-Session update takes sessionId, title and optional description; only
+Session update takes sessionId, topic and optional focus; only
 self or authorized UI may update it. Metadata does not revise work
 goals or acceptance. `register_folder` with path
 uses the existing Project registry for an existing Main-local folder. List with
@@ -852,8 +852,8 @@ or register folders.
 
 Authorized routes expose GET `/projects/:projectId/api/sessions/discover`, POST
 `/projects/:projectId/api/sessions`, PATCH
-`/projects/:projectId/api/sessions/:key/metadata`. Historical Topic metadata remains in
-stored records; current details and graph use session names/descriptions.
+`/projects/:projectId/api/sessions/:key/metadata`. Current metadata is plain `topic` plus optional current-step `focus`;
+old title/name fields remain read fallbacks, not another description.
 Discovery returns a paginated `sessions` array and `metadataSource`; neither
 session creation nor renaming creates or revises a Work definition.
 
@@ -3261,9 +3261,8 @@ old/new context, instruction provenance/scope and supersession of old defaults.
 Locality is refreshed for subsequent calls; already running processes and
 existing children retain their captured context.
 
-`v:session/self.json` exposes read-only `projectDir` and `cwd` (null when no
-selected local folder / no available local cwd, respectively). An unchanged
-roundtrip is accepted; modifying these fields is rejected. The committed
+`v:session/self.json` exposes `topic`, `focus` and `completed`, not filesystem
+paths. An unchanged roundtrip is accepted; unknown fields are rejected. The committed
 `session.changed` notification refreshes the existing session list, sidebar
 folder selection and file workbench. Browsing alone does not mutate execution.
 

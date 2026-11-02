@@ -253,13 +253,13 @@ test('session rename validates input, cancels without requests and respects read
   assert.equal(state().name, 'Original')
 })
 
-test('saved names take precedence over topic and admin fallback labels', () => {
+test('canonical topics take precedence over legacy names and admin fallback labels', () => {
   const sessions = parseSessionGraph({ sessions: [
-    { sessionId: 'web:topic', name: 'My name', title: 'Generated', topic: { title: 'Topic title', goal: 'Goal', scope: 'Scope' } },
+    { sessionId: 'web:topic', name: 'My name', title: 'Generated', topic: 'Topic title' },
     { sessionId: 'web:chat-admin', name: 'My admin' },
   ], nodes: [] })
-  assert.deepEqual(sessions.map(session => session.label), ['My name', 'My admin'])
-  assert.equal(sessions[0].topic?.title, 'Topic title')
+  assert.deepEqual(sessions.map(session => session.label), ['Topic title', 'My admin'])
+  assert.equal(sessions[0].topic, 'Topic title')
 })
 
 test('Project session invalidation also refreshes its folder catalog for agent-registered folders', async t => {
@@ -338,7 +338,7 @@ test('folder catalog revision cancels stale lists and moves an agent-created top
   const props = reactive({
     apiBase: 'http://fixture/projects/a/', grouped: true, projectName: 'A', folderRevision: 0,
     sessions: parseSessionGraph({ sessions: [{ sessionId: 'web:chat-generated', folderId: 'agent-folder', sessionKind: 'topic',
-      topic: { title: 'Installer', goal: 'Ship', scope: 'Windows' } }], nodes: [] }),
+      topic: 'Installer' }], nodes: [] }),
     activeSessionId: 'web:chat-generated', collapsed: new Set<string>(), stages: {}, sessionsLoading: false, sessionsError: '',
   })
   const state = mountScript(t, 'FoldersSidebar.vue', props, undefined, { vue: { ...Vue, onMounted: () => {} } })

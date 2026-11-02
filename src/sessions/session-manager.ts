@@ -1,3 +1,4 @@
+import { parseSessionFocus, selfSessionMetadata, sessionTopic } from './session-metadata.ts'
 import { UserPresence, resolveUserWaitPolicy, type UserWaitPolicy } from './presence.ts'
 import { createTaskLifecycle, transitionTaskLifecycle, type TaskLifecycleAction } from './task-lifecycle.ts'
 import { parseTaskRecord, type TaskRecord } from './task-record.ts'
@@ -50,7 +51,7 @@ import { EphemeralSession } from './ephemeral-session.ts'
 import { runBoundedSession } from './bounded-session.ts'
 import type { ChannelBoundary } from '../channels/integration-contract.ts'
 import { LOCAL_NODE_ID, normalizeSessionLocality, resolveSessionLocations, type WorkdirLookup, type WorkdirRefV2 } from './locality.ts'
-import { parseTopicSessionFields, type TopicMetadata } from './topic-contract.ts'
+import { parseTopicSessionFields } from './topic-contract.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
 import { isConfigObject, type SessionConfigPatch } from './config-patch.ts'
 import type { Executor } from '../execution/executor.ts'
@@ -736,7 +737,7 @@ export class SessionManager {
     if (!state) throw new YieldError('not_found', 'Decision session not found.')
     return { reportingSessionId: state.decisionOwnerSessionId ?? sessionId,
       candidates: Object.values(this.sessionStates).filter(item => (!item.mode || item.mode === 'session') && !delegationOwner(item))
-        .map(item => ({ sessionId: item.sessionId, label: item.name ?? item.topic?.title ?? item.generatedTitle ?? item.sessionId })) }
+        .map(item => ({ sessionId: item.sessionId, label: item.topic ?? item.name ?? item.generatedTitle ?? item.sessionId })) }
   }
 
   async setDecisionOwner(sessionId: string, reportingSessionId: string): Promise<void> {
@@ -1833,6 +1834,7 @@ ${JSON.stringify(request)}`,
       originUser?: string
       name?: string
       description?: string
+      focus?: string
       /** Host-authored setup record; persisted without scheduling an inference. Never guest supplied. */
       setupInstructions?: string
       preloadTools?: Record<string, string[]>
@@ -1846,7 +1848,7 @@ ${JSON.stringify(request)}`,
       statePersistence?: SessionState['statePersistence']
       automation?: AutomationSessionRef
       sessionKind?: 'topic'
-      topic?: TopicMetadata
+      topic?: string
       createdBySessionId?: string
       topicRequestHash?: string
       workPolicy?: WorkPolicy
@@ -2001,6 +2003,7 @@ ${JSON.stringify(request)}`,
           : undefined
         : parseSessionName(stateFields.name),
       description: stateFields?.description,
+      focus: stateFields?.focus === undefined ? undefined : parseSessionFocus(stateFields.focus),
       preloadTools: stateFields?.preloadTools,
     }
     if (state.mode === 'task' && ownerId && !state.automation && !state.statePersistence) state.task = { ...createTaskLifecycle({ creatorSessionId: ownerId, workerSessionId: sessionId }), version: 0, reportedRunIds: [] }
@@ -2215,15 +2218,10 @@ ${JSON.stringify(request)}`,
   async updateSelfMetadata(sessionId: string, value: unknown, expected?: string): Promise<void> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected metadata object')
     const patch = value as Record<string, unknown>
-    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['title', 'description', 'completed'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
+    if (!Object.keys(patch).length || Object.keys(patch).some(key => !['topic', 'focus', 'completed'].includes(key))) throw new TypeError('Unknown or empty self metadata patch')
     const changes: Partial<SessionState> = {}
-    if ('title' in patch) {
-      if (typeof patch.title !== 'string') throw new TypeError('Title must be text')
-    }
-    if ('description' in patch) {
-      if (typeof patch.description !== 'string') throw new TypeError('Description must be text of at most 4000 characters')
-      changes.description = patch.description
-    }
+    if ('topic' in patch && typeof patch.topic !== 'string') throw new TypeError('Topic must be text')
+    if ('focus' in patch) changes.focus = parseSessionFocus(patch.focus)
     if ('completed' in patch) {
       if (typeof patch.completed !== 'boolean') throw new TypeError('completed must be boolean')
       changes.completed = patch.completed
@@ -2231,16 +2229,14 @@ ${JSON.stringify(request)}`,
     await this.withStateCreation(sessionId, async () => {
       const state = this.sessionStates[sessionId]
       if (!state || this.stopped || this.deleting.has(sessionId) || state.mode === 'call' || state.automation) throw new Error('Self metadata requires an available ordinary durable session or task')
-      if (expected !== undefined && expected !== JSON.stringify({ title: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '', description: state.description ?? '', completed: state.completed ?? false }, null, 2)) throw new Error('Session metadata changed during editing. Reread v:session/self.json and retry.')
-      // Fresh task identity is owned by its parent, not by the child's prompt or supplied patch.
-      if (state.mode === 'task' && (('title' in patch && patch.title !== (state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '')) || ('description' in patch && patch.description !== (state.description ?? '')))) throw new Error('Task title and description are parent-owned; preserve them unchanged or omit them.')
+      if (expected !== undefined && expected !== JSON.stringify(selfSessionMetadata(state), null, 2)) throw new Error('Session metadata changed during editing. Reread v:session/self.json and retry.')
+      // Parent-owned task discovery titles adapt to a read-only self topic, never to focus.
+      if (state.mode === 'task' && 'topic' in patch && patch.topic !== sessionTopic(state)) throw new Error('Task topic is adapted from its parent-owned title; preserve it unchanged or omit it.')
       if (state.task && 'completed' in patch && patch.completed !== (state.completed ?? false)) throw new Error('Worker completion is a review submission, not acceptance; return a final response instead')
       if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
-      const currentTitle = state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? ''
-      if ('title' in patch && patch.title !== currentTitle) changes.name = parseSessionName(patch.title as string)
-      if (typeof patch.description === 'string' && patch.description !== (state.description ?? '') && patch.description.length > 4000) throw new TypeError('Description must be text of at most 4000 characters')
-      if (patch.title === '' && (state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '') !== '') throw new TypeError('Title must not be empty')
-      if (state.mode === 'task') { delete changes.name; delete changes.description }
+      const currentTopic = sessionTopic(state)
+      if ('topic' in patch && patch.topic !== currentTopic) changes.topic = parseSessionName(patch.topic as string)
+      if (patch.topic === '' && currentTopic !== '') throw new TypeError('Topic must not be empty')
       const release = this.acquireFolderAccess()
       try {
         this.assertFolderAccess(sessionId)
@@ -2252,11 +2248,9 @@ ${JSON.stringify(request)}`,
     })
   }
 
-  async updateConversationMetadata(sessionId: string, metadata: { title: string; description?: string }): Promise<void> {
-    const name = parseSessionName(metadata.title)
-    if (metadata.description !== undefined && (typeof metadata.description !== 'string' || metadata.description.length > 4000)) {
-      throw new TypeError('Session description must be text of at most 4000 characters.')
-    }
+  async updateConversationMetadata(sessionId: string, metadata: { topic: string; focus?: string }): Promise<void> {
+    const name = parseSessionName(metadata.topic)
+    const focus = metadata.focus === undefined ? undefined : parseSessionFocus(metadata.focus)
     await this.withStateCreation(sessionId, async () => {
       if (this.stopped || this.deleting.has(sessionId)) throw new Error('Session is unavailable')
       const state = this.sessionStates[sessionId]
@@ -2264,9 +2258,9 @@ ${JSON.stringify(request)}`,
       const release = this.acquireFolderAccess()
       try {
         this.assertFolderAccess(sessionId)
-        const next = { ...state, name, description: metadata.description }
+        const next = { ...state, topic: name, ...(focus === undefined ? {} : { focus }) }
         await this.store.saveState(sessionId, next)
-        state.name = name; state.description = metadata.description
+        state.topic = name; if (focus !== undefined) state.focus = focus
         this.deps.bus.emit('session.changed', { sessionId, metadataOnly: true })
       } finally { release() }
     })
@@ -2278,8 +2272,8 @@ ${JSON.stringify(request)}`,
       const state = this.sessionStates[sessionId]
       if (!state) throw new Error('session_not_found')
       if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
-      await this.store.saveState(sessionId, { ...state, name })
-      state.name = name
+      await this.store.saveState(sessionId, { ...state, topic: name })
+      state.topic = name
       this.deps.bus.emit('session.renamed', { sessionId })
       return name
     })
@@ -2637,8 +2631,10 @@ ${JSON.stringify(request)}`,
     return (await this.listHistoryStates()).filter(state => !state.retirement).map(state => ({
       ...(state.projectId ? { projectId: state.projectId } : {}),
       sessionId: state.sessionId,
-      name: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName,
-      description: state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
+      topic: sessionTopic(state),
+      name: state.topic ?? state.name ?? state.generatedTitle ?? state.chatName,
+      focus: state.focus,
+      description: state.mode === 'task' || state.mode === 'call' ? state.description : undefined,
       segmentIndex: state.segmentIndex, lastActivityAt: state.lastActivityAt,
       folderId: state.folderId, initiativeId: state.initiativeId, automation: state.automation,
       agentType: state.agentType, mode: state.mode, completed: state.completed, executionStatus: state.executionStatus,
@@ -2760,9 +2756,11 @@ ${JSON.stringify(request)}`,
       ...(state.projectId ? { projectId: state.projectId } : {}),
       ...(state.completed === undefined ? {} : { completed: state.completed }),
       ...parseTopicSessionFields(state),
-      description: state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
+      topic: sessionTopic(state),
+      focus: state.focus,
+      description: state.mode === 'task' || state.mode === 'call' ? state.description : undefined,
       sessionId,
-      name: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? await this.getFirstUserMessage(sessionId),
+      name: state.topic ?? state.name ?? state.generatedTitle ?? state.chatName ?? await this.getFirstUserMessage(sessionId),
       workdir: {
         kind: remote ? 'remote' as const : 'local' as const,
         displayPath: remote
@@ -2971,14 +2969,16 @@ ${JSON.stringify(request)}`,
   }
 
   listSessions(): Array<
-    Pick<SessionState, 'projectId' | 'sessionId' | 'name' | 'description' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'createdBySessionId'
+    Pick<SessionState, 'projectId' | 'sessionId' | 'name' | 'topic' | 'focus' | 'description' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'createdBySessionId'
       | 'initiativeId' | 'automation' | 'agentType' | 'mode' | 'completed' | 'executionStatus'>
   > {
     return Object.values(this.sessionStates).filter(s => !s.retirement).map((s) => ({
       ...(s.projectId ? { projectId: s.projectId } : {}),
       sessionId: s.sessionId,
-      name: s.name ?? s.topic?.title ?? s.generatedTitle ?? s.chatName,
-      description: s.description ?? (s.topic ? [s.topic.goal, s.topic.scope, s.topic.nonGoals].filter(Boolean).join('\n') : undefined),
+      topic: sessionTopic(s),
+      name: s.topic ?? s.name ?? s.generatedTitle ?? s.chatName,
+      focus: s.focus,
+      description: s.mode === 'task' || s.mode === 'call' ? s.description : undefined,
       segmentIndex: s.segmentIndex,
       lastActivityAt: s.lastActivityAt,
       folderId: s.folderId,
@@ -3489,7 +3489,7 @@ ${JSON.stringify(request)}`,
       initiativeId: state.initiativeId,
       contextResetAt: state.contextResetAt,
       ...((state.mode ?? 'session') === 'session' && !state.automation ? {
-        sessionMetadata: { title: state.name ?? state.topic?.title ?? state.generatedTitle, description: state.description, topic: state.topic, completed: state.completed ?? false },
+        sessionMetadata: selfSessionMetadata(state),
       } : {}),
       ...sessionPromptLocality(state),
     }

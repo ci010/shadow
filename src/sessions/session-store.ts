@@ -7,7 +7,6 @@ import type { WorkdirRefV2 } from './locality.ts'
 import type { YieldPolicy } from './yield-contract.ts'
 import type { ExecutionMode } from './execution-mode.ts'
 import type { AutomationSessionRef } from '../cron/contracts.ts'
-import type { TopicMetadata } from './topic-contract.ts'
 import type { WorkPolicy } from './work-policy.ts'
 
 export type ExecutionStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
@@ -120,8 +119,10 @@ export interface SessionState {
   channelBoundary?: import('../channels/integration-contract.ts').ChannelBoundary
   /** Execution enforcement, independent of Work tool availability. Absent on legacy records. */
   workPolicy?: WorkPolicy
-  /** User-selected display name, independent of identity and topic instructions. */
+  /** Legacy display title; read fallback when canonical topic is absent. */
   name?: string
+  /** Optional current step. Never inferred from legacy description. */
+  focus?: string
   /** Explicit current-goal completion; independent of inferred runtime activity. Absent means open. */
   completed?: boolean
   /** Legacy background summary title; explicit names and topic titles always take precedence. */
@@ -129,7 +130,8 @@ export interface SessionState {
   /** Last known platform conversation name; never overrides a user-selected name. */
   chatName?: string
   sessionKind?: 'topic'
-  topic?: TopicMetadata
+  /** Stable overarching conversation title; current steps belong in focus. */
+  topic?: string
   /** Creation provenance only; never lifecycle or directory ownership. */
   createdBySessionId?: string
   /** Immutable original creation request fingerprint for durable idempotency. */
@@ -266,7 +268,7 @@ export interface SessionStore {
         lastActivityAt?: string
         folderId?: string
         sessionKind?: SessionState['sessionKind']
-        topic?: TopicMetadata
+        topic?: string
         createdBySessionId?: string
       }
     >

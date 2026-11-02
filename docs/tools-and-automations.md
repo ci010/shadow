@@ -583,7 +583,7 @@ grep, so a match's line number can be read directly. Physical segment references
 returned by compact/handoff also support line ranges and exact-reference search:
 their view contains that segment's full history, not the current segment or only
 the most recent messages. Reading `v:sessions` lists root conversations, newest
-activity first, with persisted title/description previews and direct-child counts.
+activity first, with persisted topic previews (plus distinct focus) and direct-child counts.
 Titles lead each entry, followed by its ID; root entries omit the redundant
 `mode=session` field.
 Missing metadata is marked `(not set)`; listing never generates titles or loads
@@ -604,7 +604,7 @@ creation attribution is not parent lineage. Orphaned children remain in tasks/al
 Owned remote conversations retain their existing cached discovery and access rules.
 Glob/grep over `v:sessions` remain exhaustive, including child and internal histories;
 navigation views are not duplicated into global search results. Local history headers
-include full title/description text (whitespace collapsed), parent IDs when present,
+include full topic/focus text (whitespace collapsed), parent IDs when present,
 and a children link. Default grep uses these headers instead of also searching
 `/brief`, avoiding duplicate metadata hits without dropping long descriptions.
 Glob still discovers `/brief`; explicit grep/read on `v:sessions/<id>/brief`
@@ -710,7 +710,7 @@ characters); `description` is discovery text (up to 4000 characters). For compat
 existing description-only calls derive the title from its first 120 characters,
 flattening control characters. Both are persisted as the task's name and description.
 The task may use `write` of `v:session/self.json` with `completed:true` or
-`completed:false` for non-reviewable tasks; unchanged title and description may be included in a full JSON roundtrip. Reviewable tasks submit a final response instead of self-completing. Title and description are immutable to
+`completed:false` for non-reviewable tasks; unchanged adapted topic may be included in a full JSON roundtrip; focus may describe the current step. Reviewable tasks submit a final response instead of self-completing. Title and description are immutable to
 the child, including through legacy update. This does not grant parents a new
 cross-session editing API. Blocking `call` forks keep their existing metadata and
 cannot use session tools. Remote A2A retains its separate delegation contract.
@@ -1153,14 +1153,13 @@ the `log` tool writes learning events, not runtime diagnostics.
 Every ordinary user-visible session is itself a lightweight topic, including normal
 questions with no Work. There is no extra topic entity or registration step. The
 Project dashboard/Work overview reads these conversations directly and provides
-title, discovery description, explicit completion, derived activity and conversation
+stable topic, optional current-step focus, explicit completion, derived activity and conversation
 navigation. Internal task executions are folded under their owner/Work; calls and
 organizer/observer archives never become independent dashboard topics.
 
-`write` of `v:session/self.json` accepts only title, description and completed for a
-durable session. Tasks may change completed only (reviewable completion requires review); unchanged title/description may be included in a full roundtrip and remain parent-owned. Calls cannot mutate self metadata. The tool no longer accepts a
-topic object. Old persisted topic metadata and unrelated native topic routing stay
-read-compatible. Formal outcomes, acceptance and boundaries belong in Work, not
+`write` of `v:session/self.json` accepts only topic, focus and completed for a
+durable session. Tasks may change focus and non-reviewable completion; self topic adapts the parent-owned task title and must remain unchanged. Reviewable completion requires review. Calls cannot mutate self metadata. The tool no longer accepts a
+structured topic object. Unrelated native topic routing is unchanged. Formal outcomes, acceptance and boundaries belong in Work, not
 this discovery metadata. Session completion ends that session's responsibility; it
 does not complete associated Work.
 
@@ -1178,7 +1177,7 @@ evidence, not an automatic observer or background model goal guess. Conversation
 metadata/completion changes invalidate organization source versions. Lightweight
 topics are never materialized as Work just to make organization possible.
 
-Current session metadata is available at `v:session/self.json` via read/write, including when the session selects a remote workdir: it is a Main control-plane resource, not a file in that directory. Likewise, `search` with `handler: "web"` uses the configured Main search provider regardless of session workdir locality; this does not provide remote-device network execution or allow filesystem fallback. Explicit Folder targeting remains restricted to ordinary filesystem operations and OS shells. Writes accept nonempty partial JSON objects or the full read result, with only title (string, max 120), description (string, max 4000), completed (boolean). Exact match edits validate the full resulting JSON; append is unsupported. Identity is runtime-bound, not a JSON target. Tasks must preserve parent-owned title/description unchanged or omit them; reviewable task completion changes require review, not self-acceptance. Calls/automations cannot write. Ordinary new sessions set accurate title and description after understanding the first request, and update only for meaningful goal changes.
+Current session metadata is available at `v:session/self.json` via read/write, including when the session selects a remote workdir: it is a Main control-plane resource, not a file in that directory. Likewise, `search` with `handler: "web"` uses the configured Main search provider regardless of session workdir locality; this does not provide remote-device network execution or allow filesystem fallback. Explicit Folder targeting remains restricted to ordinary filesystem operations and OS shells. Writes accept nonempty partial JSON objects or the full read result, with only topic (string, max 120), focus (string, max 4000; empty clears), completed (boolean). Exact match edits validate the full resulting JSON; append is unsupported. Identity is runtime-bound, not a JSON target. Task self topic adapts the parent-owned discovery title and must be preserved unchanged or omitted; task discovery title/description contracts are separate, and focus may change; reviewable task completion changes require review, not self-acceptance. Calls/automations cannot write. Ordinary new sessions set the stable topic after understanding the first request. Subtask/debug phases update only focus; topic changes only for a real overall topic shift. Empty focus displays the topic. Sidebar labels always show topic. Session listings show focus additionally only when distinct.
 
 ### Conversation schedule chip
 
@@ -1189,3 +1188,16 @@ local timezone). Disabled jobs remain inspectable without a next trigger. The
 inventory comes from persisted cron jobs and does not require the conversation
 to be active in memory after a restart. Fresh-session automations remain in the
 Automations workspace rather than the creating conversation's chip.
+
+### Session metadata compatibility
+
+Self metadata, session create/update, JSONL and SQLite use `topic: string` and
+optional `focus: string`. Old `name` (the former explicit title storage key),
+`generatedTitle` and `chatName` are read fallbacks when topic is absent. New topic
+writes take precedence over those aliases. No historical files are rewritten.
+Historical `description` remains on disk but is not migrated to focus. The retired
+structured topic goal/scope/nonGoals contract has been removed; topic is plain text,
+not another instructions object. Task/call discovery title/description remain
+separate parent-owned contracts. Self views adapt task title to read-only topic,
+never task description to focus. New focus is persisted independently; clearing it
+falls back to topic without erasing any historical discovery metadata.

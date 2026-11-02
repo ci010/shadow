@@ -29,7 +29,7 @@ export function createRuntimeHandler(log: RuntimeDiagnosticLog, projectId: strin
       for (const state of await sessions.listHistoryStates()) {
         if (state.projectId !== projectId) continue
         try { await sessions.assertHistoricalFolderAccess(state.sessionId); if (sessions.getSessionState(state.sessionId)) sessions.assertFolderAccess(state.sessionId) } catch { continue }
-        entries.push({ sessionId: state.sessionId, title: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.description ?? state.sessionId, mode: state.mode,
+        entries.push({ sessionId: state.sessionId, title: state.topic ?? state.name ?? state.generatedTitle ?? state.sessionId, mode: state.mode,
           path: `v:runtime/sessions/${encodeURIComponent(state.sessionId)}`, views: ['system-prompt', 'preview', 'tools', 'captures'] })
       }
       context.signal.throwIfAborted()

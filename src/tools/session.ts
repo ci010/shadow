@@ -11,8 +11,9 @@ export class SessionTool implements Tool {
     type: 'object',
     properties: {
       action: { type: 'string', enum: ['create', 'update', 'register_folder'] },
-      title: { type: 'string', description: 'Required for create/update: session name, max 120 characters.' },
-      description: { type: 'string', description: 'Optional short discovery description for create/update, or folder contents description for register_folder. Not instructions or permission.' },
+      topic: { type: 'string', description: 'Required for create/update: stable overarching conversation topic, max 120 characters.' },
+      focus: { type: 'string', description: 'Optional current step, max 4000 characters. Display falls back to topic when empty.' },
+      description: { type: 'string', description: 'Folder contents description for register_folder only. Not instructions or permission.' },
       sessionId: { type: 'string', description: 'Update only: this session.' },
       requestId: { type: 'string', description: 'Create only: optional UUID; reuse exactly the same request on retry. Initial messages are never replayed.' },
       folderId: { type: 'string', description: 'Create only: current Project folder shortName, name-ID selector or full UUID. Uses the registered folder and its node. Omit for a discussion-only session; never a path.' },

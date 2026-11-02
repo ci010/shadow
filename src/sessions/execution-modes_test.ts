@@ -35,7 +35,7 @@ import { CommandHandlerManager } from '../tools/shell-commands/command-handler.t
 import { defaultManagedShell } from '../execution/processes/shells.ts'
 import type { ManagedProcessStatus } from '../execution/processes/manager.ts'
 import { managedSessionWorkdirRef, resolveSessionLocations } from './locality.ts'
-import { parseTopicMetadata } from './topic-contract.ts'
+import { parseSessionName } from './session-name.ts'
 import { physicalSessionId } from './session-identity.ts'
 import { InitiativeStore } from '../initiatives/store.ts'
 import { WorkAlignment } from './work-alignment.ts'
@@ -311,12 +311,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             mode: 'session' as const,
             sessionKind: 'topic' as const,
             agentType: 'general',
-            topic: { title: 'Original brief', goal: 'Original goal', scope: '' },
+            topic: 'Original brief',
           }
           const creation = f.sessions.buildSession(id, undefined, fields)
           await entered.promise
           const duplicate = assert.rejects(f.sessions.buildSession(id, undefined, {
-            ...fields, topic: { ...fields.topic, title: 'Conflicting brief' },
+            ...fields, topic: 'Conflicting brief',
           }), /existing session/)
           const implicit = f.sessions.deliver(id, input('Admitted user message'))
           await delay(1)
@@ -327,7 +327,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           await Promise.all([creation, duplicate, implicit])
           assert.equal(creates, 1)
           store.createSessionLog = originalCreate
-          assert.equal((await store.getState(id))?.topic?.title, 'Original brief')
+          assert.equal((await store.getState(id))?.topic, 'Original brief')
           const request = await f.next(id)
           request.resolve(done('Preserved reply'))
           await waitFor(() => f.facts.some(fact => fact.sessionId === id))
@@ -361,11 +361,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.buildSession('virtual:task', undefined, {
           mode: 'task', parentSessionId: 'web:root', name: 'Parent title', description: 'Parent purpose',
         })
-        for (const patch of [{ title: 'Child title' }, { description: 'Child purpose' },
-          { topic: { title: 'Bypass', goal: 'Goal', scope: '' } }, { completed: true, title: 'Mixed' }]) {
-          await assert.rejects(f.sessions.updateSelfMetadata('virtual:task', patch), 'topic' in patch ? /Unknown or empty/ : /parent-owned/)
+        for (const patch of [{ topic: 'Child topic' }, { completed: true, topic: 'Mixed' }]) {
+          await assert.rejects(f.sessions.updateSelfMetadata('virtual:task', patch), /parent-owned/)
         }
-        await assert.rejects(f.sessions.updateConversationMetadata('virtual:task', { title: 'Legacy bypass' }), /ordinary/)
+        await assert.rejects(f.sessions.updateSelfMetadata('virtual:task', { description: 'Child purpose' }), /Unknown/)
+        await f.sessions.updateSelfMetadata('virtual:task', { focus: 'Checking regression' })
+        await assert.rejects(f.sessions.updateConversationMetadata('virtual:task', { topic: 'Legacy bypass' }), /ordinary/)
         const metadataService = new TopicService({
           projectId: 'p', sessions: f.sessions, folders: {} as never, listStates: async () => [],
           resolveAgent: () => undefined, changed: () => {},
@@ -374,8 +375,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const self = createSelfSessionHandler(f.sessions, () => metadataService)
         const writeSelf = async (patch: unknown) => self.write('self.json', { content: JSON.stringify(patch) }, context)
         const context = { sessionId: 'virtual:task', projectId: 'p', signal: new AbortController().signal } as ExecutionContext
-        await assert.rejects(writeSelf({ title: 'Bypass' }), /parent-owned/)
-        await assert.rejects(writeSelf({ topic: { title: 'Bypass', goal: 'Goal', scope: '' } }), /Unknown or empty/)
+        await assert.rejects(writeSelf({ topic: 'Bypass' }), /parent-owned/)
+        await assert.rejects(writeSelf({ topic: {} }), /Topic must be text/)
         await assert.rejects(sessionTool.execute({ action: 'update', sessionId: 'virtual:task', title: 'Bypass' }, context), /Temporary/)
         await assert.rejects(writeSelf({ sessionId: 'web:root', completed: true }), /Unknown/)
         await assert.rejects(writeSelf({ completed: true }), /review submission/)
@@ -385,8 +386,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         // Records without the new metadata retain their legacy one-shot contract.
         delete f.sessions.getSessionState('virtual:task')!.task
         const receipt = JSON.parse(await writeSelf({ completed: true }))
-        assert.equal(receipt.title, 'Parent title')
-        assert.equal(receipt.description, 'Parent purpose')
+        assert.equal(receipt.topic, 'Parent title')
+        assert.equal(receipt.focus, 'Checking regression')
         assert.equal(f.sessions.getSessionState('virtual:task')?.completed, true)
         await writeSelf({ completed: false })
         const saved = (await store.getState('virtual:task'))!
@@ -416,7 +417,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
       const f = fixture(workspace, store)
-      const topic = { title: 'Topic', goal: 'Finish a goal', scope: '', nonGoals: 'Unrelated work' }
+      const topic = 'Topic'
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:chat-admin', undefined, { mode: 'session', agentType: 'general', sessionKind: 'topic' })
@@ -424,30 +425,27 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           mode: 'session', parentSessionId: null, sessionKind: 'topic', topic, createdBySessionId: 'web:chat-admin',
           topicRequestHash: 'a'.repeat(64),
         })
-        for (const invalid of [null, [], {}, { ...topic, title: ' ' }, { ...topic, goal: '' },
-          { ...topic, title: 'x'.repeat(201) }, { ...topic, scope: 'x'.repeat(8001) },
-          { ...topic, nonGoals: 1 }, { ...topic, unexpected: true }]) {
-          assert.throws(() => parseTopicMetadata(invalid))
+        for (const invalid of [null, [], {}, ' ', 'x'.repeat(121)]) {
+          assert.throws(() => parseSessionName(invalid))
         }
-        await assert.rejects(f.sessions.updateConversationMetadata('web:topic', { title: '' }))
-        await assert.rejects(f.sessions.updateConversationMetadata('web:topic', { title: 'Valid', description: 'x'.repeat(4001) }))
+        await assert.rejects(f.sessions.updateConversationMetadata('web:topic', { topic: '' }))
+        await assert.rejects(f.sessions.updateConversationMetadata('web:topic', { topic: 'Valid', focus: 'x'.repeat(4001) }))
         await assert.rejects(f.sessions.buildSession('web:foreign', undefined, { topic, createdBySessionId: 'web:missing' }), /project/)
-        await assert.rejects(store.saveState('web:invalid', { sessionId: 'web:invalid', segmentIndex: 0, topic: { ...topic, goal: '' } }))
+        await assert.rejects(store.saveState('web:invalid', { sessionId: 'web:invalid', segmentIndex: 0, topic: '' }))
         await assert.rejects(store.saveState('web:invalid-kind', { sessionId: 'web:invalid-kind', segmentIndex: 0, sessionKind: 'unsupported' as never }), /session kind/)
         assert(!(await store.listSessions()).some(state => state.sessionId === 'web:invalid-kind'))
-        const replacement = { title: 'Replacement', description: 'Discovery metadata, not a new goal' }
+        const replacement = { topic: 'Replacement', focus: 'Discovery metadata, not a new goal' }
         await Promise.all([
-          f.sessions.updateConversationMetadata('web:topic', { ...replacement, title: 'Previous replacement' }),
+          f.sessions.updateConversationMetadata('web:topic', { ...replacement, topic: 'Previous replacement' }),
           f.sessions.updateConversationMetadata('web:topic', replacement),
         ])
-        assert.equal(f.sessions.listSessions().find(s => s.sessionId === 'web:topic')?.description, replacement.description)
-        assert.equal((await f.sessions.getSessionDetails('web:topic'))?.description, replacement.description)
-        assert.equal((await f.sessions.getSessionDetails('web:topic'))?.name, replacement.title)
-        assert.deepEqual((await store.listSessions()).find(s => s.sessionId === 'web:topic')?.topic, topic, 'Historical metadata is preserved, not another editable goal')
+        assert.equal(f.sessions.listSessions().find(s => s.sessionId === 'web:topic')?.focus, replacement.focus)
+        assert.equal((await f.sessions.getSessionDetails('web:topic'))?.focus, replacement.focus)
+        assert.equal((await f.sessions.getSessionDetails('web:topic'))?.name, replacement.topic)
+        assert.deepEqual((await store.listSessions()).find(s => s.sessionId === 'web:topic')?.topic, replacement.topic)
         await f.sessions.stop()
         await f.sessions.start()
-        assert.deepEqual(f.sessions.getSessionState('web:topic')?.topic, topic)
-        assert.equal(f.sessions.getSessionState('web:topic')?.name, replacement.title)
+        assert.deepEqual(f.sessions.getSessionState('web:topic')?.topic, replacement.topic)
         assert.equal(f.sessions.getSessionState('web:topic')?.createdBySessionId, 'web:chat-admin')
         assert.equal(f.sessions.getSessionState('web:topic')?.topicRequestHash, 'a'.repeat(64))
         assert.equal(f.sessions.getDelegationOwner('web:topic'), undefined)
@@ -457,10 +455,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const release = Promise.withResolvers<void>()
         const originalSave = store.saveState.bind(store)
         store.saveState = async (id, state) => {
-          if (state.name === 'Slow replacement') { entered.resolve(); await release.promise }
+          if (state.topic === 'Slow replacement') { entered.resolve(); await release.promise }
           await originalSave(id, state)
         }
-        const update = f.sessions.updateConversationMetadata('web:topic', { ...replacement, title: 'Slow replacement' })
+        const update = f.sessions.updateConversationMetadata('web:topic', { ...replacement, topic: 'Slow replacement' })
         await entered.promise
         const deletion = f.sessions.deleteSession('web:topic')
         release.resolve()

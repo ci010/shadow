@@ -1,3 +1,4 @@
+import { sessionTopic } from '../sessions/session-metadata.ts'
 import { isLightweightTopic } from '../sessions/lightweight-topic.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 import type { VirtualDirectory } from './virtual-fs.ts'
@@ -15,9 +16,11 @@ function preview(value: string | undefined, limit: number): string {
 }
 
 export function sessionMetadata(state: SessionState, compact = true): string[] {
+  const topic = sessionTopic(state)
   return [
-    `title: ${preview(state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName, compact ? 120 : Infinity)}`,
-    `description: ${preview(state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join(' ') : undefined), compact ? 240 : Infinity)}`,
+    `topic: ${preview(topic, compact ? 120 : Infinity)}`,
+    ...(state.focus && state.focus !== topic ? [`focus: ${preview(state.focus, compact ? 240 : Infinity)}`] : []),
+    ...((state.mode === 'task' || state.mode === 'call') && state.description ? [`description: ${preview(state.description, compact ? 240 : Infinity)}`] : []),
   ]
 }
 
@@ -36,8 +39,8 @@ export function sessionDirectory(states: SessionState[], view: 'root' | 'all' | 
   const header = lines.join('\n')
   const items = selected.map(state => {
     const lines: string[] = []
-    const [title, description] = sessionMetadata(state)
-    lines.push(`- ${title}`, `  id: ${state.sessionId}`, `  ${description}`)
+    const [topic, ...metadata] = sessionMetadata(state)
+    lines.push(`- ${topic}`, `  id: ${state.sessionId}`, ...metadata.map(line => `  ${line}`))
     const details: string[] = view === 'root' ? [] : [`mode=${state.mode ?? 'session'}`]
     if (state.executionStatus) details.push(`status=${state.executionStatus}`)
     else if (state.completed) details.push('status=completed')

@@ -56,7 +56,7 @@ export function overviewGraph(data: ProjectWorkOverview, history: YieldDecisionR
     evidence: item.observation ? item.observation.sources.map(source => `${source.physicalId}/${source.id}`).join(', ') : `${item.key} v${item.sequence}`,
     detail: item.notes?.summary ?? item.objective }))
   for (const session of data.sessions) if (session.assignable && !data.items.some(item => item.key === session.workKey || session.workKeys?.includes(item.key) || item.assignee === session.sessionId || item.observation?.sessionId === session.sessionId)) {
-    nodes.push({ id: `session:${session.sessionId}`, title: session.title, kind: 'topic', at: session.lastActivityAt ?? '', authority: 'session_derived', sessionId: session.sessionId, evidence: 'Conversation identity and explicit metadata; no inferred Work association.', detail: session.description || session.activity, status: session.completed ? 'completed' : session.activity })
+    nodes.push({ id: `session:${session.sessionId}`, title: session.title, kind: 'topic', at: session.lastActivityAt ?? '', authority: 'session_derived', sessionId: session.sessionId, evidence: 'Conversation identity and explicit metadata; no inferred Work association.', detail: session.focus || session.topic || session.description || session.activity, status: session.completed ? 'completed' : session.activity })
   }
   const edges: OverviewEdge[] = []
   for (const item of items) {

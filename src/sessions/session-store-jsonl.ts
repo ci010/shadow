@@ -1,3 +1,4 @@
+import { parseSessionFocus } from './session-metadata.ts'
 import { parseTaskRecord } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { retirementReceiptSchema } from './retirement-contract.ts'
@@ -41,6 +42,7 @@ function parseStoredState(raw: string): SessionState {
   )) as unknown as SessionState
   if (typeof state.sessionId !== 'string' || !state.sessionId.trim()) throw new SessionIdentityError('Missing session identity')
   if (state.task !== undefined) state.task = parseTaskRecord(state.task)
+  if (state.focus !== undefined) state.focus = parseSessionFocus(state.focus)
   if (state.generatedTitle !== undefined) state.generatedTitle = parseSessionName(state.generatedTitle)
   if (state.name !== undefined) state.name = parseSessionName(state.name)
   if (state.chatName !== undefined) state.chatName = parseSessionName(state.chatName)
@@ -96,6 +98,7 @@ export class JsonlSessionStore implements SessionStore {
       return this.fresh.save(state)
     }
     if (await this.fresh.has(sessionKey)) throw new Error('Fresh automation policy cannot be removed')
+    if (state.focus !== undefined) state = { ...state, focus: parseSessionFocus(state.focus) }
     if (state.generatedTitle !== undefined) state = { ...state, generatedTitle: parseSessionName(state.generatedTitle) }
     if (state.name !== undefined) state = { ...state, name: parseSessionName(state.name) }
     if (state.chatName !== undefined) state = { ...state, chatName: parseSessionName(state.chatName) }
