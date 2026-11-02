@@ -40,6 +40,8 @@ export default defineConfig({
         'blockquote blockquote': { margin: '0.65em 0', padding: '0.25em 0.75em', background: 'transparent' },
         'hr': { 'border-color': 'var(--c-border)' },
         'code': { color: 'var(--c-text)' },
+        'pre': { background: 'var(--c-bg-soft)', color: 'var(--c-text)' },
+        'pre code': { color: 'inherit' },
         'thead': { 'border-bottom-color': 'var(--c-markdown-table-rule)' },
         'thead th': { color: 'var(--c-text)' },
         'tbody tr': { 'border-bottom-color': 'var(--c-markdown-table-rule)' },
