@@ -273,6 +273,11 @@ test('selected project coordination accents the title without a filled selection
   assert.equal(property('.admin-entry:focus-visible', 'outline'), '2px solid var(--c-blue)')
 })
 
+test('timeline focus does not frame the canvas while conversation controls retain focus indicators', () => {
+  assert.equal(property('ChatTab', '.chat-messages:focus', 'outline'), 'none')
+  assert.equal(property('ChatTab', '.conversation-find:focus-visible', 'outline'), '2px solid var(--c-blue)')
+})
+
 test('composer keeps a quiet resting edge and a visible interactive focus boundary', () => {
   assert.equal(property('ChatTab', '.composer-box', 'border'), '1px solid var(--c-border)')
   assert.equal(property('ChatTab', '.composer-box:focus-within', 'border-color'), 'var(--c-blue)')
