@@ -88,10 +88,19 @@ test('CI builds all requested architectures natively and uploads only packaged a
   assert('pull_request' in workflow.on && 'workflow_dispatch' in workflow.on)
   const portable = workflow.jobs['portable-release']
   assert.equal(portable.strategy['fail-fast'], false)
-  assert.deepEqual(portable.strategy.matrix.include.map((job: { runner: string; platform: string; arch: string }) =>
-    [job.runner, job.platform, job.arch]), [
+  // GitHub evaluates this expression; YAML parsing alone leaves it as a string.
+  // Validate both daily (skip Linux) and full release branches without eval.
+  const expression = portable.strategy.matrix.include
+  assert.equal(typeof expression, 'string')
+  const branches = /^\$\{\{ fromJSON\(inputs\.skip_linux && '([^']+)' \|\| '([^']+)'\) \}\}$/.exec(expression)
+  assert(branches, 'Expected explicit daily and full native release matrices')
+  const targets = [
     ['macos-15', 'darwin', 'arm64'], ['macos-15-intel', 'darwin', 'x64'], ['ubuntu-22.04', 'linux', 'x64'],
-  ])
+  ]
+  for (const [index, json] of branches.slice(1).entries()) {
+    assert.deepEqual(JSON.parse(json).map((job: { runner: string; platform: string; arch: string }) =>
+      [job.runner, job.platform, job.arch]), index === 0 ? targets.slice(0, 2) : targets)
+  }
   assert(portable.steps.some((step: { run?: string }) => step.run === 'xvfb-run --auto-servernum pnpm test:release'))
   assert(portable.steps.some((step: { run?: string }) => step.run === 'xvfb-run --auto-servernum pnpm desktop:package'))
   for (const job of [workflow.jobs['windows-release'], portable]) {

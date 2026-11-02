@@ -50,17 +50,24 @@ test('isolated Node-only fixture reaches separate review and timed author confir
       assert.ok(messages.some(message => message.role === 'user' &&
         contentText(message.content).includes('Publish only the inert synthetic fixture.')))
       if (calls === 1) return tools({ name: 'work', arguments: { action: 'create', data: {
-        title: 'Timeline fixture', reason: 'Synthetic lifecycle check',
-        definition: { objective: 'Publish inert fixture', acceptance: ['Report honest test status'], boundaries: ['No devices'], evidence: [] },
+        title: 'Timeline fixture', definition: { objective: 'Publish inert fixture' }, notes: { kind: 'task' },
       } } })
       if (calls === 2) {
         const value = messages.findLast(message => message.role === 'tool' && message.name === 'work')?.content
         assert.equal(typeof value, 'string')
         const record = JSON.parse(String(value))
-        return tools({ name: 'work', arguments: { action: 'adopt', key: record.key, revision: record.revision,
-          data: { understanding: 'Publish inert fixture only', next: ['Publish source'] } } })
+        assert.equal(typeof record.key, 'string')
+        assert.equal(typeof record.version, 'number')
+        return tools({ name: 'work', arguments: { action: 'update', key: record.key, version: record.version,
+          data: { notes: { summary: 'Publish inert fixture only', next: 'Publish source' } } } })
       }
-      if (calls === 3) return tools({ name: 'read', arguments: { path: 'v:skills/micro-app' } })
+      if (calls === 3) {
+        const value = messages.findLast(message => message.role === 'tool' && message.name === 'work')?.content
+        const record = JSON.parse(String(value))
+        assert.equal(typeof record.key, 'string', 'Work note update must succeed')
+        assert.equal(typeof record.version, 'number')
+        return tools({ name: 'read', arguments: { path: 'v:skills/micro-app' } })
+      }
       if (calls === 4) return tools({ name: 'read', arguments: { path: 'v:tools/micro_app/micro_app' } })
       if (calls === 5) return tools(
         { name: 'exec', arguments: { script: `
@@ -167,6 +174,9 @@ test('isolated Node-only fixture reaches separate review and timed author confir
         dispatching: z.boolean(), lastStartedAt: z.string().optional(), lastDispatchedAt: z.string().optional(),
       })),
     }).parse(JSON.parse(await readFile(join(output, 'learning.json'), 'utf8')))
+    const work = JSON.parse(await readFile(join(output, 'work.json'), 'utf8'))
+    assert.equal(work.organization.enabled, false, 'Organization is independent of learning and must not call the fixture provider')
+    assert.equal(work.organization.running, false)
     assert.equal(learning.enabled, false)
     for (const pipeline of Object.values(learning.pipelines)) {
       // A persisted ledger can be pending while scheduling remains disabled.
