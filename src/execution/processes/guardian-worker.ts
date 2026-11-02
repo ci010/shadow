@@ -110,7 +110,13 @@ async function run(input: GuardianRequest): Promise<void> {
           stop('supervisor-failed')
         }
       })
-      if (windows) execution.stdin?.write(`${JSON.stringify({ ...input, statusPath })}\n`)
+      if (windows) {
+        // The supervisor already inherits input.env through spawn. Do not send it
+        // through Windows PowerShell's case-insensitive ConvertFrom-Json: valid
+        // Node environments can contain both Path and PATH (exec adds an alias).
+        const { env: _env, ...control } = input
+        execution.stdin?.write(`${JSON.stringify({ ...control, statusPath })}\n`)
+      }
       const output = (type: 'stdout' | 'stderr', chunk: Buffer) => {
         const kept = chunk.subarray(0, Math.max(0, GUARDED_OUTPUT_LIMIT - bytes))
         bytes += kept.length
