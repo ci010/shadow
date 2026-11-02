@@ -82,3 +82,13 @@ test('relative cells are bounded, explicit, local to group and independent of ed
   assert.throws(() => parseAnswerFlow(JSON.stringify({ ...relative, layout: undefined })))
   for (const direction of ['TB', 'LR']) assert.deepEqual(layoutAnswerFlow(parseAnswerFlow(JSON.stringify({ ...minimal, direction }))), layoutAnswerFlow(parseAnswerFlow(JSON.stringify({ ...minimal, direction, layout: { mode: 'auto' } }))))
 })
+
+test('diagram wheel configuration reserves zoom for Control and leaves chat scrolling enabled', () => {
+  const source = readFileSync('app/src/components/AnswerFlow.vue', 'utf8')
+  assert.ok(source.includes(':zoom-on-scroll="false"'))
+  assert.ok(source.includes('zoom-activation-key-code="Control"'))
+  assert.ok(source.includes(':pan-on-scroll="false"'))
+  assert.ok(source.includes(':prevent-scrolling="false"'))
+  assert.ok(source.includes(':zoom-on-pinch="true"'))
+  assert.ok(source.includes('Ctrl + scroll to zoom'))
+})

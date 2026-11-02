@@ -19,10 +19,10 @@ const edges = computed<Edge[]>(() => props.flow.edges.map((e, i) => ({ id: `e:${
   <section class="native-answer-flow" :aria-label="flow.title || 'Answer diagram'">
     <h4 v-if="flow.title">{{ flow.title }}</h4><p v-if="flow.summary">{{ flow.summary }}</p>
     <div class="answer-flow-toolbar" role="group" aria-label="Diagram viewport">
-      <button type="button" @click="zoomIn()" aria-label="Zoom in">+</button><button type="button" @click="zoomOut()" aria-label="Zoom out">−</button><button type="button" @click="fitView({ padding: .15 })">Fit diagram</button><span>Scroll to zoom · drag to pan · select a node for details</span>
+      <button type="button" @click="zoomIn()" aria-label="Zoom in">+</button><button type="button" @click="zoomOut()" aria-label="Zoom out">−</button><button type="button" @click="fitView({ padding: .15 })">Fit diagram</button><span>Ctrl + scroll to zoom · drag to pan · select a node for details</span>
     </div>
     <div class="answer-flow-canvas" :style="{ height: `${flow.height}px` }">
-      <VueFlow :id="instanceId" :nodes="nodes" :edges="edges" :nodes-draggable="false" :nodes-connectable="false" :delete-key-code="null" :min-zoom=".001" :max-zoom="2" :fit-view-on-init="true" :connect-on-click="false" :pan-on-drag="true" :zoom-on-scroll="true" :pan-on-scroll="false" :prevent-scrolling="true" :zoom-on-pinch="true" :zoom-on-double-click="false" @node-click="({ node }) => { if (node.type === 'answer') selected = node.data }">
+      <VueFlow :id="instanceId" :nodes="nodes" :edges="edges" :nodes-draggable="false" :nodes-connectable="false" :delete-key-code="null" :min-zoom=".001" :max-zoom="2" :fit-view-on-init="true" :connect-on-click="false" :pan-on-drag="true" :zoom-on-scroll="false" zoom-activation-key-code="Control" :pan-on-scroll="false" :prevent-scrolling="false" :zoom-on-pinch="true" :zoom-on-double-click="false" @node-click="({ node }) => { if (node.type === 'answer') selected = node.data }">
         <template #node-boundary="{ data }"><div class="answer-flow-boundary">{{ data.label }}</div></template>
         <template #node-answer="{ data, sourcePosition, targetPosition }">
           <Handle type="target" :position="targetPosition || Position.Top" :connectable="false" /><div class="answer-flow-node"><strong>{{ data.label }}</strong><small v-if="data.status">{{ data.status }}</small></div><Handle type="source" :position="sourcePosition || Position.Bottom" :connectable="false" />

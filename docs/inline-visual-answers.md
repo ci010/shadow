@@ -189,9 +189,9 @@ cycle-safe top-bottom or left-right layers and non-overlapping group boundary
 lanes. It does not reuse the project overview's ownership/evidence-specific graph
 semantics. Cross-group edges remain genuine relationships, not decorative lines.
 
-Pan, pinch zoom, zoom buttons and Fit diagram explore the bounded canvas. Mouse
-wheel zooms while over the canvas, without panning or scrolling the page. Outside
-the canvas, normal conversation scrolling is unchanged. Nodes cannot be dragged,
+Pan, pinch zoom, zoom buttons and Fit diagram explore the bounded canvas. Ctrl + mouse
+wheel zooms while over the canvas. An unmodified wheel scrolls the conversation,
+including when the pointer is over the canvas; wheel panning is disabled. Nodes cannot be dragged,
 connected or deleted; selecting a node only opens its explanatory details. A
 light-DOM “Diagram text (searchable)” disclosure includes all groups, node
 labels/details and edge relationships for search, selection and accessibility.
