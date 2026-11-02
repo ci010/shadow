@@ -3528,8 +3528,8 @@ function resendLastMessage() {
 }
 
 .chat-content :deep(pre) {
-  background: var(--c-bg-code);
-  color: var(--c-text-on-dark);
+  background: var(--c-bg-soft);
+  color: var(--c-text);
   border-radius: var(--radius-control);
   padding: 0.6rem 0.75rem;
   overflow-x: auto;

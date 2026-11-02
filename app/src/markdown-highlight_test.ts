@@ -31,15 +31,21 @@ test('lazy shared grammars support aliases and dual theme classes without inline
   assert.ok(!render('```js\n' + 'x'.repeat(20_001) + '\n```').includes('class="shiki"'))
 })
 
-test('Markdown syntax uses the dark surface palette even on a light page', async () => {
+test('Markdown fences pair theme-aware surfaces with light and dark syntax palettes', async () => {
   const css = readFileSync(new URL('./markdown-highlight.css', import.meta.url), 'utf8')
-  assert.match(css, /pre\.shiki\s*\{[^}]*background: var\(--c-bg-code\);[^}]*color: var\(--c-text-on-dark\);/)
-  assert.doesNotMatch(css, /\.dark\s+\.shiki|\.shiki\s+\.sl-/)
+  assert.match(css, /pre\.shiki\s*\{[^}]*background: var\(--c-bg-soft\);[^}]*color: var\(--c-text\);/)
+  const chat = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
+  assert.match(chat, /\.chat-content :deep\(pre\)\s*\{\s*background: var\(--c-bg-soft\);\s*color: var\(--c-text\);/)
+  const typography = readFileSync(new URL('../unocss.config.ts', import.meta.url), 'utf8')
+  assert.ok(typography.includes("'pre': { background: 'var(--c-bg-soft)', color: 'var(--c-text)' }"))
+  assert.ok(typography.includes("'pre code': { color: 'inherit' }"))
   await prepareMarkdownLanguage('typescript')
   const html = render('```typescript\nprompt: `${roleAgentType.prompt}\n\n# Personal BOT instructions\n${personal.prompt}`\n```')
-  const darkClasses = [...html.matchAll(/\bsd-([a-f\d]{6})/g)].map(match => match[1])
-  assert.ok(darkClasses.length > 0)
-  for (const color of new Set(darkClasses)) {
-    assert.ok(css.includes(`.shiki .sd-${color} { color: #${color}; }`), `missing theme-independent syntax color ${color}`)
+  for (const [prefix, selector] of [['sl', '.shiki'], ['sd', '.dark .shiki']]) {
+    const colors = [...html.matchAll(new RegExp(`\\b${prefix}-([a-f\\d]{6})`, 'g'))].map(match => match[1])
+    assert.ok(colors.length > 0)
+    for (const color of new Set(colors)) {
+      assert.ok(css.includes(`${selector} .${prefix}-${color} { color: #${color}; }`))
+    }
   }
 })
