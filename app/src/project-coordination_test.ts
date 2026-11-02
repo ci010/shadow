@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { conversationLinkSession, isDirectConversation, parseConversationTopic } from './project-coordination.ts'
+import { conversationMicroAppLink, conversationLinkSession, isDirectConversation, parseConversationTopic } from './project-coordination.ts'
 import { groupFolderSessions, parseSessionGraph, visibleSessions } from './folders-sidebar.ts'
 import { childConversationTarget } from './conversation-split.ts'
 import { parseSessionDetails, sessionDisplayFocus } from './session-details.ts'
@@ -62,4 +62,18 @@ test('current focus falls back to topic while sidebar labels remain stable', () 
   const parsed = parseSessionGraph({ sessions: [session], nodes: [] })
   assert.equal(parsed[0].label, 'Overall topic')
   assert.equal(parsed[0].focus, 'Debugging a subtask')
+})
+
+test('app review links preserve the app query for in-workbench navigation', () => {
+  const path = '/projects/project%20a/chat/web%3Achat-topic'
+  for (const prefix of ['', '#']) {
+    assert.deepEqual(conversationMicroAppLink(`${prefix}${path}?microApp=7bcbc32d-c255-4ea1-bc25-3624a4f66300`, 'project a'), {
+      path, query: { microApp: '7bcbc32d-c255-4ea1-bc25-3624a4f66300' },
+    })
+  }
+  for (const href of [
+    `${path}?microApp=`, `${path}?microApp=a&microApp=b`, `${path}?microApp=%2Fetc`,
+    `https://example.com${path}?microApp=a`, '/projects/other/chat/web:chat-topic?microApp=a',
+    '/projects/project%20a/chat/%2Fetc?microApp=a', `${path}?other=a`,
+  ]) assert.equal(conversationMicroAppLink(href, 'project a'), undefined)
 })

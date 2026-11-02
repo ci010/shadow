@@ -56,7 +56,7 @@ test('conversation links open scoped previews and reveal nested files without na
           import { messageAttachments } from '/src/message-attachments.ts';
           import { discordReviewLink } from '/src/discord-integration.ts';
           import { conversationFileLink } from '/src/conversation-file-link.ts';
-          import { conversationLinkSession } from '/src/project-coordination.ts';
+          import { conversationLinkSession, conversationMicroAppLink } from '/src/project-coordination.ts';
           import { imagePreviewFromEvent } from '/src/image-viewer.ts';
           createApp({ setup() {
             const props = {projectId:'fixture', apiBase:location.origin + '/projects/fixture'};
