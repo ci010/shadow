@@ -26,7 +26,7 @@ watch(() => [props.apiBase, ...props.projects.map(project => project.id)], () =>
   for (const { lease } of leases.value) void lease.graph.read()
 }, { immediate: true })
 const results = computed(() => searchQuickOpenSessions(leases.value.flatMap(({ projectId, lease }) =>
-  (lease.graph.state.value ?? []).map(session => ({ ...session, projectId }))), query.value))
+  (lease.graph.state.value ?? []).map(session => ({ ...session, projectId }))), query.value, props.projects.map(project => project.id)))
 const loading = computed(() => leases.value.some(({ lease }) => lease.graph.state.loading))
 const failures = computed(() => leases.value.filter(({ lease }) => lease.graph.state.error))
 const projectLabel = (projectId: string) => props.projects.find(project => project.id === projectId)?.name ?? projectId

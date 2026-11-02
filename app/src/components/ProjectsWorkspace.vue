@@ -504,7 +504,7 @@ onUnmounted(() => {
 .session-search-trigger { display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; padding: 6px 8px; min-height: 36px; border: 1px solid var(--c-border); background: var(--c-bg-input); color: var(--c-text-secondary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .session-search-trigger:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .session-search-trigger:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.session-search-trigger kbd { margin-left: auto; font-size: 10px; white-space: nowrap; }
+.session-search-trigger kbd { margin-left: auto; padding: 1px 4px; border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-bg-soft); color: var(--c-text-secondary); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; font-weight: 400; line-height: 16px; white-space: nowrap; }
 @media (max-width: 700px), (pointer: coarse) { .session-search-trigger { min-height: 44px; } }
 .projects-workspace { display: flex; position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; }
 .projects-sidebar { position: relative; display: flex; flex-direction: column; flex: 0 0 var(--projects-width, 270px); width: var(--projects-width, 270px); min-width: 0; min-height: 0; border-right: 1px solid var(--c-border); background: var(--c-bg-card); }
