@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { Marked } from 'marked'
 import { markdownHighlight, prepareMarkdownLanguage } from './markdown-highlight.ts'
 
@@ -28,4 +29,17 @@ test('lazy shared grammars support aliases and dual theme classes without inline
   assert.equal(render(source), html)
   assert.ok(render('```typescript\nlet x: number = 1\n```').includes('class="shiki"'))
   assert.ok(!render('```js\n' + 'x'.repeat(20_001) + '\n```').includes('class="shiki"'))
+})
+
+test('Markdown syntax uses the dark surface palette even on a light page', async () => {
+  const css = readFileSync(new URL('./markdown-highlight.css', import.meta.url), 'utf8')
+  assert.match(css, /pre\.shiki\s*\{[^}]*background: var\(--c-bg-code\);[^}]*color: var\(--c-text-on-dark\);/)
+  assert.doesNotMatch(css, /\.dark\s+\.shiki|\.shiki\s+\.sl-/)
+  await prepareMarkdownLanguage('typescript')
+  const html = render('```typescript\nprompt: `${roleAgentType.prompt}\n\n# Personal BOT instructions\n${personal.prompt}`\n```')
+  const darkClasses = [...html.matchAll(/\bsd-([a-f\d]{6})/g)].map(match => match[1])
+  assert.ok(darkClasses.length > 0)
+  for (const color of new Set(darkClasses)) {
+    assert.ok(css.includes(`.shiki .sd-${color} { color: #${color}; }`), `missing theme-independent syntax color ${color}`)
+  }
 })
