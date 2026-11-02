@@ -940,7 +940,7 @@ export async function createProjectRuntime(
   }
   const organizationController = new OrganizationController({
     scope, organize: runOrganization, hasDelta: async () => workOrganizer.hasDelta(await organizationTopics()), organizationStatus: () => workOrganizer.status(),
-    changed: () => realtime.invalidateSessions(),
+    changed: () => realtime.invalidateResource?.('organization'),
   }, config.organization.enabled)
   cleanup.push(() => organizationController.stop())
   const organizationHints = new Map<string, string>()

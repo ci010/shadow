@@ -455,6 +455,15 @@ unknown hints retain broad invalidation behavior. Scheduled-task views listen to
 `automations` resource changes and use periodic reads only when live updates are
 disconnected, not while the connection is healthy.
 
+Organization-controller status changes publish the Project-scoped `organization`
+resource, not session invalidations. Periodic no-op admission checks still update
+safe check/error/retry status, but do not cause graph, stages, session task lists
+or the automation catalog to reread. A visible Project workbench subscribes to
+this resource and refreshes only `/api/work`; hiding/unmounting releases the
+subscription. Actual organization execution retains its ordinary session and
+Work mutation notifications. Completed automatic checks publish after scheduling
+the next retry so the status snapshot includes its next check deadline.
+
 Session graph revisions do not imply catalog changes. Folder catalog commits
 publish Project-scoped `folders` invalidations after successful persistence;
 node connection/registry transitions publish `nodes` invalidations. These readers
@@ -497,6 +506,12 @@ so this reduces transfer/renderer parsing but does not bypass inventory lookup
 or server-side serialization. Allowed cross-origin renderer/mobile clients can
 use the conditional header and read ETag; preflight results are cached for ten
 minutes, without skipping authorization on actual requests.
+The real Electron regression in `app/src/conditional-project-browser_test.ts`
+checks `200 → 304 → 200`, object reuse and parse counts with CDP cache disabling
+both on and off. Electron 44 / Chromium 152 emits `Network.loadingFailed` with
+`net::ERR_ABORTED` for these bodyless `304` responses even though JavaScript fetch
+resolves successfully and the snapshot is reused. Do not classify a `304` as a
+failed refresh from that HAR/CDP marker alone; verify the renderer outcome.
 
 Presence heartbeats acknowledge success with bodyless `204`. The renderer also
 drains legacy JSON and error response bodies before releasing its in-flight

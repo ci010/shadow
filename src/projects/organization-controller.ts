@@ -71,6 +71,8 @@ export class OrganizationController {
           this.firstHint ??= Date.now()
           this.schedule(Math.min(3_600_000,(this.deps.retryMs ?? 30_000)*2**Math.min(7,this.automaticFailures)))
         }
+        // Publish the completed check together with its next retry deadline.
+        this.deps.changed()
       })
     }, wait)
     this.timer.unref?.()
@@ -102,7 +104,6 @@ export class OrganizationController {
       // Failure is not a permanent disable; retry at a bounded rate, never spin.
       if (!this.stopped && this.organizerEnabled) this.firstHint ??= Date.now()
     } finally {
-      this.deps.changed()
       if (generation !== this.generation && !this.stopped && this.organizerEnabled) this.firstHint ??= Date.now()
     }
   }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createLiveResourceRefresh, type ResourceLivePool } from './live-resource-refresh.ts'
 import type { LiveObserver, LiveStatus } from './live-client.ts'
 
-function fixture(phase: LiveStatus['phase'] = 'live', kind: 'interactions' | 'service-groups' | 'automations' = 'interactions') {
+function fixture(phase: LiveStatus['phase'] = 'live', kind: 'interactions' | 'service-groups' | 'automations' | 'organization' = 'interactions') {
   let observer!: LiveObserver
   let status!: (value: LiveStatus) => void
   let closed = 0, unobserved = 0, reads = 0
@@ -78,4 +78,20 @@ test('automation snapshots ignore unrelated resource events and do not poll a he
   f.event('automations')
   t.mock.timers.tick(50)
   assert.equal(f.reads(), 2)
+})
+
+test('organization status refreshes only its work reader, not automation catalog readers', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const work = fixture('live', 'organization'), catalog = fixture('live', 'automations')
+  t.after(() => { work.resource.dispose(); catalog.resource.dispose() })
+  await Promise.all([work.resource.getPromise(), catalog.resource.getPromise()])
+  for (let cycle = 0; cycle < 4; cycle++) {
+    work.event('organization'); catalog.event('organization')
+    t.mock.timers.tick(50)
+  }
+  assert.equal(work.reads(), 5)
+  assert.equal(catalog.reads(), 1)
+  work.resource.dispose()
+  work.event('organization'); t.mock.timers.tick(50)
+  assert.equal(work.reads(), 5, 'hidden/disposed panels cannot refresh')
 })

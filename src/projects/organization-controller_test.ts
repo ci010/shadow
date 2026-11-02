@@ -155,3 +155,45 @@ test('idle and cooldown reconciliation survives an unchanged preflight without a
     assert.equal(checks,stoppedAt,'disable stops periodic admission checks')
   }finally{await controller.stop();scope.close()}
 })
+
+// Exercise the production publisher contract, including several empty retry cycles.
+test('empty automatic checks publish organization status only, never sessions', async () => {
+  const { RealtimeHub } = await import('../realtime/hub.ts')
+  const hub = new RealtimeHub()
+  const publisher = hub.registerProject('fixture')
+  const scope = createProjectScope('fixture')
+  const abort = new AbortController()
+  const reader = hub.connect([{ kind: 'sessions', projectId: 'fixture' }, { kind: 'resources', projectId: 'fixture' }], abort.signal).body!.getReader()
+  const events: { topic: { kind: string }; payload: unknown }[] = []
+  const reading = (async () => {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) return
+      for (const match of new TextDecoder().decode(chunk.value).matchAll(/^data: (.+)$/gm)) {
+        const envelope = JSON.parse(match[1])
+        if (envelope.type === 'event') events.push(envelope)
+      }
+    }
+  })()
+  let checks = 0, executions = 0
+  const controller = new OrganizationController({ scope, debounceMs: 1, retryMs: 5,
+    hasDelta: async () => { checks++; return false },
+    organize: async () => { executions++ },
+    changed: () => publisher.invalidateResource?.('organization'),
+  })
+  try {
+    controller.start()
+    await until(() => checks >= 4 && events.length >= 4)
+    assert.equal(executions, 0)
+    assert(controller.status().lastCheckedAt)
+    assert(controller.status().nextAutomaticAt)
+    assert(events.length >= 4)
+    for (const event of events) {
+      assert.equal(event.topic.kind, 'resources')
+      assert.deepEqual(event.payload, { event: 'invalidate', resource: 'organization' })
+    }
+  } finally {
+    await controller.stop(); await reader.cancel(); await reading
+    publisher.close(); hub.close(); scope.close()
+  }
+})

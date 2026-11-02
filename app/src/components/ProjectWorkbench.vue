@@ -127,6 +127,8 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, 
 import { useRoute, useRouter } from 'vue-router'
 import { automationChatLocation } from '../automations.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
+import { useLiveClientPool } from '../composables/useLiveClient.ts'
+import { createLiveResourceRefresh } from '../live-resource-refresh.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
 import { filterWork, groupWork, workAttention, workColumns, workRoots } from '../project-work.ts'
 import WorkItemCard from './WorkItemCard.vue'
@@ -145,6 +147,7 @@ import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 const props = defineProps<{ apiBase: string; projectId: string; projectName: string; visible: boolean }>()
 const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string] }>()
 const live = useProjectLiveState(), route = useRoute(), router = useRouter()
+const livePool = useLiveClientPool()
 const lease = shallowRef<ProjectLiveLease>()
 const lastSnapshot = shallowRef<ProjectWorkOverview>()
 const organizationSnapshot = shallowRef<ProjectWorkOverview>()
@@ -278,6 +281,15 @@ async function newWork() {
   await nextTick()
   emit('compose', 'Help me organize a new work item:\n')
 }
+// Controller checks change /api/work status, not session inventory or activity.
+// Subscribe only while this panel owns a work snapshot; never refresh graph/stages.
+watch(() => [props.apiBase, props.projectId, props.visible] as const, ([base, projectId, visible], _previous, onCleanup) => {
+  if (!visible) return
+  const resource = createLiveResourceRefresh(livePool, {
+    base, projectId, resource: 'organization', refresh: () => { void lease.value?.work.refresh() },
+  })
+  onCleanup(() => resource.dispose())
+}, { immediate: true })
 watch(() => [props.apiBase, props.projectId, props.visible] as const, ([apiBase, projectId, visible], previous) => {
   if (apiBase !== previous?.[0] || projectId !== previous?.[1]) {
     organizationSnapshot.value = undefined; organizationController?.abort(); organizationController = undefined; organizing.value = false; organizationMessage.value = ''
