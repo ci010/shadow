@@ -608,7 +608,7 @@ import { groupToolActivity } from '../tool-activity.ts'
 import { toolImages } from '../tool-images.ts'
 import { buildMediaUrl } from '../media-url.ts'
 import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
-import { conversationLinkSession, isDirectConversation } from '../project-coordination.ts'
+import { conversationLinkSession, conversationMicroAppLink, isDirectConversation } from '../project-coordination.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import ConversationSearch from './ConversationSearch.vue'
 import QuickActionsOverlay from './QuickActionsOverlay.vue'
@@ -628,6 +628,9 @@ function openConversationLink(event: MouseEvent) {
   if (image) { event.preventDefault(); openImagePreview(image); return }
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
   const anchor = event.target instanceof Element ? event.target.closest('a') : null
+  const app = anchor && !anchor.hasAttribute('download') &&
+    conversationMicroAppLink(anchor.getAttribute('href') ?? '', props.projectId || liveProjectId(props.apiBase))
+  if (app) { event.preventDefault(); void router.push(app); return }
   const review = anchor && !anchor.hasAttribute('download') &&
     discordReviewLink(anchor.getAttribute('href') ?? '', props.projectId || liveProjectId(props.apiBase))
   if (review) { event.preventDefault(); void router.push(review); return }
