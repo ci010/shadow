@@ -1,3 +1,4 @@
+import { PRESENCE_CHANNEL } from './presence.js'
 import { contextBridge, ipcRenderer } from 'electron'
 import {
   IPC_CHANNELS,
@@ -26,6 +27,7 @@ const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction)
 window.addEventListener('unload', disposeDocumentTabs, { once: true })
 
 const api: ShadowDesktopApi = Object.freeze({
+  presence: Object.freeze({ system: () => ipcRenderer.invoke(PRESENCE_CHANNEL) }),
   fileExplorer: createFileExplorerApi(ipcRenderer),
   taskNotifications: createTaskNotificationsApi(ipcRenderer),
   clipboardFiles: createPasteClipboardFilesApi(ipcRenderer, window),

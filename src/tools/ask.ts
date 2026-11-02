@@ -21,7 +21,7 @@ const parameters = {
     reason: { type: 'string', description: 'For invalidate: which premise changed and why dependent decisions need revalidation.' },
     question: { type: 'string', description: 'A clear question for missing input or a consequential decision.' },
     options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2, uniqueItems: true, description: 'Decision only: two distinct non-empty suggested choices. The UI automatically provides a third, custom-response entry; do not generate an Other or free-text option.' },
-    default_option: { type: 'string', description: 'Decision only: exactly one of options, used only if the configured timeout expires.' },
+    default_option: { type: 'string', description: 'Decision only: exactly one of options; not human authorization. An unanswered human request is deferred without approval.' },
     sources: { type: 'array', minItems: 1, maxItems: 3, description: 'Decision only: optional existing references. Copy an answer receipt’s reference, or sessionId, origin.physicalId and id (as requestId) from a received request. Links provide context, not permission or proof of causation.',
       items: { type: 'object', properties: {
         sessionId: { type: 'string' }, physicalId: { type: 'string' }, requestId: { type: 'string' },
@@ -65,7 +65,13 @@ export class AskTool implements Tool<ToolResult> {
     if ((args.workKey || args.decisionKey) && !workContext) throw new YieldError('unavailable', 'Project work context is unavailable.')
     if (action === 'ask' && args.kind === 'input' && Object.keys(args).every(key => ['action', 'kind', 'question', 'workKey', 'decisionKey'].includes(key))) {
       if (typeof args.question !== 'string') throw new YieldError('invalid_request', 'Input requires a question.')
-      return this.answerResult(await this.inputs.ask(args.question, ctx, workContext), ctx)
+      try { return await this.answerResult(await this.inputs.ask(args.question, ctx, workContext), ctx) }
+      catch (error) {
+        if (error instanceof YieldError && error.code === 'unavailable') return JSON.stringify({
+          kind: 'input', status: 'unavailable', approved: false, reason: error.message,
+        })
+        throw error
+      }
     }
     if (action !== 'ask' || args.kind !== 'decision'
       || Object.keys(args).some(key => !['action', 'kind', 'question', 'options', 'default_option', 'sources', 'brief', 'reconsiders', 'workKey', 'decisionKey'].includes(key))) {

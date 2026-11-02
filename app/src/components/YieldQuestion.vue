@@ -30,7 +30,7 @@
                 :checked="!customMode && selected === option" @change="selected = option; customMode = false">
               <span class="yield-index" aria-hidden="true">{{ optionLetter(index) }}</span>
               <span class="yield-option-text">{{ option }}</span>
-              <span v-if="option === decisionRequest.defaultOption" class="yield-default">{{ t('Default') }}</span>
+              <span v-if="option === decisionRequest.defaultOption" class="yield-default">{{ decisionRequest.recipient.kind === 'user' ? t('Suggested') : t('Default') }}</span>
               <span class="yield-selected i-lucide-check" :class="{ visible: !customMode && selected === option }" aria-hidden="true" />
             </label>
             <button type="button" class="yield-option yield-custom-toggle" :class="{ selected: customMode }"

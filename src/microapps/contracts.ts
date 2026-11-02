@@ -17,7 +17,7 @@ export type AppState = z.infer<typeof appStateSchema>
 export const microAppCapabilities = {
   version: 1,
   approval: { execution: 'owner-approved-revision', agentMayApprove: false },
-  acceptance: { afterApproval: 'ask-local-owner', timeoutMs: 60_000, default: 'continue-testing',
+  acceptance: { afterApproval: 'ask-local-owner', timeoutMs: 60_000, default: 'defer-without-approval',
     scope: 'approved-revision-only', open: 'author-owned-browser', reports: 'agent-assessment-with-host-observations',
     categories: ['startup', 'state', 'recovery', 'reopen'], deviceAuthorization: 'unchanged',
     requirements: 'published-work-acceptance-snapshot; report each criterion, including blocked/not_tested',

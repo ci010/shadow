@@ -623,7 +623,9 @@ export async function createProjectRuntime(
     agentTypes,
     events,
     getLlmRuntimeConfig: () => llm,
-    getYieldPolicy: () => activeConfig.tools.yield ?? { timeoutMs: null },
+    getYieldPolicy: () => activeConfig.tools.yield,
+    presence: dependencies.presence,
+    getUserWaitPolicy: () => activeConfig.tools.unattended ?? { timeoutMs: 600_000, awayGraceMs: 30_000 },
     deliverYield: message => channels.deliverDecision(message),
     deliverInput: message => channels.deliver(message),
     getKnownContextWindow: (modelSpec) => {

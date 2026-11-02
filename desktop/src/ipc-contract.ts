@@ -63,6 +63,7 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+  readonly presence: import('./presence.js').DesktopPresenceApi
   readonly fileExplorer: DesktopFileExplorerApi
   readonly taskNotifications: DesktopTaskNotificationsApi
   readonly clipboardFiles: DesktopClipboardFilesApi

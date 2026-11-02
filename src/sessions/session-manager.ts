@@ -1,3 +1,4 @@
+import { UserPresence, resolveUserWaitPolicy, type UserWaitPolicy } from './presence.ts'
 import { createTaskLifecycle, transitionTaskLifecycle, type TaskLifecycleAction } from './task-lifecycle.ts'
 import { parseTaskRecord, type TaskRecord } from './task-record.ts'
 import { validateFreshAutomationState } from './fresh-automation-state.ts'
@@ -162,7 +163,9 @@ export interface SessionManagerDeps {
   getNodeInventory?: () => NodeInventoryResponse
   remoteExecutor?: Executor
   getLlmRuntimeConfig?: () => LlmRuntimeConfig
-  getYieldPolicy?: () => YieldPolicy
+  presence?: UserPresence
+  getUserWaitPolicy?: () => UserWaitPolicy
+  getYieldPolicy?: () => YieldPolicy | undefined
   deliverYield?: (message: import('../bus/events.ts').OutboundMessage) => Promise<void>
   deliverInput?: (message: import('../bus/events.ts').OutboundMessage) => Promise<void>
   getKnownContextWindow?: (model: string) => number | null
@@ -664,6 +667,8 @@ export class SessionManager {
     }, id => this.readSessionState(id))
     this.decisionRecords = decisionRecords
     this.yields = new YieldManager({
+      userWait: id => this.userWaitPolicy(id),
+      presence: (id, user) => this.presenceFor(id, user),
       current: request => !request.workContext || this.alignment?.currentDecision(request) === true,
       changed: sessionId => this.deps.bus.emit('session.activity.changed', { sessionId }),
       assertCanYield: id => {
@@ -692,6 +697,8 @@ export class SessionManager {
       notifyReporter: request => this.notifyDecisionReporter(request),
     })
     this.inputs = new InputRequests({
+      userWait: id => this.userWaitPolicy(id),
+      presence: (id, user) => this.presenceFor(id, user),
       currentContext: context => this.alignment?.currentContext(context) === true,
       getState: id => this.getSessionState(id),
       assertAccess: id => {
@@ -876,6 +883,19 @@ ${JSON.stringify(request)}`,
       signal.removeEventListener('abort', cancel)
       session.stop()
     }
+  }
+
+  get presence(): UserPresence { return this.deps.presence ?? this.localPresence }
+  private readonly localPresence = new UserPresence()
+
+  private presenceFor(id: string, user?: { channel: string; senderId: string }) {
+    // Web has one authenticated local-owner principal today. Channel identities
+    // are intentionally separate; Child/node liveness is never human presence.
+    return this.presence.state(user ? `${user.channel}:${user.senderId}` : id.startsWith('web:') ? 'web:web-user' : 'unknown')
+  }
+
+  private userWaitPolicy(id: string): UserWaitPolicy {
+    return resolveUserWaitPolicy(this.getSessionConfig(id).yield, this.deps.getYieldPolicy?.(), this.deps.getUserWaitPolicy?.())
   }
 
   getYieldPolicy(sessionId: string): YieldPolicy {

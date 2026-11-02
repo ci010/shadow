@@ -1,3 +1,4 @@
+import { installPresence } from './presence.js'
 import { existsSync, mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -9,6 +10,7 @@ import {
   desktopCapturer,
   dialog,
   ipcMain,
+  powerMonitor,
   Menu,
   nativeImage,
   Notification,
@@ -559,6 +561,7 @@ async function start(): Promise<void> {
     openTaskApp = undefined
     disposeAppIpc()
   })
+  installPresence(ipcMain, mainWindow, powerMonitor)
   installWebPairing(ipcMain, mainWindow, () => activityAuthorization)
   taskbarActivity = new TaskbarActivity(mainWindow)
   taskbarActivity.setAuthorization(activityAuthorization)

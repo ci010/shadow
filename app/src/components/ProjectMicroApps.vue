@@ -47,7 +47,7 @@
           <form v-if="canWrite && !selected.cleanupPending && selected.status !== 'running' && selected.status !== 'starting'" class="app-approval" @submit.prevent="approve">
             <label v-if="selected.manifest.llm">{{ t('Model (optional override)') }}<input v-model="model" :placeholder="t('Use Project default')" :disabled="busy" /></label>
             <label class="app-confirm"><input v-model="confirmed" type="checkbox" :disabled="busy" />{{ t('I reviewed this version and authorize its local code and requested model allowance.') }}</label>
-            <p v-if="selected.acceptanceAvailable">{{ t('After approval, we will ask whether its author should run tests. No reply within 60 seconds continues testing, using agent calls and the approved app allowance. You can choose “Not now”. New versions still need review.') }}</p>
+            <p v-if="selected.acceptanceAvailable">{{ t('After approval, we will ask whether its author should run tests. No reply within 60 seconds defers testing without approval. Explicit continuation uses agent calls and the approved app allowance. New versions still need review.') }}</p>
             <button class="app-primary" :disabled="busy || !confirmed">{{ selected.approval ? t('Renew authorization and reset allowance') : t('Approve this version') }}</button>
           </form>
           <button v-if="selected.approval && canWrite" :disabled="busy" @click="act('revoke')">{{ t('Revoke access and stop') }}</button>

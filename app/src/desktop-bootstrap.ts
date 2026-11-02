@@ -61,6 +61,7 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+	readonly presence?: import('../../desktop/src/presence.ts').DesktopPresenceApi
 	readonly fileExplorer?: import('../../desktop/src/file-explorer-contract.ts').DesktopFileExplorerApi
 	readonly taskNotifications?: DesktopTaskNotificationsApi
 	readonly clipboardFiles?: {

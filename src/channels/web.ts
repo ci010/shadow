@@ -1,3 +1,4 @@
+import { presenceReportSchema } from '../sessions/presence.ts'
 import { AbstractChannel, ChannelAdmissionError } from './base.ts'
 import type { ChannelCapabilities } from './capabilities.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -155,6 +156,14 @@ export class WebChannel extends AbstractChannel {
       if (!await this.authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
       if (!this.isAllowed('web-user')) return c.json({ error: 'Sender is not authorized' }, 403)
       return next()
+    })
+    // Same authentication and fixed principal as chat/send; never accept a body userId.
+    app.post('/api/chat/presence', async c => {
+      const report = presenceReportSchema.safeParse(await c.req.json().catch(() => null))
+      if (!report.success) return c.json({ error: 'Invalid presence report' }, 400)
+      if (!this.sessionManager) return c.json({ error: 'Unavailable' }, 503)
+      this.sessionManager.presence.report('web:web-user', report.data)
+      return c.json({ ok: true })
     })
     for (const path of ['/api/chat/send', '/api/chat/message', '/api/chat/upload', '/api/chat/uploads/*', '/api/media']) {
       app.use(path, async (c, next) => {
