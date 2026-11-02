@@ -246,3 +246,24 @@ test('Unix release inventory verifies safegit binary/license and excludes prepar
     await assert.rejects(verifyReleaseManifest(packaged, root, target), /safegit/)
   })
 })
+
+test('native safegit preparation preserves shared source identity on Windows and Unix', async () => {
+  for (const binary of ['safegit.exe', 'safegit']) {
+    await withTempWorkspace(async root => {
+      await fixture(root, windows)
+      await file(root, 'desktop/safegit/BUILD.md', 'owned preparation guide')
+      const source = await sourceFingerprint(root)
+      // desktop:package verifies the receipt before prepareSafegit stages these outputs.
+      for (const name of [binary, 'LICENSE', 'release.json']) {
+        await file(root, `desktop/safegit/${name}`, `generated ${name}`)
+      }
+      assert.equal(await sourceFingerprint(root), source)
+      assert.equal((await createReleaseManifest(root, source, windows)).sourceHash, source)
+      await file(root, `desktop/safegit/${binary}`, 'replacement native binary')
+      assert.equal(await sourceFingerprint(root), source)
+      // Only named generated files are excluded, not native preparation source/docs.
+      await file(root, 'desktop/safegit/BUILD.md', 'changed preparation guide')
+      await assert.rejects(createReleaseManifest(root, source, windows), /Source changed/)
+    })
+  }
+})

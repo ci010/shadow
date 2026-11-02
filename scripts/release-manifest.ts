@@ -78,7 +78,7 @@ export async function sourceFingerprint(root: string): Promise<string> {
       for (const [name, bytes] of await tree(path, input === 'integrations/a2a' ? new Set(['node_modules', 'dist']) : undefined)) {
         // The pinned downloaded wrapper is an output, not source.
         if (input === 'desktop/service' && name === 'ShadowService.exe') continue
-        if (input === 'desktop/safegit' && ['safegit', 'release.json', 'LICENSE'].includes(name)) continue
+        if (input === 'desktop/safegit' && ['safegit', 'safegit.exe', 'release.json', 'LICENSE'].includes(name)) continue
         if (input === 'desktop/aria2' && ['aria2c', 'aria2c.exe', 'COPYING', 'LICENSE.OpenSSL',
           'aria2-1.37.0-source.tar.gz', 'build-aria2-native.sh'].includes(name)) continue
         entries.push([`${input}/${name}`, hash(bytes)])
