@@ -12,6 +12,7 @@ import type { RealtimeHub } from '../realtime/hub.ts'
 import type { ComputerService } from '../computer/service.ts'
 
 export interface ProjectRuntimeDependencies {
+  presence?: import('../sessions/presence.ts').UserPresence
   /** Single-use ownership scan, only during the initial host boot. */
   startupSessionStates?: import('./session-ownership.ts').StartupOwnershipStates
   diagnostics?: RuntimeDiagnosticLog

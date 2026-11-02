@@ -1472,20 +1472,23 @@ Replies return text and resume the original tool call. Both stores retain
 `input_request` facts without restoring in-memory waiters on restart. A2A task
 state and question-bound remote references are described in [A2A](a2a.md).
 
-The waiting-policy field remains `tools.yield.timeoutMs` and defaults to indefinite waiting (`null`).
-`SessionConfig.yield` can override it, including explicit indefinite waiting;
-removing the override restores the global default. Positive timeouts choose
-the declared default on the backend, with timeout provenance in the tool
-result for decisions; ordinary input instead fails without choosing an answer.
-Policy is captured when each question opens. Cancellation never
-chooses a default. This workflow is not an authorization or capability
-approval mechanism.
+User-recipient questions use the backend's finite unattended policy (ten minutes
+by default), with a continuous confirmed-away shortcut (thirty seconds).
+Existing explicit `SessionConfig.yield.timeoutMs` and `tools.yield.timeoutMs`
+overrides take precedence, including `null` for indefinite waiting. Unanswered
+human decisions return a durable deferred continuation with `approved: false`,
+never the agent's default option. Ordinary input returns structured unavailable
+through Ask without inventing text. Parent/caller policy remains separate.
+Policy is captured when each question opens; cancellation never chooses a default.
+See [client presence and unattended Ask](presence-and-unattended-ask.md) for
+configuration, identity boundaries, aggregation and implementation limitations.
+This workflow is not an authorization or capability approval mechanism.
 
 Calls, results and policy overrides persist through the normal JSONL/SQLite
 paths. `YieldRecords` also appends versioned `yield_decision` facts to the
 request's physical segment. The server assigns the request ID and pins its
-segment/tool-call origin before publication. Answers (including timeout
-defaults) are saved before acknowledging or resuming the suspended call;
+segment/tool-call origin before publication. Answers and non-approving deferred closes are saved before acknowledging or
+resuming the suspended call (historical timeout defaults remain readable);
 concurrent responses cannot replace an in-flight settlement. A persistence
 failure rejects the operation rather than approving work. Cancellation and
 delivery failure record a separate closed outcome. These facts are excluded

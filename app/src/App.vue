@@ -79,6 +79,7 @@
 import { t } from './i18n.ts'
 import { installRevealBorder } from './reveal-border.ts'
 import { computed, ref, onMounted, onUnmounted, watch, provide, inject } from 'vue'
+import { startPresence } from './presence.ts'
 import { browserSessionKey } from './web-auth.ts'
 import { mobileSessionKey } from './mobile-client.ts'
 import MobileConnection from './MobileConnection.vue'
@@ -136,6 +137,12 @@ const stopLiveStatus = livePool.observe(statuses => {
 const liveError = computed(() => liveStatuses.value.find(status => status.error)?.error ?? '')
 
 const resolvedBase = computed(() => installationContext.value.apiBase)
+{
+  const stop = watch(resolvedBase, (base, _previous, cleanup) => {
+    cleanup(startPresence(base, window, document, window.shadowDesktop?.presence))
+  }, { immediate: true })
+  onUnmounted(stop)
+}
 // Dev diagnostics follow only an explicit visible Project; never infer ownership
 // from a log payload or silently attribute host/unscoped logs to a default Project.
 {

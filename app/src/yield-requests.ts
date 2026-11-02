@@ -23,9 +23,14 @@ export function yieldDeadlineText(request: AskRequest, now: number): string {
   if (isInputRequest(request)) return request.deadline
     ? t('Input expires at {value1}; no answer is chosen automatically.', { value1: formatDateTime(new Date(request.deadline), { hour: 'numeric', minute: '2-digit', second: '2-digit' }) })
     : ''
-  if (request.timeoutPaused) return t('Automatic default paused because you requested an explanation or revision. An explicit answer is required.')
+  if (request.timeoutPaused) return request.recipient.kind === 'user'
+    ? t('Automatic expiry paused because you requested an explanation or revision. An explicit answer is required.')
+    : t('Automatic default paused because you requested an explanation or revision. An explicit answer is required.')
   if (!request.deadline) return t('No time limit. Waiting for a response.')
   const deadline = Date.parse(request.deadline)
+  if (request.recipient.kind === 'user') return deadline <= now
+    ? t('Time limit reached. Waiting for the server to defer without approval.')
+    : t('By {value1}, an unanswered request is deferred without approval; confirmed absence may shorten this wait.', { value1: formatDateTime(new Date(deadline), { hour: '2-digit', minute: '2-digit', second: '2-digit' }) })
   if (deadline <= now) return t('Time limit reached. Waiting for the server to confirm the default choice.')
   return t('At {value1}, the server will choose the default if no response arrives.', { value1: formatDateTime(new Date(deadline), { hour: '2-digit', minute: '2-digit', second: '2-digit' }) })
 }

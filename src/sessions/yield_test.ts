@@ -55,7 +55,7 @@ test('host owner confirmations resolve stored lineage, never ask A2A callers or 
   assert.throws(() => manager.answerChannel('discord:root', request.id, 'Continue', 'discord', 'someone'), code('forbidden'))
   assert.throws(() => manager.answerParent('discord:root', request.id, 'Continue'), code('forbidden'))
   t.mock.timers.tick(60_000)
-  assert.equal((await pending).answeredBy, 'timeout')
+  await assert.rejects(pending, code('unavailable'))
   assert.throws(() => manager.askOwner('unknown', question(), signal(), 60_000), code('not_found'))
 })
 
@@ -83,7 +83,7 @@ test('waiting, answering, cancellation and timeout notify observers after visibl
   const timed = manager.ask('root', question(), signal())
   assert.equal(changes.at(-1), manager.get('root')!.id)
   t.mock.timers.tick(100)
-  assert.equal((await timed).answeredBy, 'timeout')
+  await assert.rejects(timed, code('unavailable'))
   assert.equal(changes.at(-1), null)
 })
 
@@ -112,7 +112,7 @@ test('channel decisions bind the initiating human, not anyone who can see or quo
   await assert.rejects(manager.ask(state.sessionId, question(), signal()), code('forbidden'))
 })
 
-test('expired channel controls cannot override the configured default', async t => {
+test('expired human channel controls never select a default or accept a late answer', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 })
   const manager = new YieldManager({
     getState: sessionId => ({ sessionId, segmentIndex: 0 }),
@@ -122,7 +122,7 @@ test('expired channel controls cannot override the configured default', async t 
   const waiting = manager.ask('feishu:room', question(), signal(), { channel: 'feishu', senderId: 'alice' })
   const id = manager.get('feishu:room')!.id
   t.mock.timers.tick(10)
-  assert.equal((await waiting).answeredBy, 'timeout')
+  await assert.rejects(waiting, code('unavailable'))
   assert.throws(() => manager.cancelChannel('feishu:room', id, 'feishu', 'alice'), code('not_found'))
   assert.throws(() => manager.answerChannelText('feishu:room', id, 'Too late', 'feishu', 'alice'), code('not_found'))
 })
@@ -441,7 +441,7 @@ test('answer/timeout/cancel races settle once; old timers cannot consume the nex
   assert.ok(f.manager.get('root'))
   assert.equal((await first).answeredBy, 'user')
   t.mock.timers.tick(9)
-  assert.equal((await second).answeredBy, 'timeout')
+  await assert.rejects(second, code('unavailable'))
   f.manager.cancelSession('root')
   assert.throws(() => f.manager.answerUser('root', f.users[1]!.id, 'Stop'), code('not_found'))
 })
@@ -532,7 +532,7 @@ test('hanging delivery cannot delay an answer or abort; late failure cannot affe
   assert.equal(f.manager.get('other'), null)
 })
 
-test('timeout resolves during hanging delivery, remains final after abort and observes cleanup', async t => {
+test('timeout fails closed during hanging delivery, remains final after abort and observes cleanup', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture({ notifyUser: () => new Promise(() => {}) })
   f.setPolicy({ timeoutMs: 10 })
@@ -540,7 +540,7 @@ test('timeout resolves during hanging delivery, remains final after abort and ob
   const waiting = f.manager.ask('root', question(), controller.signal)
   t.mock.timers.tick(10)
   controller.abort()
-  assert.equal((await waiting).answeredBy, 'timeout')
+  await assert.rejects(waiting, code('unavailable'))
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0)
   assert.equal(f.manager.get('root'), null)
 })

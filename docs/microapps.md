@@ -5,8 +5,8 @@ cards or another agent loop. Open the Project workbench's **Apps** workspace.
 Ask the agent to build a tool, then **Refresh** Apps to see its publication.
 Review the exact source, local backend behavior and model allowance before
 approving. Approval does not immediately start the app. The runtime asks whether
-its author should continue testing; an unanswered 60-second confirmation defaults
-to continuing. Choose **Not now** to test it yourself with **Open window** on
+its author should continue testing; an unanswered 60-second confirmation does not
+grant continuation. Choose **Not now** to test it yourself with **Open window** on
 Electron or **Open app** in a Web browser.
 
 The initial framework supports static HTML/CSS/JavaScript and an optional local
@@ -54,9 +54,10 @@ After approval, the existing owner question card offers **Continue runtime
 testing** or **Not now; I will test it myself**. The question is local to the
 Project owner, even for an A2A or child author; it is not sent to a remote caller,
 parent agent or channel. Its answer is recorded through the existing JSONL/SQLite
-decision journal. The 60-second default applies only to continuing tests of the
-already approved revision, never to code approval, new device access or Work
-changes. Cancellation and custom replies pause testing. Cancelling this host
+decision journal. The 60-second deadline defers unanswered confirmations without
+approval; only explicit **Continue runtime testing** permits author testing of the
+already approved revision. It never approves code, new device access or Work
+changes. Cancellation and custom replies also pause testing. Cancelling this host
 confirmation does not cancel unrelated conversation work.
 
 Continuing queues a runtime event to the original author through SessionManager.

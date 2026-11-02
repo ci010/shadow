@@ -211,6 +211,10 @@ export const WindowsToolSchema = z.object({
 export const ChromeToolSchema = z.object({}).strict()
 
 export const ToolsSchema = z.object({
+  unattended: z.object({
+    timeoutMs: z.number().int().min(1).max(MAX_YIELD_TIMEOUT_MS).nullable().default(600_000),
+    awayGraceMs: z.number().int().min(1).max(MAX_YIELD_TIMEOUT_MS).default(30_000),
+  }).strict().optional(),
   exec: ExecToolSchema.optional(),
   yield: z.object({
     timeoutMs: z.number().int().min(1).max(MAX_YIELD_TIMEOUT_MS).nullable().default(null),

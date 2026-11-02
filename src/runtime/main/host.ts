@@ -1,3 +1,4 @@
+import { UserPresence } from '../../sessions/presence.ts'
 import { measureStartupProfile, startupProjectOrdinal } from '../startup-profile.ts'
 import { appProxyPlugin } from '../../config/proxy-routes.ts'
 import { updateBackendNetwork } from '../../execution/network/backend.ts'
@@ -154,6 +155,7 @@ export async function startProjectHost(
   let deviceUi: MainDeviceUi | undefined
   const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || browserAuth.authorize(request)
     || ((!browserAuth.required || !!launchCredential) && authorizeMainNodeInventory(request, launchCredential, clientAddresses))
+  const presence = new UserPresence()
   const runtimes = new Map<string, ProjectRuntime>()
   const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
   const stores = new Map<string, ProjectConfigStore>()
@@ -249,6 +251,7 @@ export async function startProjectHost(
         const projectStartup = new StartupTimings('project', id)
         const projectConfig = await projectStartup.measure('config', () => store.init())
         runtime = await scope.run(() => factory(projectConfig, {
+          presence,
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
           mainCluster, copilotAuth, authorize, realtimeHub, computer,

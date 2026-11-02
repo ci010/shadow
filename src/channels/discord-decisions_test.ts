@@ -213,7 +213,7 @@ test('Discord routes cross-user, repeated, timed-out and stale choices through s
   timeoutMs = 10
   const staleAnswer = manager.ask('discord:100', request, new AbortController().signal, { channel: 'discord', senderId: '400' })
   const stale = manager.get('discord:100')!
-  assert.equal((await staleAnswer).answeredBy, 'timeout')
+  await assert.rejects(staleAnswer, /No human answer received/)
   await f.dispatch(f.interaction({
     message: { id: '501', author: { id: '300', bot: true } },
     data: { component_type: 2, custom_id: `yield:${stale.id}:1` },

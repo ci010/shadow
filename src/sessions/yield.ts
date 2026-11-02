@@ -1,3 +1,4 @@
+import { watchUserWait, type UserWaitPolicy, type PresenceState } from './presence.ts'
 import { randomUUID } from 'node:crypto'
 import { WORK_APPROVE } from '../initiatives/work-contract.ts'
 import { channelAddressFromSessionId } from '../bus/events.ts'
@@ -20,6 +21,8 @@ export class YieldError extends Error {
 }
 
 interface YieldManagerDeps {
+  userWait?: (sessionId: string) => UserWaitPolicy
+  presence?: (sessionId: string, channelUser?: { channel: string; senderId: string }) => PresenceState
   current?: (request: YieldRequest) => boolean
   changed?: (sessionId: string) => void
   assertCanYield?: (id: string) => void
@@ -50,6 +53,7 @@ interface PendingYield {
   prepareError?: unknown
   abortReason?: unknown
   timeoutPaused?: true
+  stopWait?: () => void
 }
 
 function snapshot(request: YieldRequest): YieldRequest {
@@ -137,6 +141,8 @@ export class YieldManager {
       || (channelAddress ? channelAddress.platform !== channelUser.channel : !sessionId.startsWith(`${channelUser.channel}:`)))) {
       throw new YieldError('invalid_request', 'The answering user must belong to this session channel.')
     }
+    const userWait = recipient.kind === 'user' && !ownerPolicy ? this.deps.userWait?.(sessionId) : undefined
+    if (userWait) policy = parseYieldPolicy({ timeoutMs: userWait.timeoutMs })
     const now = Date.now()
     const request = snapshot({
       ...parsed, id: randomUUID(), sessionId, recipient, ...(reportingSessionId ? { reportingSessionId } : {}),
@@ -172,9 +178,12 @@ export class YieldManager {
         if (request.deadline !== null) {
           pending.timer = setTimeout(() => {
             if (signal.aborted) pending.onAbort()
-            else if (pending.phase === 'waiting') void this.complete(pending, request.defaultOption, 'timeout')
+            else if (pending.phase === 'waiting') void this.expire(pending)
           }, Math.max(0, Date.parse(request.deadline) - Date.now()))
         }
+        if (userWait) pending.stopWait = watchUserWait(userWait,
+          () => this.deps.presence?.(sessionId, pending.channelUser) ?? 'unknown',
+          () => { if (pending.phase === 'waiting' && !pending.timeoutPaused) void this.expire(pending) })
         // Delivery must not prevent an answer or cancellation if the recipient hangs.
         try {
           const delivery = ownerPolicy ? Promise.resolve() : recipient.kind === 'user'
@@ -196,6 +205,13 @@ export class YieldManager {
         this.track(pending.prepared.then(publish))
       } else publish()
     })
+  }
+
+  private expire(pending: PendingYield): Promise<unknown> {
+    if (pending.request.recipient.kind !== 'user') return this.complete(pending, pending.request.defaultOption, 'timeout')
+    if (this.deps.journal && pending.request.origin) return this.continueWithoutAnswer(pending, 'deferred',
+      'No human answer was received. This is not approval; only authorized unaffected work or investigation may continue.')
+    return this.fail(pending, new YieldError('unavailable', 'No human answer received; no approval granted.'))
   }
 
   async context(sessionId: string): Promise<unknown> {
@@ -222,6 +238,7 @@ export class YieldManager {
 
   private continueWithoutAnswer(pending: PendingYield, disposition: YieldContinuation['disposition'], reason: string): Promise<YieldContinuation> {
     if (!this.deps.journal || !pending.request.origin) throw new YieldError('unavailable', 'Decision follow-up requires durable history.')
+    if (pending.phase !== 'waiting') throw new YieldError('conflict', 'Decision is already settling.')
     const request = pending.request
     const result: YieldContinuation = { requestId: request.id, disposition, approved: false, reason,
       reference: { sessionId: request.sessionId, physicalId: request.origin!.physicalId, requestId: request.id },
@@ -503,6 +520,7 @@ export class YieldManager {
   }
 
   private cleanup(pending: PendingYield): void {
+    pending.stopWait?.()
     this.pending.delete(pending.request.sessionId)
     this.requests.delete(pending.request.id)
     if (pending.timer !== undefined) clearTimeout(pending.timer)

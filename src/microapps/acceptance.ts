@@ -12,7 +12,7 @@ const PAUSE = 'Not now; I will test it myself'
 export function appTestQuestion(record: AppRecord): YieldQuestion {
   return {
     question: `Let the author of "${record.manifest.name}" continue testing approved revision ${record.revision}? ` +
-      'This uses agent calls and may use the app model allowance. No reply within 60 seconds continues testing. ' +
+      'This uses agent calls and may use the app model allowance. No reply within 60 seconds defers testing without approval. ' +
       'This does not approve new versions or additional device access.',
     options: [CONTINUE, PAUSE], defaultOption: CONTINUE,
   }
@@ -116,13 +116,13 @@ export class AppAcceptanceFlow {
     signal.throwIfAborted()
     record = this.current(record.id, acceptanceId)
     const acceptance = record.acceptance!
-    if (outcome.option !== CONTINUE || outcome.custom || !['user', 'timeout'].includes(outcome.answeredBy ?? '') || outcome.revisedQuestion) {
+    if (outcome.option !== CONTINUE || outcome.custom || outcome.answeredBy !== 'user' || outcome.revisedQuestion) {
       acceptance.status = 'paused'
       if (outcome.custom) acceptance.error = 'Custom response saved with the owner question. Testing is paused; this response did not grant continuation.'
       this.store.save(record)
       return
     }
-    if (outcome.answeredBy !== 'user' && outcome.answeredBy !== 'timeout') throw new Error('Invalid testing decision authority')
+    if (outcome.answeredBy !== 'user') throw new Error('Invalid testing decision authority')
     acceptance.decision = outcome.answeredBy
     acceptance.status = 'dispatching'
     this.store.save(record)

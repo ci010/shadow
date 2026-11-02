@@ -1,3 +1,4 @@
+import { watchUserWait, type UserWaitPolicy, type PresenceState } from './presence.ts'
 import { randomUUID } from 'node:crypto'
 import { channelAddressFromSessionId } from '../bus/events.ts'
 import type { ExecutionContext } from '../tools/context.ts'
@@ -10,6 +11,8 @@ import { answerMediaSchema } from './answer-media.ts'
 import { workDecisionContextSchema, type WorkDecisionContext } from '../initiatives/work-notes.ts'
 
 interface Dependencies {
+  userWait?: (id: string) => UserWaitPolicy
+  presence?: (id: string, user?: { channel: string; senderId: string }) => PresenceState
   currentContext?(context: WorkDecisionContext): boolean
   getState(id: string): SessionState | null | undefined
   assertAccess(id: string): void
@@ -28,6 +31,7 @@ interface Pending {
   result: ReturnType<typeof Promise.withResolvers<InputAnswer>>
   abort: () => void
   callerController: AbortController
+  stopWait?: () => void
   timer?: ReturnType<typeof setTimeout>
   interrupted?: { reason: unknown }
 }
@@ -76,7 +80,8 @@ export class InputRequests {
       && (context.inputSource !== 'user' || context.channel !== channel || !context.senderId?.trim())) {
       throw new YieldError('forbidden', 'A channel input request requires an initiating human.')
     }
-    const timeout = this.deps.timeout(sessionId)
+    const userWait = !caller && !parent ? this.deps.userWait?.(sessionId) : undefined
+    const timeout = userWait ? userWait.timeoutMs : this.deps.timeout(sessionId)
     const request: InputRequest = {
       kind: 'input', id: randomUUID(), sessionId, question: text.data,
       recipient: { kind: caller ? 'caller' : parent ? 'parent' : 'user', sessionId: parent && !caller ? parent : sessionId },
@@ -109,6 +114,10 @@ export class InputRequests {
           void this.close(pending, new YieldError('unavailable', 'Input deadline expired without an answer.'))
             .catch(error => console.error('[input] Could not record timeout', error))
         }, Math.max(0, Date.parse(request.deadline!) - Date.now()))
+        if (userWait) pending.stopWait = watchUserWait(userWait,
+          () => this.deps.presence?.(sessionId, { channel: context.channel, senderId: context.senderId }) ?? 'unknown',
+          () => { if (pending.phase === 'waiting') void this.close(pending, new YieldError('unavailable', 'No human input received; no answer or approval was supplied.'))
+            .catch(error => console.error('[input] Could not record unavailable input', error)) })
         if (caller) {
           void Promise.resolve().then(() => {
             pending.callerController.signal.throwIfAborted()
@@ -214,7 +223,10 @@ export class InputRequests {
   private close(pending: Pending, error: unknown): Promise<void> {
     if (this.pending.get(pending.request.id) !== pending) return Promise.resolve()
     pending.callerController.abort(error)
-    if (pending.phase === 'settling') { pending.interrupted ??= { reason: error }; return Promise.resolve() }
+    if (pending.phase === 'settling') {
+      if (!(error instanceof YieldError && error.code === 'unavailable')) pending.interrupted ??= { reason: error }
+      return Promise.resolve()
+    }
     pending.phase = 'settling'
     return this.track((async () => {
       try {
@@ -229,6 +241,7 @@ export class InputRequests {
     })())
   }
   private cleanup(pending: Pending): void {
+    pending.stopWait?.()
     this.pending.delete(pending.request.id)
     pending.callerController.abort(new DOMException('Input request settled.', 'AbortError'))
     if (pending.timer !== undefined) clearTimeout(pending.timer)

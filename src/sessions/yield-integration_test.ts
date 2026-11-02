@@ -102,6 +102,45 @@ async function answer(app: Hono, sessionId: string, requestId: string, option: s
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   for (const kind of ['decision', 'input'] as const) {
+    test(`${Store.name}: unattended ${kind} resumes exactly one paired tool result without human approval`, async () => {
+      await withTempWorkspace(async workspace => {
+        const store: SessionStore = new Store(join(workspace, 'sessions'))
+        await store.init()
+        const f = fixture(workspace, store)
+        const sessionId = `web:unattended-${kind}`
+        f.setGlobal({ timeoutMs: 100 })
+        try {
+          await f.sessions.start()
+          await f.sessions.buildSession(sessionId, undefined, { agentType: 'general' })
+          await f.sessions.deliver(sessionId, message('unattended-input'))
+          await waitFor(() => f.calls.length === 1)
+          f.calls[0].resolve({ content: '', toolCalls: [{ id: 'ask-call', name: 'ask', arguments: kind === 'decision'
+            ? { kind, question: 'Publish?', options: ['Publish', 'Wait'], default_option: 'Publish' }
+            : { kind, question: 'Which name?' } }] })
+          await waitFor(() => f.calls.length === 2)
+          const results = f.calls[1].messages.filter(item => item.tool_call_id === 'ask-call')
+          assert.equal(results.length, 1)
+          const result = JSON.parse(String(results[0].content).split('\n', 1)[0])
+          assert.equal(result.approved, false)
+          assert.equal(result.option, undefined)
+          assert.equal(result.text, undefined)
+          assert.equal(kind === 'decision' ? result.disposition : result.status, kind === 'decision' ? 'deferred' : 'unavailable')
+          if (kind === 'decision') assert.equal((await f.sessions.getYieldRecords(sessionId))[0].closed?.reason, 'deferred')
+          f.calls[1].resolve(done())
+          await waitFor(() => f.facts.length === 1)
+        } finally { await f.sessions.stop(); await store.close?.() }
+        const reopened: SessionStore = new Store(join(workspace, 'sessions'))
+        await reopened.init()
+        const restored = fixture(workspace, reopened)
+        try {
+          await restored.sessions.start()
+          const history = await restored.sessions.getHistory(sessionId)
+          assert.equal(history.messages.filter(item => item.tool_call_id === 'ask-call').length, 1)
+          assert.equal(restored.sessions.yields.get(sessionId), null)
+          assert.equal(restored.sessions.inputs.get(sessionId), null)
+        } finally { await restored.sessions.stop(); await reopened.close?.() }
+      })
+    })
     test(`${Store.name}: ${kind} custom composer attachments resume the paired call and persist image bytes`, async () => {
       await withTempWorkspace(async workspace => {
         const store: SessionStore = new Store(join(workspace, 'sessions'))

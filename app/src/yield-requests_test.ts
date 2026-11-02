@@ -306,7 +306,9 @@ test('preselection and expired deadlines never submit; selections survive refres
   await settle()
   assert.equal(state.selected.value, expired.defaultOption)
   assert.match(yieldDeadlineText(state.request.value!, Date.parse('2026-09-13T13:00:00Z')), /Waiting for the server/)
-  assert.match(yieldDeadlineText(state.request.value!, Date.parse('2026-09-13T11:00:00Z')), /server will choose the default/)
+  assert.match(yieldDeadlineText(state.request.value!, Date.parse('2026-09-13T11:00:00Z')), /deferred without approval/)
+  assert.match(yieldDeadlineText(state.request.value!, Date.parse('2026-09-13T13:00:00Z')), /defer without approval/)
+  assert.match(yieldDeadlineText({ ...state.request.value!, recipient: { kind: 'parent', sessionId: 'parent' } }, Date.parse('2026-09-13T11:00:00Z')), /server will choose the default/)
   assert.match(yieldDeadlineText(question() as never, Date.now()), /No time limit/)
   assert.equal(requests.length, 1)
   state.selected.value = 'Full refactor'

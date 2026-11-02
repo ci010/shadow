@@ -87,21 +87,22 @@ async function fixture(home: string, work: AppWorkScope[] = [],
     block: (reason?: string) => { blocker = reason } }
 }
 
-test('approval asks the owner; only its timeout or explicit continue permits author testing', async t => withTempWorkspace(async home => {
+test('approval asks the owner; only explicit continue permits author testing', async t => withTempWorkspace(async home => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = await fixture(home)
   try {
     await assert.rejects(f.service.openTest(f.app.id, f.app.revision, 'web:author', new AbortController().signal), /review/)
     await f.approve()
     assert.equal(f.yields.get('web:author')!.ownerOnly, true)
+    assert.match(f.yields.get('web:author')!.question, /defers testing without approval/)
     assert.equal(f.service.get(f.app.id).lastRun, undefined)
     assert.throws(() => f.service.acceptance.authorize(f.app.id, f.app.revision, 'web:author'), /asking/)
-    t.mock.timers.tick(59_999)
+    t.mock.timers.tick(30_000)
     assert.equal(f.notifications.length, 0)
-    t.mock.timers.tick(1)
+    await f.answer(0)
     await wait(() => f.notifications.length === 1)
     await wait(() => f.service.get(f.app.id).acceptance!.status === 'notified')
-    assert.equal(f.service.get(f.app.id).acceptance!.decision, 'timeout')
+    assert.equal(f.service.get(f.app.id).acceptance!.decision, 'user')
     assert.ok(f.service.acceptance.authorize(f.app.id, f.app.revision, 'web:author'))
     assert.throws(() => f.service.acceptance.authorize(f.app.id, f.app.revision, 'web:peer'), /author/)
     assert.throws(() => f.service.acceptance.authorize(f.app.id, '0'.repeat(64), 'web:author'), /review/)
@@ -111,6 +112,18 @@ test('approval asks the owner; only its timeout or explicit continue permits aut
     assert.equal(denied.status, 401)
     await f.service.revoke(f.app.id)
     assert.throws(() => f.service.acceptance.authorize(f.app.id, f.app.revision, 'web:author'), /approval/)
+  } finally { await f.service.shutdown() }
+}))
+
+test('unanswered owner confirmation never grants author testing permission', async t => withTempWorkspace(async home => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = await fixture(home)
+  try {
+    await f.approve()
+    t.mock.timers.tick(60_000)
+    await wait(() => f.service.get(f.app.id).acceptance!.status === 'failed')
+    assert.equal(f.notifications.length, 0)
+    assert.throws(() => f.service.acceptance.authorize(f.app.id, f.app.revision, 'web:author'))
   } finally { await f.service.shutdown() }
 }))
 

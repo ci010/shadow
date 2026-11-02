@@ -1,8 +1,9 @@
 # Exact-version runtime testing
 
 After exact-version owner approval, Shadow asks the local owner whether you
-should continue runtime testing (60-second default: continue). This is not
-approval for another revision or additional device access. On the
+should continue runtime testing. An unanswered 60-second confirmation defers
+without approval; wait for explicit owner continuation. This never approves
+another revision or additional device access. On the
 `microapp.testing.ready` event, read `get` and current Work, then use `test` with
 that exact revision for an isolated browser handle. Exercise the real UI/SDK;
 stop and reopen to check persistence, and check failure/cancel recovery.
