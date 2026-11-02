@@ -1,3 +1,4 @@
+import { HtmlPreviewLeases, previewContext } from './html-preview.ts'
 import type { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { env } from 'node:process'
@@ -126,6 +127,7 @@ function registerGatewayRoutes(
   opts: GatewayRouteOptions = {},
   environment: NodeJS.ProcessEnv = env,
 ) {
+  const htmlPreviews = new HtmlPreviewLeases()
   // Diagnose organize requests rejected before the Project plugin (origin/auth/routing).
   // Do not log URLs, headers, credentials or arbitrary error messages.
   app.use('*', async (c, next) => {
@@ -185,6 +187,8 @@ function registerGatewayRoutes(
       const denied = opts.browserAuth.guardLanRequest(c.req.raw)
       if (denied) return denied
     }
+    const previewResponse = await htmlPreviews.serve(c.req.raw)
+    if (previewResponse) return previewResponse
     const requestOrigin = c.req.header('Origin')
     let normalizedRequestOrigin: string | undefined
     if (requestOrigin) {
@@ -266,12 +270,16 @@ function registerGatewayRoutes(
       })
       opts.clientAddresses?.inherit(original, c.req.raw)
     }
-    await next()
+    await previewContext.run({ store: htmlPreviews, origin: new URL(c.req.url).origin, owner: browserSession?.controller.signal }, next)
     if (normalizedRequestOrigin) {
       c.header('Access-Control-Allow-Origin', normalizedRequestOrigin)
       c.header('Access-Control-Expose-Headers', 'ETag')
       c.header('Vary', 'Origin')
     }
+  })
+  app.delete('/api/html-preview-leases/:token', c => {
+    htmlPreviews.revoke(c.req.param('token'))
+    return c.body(null, 204)
   })
 
   for (const plugin of plugins) plugin(app)

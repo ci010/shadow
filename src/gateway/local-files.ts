@@ -4,7 +4,7 @@ import { filePreviewLimit, type LocalFileOperation } from '../execution/filesyst
 import { FileReadError, localFiles } from '../execution/filesystem/local-files.ts'
 import { isTextEncoding } from '../execution/filesystem/text-encoding.ts'
 
-const MIME_BY_EXT: Record<string, string> = {
+export const MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.bmp': 'image/bmp', '.ico': 'image/x-icon',
