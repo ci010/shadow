@@ -4104,5 +4104,12 @@
   "Could not load saved service access. Refresh to retry.": "无法加载已保存的服务权限。请刷新重试。",
   "Choose a platform connection first. BOT behavior and permissions are configured in files through conversation.": "先选择平台连接。BOT 行为与权限通过对话在文件中配置。",
   "This link belongs to the retired Discord configuration workflow. No change has been approved or published. Return to chat to inspect the current BOT files and request a new exact deployment confirmation.": "此链接属于已停用的 Discord 配置流程。未批准或发布任何更改。请返回对话检查当前 BOT 文件，并重新发起精确部署确认。",
-  "Edit BOT.md and its companion files in a registered local Folder through conversation, then review the exact deployment confirmation. Source edits never change a running deployment.": "通过对话编辑已注册本地文件夹中的 BOT.md 及配套文件，再核对精确部署确认。修改源文件不会改变正在运行的部署。"
+  "Edit BOT.md and its companion files in a registered local Folder through conversation, then review the exact deployment confirmation. Source edits never change a running deployment.": "通过对话编辑已注册本地文件夹中的 BOT.md 及配套文件，再核对精确部署确认。修改源文件不会改变正在运行的部署。",
+  "Go to session": "跳转到会话",
+  "Open session": "打开会话",
+  "Search session titles across projects": "搜索所有项目中的会话标题",
+  "Loading sessions…": "正在加载会话…",
+  "No matching sessions": "没有匹配的会话",
+  "Could not load sessions for {project}": "无法加载项目 {project} 的会话",
+  "Sessions": "会话"
 }

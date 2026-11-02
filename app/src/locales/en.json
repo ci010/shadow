@@ -4104,5 +4104,12 @@
   "Could not load saved service access. Refresh to retry.": "Could not load saved service access. Refresh to retry.",
   "Choose a platform connection first. BOT behavior and permissions are configured in files through conversation.": "Choose a platform connection first. BOT behavior and permissions are configured in files through conversation.",
   "This link belongs to the retired Discord configuration workflow. No change has been approved or published. Return to chat to inspect the current BOT files and request a new exact deployment confirmation.": "This link belongs to the retired Discord configuration workflow. No change has been approved or published. Return to chat to inspect the current BOT files and request a new exact deployment confirmation.",
-  "Edit BOT.md and its companion files in a registered local Folder through conversation, then review the exact deployment confirmation. Source edits never change a running deployment.": "Edit BOT.md and its companion files in a registered local Folder through conversation, then review the exact deployment confirmation. Source edits never change a running deployment."
+  "Edit BOT.md and its companion files in a registered local Folder through conversation, then review the exact deployment confirmation. Source edits never change a running deployment.": "Edit BOT.md and its companion files in a registered local Folder through conversation, then review the exact deployment confirmation. Source edits never change a running deployment.",
+  "Go to session": "Go to session",
+  "Open session": "Open session",
+  "Search session titles across projects": "Search session titles across projects",
+  "Loading sessions…": "Loading sessions…",
+  "No matching sessions": "No matching sessions",
+  "Could not load sessions for {project}": "Could not load sessions for {project}",
+  "Sessions": "Sessions"
 }
