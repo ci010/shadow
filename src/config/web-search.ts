@@ -1,6 +1,8 @@
+import { resolveDeepSeekSearch, type SearchProviders } from './deepseek-search.ts'
 import { z } from 'zod'
 
-export const WEB_SEARCH_PROVIDERS = ['firecrawl', 'brave', 'exa', 'tavily'] as const
+export const WEB_SEARCH_KEY_PROVIDERS = ['firecrawl', 'brave', 'exa', 'tavily'] as const
+export const WEB_SEARCH_PROVIDERS = [...WEB_SEARCH_KEY_PROVIDERS, 'deepseek'] as const
 export type WebSearchProvider = typeof WEB_SEARCH_PROVIDERS[number]
 export const WebSearchSelectionSchema = z.enum(['auto', ...WEB_SEARCH_PROVIDERS])
 export type WebSearchSelection = z.infer<typeof WebSearchSelectionSchema>
@@ -14,9 +16,10 @@ export type WebSearchConfig = {
   webSearchProvider?: WebSearchSelection
 } & Partial<Record<typeof WEB_SEARCH_KEY_FIELDS[number], string>>
 
-export function resolveWebSearchProvider(config: WebSearchConfig): WebSearchProvider {
+export function resolveWebSearchProvider(config: WebSearchConfig, providers: SearchProviders = {}): WebSearchProvider {
   if (config.webSearchProvider && config.webSearchProvider !== 'auto') return config.webSearchProvider
-  return WEB_SEARCH_PROVIDERS.find(provider => !!config[WEB_SEARCH_KEYS[provider]]?.trim()) ?? 'firecrawl'
+  return WEB_SEARCH_KEY_PROVIDERS.find(provider => !!config[WEB_SEARCH_KEYS[provider]]?.trim())
+    ?? (resolveDeepSeekSearch(providers) ? 'deepseek' : 'firecrawl')
 }
 
 const apiKey = z.string().trim().min(1).max(4096)
@@ -35,20 +38,23 @@ export interface WebSearchStatus {
   provider: WebSearchSelection
   effectiveProvider: WebSearchProvider
   ready: boolean
-  keys: Record<WebSearchProvider, boolean>
+  keys: Record<typeof WEB_SEARCH_KEY_PROVIDERS[number], boolean>
+  deepseek: { ready: boolean; providerId?: string }
 }
 
-export function webSearchStatus(config: WebSearchConfig): WebSearchStatus {
-  const effectiveProvider = resolveWebSearchProvider(config)
+export function webSearchStatus(config: WebSearchConfig, providers: SearchProviders = {}): WebSearchStatus {
+  const effectiveProvider = resolveWebSearchProvider(config, providers)
   const keys = {
     firecrawl: !!config.firecrawlApiKey?.trim(),
     brave: !!config.braveApiKey?.trim(),
     exa: !!config.exaApiKey?.trim(),
     tavily: !!config.tavilyApiKey?.trim(),
   }
+  const deepseek = resolveDeepSeekSearch(providers)
   return {
+    deepseek: deepseek ? { ready: true, providerId: deepseek.providerId } : { ready: false },
     provider: config.webSearchProvider ?? 'auto', effectiveProvider,
-    ready: effectiveProvider === 'firecrawl' || keys[effectiveProvider], keys,
+    ready: effectiveProvider === 'firecrawl' || (effectiveProvider === 'deepseek' ? !!deepseek : keys[effectiveProvider]), keys,
   }
 }
 

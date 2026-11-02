@@ -14,7 +14,7 @@ import { appWebSearchPlugin } from './web-search-routes.ts'
 import { WEB_SEARCH_KEY_FIELDS, webSearchStatus, WebSearchPatchSchema } from './web-search.ts'
 
 test('web search configuration validates selection and strictly validates patches', () => {
-  for (const provider of ['auto', 'firecrawl', 'brave', 'exa', 'tavily']) {
+  for (const provider of ['auto', 'firecrawl', 'brave', 'exa', 'tavily', 'deepseek']) {
     assert.equal(ConfigSchema.parse({ tools: { webSearchProvider: provider } }).tools.webSearchProvider, provider)
   }
   assert.equal(ConfigSchema.safeParse({ tools: { webSearchProvider: 'unknown' } }).success, false)
@@ -58,6 +58,7 @@ test('App search routes authenticate, expose presence only, and preserve unrelat
     const status = await saved.json()
     assert.deepEqual(status, {
       provider: 'exa', effectiveProvider: 'exa', ready: true,
+      deepseek: { ready: false },
       keys: { firecrawl: true, brave: true, exa: true, tavily: true },
     })
     const file = JSON.parse(await readFile(configPath, 'utf8'))
@@ -191,5 +192,31 @@ test('environment search keys load, survive unrelated App saves, and remain off 
         else process.env[name] = previous[index]
       })
     }
+  })
+})
+
+test('App status follows live provider aliases and explicit DeepSeek selection without storing another key', async () => {
+  await withTempWorkspace(async root => {
+    const configPath = join(root, 'search.json')
+    const initial = { providers: { official: { type: 'deepseek', apiKey: 'synthetic-only-provider-key' } } }
+    await writeFile(configPath, JSON.stringify(initial))
+    let active = ConfigSchema.parse(initial)
+    const store = new AppProviderConfigStore({ configPath, getConfig: () => active, onChanged: value => { active = value } })
+    const app = new Hono()
+    appWebSearchPlugin(store, () => active)(app)
+    const status = await (await app.request('/api/app/web-search')).json()
+    assert.equal(status.effectiveProvider, 'deepseek')
+    assert.deepEqual(status.deepseek, { ready: true, providerId: 'official' })
+    assert.doesNotMatch(JSON.stringify(status), /synthetic-only-provider-key/)
+    const response = await app.request('/api/app/web-search', { method: 'PATCH', body: JSON.stringify({ provider: 'deepseek' }) })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).ready, true)
+    const saved = JSON.parse(await readFile(configPath, 'utf8'))
+    assert.deepEqual(saved.providers, initial.providers)
+    assert.deepEqual(saved.tools, { webSearchProvider: 'deepseek' })
+    active = ConfigSchema.parse({ ...initial, tools: saved.tools, providers: { official: { ...initial.providers.official, baseUrl: 'https://custom.invalid/v1' } } })
+    const unavailable = await (await app.request('/api/app/web-search')).json()
+    assert.equal(unavailable.effectiveProvider, 'deepseek')
+    assert.equal(unavailable.ready, false)
   })
 })

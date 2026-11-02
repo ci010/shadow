@@ -56,7 +56,7 @@ const PROVIDER_DEFAULTS: Record<string, {
   },
 }
 
-export function providerType(config: Config, id: string): string {
+export function providerType(config: Pick<Config, 'providers'>, id: string): string {
   return config.providers[id]?.type ?? id
 }
 
@@ -117,7 +117,7 @@ export function detectProvider(model: string): string {
 }
 
 /** Shared by construction and onboarding; custom endpoints may intentionally be keyless. */
-export function resolveProviderSettings(config: Config, name: string): {
+export function resolveProviderSettings(config: Pick<Config, 'providers'>, name: string): {
   apiKey: string
   baseUrl?: string
   authMode: 'api-key' | 'copilot' | 'none'

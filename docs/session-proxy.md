@@ -38,7 +38,7 @@ fallback. HTTP versus HTTPS routing follows the existing proxy resolver.
 ## Scope and lifecycle
 
 Only subsequent built-in `search` with `handler: "web"` (Firecrawl, Brave, Exa,
-Tavily) and `read` HTTP(S) URL fetches use the override. Filesystem/virtual reads,
+Tavily, DeepSeek) and `read` HTTP(S) URL fetches use the override. Filesystem/virtual reads,
 other sessions and children, browser, shell, MCP and unrelated backend requests
 are unaffected. Session tool snapshots share their owner's policy, not another
 session's policy. Each request captures its policy before starting and retains

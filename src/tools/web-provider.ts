@@ -1,3 +1,5 @@
+import { resolveDeepSeekSearch, type SearchProviders } from '../config/deepseek-search.ts'
+import { DeepSeekSearchTool } from './deepseek-search.ts'
 import { resolveWebSearchProvider, type WebSearchConfig } from '../config/web-search.ts'
 import type { ExecutionContext } from './context.ts'
 import type { Tool } from './tool.ts'
@@ -8,8 +10,10 @@ import { webSearchParameters } from './web-search-json.ts'
 
 export function createWebSearchTool(
   config: WebSearchConfig,
+  providers: SearchProviders = {},
 ): Tool {
-  const provider = resolveWebSearchProvider(config)
+  const provider = resolveWebSearchProvider(config, providers)
+  if (provider === 'deepseek') return new DeepSeekSearchTool(resolveDeepSeekSearch(providers)?.apiKey ?? '')
   if (provider === 'firecrawl') return new FirecrawlSearchTool(config.firecrawlApiKey?.trim() || undefined)
   const key = {
     brave: config.braveApiKey,
@@ -35,14 +39,14 @@ export function createWebSearchTool(
   return new TavilySearchTool(key)
 }
 
-export function createLiveWebSearchTool(getConfig: () => WebSearchConfig): Tool {
+export function createLiveWebSearchTool(getConfig: () => WebSearchConfig, getProviders: () => SearchProviders = () => ({})): Tool {
   return {
     name: 'web_search',
     readonly: true,
     description: 'Search the web using the configured search provider and return results.',
     parameters: webSearchParameters,
     execute(args: Record<string, unknown>, context: ExecutionContext) {
-      return createWebSearchTool(getConfig()).execute(args, context)
+      return createWebSearchTool(getConfig(), getProviders()).execute(args, context)
     },
     getChatTextDisplay: args => `🕵️ ${String(args.query)}`,
   }
