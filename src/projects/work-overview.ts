@@ -47,6 +47,9 @@ export const projectWorkOverviewSchema = z.object({
   organization: z.object({
     organization: z.object({phase:z.enum(['evidence','hierarchy']).optional(),mode:z.enum(['full','delta']),status:z.enum(['running','completed','partial']),coveredCount:z.number().int().nonnegative(),manifestCount:z.number().int().nonnegative(),patches:z.number().int().nonnegative()}).optional(),
     enabled: z.boolean(), running: z.boolean(),
+    lastAutomaticError: z.enum(['organization_delta_check_failed', 'organization_execution_failed']).optional(),
+    lastCheckedAt: z.string().datetime().optional(),
+    nextAutomaticAt: z.string().datetime().optional(),
   }).optional(),
 }).superRefine((value, ctx) => {
   const lookup = new Map(value.items.map(item => [item.key, item]))

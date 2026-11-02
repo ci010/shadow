@@ -10,7 +10,7 @@ export interface RealtimeSessionActivityPayload {
 
 export type RealtimeSessionChange = 'history' | 'metadata' | 'activity' | 'work' | 'background-tasks' | 'scheduled-tasks'
 
-export type RealtimeResource = 'interactions' | 'service-groups' | 'automations' | 'config' | 'folders' | 'nodes' | 'channels'
+export type RealtimeResource = 'interactions' | 'service-groups' | 'automations' | 'organization' | 'config' | 'folders' | 'nodes' | 'channels'
 
 /** Backend/renderer wire contract. New subscriptions require authoritative HTTP
  * snapshots even when the connection cursor can be replayed. Persisted history,
