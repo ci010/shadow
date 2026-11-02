@@ -4,7 +4,7 @@ import { t } from '../i18n.ts'
 import type { ProjectRecord } from '../projects.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
-import { searchQuickOpenSessions } from '../session-quick-open.ts'
+import { isQuickOpenBackdropPoint, searchQuickOpenSessions } from '../session-quick-open.ts'
 
 const props = defineProps<{ apiBase: string; projects: ProjectRecord[] }>()
 const emit = defineEmits<{ close: []; select: [projectId: string, sessionId: string] }>()
@@ -13,6 +13,11 @@ const leases = shallowRef<Array<{ projectId: string; lease: ProjectLiveLease }>>
 const dialog = ref<HTMLDialogElement>()
 const input = ref<HTMLInputElement>()
 const query = ref('')
+const projectFilter = ref('')
+const filteredLeases = computed(() => leases.value.filter(entry => !projectFilter.value || entry.projectId === projectFilter.value))
+watch(() => props.projects, projects => {
+  if (projectFilter.value && !projects.some(project => project.id === projectFilter.value)) projectFilter.value = ''
+})
 const selected = ref(0)
 const id = useId()
 let previousFocus: HTMLElement | null = null
@@ -25,10 +30,10 @@ watch(() => [props.apiBase, ...props.projects.map(project => project.id)], () =>
   }))
   for (const { lease } of leases.value) void lease.graph.read()
 }, { immediate: true })
-const results = computed(() => searchQuickOpenSessions(leases.value.flatMap(({ projectId, lease }) =>
-  (lease.graph.state.value ?? []).map(session => ({ ...session, projectId }))), query.value, props.projects.map(project => project.id)))
-const loading = computed(() => leases.value.some(({ lease }) => lease.graph.state.loading))
-const failures = computed(() => leases.value.filter(({ lease }) => lease.graph.state.error))
+const results = computed(() => searchQuickOpenSessions(filteredLeases.value.flatMap(({ projectId, lease }) =>
+  (lease.graph.state.value ?? []).map(session => ({ ...session, projectId }))), query.value, props.projects.map(project => project.id), projectFilter.value))
+const loading = computed(() => filteredLeases.value.some(({ lease }) => lease.graph.state.loading))
+const failures = computed(() => filteredLeases.value.filter(({ lease }) => lease.graph.state.error))
 const projectLabel = (projectId: string) => props.projects.find(project => project.id === projectId)?.name ?? projectId
 const optionId = (index: number) => `${id}-option-${index}`
 watch([query, results], () => { selected.value = 0 })
@@ -36,6 +41,17 @@ watch([selected, results], async () => {
   await nextTick()
   document.getElementById(optionId(selected.value))?.scrollIntoView({ block: 'nearest' })
 }, { flush: 'post' })
+let backdropPressed = false
+function onBackdropPointerdown(event: PointerEvent) {
+  backdropPressed = event.button === 0 && event.target === dialog.value
+    && !!dialog.value && isQuickOpenBackdropPoint(event, dialog.value.getBoundingClientRect())
+}
+function onBackdropClick(event: MouseEvent) {
+  const dismiss = backdropPressed && event.target === dialog.value
+    && !!dialog.value && isQuickOpenBackdropPoint(event, dialog.value.getBoundingClientRect())
+  backdropPressed = false
+  if (dismiss) close()
+}
 function close() {
   if (closing) return
   closing = true
@@ -59,7 +75,7 @@ function keydown(event: KeyboardEvent) {
     return
   }
   if (event.key === 'Escape') { event.preventDefault(); close() }
-  else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+  else if (event.target === input.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
     event.preventDefault()
     const count = results.value.length
     if (count) selected.value = (selected.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count
@@ -85,6 +101,7 @@ onBeforeUnmount(() => {
 
 <template>
   <dialog ref="dialog" class="quick-open" :aria-label="t('Open session')"
+    @pointerdown="onBackdropPointerdown" @pointercancel="backdropPressed = false" @click="onBackdropClick"
     @keydown.stop="keydown" @cancel.prevent="!composing && close()" @close="close">
     <header>
       <label :for="`${id}-search`">{{ t('Open session') }}</label>
@@ -95,6 +112,11 @@ onBeforeUnmount(() => {
       aria-autocomplete="list" aria-expanded="true" :aria-controls="`${id}-results`"
       :aria-activedescendant="results.length ? optionId(selected) : undefined"
       autocomplete="off" @compositionstart="composing = true" @compositionend="composing = false">
+    <div class="project-filter" role="group" :aria-label="t('Filter by project')">
+      <button type="button" :aria-pressed="!projectFilter" @click="projectFilter = ''">{{ t('All projects') }}</button>
+      <button v-for="project in projects" :key="project.id" type="button" :aria-pressed="projectFilter === project.id"
+        @click="projectFilter = project.id">{{ project.name }}</button>
+    </div>
     <div class="status" role="status" aria-live="polite">
       <span v-if="loading">{{ t('Loading sessions…') }}</span>
       <span v-else-if="!results.length">{{ t('No matching sessions') }}</span>
@@ -127,6 +149,9 @@ input:focus-visible, button:focus-visible { outline: 2px solid var(--c-blue); ou
 button { min-height: 32px; padding: 5px 10px; background: transparent; color: var(--c-text); border: 1px solid var(--c-border); font: inherit; cursor: pointer; }
 button:hover { background: var(--c-bg-muted); }
 button:disabled { cursor: default; opacity: .6; }
+.project-filter { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 8px; max-height: 132px; overflow-y: auto; }
+.project-filter button { max-width: 100%; overflow-wrap: anywhere; color: var(--c-text-secondary); }
+.project-filter button[aria-pressed="true"] { background: var(--c-selection-bg); border-color: var(--c-selection-border); color: var(--c-primary); }
 .status:empty { display: none; }
 .status, .failures { padding: 4px 16px 12px; color: var(--c-text-secondary); }
 .failure { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

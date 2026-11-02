@@ -24,7 +24,7 @@ export function isRegularQuickOpenSession(session: QuickOpenSession): boolean {
 }
 
 export function searchQuickOpenSessions<T extends QuickOpenSession>(sessions: readonly T[], query: string,
-  projectOrder: readonly string[] = [...new Set(sessions.map(session => session.projectId))]): T[] {
+  projectOrder: readonly string[] = [...new Set(sessions.map(session => session.projectId))], projectFilter = ''): T[] {
   const projectRank = new Map(projectOrder.map((id, index) => [id, index]))
   const rank = (session: T) => projectRank.get(session.projectId) ?? projectOrder.length
   const prefix = query.trim().toLocaleLowerCase()
@@ -34,7 +34,8 @@ export function searchQuickOpenSessions<T extends QuickOpenSession>(sessions: re
     const time = Date.parse(session.lastActivityAt ?? '')
     return Number.isFinite(time) ? time : 0
   }
-  return sessions.filter(session => isRegularQuickOpenSession(session) && matchesSessionTitle(session, query)).sort((a, b) =>
+  return sessions.filter(session => (!projectFilter || session.projectId === projectFilter)
+    && isRegularQuickOpenSession(session) && matchesSessionTitle(session, query)).sort((a, b) =>
     rank(a) - rank(b) || a.projectId.localeCompare(b.projectId) || Number(isPrefix(b)) - Number(isPrefix(a)) || recency(b) - recency(a)
     || a.sessionId.localeCompare(b.sessionId))
 }
@@ -43,4 +44,11 @@ export function isSessionQuickOpenShortcut(event: Pick<KeyboardEvent,
   'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey' | 'repeat' | 'defaultPrevented' | 'isComposing'>): boolean {
   return !event.defaultPrevented && !event.repeat && !event.isComposing && !event.altKey
     && event.shiftKey && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r'
+}
+
+/** Dialog backdrop events target the dialog too; padding inside its bounds is not backdrop. */
+export function isQuickOpenBackdropPoint(point: { clientX: number; clientY: number },
+  bounds: { left: number; right: number; top: number; bottom: number }): boolean {
+  return point.clientX < bounds.left || point.clientX > bounds.right
+    || point.clientY < bounds.top || point.clientY > bounds.bottom
 }
