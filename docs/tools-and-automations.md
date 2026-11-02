@@ -168,9 +168,13 @@ creation/update and turn-finished/context-ended notifications. Ordinary session
 hints are deduplicated; internal automation and temporary workers do not feed
 back into the trigger. Changes use a 30-second trailing debounce with a two-minute
 maximum wait. After runtime recovery, and on re-enable, a delta check reconciles
-existing source versions. No delta means no model call; each delta handles at most
-three topics and checks again for remaining work. Failures retry after 30 seconds
-rather than disabling the automation. Manual full/delta actions remain available,
+existing source versions. Admission skips conversations currently processing a
+turn (not merely retaining an idle session context). Cheap checks continue so an
+idle transition or retry deadline cannot be lost. No eligible source or hierarchy
+work means no model call; evidence deltas handle at most three topics. An uncovered
+source version backs off exponentially from 30 seconds to one hour, while a new
+version or another eligible source remains independent. Controller-level failures
+also back off rather than repeatedly starting the same failed work every 30 seconds. Manual full/delta actions remain available,
 and only one organization run executes at a time. Disabling or stopping cancels
 timers and active execution. Automatic check time, next scheduled check and safe
 failure categories are exposed in organization status.
@@ -1047,6 +1051,12 @@ view does not rewrite historical records or inspect prompts to classify them.
 ### Evidence boundaries and coverage
 
 - The organizer alone produces project hierarchy and display-purpose interpretation. Full and delta modes retain bounded manifests; meaningful child outcomes should appear in the parent's report.
+- Prefer a few coherent macro roots (three to five as a soft target), then subthemes and evidence-owning groups within the existing four-level depth limit. Root count is not a hard quota: unrelated purposes must not be forced under a generic “Other” or universal project wrapper.
+- Initial context includes a bounded global root index; `organization_read` can page omitted roots. Root labels support display placement, not factual citations. Prefer reusing a suitable existing root across delta batches rather than adding a root for every session.
+- `organization_patch.rootRegroup` can explicitly place shown existing root subtrees under a shared display parent while preserving their labels, topic membership, cards and evidence. Revision, ID, cycle and depth validation remain enforced; this does not permit arbitrary delta edits of unrelated content.
+- Automatic delta admission first checks for a hierarchy-only phase when more than five roots remain and that hierarchy fingerprint has not been evaluated. This phase reads root summaries, not conversation evidence; `organization_patch` accepts empty `groups`/`hierarchy` only for an explicit `rootRegroup` in this phase. Evidence phases still require nonempty, cited groups. At most one hierarchy patch is committed per run, with fixed revision, full root-page coverage, cycle and four-level depth checks.
+- A successful hierarchy finish, including an honest no-change result, records the resulting hierarchy fingerprint. Card-only changes do not invalidate it. Root/edge/label changes can make another evaluation eligible; a failed hierarchy phase backs off and does not block eligible evidence work. Too many root pages for the bounded execution budget remains partial, not falsely fully checked.
+- Admission metadata is bounded inside the existing optional focus snapshot, not a new event store. With an existing snapshot, checked fingerprints and failed source-version cooldowns survive restart. Before the first snapshot exists, failed-source cooldowns are memory-only and may be retried after restart. Explicit full organization bypasses automatic busy/cooldown filtering; delta respects it.
 - Project-private learning uses one provenance/lineage eligibility predicate for scheduling and source selection, including unfinished batch execution/recovery. Internal system and learning automation (and their descendants), known historical internal addresses, missing lineage and channel-scoped histories are excluded. Agent names alone do not exclude a human-owned session. User cron work remains eligible. Channel learning retains its separate journal.
 - No additional model scoring, periodic project-summary generation or automatic outcome attribution was added. Existing correction/result evidence remains available; assistant completion reports are not independent verification. Provider-token aggregation, material semantic fingerprints, richer sourced outcome feedback and dedicated coverage UI remain candidates, not implemented features.
 

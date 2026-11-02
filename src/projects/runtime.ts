@@ -15,6 +15,7 @@ export interface ProjectRuntimeDependencies {
   presence?: import('../sessions/presence.ts').UserPresence
   /** Single-use ownership scan, only during the initial host boot. */
   startupSessionStates?: import('./session-ownership.ts').StartupOwnershipStates
+  debugProjects?: import('../vfs/virtual-fs.ts').VirtualFsHandler
   diagnostics?: RuntimeDiagnosticLog
   /** Omission preserves legacy/test callers. False selects the coordinator tool profile. */
   localExecutor?: boolean
@@ -32,6 +33,8 @@ export interface ProjectRuntimeDependencies {
 }
 
 export interface ProjectRuntime {
+  /** Host-only reader; never mounted as a general target VFS. */
+  debugRead?: import('../vfs/virtual-fs.ts').VirtualFsHandler
   authorizeA2a?(request: Request): boolean
   readonly app: Hono
   readonly folders: FolderRegistry

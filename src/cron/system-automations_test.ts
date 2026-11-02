@@ -34,7 +34,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
     try {
       const ref = systemAutomationRef('work-organizer', organizerId, 'delta')
       ref.organizationProblem = 'unfinished'
-      ref.organization = { mode: 'delta', status: 'partial', coveredCount: 1, manifestCount: 3, patches: 1 }
+      ref.organization = { phase: 'hierarchy', mode: 'delta', status: 'partial', coveredCount: 1, manifestCount: 3, patches: 1 }
       const current: SessionState = { ...old, segmentIndex: 0, projectId: 'fixture', mode: 'task', executionStatus: 'completed', automation: ref }
       await store.saveState(organizerId, current)
       const state = await store.getState(organizerId)
@@ -62,6 +62,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
       assert.equal(history.runs.find((r: {id:string}) => r.id === organizerId).scope, 'delta')
       assert.equal(history.runs.find((r: {id:string}) => r.id === organizerId).organizationProblem, 'unfinished')
       assert.equal(history.runs.find((r: {id:string}) => r.id === organizerId).organization.status, 'partial')
+      assert.equal(history.runs.find((r: {id:string}) => r.id === organizerId).organization.phase, 'hierarchy')
       const graph = parseSessionGraph({ nodes: [], sessions: states.map(s => ({ ...s, title: 'concise', automation: resolveAutomationSession(s) })) })
       const grouped = groupFolderSessions([], graph)
       assert.equal(grouped.chats.length, 0)
@@ -72,6 +73,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}
 })
 test('organization receipt contract rejects unbounded or inconsistent counts', () => {
   const ref = systemAutomationRef('work-organizer', organizerId, 'full')
+  const legacy={mode:'delta',status:'completed',coveredCount:0,manifestCount:0,patches:0}
+  assert.deepEqual(parseAutomationSessionRef({...ref,organization:legacy})?.organization,legacy)
+  for(const phase of ['hierarchy','evidence'])assert.equal(parseAutomationSessionRef({...ref,organization:{...legacy,phase}})?.organization?.phase,phase)
+  assert.throws(()=>parseAutomationSessionRef({...ref,organization:{...legacy,phase:'anything'}}))
   assert.throws(() => parseAutomationSessionRef({ ...ref, organization: { mode:'full', status:'partial', coveredCount: 4, manifestCount: 3, patches: 1 } }))
 })
 

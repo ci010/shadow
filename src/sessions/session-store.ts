@@ -215,6 +215,8 @@ export interface SessionStartEvent {
 }
 
 export interface StoredMessage {
+  /** Atomic history-only channel input marker, scoped to this physical context. */
+  channel_input_id?: string
   role: string
   content: string | unknown[] | null
   /** Round-trippable reasoning (DeepSeek). Sent back on next turn. */

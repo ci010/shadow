@@ -51,6 +51,7 @@ export interface AutomationRunSummary {
   learning?: LearningOutcome
 }
 export interface OrganizationOutcome {
+  phase?: 'evidence' | 'hierarchy'
   mode: 'full' | 'delta'
   status: 'running' | 'completed' | 'partial'
   coveredCount: number
@@ -71,10 +72,10 @@ export function parseOrganizationOutcome(value: unknown): OrganizationOutcome | 
   if (value === undefined) return undefined
   if (!value || typeof value !== 'object') throw new TypeError('Invalid organization outcome')
   const v = value as Record<string, unknown>
-  if (!['full', 'delta'].includes(String(v.mode)) || !['running', 'completed', 'partial'].includes(String(v.status))
+  if ((v.phase !== undefined && v.phase !== 'evidence' && v.phase !== 'hierarchy') || !['full', 'delta'].includes(String(v.mode)) || !['running', 'completed', 'partial'].includes(String(v.status))
     || ['coveredCount', 'manifestCount', 'patches'].some(k => typeof v[k] !== 'number' || !Number.isSafeInteger(v[k]) || (v[k] as number) < 0)
     || (v.coveredCount as number) > (v.manifestCount as number)) throw new TypeError('Invalid organization outcome')
-  return { mode: v.mode, status: v.status, coveredCount: v.coveredCount, manifestCount: v.manifestCount, patches: v.patches } as OrganizationOutcome
+  return { ...(v.phase !== undefined ? { phase:v.phase } : {}), mode: v.mode, status: v.status, coveredCount: v.coveredCount, manifestCount: v.manifestCount, patches: v.patches } as OrganizationOutcome
 }
 export interface LearningOutcome {
   status: 'applied' | 'no_change' | 'partial' | 'blocked' | 'draft_only'
