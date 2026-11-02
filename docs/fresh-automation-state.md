@@ -28,6 +28,8 @@ Startup never replays a provider run to repair metadata. Pending report delivery
 
 Session history, physical segments, result/details/profile routes, session VFS, owned completed-execution receipts, Project usage and automation discovery include archives. Automation run pagination uses indexed job queries and counts; feature discovery reads one representative per job. Physical history is checked against a Project-resolved state. Historical folder checks validate preserved locality/lineage. Read access does not authorize message admission, resume, mutation or cancellation of a non-live run. Direct creation of an archived session ID is rejected.
 
+The live context route returns `409 archived_context_unavailable` for a non-live execution rather than reconstructing its prompt from current configuration. The read-only conversation treats this explicit response as normal: persisted history remains visible, live prompt/tool context is cleared, and no retry warning is shown. Other context errors still show the execution-context failure warning without discarding readable history.
+
 Explicit deletion of new fresh-automation state is not implemented; attempts fail rather than orphaning archive/log/ownership references. This feature is not a cleanup operation for old history.
 
 ## Tests
