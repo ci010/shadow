@@ -14,7 +14,7 @@ import type { ExecutionContext } from './context.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import type { Tool, ToolParameters, ToolResult } from './tool.ts'
 import { isImagePath, readImage } from '../utils/image-input.ts'
-import type { VirtualFs } from '../vfs/virtual-fs.ts'
+import { isVirtualPath, type VirtualFs } from '../vfs/virtual-fs.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import { executeRemoteFilesystemText } from '../execution/remote-filesystem-client.ts'
 import { decodeReadText } from './read-text.ts'
@@ -248,6 +248,21 @@ export class ReadTool implements Tool<ToolResult> {
       const rel = isAbsolute(raw) ? relative(this.workspace, raw) : raw
       // Only check virtual mounts for paths that don't escape the workspace
       if (!rel.startsWith('..')) {
+        if (listMode && isVirtualPath(rel)) {
+          const directory = await this.virtualFs.directory(rel, context)
+          if (directory) {
+            if (args.encoding !== undefined) throw new Error('read encoding is not supported for virtual paths.')
+            const offset = args.offset === undefined ? 0 : Number(args.offset) - 1
+            const limit = args.limit === undefined ? directory.items.length : Number(args.limit)
+            const items = directory.items.slice(offset, offset + limit)
+            const end = offset + items.length
+            const range = items.length ? `${offset + 1}–${end}` : '0'
+            let page = `${directory.header}\n[items ${range} of ${directory.items.length}]\n${items.length ? items.join('\n') : '(none)'}`
+            if (end < directory.items.length) page += `\n\n[${directory.items.length - end} more item(s) — use offset=${end + 1} to continue]`
+            validateContentTokens(page, '.txt')
+            return page
+          }
+        }
         if (!listMode && /^v:sessions\/(?!remote:)[^?]+$/.test(rel.replace(/\\/g, '/')) && !rel.endsWith('/brief')) {
           const entries = await this.virtualFs.list(rel, context)
           const entry = entries?.find(entry => entry.path === rel.replace(/\\/g, '/'))

@@ -1089,6 +1089,8 @@ export async function createProjectRuntime(
     'conversation histories and owned remote execution views; <session-id>/brief holds Project topic metadata',
     sessionsVfs.read,
     sessionsVfs.list,
+    undefined,
+    sessionsVfs.directory,
   )
 
   const bgVfs = createBgTasksHandler(backgroundTasks, sessions, a2a.sessions)
@@ -1210,6 +1212,7 @@ export async function createProjectRuntime(
       (initiativeId, itemId) => initiatives.assertWorkReference(initiativeId, itemId),
       stamps => alignment.current(stamps),
       a2a.sessions,
+      alignment,
     ),
   )
   tools.register(new AskTool(sessions.yields, sessions.inputs, () => alignment))

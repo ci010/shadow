@@ -20,6 +20,8 @@ export interface SessionInputSource {
   inputId?: string
   senderName?: string
   workStamps?: import('../initiatives/work-contract.ts').WorkStamp[]
+  /** Explicit kickoff correlation; admission is not execution or completion. */
+  workAssignment?: { key: string; assignmentRevision: number }
   /** Work references are context, never an assignment or authorization grant. */
   coordination?: {
     intent: 'request' | 'question' | 'progress' | 'handoff' | 'acknowledgement'

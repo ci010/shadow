@@ -582,7 +582,34 @@ text. Local `v:sessions/<id>` line ranges use the same complete-history view as
 grep, so a match's line number can be read directly. Physical segment references
 returned by compact/handoff also support line ranges and exact-reference search:
 their view contains that segment's full history, not the current segment or only
-the most recent messages. Root session discovery still lists logical sessions.
+the most recent messages. Reading `v:sessions` lists root conversations, newest
+activity first, with persisted title/description previews and direct-child counts.
+Titles lead each entry, followed by its ID; root entries omit the redundant
+`mode=session` field.
+Missing metadata is marked `(not set)`; listing never generates titles or loads
+transcripts. Titles are capped at 120 characters and descriptions at 240, with
+whitespace collapsed and an explicit ellipsis for truncation.
+Read `v:sessions/<id>/children` to navigate one level of descendants (including
+nested tasks/reviews), `v:sessions/tasks` for child/internal/automation records,
+or `v:sessions/all` for the complete local index. These views support ordinary
+read line paging. With `flag: "l"`, they instead use structured item pagination:
+`offset` is a one-based session index and `limit` is the maximum number of complete
+session entries. Headers do not count as items; responses report the item range,
+total and next offset. For example, `read({path: "v:sessions", flag: "l", limit: 2})`
+returns two conversations, not two lines or whitespace-delimited blocks. Empty or
+out-of-range pages contain no entries. Cached owned remote conversations, when
+visible in the index, count as individual items after the local entries. Search
+enumeration remains independent of this navigation pagination. Durable peers created by another session remain root conversations;
+creation attribution is not parent lineage. Orphaned children remain in tasks/all.
+Owned remote conversations retain their existing cached discovery and access rules.
+Glob/grep over `v:sessions` remain exhaustive, including child and internal histories;
+navigation views are not duplicated into global search results. Local history headers
+include full title/description text (whitespace collapsed), parent IDs when present,
+and a children link. Default grep uses these headers instead of also searching
+`/brief`, avoiding duplicate metadata hits without dropping long descriptions.
+Glob still discovers `/brief`; explicit grep/read on `v:sessions/<id>/brief`
+retains the full Project topic metadata where available. Repeated mentions within
+conversation messages are not deduplicated.
 Bare local session IDs default to `/overview`: human user messages, assistant
 final responses, and a tool-call/result index with recorded status and detail links.
 For collaboration tools (`subagent`, `call`, `session`, `message`), overview also

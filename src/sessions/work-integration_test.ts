@@ -14,6 +14,7 @@ import { EventService } from '../events/service.ts'
 import { InitiativeStore } from '../initiatives/store.ts'
 import { workRecordSchema } from '../initiatives/work-contract.ts'
 import { WorkTool } from '../tools/work.ts'
+import { MessageTool } from '../tools/message.ts'
 import { AskTool } from '../tools/ask.ts'
 import { ReplyTool } from '../tools/reply.ts'
 import { SqlTool } from '../tools/sql.ts'
@@ -153,6 +154,55 @@ async function fixture(workspace: string, store: SessionStore) {
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: explicit assignment receipts persist for new and reused ordinary peers`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
+    const folders = new FolderRegistry(workspace); await folders.init()
+    try {
+      await f.sessions.prepareCommandSession(id)
+      const work = await f.note({ assignee: null, idempotencyKey: 'durable-kickoff' })
+      const topics = new TopicService({ projectId, sessions: f.sessions, folders,
+        listStates: async () => Object.values(await store.listAllStates()), resolveAgent: () => ({ defaultMode: 'session' }), changed: () => {} })
+      const request = { requestId: crypto.randomUUID(), title: 'Peer', work: { key: work.key }, initialMessage: 'First task' }
+      const peer = await topics.create(request, id)
+      await f.finish(peer.sessionId)
+      const assigned = f.alignment.get(work.key)
+      const first = f.initiatives.assignmentDelivery(work.key, assigned.workflow!.assignmentRevision)!
+      assert.equal(first.status, 'accepted')
+      assert.equal((await topics.create(request, id)).initialMessageStatus, 'not_replayed')
+      const next = await f.note({ assignee: peer.sessionId })
+      const message = new MessageTool(new Bus(), (target, source) => f.sessions.canReceiveSessionMessage(target, source),
+        () => undefined, () => [], (target, input) => f.sessions.deliver(target, input), undefined, undefined, undefined, undefined, f.alignment)
+      const args = { sessionId: peer.sessionId, content: 'Second task', work: { key: next.key, assignmentRevision: next.workflow!.assignmentRevision } }
+      const receipt = await message.execute(args, f.ctx())
+      await f.finish(peer.sessionId)
+      const calls = f.calls.length
+      assert.match(await message.execute(args, f.ctx()), /already accepted/)
+      assert.equal(f.calls.length, calls)
+      assert.match(receipt, /inputId=/)
+      assert.equal(f.alignment.get(next.key).workflow!.status, 'pending')
+      const reopened = new InitiativeStore(workspace)
+      const restored = new Store(join(workspace, 'sessions')); await restored.init()
+      try {
+        const restoredState = (await restored.getState(peer.sessionId))!
+        assert.equal(restoredState.mode, 'session')
+        const history = []
+        for await (const row of restored.readSessionLog(physicalSessionId(restoredState))) history.push(row)
+        assert.match(JSON.stringify(history), /assignment-revision/)
+        assert(JSON.stringify(history).includes(first.inputId), 'Stored sender metadata retains the receipt input identity')
+        assert.equal(reopened.assignmentDelivery(work.key, assigned.workflow!.assignmentRevision)?.inputId, first.inputId)
+        assert.equal(reopened.assignmentDelivery(next.key, next.workflow!.assignmentRevision)?.status, 'accepted')
+        const recoveredAlignment = new WorkAlignment(reopened, {
+          state: target => f.sessions.getSessionState(target), evidence: async () => {}, changed: async () => {},
+          fresh: async () => {}, successor: async () => undefined,
+        })
+        const recovered = await recoveredAlignment.deliverAssignment(id, peer.sessionId, args.work, {
+          id: crypto.randomUUID(), kind: 'message', timestamp: new Date().toISOString(), source: { kind: 'session', sessionId: id },
+          policy: 'next-step', content: args.content,
+        }, async () => { throw new Error('A recovered receipt must not replay delivery') })
+        assert.equal(recovered.inputId, reopened.assignmentDelivery(next.key, next.workflow!.assignmentRevision)?.inputId)
+      } finally { reopened.close(); restored.close?.() }
+    } finally { await f.close(); store.close?.() }
+  }))
   test(`${Store.name}: real file tools need neither Work nor adoption, even with blocked notes and old required metadata`, async () => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
     f.tools.register(new WriteTool(workspace)); f.tools.register(new ReadTool(workspace))
@@ -209,7 +259,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(f.alignment.get(work.key).workflow?.assignee, peer.sessionId)
       assert.equal(f.alignment.required(peer.sessionId), false)
       assert.equal((await store.getState(peer.sessionId))?.workPolicy?.mode, 'optional')
-      assert.match(String(f.calls[0].messages[0].content), /Shared work notes/)
+      assert.match(JSON.stringify(f.calls[0].messages), /Shared work notes/)
       assert.equal((await topics.create(request, id)).initialMessageStatus, 'not_replayed')
       assert.equal(f.calls.length, 1, 'Assignment must not admit a separate model turn before the explicit kickoff')
       f.calls[0].resolve(call('fixture_write', {}))
@@ -268,7 +318,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const outcome = JSON.parse(String(f.calls[1].messages.find(message => message.tool_call_id === 'grader-ask')?.content))
       assert.equal(outcome.disposition, 'invalidated')
       assert.equal(outcome.approved, false)
-      assert.match(String(f.calls[1].messages[0].content), /Report token metrics without a grader/)
+      assert.match(JSON.stringify(f.calls[1].messages), /Report token metrics without a grader/)
       assert((await f.overview()).items.filter(item => item.parentKey).every(item => item.contextChanged))
       const before = f.alignment.get(grader.key)
       await f.alignment.editNote(actor(), grader.key, before.sequence, { notes: { next: 'Reassess the obsolete prerequisite' } })
@@ -564,7 +614,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       f.calls[3].resolve(call('sql', { query: "UPDATE project_conventions SET text='Use pnpm 12' WHERE id='packages' AND revision=1",
         source: { kind: 'decision', sessionId: id, physicalId: request.origin!.physicalId, requestId: request.id } }))
       await waitFor(() => f.calls.length === 5)
-      assert.match(String(f.calls[4].messages[0].content), /Use pnpm 12/)
+      assert.match(JSON.stringify(f.calls[4].messages), /Use pnpm 12/)
       await f.finish()
     } finally { await f.close(); store.close?.() }
   }))

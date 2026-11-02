@@ -44,3 +44,26 @@ test('overflow at a line boundary reports only fully delivered lines', async () 
   assert.match(output, /showing complete lines 1-1 of 2; use offset=2 to continue/)
   assert.doesNotMatch(output, /incomplete/)
 })
+
+test('structured virtual list paging keeps headers and item boundaries independent of whitespace', async () => {
+  const vfs = new VirtualFs()
+  let plainReads = 0
+  vfs.mount('v:fixture', 'fixture', () => { plainReads++; return 'legacy first\n\nlegacy second' }, undefined, undefined,
+    path => path ? null : { header: 'Fixture navigation', items: ['one\n\ncontinued', 'two\nmore', 'three'] })
+  const tool = new ReadTool(process.cwd(), vfs)
+  const page = String(await tool.execute({ path: 'v:fixture', flag: 'l', limit: 1 }, context))
+  assert.match(page, /items 1–1 of 3/)
+  assert.match(page, /one\n\ncontinued/)
+  assert.doesNotMatch(page, /two/)
+  assert.match(page, /offset=2/)
+  assert.equal(plainReads, 0)
+  const second = String(await tool.execute({ path: 'v:fixture', flag: 'l', offset: 2, limit: 1 }, context))
+  assert.match(second, /two\nmore/)
+  assert.doesNotMatch(second, /continued/)
+  // Unhandled paths keep their existing text-list compatibility behavior.
+  assert.match(String(await tool.execute({ path: 'v:fixture/legacy', flag: 'l', limit: 1 }, context)), /^legacy first\n\n\[1 more/)
+  await assert.rejects(tool.execute({ path: 'v:fixture', flag: 'l', encoding: 'utf-8' }, context), /encoding is supported only/)
+  await assert.rejects(vfs.directory('v:fixture/../secret', context), /Invalid virtual directory/)
+  await assert.rejects(vfs.directory('v:fixture', { ...context, memoryAccess: {} } as ExecutionContext), /memory leases/)
+  await assert.rejects(vfs.directory('v:fixture', { ...context, signal: AbortSignal.abort() }), { name: 'AbortError' })
+})
