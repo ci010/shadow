@@ -20,8 +20,16 @@
       <template v-else>
         <div class="trace-heading">
           <div><h2>{{ t('Session trace') }}</h2><p>{{ physicalId ? t('History and execution for this physical segment.') : t('History and execution for the current segment.') }}</p></div>
-          <button class="diagnosis-button" :disabled="exporting" @click="exportDiagnosis">{{ exporting ? t('Exporting...') : t('Export for agent') }}</button>
-          <button class="diagnosis-button" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing...') : t('Refresh') }}</button>
+          <div class="trace-actions">
+            <button class="diagnosis-button" :disabled="exporting" @click="exportDiagnosis">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5" /></svg>
+              {{ exporting ? t('Exporting...') : t('Export for agent') }}
+            </button>
+            <button class="diagnosis-button" :disabled="loading" @click="refresh">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9" /></svg>
+              {{ loading ? t('Refreshing...') : t('Refresh') }}
+            </button>
+          </div>
         </div>
         <p class="timeline-note">{{ t('Agent exports contain bounded, best-effort-redacted evidence for this segment. Review before sharing.') }}</p>
         <p v-if="exportStatus" class="timeline-note" role="status">{{ exportStatus }}</p>
@@ -542,7 +550,11 @@ onUnmounted(stop)
 .diagnosis-status i, .span-dot { width: 6px; height: 6px; border-radius: var(--radius-circle); background: var(--c-text-secondary); }
 .diagnosis-status i, .span-dot.running { animation: trace-pulse 1.6s ease-in-out infinite; }
 .diagnosis-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 24px; overscroll-behavior: contain; }
-.trace-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.trace-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.trace-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.trace-actions .diagnosis-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; }
+.trace-actions svg { width: 16px; height: 16px; flex-shrink: 0; }
+@media (max-width: 700px), (pointer: coarse) { .trace-actions .diagnosis-button { min-height: 44px; } }
 h2, h3, h4, p { margin: 0; }
 h2 { font-size: 20px; font-weight: 600; letter-spacing: -.025em; }
 .trace-heading p { color: var(--c-text-secondary); font-size: 12px; margin-top: 6px; }
