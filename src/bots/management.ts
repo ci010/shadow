@@ -56,6 +56,16 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
   return new Set(facts)
 }
 
+function disclosedBindings(bot: BotDefinition): unknown[] {
+  return bot.bindings.map(binding => ({ ...binding, grants: binding.grants?.map(grant => {
+    if (grant.kind !== 'http') return grant
+    const { credential, ...scope } = grant
+    // Deployment files may reference private credential configuration. The owner
+    // reviews destination/route authority here, not secret refs or header values.
+    return { ...scope, ...(credential ? { credential: { configured: true } } : {}) }
+  }) }))
+}
+
 export function botPackageTool(options: Options): Tool {
   return {name:'bot_package',optIn:true,
     description:'Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then asks one exact-content owner confirmation. Supply a concise user-facing summary. No review history or embedded source snapshots. Edit source and propose again to update.',
@@ -95,27 +105,41 @@ export function botPackageTool(options: Options): Tool {
         effect: 'Deployment restores a valid BOT definition and its enabled input subscriptions/runtime; it is not only a format change.',
         candidatePermissions: [...newAuthority], expectedRevision: current!.revision, exactContent: frozen.revision,
       } : undefined
+      const added=[...newAuthority].filter(value=>!oldAuthority.has(value)),removed=[...oldAuthority].filter(value=>!newAuthority.has(value))
+      const affected=[...new Set([...(before?.bindings ?? []),...bot.bindings].map(location))]
       const facts = {projectId:options.projectId,bot:bot.id,source:{folderId:input.folderId,directory:input.directory},sourceGit:gitSource,repair,
-        exactContent:frozen.revision,fileCount:Object.keys(frozen.files).length,
-        mode:bot.mode,connection:bot.connection,agent:bot.agent,bindings:bot.bindings,subscriptions:subscribedBindings(bot).map(bindingSubscription),subscriptionMigration:bot.subscriptions === undefined ? 'legacy bindings (same authority)' : 'explicit',toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
+        expectedRevision:current?.revision ?? null,exactContent:frozen.revision,fileCount:Object.keys(frozen.files).length,
+        affected,addedPermissions:added,removedPermissions:removed,candidatePermissions:[...newAuthority],
+        credentialDisclosure:'Credential configuration is represented only by its presence; private references and header values are withheld. Origins, routes and body restrictions remain visible.',
+        mode:bot.mode,connection:bot.connection,agent:bot.agent,bindings:disclosedBindings(bot),subscriptions:subscribedBindings(bot).map(bindingSubscription),subscriptionMigration:bot.subscriptions === undefined ? 'legacy bindings (same authority)' : 'explicit',toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
         modules:bot.allowedModules,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders ?? [],discordHistory:bot.discordHistory ?? null,
         storage:'BOT- and binding-scoped mutable data, separate from immutable deployment files',
         execution:bot.mode === 'personal' ? 'Normal verified-owner session, ordinary role tools/context; BOT prompt only, no custom modules' : 'Restricted child runtime, no raw credentials/platform clients; no source executes during deployment'}
-      const approve = `Deploy ${bot.id}`
+      const approve = '部署'
+      // One live details entry per exact revision. A second waiter must not remove
+      // the first owner's facts when its ask conflicts, cancels or finishes.
+      if (options.pending.has(frozen.revision)) throw new Error('This exact BOT revision already has a pending owner confirmation.')
       options.pending.set(frozen.revision,facts)
-      const added=[...newAuthority].filter(value=>!oldAuthority.has(value)),removed=[...oldAuthority].filter(value=>!newAuthority.has(value))
-      const repairNotice = repair ? `\nActive package is invalid: retired binding.skills selectors. Removed selections: ${repair.removedBindingSkills.map(value => `bindings[${value.index}].skills=${JSON.stringify(value.names)}`).join('; ')}. Top-level skill prompts remain in the baseline. ${repair.effect}\nCandidate permissions (complete): ${repair.candidatePermissions.join('; ') || 'none'}.\nExpected active revision: ${repair.expectedRevision}. Exact candidate hash: ${repair.exactContent}.` : ''
-      const targets=[...new Set([...(before?.bindings ?? []),...bot.bindings].map(location))]
+      const repairNotice = repair ? '\n旧版本目前无法运行；部署后将恢复已授权的消息接收和处理。' : ''
+      const affectedSummary = `影响 ${affected.length} 个消息接收位置，接收配置由 ${before?.bindings.length ?? 0} 项变为 ${bot.bindings.length} 项。`
+      const receivesAll = bot.bindings.filter(binding => binding.enabled && binding.trigger === 'all').length
+      const personalNotice = bot.mode === 'personal' ? '该机器人将使用你的已验证身份和所选角色的正常工具处理消息。' : ''
+      const receiveNotice = receivesAll ? `其中 ${receivesAll} 项会处理所有获准接收的消息，不仅是被提及的消息。` : ''
+      // Only bounded counts and the user's summary appear in the native question
+      // (4000-character ceiling). Complete frozen authority facts stay owner-only.
+      const question = `${input.summary.replace(/\s+/g,' ')}\n${affectedSummary}${receiveNotice}${personalNotice}\n权限范围新增 ${added.length} 项、移除 ${removed.length} 项。${repairNotice}\n是否部署此版本？`
       let result: ToolResult
       try {
-        result = await options.ask.execute({kind:'decision',question:`Agent summary: ${input.summary.replace(/\s+/g,' ')}\nAffected: ${targets.join('; ') || 'no channel bindings'}.\nAdded permissions: ${added.join('; ') || 'none'}.\nRemoved permissions: ${removed.join('; ') || 'none'}.${repairNotice}\nDeploy this frozen BOT version? Optional exact source/permission details are in Channels → BOT deployments.`,options:[approve,'Cancel deployment'],default_option:'Cancel deployment'},context)
+        result = await options.ask.execute({kind:'decision',question,options:[approve,'取消'],default_option:'取消'},context)
       } finally { options.pending.delete(frozen.revision) }
       const answer = typeof result === 'string' ? JSON.parse(result) as Record<string,unknown> : undefined
       if (!answer || answer.option !== approve || answer.answeredBy !== 'user' || answer.custom) return JSON.stringify({status:'cancelled',bot:bot.id,activeUnchanged:true})
       context.signal.throwIfAborted()
       // Recheck live authority after the human delay; approval never blesses future permission changes.
       const deployment = await options.publish(bot.id,async () => {
+        if (!options.canAuthor(context.sessionId)) throw new Error('BOT publication owner authority changed.')
         await options.validate(frozen.files,context.signal)
+        if (!options.canAuthor(context.sessionId)) throw new Error('BOT publication owner authority changed.')
         return options.deployments.deploy({id:bot.id,source:{folderId:input.folderId,directory:input.directory},files:frozen.files,revision:frozen.revision,expectedRevision:input.expectedRevision,signal:context.signal})
       }, bot)
       options.changed([...new Set([...(before?.bindings ?? []),...bot.bindings].flatMap(binding=>binding.platform === 'discord' ? [binding.id] : []))])

@@ -1271,10 +1271,10 @@ test('restricted history runtime uses real Discord permission proof and blocks c
 })
 
 
-test('directory Discord SDK tools run in the existing session loop with per-binding exposure and live callback checks',async t=>{
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}: directory Discord SDK tools run in the existing session loop with per-binding exposure and live callback checks`,async t=>{
   const {BotDeployments}=await import('../bots/deployments.ts')
   const {DirectoryBots}=await import('../bots/runtime.ts')
-  const f=await fixture(t)
+  const f=await fixture(t, Store)
   const deployments=new BotDeployments({directory:join(f.root,'directory-deployments'),projectId:f.projectId,runGit:async()=>{throw new Error('Git unavailable')}})
   const runtime=new DirectoryBots(deployments)
   const {agentId: _agent,epochRevision:_epoch,...data}=f.a
@@ -1292,15 +1292,22 @@ test('directory Discord SDK tools run in the existing session loop with per-bind
   f.responses.push({content:'',toolCalls:[{id:'sdk-call',name:'sdk_probe',arguments:{}}]},{content:'Stored',toolCalls:[]})
   const { channelInputFixture } = await import('../testing/channel-input.ts')
   const inputs = channelInputFixture({ projectId: f.projectId, bots: f.bots, directory: runtime,
-    receive: async message => { const id = f.id(message.chatId); await f.deliver(id, channelMessageInput(message)); return { status: 'accepted', sessionId: id, inputId: message.messageId } } })
+    receive: async message => {
+      const id = f.id(message.chatId), input = channelMessageInput(message)
+      if (message.silent) return f.sessions.deliver(id, input)
+      await f.deliver(id, input)
+      return { status: 'accepted', sessionId: id, inputId: message.messageId }
+    } })
   const input = await f.input('205')
   assert.ok(input.kind === 'message' && input.source.kind === 'user')
   const message = { ...input.source.sender, content: input.content, timestamp: input.timestamp }
-  assert.equal((await inputs.receive({ ...message, silent: true })).disposition, 'filtered')
-  assert.equal(f.sessions.getSessionState(f.id('205')), null)
+  assert.equal((await inputs.receive({ ...message, content: 'PASSIVE_DISCORD_CONTEXT', silent: true })).delivery, 'silent')
+  assert.ok(f.sessions.getSessionState(f.id('205')))
+  assert.equal(f.sessions.listActiveSessions().length, 0)
   assert.equal(f.requests.length, 0)
   await inputs.receive(message)
   assert(f.requests.some(request=>request.tools.includes('sdk_probe')))
+  assert(JSON.stringify(f.requests).includes('PASSIVE_DISCORD_CONTEXT'))
   for (const request of f.requests.filter(request => request.tools.includes('sdk_probe'))) assert.deepEqual(request.inference, inference)
   assert(JSON.stringify(f.requests).includes('SDK_SCOPED_RECEIPT'))
   assert(inspections>=6,'live authorization runs around inference/tool and each SDK callback')

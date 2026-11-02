@@ -1,3 +1,4 @@
+import { ingressDispatchEvent, ingressErrorDetail } from './ingress-diagnostic.ts'
 /**
  * QQ Bot channel (官方机器人 / 群聊 + 单聊 + 频道).
  *
@@ -700,7 +701,7 @@ export class QQChannel extends AbstractChannel {
           break
         case OP_DISPATCH:
           this.withConnection(() => this.handleDispatch(data.t ?? '', data.d ?? {})).catch((err) =>
-            console.error('[qq] Incoming message handling failed')
+            console.error(`[qq] Incoming message handling failed event=${ingressDispatchEvent(data.t)} ${ingressErrorDetail(err)}`)
           )
           break
       }

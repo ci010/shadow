@@ -1,3 +1,4 @@
+import { ingressDispatchEvent, ingressErrorDetail, markIngressFailure } from './ingress-diagnostic.ts'
 import type { DiscordHistoryScope, DiscordObservationProof } from './integration-contract.ts'
 import { InputProcessor, awaitInputSignal } from '../events/input-processor.ts'
 import type { InputProcessorPolicy } from '../events/input-processor-contract.ts'
@@ -960,7 +961,7 @@ export class DiscordChannel extends AbstractChannel {
           break
         case 0: // Dispatch
           this.withConnection(() => this.handleDispatch(data.t!, data.d!)).catch((err) =>
-            console.error('[discord] Incoming message handling failed')
+            console.error(`[discord] Incoming message handling failed event=${ingressDispatchEvent(data.t)} ${ingressErrorDetail(err)}`)
           )
           break
       }
@@ -1219,7 +1220,7 @@ export class DiscordChannel extends AbstractChannel {
       }, preparationSignal)).then(proof => {
         if (preparationSignal.aborted && proof) this.integration?.discard(proof.admissionId)
         return proof
-      })).catch(error => { if (observed) return undefined; throw error })
+      })).catch(error => { if (observed) return undefined; markIngressFailure(error, 'admission'); throw error })
       if (observed && this.integration && !admission) return
       let retainedAdmission = true
       try {

@@ -1,3 +1,4 @@
+import { markIngressFailure } from './ingress-diagnostic.ts'
 import { lifecycleErrorDetail } from './lifecycle-diagnostic.ts'
 import { IntegrationError } from './integration-store.ts'
 import { ChannelMessageStream } from './message-stream.ts'
@@ -584,7 +585,10 @@ export class ChannelManager {
           return { status: 'accepted', sessionId: channelSessionId({ ...scope, conversationId: message.chatId }), inputId: message.messageId }
         }
       }
-      if (bot && bot.platform !== 'discord' && message.channel === channel.name) this.options?.messageStream?.append({connection:bot.id,platform:bot.platform,conversation:message.chatId,kind:'created',message:message.platformMessageId ?? message.messageId,sender:message.senderId,content:message.content.slice(0,32000)})
+      if (bot && bot.platform !== 'discord' && message.channel === channel.name) {
+        try { this.options?.messageStream?.append({connection:bot.id,platform:bot.platform,conversation:message.chatId,kind:'created',message:message.platformMessageId ?? message.messageId,sender:message.senderId,content:message.content.slice(0,32000)}) }
+        catch (error) { markIngressFailure(error, 'stream'); throw error }
+      }
       return this.receive({
         ...message, ...(scope ? { channelAddress: { ...scope, conversationId: message.chatId } } : {}),
         ...(bot ? { admin: bot.purpose === 'personal' } : {}),
