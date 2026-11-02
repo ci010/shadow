@@ -6,6 +6,7 @@ import {
 
 const state = {
   provider: 'auto' as const, effectiveProvider: 'firecrawl' as const, ready: true,
+  deepseek: { ready: false },
   keys: { firecrawl: true, brave: false, exa: false, tavily: false },
 }
 
@@ -62,4 +63,14 @@ test('client gives actionable errors without reflecting backend bodies or saved 
   await assert.rejects(createWebSearchSettingsClient('http://fixture', async () => {
     throw new Error('synthetic-secret')
   }).load(), /Could not reach Main/)
+})
+
+test('DeepSeek source status is shown without a duplicate key draft or patch', () => {
+  const deepseek = { ...state, keys: { ...state.keys, firecrawl: false }, effectiveProvider: 'deepseek', deepseek: { ready: true, providerId: 'official-alias' } }
+  assert.deepEqual(parseWebSearchStatus(deepseek), deepseek)
+  assert.deepEqual(webSearchPatch(parseWebSearchStatus(deepseek), 'deepseek', emptySearchKeys()), { provider: 'deepseek' })
+  assert.equal('deepseek' in emptySearchKeys(), false)
+  for (const source of [{ ready: true }, { ready: false, providerId: 'alias' }, { ready: true, providerId: 'alias', apiKey: 'secret' }]) {
+    assert.throws(() => parseWebSearchStatus({ ...deepseek, deepseek: source }), /invalid/)
+  }
 })

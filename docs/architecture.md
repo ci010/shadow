@@ -2081,13 +2081,36 @@ Project-local search fields are ignored with a warning, not automatically
 promoted to App credentials. Existing legacy keys may remain in old files.
 The runtime resolves the active App selection for each search, so saved changes
 reach running Projects without replacing their tool registry. Automatic mode
-prefers configured Firecrawl, Brave, Exa, then Tavily, finally keyless Firecrawl;
+prefers configured Firecrawl, Brave, Exa, then Tavily, followed by a configured
+official DeepSeek provider, finally keyless Firecrawl;
 explicit selection does not switch services when a request fails or a key is
 missing. The unified `search` tool's `web:` scheme is the entry point;
 there is no separate loadable `web_search` tool or local search service.
 Provider selection does not perform network probes, and requests observe the
 turn's abort signal. Service reachability, rate limits, and provider behavior
 remain external dependencies.
+
+DeepSeek Search reuses the API key of a configured provider of type `deepseek`
+(including aliases), not the current session model. No separate search key is
+stored or accepted. Eligible instances use HTTPS `api.deepseek.com` with the
+root or `/v1` base path, no URL credentials, query or fragment. Custom endpoints
+are deliberately unsupported for Search: their credentials are never forwarded
+to the official API. Among eligible instances with a key, `deepseek` wins, then
+instance IDs in code-point order. The standard provider resolver applies:
+`DEEPSEEK_API_KEY` is a fallback only for the canonical `deepseek` instance;
+aliases require their own configured key. Configuration and environment fallback
+are resolved for each subsequent search. The status endpoint returns
+`deepseek.ready` and the selected `deepseek.providerId` (not its secret); the UI
+shows this source in provider settings guidance rather than a duplicate key field.
+Explicit DeepSeek selection without an eligible provider reports an error.
+
+Requests use [DeepSeek Search](https://api-docs.deepseek.com/api/search/):
+`POST https://api.deepseek.com/v1/tools/search`, Bearer authentication,
+`query` (1–128 Unicode code points, nonblank), `count` (1–50, default 5), and
+`need_content: false`. Results display title, URL, and snippet (falling back to
+summary/content if present). Requests use the session network proxy and abort
+signal; errors do not trigger retries or service fallback. API availability,
+account entitlement and billing remain DeepSeek's responsibility.
 
 ## Events, background work, and cron
 

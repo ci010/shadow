@@ -4,44 +4,52 @@ import { isRecord } from './folders-sidebar.ts'
 import type { WebSearchPatch, WebSearchProvider, WebSearchSelection, WebSearchStatus } from '../../src/config/web-search.ts'
 
 export type { WebSearchPatch, WebSearchProvider, WebSearchSelection, WebSearchStatus }
-export const searchProviders: Array<{ id: WebSearchProvider; label: string }> = [
+export const searchKeyProviders: Array<{ id: keyof WebSearchStatus['keys']; label: string }> = [
   { id: 'firecrawl', label: 'Firecrawl' },
   { id: 'brave', label: 'Brave' },
   { id: 'exa', label: 'Exa' },
   { id: 'tavily', label: 'Tavily' },
 ]
+export const searchProviders: Array<{ id: WebSearchProvider; label: string }> = [...searchKeyProviders, { id: 'deepseek', label: 'DeepSeek' }]
 export const searchProviderLabel = (id: WebSearchProvider) => searchProviders.find(provider => provider.id === id)!.label
 const isProvider = (value: unknown): value is WebSearchProvider => searchProviders.some(provider => provider.id === value)
 export const isSearchSelection = (value: unknown): value is WebSearchSelection => value === 'auto' || isProvider(value)
 
 export function parseWebSearchStatus(value: unknown): WebSearchStatus {
   if (!isRecord(value) || !isSearchSelection(value.provider) || !isProvider(value.effectiveProvider)
-    || typeof value.ready !== 'boolean' || !isRecord(value.keys)) {
+    || typeof value.ready !== 'boolean' || !isRecord(value.keys) || !isRecord(value.deepseek)) {
     throw new Error(t('Main returned invalid web search settings. Reload settings and retry.'))
   }
+  const deepseek = value.deepseek
+  if (typeof deepseek.ready !== 'boolean'
+    || (deepseek.ready ? typeof deepseek.providerId !== 'string' || !deepseek.providerId : deepseek.providerId !== undefined)
+    || Object.keys(deepseek).some(key => !['ready', 'providerId'].includes(key))) {
+    throw new Error(t('Main returned invalid web search settings. Reload settings and retry.'))
+  }
+  const source = deepseek.ready ? { ready: true, providerId: deepseek.providerId as string } : { ready: false }
   const keys = value.keys
-  if (Object.keys(keys).length !== searchProviders.length || searchProviders.some(provider => typeof keys[provider.id] !== 'boolean')
-    || Object.keys(value).some(key => !['provider', 'effectiveProvider', 'ready', 'keys'].includes(key))) {
+  if (Object.keys(keys).length !== searchKeyProviders.length || searchKeyProviders.some(provider => typeof keys[provider.id] !== 'boolean')
+    || Object.keys(value).some(key => !['provider', 'effectiveProvider', 'ready', 'keys', 'deepseek'].includes(key))) {
     throw new Error(t('Main returned invalid web search settings. Reload settings and retry.'))
   }
   const configured = { firecrawl: keys.firecrawl as boolean, brave: keys.brave as boolean, exa: keys.exa as boolean, tavily: keys.tavily as boolean }
   const effective = value.provider === 'auto'
-    ? searchProviders.find(provider => configured[provider.id])?.id ?? 'firecrawl'
+    ? searchKeyProviders.find(provider => configured[provider.id])?.id ?? (source.ready ? 'deepseek' : 'firecrawl')
     : value.provider
-  if (value.effectiveProvider !== effective || value.ready !== (effective === 'firecrawl' || configured[effective])) {
+  if (value.effectiveProvider !== effective || value.ready !== (effective === 'firecrawl' || (effective === 'deepseek' ? source.ready : configured[effective]))) {
     throw new Error(t('Main returned inconsistent web search settings. Reload settings and retry.'))
   }
-  return { provider: value.provider, effectiveProvider: effective, ready: value.ready, keys: configured }
+  return { provider: value.provider, effectiveProvider: effective, ready: value.ready, keys: configured, deepseek: source }
 }
 
-export type SearchKeyDraft = Record<WebSearchProvider, { value: string; remove: boolean }>
+export type SearchKeyDraft = Record<keyof WebSearchStatus['keys'], { value: string; remove: boolean }>
 export function emptySearchKeys(): SearchKeyDraft {
   return { firecrawl: { value: '', remove: false }, brave: { value: '', remove: false }, exa: { value: '', remove: false }, tavily: { value: '', remove: false } }
 }
 
 export function webSearchPatch(state: WebSearchStatus, provider: WebSearchSelection, keys: SearchKeyDraft): WebSearchPatch {
   const apiKeys: NonNullable<WebSearchPatch['apiKeys']> = {}
-  for (const { id } of searchProviders) {
+  for (const { id } of searchKeyProviders) {
     if (keys[id].remove) apiKeys[id] = null
     else if (keys[id].value.trim()) apiKeys[id] = keys[id].value.trim()
   }

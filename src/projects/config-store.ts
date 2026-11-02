@@ -7,7 +7,7 @@ import { parseModelSpec } from '../providers/aggregated.ts'
 import { detectProvider } from '../providers/factory.ts'
 import { McpToolIndex } from '../mcp/tool-index.ts'
 import { MODEL_DEFAULT_FIELDS, modelDefaultsState, modelFields, patchModelDefaults, type ModelDefaultsPatch } from '../config/model-defaults.ts'
-import { WEB_SEARCH_FIELDS, WEB_SEARCH_KEYS, WEB_SEARCH_PROVIDERS, WebSearchPatchSchema,
+import { WEB_SEARCH_FIELDS, WEB_SEARCH_KEYS, WEB_SEARCH_KEY_PROVIDERS, WebSearchPatchSchema,
   sharedWebSearchConfig, withoutWebSearchConfig, type WebSearchPatch } from '../config/web-search.ts'
 
 type Raw = Record<string, unknown>
@@ -49,7 +49,7 @@ export class AppProviderConfigStore extends ConfigStore {
     return super.update(raw => {
       const tools = { ...(record(raw.tools) ? raw.tools : {}) }
       if (parsed.provider !== undefined) tools.webSearchProvider = parsed.provider
-      for (const provider of WEB_SEARCH_PROVIDERS) {
+      for (const provider of WEB_SEARCH_KEY_PROVIDERS) {
         const key = parsed.apiKeys?.[provider]
         if (key !== undefined) tools[WEB_SEARCH_KEYS[provider]] = key ?? ''
       }

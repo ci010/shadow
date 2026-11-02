@@ -15,11 +15,15 @@
         </UiSelect>
       </label>
       <p :id="`${id}-selection-help`" class="settings-help">
-        {{ t('Automatic uses the first configured key: Firecrawl, Brave, Exa, then Tavily. Without keys, it uses keyless Firecrawl. Failed searches never switch services automatically.') }}
+        {{ t('Automatic uses the first configured key: Firecrawl, Brave, Exa, then Tavily. Then it reuses a configured official DeepSeek provider, before keyless Firecrawl. Failed searches never switch services automatically.') }}
+      </p>
+      <p class="settings-help">
+        {{ t('DeepSeek reuses an API key from provider settings; only official DeepSeek endpoints are supported.') }}
+        {{ state?.deepseek.ready ? t('Configured') : t('Not configured') }}<template v-if="state?.deepseek.providerId">: {{ state.deepseek.providerId }}</template>
       </p>
       <h3>{{ t('API keys') }}</h3>
       <p class="settings-help">{{ t('Saved keys are never shown. Leave a field blank to keep its key, or select Remove key. Environment variables override saved keys when Main restarts.') }}</p>
-      <div v-for="item in searchProviders" :key="item.id" class="key-row">
+      <div v-for="item in searchKeyProviders" :key="item.id" class="key-row">
         <div class="key-heading">
           <label :for="`${id}-${item.id}`">{{ item.label }} {{ t('API key') }}</label>
           <span :id="`${id}-${item.id}-status`" class="key-status">{{ state?.keys[item.id] ? t('Configured') : t('Not configured') }}</span>
@@ -39,7 +43,8 @@
     </fieldset>
     <p v-if="state" class="settings-help" role="status">
       {{ t('Saved service:') }} {{ searchProviderLabel(state.effectiveProvider) }}{{ state.provider === 'auto' ? t(' (automatic)') : '' }}.
-      <template v-if="!state.ready">{{ t('Add its API key or choose another service to enable searches.') }}</template>
+      <template v-if="!state.ready && state.effectiveProvider === 'deepseek'">{{ t('Configure an official DeepSeek provider in provider settings or choose another service.') }}</template>
+      <template v-else-if="!state.ready">{{ t('Add its API key or choose another service to enable searches.') }}</template>
       <template v-else-if="state.effectiveProvider === 'firecrawl' && !state.keys.firecrawl">{{ t('Using keyless access.') }}</template>
     </p>
     <p v-if="notice" class="settings-help" role="status">{{ notice }}</p>
@@ -51,7 +56,7 @@ import UiSelect from './UiSelect.vue'
 import { t } from '../i18n.ts'
 import { computed, onUnmounted, ref, useId, watch } from 'vue'
 import {
-  createWebSearchSettingsClient, emptySearchKeys, searchProviderLabel, searchProviders, webSearchPatch,
+  createWebSearchSettingsClient, emptySearchKeys, searchProviderLabel, searchProviders, searchKeyProviders, webSearchPatch,
   type WebSearchSelection, type WebSearchStatus,
 } from '../web-search-settings.ts'
 

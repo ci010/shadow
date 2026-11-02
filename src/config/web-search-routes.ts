@@ -7,7 +7,8 @@ export function appWebSearchPlugin(store: AppProviderConfigStore, getConfig: () 
   return app => {
     app.get('/api/app/web-search', c => {
       c.header('Cache-Control', 'no-store')
-      return c.json(webSearchStatus(getConfig().tools))
+      const config = getConfig()
+      return c.json(webSearchStatus(config.tools, config.providers))
     })
     app.patch('/api/app/web-search', async c => {
       c.header('Cache-Control', 'no-store')
@@ -18,7 +19,7 @@ export function appWebSearchPlugin(store: AppProviderConfigStore, getConfig: () 
       if (!patch.success) return c.json({ error: 'invalid_web_search_settings' }, 400)
       try {
         const config = await store.updateWebSearch(patch.data, c.req.raw.signal)
-        return c.json(webSearchStatus(config.tools))
+        return c.json(webSearchStatus(config.tools, config.providers))
       } catch {
         console.error('[config] App web search settings could not be saved or activated')
         return c.json({ error: 'configuration_update_failed' }, 500)

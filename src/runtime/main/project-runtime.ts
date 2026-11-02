@@ -468,7 +468,7 @@ export async function createProjectRuntime(
   // Web search provider for the `search` tool's `web:` scheme.
   // Not registered as a standalone tool — only wired into SearchTool below.
   // Resolve shared App credentials at execution time so active Projects see updates.
-  const webSearchTool = createLiveWebSearchTool(() => activeConfig.tools)
+  const webSearchTool = createLiveWebSearchTool(() => activeConfig.tools, () => activeConfig.providers)
 
   const loadable = new Map<string, LoadableEntry>()
   loadable.set('agent_tool_test', agentToolTest)
