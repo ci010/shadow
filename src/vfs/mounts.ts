@@ -16,6 +16,9 @@ import type { EventService } from '../events/service.ts'
 import type { EventSubscription } from '../events/types.ts'
 import type { VirtualFsHandler, VirtualFsListHandler, VirtualFsWriteHandler } from './virtual-fs.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
+import type { SessionState } from '../sessions/session-store.ts'
+import { renderSessionDirectory, sessionDirectory, sessionMetadata } from './session-index.ts'
+import type { VirtualDirectory, VirtualDirectoryHandler } from './virtual-fs.ts'
 import { lstat, readdir, readFile, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { isNotFoundError } from '../utils/runtime.ts'
@@ -34,7 +37,27 @@ export function createSessionsHandler(
 ): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
+  directory: VirtualDirectoryHandler
 } {
+  const index = async (subpath: string, context: ExecutionContext): Promise<VirtualDirectory> => {
+    const summaries = await (sessions.listHistorySessions?.() ?? sessions.listSessions())
+    const states: SessionState[] = []
+    for (const summary of summaries) {
+      context.signal.throwIfAborted()
+      const state = await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(summary.sessionId)
+      states.push({ config: {}, ...summary, ...state })
+    }
+    context.signal.throwIfAborted()
+    const parentId = subpath.endsWith('/children') ? subpath.slice(0, -9) : undefined
+    if (parentId !== undefined && !states.some(state => state.sessionId === parentId)) throw new Error('Unknown parent session.')
+    const view = parentId !== undefined ? 'children' : subpath === 'all' ? 'all' : subpath === 'tasks' ? 'tasks' : 'root'
+    const directory = sessionDirectory(states, view, parentId)
+    const external = (view === 'root' || view === 'all') && remote?.canDiscover(context)
+      ? remote.entries(context).filter(entry => !entry.name.includes('/')) : []
+    directory.items.push(...external.map(entry => `Owned remote conversation (cached):\n${entry.content}`))
+    return directory
+  }
+  const isIndex = (subpath: string) => !subpath || subpath === 'all' || subpath === 'tasks' || subpath.endsWith('/children')
   const read: VirtualFsHandler = async (subpath, context) => {
     topics?.().assertActor(context.projectId, context.sessionId)
     context.signal.throwIfAborted()
@@ -47,28 +70,7 @@ export function createSessionsHandler(
       if (!summary) throw new Error('Unknown Project session metadata.')
       return JSON.stringify(summary, null, 2)
     }
-    if (!subpath) {
-      const allList = await (sessions.listHistorySessions?.() ?? sessions.listSessions())
-      // Hide internal pipeline sessions (heartbeat:*) from the default listing.
-      // They can still be read directly by ID (e.g. v:sessions/heartbeat:reflector-...).
-      const list = allList.filter((s) => !s.sessionId.startsWith('heartbeat:'))
-      const external = remote?.canDiscover(context)
-        ? remote.entries(context).filter(entry => !entry.name.includes('/')) : []
-      if (list.length === 0 && external.length === 0) return 'No sessions.'
-      const lines: string[] = [`Sessions (${list.length + external.length}):`]
-      for (const s of list) {
-        const state = await (sessions.readSessionState?.bind(sessions) ?? sessions.getSessionState.bind(sessions))(s.sessionId)
-        const parts = [`- ${s.sessionId}`]
-        if (state?.originUser) parts.push(`(by ${state.originUser})`)
-        if (state?.parent?.id) parts.push(`←parent: ${state.parent.id}`)
-        if (state?.mode && state.mode !== 'session') parts.push(`mode=${state.mode} status=${state.executionStatus ?? 'unknown'}`)
-        if (s.lastActivityAt) parts.push(`[${s.lastActivityAt}]`)
-        parts.push(`segments=${s.segmentIndex + 1}`)
-        lines.push(parts.join(' '))
-      }
-      if (external.length) lines.push('', 'Owned remote conversations (cached):', ...external.map(entry => entry.content))
-      return lines.join('\n')
-    }
+    if (isIndex(subpath)) return renderSessionDirectory(await index(subpath, context))
 
     const entries = await list(context, { subpath })
     const entry = entries.find(entry => entry.name === subpath)
@@ -78,9 +80,13 @@ export function createSessionsHandler(
   const list: VirtualFsListHandler = async (context, options) => {
     topics?.().assertActor(context.projectId, context.sessionId)
     context.signal.throwIfAborted()
+    const requested = options?.subpath
+    // Explicit navigation views only: don't duplicate index text in global grep/glob.
+    if (requested && !requested.startsWith('remote:') && isIndex(requested)) {
+      return [{ name: requested, content: options?.content === false ? '' : renderSessionDirectory(await index(requested, context)) }]
+    }
     const all = await (sessions.listHistorySessions?.() ?? sessions.listSessions())
     const entries = []
-    const requested = options?.subpath
     if (!requested?.startsWith('remote:') && requested?.includes('?')) throw new Error('Session query parameters are not supported. Use /overview or /full and read.offset/read.limit, not index/page_size.')
     // Resolve display aliases against all known physical segments, never the current
     // segment alone. Ambiguity fails closed rather than selecting a different history.
@@ -146,8 +152,12 @@ export function createSessionsHandler(
       }]
     }
     if (remote?.canDiscover(context)) entries.push(...remote.entries(context, options))
+    // Root grep uses history metadata as its canonical hit. Keep brief discovery
+    // for glob and explicitly scoped reads/searches without duplicate global hits.
+    const historyIds = new Set(all.map(session => session.sessionId))
     for (const summary of await topics?.().summaries() ?? []) {
-      if (selected(`${summary.sessionId}/brief`)) {
+      const includeBrief = options?.content === false || subpath?.endsWith('/brief') || !historyIds.has(summary.sessionId)
+      if (includeBrief && selected(`${summary.sessionId}/brief`)) {
         entries.push({ name: `${summary.sessionId}/brief`, content: options?.content === false ? '' : JSON.stringify(summary, null, 2) })
       }
     }
@@ -173,13 +183,19 @@ export function createSessionsHandler(
 
       entries.push({
         name: s.sessionId + viewSuffix,
-        content: parts.join('  ') + '\n\n' + historyText,
+        content: parts.join('  ') + '\n' + sessionMetadata({ config: {}, ...s, ...state }, false).join('\n')
+          + `\nchildren: v:sessions/${s.sessionId}/children\n\n` + historyText,
       })
     }
     return entries
   }
 
-  return { read, list }
+  const directory: VirtualDirectoryHandler = async (subpath, context) => {
+    topics?.().assertActor(context.projectId, context.sessionId)
+    context.signal.throwIfAborted()
+    return !subpath.startsWith('remote:') && isIndex(subpath) ? index(subpath, context) : null
+  }
+  return { read, list, directory }
 }
 
 // ── Background tasks ─────────────────────────────────────────────────────

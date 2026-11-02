@@ -297,3 +297,79 @@ test('notes persist across reload without growing every inference or losing opti
     assert.equal(reopened.workFocus(owner), key)
   } finally { reopened.close() }
 }))
+
+
+test('creation retry keys survive concurrency, conflict, failed publication and restart', async () => withTempWorkspace(async home => {
+  let f = fixture(home)
+  const request = { idempotencyKey: 'request-1' }
+  const [a, b] = await Promise.all([f.create(request), f.create(request)])
+  assert.equal(a.key, b.key)
+  assert.equal(f.changes.length, 1)
+  await assert.rejects(f.create({ ...request, title: 'Changed' }), /conflicts/)
+  assert.notEqual((await f.create()).key, a.key)
+  f.store.close()
+  f = fixture(home)
+  try {
+    assert.equal((await f.create(request)).key, a.key)
+    assert.equal(f.changes.length, 0)
+    const failing = new WorkAlignment(f.store, { state: id => f.states.get(id), evidence: async () => {}, changed: async () => { throw new Error('offline') }, fresh: async () => {}, successor: async () => undefined })
+    const data = { title: 'Saved', definition: { objective: 'Saved before publication' }, idempotencyKey: 'failure' }
+    await assert.rejects(failing.execute(actor(owner), 'create', undefined, undefined, data), /saved/)
+    const retry = workRecordSchema.parse(await failing.execute(actor(owner), 'create', undefined, undefined, data))
+    assert.equal(retry.sequence, 1)
+  } finally { f.store.close() }
+}))
+
+test('assignment delivery reserves once, keeps failed and old receipts, and does not change assignment', async () => withTempWorkspace(async home => {
+  let f = fixture(home)
+  const record = await f.create({ assignee: worker })
+  const reference = { key: record.key, assignmentRevision: 1 }
+  const input = () => ({ id: crypto.randomUUID(), kind: 'message' as const, timestamp: new Date().toISOString(), source: { kind: 'session' as const, sessionId: owner }, policy: 'queue' as const, content: 'Do the work' })
+  let calls = 0
+  const deliver = async (sessionId: string, message: import('./input.ts').SessionInput) => {
+    calls++
+    assert.deepEqual(message.source.kind === 'session' && message.source.workAssignment, reference)
+    return { status: 'accepted' as const, sessionId, inputId: message.id }
+  }
+  const first = await f.alignment.deliverAssignment(owner, worker, reference, input(), deliver)
+  assert.equal((await f.alignment.deliverAssignment(owner, worker, reference, input(), deliver)).inputId, first.inputId)
+  assert.equal(calls, 1)
+  assert.equal(f.alignment.get(record.key).sequence, record.sequence)
+  assert.equal(f.alignment.get(record.key).workflow?.status, 'pending')
+  await assert.rejects(f.alignment.deliverAssignment(peer, worker, reference, input(), deliver), /manager/)
+  await assert.rejects(f.alignment.deliverAssignment(owner, worker, reference, { ...input(), content: 'Different' }, deliver), /different kickoff/)
+  const reassigned = await f.alignment.assignNote(actor(owner), record.key, record.sequence, peer)
+  await assert.rejects(f.alignment.deliverAssignment(owner, worker, reference, input(), deliver), /assignmentRevision/)
+  const next = { key: record.key, assignmentRevision: reassigned.workflow!.assignmentRevision }
+  await assert.rejects(f.alignment.deliverAssignment(owner, peer, next, input(), async () => { throw new Error('network') }), /network/)
+  assert.equal(f.store.assignmentDelivery(record.key, next.assignmentRevision)?.status, 'unconfirmed')
+  f.store.close()
+  f = fixture(home)
+  try {
+    assert.equal(f.store.assignmentDelivery(record.key, 1)?.status, 'accepted')
+    await assert.rejects(f.alignment.deliverAssignment(owner, peer, next, input(), deliver), /unconfirmed/)
+    assert.equal(calls, 1)
+  } finally { f.store.close() }
+}))
+
+
+test('a late acceptance is recorded only against its old assignment revision', async () => withTempWorkspace(async home => {
+  const f = fixture(home)
+  try {
+    const record = await f.create({ assignee: worker })
+    const reference = { key: record.key, assignmentRevision: 1 }
+    let nextRevision = 0
+    await f.alignment.deliverAssignment(owner, worker, reference, {
+      id: crypto.randomUUID(), kind: 'message', timestamp: new Date().toISOString(),
+      source: { kind: 'session', sessionId: owner }, policy: 'queue', content: 'Kickoff',
+    }, async (sessionId, message) => {
+      const changed = await f.alignment.assignNote(actor(owner), record.key, record.sequence, peer)
+      nextRevision = changed.workflow!.assignmentRevision
+      return { status: 'accepted', sessionId, inputId: message.id }
+    })
+    assert.equal(f.store.assignmentDelivery(record.key, 1)?.status, 'accepted')
+    assert.equal(f.store.assignmentDelivery(record.key, nextRevision), undefined)
+    assert.equal(f.alignment.get(record.key).workflow!.assignee, peer)
+    assert.equal(f.alignment.get(record.key).workflow!.status, 'pending')
+  } finally { f.store.close() }
+}))

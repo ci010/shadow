@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+
 import { z } from 'zod'
 import type { InitiativeStore } from '../initiatives/store.ts'
 import { WorkConflict, workAdoptionSchema, workChangeSchema, workDefinitionSchema, workInventorySchema, workKey,
@@ -13,6 +14,13 @@ import type { Tool as TypedTool, ToolResult } from '../tools/tool.ts'
 import { delegationOwner } from './execution-scope.ts'
 import { type WorkPolicy, type WorkBinding } from './work-policy.ts'
 import { workNotesSchema, workNotePatchSchema, workDecisionContextSchema, type WorkDecisionContext } from '../initiatives/work-notes.ts'
+
+function canonicalRequest(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalRequest).join(',')}]`
+  if (value && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonicalRequest(v)}`).join(',')}}`
+  return JSON.stringify(value)
+}
+function requestHash(value: unknown): string { return createHash('sha256').update(canonicalRequest(value)).digest('hex') }
 
 type Tool = TypedTool<ToolResult>
 
@@ -42,6 +50,7 @@ export interface WorkAlignmentDeps {
 export const WORK_HELP = {
   notice: 'Notes orient work, never gate tools or grant permission. Completion is a reported result, not human acceptance.',
   create: { title: 'Short name', definition: { objective: 'Desired outcome; acceptance and boundaries are optional lists' },
+    idempotencyKey: 'Optional creator/Project-scoped retry key (max 200); normalized identical requests return existing Work, changed parameters conflict. Retries do not republish saved creation.',
     parentKey: 'Optional existing parent', assignee: 'Optional durable session ID or null',
     notes: { kind: 'goal|approach|task|finding', relation: { kind: 'supports|requires|assumption', reason: 'Why this branch follows from the parent; omit for roots' } },
     requestQuote: 'Optional exact quote from the current user input; the host supplies its source' },
@@ -148,6 +157,24 @@ export class WorkAlignment implements WorkToolGuard {
     const record = this.get(binding.key)
     await this.assignNote({ kind: 'session', sessionId: controller }, record.key, record.sequence, sessionId, signal)
     this.store.setWorkFocus(sessionId, record.key)
+  }
+
+  async deliverAssignment(manager: string, assignee: string, reference: { key: string; assignmentRevision: number }, input: import('./input.ts').SessionMessageInput, deliver: import('./input.ts').DeliverInput): Promise<import('./input.ts').DeliveryReceipt> {
+    this.requireSession(manager)
+    this.requireSession(assignee)
+    if (input.source.kind !== 'session' || input.source.sessionId !== manager) throw new WorkConflict('Assignment input must originate from its manager.')
+    const fingerprint = requestHash({ content: input.content, media: input.media, policy: input.policy, manager, assignee,
+      coordination: input.source.coordination, workStamps: input.source.workStamps })
+    const reservation = this.store.reserveAssignmentDelivery(reference.key, reference.assignmentRevision, manager, assignee, input.id, fingerprint)
+    if (!reservation.fresh) {
+      if (reservation.status === 'accepted') return { status: 'accepted', sessionId: assignee, inputId: reservation.inputId, delivery: input.policy }
+      throw new WorkConflict(`Assignment delivery inputId=${reservation.inputId} is unconfirmed; inspect the recipient before sending again. It has not been retried.`)
+    }
+    input.source.workAssignment = reference
+    const receipt = await deliver(assignee, input)
+    if (receipt.status !== 'accepted' || receipt.disposition === 'filtered' || receipt.sessionId !== assignee || receipt.inputId !== input.id) throw new WorkConflict('Assignment delivery was not confirmed by the recipient.')
+    this.store.confirmAssignmentDelivery(reference.key, reference.assignmentRevision, manager, assignee, input.id)
+    return receipt
   }
 
   linkExecution(sessionId: string, parentId: string, binding?: WorkBinding): void {
@@ -533,6 +560,7 @@ export class WorkAlignment implements WorkToolGuard {
     }
     if (action === 'create') {
       const request = z.object({
+        idempotencyKey: z.string().trim().min(1).max(200).optional(),
         title: z.string().trim().min(1).max(160), parentKey: z.string().min(1).max(600).optional(),
         assignee: z.string().min(1).max(512).nullable().optional(),
         definition: workDefinitionSchema, reason: z.string().trim().min(1).max(2000).default('Working interpretation, not new authorization'),
@@ -540,6 +568,19 @@ export class WorkAlignment implements WorkToolGuard {
         requestQuote: decisionEvidenceSchema.shape.quote.optional(),
       }).strict().parse(data)
       if (actor.kind === 'session') this.requireSession(actor.sessionId)
+      const creator = actor.kind === 'session' ? `session:${actor.sessionId}` : 'user'
+      const normalized = { ...request, assignee: request.assignee === undefined ? actor.kind === 'session' ? actor.sessionId : null : request.assignee }
+      const creationRequest = request.idempotencyKey ? { creator, key: request.idempotencyKey, fingerprint: requestHash(normalized) } : undefined
+      const identity = creationRequest ? requestHash([creator, creationRequest.key]) : undefined
+      // A deterministic UUID makes the existing transactional primary key the concurrency arbiter.
+      const createId = identity ? `${identity.slice(0, 8)}-${identity.slice(8, 12)}-8${identity.slice(13, 16)}-a${identity.slice(17, 20)}-${identity.slice(20, 32)}` : randomUUID()
+      const existing = () => {
+        const found = this.store.workRecords().find(record => record.key === `work:${createId}`)
+        if (found && (!creationRequest || canonicalRequest(found.creationRequest) !== canonicalRequest(creationRequest))) throw new WorkConflict('Creation idempotency key conflicts with a different request.')
+        return found
+      }
+      const replay = creationRequest && existing()
+      if (replay) return replay
       const parent = request.parentKey ? this.get(request.parentKey) : undefined
       if (parent) {
         if (!(actor.kind === 'session' && this.store.workAuthority(parent.subject).executor === actor.sessionId)) this.assertController(parent, actor)
@@ -558,9 +599,9 @@ export class WorkAlignment implements WorkToolGuard {
       for (const source of request.definition.evidence) await this.deps.evidence(source)
       signal?.throwIfAborted()
       if (parent && !(actor.kind === 'session' && this.store.workAuthority(this.get(parent.key).subject).executor === actor.sessionId)) this.assertController(this.get(parent.key), actor)
-      const subject = { kind: 'work' as const, id: randomUUID() }
+      const subject = { kind: 'work' as const, id: createId }
       const record: WorkRecord = {
-        key: workKey(subject), subject, revision: 1, sequence: 1,
+        key: workKey(subject), subject, revision: 1, sequence: 1, creationRequest,
         definition: request.definition, origin: actor.kind === 'user' ? 'human' : 'agent_interpretation',
         changedBy: this.actorName(actor), changedAt: new Date().toISOString(),
         change: 'understanding', reason: request.reason, paused: false,
@@ -569,7 +610,12 @@ export class WorkAlignment implements WorkToolGuard {
           manager: actor.kind === 'session' ? actor.sessionId : parent ? this.store.workAuthority(parent.subject).manager : assignee,
           assignee, assignmentRevision: 1, status: 'pending', dependencies: [] },
       }
-      this.store.saveWork(record, 0, this.actorName(actor), 'created')
+      try { this.store.saveWork(record, 0, this.actorName(actor), 'created') }
+      catch (error) {
+        const winner = creationRequest && existing()
+        if (winner) return winner
+        throw error
+      }
       if (actor.kind === 'session') this.store.linkWorkSession(actor.sessionId, record.key)
       if (assignee && (actor.kind === 'user' || assignee === actor.sessionId)) this.store.setWorkFocus(assignee, record.key)
       await this.publishNote(record)

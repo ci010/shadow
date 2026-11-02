@@ -16,6 +16,7 @@ export function workReceipt(record: WorkRecord) {
     key: record.key, version: record.sequence, goalRevision: record.revision,
     title: record.workflow?.title, status: record.workflow?.status,
     parentKey: record.workflow?.parentKey, assignee: record.workflow?.assignee,
+    assignmentRevision: record.workflow?.assignmentRevision,
     impactPending: !!record.notes?.attention && !record.notes.attention.reviewed,
   }
 }
@@ -30,7 +31,7 @@ export class WorkTool implements Tool {
       action: { type: 'string', enum: request.shape.action.options },
       key: { type: 'string', description: 'Stable work key.' },
       version: { type: 'integer', description: 'Current note version for update, assign or review; returned by reads and writes.' },
-      data: { type: 'object', description: 'Only action-specific fields. context data.includeSchema=true returns help.' },
+      data: { type: 'object', description: 'Only action-specific fields. create accepts optional idempotencyKey: same creator/Project and normalized request returns existing Work; conflicting parameters reject. context data.includeSchema=true returns help.' },
     }, required: ['action'], additionalProperties: false,
   }
 
@@ -50,6 +51,7 @@ export class WorkTool implements Tool {
         associated: this.alignment.store.workSessionKeys(context.sessionId),
         records: view.records.map(record => ({
           ...workReceipt(record), definition: record.definition, origin: record.origin,
+          assignmentDelivery: record.workflow ? this.alignment.store.assignmentDelivery(record.key, record.workflow.assignmentRevision) ?? null : null,
           userQuote: record.requestSource?.quote, notes: record.notes, authority: record.authority,
           contextNeedsReview: record.contextChanged,
           path: this.alignment.decisionContext(context.sessionId, record.key)?.path,

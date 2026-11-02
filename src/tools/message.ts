@@ -40,6 +40,7 @@ export class MessageTool implements Tool {
       attention: { type: 'string', enum: ['routine', 'milestone', 'blocker', 'decision', 'correction'], description: 'Routine status is archived by default. Other values require a response and cannot be silent. Do not hide failures or corrections as routine progress.' },
       initiativeId: { type: 'string', description: 'Optional existing Initiative in this Project.' },
       itemId: { type: 'string', description: 'Optional existing work item in initiativeId.' },
+      work: { type: 'object', description: 'Explicit assignment kickoff: {key, assignmentRevision}. Current manager to current assignee only. One durable admission per assignment; unconfirmed attempts are not replayed.' },
     },
     required: ['content', 'sessionId'],
   }
@@ -54,6 +55,7 @@ export class MessageTool implements Tool {
     private assertWorkReference?: (initiativeId: string, itemId?: string) => void,
     private workIsCurrent?: (stamps: WorkStamp[]) => boolean,
     private remote?: Pick<A2aSessions, 'message'>,
+    private alignment?: import('../sessions/work-alignment.ts').WorkAlignment,
   ) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
@@ -156,7 +158,12 @@ export class MessageTool implements Tool {
       content: stale ? `[Historical update from an obsolete work revision; not a new instruction or completion.]\n${text}` : text,
       media,
     }
-    const receipt = await this.deliver(targetSessionId, input)
+    const work = args.work === undefined ? undefined : z.object({ key: z.string().min(1).max(600), assignmentRevision: z.number().int().positive() }).strict().parse(args.work)
+    if (work && (!this.alignment || stale || delivery === 'silent')) throw new Error('Assignment kickoff requires current Work service and non-silent delivery.')
+    const receipt = work
+      ? await this.alignment!.deliverAssignment(currentSessionId, targetSessionId, work, input, this.deliver)
+      : await this.deliver(targetSessionId, input)
+    if (receipt.inputId !== input.id) return `Message already accepted by ${targetSessionId}; inputId=${receipt.inputId}. Admission only, not started or done.`
 
     const outbound: OutboundMessage = {
       event: 'response',

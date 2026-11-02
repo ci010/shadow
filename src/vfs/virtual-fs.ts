@@ -10,6 +10,17 @@ export interface VirtualEntry {
   warning?: string
 }
 
+/** Structured navigation entries, independent of exhaustive search enumeration. */
+export interface VirtualDirectory {
+  header: string
+  items: string[]
+}
+
+export type VirtualDirectoryHandler = (
+  subpath: string,
+  context: ExecutionContext,
+) => Promise<VirtualDirectory | null> | VirtualDirectory | null
+
 export interface VirtualListOptions {
   subpath?: string
   content?: boolean
@@ -55,6 +66,7 @@ interface VirtualMount {
   read: VirtualFsHandler
   list?: VirtualFsListHandler
   write?: VirtualFsWriteHandler
+  directory?: VirtualDirectoryHandler
 }
 
 /**
@@ -77,8 +89,9 @@ export class VirtualFs {
     read: VirtualFsHandler,
     list?: VirtualFsListHandler,
     write?: VirtualFsWriteHandler,
+    directory?: VirtualDirectoryHandler,
   ): void {
-    this.mounts.set(prefix, { description, read, list, write })
+    this.mounts.set(prefix, { description, read, list, write, directory })
   }
 
   /** All registered mount prefixes with descriptions. */
@@ -105,6 +118,17 @@ export class VirtualFs {
 
     const result = mount.read(subpath, context)
     return result instanceof Promise ? result : Promise.resolve(result)
+  }
+
+  /** null means this path has no structured navigation view; use ordinary read. */
+  async directory(relativePath: string, context: ExecutionContext): Promise<VirtualDirectory | null> {
+    if (context.memoryAccess) throw new Error('Channel memory leases cannot discover Project resources.')
+    const { prefix, subpath } = this.parse(relativePath)
+    if (subpath.split('/').some(part => part === '.' || part === '..')) throw new Error('Invalid virtual directory path.')
+    context.signal.throwIfAborted()
+    const result = await this.mounts.get(prefix)?.directory?.(subpath, context) ?? null
+    context.signal.throwIfAborted()
+    return result
   }
 
   /** Virtual writes never fall through to the host filesystem. */

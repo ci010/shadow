@@ -70,8 +70,10 @@ export function buildSenderTag(msg: SessionMessageInput): string {
     : ''
   const revisions = msg.source.kind === 'session' && msg.source.workStamps?.length
     ? ` work-revisions="${escapeAttr(JSON.stringify(msg.source.workStamps.map(({ key, revision }) => ({ key, revision }))))}"` : ''
+  const assignment = msg.source.kind === 'session' && msg.source.workAssignment
+    ? ` work-key="${escapeAttr(msg.source.workAssignment.key)}" assignment-revision="${msg.source.workAssignment.assignmentRevision}" input-id="${escapeAttr(msg.id)}"` : ''
   const platform = msg.source.kind === 'user' ? platformAttributes(msg.source.sender.displayMetadata) : ''
-  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin}${work}${revisions}${platform} />`
+  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin}${work}${revisions}${assignment}${platform} />`
 }
 
 /**

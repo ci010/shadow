@@ -159,6 +159,12 @@ export class InitiativeStore {
     this.#transaction(actor, () => {
       const prior = this.#one('work_contracts', parsed.key)
       if ((Number(prior?.sequence) || 0) !== expectedSequence) throw new WorkConflict('Work contract changed; reload before applying.')
+      // Creation identity is immutable, including through legacy record replacement paths.
+      if (prior) {
+        const original = workRecordSchema.parse(JSON.parse(String(prior.data))).creationRequest
+        if (parsed.creationRequest && JSON.stringify(parsed.creationRequest) !== JSON.stringify(original)) throw new WorkConflict('Creation request identity is immutable.')
+        parsed.creationRequest = original
+      }
       if (!prior && this.#all('SELECT id FROM work_contracts').length >= MAX_TABLE_ROWS) throw new WorkConflict('Work contract limit exceeded.')
       const records = this.#all('SELECT data FROM work_contracts')
         .map(row => workRecordSchema.parse(JSON.parse(String(row.data)))).filter(item => item.key !== parsed.key)
@@ -221,6 +227,43 @@ export class InitiativeStore {
       total: items.length, done: items.filter(record => record.workflow?.status === 'done').length,
       cancelled: items.filter(record => record.workflow?.status === 'cancelled').length,
     } }
+  }
+
+  /** One explicit kickoff per assignment. A reserved but unconfirmed send is never replayed blindly. */
+  assignmentDelivery(key: string, revision: number): { inputId: string; fingerprint: string; manager: string; assignee: string; status: 'unconfirmed' | 'accepted' } | undefined {
+    return this.#transaction('', () => this.#assignmentDelivery(key, revision), undefined, true)
+  }
+
+  #assignmentDelivery(key: string, revision: number): { inputId: string; fingerprint: string; manager: string; assignee: string; status: 'unconfirmed' | 'accepted' } | undefined {
+    const events = this.#all("SELECT data FROM work_contract_events WHERE work_key=? AND kind='assignment_delivery'", [key])
+      .map(row => JSON.parse(String(row.data))).filter(row => row.assignmentRevision === revision)
+    return events.find(row => row.status === 'accepted') ?? events[0]
+  }
+
+  reserveAssignmentDelivery(key: string, revision: number, manager: string, assignee: string, inputId: string, fingerprint: string) {
+    return this.#transaction(manager, () => {
+      const row = this.#one('work_contracts', key)
+      const work = row && workRecordSchema.parse(JSON.parse(String(row.data))).workflow
+      if (!work || work.manager !== manager || work.assignee !== assignee || work.assignmentRevision !== revision) throw new WorkConflict('Assignment delivery requires the current manager, assignee and assignmentRevision.')
+      const prior = this.#assignmentDelivery(key, revision)
+      if (prior) {
+        if (prior.fingerprint !== fingerprint) throw new WorkConflict('Assignment already has a different kickoff. Send subsequent context without a Work delivery reference.')
+        return { ...prior, fresh: false }
+      }
+      const delivery = { inputId, fingerprint, status: 'unconfirmed' as const }
+      this.#workEvent(key, manager, 'assignment_delivery', { ...delivery, assignmentRevision: revision, manager, assignee })
+      return { ...delivery, fresh: true }
+    })
+  }
+
+  confirmAssignmentDelivery(key: string, revision: number, manager: string, assignee: string, inputId: string): void {
+    this.#transaction(manager, () => {
+      const prior = this.#assignmentDelivery(key, revision)
+      if (!prior || prior.inputId !== inputId || prior.manager !== manager || prior.assignee !== assignee) throw new WorkConflict('Unknown assignment delivery receipt.')
+      if (prior.status === 'accepted') return
+      // Receipt belongs to the reserved revision, even if responsibility changed in flight.
+      this.#workEvent(key, manager, 'assignment_delivery', { ...prior, status: 'accepted', assignmentRevision: revision, manager, assignee })
+    })
   }
 
   workEvent(key: string, actor: string, kind: string, data: unknown): void {

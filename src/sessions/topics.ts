@@ -196,10 +196,14 @@ export class TopicService {
             : { kind: 'user', sender: { channel: 'web', chatId: sessionId.slice(4), senderId: 'web-user', messageId: inputId } }
           try {
             signal?.throwIfAborted()
-            await this.options.sessions.deliver(sessionId, {
-              id: inputId, kind: 'message', timestamp: new Date().toISOString(), source,
-              policy: 'queue', content: parsed.initialMessage,
-            })
+            const input = {
+              id: inputId, kind: 'message' as const, timestamp: new Date().toISOString(), source,
+              policy: 'queue' as const, content: parsed.initialMessage,
+            }
+            if (parsed.work) {
+              const assignmentRevision = alignment!.get(parsed.work.key).workflow!.assignmentRevision
+              await alignment!.deliverAssignment(createdBySessionId!, sessionId, { key: parsed.work.key, assignmentRevision }, input, (target, message) => this.options.sessions.deliver(target, message))
+            } else await this.options.sessions.deliver(sessionId, input)
           } catch (error) {
             throw new TopicError(`Session ${sessionId} was created, but its initial message was not confirmed accepted: ${error instanceof Error ? error.message : String(error)}. Inspect the session before sending it again.`, 409)
           }

@@ -128,3 +128,56 @@ mechanisms, not a second preference table. Runtime profile guidance and
 reflector instructions retain attribution, uncertainty and corrections.
 Automatic extraction remains model-driven, and learning may be disabled; this
 does not guarantee every preference has already been captured.
+
+## Work creation retries and assignment delivery
+
+Work remains optional. Neither a note nor its delivery receipt authorizes an
+operation, starts an execution, cancels the previous owner, or completes Work.
+
+`work create` accepts optional `data.idempotencyKey` (1–200 trimmed characters).
+The owning Project database and creator scope the key. Session creators use their
+session identity; the existing authenticated-human actor is a single `user`
+namespace. Parsed/defaulted request fields are fingerprinted: identical retries
+return the existing (possibly subsequently updated) Work; changed parameters
+reject the key. Omit the key for the old fresh-create behavior. The deterministic
+Work identity and SQLite transaction arbitrate concurrent creates, including
+separate service instances. Retries after a saved creation's notification fails
+do not republish notifications or repeat focus changes. This is not a notification
+outbox: a crash or failure can leave notification/focus follow-up incomplete.
+
+Responsibility and delivery are still separate operations. `assign` receipts and
+`work context` expose `assignmentRevision`. For an existing ordinary peer, send
+its initial assignment message with:
+
+```json
+{
+  "sessionId": "web:peer",
+  "content": "The bounded assignment and necessary context",
+  "work": { "key": "work:...", "assignmentRevision": 2 }
+}
+```
+
+This explicit `message.work` reference requires the current Work manager as
+sender, current assignee as recipient, and exact assignment revision. Normal
+message access rules still apply. Silent/obsolete inputs and remote A2A messages
+do not support this kickoff binding. Subsequent context messages omit `work`;
+this reference denotes one kickoff per assignment, not every message about Work.
+Creating a peer with `session create`'s `work:{key}` and `initialMessage` uses the
+same mechanism after binding responsibility, without a second wakeup.
+
+The existing Work audit store reserves an `assignment_delivery` event before
+calling normal Session delivery, then records `accepted` with its input ID after
+a matching, non-filtered receipt. `work context` returns the current assignment's
+`assignmentDelivery` (`null`, `unconfirmed`, or `accepted`); old revisions remain
+in audit history. These events do not increment the note or assignment revision.
+A late receipt updates only the old revision. The sender envelope includes Work
+key, assignment revision and input ID, retained by JSONL and SQLite histories.
+
+Identical confirmed retries return the original input ID without sending again;
+a conflicting kickoff rejects. An unconfirmed attempt is deliberately not
+replayed: inspect the recipient/history before deciding the next action. Receipt
+persistence and Session admission are not one transaction, so an interrupted send
+can remain unconfirmed even if admitted. There is no automatic retry worker or
+claim of exactly-once execution. `accepted` means admission only—not applied,
+started, successful, or done—and existing Session queue/recovery semantics remain
+unchanged. A delivery failure leaves the assignment intact.

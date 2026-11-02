@@ -92,6 +92,8 @@ export const workRecordSchema = z.object({
   origin: z.enum(['human', 'agent_interpretation']),
   changedBy: z.string().min(1), changedAt: z.string().datetime(),
   change: workChangeSchema.shape.change, reason: text, paused: z.boolean(),
+  /** Immutable creation request identity; scoped by the owning Project database. */
+  creationRequest: z.object({ creator: z.string().min(1), key: z.string().min(1).max(200), fingerprint: z.string().length(64) }).strict().optional(),
   requestSource: decisionEvidenceSchema.extend({ kind: z.literal('user') }).optional(),
   adoption: workAdoptionSchema.extend({
     id: z.string().uuid(), sessionId: z.string().min(1), revision: z.number().int().positive(),
