@@ -473,14 +473,32 @@ recovery remain available. Channel-manager spontaneous connection transitions do
 not yet have a complete notification source; silently changed channel connection
 status may require manual refresh or live recovery rather than being real-time.
 
-Known session invalidations with supported change hints can request
+Known session invalidations with supported change hints, or legacy scoped
+invalidations without hints (including `session.ended`), can request
 `GET /api/sessions/graph?sessionIds=<JSON array>` instead of the full graph.
 Requests are bounded to 32 distinct IDs and remain Project-scoped. The response
-contains complete summaries and physical nodes for only those sessions; the
-client merges them into its retained wire graph before resolving cross-session
-parents. Initial reads, unknown/new sessions, broad or legacy invalidations,
-manual refresh and recovery use the full graph. Missing/deleted or malformed
-partial rows trigger a full read, rather than guessing membership/topology.
+contains complete summaries and physical nodes for only those sessions. Before
+merging, the client compares all session/node fields except known mutable
+presentation and status attributes against its retained wire graph. Changed
+lineage, parent references/indexes, segment sets, membership or unknown future
+fields require an authoritative full read; this also applies to hinted events.
+Stable summaries are merged before resolving cross-session physical parents.
+The bus-to-realtime mapper keeps handoff global because it can change both
+source and target; it must not collapse that fact into a source-only probe.
+TopicService scoped callbacks describe self-metadata or creation (unknown IDs
+recover full); its Folder registration callback remains global.
+Initial reads, unknown/new sessions, global invalidations, malformed/unknown
+hints, manual refresh and recovery use the full graph. Missing/deleted or
+malformed partial rows trigger a full read rather than guessing topology. A
+structural scoped event therefore costs a bounded probe plus a full recovery;
+this conservative first optimization does not support partial node creation.
+Invalidations during an in-flight read retain their serialized follow-up; no
+additional debounce or event suppression is introduced. Activity/history/Work
+reader behavior and publisher wire contracts are unchanged.
+Without captured SSE payloads, repeated HAR full reads alone cannot establish
+which invalidation caused each request. Request/byte savings for stable scoped
+events are covered by a synthetic 665-session replay, not a measured live CPU
+improvement or a claim that every HAR reread is avoidable.
 Graph `name` and `title` are label previews capped at 160 UTF-16 code units
 (with an ellipsis and no split surrogate pair). Their existing naming/fallback
 priority is retained; persisted names and full task descriptions are unchanged.

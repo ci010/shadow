@@ -3,6 +3,20 @@ import { createConditionalProjectJson, projectJson } from './projects.ts'
 
 interface Graph { sessions: Array<Record<string, unknown>>; nodes: Array<Record<string, unknown>> }
 const narrowChanges = new Set(['history', 'metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks'])
+/** Ignore only known presentation/status fields. Unknown future fields remain
+ * structural, so new lineage contracts cannot silently bypass full recovery. */
+function sameTopology(previous: Graph, patch: Graph, selected: Set<string>): boolean {
+  const sessionAttributes = new Set(['name', 'title', 'topic', 'focus', 'description', 'completed', 'executionStatus',
+    'lastActivityAt', 'waitingForCall', 'hasCron', 'hasBackgroundTasks', 'config', 'inferenceDefaults'])
+  const nodeAttributes = new Set(['executionStatus', 'timestamp', 'waitingForCall', 'description'])
+  const signature = (rows: Array<Record<string, unknown>>, attributes: Set<string>) => rows.map(row =>
+    JSON.stringify(Object.keys(row).filter(key => !attributes.has(key) && row[key] !== undefined).sort()
+      .map(key => [key, row[key]]))).sort()
+  const equal = (before: Array<Record<string, unknown>>, after: Array<Record<string, unknown>>, attributes: Set<string>) =>
+    JSON.stringify(signature(before, attributes)) === JSON.stringify(signature(after, attributes))
+  return equal(previous.sessions.filter(row => selected.has(String(row.sessionId))), patch.sessions, sessionAttributes)
+    && equal(previous.nodes.filter(row => selected.has(String(row.logicalId))), patch.nodes, nodeAttributes)
+}
 function graphWire(value: unknown): Graph {
   if (!isRecord(value) || !Array.isArray(value.sessions) || !Array.isArray(value.nodes)
     || !value.sessions.every(isRecord) || !value.nodes.every(isRecord)) throw new Error('Invalid session graph')
@@ -10,8 +24,8 @@ function graphWire(value: unknown): Graph {
 }
 
 /** Retain the complete wire graph for cross-session physical parent resolution.
- * Only known session invalidations can patch it. Structural/legacy events and
- * recovery always replace the authoritative full graph. */
+ * Only known session invalidations with unchanged topology can patch it.
+ * Global/unknown events, topology changes and recovery replace the full graph. */
 export function createSessionGraphLoader(base: string, projectId: string, request: typeof fetch = fetch) {
   const parsedFull = new WeakMap<Graph, SidebarSession[]>()
   const fullReader = createConditionalProjectJson(base, '/api/sessions/graph', value => {
@@ -40,9 +54,11 @@ export function createSessionGraphLoader(base: string, projectId: string, reques
   return {
     reset,
     invalidate(payload: unknown) {
-      if (!isRecord(payload) || typeof payload.sessionId !== 'string'
-        || !Array.isArray(payload.changes) || !payload.changes.length
-        || payload.changes.some(change => typeof change !== 'string' || !narrowChanges.has(change))
+      if (!isRecord(payload) || (payload.event !== undefined && payload.event !== 'invalidate')
+        || (payload.projectId !== undefined && payload.projectId !== projectId)
+        || typeof payload.sessionId !== 'string' || !payload.sessionId.trim() || payload.sessionId.length > 512
+        || (payload.changes !== undefined && (!Array.isArray(payload.changes) || !payload.changes.length
+          || payload.changes.some(change => typeof change !== 'string' || !narrowChanges.has(change))))
         || !cached?.sessions.some(row => row.sessionId === payload.sessionId)) { reset(); return }
       pending.add(payload.sessionId)
       if (pending.size > 32) reset()
@@ -68,7 +84,8 @@ export function createSessionGraphLoader(base: string, projectId: string, reques
           || new Set(patch.sessions.map(row => row.sessionId)).size !== ids.length
           || patch.sessions.some(row => typeof row.sessionId !== 'string' || !selected.has(row.sessionId))
           || patch.nodes.some(node => typeof node.logicalId !== 'string' || !selected.has(node.logicalId))
-          || ids.some(id => !patch.nodes.some(node => node.logicalId === id))) {
+          || ids.some(id => !patch.nodes.some(node => node.logicalId === id))
+          || !sameTopology(previous, patch, selected)) {
           return apply(await fetchGraph(signal), signal)
         }
         const replacements = new Map(patch.sessions.map(row => [row.sessionId, row]))

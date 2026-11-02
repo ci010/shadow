@@ -1,3 +1,4 @@
+import { observeSessionInvalidations } from './session-realtime.ts'
 import { learningInterval, updateLearningInterval, updateLearningEnabled } from '../../cron/learning-controls.ts'
 import { InputRouter } from '../../input/router.ts'
 import { createBotsHandler } from '../../vfs/bots.ts'
@@ -297,19 +298,7 @@ export async function createProjectRuntime(
   cleanup.push(closeRealtime)
   cleanup.push(dependencies.catalog.observeFolders(project.id, () => realtime.invalidateResource?.('folders')))
   cleanup.push(mainCluster.observeInventory(() => realtime.invalidateResource?.('nodes')))
-  for (const topic of ['session.input.accepted', 'session.message.appended', 'session.handoff', 'session.ended', 'session.renamed', 'session.changed', 'background.task.changed'] as const) {
-    const subscription = bus.on(topic, fact => realtime.invalidateSessions(fact.sessionId, undefined,
-      topic === 'background.task.changed' ? ['background-tasks'] :
-        topic === 'session.input.accepted' ? ['history', 'activity'] :
-        topic === 'session.message.appended' ? ['history'] :
-        topic === 'session.renamed' ? ['metadata'] :
-        topic === 'session.changed' ? ('metadataOnly' in fact && fact.metadataOnly
-          ? ['metadata'] : ['metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks']) : undefined))
-    cleanup.push(() => bus.off(subscription))
-  }
-  const finishedSubscription = bus.on('session.turn.finished', fact =>
-    realtime.invalidateSessions(fact.sessionId, fact.status === 'completed' ? fact.turnId : undefined, ['history', 'work', 'activity']))
-  cleanup.push(() => bus.off(finishedSubscription))
+  cleanup.push(observeSessionInvalidations(bus, realtime))
   let activitySource: SessionManager | undefined
   const activityInvalidator = createActivityInvalidator(id => {
     if (!activitySource) throw new Error('Session activity source is initializing')

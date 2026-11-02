@@ -611,3 +611,39 @@ test('304 activity revalidation preserves newer in-flight SSE overlays and clear
   assert.equal(lease.activity.state.value?.stages['web:one'], 'llm')
   assert.equal(lease.activity.state.value?.activeRequestIds['web:one'], 'old')
 })
+
+
+test('scoped legacy ended notifications revalidate only known nodes through the shared reader', async t => {
+  const f = fixture(t)
+  const lease = f.store.acquireProject('http://fixture', 'a')
+  const initial = { sessions: [{ sessionId: 'web:one', title: 'Worker' }],
+    nodes: [{ physicalId: 'physical-one', logicalId: 'web:one', parentPhysicalId: null }] }
+  await f.tick()
+  f.requests.find(r => r.path.endsWith('/graph'))!.finish(initial)
+  f.requests.find(r => r.path.endsWith('/stages'))!.finish({ stages: {} })
+  await flush()
+  // session.ended currently publishes this unhinted payload. It must not be
+  // treated as a topology change just because it has no resource hints.
+  for (let i = 0; i < 10; i++) f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one' })
+  await f.tick()
+  let graphs = f.requests.filter(r => r.path.endsWith('/graph'))
+  assert.equal(graphs.length, 2)
+  assert.deepEqual(JSON.parse(graphs[1].url.searchParams.get('sessionIds')!), ['web:one'])
+  graphs[1].finish({ ...initial, partial: true, sessionIds: ['web:one'],
+    sessions: [{ ...initial.sessions[0], executionStatus: 'completed' }] })
+  f.requests.filter(r => r.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
+  await flush()
+  assert.equal(lease.graph.state.value?.[0].executionStatus, 'completed')
+  // A real segment transition arriving via the same publisher must recover.
+  f.event({ kind: 'sessions', projectId: 'a' }, { event: 'invalidate', sessionId: 'web:one' })
+  await f.tick()
+  graphs = f.requests.filter(r => r.path.endsWith('/graph'))
+  graphs.at(-1)!.finish({ ...initial, partial: true, sessionIds: ['web:one'],
+    nodes: [{ ...initial.nodes[0], physicalId: 'next-segment' }] })
+  await flush()
+  graphs = f.requests.filter(r => r.path.endsWith('/graph'))
+  assert.equal(graphs.at(-1)!.url.searchParams.has('sessionIds'), false)
+  graphs.at(-1)!.finish(initial)
+  f.requests.filter(r => r.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
+  await flush()
+})
