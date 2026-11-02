@@ -2164,11 +2164,29 @@ async function loadReadonlySession(background = false): Promise<void> {
   let followBottom = false
   if (!background) loadingHistory.value = true
   lastReadonlyRefresh = Date.now()
+  if (!background) {
+    readonlyContextError.value = ''
+    systemPrompt.value = ''
+    tools.value = []
+  }
   try {
     // Fetch all history + context in parallel
-    const [histRes, ctxRes] = await Promise.all([
+    const [histRes, context] = await Promise.all([
       readonlyHistorySnapshots(livePool).read(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' }), AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])),
-      background ? Promise.resolve(null) : fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), { signal: controller.signal }),
+      background ? Promise.resolve(null) : (async () => {
+        try {
+          const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), { signal: controller.signal })
+          const data = await res.json()
+          // Archived runs still have readable history, but no live context to show.
+          // Do not rebuild today's prompt as if it were the historical execution.
+          if (res.status === 409 && data?.error === 'archived_context_unavailable') return { data: null, failed: false }
+          if (!res.ok) return { data: null, failed: true }
+          return { data, failed: false }
+        } catch {
+          // A context/network/JSON failure must not discard readable history.
+          return { data: null, failed: true }
+        }
+      })(),
     ])
 
     if (!histRes.ok) throw new Error(t('Could not update this conversation. Reopen it to retry.'))
@@ -2186,13 +2204,10 @@ async function loadReadonlySession(background = false): Promise<void> {
     }
     composerError.value = ''
 
-    if (ctxRes && !ctxRes.ok) readonlyContextError.value = t('Could not load execution context. Reopen it to retry.')
-    if (ctxRes?.ok) {
-      const ctxData = await ctxRes.json()
-      if (controller.signal.aborted) return
-      readonlyContextError.value = ''
-      systemPrompt.value = ctxData.systemPrompt ?? ''
-      tools.value = ctxData.tools ?? []
+    if (context) {
+      readonlyContextError.value = context.failed ? t('Could not load execution context. Reopen it to retry.') : ''
+      systemPrompt.value = context.data?.systemPrompt ?? ''
+      tools.value = context.data?.tools ?? []
     }
   } catch (cause) {
     if (!controller.signal.aborted) composerError.value = cause instanceof Error ? cause.message : t('Could not update this conversation. Reopen it to retry.')
