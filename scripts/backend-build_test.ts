@@ -24,6 +24,7 @@ async function fixture(root: string): Promise<void> {
       'integrations/agent-desktop/Cargo.lock', 'integrations/agent-desktop/build.rs',
       'src/execution/computer/agent-desktop-worker.js', 'src/execution/computer/agent-desktop-errors.js',
       'src/execution/computer/agent-desktop-errors.d.ts',
+      'src/execution/computer/agent-desktop-actions.js',
       'src/execution/computer/stdio-transport.ts', 'src/execution/computer/contracts.ts',
       'src/execution/computer/windows-input.cs',
       'scripts/agent-desktop-input-guard.ts', 'scripts/agent-desktop-integrity.ts']) {

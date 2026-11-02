@@ -21,7 +21,7 @@ test('Electron main bundle loads without startup and sandbox preload stays stand
     assert.doesNotMatch(preload, /require\(["'](?:\.\/|\.\.\/)/)
     assert.doesNotMatch(preload, /require\(["']node:/, 'Sandboxed preload cannot load Node built-ins')
     const names = ['app', 'BrowserWindow', 'clipboard', 'desktopCapturer', 'dialog', 'ipcMain', 'Menu',
-      'nativeImage', 'Notification', 'session', 'shell', 'Tray', 'utilityProcess']
+      'nativeImage', 'Notification', 'powerMonitor', 'session', 'shell', 'Tray', 'utilityProcess']
     const electron = pathToFileURL(join(root, 'electron-mock.js')).href
     await writeFile(join(root, 'electron-mock.js'), names.map(name => `export const ${name} = {};`).join('\n'))
     execFileSync(process.execPath, ['--input-type=module', '-e', `

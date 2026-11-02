@@ -306,13 +306,15 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
     const config = {
       agent: { workspace: home, model: `${model}@openai`, sessionStorage: 'jsonl', maxToolIterations: 80 },
       providers: { openai: { apiKey: proxyToken, baseUrl: `http://127.0.0.1:${proxyPort}/v1` } },
-      channels: {}, mcp: {}, learning: { enabled: false }, tools: { restrictToWorkspace: true },
+      // Background organization has its own model loop, independent of learning.
+      // Neither may consume the acceptance proxy's calls or lifecycle budget.
+      channels: {}, mcp: {}, learning: { enabled: false }, organization: { enabled: false }, tools: { restrictToWorkspace: true },
     }
     writePrivateFile(join(directory, 'runtime.config.json'), JSON.stringify(config))
     await mkdir(dirname(project.configPath), { recursive: true })
     writePrivateFile(project.configPath, JSON.stringify({
       ...(nodeOnly ? { tools: { exec: { nodeOnly: true } } } : {}),
-      learning: { enabled: false }, voice: { enabled: false }, a2a: { server: {
+      learning: { enabled: false }, organization: { enabled: false }, voice: { enabled: false }, a2a: { server: {
       url: `${base}/projects/default/a2a`, agentType: 'app-acceptance', callers: { tester: 'SHADOW_TEST_CALLER' }, timeoutMs: 1_800_000,
     } } }))
     const general = await readFile(join(root, 'src', 'agent', 'types', 'builtin', 'general', 'AGENT.md'), 'utf8')
