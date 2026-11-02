@@ -74,7 +74,7 @@ test('timeline provider rejects failed publication instead of claiming success',
     /Fixture publication failed/)
 })
 
-test('isolated Node-only fixture reaches separate review and timed author confirmation without real model calls', { timeout: 150_000 }, async t =>
+test('isolated Node-only fixture reaches separate review and explicit owner confirmation without real model calls', { timeout: 150_000 }, async t =>
   withTempWorkspace(async home => {
     const forkRuntime = childProcess.fork
     const runtimeFork = t.mock.method(childProcess, 'fork', (modulePath: string | URL, args: readonly string[], options: ForkOptions) =>
@@ -207,10 +207,19 @@ test('isolated Node-only fixture reaches separate review and timed author confir
       const approval = JSON.parse(await readFile(join(output, 'approval.json'), 'utf8'))
       assert.equal(testing.phase, 'testing')
       assert.equal(Date.parse(testing.deadlineAt) - Date.parse(approval.approvedAt), 10 * 60_000)
-      const apps = await waitFile('apps.json', appRecordSchema.strip().array(), apps => !!apps[0]?.acceptance?.authorTurn?.finishedAt, 90_000)
+      const [asking] = await waitFile('apps.json', appRecordSchema.strip().array(), apps =>
+        apps[0]?.acceptance?.status === 'asking' && !!apps[0].acceptance.decisionRequestId)
+      assert.equal(calls, 7, 'Version approval alone never resumes the author')
+      const answer = { ...exact, requestId: asking.acceptance!.decisionRequestId, option: 'Continue runtime testing' }
+      const staleAnswer = await control('answer-testing', { ...answer, requestId: 'stale-request' })
+      assert.equal(staleAnswer.done, false)
+      assert.match(staleAnswer.error ?? '', /stale/)
+      assert.equal(calls, 7, 'A stale question never grants testing permission')
+      assert.equal((await control('answer-testing', answer)).done, true)
+      const apps = await waitFile('apps.json', appRecordSchema.strip().array(), apps => !!apps[0]?.acceptance?.authorTurn?.finishedAt)
       const acceptance = apps[0].acceptance
       assert.ok(acceptance?.authorTurn)
-      assert.equal(acceptance.decision, 'timeout')
+      assert.equal(acceptance.decision, 'user')
       assert.equal(acceptance.authorTurn.outcome, 'completed')
       assert.ok(['incomplete', 'blocked'].includes(acceptance.status), 'An ended author turn is not a fabricated passing report')
       assert.equal(acceptance.report, undefined)

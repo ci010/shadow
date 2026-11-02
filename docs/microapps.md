@@ -529,6 +529,7 @@ new command `id`. Supported controls:
 | `review` | `appId`, exact `revision`; after the creation task ends, begins review early and saves source in `review.json` and `bundles/` |
 | `review-work` | `workKey`; saves the current note and its context in `work-review.json` |
 | `approve` | `appId`, exact reviewed `revision`; invokes the real owner API and starts the first testing window; can enter review implicitly from completed creation |
+| `answer-testing` | `appId`, exact `revision`, current acceptance `requestId`, `option`; explicitly answers the separate owner testing question through the real owner API; stale questions are rejected |
 | `open` | `appId`; writes a one-use URL to `launch.private.json`, never to logs |
 | `restart` | None; restarts only this test's Shadow runtime, preserving this round's app |
 | `finish` | None; stops the round and cleans only its uniquely named test directory |
@@ -539,6 +540,11 @@ to reserve review time before inspecting the exact source. This closes creation;
 do not send it after an intermediate delivery when more product feedback remains.
 An example approval control is
 `{"id":"review-1","action":"approve","appId":"<uuid>","revision":"<sha256>"}`.
+Approval alone does not resume the author. Read the acceptance question IDs in
+`apps.json`, then explicitly send `answer-testing` with the current
+`decisionRequestId` as `requestId` and the selected question option (for example,
+`Continue runtime testing`). An unanswered question defers testing, never grants
+permission on timeout.
 Read `control-result.json` before sending the next command. Finish is cleanup,
 not an assertion that audio acceptance passed: inspect the actual app UI,
 translation, WAV bytes, repeat runs and restart result. Artifacts preserve
