@@ -379,6 +379,8 @@ Markdown links in conversation, summaries, prompts, Knowledge and file previews 
 
 ### Navigation
 
+Project sidebars show at most ten recent persistent conversations across their folder/chat/bot groups, retaining the current conversation within that limit. Automation entries and execution metadata retain their existing behavior. The Go to session entry opens a top-centered quick-open dialog, also available within the Project workbench with Ctrl+Shift+R (Command+Shift+R on macOS). It searches full session titles across Projects, independently of sidebar truncation; results name their Project and navigate directly. Blank queries show recent sessions. Arrow keys select, Enter opens, and Escape dismisses with focus restored. Keep the dialog's neutral square surface and readable empty/loading/partial-error states; this is navigation, not a sidebar filter.
+
 Tree rows use neutral ink and muted hover; selected rows use selection background and primary ink. Project coordination is a heading-level entry: use primary ink and a one-pixel title underline (4px offset), not a filled selection block. Its hover stays neutral and keyboard focus retains the blue outline. Maintain the icon/text/disclosure columns rather than distributing extra space between siblings. Tree icons are normally (16px); labels truncate within the row. Focus remains a visible blue outline, including the tree row's focus-within treatment.
 
 Selected automation rows and model options use the same primary-ink/selection-background pair. The history rail distinguishes peer and event types through size and pattern rather than identity color; current, hovered, previewed, and keyboard-focused markers use interaction blue.

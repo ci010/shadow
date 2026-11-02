@@ -230,9 +230,26 @@ export function automationSessionOwners(sessions: SidebarSession[]): Map<string,
   return owners
 }
 
-export function groupFolderSessions(folders: FolderRecord[], sessions: SidebarSession[]) {
+export const PROJECT_SESSION_LIMIT = 10
+
+/** Cap only navigation rows, never the source graph or automation/execution metadata. */
+export function recentSidebarSessions(sessions: SidebarSession[], activeSessionId: string, limit = PROJECT_SESSION_LIMIT,
+  draftActivity: ReadonlyMap<string, number> = new Map()): SidebarSession[] {
+  if (limit <= 0) return []
+  const recent = [...sessions].sort((a, b) => sidebarChatActivity(b, draftActivity.get(b.sessionId)) - sidebarChatActivity(a, draftActivity.get(a.sessionId))
+    || a.sessionId.localeCompare(b.sessionId))
+  const visible = recent.slice(0, limit)
+  const active = recent.find(session => session.sessionId === activeSessionId)
+  if (active && !visible.includes(active)) visible[visible.length - 1] = active
+  return visible
+}
+
+export function groupFolderSessions(folders: FolderRecord[], sessions: SidebarSession[], navigation?: {
+  activeSessionId: string; draftActivity?: ReadonlyMap<string, number>
+}) {
   const owners = automationSessionOwners(sessions)
-  const regular = persistentConversations(sessions).filter(session => !owners.has(session.sessionId))
+  const allRegular = persistentConversations(sessions).filter(session => !owners.has(session.sessionId))
+  const regular = navigation ? recentSidebarSessions(allRegular, navigation.activeSessionId, PROJECT_SESSION_LIMIT, navigation.draftActivity) : allRegular
   const folderIds = new Set(folders.map(folder => folder.id))
   const automations = new Map<string, { id: string; name: string; sessions: SidebarSession[] }>()
   for (const session of sessions) {

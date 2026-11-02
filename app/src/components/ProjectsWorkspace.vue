@@ -19,6 +19,10 @@
           <button v-if="!sidebarPinned && !mobileIntegrated" ref="closeButton" class="project-add" :aria-label="t('Close projects')" @click="closeSidebar()"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button>
         </div>
       </header>
+      <button class="session-search-trigger" aria-keyshortcuts="Control+Shift+R Meta+Shift+R" @click="openSessionSearch">
+        <span class="i-lucide-search w-4 h-4" aria-hidden="true" />
+        <span>{{ t('Go to session') }}</span><kbd>Ctrl+Shift+R</kbd>
+      </button>
       <form v-if="creating" class="project-create" @submit.prevent="createProject" @keydown.esc.stop.prevent="cancelCreateProject">
         <label>{{ t('Project name') }}<input v-model="name" required autocomplete="off" :disabled="saving" /></label>
         <button type="button" class="btn btn-sm" :disabled="saving" @click="cancelCreateProject">{{ t('Cancel') }}</button>
@@ -77,6 +81,8 @@
         @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" @deleted="deleted(resource.projectId, $event)" />
       </AutomationDetail>
     </div>
+    <SessionQuickOpen v-if="sessionSearchOpen" :api-base="apiBase" :projects="projects"
+      @close="sessionSearchOpen = false" @select="quickOpenSession" />
     <FolderOwnershipDialog v-if="folderOperation" :key="`${folderOperation.project.id}:${folderOperation.folder.id}:${folderOperation.action}`"
       :api-base="apiBase" :project="folderOperation.project" :projects="projects"
       :folder="folderOperation.folder" :action="folderOperation.action" @close="folderOperation = undefined"
@@ -94,6 +100,8 @@ import ProjectConversation from './ProjectConversation.vue'
 import FolderOwnershipDialog from './FolderOwnershipDialog.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import HoverInfo from './HoverInfo.vue'
+import SessionQuickOpen from './SessionQuickOpen.vue'
+import { isSessionQuickOpenShortcut } from '../session-quick-open.ts'
 import AutomationDetail from './AutomationDetail.vue'
 import { projectBase } from '../api-url.ts'
 import { createProjectsClient, projectChatLocation, type ProjectRecord } from '../projects.ts'
@@ -136,6 +144,19 @@ const sidebarOpen = computed({
   get: () => mobileIntegrated.value ? mobile!.menuOpen.value : localSidebarOpen.value,
   set: value => { if (mobileIntegrated.value) mobile!.menuOpen.value = value; else localSidebarOpen.value = value },
 })
+const sessionSearchOpen = ref(false)
+function openSessionSearch() { sessionSearchOpen.value = true }
+function quickOpenSession(projectId: string, sessionId: string) {
+  sessionSearchOpen.value = false
+  selectSession(projectId, sessionId)
+}
+function sessionSearchKeydown(event: KeyboardEvent) {
+  if (!props.visible || !keyboardActive.value || !isSessionQuickOpenShortcut(event)) return
+  event.preventDefault()
+  // Reserve the chord without stealing focus from an existing modal workflow.
+  if (document.querySelector('dialog[open], [aria-modal="true"]')) return
+  openSessionSearch()
+}
 const creating = ref(false)
 const name = ref('')
 const saving = ref(false)
@@ -436,8 +457,8 @@ function onProjectDeleted(event: Event) {
   if (id) projectDeleted(id)
 }
 watch(() => [route.fullPath, props.visible], syncRoute)
-watch(() => route.fullPath, () => { closeSidebar(false) })
-watch(() => props.visible, visible => { if (!visible) closeSidebar(false) })
+watch(() => route.fullPath, () => { sessionSearchOpen.value = false; closeSidebar(false) })
+watch(() => props.visible, visible => { if (!visible) { sessionSearchOpen.value = false; closeSidebar(false) } })
 watch(desktop, () => {
   const hadFocus = sidebarElement.value?.contains(document.activeElement)
   closeSidebar(false)
@@ -461,10 +482,11 @@ onMounted(() => {
   window.addEventListener('shadow:projects-changed', onCatalogChanged)
   window.addEventListener('shadow:project-deleted', onProjectDeleted)
   window.addEventListener('keydown', sidebarKeydown)
+  window.addEventListener('keydown', sessionSearchKeydown)
   window.addEventListener('keydown', newConversationShortcut.keydown)
 })
 onActivated(() => { keyboardActive.value = true })
-onDeactivated(() => { keyboardActive.value = false; newConversationShortcut.cancel(); closeSidebar(false) })
+onDeactivated(() => { sessionSearchOpen.value = false; keyboardActive.value = false; newConversationShortcut.cancel(); closeSidebar(false) })
 onUnmounted(() => {
   keyboardActive.value = false
   newConversationShortcut.cancel()
@@ -474,10 +496,16 @@ onUnmounted(() => {
   window.removeEventListener('shadow:projects-changed', onCatalogChanged)
   window.removeEventListener('shadow:project-deleted', onProjectDeleted)
   window.removeEventListener('keydown', sidebarKeydown)
+  window.removeEventListener('keydown', sessionSearchKeydown)
 })
 </script>
 
 <style scoped>
+.session-search-trigger { display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; padding: 6px 8px; min-height: 36px; border: 1px solid var(--c-border); background: var(--c-bg-input); color: var(--c-text-secondary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.session-search-trigger:hover { background: var(--c-bg-muted); color: var(--c-text); }
+.session-search-trigger:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.session-search-trigger kbd { margin-left: auto; font-size: 10px; white-space: nowrap; }
+@media (max-width: 700px), (pointer: coarse) { .session-search-trigger { min-height: 44px; } }
 .projects-workspace { display: flex; position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; }
 .projects-sidebar { position: relative; display: flex; flex-direction: column; flex: 0 0 var(--projects-width, 270px); width: var(--projects-width, 270px); min-width: 0; min-height: 0; border-right: 1px solid var(--c-border); background: var(--c-bg-card); }
 .projects-sidebar.in-mobile-menu { flex: 1; width: 100%; border: 0; }

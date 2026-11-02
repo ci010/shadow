@@ -197,7 +197,8 @@ const domId = (id: string) => props.grouped ? `${componentId}-${id}` : id
 const folderActions = computed(() => FOLDER_ACTIONS)
 const folders = ref<FolderRecord[]>([])
 const nodes = ref<readonly NodeInventoryEntry[]>([])
-const groups = computed(() => groupFolderSessions(folders.value, props.sessions))
+const groups = computed(() => groupFolderSessions(folders.value, props.sessions, props.grouped
+  ? { activeSessionId: props.activeSessionId, draftActivity: draftActivity.value } : undefined))
 const executionsByOwner = computed(() => activeSubagentsByOwner(props.sessions, props.stages))
 // Independent of grouped: that prop controls project disclosure, not folder presentation.
 const folderGrouped = ref(false)
