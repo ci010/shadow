@@ -37,20 +37,52 @@ export function parseProjects(value: unknown): ProjectRecord[] {
   return result
 }
 
-export async function projectJson(base: string, path: string, init?: RequestInit, request: typeof fetch = fetch): Promise<unknown> {
+async function projectResponse(base: string, path: string, init: RequestInit | undefined, request: typeof fetch, conditional = false): Promise<Response> {
   const headers = new Headers(init?.headers)
   if (init?.body != null && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const response = await request(apiUrl(base, path), {
     ...init, headers,
     signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
   })
-  if (!response.ok) {
+  if (!response.ok && !(conditional && response.status === 304)) {
     const detail = response.status === 409 ? t('The resource conflicts with an existing project or folder.')
       : response.status === 401 || response.status === 403 ? t('Main did not authorize this request.')
       : t('Main could not complete this request (HTTP {status}).', { status: response.status })
     throw new Error(t('{detail} Check Main and retry.', { detail: detail }))
   }
-  return response.json()
+  return response
+}
+
+export async function projectJson(base: string, path: string, init?: RequestInit, request: typeof fetch = fetch): Promise<unknown> {
+  return (await projectResponse(base, path, init, request)).json()
+}
+
+/** A single endpoint's validated snapshot, scoped to its owning live reader.
+ * Always revalidate against Main; never use a disk/browser cache or reuse across
+ * Projects/queries. Older servers without ETag continue to return full JSON. */
+export function createConditionalProjectJson<T>(base: string, path: string, parse: (value: unknown) => T, request: typeof fetch = fetch) {
+  let cached: { etag: string; value: T } | undefined
+  let generation = 0
+  return {
+    clear() { cached = undefined; generation++ },
+    async load(signal: AbortSignal): Promise<T> {
+      const current = ++generation
+      const previous = cached
+      const headers = new Headers()
+      if (previous) headers.set('If-None-Match', previous.etag)
+      const response = await projectResponse(base, path, { signal, headers, cache: 'no-store' }, request, true)
+      signal.throwIfAborted()
+      if (response.status === 304) {
+        if (!previous) throw new Error('Main returned 304 without a validated snapshot.')
+        return previous.value
+      }
+      const value = parse(await response.json())
+      signal.throwIfAborted()
+      const etag = response.headers.get('ETag')
+      if (current === generation) cached = etag ? { etag, value } : undefined
+      return value
+    },
+  }
 }
 
 export function createProjectsClient(base: string, request: typeof fetch = fetch) {

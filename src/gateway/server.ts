@@ -52,7 +52,7 @@ export interface GatewayRouteOptions {
 }
 
 const CORS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const
-const CORS_HEADERS = ['Content-Type', 'Authorization'] as const
+const CORS_HEADERS = ['Content-Type', 'Authorization', 'If-None-Match'] as const
 
 // A 32 KiB live-topic JSON query can occupy 96 KiB after percent encoding.
 // Bound the parser while retaining room for the cursor and ordinary headers.
@@ -233,6 +233,7 @@ function registerGatewayRoutes(
           'Access-Control-Allow-Origin': normalizedRequestOrigin,
           'Access-Control-Allow-Methods': CORS_METHODS.join(', '),
           'Access-Control-Allow-Headers': CORS_HEADERS.join(', '),
+          'Access-Control-Max-Age': '600',
           'Vary': 'Origin',
         })
       }
@@ -268,6 +269,7 @@ function registerGatewayRoutes(
     await next()
     if (normalizedRequestOrigin) {
       c.header('Access-Control-Allow-Origin', normalizedRequestOrigin)
+      c.header('Access-Control-Expose-Headers', 'ETag')
       c.header('Vary', 'Origin')
     }
   })

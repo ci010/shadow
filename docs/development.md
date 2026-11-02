@@ -484,6 +484,26 @@ This narrows transfer and per-session enrichment work; it does not eliminate
 the inventory lookup (including archived inventory paging) or replace
 authoritative reads with event payloads.
 
+Full graph and stages readers also hold an endpoint-local, in-memory ETag and
+validated snapshot. They send `If-None-Match` on subsequent reads; an unchanged
+representation returns bodyless `304`, reusing the validated snapshot without
+JSON decoding (and without reparsing the graph). Partial graph responses never
+replace the full graph's validator or base. A `304` still reconciles activity
+notifications received while HTTP was in flight. Legacy servers without ETag
+continue to return full JSON. These are explicit revalidations with `no-store`,
+not persistent browser caches: resets, manual refreshes and broad invalidations
+still contact Main. Main computes the validator from the actual response body,
+so this reduces transfer/renderer parsing but does not bypass inventory lookup
+or server-side serialization. Allowed cross-origin renderer/mobile clients can
+use the conditional header and read ETag; preflight results are cached for ten
+minutes, without skipping authorization on actual requests.
+
+Presence heartbeats acknowledge success with bodyless `204`. The renderer also
+drains legacy JSON and error response bodies before releasing its in-flight
+guard, rather than leaving a response attached to the ten-second timeout after
+headers arrive. The 15-second heartbeat cadence, focus/visibility reports,
+trusted-interaction semantics and presence TTL remain unchanged.
+
 Activity notifications are deduplicated per Project/session against the visible
 stage, waiting-for-call flag, active request ID, recovery state and pending
 question/input metadata. The `activity` event carries a runtime-validated complete

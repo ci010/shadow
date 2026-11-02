@@ -249,3 +249,19 @@ test('LAN HTTP Main requires explicit opt-in and rejects public hosts and peers'
     }
   } finally { access.close() }
 })
+
+test('mobile conditional reads permit validators but preserve origin, header and actual authorization checks', async () => {
+  const f = fixture()
+  const headers = { 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'If-None-Match, Authorization' }
+  const preflight = await f.client('/api/private', undefined, { method: 'OPTIONS', headers })
+  assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers.get('Access-Control-Max-Age'), '600')
+  assert.ok(preflight.headers.get('Access-Control-Allow-Headers')?.includes('if-none-match'))
+  assert.equal((await f.client('/api/private')).status, 401)
+  const actual = await f.client('/api/private', await f.login())
+  assert.equal(actual.status, 200)
+  assert.ok(actual.headers.get('Access-Control-Expose-Headers')?.includes('ETag'))
+  for (const denied of [{ Origin: 'https://evil.test' }, { 'Access-Control-Request-Headers': 'X-Unapproved' }] as Record<string, string>[]) {
+    assert.equal((await f.client('/api/private', undefined, { method: 'OPTIONS', headers: { ...headers, ...denied } })).status, 403)
+  }
+})

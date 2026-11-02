@@ -90,3 +90,31 @@ test('legacy full responses remain compatible; aborted reads cannot mutate the g
   await loader.load(signal())
   assert.equal(urls.at(-1)!.searchParams.has('sessionIds'), false)
 })
+
+
+test('full revalidation can reuse 304 after a partial patch without confusing the two graph bases', async () => {
+  const seen: Array<{ url: URL; etag: string | null }> = []
+  let mode = 'full'
+  const request: typeof fetch = async (input, init) => {
+    const url = new URL(String(input))
+    seen.push({ url, etag: new Headers(init?.headers).get('If-None-Match') })
+    if (url.searchParams.has('sessionIds')) {
+      const value = graph()
+      value.sessions[0].title = 'Partial newer title'
+      return Response.json({ partial: true, sessionIds: ['web:root'], sessions: [value.sessions[0]], nodes: [value.nodes[0]] }, { headers: { ETag: '"partial"' } })
+    }
+    if (mode === 'unchanged') return new Response(null, { status: 304 })
+    return Response.json(graph(), { headers: { ETag: '"full"' } })
+  }
+  const loader = createSessionGraphLoader('http://main/projects/a', 'a', request)
+  const first = await loader.load(signal())
+  loader.invalidate({ sessionId: 'web:root', changes: ['metadata'] })
+  assert.equal((await loader.load(signal()))[0].title, 'Partial newer title')
+  assert.equal(seen[1].etag, null, 'partial request does not use a full-graph validator')
+  loader.reset()
+  mode = 'unchanged'
+  const restored = await loader.load(signal())
+  assert.equal(seen[2].etag, '"full"')
+  assert.equal(restored, first, '304 authoritatively validates the original full body, not the patched base')
+  assert.equal(restored[0].title, 'Root')
+})

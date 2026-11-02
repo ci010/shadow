@@ -21,7 +21,10 @@ test('presence uses authenticated chat principal, rejects arbitrary user identit
     authorized = true
     assert.equal((await send({ ...report, userId: 'victim' })).status, 400)
     assert.equal(presence.state('victim'), 'unknown')
-    assert.equal((await send(report)).status, 200)
+    const response = await send(report)
+    assert.equal(response.status, 204)
+    assert.equal(response.body, null)
+    assert.equal(await response.text(), '')
     assert.equal(presence.state('web:web-user'), 'active')
     assert.equal(presence.state('victim'), 'unknown')
   } finally { await web.stop() }

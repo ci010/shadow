@@ -18,13 +18,16 @@ export function startPresence(base: string, window: Window, document: Document,
     try {
       const system = await native?.system().catch(() => null) ?? null
       if (stopped) return
-      await request(apiUrl(base, '/api/chat/presence'), {
+      const response = await request(apiUrl(base, '/api/chat/presence'), {
         method: 'POST', credentials: 'same-origin', cache: 'no-store',
         signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(10_000)]),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clientId, visible: document.visibilityState === 'visible', focused: document.hasFocus(),
           interactionAgeMs: lastInteraction === null ? null : Math.min(86_400_000, Math.floor(performance.now() - lastInteraction)), system }),
       })
+      // fetch resolves at headers. Drain even error/legacy JSON responses so the
+      // request finishes before its timeout signal fires; presence has no payload.
+      await response.arrayBuffer()
     } catch { /* Missing/expired authentication and offline clients naturally become unknown. */ }
     finally { sending = false }
   }

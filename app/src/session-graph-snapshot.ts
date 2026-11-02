@@ -1,5 +1,5 @@
 import { parseSessionGraph, isRecord, type SidebarSession } from './folders-sidebar.ts'
-import { projectJson } from './projects.ts'
+import { createConditionalProjectJson, projectJson } from './projects.ts'
 
 interface Graph { sessions: Array<Record<string, unknown>>; nodes: Array<Record<string, unknown>> }
 const narrowChanges = new Set(['history', 'metadata', 'activity', 'work', 'background-tasks', 'scheduled-tasks'])
@@ -13,18 +13,28 @@ function graphWire(value: unknown): Graph {
  * Only known session invalidations can patch it. Structural/legacy events and
  * recovery always replace the authoritative full graph. */
 export function createSessionGraphLoader(base: string, projectId: string, request: typeof fetch = fetch) {
+  const parsedFull = new WeakMap<Graph, SidebarSession[]>()
+  const fullReader = createConditionalProjectJson(base, '/api/sessions/graph', value => {
+    // Do not retain a validator for a malformed/domain-invalid response.
+    const parsed = parseSessionGraph(value, projectId)
+    const wire = graphWire(value)
+    parsedFull.set(wire, parsed)
+    return wire
+  }, request)
   let cached: Graph | undefined
   let full = true
   const pending = new Set<string>()
   function reset() { full = true; pending.clear() }
   async function fetchGraph(signal: AbortSignal, ids?: string[]) {
-    const path = `/api/sessions/graph${ids ? `?sessionIds=${encodeURIComponent(JSON.stringify(ids))}` : ''}`
-    return projectJson(base, path, { signal }, request)
+    if (!ids) return fullReader.load(signal)
+    // Partial results must never replace the full endpoint's validator/base.
+    return projectJson(base, `/api/sessions/graph?sessionIds=${encodeURIComponent(JSON.stringify(ids))}`, { signal }, request)
   }
   function apply(value: unknown, signal: AbortSignal): SidebarSession[] {
-    const parsed = parseSessionGraph(value, projectId)
+    const wire = graphWire(value)
+    const parsed = parsedFull.get(wire) ?? parseSessionGraph(value, projectId)
     signal.throwIfAborted()
-    cached = graphWire(value)
+    cached = wire
     return parsed
   }
   return {

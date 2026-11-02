@@ -179,7 +179,7 @@ test('gateway handles allowed preflight without wildcard', async () => {
   )
   assertEquals(
     response.headers.get('Access-Control-Allow-Headers'),
-    'Content-Type, Authorization',
+    'Content-Type, Authorization, If-None-Match',
   )
 })
 
@@ -200,7 +200,7 @@ test('gateway preflight permits the credential header without validating it', as
   assertEquals(response.status, 204)
   assertEquals(
     response.headers.get('Access-Control-Allow-Headers'),
-    'Content-Type, Authorization',
+    'Content-Type, Authorization, If-None-Match',
   )
 })
 
@@ -212,7 +212,7 @@ test('gateway permits PUT preflight for authenticated device network settings', 
       headers: {
         Origin: 'http://localhost:5273',
         'Access-Control-Request-Method': 'PUT',
-        'Access-Control-Request-Headers': 'Content-Type, Authorization',
+        'Access-Control-Request-Headers': 'Content-Type, Authorization, If-None-Match',
       },
     },
   )
@@ -331,4 +331,17 @@ test('organize failures before Project routing carry sanitized gateway diagnosti
   assertEquals(response.headers.get('X-Correlation-ID'), body.correlationId)
   assert(typeof body.correlationId === 'string' && body.correlationId.length === 36)
   assert(!JSON.stringify(body).includes('fixture-secret'))
+})
+
+test('conditional GET CORS exposes validators and preflight caching never grants authorization', async () => {
+  const app = createApp(['http://localhost:5273'], 'secret')
+  const headers = { Origin: 'http://localhost:5273', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'If-None-Match, Authorization' }
+  const preflight = await app.request('/api/ping', { method: 'OPTIONS', headers })
+  assertEquals(preflight.status, 204)
+  assertEquals(preflight.headers.get('Access-Control-Max-Age'), '600')
+  assert(preflight.headers.get('Access-Control-Allow-Headers')?.includes('If-None-Match'))
+  assertEquals((await app.request('/api/ping', { headers })).status, 401)
+  const actual = await app.request('/api/ping', { headers: { ...headers, Authorization: 'Bearer secret' } })
+  assertEquals(actual.status, 200)
+  assertEquals(actual.headers.get('Access-Control-Expose-Headers'), 'ETag')
 })

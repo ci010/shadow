@@ -734,3 +734,49 @@ test('readonly shallow snapshots are opt-in and segment rollover is never mislab
   rollover = true
   assert.equal((await app.request('/api/sessions/logical?shallow=true&snapshot=')).status, 409)
 })
+
+for (const endpoint of ['graph', 'stages']) test(`${endpoint} GET revalidates fresh JSON without caching Project reads`, async () => {
+  let changed = false
+  let reads = 0
+  const makeApp = (projectId: string) => {
+    const manager = {
+      projectId,
+      listHistorySessions: async () => { reads++; return changed ? [{ sessionId: 'web:one', segmentIndex: 0 }] : [] },
+      listSessions: async () => { reads++; return changed ? [{ sessionId: 'web:one' }] : [] },
+      readSessionState: async () => ({ sessionId: 'web:one', segmentIndex: 0 }),
+      getFirstUserMessage: async () => null,
+      getSessionInferenceDefaults: () => ({}),
+      getActiveSession: () => undefined,
+      yields: new Map(), inputs: new Map(),
+    } as unknown as SessionManager
+    const app = new Hono()
+    sessionsApiPlugin(manager)(app)
+    return app
+  }
+  const app = makeApp('a')
+  const url = `/api/sessions/${endpoint}`
+  const first = await app.request(url)
+  const body = await first.text()
+  const etag = first.headers.get('ETag')!
+  assert.ok(etag)
+  assert.equal(first.headers.get('Cache-Control'), 'no-store')
+  const same = await app.request(url, { headers: { 'If-None-Match': `"unrelated", W/${etag}` } })
+  assert.equal(same.status, 304)
+  assert.equal(await same.text(), '')
+  assert.equal(same.headers.get('ETag'), etag)
+  assert.equal(same.headers.get('Cache-Control'), 'no-store')
+  assert.equal(reads, 2)
+  for (const [target, requestUrl] of [[app, `${url}?variant=other`], [makeApp('b'), url]] as const) {
+    const other = await target.request(requestUrl, { headers: { 'If-None-Match': etag } })
+    assert.equal(other.status, 200)
+    assert.equal(await other.text(), body)
+  }
+  const unmatched = await app.request(url, { headers: { 'If-None-Match': '"missing"' } })
+  assert.equal(unmatched.status, 200)
+  assert.equal(await unmatched.text(), body)
+  changed = true
+  const fresh = await app.request(url, { headers: { 'If-None-Match': etag } })
+  assert.equal(fresh.status, 200)
+  assert.notEqual(fresh.headers.get('ETag'), etag)
+  assert.notEqual(await fresh.text(), body)
+})

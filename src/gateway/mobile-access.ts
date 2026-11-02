@@ -10,7 +10,7 @@ const SESSION_TTL = 12 * 60 * 60_000
 const TICKET_TTL = 60_000
 const NATIVE_ORIGINS = new Set(['capacitor://localhost', 'https://localhost'])
 const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
-const HEADERS = ['authorization', 'content-type', 'range']
+const HEADERS = ['authorization', 'content-type', 'range', 'if-none-match']
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 const secret = () => randomBytes(32).toString('base64url')
 
@@ -168,7 +168,7 @@ export class MobileAccess {
       if (origin && !NATIVE_ORIGINS.has(origin)) return c.json({ error: 'origin_not_allowed' }, 403)
       if (origin) {
         c.header('Access-Control-Allow-Origin', origin)
-        c.header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
+        c.header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, ETag')
         c.header('Vary', 'Origin')
       }
       if (c.req.method === 'OPTIONS') {
@@ -179,6 +179,7 @@ export class MobileAccess {
         }
         c.header('Access-Control-Allow-Methods', METHODS.join(', '))
         c.header('Access-Control-Allow-Headers', HEADERS.join(', '))
+        c.header('Access-Control-Max-Age', '600')
         return c.body(null, 204)
       }
       if (!METHODS.includes(c.req.method)) return c.json({ error: 'method_not_allowed' }, 405)
@@ -189,7 +190,7 @@ export class MobileAccess {
       c.header('X-Content-Type-Options', 'nosniff')
       if (origin) {
         c.header('Access-Control-Allow-Origin', origin)
-        c.header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
+        c.header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, ETag')
         c.header('Vary', 'Origin')
       }
     })
