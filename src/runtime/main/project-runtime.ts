@@ -1,3 +1,4 @@
+import { learningInterval, updateLearningInterval, updateLearningEnabled } from '../../cron/learning-controls.ts'
 import { InputRouter } from '../../input/router.ts'
 import { createBotsHandler } from '../../vfs/bots.ts'
 import { channelMessageEnvelope, observationEnvelope, requireChannelReceipt, requirePolicyReceipt, type ChannelInputPayload, type ChannelInputResult } from '../../channels/input.ts'
@@ -1288,12 +1289,14 @@ export async function createProjectRuntime(
   }, {
     preference: id => configStore.current().learning.pipelines?.[learningPipeline(id)] !== false,
     globallyEnabled: () => (configStore.current().learning as { enabled?: boolean }).enabled !== false,
+    interval: id => learningInterval(configStore.current().learning, id),
+    updateInterval: async (id, intervalMs) => {
+      await configStore.update(raw => ({ ...raw,
+        learning: updateLearningInterval(raw.learning as typeof config.learning, id, intervalMs) }))
+    },
     update: async (id, enabled) => {
-      const pipeline = learningPipeline(id)
-      await configStore.update(raw => {
-        const current = raw.learning as typeof config.learning
-        return { ...raw, learning: { ...current, pipelines: { ...current.pipelines, [pipeline]: enabled } } }
-      })
+      await configStore.update(raw => ({ ...raw,
+        learning: updateLearningEnabled(raw.learning as typeof config.learning, id, enabled) }))
     },
   }, {
     authorize: dependencies.authorize,

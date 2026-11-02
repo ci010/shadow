@@ -8,7 +8,7 @@ import { SYSTEM_AUTOMATIONS, resolveAutomationSession, type AutomationSummary, t
 /** Mounted on the owning project's router; never reads another project's stores. */
 export function registerAutomationRoutes(app: Hono, cron: CronService, sessions: SessionManager, projectId: string,
   learningOutcome?: (sessionId: string) => LearningOutcome | undefined, learningNotice?: (jobId: string) => string | undefined,
-  learningControls?: { preference: (jobId: string) => boolean; globallyEnabled: () => boolean; update: (jobId: string, enabled: boolean) => Promise<void> },
+  learningControls?: { preference: (jobId: string) => boolean; globallyEnabled: () => boolean; update: (jobId: string, enabled: boolean) => Promise<void>; interval?: (jobId: string) => number; updateInterval?: (jobId: string, intervalMs: number) => Promise<void> },
   systemControls?: { preference: (jobId: string) => boolean; update: (jobId: string, enabled: boolean) => Promise<void>; authorize: (request: Request) => boolean | Promise<boolean>; modelSettings?: (jobId: string) => { model?: string; defaultModel: string }; updateModel?: (jobId: string, model: string | null) => Promise<void> }, profileService?: AutomationProfileService): void {
   const profiler = profileService ?? new AutomationProfileService(cron, sessions, projectId)
   app.get('/api/automations/:id/profile', async c => {
@@ -41,7 +41,7 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
         editable: job.source !== 'learning' || !!learningControls,
         configuredEnabled: job.source === 'learning' ? learningControls?.preference(job.id) ?? job.enabled !== false : job.enabled !== false,
         disabledByGlobal: job.source === 'learning' && !!learningControls && !learningControls.globallyEnabled(),
-        ...(job.source === 'learning' ? { notice: learningNotice?.(job.id) } : {}),
+        ...(job.source === 'learning' ? { notice: learningNotice?.(job.id), intervalMs: learningControls?.interval?.(job.id) } : {}),
       })
     }
     if (systemControls) for (const job of Object.values(SYSTEM_AUTOMATIONS)) jobs.set(job.id, {
@@ -75,6 +75,13 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
       if (!systemControls!.updateModel) return c.json({ error: 'model_settings_unavailable' }, 400)
       if (body.model !== null && (typeof body.model !== 'string' || !body.model.trim() || body.model.length > 512)) return c.json({ error: 'invalid_automation_update' }, 400)
       await systemControls!.updateModel(id, typeof body.model === 'string' ? body.model.trim() : null)
+      return c.json({ automation: (await summaries(true)).find(job => job.id === id) })
+    }
+    if (!system && job?.source === 'learning' && body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 1 && 'intervalMs' in body) {
+      const interval = body.intervalMs
+      if (!learningControls?.updateInterval || typeof interval !== 'number' || !Number.isSafeInteger(interval)
+        || interval < 60_000 || interval > 35791 * 60_000 || interval % 60_000 !== 0) return c.json({ error: 'invalid_automation_update' }, 400)
+      await learningControls.updateInterval(id, interval)
       return c.json({ automation: (await summaries(true)).find(job => job.id === id) })
     }
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 1

@@ -33,17 +33,6 @@
         <ChannelsView v-if="botsOpened" v-show="section === 'bots'" :api-base="apiBase" :project-id="projectId" :available="available" :active="section === 'bots' && route.name === 'project-settings' && route.params.projectId === projectId"
           :review-bot-id="typeof route.query.discordBot === 'string' ? route.query.discordBot : undefined"
           :requested-review-id="typeof route.query.discordReview === 'string' ? route.query.discordReview : undefined" />
-        <form v-show="section === 'learning'" @submit.prevent="saveLearning">
-          <h2>{{ t('Learning') }}</h2>
-          <p class="settings-help">{{ t('Reflection, skill encapsulation and identity learning use only this project\'s sessions and Home.') }}</p>
-          <label v-if="typeof config?.learning?.enabled === 'boolean'" class="settings-checkbox"><input v-model="learningEnabled" type="checkbox" :disabled="saving || !config" />{{ t('Enable automatic learning') }}</label>
-          <label v-for="item in learningFields" :key="item.key" class="settings-field">{{ item.label }} {{ t('interval (minutes)') }}<input v-model.number="learningIntervals[item.key]" type="number" min="1" max="35791" step="1" required :disabled="saving || !config" /></label>
-          <button class="btn primary" :disabled="saving || !config">{{ saving ? t('Saving...') : t('Save learning settings') }}</button>
-          <LearningRuntimeStatus :api-base="apiBase" :project-id="projectId" :revision="learningRevision"
-            :active="available && section === 'learning' && route.name === 'project-settings' && route.params.projectId === projectId" />
-          <RouterLink class="settings-related" :to="{ name: 'chat', params: { projectId } }">{{ t('View Self-reflection conversations') }}</RouterLink>
-          <RouterLink class="settings-related" :to="{ name: 'project-settings', params: { projectId, section: 'agents' } }">{{ t('Project agents and instructions') }}</RouterLink>
-        </form>
       </div>
       <ProjectDeleteDialog v-if="deleting && project" :api-base="hostApiBase" :project="project" @close="deleting = false" @deleted="projectDeleted" />
     </div>
@@ -58,7 +47,6 @@ import { useRoute } from 'vue-router'
 import AgentsTab from './AgentsTab.vue'
 import ChannelsView from './ChannelsView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
-import LearningRuntimeStatus from './LearningRuntimeStatus.vue'
 import ProjectDeleteDialog from './ProjectDeleteDialog.vue'
 import { createProjectsClient, type ProjectRecord } from '../projects.ts'
 import { createProjectSettingsClient, type ProjectConfig } from '../project-settings.ts'
@@ -70,7 +58,7 @@ defineOptions({ name: 'ProjectSettings' })
 const route = useRoute()
 const installation = useInstallationContext()
 const available = computed(() => installation.value.mode !== 'child' || installation.value.mainWorkspace === true || installation.value.mainConnection === 'connected')
-const sections = [{ id: 'general', get label() { return t('General') } }, { id: 'models', get label() { return t('Models') } }, { id: 'agents', get label() { return t('Agents') } }, { id: 'bots', get label() { return t('Bots') } }, { id: 'learning', get label() { return t('Learning') } }]
+const sections = [{ id: 'general', get label() { return t('General') } }, { id: 'models', get label() { return t('Models') } }, { id: 'agents', get label() { return t('Agents') } }, { id: 'bots', get label() { return t('Bots') } }]
 const section = computed(() => typeof route.params.section === 'string' ? route.params.section : 'general')
 const botsOpened = ref(false)
 const modelsOpened = ref(false)
@@ -84,26 +72,9 @@ const saving = ref(false)
 const deleting = ref(false)
 const error = ref('')
 const notice = ref('')
-const learningEnabled = ref(true)
-const learningRevision = ref(0)
-const learningFields = [
-  { key: 'reflectIntervalMs', get label() { return t('Self-reflection') } },
-  { key: 'encapsulateIntervalMs', get label() { return t('Skill encapsulation') } },
-  { key: 'soulIntervalMs', get label() { return t('Identity reflection') } },
-] as const
-const learningIntervals = ref<Record<string, number>>({})
 let request: AbortController | undefined
 let mutation: AbortController | undefined
-function accept(value: ProjectConfig, section?: 'agent' | 'learning') {
-  config.value = value
-  if (section !== 'agent') {
-    learningEnabled.value = value.learning?.enabled === true
-    for (const item of learningFields) {
-      const interval = value.learning?.[item.key]
-      learningIntervals.value[item.key] = typeof interval === 'number' ? interval / 60_000 : 0
-    }
-  }
-}
+function accept(value: ProjectConfig) { config.value = value }
 async function load() {
   if (!available.value) { error.value = t('Main is unavailable'); return }
   request?.abort()
@@ -147,23 +118,6 @@ async function rename() {
 function projectDeleted(projectId: string) {
   deleting.value = false
   window.dispatchEvent(new CustomEvent('shadow:project-deleted', { detail: { projectId } }))
-}
-async function saveLearning() {
-  await mutate(async signal => {
-    const patch: Record<string, unknown> = {}
-    for (const item of learningFields) {
-      const minutes = learningIntervals.value[item.key]
-      if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes * 60_000 > 2_147_483_647) throw new Error(t('Learning intervals must be whole minutes from 1 to 35791.'))
-      patch[item.key] = minutes * 60_000
-    }
-    if (typeof config.value?.learning?.enabled === 'boolean') patch.enabled = learningEnabled.value
-    const result = await createProjectSettingsClient(props.apiBase, fetch, livePool).save('learning', patch, signal)
-    if (signal.aborted) return
-    accept(result, 'learning')
-    learningRevision.value++
-    notice.value = t('Learning settings saved for this project.')
-    window.dispatchEvent(new CustomEvent('shadow:config-changed', { detail: { projectId: props.projectId } }))
-  })
 }
 onMounted(load)
 onUnmounted(() => { request?.abort(); mutation?.abort() })

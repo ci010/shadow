@@ -13,6 +13,7 @@ export interface AutomationSummary {
   source: 'cron' | 'learning' | 'system'
   session: 'fresh'
   schedule: string
+  intervalMs?: number
   task?: string
   agentType?: string
   enabled: boolean
@@ -129,6 +130,7 @@ export async function fetchAutomations(
       if (!record(item) || !identifier(item.id) || ids.has(item.id) || typeof item.name !== 'string' || !item.name.trim()
         || (item.source !== 'cron' && item.source !== 'learning' && item.source !== 'system') || item.session !== 'fresh'
         || typeof item.schedule !== 'string' || !item.schedule.trim() || typeof item.enabled !== 'boolean'
+        || (item.intervalMs !== undefined && (!count(item.intervalMs) || item.intervalMs === 0))
         || !optionalText(item.model) || !optionalText(item.defaultModel)
         || ['canConfigureModel', 'configuredEnabled', 'editable', 'canToggle', 'toggleEnabled', 'disabledByGlobal'].some(key => item[key] !== undefined && typeof item[key] !== 'boolean')
         || (item.toggleId !== undefined && !identifier(item.toggleId))
@@ -137,6 +139,7 @@ export async function fetchAutomations(
       return {
         id: item.id, name: item.name, source: item.source, session: 'fresh', schedule: item.schedule,
         enabled: item.enabled,
+        ...(item.intervalMs !== undefined ? { intervalMs: item.intervalMs as number } : {}),
         ...(item.model !== undefined ? { model: item.model as string } : {}),
         ...(item.defaultModel !== undefined ? { defaultModel: item.defaultModel as string } : {}),
         ...(item.canConfigureModel !== undefined ? { canConfigureModel: item.canConfigureModel as boolean } : {}),
@@ -206,4 +209,13 @@ export async function setAutomationModel(base: string, id: string, model: string
   await read(apiUrl(base, `/api/automations/${encodeURIComponent(id)}`), signal, value => {
     if (!record(value) || !record(value.automation) || value.automation.id !== id) throw invalid()
   }, (url, init) => request(url, { ...init, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) }))
+}
+
+/** Interval-only mutation: never changes automation admission. */
+export async function setAutomationInterval(base: string, id: string, minutes: number, signal: AbortSignal, request: typeof fetch = fetch): Promise<void> {
+  if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 35791) throw new Error(t('Learning intervals must be whole minutes from 1 to 35791.'))
+  if (!identifier(id)) throw invalid()
+  await read(apiUrl(base, `/api/automations/${encodeURIComponent(id)}`), signal, value => {
+    if (!record(value) || !record(value.automation) || value.automation.id !== id) throw invalid()
+  }, (url, init) => request(url, { ...init, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ intervalMs: minutes * 60_000 }) }))
 }

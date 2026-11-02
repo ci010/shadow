@@ -55,7 +55,7 @@ const updating = reactive(new Set<string>())
 const updateError = ref('')
 // Shared hover content can outlive the row's snapshot after catalog refresh.
 const currentJob = (job: AutomationSummary) => jobs.value.find(current => current.id === job.id) ?? job
-const preference = (job: AutomationSummary) => { const current = currentJob(job); return current.toggleEnabled ?? current.configuredEnabled ?? current.enabled }
+const preference = (job: AutomationSummary) => { const current = currentJob(job); return current.source === 'learning' ? current.enabled : (current.toggleEnabled ?? current.configuredEnabled ?? current.enabled) }
 async function toggle(id: string, toggleId: string, enabled: boolean) {
   if (updating.has(id)) return
   const base = props.apiBase

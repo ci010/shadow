@@ -5,6 +5,7 @@ import ProjectsWorkspace from './components/ProjectsWorkspace.vue'
 import SettingsView from './components/SettingsView.vue'
 
 const routes: RouteRecordRaw[] = [
+  { path: '/projects/:projectId/settings/learning', redirect: to => ({ name: 'chat', params: { projectId: to.params.projectId }, query: { automation: 'learning:reflector' } }) },
   { path: '/', redirect: '/chat' },
   { path: '/chat/:sessionId?', redirect: to => ({ name: 'chat', params: { projectId: 'default', sessionId: to.params.sessionId }, query: to.query }) },
   { path: '/projects/:projectId/chat/:sessionId?', name: 'chat', component: ProjectsWorkspace },
@@ -14,7 +15,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/projects/:projectId/knowledge', name: 'knowledge', redirect: to => ({
     name: 'chat', params: { projectId: to.params.projectId }, query: { ...to.query, panel: 'knowledge' }, hash: to.hash,
   }) },
-  { path: '/projects/:projectId/settings/:section(general|models|bots|agents|learning)?', name: 'project-settings', component: ProjectsWorkspace },
+  { path: '/projects/:projectId/settings/:section(general|models|bots|agents)?', name: 'project-settings', component: ProjectsWorkspace },
   { path: '/workspaces', redirect: '/nodes' },
   { path: '/nodes', name: 'nodes', redirect: '/settings/nodes' },
   { path: '/providers', name: 'providers', redirect: '/settings/providers' },

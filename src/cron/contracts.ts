@@ -20,6 +20,7 @@ export interface AutomationSessionRef {
   legacy?: boolean
 }
 export interface AutomationSummary {
+  intervalMs?: number
   id: string
   name: string
   source: 'cron' | 'learning' | 'system'
