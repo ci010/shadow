@@ -392,7 +392,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
         pendingWorkReviews: work.items.filter(item => item.contextChanged || item.notes?.attention && !item.notes.attention.reviewed).length })
       const controlPath = join(output, 'control.json')
       let control: { id: string; action: string; appId?: string; revision?: string; text?: string;
-        workKey?: string } | undefined
+        workKey?: string; requestId?: string; option?: string } | undefined
       try { control = JSON.parse(await readFile(controlPath, 'utf8')) }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       if (control && !commands.has(control.id)) {
@@ -429,6 +429,17 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
                 await artifact('timeline.json', timeline!.snapshot())
               } finally { approvalGate = undefined; gate.resolve() }
             }
+          } else if (control.action === 'answer-testing') {
+            // Version approval and permission to resume the author are separate owner operations.
+            const app = appRecordSchema.strip().parse(await owner(`/${control.appId}`))
+            const acceptance = app.acceptance
+            if (app.revision !== control.revision || acceptance?.status !== 'asking' ||
+              !acceptance.decisionSessionId || !control.requestId || acceptance.decisionRequestId !== control.requestId) {
+              throw new AcceptanceControlError('Testing answer is stale; inspect the current exact app and owner question')
+            }
+            await ownerRequest(`/sessions/${encodeURIComponent(acceptance.decisionSessionId)}/ask`, {
+              requestId: control.requestId, option: control.option,
+            })
           } else if (control.action === 'snapshot') {
             await exportAcceptanceBundles(project.home, output)
           } else if (control.action === 'review-work') {
