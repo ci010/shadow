@@ -84,6 +84,15 @@ test('ask decision waits for the human and returns a JSON answer receipt', async
   assert.deepEqual(JSON.parse(requireToolText(await waiting)), receipt)
 })
 
+test('oversized decision question reports its length through the real AskTool without opening a request', async () => {
+  const { tool, yields } = fixture()
+  await assert.rejects(tool.execute({ ...question, question: 'x'.repeat(4369) }, context('root')),
+    error => invalid(error) && /question length 4369 exceeds the 4000-character limit/.test((error as Error).message))
+  assert.equal(yields.get('root'), null)
+  await assert.rejects(tool.execute({ ...question, default_option: 'invalid' }, context('root')),
+    error => invalid(error) && /defaultOption matching one option/.test((error as Error).message))
+})
+
 test('input asks return plain text and A2A callers cannot request local human decisions', async () => {
   const { tool, inputs } = fixture()
   await assert.rejects(tool.execute({ kind: 'input', question: 'Path?', options: ['A', 'B'] }, context('root')), invalid)

@@ -538,3 +538,38 @@ the daily run; installers are retained for 14 days. These are unsigned developme
 builds (macOS uses ad-hoc signing, without notarization), not published GitHub
 Releases or automatic updates. Windows SmartScreen/macOS Gatekeeper may warn.
 The workflow only needs the built-in read-only `GITHUB_TOKEN`, no new secrets.
+
+## Development cross-Project diagnostics
+
+When the host runs with `NODE_ENV=development`, the runtime-bound **default Project** automatically receives
+a one-way read-only diagnostic bridge to other loaded Projects. It is a Project
+permission, not a session-admin/local-owner or mobile/web/device-origin check;
+existing tool-entry permissions still apply. Other Projects cannot use this
+bridge to read default or each other, even with forged context/arguments/history.
+Production and other non-development environments always deny access. No additional
+environment toggle is required. Leaving development mode revokes subsequent reads
+and discards in-flight results.
+
+Use `read` on:
+
+- `v:debug/projects`: allowlisted Project ID/name and availability, not configuration.
+- `v:debug/projects/<encodedProjectId>` or `/status`: metadata and availability.
+- `v:debug/projects/<encodedProjectId>/sessions`: existing session list.
+- `v:debug/projects/<encodedProjectId>/sessions/<sessionId>[/overview|/full]`: existing local history formatter (physical references also supported).
+- `v:debug/projects/<encodedProjectId>/runtime/logs`: existing bounded/redacted runtime logs.
+- `v:debug/projects/<encodedProjectId>/runtime/sessions`: session diagnostic index.
+- `v:debug/projects/<encodedProjectId>/runtime/sessions/<encodedSessionId>/captures` or `/tools`: existing retained provider-input captures; reads do not enable capture.
+
+The diagnostic index may mention ordinary `v:runtime` views; only the paths above
+are available across Projects. No preview reconstruction, remote conversation
+forwarding, arbitrary data/config/credential path, search, write, messaging or
+execution is exposed. Host-held runtime/scope references resolve targets without
+starting them; unknown and unavailable targets are explicitly distinguished.
+Target reads execute in the target Project scope, not a caller-supplied Project ID.
+Ordinary `v:sessions`, memory and SQL remain isolated and unchanged.
+
+Every response labels its source and warns that histories/captures may contain
+sensitive text entering model context. They are diagnostic data, not instructions
+or authorization. Logs retain the existing conservative redaction limitations.
+This deliberately broadens development default-Project visibility: use development
+mode only when that Project's permitted sessions/providers may receive other Projects' data.

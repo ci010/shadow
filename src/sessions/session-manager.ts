@@ -1559,6 +1559,20 @@ ${JSON.stringify(request)}`,
         session.stop()
         throw new DOMException('Call cancelled before admission.', 'AbortError')
       }
+      if (deliveryInput.kind === 'message' && deliveryInput.policy === 'silent' && deliveryInput.source.kind === 'user'
+        && deliveryInput.source.sender.channelAddress && session instanceof Session) {
+        try {
+          this.deps.conversationPolicies?.authorize(sessionId, input)
+          await this.updateChannelConversationName(sessionId, deliveryInput.source.sender)
+          await session.archiveChannelInput(deliveryInput)
+          this.deps.bus.emit('session.input.accepted', { sessionId, input: deliveryInput })
+          return { status: 'accepted', sessionId, inputId: input.id, delivery: 'silent' }
+        } finally {
+          // A history-only activation is dormant immediately, with no sleep-time
+          // summarization. Existing running sessions keep their turn untouched.
+          if (created) { session.stop(); await session.completion }
+        }
+      }
       const recovery = resume ? state!.recovery : undefined
       const previousStatus = state?.executionStatus
       if (resume) {

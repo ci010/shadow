@@ -39,6 +39,7 @@ type LoopEvent =
   | { type: 'sleep'; llm: LlmRuntimeConfig }
   | { type: 'compact'; llm: LlmRuntimeConfig }
   | { type: 'realign'; apply: () => Promise<void> }
+  | { type: 'archive'; apply: () => Promise<void>; reject: (error: unknown) => void }
 
 export class Session extends BaseSession {
   private running = false
@@ -252,6 +253,35 @@ export class Session extends BaseSession {
       })
   }
 
+  /** Archive channel context at a mailbox boundary, never as a turn. In particular,
+   * do not reconcile recovery, close tool calls, compact, or run boundary tools. */
+  archiveChannelInput(input: SessionMessageInput): Promise<void> {
+    if (!this.accepting) return Promise.reject(new Error('Session is stopping.'))
+    return new Promise<void>((resolve, reject) => {
+      this.pushEvent({ type: 'archive', reject, apply: async () => {
+        try {
+          const physicalId = this.physicalSessionId
+          // The marker and message are one stored record. Replays after restart
+          // deduplicate within this context epoch, not across unrelated threads.
+          for await (const record of this.store.readSessionLog(physicalId)) {
+            if (record.channel_input_id === input.id) { resolve(); return }
+          }
+          const locations = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup)
+          if (!locations.workdir.available) throw new Error(`Session workdir unavailable: ${locations.workdir.reason}`)
+          const cwd = locations.workdir.locality === 'local' ? locations.workdir.path : locations.sessionDataDir
+          const message = { ...await buildUserChatMessage(input, this.workspace, cwd), timestamp: input.timestamp }
+          await this.store.appendMessages(physicalId, [{
+            role: message.role, content: message.content, name: message.name,
+            timestamp: message.timestamp, channel_input_id: input.id,
+          }])
+          this.messages.push(message)
+          this.bus.emit('session.message.appended', { sessionId: this.id, physicalSessionId: physicalId, message })
+          resolve()
+        } catch (error) { reject(error) }
+      } })
+    })
+  }
+
   /** Trigger compaction manually (routed through the event loop to avoid races). */
   requestCompact(llm: LlmRuntimeConfig): void {
     this.pushEvent({ type: 'compact', llm })
@@ -310,14 +340,19 @@ export class Session extends BaseSession {
       let event: LoopEvent
       try {
         event = await this.consumeEvent()
-        if (!this.accepting) break
+        if (!this.accepting) {
+          if (event.type === 'archive') event.reject(new Error('Session stopped before history admission.'))
+          break
+        }
       } catch {
         // consumeEvent rejects when stopController aborts — exit the loop.
         break
       }
 
       try {
-        if (event.type === 'realign') {
+        if (event.type === 'archive') {
+          await event.apply()
+        } else if (event.type === 'realign') {
           await event.apply()
         } else if (event.type === 'sleep') {
           await this.sleep(event.llm)
@@ -361,7 +396,7 @@ export class Session extends BaseSession {
       }
 
       // After processing, if no queued messages remain start the sleep timer.
-      if (this.inbox.length === 0 && event.type !== 'realign') {
+      if (this.inbox.length === 0 && event.type !== 'realign' && event.type !== 'archive') {
         this.scheduleSleepCheck(event.llm)
       }
     }
@@ -381,6 +416,9 @@ export class Session extends BaseSession {
     }
     this.stopController.abort()
     this.turn?.abort()
+    for (const event of this.inbox) {
+      if (event.type === 'archive') event.reject(new Error('Session stopped before history admission.'))
+    }
     this.inbox = []
   }
 

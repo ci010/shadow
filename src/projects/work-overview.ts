@@ -44,7 +44,7 @@ export const projectWorkOverviewSchema = z.object({
     id, sessionId: id, tool: id, status: z.enum(['running', 'unknown']), workKeys: z.array(id),
   })),
   organization: z.object({
-    organization: z.object({mode:z.enum(['full','delta']),status:z.enum(['running','completed','partial']),coveredCount:z.number().int().nonnegative(),manifestCount:z.number().int().nonnegative(),patches:z.number().int().nonnegative()}).optional(),
+    organization: z.object({phase:z.enum(['evidence','hierarchy']).optional(),mode:z.enum(['full','delta']),status:z.enum(['running','completed','partial']),coveredCount:z.number().int().nonnegative(),manifestCount:z.number().int().nonnegative(),patches:z.number().int().nonnegative()}).optional(),
     enabled: z.boolean(), running: z.boolean(),
   }).optional(),
 }).superRefine((value, ctx) => {

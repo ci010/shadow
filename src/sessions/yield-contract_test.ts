@@ -77,6 +77,15 @@ test('question requires two or three distinct options and an exact default', () 
   assert.equal(parsed.options[0], 'A')
 })
 
+test('question length has a dedicated diagnostic without echoing oversized content', () => {
+  for (const length of [4001, 4367, 4369]) {
+    assert.throws(() => parseYieldQuestion({ ...question, question: 'x'.repeat(length) }),
+      error => error instanceof TypeError && error.message.includes(`question length ${length} exceeds the 4000-character limit`) && !error.message.includes('xxxxx'))
+  }
+  assert.throws(() => parseYieldQuestion({ ...question, options: ['A', 'A'] }), /distinct non-empty options/)
+  assert.throws(() => parseYieldQuestion({ ...question, defaultOption: 'missing' }), /defaultOption matching one option/)
+})
+
 test('request parser validates recipient, session identity and timestamp shape and returns copies', () => {
   assert.deepEqual(parseYieldRequest(request, 'root'), request)
   const parent = { ...request, recipient: { kind: 'parent', sessionId: 'parent' }, deadline: '2026-09-13T12:00:01.000Z' }

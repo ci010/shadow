@@ -1,4 +1,5 @@
 import { UserPresence } from '../../sessions/presence.ts'
+import { createProjectDebugBridge } from '../../projects/debug-bridge.ts'
 import { measureStartupProfile, startupProjectOrdinal } from '../startup-profile.ts'
 import { appProxyPlugin } from '../../config/proxy-routes.ts'
 import { updateBackendNetwork } from '../../execution/network/backend.ts'
@@ -158,6 +159,14 @@ export async function startProjectHost(
   const presence = new UserPresence()
   const runtimes = new Map<string, ProjectRuntime>()
   const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
+  const debugHost = {
+    metadata: () => catalog.list().map(({ id, name }) => ({ id, name })),
+    lookup: (id: string) => {
+      const runtime = !stopping && !deletions.has(id) && !catalog.isDeleting(id) ? runtimes.get(id) : undefined
+      const scope = scopes.get(id)
+      return runtime?.debugRead && scope && !scope.closed ? { scope, read: runtime.debugRead } : undefined
+    },
+  }
   const stores = new Map<string, ProjectConfigStore>()
   const starts = new Map<string, Promise<void>>()
   const deletions = new Set<string>()
@@ -252,6 +261,7 @@ export async function startProjectHost(
         const projectConfig = await projectStartup.measure('config', () => store.init())
         runtime = await scope.run(() => factory(projectConfig, {
           presence,
+          debugProjects: createProjectDebugBridge(scope, debugHost),
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
           mainCluster, copilotAuth, authorize, realtimeHub, computer,

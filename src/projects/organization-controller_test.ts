@@ -135,3 +135,23 @@ test('pre-ready hints never run until start; failed preflight exposes safe diagn
     assert.equal(controller.status().lastAutomaticError, undefined)
   } finally { await controller.stop(); scope.close() }
 })
+
+
+test('idle and cooldown reconciliation survives an unchanged preflight without a fresh hint',async()=>{
+  const scope=createProjectScope('fixture')
+  let eligible=false,checks=0,calls=0
+  const controller=new OrganizationController({scope,changed(){},debounceMs:1,retryMs:5,
+    hasDelta:async()=>{checks++;return eligible},organize:async()=>{calls++;eligible=false}})
+  try{
+    controller.start()
+    await until(()=>checks>=2)
+    assert.equal(calls,0,'cheap recovery checks never call an empty model')
+    eligible=true // source became idle or cooldown expired, with no second hint
+    await until(()=>calls===1)
+    assert(controller.status().nextAutomaticAt || checks>2)
+    controller.update(false)
+    const stoppedAt=checks
+    await sleep(20)
+    assert.equal(checks,stoppedAt,'disable stops periodic admission checks')
+  }finally{await controller.stop();scope.close()}
+})

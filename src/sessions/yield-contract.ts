@@ -10,6 +10,7 @@ export const workStampsSchema = z.array(z.object({
 
 export const MAX_YIELD_TIMEOUT_MS = 2_147_483_647
 export const MAX_YIELD_CUSTOM_TEXT_LENGTH = 4000
+export const MAX_YIELD_QUESTION_LENGTH = 4000
 
 export interface YieldPolicy {
   timeoutMs: number | null
@@ -169,7 +170,10 @@ export function parseYieldPolicy(value: unknown): YieldPolicy {
 }
 
 export function parseYieldQuestion(value: unknown): YieldQuestion {
-  if (!isRecord(value) || typeof value.question !== 'string' || !value.question.trim() || value.question.length > 4000
+  if (isRecord(value) && typeof value.question === 'string' && value.question.length > MAX_YIELD_QUESTION_LENGTH) {
+    throw new TypeError(`Yield question length ${value.question.length} exceeds the ${MAX_YIELD_QUESTION_LENGTH}-character limit. Keep the question concise and put complete supporting details in a brief or an authorized detail view.`)
+  }
+  if (!isRecord(value) || typeof value.question !== 'string' || !value.question.trim()
     || !Array.isArray(value.options) || (value.options.length !== 2 && value.options.length !== 3)
     || !Array.from(value.options).every((item): item is string => typeof item === 'string' && !!item.trim() && item.length <= 500)
     || new Set(value.options.map(item => item.trim())).size !== value.options.length

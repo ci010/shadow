@@ -25,6 +25,7 @@ export class OrganizationController {
   private automaticJob?: Promise<void>
   private generation = 0
   private lastAutomaticError?: 'organization_delta_check_failed' | 'organization_execution_failed'
+  private automaticFailures=0
   private lastCheckedAt?: string
   private nextAutomaticAt?: string
   constructor(private deps: {
@@ -63,7 +64,13 @@ export class OrganizationController {
       this.automaticJob = job
       void job.finally(() => {
         this.automaticJob = undefined
-        if (this.firstHint !== undefined) this.schedule(this.deps.retryMs ?? 30_000)
+        // Even a currently busy/cooling source must be reconsidered after idle or
+        // deadline without relying on another metadata event. This is a cheap
+        // store check; the executor never starts an empty model run.
+        if (!this.stopped && this.organizerEnabled) {
+          this.firstHint ??= Date.now()
+          this.schedule(Math.min(3_600_000,(this.deps.retryMs ?? 30_000)*2**Math.min(7,this.automaticFailures)))
+        }
       })
     }, wait)
     this.timer.unref?.()
@@ -77,16 +84,18 @@ export class OrganizationController {
       if (this.stopped || !this.organizerEnabled) return
       const pending = await this.deps.scope.run(() => this.deps.hasDelta!())
       this.lastAutomaticError = undefined
-      if (!pending) return
+      if (!pending) { this.automaticFailures=0; return }
       if (this.stopped || !this.organizerEnabled) return
       phase = 'execute'
       await this.organizeNow(new AbortController().signal, 'delta')
+      this.automaticFailures=0
       phase = 'check'
       // Delta is bounded to three topics. Continue draining persisted leftovers.
       if (!this.stopped && this.organizerEnabled && await this.deps.scope.run(() => this.deps.hasDelta!())) this.firstHint ??= Date.now()
     } catch {
       if (!this.stopped && this.organizerEnabled) {
         // Never surface provider/error payloads: they may contain evidence or prompts.
+        this.automaticFailures++
         this.lastAutomaticError = phase === 'check' ? 'organization_delta_check_failed' : 'organization_execution_failed'
         console.warn(`[organization] ${this.lastAutomaticError}; automatic delta will retry`)
       }
