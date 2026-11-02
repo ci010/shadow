@@ -1,3 +1,4 @@
+import { markIngressFailure } from './ingress-diagnostic.ts'
 import type { StreamInput } from './message-stream.ts'
 import type { GroupObservation } from './service-discovery.ts'
 import type { InboundMessage, OutboundMessage } from '../bus/events.ts'
@@ -112,7 +113,10 @@ export abstract class AbstractChannel implements BaseChannel {
   }
   private streamCollector?: (event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean) => Promise<void>
   setStreamCollector(collector: NonNullable<AbstractChannel['streamCollector']>): void { this.streamCollector = collector }
-  protected async collectStream(event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean): Promise<void> { this.assertConnection(); await this.streamCollector?.(event, isGroup) }
+  protected async collectStream(event: Omit<StreamInput, 'connection' | 'platform'>, isGroup: boolean): Promise<void> {
+    try { this.assertConnection(); await this.streamCollector?.(event, isGroup) }
+    catch (error) { markIngressFailure(error, 'stream'); throw error }
+  }
   private inputPolicy?: ReceiveChannelPolicy
   private inputPolicyMode: 'service' | 'personal' = 'service'
   setReceivePolicy(receiver: ReceiveChannelPolicy, mode: 'service' | 'personal' = 'service'): void {

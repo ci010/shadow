@@ -111,8 +111,11 @@ in-memory baseline that removes only those selector keys. Selectors must be vali
 name arrays referencing retained top-level skill prompts, and the entire cleaned
 baseline must pass the normal strict parser. Any other validation error still
 blocks publication. Runtime parsing never uses this exception. The owner question
-explicitly discloses the invalid active package, removed selectors, complete candidate
-permissions, expected/next hashes and restoration of valid subscriptions/runtime.
+discloses in Chinese that the old package cannot run and deployment restores
+already-authorized message reception and processing. Internal selector names and
+revision hashes do not appear in the question.
+The same-revision pending details list every removed selector and all candidate
+permissions, alongside complete added/removed scopes and affected locations.
 No active files change without the ordinary exact-content Deploy confirmation and
 post-confirmation live authorization. Use the owning Project's normal `bot_package`
 proposal with `expectedRevision`. Recheck the resulting current/previous hashes.
@@ -199,8 +202,14 @@ cannot add tools, participants, folders or inherited threads. Those remain bindi
 policy. The source router selects the BOT before its handler invokes the lazy
 platform receive strategy (triggers/processors/classifiers); security admission
 still verifies the source and connection. Policies are checked again before
-Session creation/execution and buffered processor retries. A non-triggering service message is filtered without creating/waking a
-Session; admitted channel-stream collection remains separate from Session history.
+Session creation/execution and buffered processor retries. An authorized non-triggering
+service message is recorded in the same Session history as mentions, without commands,
+model calls, tasks or outbound replies. With no active Session this creates a dormant
+history-only conversation; with a running turn it waits at a mailbox boundary without
+interrupting or steering that turn. History survives restart and repeated silent inputs
+are deduplicated by input ID within the current context epoch. Channel-stream collection
+remains separate and is not itself Session history; unbound or unauthorized messages
+cannot use this archive path.
 
 Migration is read-time and non-destructive: omitting `subscriptions` retains the
 same legacy binding subscriptions (including enabled/disabled state and all
@@ -305,16 +314,30 @@ In an authenticated owner Web conversation, the Agent calls `bot_package`:
 3. `propose` takes `folderId`, a relative `directory` (empty means Folder root), a
    concise Agent-authored `summary`, and the exact `expectedRevision` for an update.
    Omit `expectedRevision` only for a new BOT identity.
-4. One native ask confirmation shows that summary, actual affected targets, and
-   host-derived added/removed permission scopes. Deploy/Cancel is the only decision.
-   Exact optional details are available under Channels → BOT deployments while
-   the question is open. They are transient, not a publication-history database.
+4. One native ask confirmation uses Chinese system text and preserves the user's
+   summary as supplied (including an English summary). It shows bounded message
+   reception/configuration counts, added/removed permission counts and short
+   business-impact notices. Options are `部署` and `取消`, with `取消` as default.
+   The question contains no revision hash, internal permission strings or English
+   navigation instructions, and does not require matching a hash on another page.
+   Complete frozen facts remain available in the existing owner-only deployment
+   details; they are not embedded in the question. The
+   owner-authorized expandable card contains all affected locations, added/removed
+   scopes, all candidate permissions, candidate bindings and any legacy-selector
+   repair facts. HTTP origins, routes and body restrictions are retained; credential
+   configuration is shown only as present, never private references or header values.
+   Details exist before the question opens and are cleared when it settles, including
+   cancellation/failure. They are transient, not a publication-history database.
+   A duplicate live proposal for the same candidate hash is rejected without
+   replacing or clearing the original confirmation's details.
 5. Shadow revalidates live authority after approval, retires affected idle contexts,
    then deploys **exactly the frozen files**. Subsequent workspace edits are excluded.
    Cancellation, non-approval/custom answers, stale revisions and validation failures
    do not publish. Busy contexts must finish before publication can proceed. The native decision question
-   has a 4000-character ceiling: exceptionally large permission/target changes fail
-   closed rather than truncating consequential scopes.
+   retains its 4000-character ceiling. BOT questions keep a bounded summary budget
+   independently of permission/target list size; full facts stay in the matching
+   pending detail view. Oversized questions elsewhere report their actual length
+   and the limit, rather than an unrelated options/default error.
 
 Directory BOT bindings declare their permissions directly, subject to BOT-level
 ceilings. They do not use `AGENT.md` capability profiles or copy authority

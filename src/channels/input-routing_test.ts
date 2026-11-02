@@ -154,9 +154,11 @@ for (const connectionTrigger of ['mention', 'all'] as const) test(`two directory
           ...(trigger === 'mention' && connectionTrigger === 'all' ? {} : { trigger }), tools: [] }] }) })
       await deployments.deploy({ id, source: { folderId: 'fixture', directory: '' }, ...frozen })
     }
-    const directory = new DirectoryBots(deployments), delivered: string[] = [], configured: string[] = []
+    const directory = new DirectoryBots(deployments), delivered: string[] = [], silent: string[] = [], configured: string[] = []
     const inputs = channelInputFixture({ projectId, bots, directory, receive: async message => {
-      delivered.push(message.chatId); assert.equal(message.channelAddress?.botInstanceId, connection.id)
+      delivered.push(message.chatId)
+      if (message.silent) silent.push(message.chatId)
+      assert.equal(message.channelAddress?.botInstanceId, connection.id)
       return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
     } })
     const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace } }), bus, {} as SessionManager, inputs.receive, {
@@ -177,10 +179,12 @@ for (const connectionTrigger of ['mention', 'all'] as const) test(`two directory
         id: String(++id), content: 'ordinary message', group_openid: group, author: { member_openid: '500' }, timestamp: new Date().toISOString(), triggerMode: 'all',
       })
       await Promise.all([send('mention'), send('all')])
-      assert.deepEqual(delivered, ['group:all'])
+      assert.deepEqual(delivered, ['group:mention', 'group:all'])
+      assert.deepEqual(silent, ['group:mention'])
       assert.deepEqual(configured, ['group:mention:mention', 'group:all:all'])
       await send('mention', true)
-      assert.deepEqual(delivered, ['group:all', 'group:mention'])
+      assert.deepEqual(delivered, ['group:mention', 'group:all', 'group:mention'])
+      assert.deepEqual(silent, ['group:mention'])
       const saved = bots.get(connection.id).config
       assert.ok('triggerMode' in saved)
       assert.equal(saved.triggerMode, connectionTrigger, 'Compatibility configuration is not rewritten or used as Service policy')

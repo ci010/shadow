@@ -1,5 +1,4 @@
 import type { InboundMessage } from '../bus/events.ts'
-import { deriveSessionId } from '../bus/events.ts'
 import type { DeliveryReceipt, ReceiveChannelMessage, RunChannelPolicy } from '../sessions/input.ts'
 import type { InputEnvelope, InputListener } from '../input/router.ts'
 import { matchesInput } from '../input/router.ts'
@@ -51,11 +50,10 @@ export async function handleBotObservationPolicy(bot: BotDefinition, connection:
   await runPolicy()
 }
 
-/** Final normalized output is rechecked before Session entry; silent is a strategy
- * verdict, not permission to create a dormant Session. */
+/** Final normalized output is rechecked before Session entry. Silent inputs use
+ * the same authorized Session history, without commands or model execution. */
 export async function handleBotChannelInput(bot: BotDefinition, message: InboundMessage, receive: ReceiveChannelMessage): Promise<DeliveryReceipt> {
   assertBotChannelInput(bot, message)
-  if (message.silent) return { status: 'accepted', disposition: 'filtered', sessionId: deriveSessionId(message), inputId: message.messageId, delivery: 'silent' }
   // AgentApp + SessionManager recheck current policy/admission before commands or inference.
   return receive(message)
 }

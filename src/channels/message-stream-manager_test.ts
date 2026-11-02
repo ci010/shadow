@@ -88,3 +88,20 @@ for(const failure of ['directory','append'] as const)test(`transport ${failure} 
  assert.ok(logs.some(line=>line.includes('phase=stream-gap')&&line.includes(`bot=${f.bot.id}`)))
  assert.ok(!logs.some(line=>/phase=(start|stop|cleanup-after-start-failure)\b/.test(line)))
 })
+
+test('actual ingress stream write failure remains fail-closed and gains a safe stage',async t=>{
+ const f=await fixture(t,true)
+ const failure=Object.assign(new Error('private synthetic content'),{code:'ENOSPC'})
+ t.mock.method(f.stream,'append',()=>{throw failure})
+ const {ingressErrorDetail}=await import('./ingress-diagnostic.ts')
+ await assert.rejects(f.adapter.push(),error=>{
+  assert.equal(error,failure)
+  assert.equal(ingressErrorDetail(error),'phase=stream category=system:ENOSPC')
+  return true
+ })
+ assert.equal(f.received,0)
+ await assert.rejects(f.adapter.push('owner','unauthorized'),/assignment/)
+ await assert.rejects(f.adapter.passive({conversation:'10',message:'2',sender:'owner',kind:'created',content:'synthetic'}),error=>{
+  assert.equal(error,failure);assert.equal(ingressErrorDetail(error),'phase=stream category=system:ENOSPC');return true
+ })
+})
