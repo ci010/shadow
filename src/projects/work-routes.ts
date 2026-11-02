@@ -1,4 +1,4 @@
-import { isLightweightTopic, sessionTopicTitle, sessionTopicDescription, sessionTopicSequence } from '../sessions/lightweight-topic.ts'
+import { isLightweightTopic, sessionTopicTitle, sessionTopicFocus, sessionTopicSequence } from '../sessions/lightweight-topic.ts'
 import { OrganizationConflict } from './organization-controller.ts'
 import { randomUUID } from 'node:crypto'
 import { OrganizationOutputError } from './organization-output.ts'
@@ -68,7 +68,8 @@ export async function projectWorkOverview(sessions: SessionManager, github: Reco
       const workKeys = alignment.store.workSessionKeys(state.sessionId, records).filter(key => records.some(record => record.key === key))
       const observed = records.find(record => record.observation?.sessionId === state.sessionId)
       return { sessionId: state.sessionId, title: sessionTopicTitle(state),
-        description: sessionTopicDescription(state), completed: state.completed ?? false, topicSequence: sessionTopicSequence(state), workKeys,
+        topic: sessionTopicTitle(state), focus: state.focus,
+        description: temporary ? state.description : undefined, completed: state.completed ?? false, topicSequence: sessionTopicSequence(state), workKeys,
         assignable: !temporary, parentSessionId: full?.parentSessionId ?? null, lastActivityAt: state.lastActivityAt,
         workKey: workKeys[0] ?? observed?.key,
         activity: sessions.inputs.get(state.sessionId) || sessions.yields.get(state.sessionId) ? 'waiting'

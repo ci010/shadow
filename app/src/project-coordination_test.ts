@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { conversationLinkSession, isDirectConversation, parseTopicMetadata } from './project-coordination.ts'
+import { conversationLinkSession, isDirectConversation, parseConversationTopic } from './project-coordination.ts'
 import { groupFolderSessions, parseSessionGraph, visibleSessions } from './folders-sidebar.ts'
 import { childConversationTarget } from './conversation-split.ts'
-import { parseSessionDetails } from './session-details.ts'
+import { parseSessionDetails, sessionDisplayFocus } from './session-details.ts'
 
-const topic = { title: 'Release readiness', goal: 'Ship the desktop build', scope: 'Windows installer', nonGoals: 'Linux packages' }
+const topic = 'Release readiness'
 
 
 test('ordinary Web sessions are listed with durable conversations and generated topics remain direct roots', () => {
@@ -23,7 +23,7 @@ test('ordinary Web sessions are listed with durable conversations and generated 
   assert.deepEqual(groups.chats.map(s => s.sessionId), ['web:chat-topic'])
   assert.deepEqual(groups.folders[0]!.sessions.map(s => s.sessionId), ['web:chat-admin', 'web:chat-folder'])
   assert.ok(groups.chats[0]!.isDirectChat)
-  assert.equal(groups.chats[0]!.label, topic.title)
+  assert.equal(groups.chats[0]!.label, topic)
   assert.equal(groups.chats[0]!.createdBySessionId, 'web:chat-admin')
   assert.equal(groups.chats[0]!.depth, 0)
   assert.equal(childConversationTarget(sessions, 'web:chat-topic', 'web:chat-admin'), null)
@@ -35,9 +35,9 @@ test('ordinary Web sessions are listed with durable conversations and generated 
 })
 
 test('topic details validate wire metadata and retain unknown historical fields as absent', () => {
-  assert.deepEqual(parseTopicMetadata(topic), topic)
-  for (const invalid of [null, {}, { ...topic, scope: [] }, { ...topic, nonGoals: 2 }]) {
-    assert.throws(() => parseTopicMetadata(invalid), /topic metadata/)
+  assert.deepEqual(parseConversationTopic(topic), topic)
+  for (const invalid of [null, {}, [], 2]) {
+    assert.throws(() => parseConversationTopic(invalid), /topic metadata/)
   }
   const parsed = parseSessionDetails({ sessionId: 'web:chat-topic', name: null, sessionKind: 'topic', topic,
     createdBySessionId: 'web:chat-admin', workdir: { kind: 'local', displayPath: null },
@@ -52,4 +52,14 @@ test('only same-project conversation receipts navigate inside the app, including
   for (const href of ['/projects/b/chat/web:chat-topic', 'https://outside.invalid/projects/a/chat/id',
     '//outside.invalid/projects/a/chat/id', '/projects/a/chat/id?child=task', '/projects/a/chat/%ZZ',
     '/projects/a/chat/%2Fetc', 'javascript:alert(1)']) assert.equal(conversationLinkSession(href, 'a'), undefined)
+})
+
+test('current focus falls back to topic while sidebar labels remain stable', () => {
+  const session = { sessionId: 'web:chat-topic', topic: 'Overall topic', focus: 'Debugging a subtask', name: 'Old name' }
+  assert.equal(sessionDisplayFocus(session), 'Debugging a subtask')
+  assert.equal(sessionDisplayFocus({ ...session, focus: '' }), 'Overall topic')
+  assert.equal(sessionDisplayFocus({ ...session, focus: undefined }), 'Overall topic')
+  const parsed = parseSessionGraph({ sessions: [session], nodes: [] })
+  assert.equal(parsed[0].label, 'Overall topic')
+  assert.equal(parsed[0].focus, 'Debugging a subtask')
 })

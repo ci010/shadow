@@ -1,3 +1,4 @@
+import { parseSessionFocus } from './session-metadata.ts'
 import { parseTaskRecord } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { retirementReceiptSchema } from './retirement-contract.ts'
@@ -44,6 +45,7 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'channelBoundary',
   'workPolicy',
   'name',
+  'focus',
   'generatedTitle',
   'chatName',
   'physicalIdVersion',
@@ -110,6 +112,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (value.retirement !== undefined) metadata.retirement = retirementReceiptSchema.parse(value.retirement)
   if (value.channelBoundary !== undefined) metadata.channelBoundary = parseChannelBoundary(value.channelBoundary)
   if (value.workPolicy !== undefined) metadata.workPolicy = parseWorkPolicy(value.workPolicy)
+  if (value.focus !== undefined) metadata.focus = parseSessionFocus(value.focus)
   if (value.name !== undefined) metadata.name = parseSessionName(value.name)
   if (value.generatedTitle !== undefined) metadata.generatedTitle = parseSessionName(value.generatedTitle)
   if (value.chatName !== undefined) metadata.chatName = parseSessionName(value.chatName)
@@ -404,6 +407,7 @@ export class SqliteSessionStore implements SessionStore {
         workPolicy: parseWorkPolicy(state.workPolicy),
         name: state.name === undefined ? undefined : parseSessionName(state.name),
         completed: state.completed,
+        focus: state.focus === undefined ? undefined : parseSessionFocus(state.focus),
         generatedTitle: state.generatedTitle === undefined ? undefined : parseSessionName(state.generatedTitle),
         chatName: state.chatName === undefined ? undefined : parseSessionName(state.chatName),
         decisionOwnerSessionId: parseDecisionOwner(state.decisionOwnerSessionId),

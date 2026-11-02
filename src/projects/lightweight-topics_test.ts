@@ -16,14 +16,14 @@ import type { ExecutionContext } from '../tools/context.ts'
 
 const state = (sessionId: string, patch: Partial<SessionState> = {}): SessionState => ({ sessionId, segmentIndex: 0, mode: 'session', name: sessionId, ...patch })
 
-test('self metadata schema has no topic and historical topic values remain discoverable', () => {
-  assert.equal('topic' in new SessionTool({} as never).parameters.properties!, false)
-  assert.equal(isLightweightTopic(state('web:old', { topic: { title: 'Old title', goal: 'Old goal', scope: 'Old scope' } })), true)
+test('self metadata exposes plain topic and temporary sessions remain excluded', () => {
+  assert.equal('topic' in new SessionTool({} as never).parameters.properties!, true)
+  assert.equal(isLightweightTopic(state('web:old', { topic: 'Old title' })), true)
   for (const patch of [{ mode: 'task' }, { mode: 'call' }, { agentType: 'work-organizer' }, { agentType: 'work-observer' }]) assert.equal(isLightweightTopic(state('internal', patch as Partial<SessionState>)), false)
 })
 
 test('ordinary no-Work sessions are globally rendered; persisted associations survive focus clearing without duplicate roots or Work completion', async () => withTempWorkspace(async home => {
-  const states = [state('web:question', { description: 'A normal question', completed: true }), state('web:work'), state('internal:task', { mode: 'task', parentSessionId: 'web:work' }), state('internal:call', { mode: 'call', parentSessionId: 'web:work' }), state('organizer', { agentType: 'work-organizer' })]
+  const states = [state('web:question', { focus: 'A normal question', completed: true }), state('web:work'), state('internal:task', { mode: 'task', parentSessionId: 'web:work' }), state('internal:call', { mode: 'call', parentSessionId: 'web:work' }), state('organizer', { agentType: 'work-organizer' })]
   const store = new InitiativeStore(home, { isSessionKnown: id => states.some(s => s.sessionId === id) })
   const alignment = new WorkAlignment(store, { state: id => states.find(s => s.sessionId === id), evidence: async () => {}, changed: async () => {}, fresh: async () => {}, successor: async () => undefined })
   const sessions = { alignment, listHistoryStates: async () => states, inputs: new Map(), yields: new Map(), isWaitingForCall: () => false, getActiveSession: () => undefined } as unknown as SessionManager
@@ -58,12 +58,12 @@ test('ordinary no-Work sessions are globally rendered; persisted associations su
 }))
 
 test('organizer accepts lightweight conversation identities without creating Work and detects metadata-only changes', async () => withTempWorkspace(async home => {
-  const conversation = state('web:question', { description: 'Explain a concept', lastActivityAt: '2026-10-16T00:00:00Z' })
+  const conversation = state('web:question', { focus: 'Explain a concept', lastActivityAt: '2026-10-16T00:00:00Z' })
   const store = new InitiativeStore(home, { sessionTopicSequence: id => id === conversation.sessionId ? sessionTopicSequence(conversation) : undefined })
   const organizer = new WorkOrganizer(store, { projectId: 'p', activity: () => conversation.lastActivityAt!, evidence: async () => ({ sources: [], partial: false }), changed() {} })
   const ctx = { projectId: 'p', sessionId: 'organizer', physicalSessionId: 'organizer.0', signal: new AbortController().signal } as ExecutionContext
   const key = sessionTopicKey(conversation.sessionId)
-  const topic = () => ({ key, sequence: sessionTopicSequence(conversation), changedAt: conversation.lastActivityAt!, workflow: { title: 'Explain concept' }, definition: { objective: conversation.description! }, observation: { sessionId: conversation.sessionId } })
+  const topic = () => ({ key, sequence: sessionTopicSequence(conversation), changedAt: conversation.lastActivityAt!, workflow: { title: 'Explain concept' }, definition: { objective: conversation.focus! }, observation: { sessionId: conversation.sessionId } })
   const patch = (id: string) => ({ patchId: id, expectedRevision: 0, groups: [{ id: 'concept', category: 'Concepts', purpose: 'Understand', motivation: 'Question', topicKeys: [key], cards: [] }], hierarchy: [{ id: 'learning', title: 'Learning', purpose: 'Understand', groupIds: ['concept'] }] })
   try {
     const manifest = organizer.begin(ctx.sessionId, 'full', ctx.signal, [topic()])
@@ -82,7 +82,7 @@ test('organizer accepts lightweight conversation identities without creating Wor
     organizer.end()
     assert.equal(JSON.parse(organizer.begin(ctx.sessionId, 'delta', ctx.signal, [topic()])).manifest.length, 0)
     organizer.end()
-    conversation.description = 'Updated discovery description'
+    conversation.focus = 'Updated discovery description'
     assert.equal(JSON.parse(organizer.begin(ctx.sessionId, 'delta', ctx.signal, [topic()])).manifest.length, 1)
   } finally { organizer.end(); store.close() }
 }))

@@ -21,7 +21,7 @@ execution contract and tool schemas remain authoritative.
 3. If a new peer is justified, read `v:tools/session` and invoke the dynamic
    `session` tool through `invoke_tool` with `action: "create"`.
 
-Choose a meaningful title and short discovery description. Put the assignment in
+Choose a stable overarching `topic` and optional current-step `focus`. Put the assignment in
 `initialMessage`: objective, relevant sources, scope, constraints, expected result
 and stop condition. Do not use metadata as instructions.
 
@@ -68,4 +68,4 @@ recovery needs justify a shared goal map, read `v:skills/work-coordination`.
 Optional `work:{key}` on creation binds an existing unassigned note coordinated
 by the creator before kickoff; use the live tool contract for requirements.
 
-For your own metadata and completion, prefer `v:session/self.json`.
+For your own metadata and completion, prefer `v:session/self.json` (`topic`, `focus`, `completed`). Set topic after understanding the first request; change only focus during subtask/debug phases. Change topic only for a real overall topic shift. Empty focus displays the topic.

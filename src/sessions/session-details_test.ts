@@ -88,7 +88,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     bus.on('session.changed', fact => changed.push(fact.sessionId))
     const sessions = makeManager(workspace, store, { projectId: 'p', bus })
     try {
-      for (const id of ['web:self', 'web:other']) await store.saveState(id, { sessionId: id, projectId: 'p', mode: 'session', segmentIndex: 0, executionStatus: 'waiting', topic: id === 'web:self' ? { title: 'Legacy', goal: 'Old goal', scope: 'Old scope' } : undefined })
+      for (const id of ['web:self', 'web:other']) await store.saveState(id, { sessionId: id, projectId: 'p', mode: 'session', segmentIndex: 0, executionStatus: 'waiting', topic: id === 'web:self' ? 'Legacy' : undefined })
       await sessions.start()
       const service = new TopicService({ projectId: 'p', sessions, listStates: async () => Object.values(await store.listAllStates()), folders: {} as any, resolveAgent: () => undefined, changed: () => {} })
       const tool = new SessionTool(service)
@@ -98,49 +98,48 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const tools = new SessionTools(baseTools, workspace)
       const context = { projectId: 'p', sessionId: 'web:self', tools, signal: new AbortController().signal } as ExecutionContext
       const paths = JSON.parse(await self.read('self.json', context))
-      deepEqual(Object.keys(paths).sort(), ['completed', 'description', 'title'])
+      deepEqual(Object.keys(paths).sort(), ['completed', 'focus', 'topic'])
       for (const key of ['cwd', 'projectDir', 'workdir']) {
         await assert.rejects(writeSelf({ [key]: workspace }), /Unknown/)
       }
-      const topic = { title: 'Explicit title', goal: 'Verify explicit state', scope: 'Current work' }
-      const receipt = await writeSelf({ title: topic.title, description: 'Discovery', completed: true })
+      const topic = 'Explicit title'
+      const receipt = await writeSelf({ topic: topic, focus: 'Discovery', completed: true })
       equal(JSON.parse(receipt as string).completed, true)
       equal(sessions.getSessionState('web:self')?.executionStatus, 'waiting')
       equal(sessions.getSessionState('web:other')?.completed, undefined)
       const saved = await store.getState('web:self')
       equal(saved?.completed, true)
-      deepEqual(saved?.topic, { title: 'Legacy', goal: 'Old goal', scope: 'Old scope' })
-      equal(saved?.name, topic.title)
+      equal(saved?.topic, topic)
       equal(sessions.listSessions().find(s => s.sessionId === 'web:self')?.completed, true)
       const app = new Hono(); sessionsApiPlugin(sessions)(app)
       const graph = await (await app.request('/api/sessions/graph')).json()
       equal(graph.sessions.find((s: any) => s.sessionId === 'web:self').completed, true)
-      for (const patch of [null, [], { title: null }, { completed: 0 }, { sessionId: 'web:other', completed: false }, { completed: 'yes' }, { topic: { goal: 'missing title' } }, { topic: { title: 'Forbidden', goal: 'No new topic metadata', scope: 'Not tool-owned' } }, {}]) {
+      for (const patch of [null, [], { title: null }, { completed: 0 }, { sessionId: 'web:other', completed: false }, { completed: 'yes' }, { topic: { goal: 'missing title' } }, { topic: {} }, {}]) {
         await assert.rejects(writeSelf(patch))
       }
       await assert.rejects(tool.execute({ action: 'update', sessionId: 'web:other', title: 'Forbidden' }, context), /own/)
       await assert.rejects(writeSelf({ completed: false }, { ...context, projectId: 'wrong' }), /Project/)
       const changedBeforeFailure = changed.length
       const failure = t.mock.method(store, 'saveState', async () => { throw new Error('synthetic metadata disk failure') })
-      await assert.rejects(writeSelf({ title: 'Not committed', completed: false }), /disk failure/)
+      await assert.rejects(writeSelf({ topic: 'Not committed', completed: false }), /disk failure/)
       equal(sessions.getSessionState('web:self')?.completed, true)
-      equal(sessions.getSessionState('web:self')?.name, topic.title)
+      equal(sessions.getSessionState('web:self')?.topic, topic)
       equal(changed.length, changedBeforeFailure)
       assert(changed.includes('web:self'))
       failure.mock.restore()
       const stale = await self.read('self.json', context)
-      await writeSelf({ description: 'Changed meanwhile' })
+      await writeSelf({ focus: 'Changed meanwhile' })
       await assert.rejects(sessions.updateSelfMetadata('web:self', { completed: false }, stale), /changed during editing/)
       await assert.rejects(Promise.resolve(self.write('self.json', { content: '{bad json}' }, context)), /Invalid JSON/)
-      await assert.rejects(sessions.updateSelfMetadata('web:self', { title: 'x'.repeat(121) }), /120/)
-      await assert.rejects(sessions.updateSelfMetadata('web:self', { description: 'x'.repeat(4001) }), /4000/)
+      await assert.rejects(sessions.updateSelfMetadata('web:self', { topic: 'x'.repeat(121) }), /120/)
+      await assert.rejects(sessions.updateSelfMetadata('web:self', { focus: 'x'.repeat(4001) }), /4000/)
       await self.write('self.json', { content: await self.read('self.json', context) }, context)
       await sessions.stop()
       await sessions.start()
       equal(sessions.getSessionState('web:self')?.completed, true)
       await writeSelf({ completed: false })
       equal((await store.getState('web:self'))?.completed, false)
-      equal((await store.getState('web:self'))?.name, topic.title)
+      equal((await store.getState('web:self'))?.topic, topic)
     } finally { await sessions.stop(); store.close?.() }
   }))
 
@@ -266,9 +265,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await sessions.setSessionConfig('web:new', { model: 'fixture' })
         await sessions.resetSessionConfig('web:new')
         assert.equal(changed.length, 5)
-        await sessions.updateConversationMetadata('web:new', { title: 'Updated', description: 'Refresh metadata' })
+        await sessions.updateConversationMetadata('web:new', { topic: 'Updated', focus: 'Refresh metadata' })
         assert.equal(changed.length, 6)
-        await sessions.updateSelfMetadata('web:new', { description: 'Self update', completed: false })
+        await sessions.updateSelfMetadata('web:new', { focus: 'Self update', completed: false })
         assert.deepEqual(hints, [undefined, true, true, true, true, true, true])
         await sessions.deleteSession('web:new')
         assert.deepEqual(changed.at(-1), { id: 'web:new', exists: false })
@@ -291,7 +290,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const save = t.mock.method(store, 'saveState', async () => { throw new Error('synthetic disk failure') })
         try {
           await assert.rejects(sessions.setSessionConfig('web:one', { model: 'fixture' }), /synthetic disk failure/)
-          await assert.rejects(sessions.updateConversationMetadata('web:one', { title: 'Updated', description: 'Discussion' }), /synthetic disk failure/)
+          await assert.rejects(sessions.updateConversationMetadata('web:one', { topic: 'Updated', focus: 'Discussion' }), /synthetic disk failure/)
           await assert.rejects(sessions.buildSession('web:two'), /synthetic disk failure/)
           assert.equal(notifications, 0)
         } finally { save.mock.restore() }
@@ -299,7 +298,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: rename persists display metadata without changing identity, topic or history`, async () => {
+  test(`${Store.name}: rename updates canonical topic without changing identity or history`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -310,7 +309,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await store.saveState('web:rename', {
           sessionId: 'web:rename', segmentIndex: 0, mode: 'session', sessionKind: 'topic',
-          topic: { title: 'Original topic', goal: 'Preserve goal', scope: 'Preserve scope' },
+          topic: 'Original topic',
         })
         await store.createSessionLog(newPhysicalSessionId('web:rename', 0, 1), [
           { role: 'user', content: 'Original message' },
@@ -323,11 +322,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         })
         const before = structuredClone(sessions.getSessionState('web:rename')!)
         equal((await patch({ name: '  Renamed conversation  ' })).status, 200)
-        equal(sessions.getSessionState('web:rename')?.name, 'Renamed conversation')
-        deepEqual(sessions.getSessionState('web:rename'), { ...before, name: 'Renamed conversation' })
+        equal(sessions.getSessionState('web:rename')?.topic, 'Renamed conversation')
+        deepEqual(sessions.getSessionState('web:rename'), { ...before, topic: 'Renamed conversation' })
         equal((await sessions.getSessionDetails('web:rename'))?.name, 'Renamed conversation')
         equal((await (await app.request('/api/sessions/graph')).json()).sessions[0].title, 'Renamed conversation')
-        equal((await store.listSessions())[0].name, 'Renamed conversation')
+        equal((await store.listSessions())[0].topic, 'Renamed conversation')
         equal(sessions.listSessions()[0].name, 'Renamed conversation')
         equal(await sessions.getFirstUserMessage('web:rename'), 'Original message')
         deepEqual(renamed, ['web:rename'])
@@ -342,7 +341,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         deepEqual(renamed, ['web:rename'])
         await sessions.renameSession('web:rename', 'x'.repeat(120))
         await sessions.setSessionConfig('web:rename', { model: 'fixture' })
-        equal((await store.getState('web:rename'))?.name, 'x'.repeat(120), 'Later metadata saves retain the name')
+        equal((await store.getState('web:rename'))?.topic, 'x'.repeat(120), 'Later metadata saves retain the name')
         await sessions.stop()
         const restarted = makeManager(workspace, store)
         await restarted.start()
@@ -553,7 +552,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         equal(sessions.getSessionState('web:missing'), null)
         deepEqual(await readdir(join(workspace, 'sessions'), { recursive: true }), before)
         deepEqual(await (await app.request('/api/sessions/web:one/details')).json(), {
-          sessionId: 'web:one', name: 'Actual question',
+          sessionId: 'web:one', name: 'Actual question', topic: '',
           workdir: { kind: 'local', displayPath: sessionWorkspacePath(workspace, 'web:owner'), nodeId: 'local', available: true, availability: 'available' },
           usage, usageScope: 'session', subagentUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, usageIncomplete: true,
           context: { usedTokens: 120, windowTokens: 999 },

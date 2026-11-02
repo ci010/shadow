@@ -1,9 +1,4 @@
-export interface TopicMetadata {
-  title: string
-  goal: string
-  scope: string
-  nonGoals?: string
-}
+import { parseSessionName } from './session-name.ts'
 
 export class TopicMetadataError extends TypeError {}
 
@@ -16,32 +11,9 @@ export function normalizeStoredTopicSessionFields(record: Record<string, unknown
   return normalized
 }
 
-export function parseTopicMetadata(value: unknown): TopicMetadata {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TopicMetadataError('Topic metadata must be an object')
-  }
-  const record = value as Record<string, unknown>
-  if (Object.keys(record).some(key => !['title', 'goal', 'scope', 'nonGoals'].includes(key))) {
-    throw new TopicMetadataError('Unknown topic metadata field')
-  }
-  const text = (key: string, limit: number, nonblank = false): string => {
-    const field = record[key]
-    if (typeof field !== 'string' || field.length > limit || (nonblank && !field.trim())) {
-      throw new TopicMetadataError(`Topic ${key} must be ${nonblank ? 'nonblank ' : ''}text of at most ${limit} characters`)
-    }
-    return field
-  }
-  return {
-    title: text('title', 160, true),
-    goal: text('goal', 4000, true),
-    scope: text('scope', 4000),
-    ...(record.nonGoals === undefined ? {} : { nonGoals: text('nonGoals', 4000) }),
-  }
-}
-
 export function parseTopicSessionFields(value: {
   sessionKind?: unknown; topic?: unknown; createdBySessionId?: unknown; topicRequestHash?: unknown
-}): { sessionKind?: 'topic'; topic?: TopicMetadata; createdBySessionId?: string; topicRequestHash?: string } {
+}): { sessionKind?: 'topic'; topic?: string; createdBySessionId?: string; topicRequestHash?: string } {
   if (value.sessionKind !== undefined && value.sessionKind !== 'topic') {
     throw new TopicMetadataError('Invalid session kind')
   }
@@ -54,7 +26,7 @@ export function parseTopicSessionFields(value: {
   }
   return {
     ...(value.sessionKind === undefined ? {} : { sessionKind: value.sessionKind }),
-    ...(value.topic === undefined ? {} : { topic: parseTopicMetadata(value.topic) }),
+    ...(value.topic === undefined ? {} : { topic: parseSessionName(value.topic) }),
     ...(value.createdBySessionId === undefined ? {} : { createdBySessionId: value.createdBySessionId as string }),
     ...(value.topicRequestHash === undefined ? {} : { topicRequestHash: value.topicRequestHash as string }),
   }

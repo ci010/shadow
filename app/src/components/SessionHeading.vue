@@ -9,9 +9,9 @@
       </template>
       <template #default>
         <div class="session-details">
-          <section v-if="details?.description" class="details-topic" :aria-label="t('Session description')">
-            <h3>{{ t('Description') }}</h3>
-            <p class="details-topic-title">{{ details?.description }}</p>
+          <section v-if="currentFocus" class="details-topic" :aria-label="t('Current focus')">
+            <h3>{{ t('Current focus') }}</h3>
+            <p class="details-topic-title">{{ currentFocus }}</p>
           </section>
           <p v-if="loading" class="details-note" role="status">{{ t('Loading session details...') }}</p>
           <p v-if="error" class="details-error" role="alert">{{ error }}</p>
@@ -98,20 +98,20 @@ import ComposerPopover from './ComposerPopover.vue'
 import CopyableId from './CopyableId.vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { chatContextName } from '../chat-draft.ts'
-import { cacheRate, contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
-import { type TopicMetadata } from '../project-coordination.ts'
+import { cacheRate, contextCapacity, contextPercent, formatTokenCount, parseSessionDetails, sessionDisplayFocus, type SessionDetails } from '../session-details.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; topic?: TopicMetadata; physicalId: string | null; revision: number; active: boolean; canRename?: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; topic?: string; physicalId: string | null; revision: number; active: boolean; canRename?: boolean }>()
 const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']]; renamed: [name: string] }>()
 const mobile = useMobileChrome()
 const mobileLayout = computed(() => !!mobile?.enabled.value)
 const detailsPopover = ref<InstanceType<typeof ComposerPopover>>()
 defineExpose({ showDetails: () => detailsPopover.value?.show(), startRename })
 const details = ref<SessionDetails | null>(null)
+const currentFocus = computed(() => details.value ? sessionDisplayFocus(details.value) : '')
 const loading = ref(false)
 const error = ref('')
 const topic = computed(() => details.value?.topic ?? props.topic)
-const sessionName = computed(() => details.value?.name?.trim() || (props.name || topic.value?.title || t('Conversation')))
+const sessionName = computed(() => details.value?.topic?.trim() || details.value?.name?.trim() || (props.name || topic.value || t('Conversation')))
 const name = computed(() => [props.projectName, sessionName.value].filter(Boolean).join(' / '))
 const editing = ref(false)
 const saving = ref(false)

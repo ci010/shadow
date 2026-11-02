@@ -1,3 +1,4 @@
+import { sessionTopic } from './session-metadata.ts'
 import { conditionalSessionJson } from './conditional-json.ts'
 import { readonlyHistorySnapshot } from './history-snapshot.ts'
 import { projectUsagePageQuerySchema } from '../projects/usage-contract.ts'
@@ -319,7 +320,7 @@ export function sessionsApiPlugin(
           mode: state?.mode ?? 'session',
           agentType: state?.agentType ?? 'general',
           sessionKind: state?.sessionKind,
-          description: state?.description ?? (state?.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
+          description: state?.mode === 'task' || state?.mode === 'call' ? state.description : undefined,
           createdBySessionId: state?.createdBySessionId,
           initiativeId: state?.initiativeId,
           parentSessionId: delegationOwner(state) ?? null,
@@ -331,7 +332,7 @@ export function sessionsApiPlugin(
         }
         const automation = state ? resolveAutomationSession(state) : undefined
         const namedTitle = automation?.config?.source === 'system' ? automation.name
-          : state?.name ?? state?.topic?.title ?? state?.generatedTitle ?? state?.chatName
+          : state?.topic ?? state?.name ?? state?.generatedTitle ?? state?.chatName
             ?? (execution.mode !== 'session' ? state?.description : undefined)
         // Message history can be expensive; only unnamed rows need that fallback.
         const title = graphTitle(namedTitle ?? await sessions.getFirstUserMessage(session.sessionId) ?? undefined)
@@ -354,7 +355,9 @@ export function sessionsApiPlugin(
           hasCron: cronTargets.has(session.sessionId),
           hasBackgroundTasks: backgroundOwners.has(session.sessionId),
           title,
-          description: state?.description ?? undefined,
+          topic: state ? sessionTopic(state) : title,
+          focus: state?.focus,
+          description: execution.description,
           config: state?.config ?? undefined,
           inferenceDefaults,
           lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??

@@ -32,6 +32,7 @@ export const projectWorkOverviewSchema = z.object({
     activity: z.string().optional(),
     workKey: id.optional(),
     workKeys: z.array(id).optional(),
+    topic: z.string().optional(), focus: z.string().optional(),
     description: z.string().optional(), completed: z.boolean().optional(),
     topicSequence: z.number().int().positive().optional(),
   })),

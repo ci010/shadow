@@ -26,8 +26,8 @@ test('tool and inline guidance expose explicit self metadata, completion and reo
   assert.match(guidance, /completed:true/)
   assert.match(guidance, /completed:false/)
   assert.match(guidance, /independent of inferred running\/waiting activity/)
-  assert.match(guidance, /Title and description are parent-owned/)
-  assert.match(guidance, /supply both explicitly/)
+  assert.match(guidance, /Task discovery title and description are parent-owned/)
+  assert.match(guidance, /Subtask\/debug phase changes update only focus/)
 })
 
 test('legacy config keeps only independent organizer preferences and ignores observer model/enable switches', async () => {

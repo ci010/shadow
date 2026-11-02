@@ -1,3 +1,4 @@
+import { selfSessionMetadata } from '../sessions/session-metadata.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { TopicService } from '../sessions/topics.ts'
 import type { VirtualFsHandler, VirtualFsWriteHandler } from './virtual-fs.ts'
@@ -11,11 +12,7 @@ export function createSelfSessionHandler(
     if (subpath !== 'self.json') throw new Error('Use v:session/self.json; arbitrary session metadata paths are not supported.')
     context.signal.throwIfAborted()
     const state = topics().assertActor(context.projectId, context.sessionId)
-    return JSON.stringify({
-      title: state.name ?? state.topic?.title ?? state.generatedTitle ?? state.chatName ?? '',
-      description: state.description ?? '',
-      completed: state.completed ?? false,
-    }, null, 2)
+    return JSON.stringify(selfSessionMetadata(state), null, 2)
   }
   const write: VirtualFsWriteHandler = async (subpath, request, context) => {
     let content = await read(subpath, context)
@@ -26,7 +23,7 @@ export function createSelfSessionHandler(
       content = request.replaceAll ? content.split(request.match).join(request.content) : content.replace(request.match, () => request.content)
     } else content = request.content
     let value: unknown
-    try { value = JSON.parse(content) } catch { throw new Error('Invalid JSON. Write an object with title (string), description (string), and/or completed (boolean).') }
+    try { value = JSON.parse(content) } catch { throw new Error('Invalid JSON. Write an object with topic (string), focus (string), and/or completed (boolean).') }
     context.signal.throwIfAborted()
     await sessions.updateSelfMetadata(context.sessionId, value, expected)
     return read(subpath, context)

@@ -1,3 +1,4 @@
+import { sessionTopic, parseSessionFocus } from './session-metadata.ts'
 import { pickFolder, type FolderPickerOptions } from '../folders/picker-service.ts'
 import { isLightweightTopic } from './lightweight-topic.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -13,8 +14,8 @@ import { selectFolder } from '../folders/identifier.ts'
 import { REASONING_EFFORTS, type InferenceSettings } from '../agent/llm-config.ts'
 
 const briefFields = {
-  title: z.string().transform(parseSessionName),
-  description: z.string().trim().max(4000).optional(),
+  topic: z.string().transform(parseSessionName),
+  focus: z.string().transform(parseSessionFocus).optional(),
 }
 const createRequest = z.object({
   ...briefFields,
@@ -45,15 +46,15 @@ export interface TopicSummary {
   sessionId: string
   conversationUrl: string
   chatId?: string
-  title: string
-  description: string
+  topic: string
+  focus?: string
   folderId?: string
   initiativeId?: string
   createdBySessionId?: string
   status: string
   completed: boolean
   lastActivityAt?: string
-  metadataSource: 'explicit' | 'summary' | 'description' | 'first_message' | 'identifier'
+  metadataSource: 'explicit' | 'summary' | 'first_message' | 'identifier'
 }
 
 export interface TopicServiceOptions {
@@ -74,15 +75,15 @@ function topicSummary(projectId: string, state: SessionState, firstMessage?: str
     sessionId: state.sessionId,
     conversationUrl: `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(state.sessionId)}`,
     ...(state.sessionId.startsWith('web:') ? { chatId: state.sessionId.slice(4) } : {}),
-    title: state.name ?? state.topic?.title ?? state.generatedTitle ?? (state.description || firstMessage)?.split('\n')[0]?.slice(0, 160) ?? state.sessionId,
-    description: state.description || (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : firstMessage) || '',
+    topic: sessionTopic(state) || firstMessage?.split('\n')[0]?.slice(0, 160) || state.sessionId,
+    ...(state.focus ? { focus: state.focus } : {}),
     folderId: state.folderId,
     initiativeId: state.initiativeId,
     createdBySessionId: state.createdBySessionId,
     completed: state.completed ?? false,
     status: state.completed ? 'completed' : state.recovery ? 'needs_attention' : state.executionStatus ?? 'idle',
     lastActivityAt: state.lastActivityAt,
-    metadataSource: state.name || state.topic ? 'explicit' : state.generatedTitle ? 'summary' : state.description ? 'description' : firstMessage ? 'first_message' : 'identifier',
+    metadataSource: state.name || state.topic ? 'explicit' : state.generatedTitle ? 'summary' : firstMessage ? 'first_message' : 'identifier',
   }
 }
 
@@ -109,7 +110,7 @@ export class TopicService {
     const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
     const entries = (await this.summaries())
       .filter(topic => {
-        const text = [topic.sessionId, topic.title, topic.description,
+        const text = [topic.sessionId, topic.topic, topic.focus,
           topic.folderId, topic.initiativeId].join('\n').toLocaleLowerCase()
         return terms.every(term => text.includes(term))
       })
@@ -123,7 +124,7 @@ export class TopicService {
       .filter(isLightweightTopic)
     const summaries: TopicSummary[] = []
     for (const state of states) {
-      const firstMessage = !state.topic && !state.description ? await this.options.firstMessage?.(state.sessionId) : undefined
+      const firstMessage = !sessionTopic(state) ? await this.options.firstMessage?.(state.sessionId) : undefined
       summaries.push(topicSummary(this.options.projectId, state, firstMessage))
     }
     return summaries
@@ -176,14 +177,14 @@ export class TopicService {
         if (parsed.work && (!createdBySessionId || !alignment)) throw new TopicError('Managed creation requires a Project session controller and Work service.')
         const workPolicy = createdBySessionId && alignment
           ? alignment.prepareDelegation(createdBySessionId, parsed.work, 'session') : { mode: 'optional' as const }
-        const { title, description } = parsed
+        const { topic, focus } = parsed
         await this.options.sessions.buildSession(sessionId, undefined, {
-          name: title,
+          topic,
           topicRequestHash, createdBySessionId, mode: 'session', parentSessionId: null,
           agentType: parsed.agentType, initiativeId: parsed.initiativeId,
           folderId: folder?.id,
           workdir: folder ? folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id) : undefined,
-          description, setupInstructions,
+          focus, setupInstructions,
           ...(Object.keys(inference).length ? { config: inference } : {}),
           workPolicy,
         })

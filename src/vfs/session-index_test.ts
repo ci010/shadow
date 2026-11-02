@@ -14,7 +14,7 @@ function fixture() {
   const state = (sessionId: string, extra: Partial<SessionState> = {}): SessionState => ({ sessionId, segmentIndex: 0, config: {}, ...extra })
   const states = [
     state('web:old', { name: 'Old conversation', lastActivityAt: '2026-01-01' }),
-    state('web:root', { name: 'Provider names', description: 'Default names\nfor providers', lastActivityAt: '2026-02-01' }),
+    state('web:root', { name: 'Provider names', focus: 'Default names\nfor providers', lastActivityAt: '2026-02-01' }),
     state('virtual:child', { name: 'Implementation', description: 'Child purpose', parent: { id: 'web:root' }, mode: 'task', executionStatus: 'completed' }),
     state('virtual:review', { parent: { id: 'virtual:child' }, mode: 'call', executionStatus: 'failed' }),
     state('virtual:orphan', { parent: { id: 'web:gone' }, mode: 'task' }),
@@ -31,7 +31,7 @@ function fixture() {
     getHistory: async () => { historyReads++; return { messages: [{ role: 'user' as const, content: 'history needle' }], total: 1 } },
   }, () => ({
     assertActor: () => {},
-    summaries: async () => states.filter(state => state.sessionId.startsWith('web:')).map(state => ({ sessionId: state.sessionId, title: state.name ?? '', description: state.description ?? '' })),
+    summaries: async () => states.filter(state => state.sessionId.startsWith('web:')).map(state => ({ sessionId: state.sessionId, topic: state.name ?? '', focus: state.focus ?? '' })),
   }) as unknown as TopicService)
   const vfs = new VirtualFs()
   vfs.mount('v:sessions', 'Sessions', handler.read, handler.list, undefined, handler.directory)
@@ -43,7 +43,7 @@ test('session navigation defaults to titled root conversations without reading h
   const f = fixture()
   const root = await f.handler.read('', f.context)
   assert.match(root, /Conversations \(3\)/)
-  assert.match(root, /- title: Provider names\n  id: web:root\n  description: Default names for providers/)
+  assert.match(root, /- topic: Provider names\n  id: web:root\n  focus: Default names for providers/)
   assert.doesNotMatch(root, /mode=session/)
   assert.match(root, /children: 1 → v:sessions\/web:root\/children/)
   assert.match(root, /web:peer/)
@@ -57,7 +57,7 @@ test('all, tasks and direct children are readable and pageable through ReadTool'
   const read = async (path: string) => requireToolText(await f.read.execute({ path }, f.context))
   const children = await read('v:sessions/web:root/children')
   assert.match(children, /Children of web:root \(1\)/)
-  assert.match(children, /title: Implementation/)
+  assert.match(children, /topic: Implementation/)
   assert.match(children, /status=completed.*parent=web:root/)
   assert.match(children, /v:sessions\/virtual:child\/children/)
   assert.doesNotMatch(children, /virtual:review/)
@@ -70,7 +70,7 @@ test('all, tasks and direct children are readable and pageable through ReadTool'
   assert.doesNotMatch(tasks, /id: web:root/)
   const all = await read('v:sessions/all')
   assert.match(all, /All sessions \(10\)/)
-  assert.match(all, /title: \(not set\)\n  id: [^\n]+\n  description: \(not set\)/)
+  assert.match(all, /topic: \(not set\)\n  id: [^\n]+/)
   const page = requireToolText(await f.read.execute({ path: 'v:sessions/all', offset: 2, limit: 1 }, f.context))
   assert.ok(page.startsWith(all.split('\n')[1]))
   assert.equal(f.historyReads(), 0)
@@ -95,8 +95,8 @@ test('global search remains exhaustive, metadata searchable and child hits retai
 
 test('index previews are bounded, empty views navigable and cancellation preserved', async () => {
   const f = fixture()
-  f.states[1].description = 'x'.repeat(500)
-  assert.match(await f.handler.read('', f.context), new RegExp(`description: ${'x'.repeat(239)}…`))
+  f.states[1].focus = 'x'.repeat(500)
+  assert.match(await f.handler.read('', f.context), new RegExp(`focus: ${'x'.repeat(239)}…`))
   f.states.splice(0)
   assert.match(await f.handler.read('', f.context), /Conversations \(0\).*\nViews:/)
   await assert.rejects(async () => f.handler.read('', { ...f.context, signal: AbortSignal.abort() }), { name: 'AbortError' })
@@ -104,9 +104,9 @@ test('index previews are bounded, empty views navigable and cancellation preserv
 
 test('metadata search avoids brief duplicates without losing full descriptions or brief discovery', async () => {
   const f = fixture()
-  f.states[1].description = 'x'.repeat(300) + ' unique-tail'
+  f.states[1].focus = 'x'.repeat(300) + ' unique-tail'
   const hit = await f.search.execute({ handler: 'grep', path: 'v:sessions', query: 'Provider names|unique-tail' }, f.context)
-  assert.match(hit, /title: Provider names/)
+  assert.match(hit, /topic: Provider names/)
   assert.match(hit, /unique-tail/)
   assert.doesNotMatch(hit, /\/brief/)
   const glob = await f.search.execute({ handler: 'glob', path: 'v:sessions', query: '**/brief' }, f.context)
@@ -114,7 +114,7 @@ test('metadata search avoids brief duplicates without losing full descriptions o
   const brief = await f.search.execute({ handler: 'grep', path: 'v:sessions/web:root/brief', query: 'unique-tail' }, f.context)
   assert.match(brief, /unique-tail/)
   const direct = requireToolText(await f.read.execute({ path: 'v:sessions/web:root/brief' }, f.context))
-  assert.equal(JSON.parse(direct).description, f.states[1].description)
+  assert.equal(JSON.parse(direct).focus, f.states[1].focus)
 })
 
 test('list-mode pages complete session items in every navigation view, not text blocks', async () => {

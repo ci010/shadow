@@ -4,7 +4,7 @@ import type { FolderRecord } from '../../src/folders/contracts.ts'
 import { isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 import { parseAutomationSessionRef, type AutomationSessionRef } from '../../src/cron/contracts.ts'
 import { isExecutionStatus, persistentConversations, type ExecutionStatus } from './subagent-executions.ts'
-import { isDirectConversation, parseTopicMetadata, type TopicMetadata } from './project-coordination.ts'
+import { isDirectConversation, parseConversationTopic } from './project-coordination.ts'
 import { channelAddressFromSessionId, type ChannelAddress } from '../../src/bus/events.ts'
 
 export const FOLDER_ACTIONS = [
@@ -20,7 +20,8 @@ export interface SidebarSession {
   projectId?: string
   channelAddress?: ChannelAddress
   sessionKind?: 'topic'
-  topic?: TopicMetadata
+  topic?: string
+  focus?: string
   createdBySessionId?: string
   label: string
   /** Human title shared by sidebar and references; never an identifier fallback. */
@@ -93,9 +94,10 @@ function flattenSessions(sessions: SidebarSession[]): SidebarSession[] {
 }
 
 /** Graph name, coordination and topic titles have the same priority everywhere. */
-export function sessionDisplayTitle(session: { name?: unknown; sessionId?: unknown; title?: unknown }, topic?: TopicMetadata): string {
+export function sessionDisplayTitle(session: { topic?: unknown; name?: unknown; sessionId?: unknown; title?: unknown }, topic?: string): string {
+  if (typeof session.topic === 'string' && session.topic.trim()) return session.topic.trim()
   if (typeof session.name === 'string' && session.name.trim()) return session.name
-  if (topic?.title?.trim()) return topic.title
+  if (topic?.trim()) return topic
   if (typeof session.title === 'string' && session.title.trim()) return session.title
   return t('New conversation')
 }
@@ -133,6 +135,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       || (session.hasBackgroundTasks !== undefined && typeof session.hasBackgroundTasks !== 'boolean')
       || (session.waitingForCall !== undefined && typeof session.waitingForCall !== 'boolean')
       || (session.parentToolCallId !== undefined && (typeof session.parentToolCallId !== 'string' || !session.parentToolCallId))
+      || (session.focus !== undefined && typeof session.focus !== 'string')
       || (session.description !== undefined && typeof session.description !== 'string')) throw invalid()
     let channelAddress: ChannelAddress | undefined
     try { channelAddress = channelAddressFromSessionId(session.sessionId) }
@@ -152,7 +155,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
     }
     sessionIds.add(session.sessionId)
     const direct = isDirectConversation(session.sessionId, session.mode as string | undefined)
-    const topic = parseTopicMetadata(session.topic)
+    const topic = parseConversationTopic(session.topic)
     const config = isRecord(session.config) ? session.config : undefined
     const defaults = session.inferenceDefaults
     if (defaults != null && (!isRecord(defaults) || typeof defaults.model !== 'string' || !defaults.model.trim()
@@ -170,6 +173,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       } : undefined,
       sessionKind: session.sessionKind as SidebarSession['sessionKind'],
       topic,
+      focus: session.focus as string | undefined,
       createdBySessionId: session.createdBySessionId as string | undefined,
       automation,
       title: sessionDisplayTitle(session, topic),

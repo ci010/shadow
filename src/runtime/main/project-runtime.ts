@@ -23,7 +23,7 @@ import { SessionProxyTool } from '../../tools/session-proxy.ts'
 import { createSelfSessionHandler } from '../../vfs/session.ts'
 import { registerDevelopmentRestart } from '../../tools/development-restart.ts'
 import { TaskTool } from '../../tools/task.ts'
-import { isLightweightTopic, sessionTopicKey, sessionTopicSequence, sessionTopicTitle, sessionTopicDescription } from '../../sessions/lightweight-topic.ts'
+import { isLightweightTopic, sessionTopicKey, sessionTopicSequence, sessionTopicTitle, sessionTopicFocus } from '../../sessions/lightweight-topic.ts'
 import { botConversationPolicies } from '../../channels/bot-policies.ts'
 import { channelSessionId, channelAddressFromSessionId } from '../../bus/events.ts'
 import { automationModelSettings, automationDispatchModel, automationCatalogConfigChanged } from '../../cron/automation-model.ts'
@@ -871,8 +871,8 @@ export async function createProjectRuntime(
           return successorId
         }
         await sessions.buildSession(successorId, undefined, {
-          name: `Realigned: ${source.name ?? source.topic?.title ?? 'work'}`.slice(0, 120),
-          description: `Prepared to receive ${record.key}; no assignment or permission has transferred.`,
+          topic: `Realigned: ${source.topic ?? source.name ?? 'work'}`.slice(0, 120),
+          focus: `Prepared to receive ${record.key}; no assignment or permission has transferred.`,
           folderId: source.folderId, agentType: source.agentType ?? 'general', initiativeId: source.initiativeId,
           workdir: source.workdir, mode: 'session', parentSessionId: null, createdBySessionId: id,
           workPolicy: { mode: 'required', keys: [record.key],
@@ -912,7 +912,7 @@ export async function createProjectRuntime(
     for (const state of topicStates) for (const key of associations.get(state.sessionId)!) if (!organizationSessionsByWork.has(key)) organizationSessionsByWork.set(key, state.sessionId)
     const topics = topicStates.filter(state => !associations.get(state.sessionId)!.length).map(state => ({
       key: sessionTopicKey(state.sessionId), sessionCompleted: state.completed ?? false, sequence: sessionTopicSequence(state), changedAt: state.lastActivityAt ?? '',
-      definition: { objective: sessionTopicDescription(state) || sessionTopicTitle(state) }, workflow: { title: sessionTopicTitle(state) },
+      definition: { objective: sessionTopicFocus(state) || sessionTopicTitle(state) }, workflow: { title: sessionTopicTitle(state) },
       observation: { sessionId: state.sessionId },
     }))
     return topics
@@ -951,7 +951,7 @@ export async function createProjectRuntime(
     if (!state || !isLightweightTopic(state)) return
     const key = `${ended ? 'ended' : 'metadata'}:${sessionId}`
     const fingerprint = ended ? String(sessionTopicSequence(state)) : JSON.stringify([
-      state.name, state.description, state.topic, state.generatedTitle, state.completed,
+      state.name, state.focus, state.topic, state.generatedTitle, state.completed,
     ])
     if (organizationHints.get(key) === fingerprint) return
     organizationHints.set(key, fingerprint)
@@ -1065,7 +1065,7 @@ export async function createProjectRuntime(
   vfs.mount('v:agents', 'available local roles and configured remote agent targets; discovery grants no capabilities', agentsVfs.read, agentsVfs.list)
 
   const selfSessionVfs = createSelfSessionHandler(sessions, () => topics)
-  vfs.mount('v:session', 'self.json: read/write current session title, description and completed as JSON; identity is runtime-bound; task metadata is parent-owned', selfSessionVfs.read, undefined, selfSessionVfs.write)
+  vfs.mount('v:session', 'self.json: read/write current session topic, focus and completed as JSON; identity is runtime-bound; task metadata is parent-owned', selfSessionVfs.read, undefined, selfSessionVfs.write)
 
   // Explicit host capability: target-owned services, no remote dispatcher or actor impersonation.
   const debugHistory = createSessionsHandler(sessions)

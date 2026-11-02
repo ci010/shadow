@@ -7,19 +7,11 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 import { safeSessionId } from '../utils/paths.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
-import { parseTopicMetadata, parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
+import { parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
 import { ProjectCatalog } from '../projects/catalog.ts'
 import { projectPaths } from '../projects/contracts.ts'
 import { assertSessionProjectOwnership, reserveRemoteSessionWorkdirs } from '../projects/session-ownership.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
-
-test('topic metadata bounds match the public topic service', () => {
-  const topic = { title: 'x'.repeat(160), goal: 'x'.repeat(4000), scope: 'x'.repeat(4000), nonGoals: 'x'.repeat(4000) }
-  assert.deepEqual(parseTopicMetadata(topic), topic)
-  for (const key of ['title', 'goal', 'scope', 'nonGoals'] as const) {
-    assert.throws(() => parseTopicMetadata({ ...topic, [key]: `${topic[key]}x` }), TopicMetadataError)
-  }
-})
 
 test('JSONL atomic state replacement serializes concurrent writes and deletion', async () => {
   await withTempWorkspace(async workspace => {
@@ -27,9 +19,9 @@ test('JSONL atomic state replacement serializes concurrent writes and deletion',
     await store.init()
     const state = { sessionId: 'web:topic', segmentIndex: 0, mode: 'session' as const, sessionKind: 'topic' as const }
     await Promise.all(Array.from({ length: 100 }, (_, index) => store.saveState(state.sessionId, {
-      ...state, topic: { title: `Update ${index}`, goal: 'Goal', scope: '' },
+      ...state, topic: `Update ${index}`,
     })))
-    assert.equal((await store.getState(state.sessionId))?.topic?.title, 'Update 99')
+    assert.equal((await store.getState(state.sessionId))?.topic, 'Update 99')
     await Promise.all([store.saveState(state.sessionId, state), store.deleteState(state.sessionId)])
     assert.equal(await store.getState(state.sessionId), null)
     assert.deepEqual(await readdir(workspace), [])
@@ -143,18 +135,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const state = {
         ownershipVersion: 2 as const, sessionId: 'web:topic', segmentIndex: 0,
         mode: 'session' as const, sessionKind: 'topic' as const,
-        topic: { title: 'Title', goal: 'Goal', scope: '' },
+        topic: 'Title',
       }
       try {
         for (const invalid of [
-          { topic: { ...state.topic, title: '' } },
-          { topic: { ...state.topic, scope: 42 } },
-          { topic: { ...state.topic, nonGoals: 'x'.repeat(8001) } },
-          { topic: { ...state.topic, unknown: 'extra' } },
-          { sessionKind: 'unknown' },
-          { createdBySessionId: '' },
+          { topic: '' }, { topic: {} }, { topic: 'x'.repeat(121) },
+          { sessionKind: 'unknown' }, { createdBySessionId: '' },
           { topicRequestHash: 'not-a-hash' },
-          { sessionKind: 'orchestrator', topic: { ...state.topic, title: '' } },
           { sessionKind: 'orchestrator', createdBySessionId: '' },
         ]) {
           await store.saveState(state.sessionId, state)
@@ -168,9 +155,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
                 .run(JSON.stringify({ version: 1, metadata: corrupt }), state.sessionId)
             } finally { db.close() }
           }
-          await assert.rejects(store.getState(state.sessionId), TopicMetadataError)
-          await assert.rejects(store.listAllStates(), TopicMetadataError)
-          await assert.rejects(store.listSessions(), TopicMetadataError)
+          await assert.rejects(store.getState(state.sessionId), TypeError)
+          await assert.rejects(store.listAllStates(), TypeError)
+          await assert.rejects(store.listSessions(), TypeError)
         }
       } finally { if (store instanceof SqliteSessionStore) store.close() }
     })

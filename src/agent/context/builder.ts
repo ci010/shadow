@@ -38,7 +38,7 @@ export interface SessionPromptContext {
   /** Stable Initiative ID for shared work context (from SessionState). */
   initiativeId?: string
   /** Explicit display/goal metadata for the acting durable session, never authority. */
-  sessionMetadata?: { title?: string; description?: string; topic?: import('../../sessions/topic-contract.ts').TopicMetadata; completed: boolean }
+  sessionMetadata?: { topic: string; focus: string; completed: boolean }
   /** Fresh-context boundary for automatically injected transient memory. */
   contextResetAt?: string
   /** Selected registered folder, independent of the effective workdir capability. */

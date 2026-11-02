@@ -68,8 +68,8 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       async updateConversationMetadata(id, topic) {
         const state = states.get(id)
         assert(state)
-        state.name = topic.title
-        state.description = topic.description
+        state.topic = topic.topic
+        state.focus = topic.focus
         await store.saveState(id, state)
       },
       async deliver(sessionId, input) {
@@ -92,9 +92,9 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     await sessions.buildSession('web:chat-admin', undefined, { mode: 'session', agentType: 'general', parentSessionId: null })
     const { folder } = await service.registerFolder(folderPath)
     const request = {
-      requestId: randomUUID(), title: 'MCP configuration',
+      requestId: randomUUID(), topic: 'MCP configuration',
       model: 'synthetic', effort: 'high',
-      description: 'MCP configuration and skill declarations',
+      focus: 'MCP configuration and skill declarations',
       folderId: folder.id, initiativeId: 'work', initialMessage: 'Read the selected skill and explain how to configure MCP.',
     }
     const [created, retry] = await Promise.all([
@@ -117,7 +117,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.match(saved.topicRequestHash ?? '', /^[a-f0-9]{64}$/)
     assert.equal((await store.getState(created.sessionId))?.topicRequestHash, saved.topicRequestHash)
     assert.equal(changes.filter(id => id === created.sessionId).length, 1)
-    await assert.rejects(service.create({ ...request, description: 'Different description' }, 'web:chat-admin'), /requestId/)
+    await assert.rejects(service.create({ ...request, focus: 'Different focus' }, 'web:chat-admin'), /requestId/)
     const restartedService = new TopicService(options)
     assert.equal((await restartedService.create(request, 'web:chat-admin')).initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, 1)
@@ -128,17 +128,17 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     for (const change of [{ model: 'different' }, { effort: 'low' }]) {
       await assert.rejects(service.create({ ...request, ...change }, 'web:chat-admin'), /requestId/)
     }
-    await assert.rejects(service.create({ title: 'Bad model', model: 'unsupported' }), /Unsupported model/)
+    await assert.rejects(service.create({ topic: 'Bad model', model: 'unsupported' }), /Unsupported model/)
     for (const fields of [{ model: '' }, { effort: 'invalid' }]) {
-      await assert.rejects(service.create({ title: 'Invalid inference', ...fields }))
+      await assert.rejects(service.create({ topic: 'Invalid inference', ...fields }))
     }
     assert.equal(builds, 2)
 
-    const plain = await service.create({ title: 'Discussion' })
+    const plain = await service.create({ topic: 'Discussion' })
     assert.equal(states.get(plain.sessionId)?.config, undefined)
-    assert.equal(states.get(plain.sessionId)?.topic, undefined)
+    assert.equal(states.get(plain.sessionId)?.topic, 'Discussion')
     assert.equal(states.get(plain.sessionId)?.sessionKind, undefined)
-    await assert.rejects(service.create({ title: 'No duplicate goal', goal: 'Not a metadata field' }))
+    await assert.rejects(service.create({ topic: 'No duplicate goal', goal: 'Not a metadata field' }))
     assert.equal(states.get(plain.sessionId)?.folderId, undefined)
     const worker: SessionState = { sessionId: 'task:worker', projectId: 'p', segmentIndex: 0, mode: 'task' }
     states.set(worker.sessionId, worker)
@@ -163,9 +163,9 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     await assert.rejects(service.search({ limit: 21 }))
     await assert.rejects(service.search({ offset: -1 }))
 
-    await assert.rejects(service.update({ sessionId: created.sessionId, title: 'Hijack' }, plain.sessionId), /Only this session/)
-    await service.update({ sessionId: created.sessionId, title: 'MCP session', description: request.description }, created.sessionId)
-    assert.equal(states.get(created.sessionId)?.name, 'MCP session')
+    await assert.rejects(service.update({ sessionId: created.sessionId, topic: 'Hijack' }, plain.sessionId), /Only this session/)
+    await service.update({ sessionId: created.sessionId, topic: 'MCP session', focus: request.focus }, created.sessionId)
+    assert.equal(states.get(created.sessionId)?.topic, 'MCP session')
 
     const tools = new SessionTools(new Tools(home), home)
     const context: ExecutionContext = {
@@ -196,7 +196,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     await assert.rejects(tool.execute({ action: 'register_folder', path: describedPath, description: 42 }, context), /description must be a string/)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath }, { ...context, sessionId: worker.sessionId }), /Temporary/)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath, extra: 1 }, context), /only path/)
-    await assert.rejects(tool.execute({ action: 'create', title: 'x', goal: 'y', scope: 'z', projectId: 'other' }, context))
+    await assert.rejects(tool.execute({ action: 'create', topic: 'x', goal: 'y', scope: 'z', projectId: 'other' }, context))
 
     const app = new Hono()
     topicsPlugin(service, req => req.headers.get('authorization') === 'fixture')(app)
@@ -241,7 +241,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
           return {
             content: '', finishReason: 'tool_calls',
             toolCalls: [{ id: 'create-topic', name: 'session', arguments: {
-              action: 'create', title: 'LLM routing', description: 'Routing investigation',
+              action: 'create', topic: 'LLM routing', focus: 'Routing investigation',
               folderId: folder.id, initialMessage: 'Investigate the routing contract and report here.',
             } }],
           }
@@ -285,7 +285,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.equal((await service.create(failing, 'web:chat-admin')).initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, deliveryCount)
 
-    const selectorRequest = { requestId: randomUUID(), title: 'Persisted selector', folderId: 'code', initialMessage: 'One kickoff' }
+    const selectorRequest = { requestId: randomUUID(), topic: 'Persisted selector', folderId: 'code', initialMessage: 'One kickoff' }
     const selected = await service.create(selectorRequest, 'web:chat-admin')
     const persisted = await store.getState(selected.sessionId)
     assert(persisted)
@@ -301,10 +301,10 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const selectedDeliveryCount = deliveries.length
     assert.equal((await retryWithoutRegistry.create(selectorRequest, 'web:chat-admin')).initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, selectedDeliveryCount)
-    const modelOnly = await service.create({ title: 'Model only', model: 'synthetic' })
+    const modelOnly = await service.create({ topic: 'Model only', model: 'synthetic' })
     assert.deepEqual(states.get(modelOnly.sessionId)?.config, { model: 'synthetic' })
     const effortOnlyService = new TopicService({ ...options, resolveAgent: () => ({ defaultMode: 'session', model: 'agent-model', reasoningEffort: 'medium' }) })
-    const effortOnly = await effortOnlyService.create({ title: 'Effort only', effort: 'low' })
+    const effortOnly = await effortOnlyService.create({ topic: 'Effort only', effort: 'low' })
     assert.deepEqual(validated.at(-1), { model: 'agent-model', reasoningEffort: 'low' })
     assert.deepEqual(states.get(effortOnly.sessionId)?.config, { reasoningEffort: 'low' })
   })
@@ -364,7 +364,7 @@ test('session tool resolves Project selectors across nodes without fallback and 
     remoteWorkdir: { nodeId: 'caller-node', workdirId: 'caller-cap' },
   } as ExecutionContext
   const create = async (folderId?: string) => {
-    const result = JSON.parse(await tool.execute({ action: 'create', title: 'Selector', ...(folderId ? { folderId } : {}) }, context))
+    const result = JSON.parse(await tool.execute({ action: 'create', topic: 'Selector', ...(folderId ? { folderId } : {}) }, context))
     return states.get(result.sessionId)!
   }
   for (const selector of ['code', folderIdentifier(local.id, local.name), local.id]) {
@@ -399,7 +399,7 @@ test('session tool resolves Project selectors across nodes without fallback and 
     }
   }
 
-  const request = { requestId: randomUUID(), title: 'Pinned', folderId: 'remote-app', initialMessage: 'Once' }
+  const request = { requestId: randomUUID(), topic: 'Pinned', folderId: 'remote-app', initialMessage: 'Once' }
   const [first, retry] = await Promise.all([service.create(request, 'web:actor'), service.create(request, 'web:actor')])
   assert.equal(first.sessionId, retry.sessionId)
   assert.equal(retry.initialMessageStatus, 'not_replayed')
@@ -417,6 +417,6 @@ test('session tool resolves Project selectors across nodes without fallback and 
   assert.deepEqual({ builds, lookups }, beforeRetry)
   assert.equal(deliveries, 1)
   await assert.rejects(restarted.create({ ...request, folderId: otherRemote.id }, 'web:actor'), /requestId/)
-  await assert.rejects(tool.execute({ action: 'create', title: 'No node override', folderId: local.id, nodeId: 'child-b' }, context))
+  await assert.rejects(tool.execute({ action: 'create', topic: 'No node override', folderId: local.id, nodeId: 'child-b' }, context))
   assert.equal(builds, beforeRetry.builds)
 })
