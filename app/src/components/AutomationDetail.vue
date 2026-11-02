@@ -47,7 +47,7 @@ async function toggle() {
   if (!job || !canToggleAutomation(job) || updating.value) return
   const base = props.apiBase
   updating.value = true; updateError.value = ''
-  try { await setAutomationEnabled(base, job.id, !(job.configuredEnabled ?? job.enabled), new AbortController().signal) }
+  try { await setAutomationEnabled(base, job.id, !(job.source === 'learning' ? job.enabled : (job.configuredEnabled ?? job.enabled)), new AbortController().signal) }
   catch (cause) { if (base === props.apiBase) updateError.value = cause instanceof Error ? cause.message : t('Automations are unavailable. Retry.') }
   finally { updating.value = false; if (base === props.apiBase) catalog.refresh() }
 }

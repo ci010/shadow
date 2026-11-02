@@ -50,7 +50,7 @@ watch(() => [props.apiBase, props.featureId, props.active], () => { controller?.
 onUnmounted(() => controller?.abort())
 </script>
 <style scoped>
-.automation-profile { flex: 0 0 auto; padding: 8px 16px; font-size: 12px; border-top: 1px solid var(--c-border-soft); min-width: 0; max-height: 180px; overflow: auto; }
+.automation-profile { flex: 0 0 auto; padding: 8px 16px; font-size: 12px; min-width: 0; max-height: 180px; overflow: auto; }
 header { display: flex; gap: 12px; align-items: center; justify-content: space-between; min-width: 0; }
 header strong { flex: 0 0 auto; font-weight: 500; white-space: nowrap; color: var(--c-text-secondary); }
 header button { flex: 0 0 auto; white-space: nowrap; min-width: 48px; }

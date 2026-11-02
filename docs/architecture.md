@@ -2513,7 +2513,7 @@ deduplicated tab. `panel=knowledge&entry=...` identifies the active entry in
 the conversation URL; browser back/forward and Alt+Left/Right move through
 visited views, while the Knowledge breadcrumb returns to the catalog. On narrow
 layouts the navigation stays inside Knowledge instead of taking a second pane.
-Project Settings (General, Models, Bots, Learning) and Agents also open as
+Project Settings (General, Models, Bots) and Agents also open as
 deduplicated, closable tabs in the selected project's conversation workbench.
 Their project-scoped URLs remain deep links; switching tabs keeps the current
 conversation mounted. Agents is reached from the project sidebar rather than
@@ -3547,3 +3547,12 @@ the current session overlay, not captured child overlays. Connections remain
 owned until session reset/sleep so borrowed children retain their handles.
 Folder declaration snapshots last for that selected scope; switch away/back
 (or start a new session) to reload edits. Remote folders have no Main fallback.
+
+Learning automation intervals are edited in each automation's bottom conversation
+settings card, alongside its statistics (whole minutes, 1–35791). Interval saves
+patch only that job's interval and never its enabled state. The existing Automation
+enable/disable action is the sole UI admission control. A legacy `learning.enabled:
+false` remains paused until an explicit enable: that action clears the legacy pause
+and materializes all other learning pipelines as disabled, enabling only the chosen
+job. No startup migration silently resumes learning. Old Project Settings Learning
+URLs redirect to the self-reflection automation conversation.
