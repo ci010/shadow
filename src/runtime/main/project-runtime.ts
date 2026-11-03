@@ -889,7 +889,11 @@ export async function createProjectRuntime(
     busy: id => { const stage=sessionActivityReadModel(sessions,id).stage; return stage!=='idle' && stage!=='inactive' },
     sessionForWork: key => organizationSessionsByWork.get(key),
     evidence:(id,signal)=>sessions.getPresentationEvidence(id,signal),
-    activity:id=>sessions.getSessionState(id)?.lastActivityAt??'', physical:id=>{const state=sessions.getSessionState(id);return state?physicalSessionId(state):undefined}, changed:()=>realtime.invalidateSessions()})
+    activity:id=>sessions.getSessionState(id)?.lastActivityAt??'', physical:id=>{const state=sessions.getSessionState(id);return state?physicalSessionId(state):undefined},
+    // Presentation commits do not mutate source sessions or their lineage.
+    // Keep Work readers notified, but probe only the owning run's graph row;
+    // unknown/new runs still recover the complete inventory in the reader.
+    changed:id=>realtime.invalidateSessions(id, undefined, ['work'])})
   for(const tool of workOrganizer.tools()) { tools.register(tool); coordinator?.allow(tool) }
   // Build admission and execution from the same current store view. Session topic
   // sequences already fingerprint metadata/completion; no new metadata log is needed.
