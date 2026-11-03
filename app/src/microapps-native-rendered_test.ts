@@ -61,10 +61,22 @@ test('native Apps use a branded isolated window and Windows tasks launch warm an
       load: id => id !== '\0native-fixture' ? undefined : `
         import '/src/styles.css';import {createApp,h} from 'vue';
         import {createRouter,createMemoryHistory} from 'vue-router';
+        import {microAppNavigation} from '/src/microapp-navigation.ts';
+        const router=createRouter({history:createMemoryHistory(),routes:[
+          {path:'/projects/:projectId/chat/:sessionId',name:'chat',component:{render:()=>null}},
+          {path:'/projects/:projectId/dashboard',name:'project-dashboard',component:{render:()=>null}}
+        ]});router.beforeEach(microAppNavigation);
+        import {conversationMicroAppLink} from '/src/project-coordination.ts';
         import ProjectMicroApps from '/src/components/ProjectMicroApps.vue';
-        const router=createRouter({history:createMemoryHistory(),routes:[{path:'/',component:{render:()=>null}}]});
-        await router.push({path:'/',query:{microApp:${JSON.stringify(record.id)}}});await router.isReady();
-        createApp({render:()=>h(ProjectMicroApps,{apiBase:location.origin+'/projects/p',active:true,canWrite:true,style:'height:100vh'})}).use(router).mount('#app');`,
+        const path='/projects/p/chat/web%3Achat-7fb0178b-a563-4267-af22-753e4b59bdba';
+        const href=path+'?microApp='+${JSON.stringify(record.id)};
+        await router.push(path);await router.isReady();
+        createApp({render:()=>h('div',[
+          h('a',{id:'message-app-link',href,target:'_blank',onClick:async e=>{
+            e.preventDefault();await router.push(path);await router.push(conversationMicroAppLink(href,'p'));
+          }},'Open published app'),
+          router.currentRoute.value.name==='project-dashboard' ? h(ProjectMicroApps,{apiBase:location.origin+'/projects/p',active:true,canWrite:true,style:'height:100vh'}) : null
+        ])}).use(router).mount('#app');`,
       configureServer(vite) {
         vite.middlewares.use(async (req, res, next) => {
           try {

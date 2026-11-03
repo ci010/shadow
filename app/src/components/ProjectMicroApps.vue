@@ -146,6 +146,8 @@ const reportChecks = computed(() => {
     })),
   ]
 })
+// One launch per navigation selection, never on polling/mutation refreshes.
+let launchSelection = ''
 let controller: AbortController | undefined
 async function loadSelection(id: string, signal?: AbortSignal) {
   const value = microAppReview.parse(await microAppRequest(props.apiBase, `/${encodeURIComponent(id)}`, undefined, signal))
@@ -168,6 +170,14 @@ async function refresh() {
     if (id) await loadSelection(id, request.signal)
   } catch (cause) { if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load apps') }
   finally { if (controller === request) loading.value = false }
+  if (request.signal.aborted || controller !== request) return
+  const id = typeof route.query.microApp === 'string' ? route.query.microApp : ''
+  if (selected.value?.id === id && launchSelection !== id) {
+    launchSelection = id
+    // This is only a UI affordance: Main still fetches fresh authorization and
+    // the service enforces exact-version approval before launching any code.
+    if (desktopApps && props.canWrite && selected.value.approval?.revision === selected.value.revision && !selected.value.cleanupPending) await open()
+  }
 }
 async function select(id: string) { await router.replace({ query: { ...route.query, microApp: id } }) }
 async function mutation(operation: (id: string) => Promise<void>) {
@@ -223,7 +233,7 @@ function iconError() { error.value = t('App icon could not be loaded. Refresh th
 watch(() => props.apiBase, () => { controller?.abort(); apps.value = []; selected.value = undefined; frameUrl.value = ''; openedNatively.value = false })
 watch(() => [props.apiBase, props.active, route.query.microApp], () => {
   if (props.active) void refresh()
-  else controller?.abort()
+  else { controller?.abort(); launchSelection = '' }
 }, { immediate: true })
 const statusPoll = setInterval(() => {
   if (!props.active || document.visibilityState === 'hidden' || busy.value || !selected.value?.acceptance ||

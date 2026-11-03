@@ -151,6 +151,12 @@ existing pending decisions and notification failures remain explicit blockers.
 
 ## Native windows and branding
 
+Published message links with `?microApp=<id>` route from the author conversation
+to the Project Apps review. Pending versions show the source and exact-version
+approval controls without executing the app. On Electron, an already-approved
+linked version opens its native window (or focuses the existing one); Web keeps
+the embedded presentation and its **Open app** action.
+
 Electron opens each Project/app pair in its own framed BrowserWindow, not an
 iframe in the workbench. Repeated opens focus that window. Closing Shadow's
 main window while an app is open hides the workbench in the tray; **Quit**

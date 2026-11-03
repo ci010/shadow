@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { microAppNavigation } from './microapp-navigation.ts'
 import LogsTab from './components/LogsTab.vue'
 import SpansTab from './components/SpansTab.vue'
 import ProjectsWorkspace from './components/ProjectsWorkspace.vue'
@@ -34,5 +35,10 @@ const router = createRouter({
   history: import.meta.env.MODE === 'mobile' || location.protocol === 'file:' ? createWebHashHistory() : createWebHistory(),
   routes,
 })
+
+// Published app links retain their author conversation path. Apps live in the
+// Project dashboard, not the conversation pane. A guard also handles query-only
+// navigation when that conversation is already mounted (route redirects do not).
+router.beforeEach(microAppNavigation)
 
 export default router
