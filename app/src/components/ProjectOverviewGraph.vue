@@ -39,6 +39,7 @@ import '@vue-flow/controls/dist/style.css'
 import OverviewFlowNode from './OverviewFlowNode.vue'
 import OverviewFlowRegion from './OverviewFlowRegion.vue'
 import { overviewFlowEdges } from '../project-overview-flow.ts'
+import { collapsedTopicViewport } from '../project-overview-viewport.ts'
 import { t } from '../i18n.ts'
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
@@ -60,8 +61,9 @@ async function returnToRecent(zoom = 1) { await nextTick(); const first = layout
 function clearFilters() { focus.value = ''; emit('update:query', '') }
 const focus = ref(''), selectedId = ref(''), history = shallowRef<Record<string, YieldDecisionRecord[]>>({}), loading = ref(false), historyError = ref(false), partial = ref(false)
 const expanded = ref(new Set<string>())
+const expansionZooms = new Map<string, number>()
 let generation = 0
-watch(() => props.apiBase, () => { generation++; expanded.value = new Set(); history.value = {}; selectedId.value = ''; loading.value = false; historyError.value = false; partial.value = false })
+watch(() => props.apiBase, () => { generation++; centerToken++; expansionZooms.clear(); expanded.value = new Set(); history.value = {}; selectedId.value = ''; loading.value = false; historyError.value = false; partial.value = false })
 const topics = computed(() => projectTopics(props.data)), groups = computed(() => projectFocusGroups(topics.value, props.data.focus)), activeGroup = computed(() => groups.value.find(group => group.key === focus.value))
 const graph = computed(() => overviewGraph(props.data, Object.values(history.value).flat()))
 const layout = computed(() => {
@@ -80,19 +82,30 @@ function trace(edge: { from: string; to: string; evidence: string }) { return ed
 const flowEdges = computed(() => [...overviewFlowEdges(visibleEdges.value, label).map(edge => ({ ...edge, sourceHandle: edge.source.startsWith('region:') ? edge.id + '-source' : undefined, targetHandle: edge.target.startsWith('region:') ? edge.id + '-target' : undefined, label: edge.source.startsWith('region:') || edge.target.startsWith('region:') ? label(edge.data.kind) : edge.label })), ...layout.value.regions.map(region => ({ id: 'ownership:' + region.owner, data: { from: region.owner, to: region.id, evidence: 'Visual ownership only; not causation.' }, source: region.owner, target: region.id, targetHandle: 'ownership', markerEnd: MarkerType.ArrowClosed, type: 'smoothstep', selectable: false, deletable: false, style: { stroke: 'var(--c-blue)', strokeDasharray: '5 5' } }))])
 function childCount(id: string) { return layout.value.children.get(id)?.length ?? 0 }
 let centerToken = 0
-async function centerExpanded(id: string) {
+async function centerTopic(id: string, expandedState: boolean, restoreZoom?: number) {
  const token = ++centerToken; await nextTick(); await new Promise<void>(resolve => setTimeout(resolve, 32))
- if (token !== centerToken || !expanded.value.has(id)) return
+ if (token !== centerToken || expanded.value.has(id) !== expandedState) return
  const position = layout.value.positions.get(id), element = canvas.value
  if (!position || !element) return
  const panel = element.parentElement?.querySelector('.context')?.getBoundingClientRect()
  const bounds = element.getBoundingClientRect(), available = panel && panel.left > bounds.left + 340 ? panel.left - bounds.left - 12 : bounds.width
- const zoom = Math.max(1, viewport.value.zoom), toolbar = element.querySelector('.canvas-toolbar')?.getBoundingClientRect()
- void setViewport({ x: available / 2 - (position.x + 140) * zoom, y: Math.max(104, (toolbar?.bottom ?? bounds.top + 80) - bounds.top + 20) - position.y * zoom, zoom }, { duration: 240 })
+ const zoom = restoreZoom ?? Math.max(1, viewport.value.zoom), toolbar = element.querySelector('.canvas-toolbar')?.getBoundingClientRect()
+ const top = Math.max(104, (toolbar?.bottom ?? bounds.top + 80) - bounds.top + 20)
+ const target = expandedState
+   ? { x: available / 2 - (position.x + 140) * zoom, y: top - position.y * zoom, zoom }
+   : collapsedTopicViewport(position, zoom, { width: available, height: bounds.height, top })
+ void setViewport(target, { duration: 240 })
 }
 function activate(id: string) {
   selectedId.value = id; edgeEvidence.value = ''
-  if (childCount(id)) { const next = new Set(expanded.value); if (next.has(id)) next.delete(id); else { next.add(id); void centerExpanded(id) }; expanded.value = next }
+  if (childCount(id)) {
+    const next = new Set(expanded.value), collapsing = next.has(id)
+    const restoreZoom = expansionZooms.get(id) ?? viewport.value.zoom
+    if (collapsing) { next.delete(id); expansionZooms.delete(id) }
+    else { expansionZooms.set(id, viewport.value.zoom); next.add(id) }
+    expanded.value = next
+    void centerTopic(id, !collapsing, collapsing ? restoreZoom : undefined)
+  }
   void loadContext(graph.value.nodes.find(node => node.id === id)?.workKey)
 }
 const selectedNode = computed(() => graph.value.nodes.find(node => node.id === selectedId.value)), selectedEdges = computed(() => graph.value.edges.filter(edge => edge.from === selectedId.value || edge.to === selectedId.value))
