@@ -87,7 +87,11 @@ async function main() {
       return
     }
     await window.loadURL(new URL('__native', process.env.MICROAPPS_NATIVE_URL).href)
+    await wait(() => execute('!!document.querySelector("#message-app-link")'), 'Published message link')
+    await execute('document.querySelector("#message-app-link").click()')
     await wait(() => execute('!!document.querySelector(".app-confirm input")'), 'Owner review')
+    assert.equal(appWindow, undefined, 'Pending approval must not launch code')
+    assert.equal(await execute('!!document.querySelector(".app-detail")'), true)
     await execute('document.querySelector(".app-confirm input").click()')
     await click('Approve this version')
     await click('Open window')
@@ -113,7 +117,9 @@ async function main() {
     assert.equal(native.getTitle(), 'Branded native app')
     await native.webContents.executeJavaScript('document.querySelector("#run").click()')
     await wait(() => native.webContents.executeJavaScript('document.querySelector("output").textContent==="Result 2"'), 'Reloaded app access')
-    await click('Open window')
+    await execute('document.querySelector("#message-app-link").click()')
+    await wait(() => execute('!!document.querySelector(".app-heading") && document.querySelector(".app-heading").textContent.includes("Running")'), 'Approved message link launch')
+    await wait(() => appWindow!.isFocused(), 'Repeated message link focuses native window')
     assert.equal(appWindow!.id, native.id)
     await manager.refresh()
     assert.deepEqual(errors, [])
