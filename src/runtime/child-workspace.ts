@@ -1,4 +1,5 @@
 import WebSocket from 'ws'
+import { ChildMicroApps } from './child-microapps.ts'
 import { upgradeGatewayWebSocket } from '../gateway/websocket.ts'
 import { bridgeSockets } from '../gateway/socket-bridge.ts'
 import { DEVICE_UI_CHALLENGE, DEVICE_UI_REQUEST, DEVICE_UI_HMR, deviceUiHeaders, deviceUiRequestPath, deviceUiResourcePath } from '../cluster/device-ui.ts'
@@ -11,8 +12,9 @@ export function childWorkspacePlugin(options: {
   endpoint: string
   proof: (signal: AbortSignal, path: string) => Promise<string>
   fetch?: typeof fetch
-}): GatewayPlugin {
-  return app => app.all('*', async c => {
+}): GatewayPlugin & { close(): Promise<void> } {
+  const microApps = new ChildMicroApps()
+  const plugin: GatewayPlugin = app => app.all('*', async c => {
     const url = new URL(c.req.url)
     const path = `${url.pathname}${url.search}`
     if (!deviceUiRequestPath(path, c.req.method)) return c.json({ error: 'not_found' }, 404)
@@ -62,6 +64,19 @@ export function childWorkspacePlugin(options: {
           async () => { const result = await forwardLease(upstream.revokeUrl, 'DELETE', AbortSignal.timeout(8000)); await result.body?.cancel() }, context.owner)
         return c.json(lease)
       }
+      const appAction = /^\/(?:projects\/[a-zA-Z0-9_-]+\/)?api\/microapps\/[0-9a-f-]{36}\/(open|stop|revoke)$/.exec(url.pathname)
+      if (response.ok && c.req.method === 'POST' && appAction) {
+        const appPath = url.pathname.slice(0, url.pathname.lastIndexOf('/'))
+        if (appAction[1] === 'open') {
+          const value: unknown = await response.json()
+          return c.json(await microApps.open(appPath, value, async (path, body, signal) => {
+            const proof = await options.proof(AbortSignal.any([signal, AbortSignal.timeout(8000)]), DEVICE_UI_CHALLENGE)
+            return (options.fetch ?? fetch)(endpoint, { method: 'POST', redirect: 'error', signal,
+              headers: { 'Content-Type': 'application/json', 'X-Shadow-Device-Proof': proof, 'X-Shadow-Ui-Path': path, 'X-Shadow-Ui-Method': 'POST' }, body: JSON.stringify(body) })
+          }))
+        }
+        await microApps.stop(appPath)
+      }
       // Fetch headers are immutable; the local gateway must still add its CORS headers.
       return new Response(response.body, {
         status: response.status, statusText: response.statusText, headers: new Headers(response.headers),
@@ -80,4 +95,5 @@ export function childWorkspacePlugin(options: {
       return c.json({ error: code, stage }, 503, { 'Cache-Control': 'no-store' })
     }
   })
+  return Object.assign(plugin, { close: () => microApps.close() })
 }

@@ -302,8 +302,14 @@ export class MicroApps {
       throw error
     }
   }
-  async open(id: string) {
+  async open(id: string, expectedRevision?: string) {
+    const checkRevision = () => {
+      if (expectedRevision && this.store.get(id).revision !== expectedRevision)
+        throw new MicroAppError('app_revision_changed', 'App version changed. Review it again before opening.', 409)
+    }
+    checkRevision()
     await this.start(id)
+    checkRevision()
     const run = this.runs.get(id)
     if (!run) throw new MicroAppError('app_stopped', 'App stopped before opening. Reopen from Apps.', 409)
     run.controller.signal.throwIfAborted()
@@ -312,7 +318,32 @@ export class MicroApps {
     if (run.tickets.size >= 32) throw new MicroAppError('too_many_tickets', 'Too many unconsumed app openings; wait one minute', 429)
     const ticket = randomBytes(32).toString('base64url')
     run.tickets.set(ticket, Date.now() + 60_000)
-    return { url: `${run.origin}/#shadow_ticket=${ticket}`, expiresAt: new Date(run.expiresAt).toISOString() }
+    return { url: `${run.origin}/#shadow_ticket=${ticket}`, revision: this.store.get(id).revision, runId: run.id, expiresAt: new Date(run.expiresAt).toISOString() }
+  }
+  /** Paired-device transport only: target is selected from this service, never a caller URL. */
+  async relay(id: string, input: { revision: string; runId: string; path: string; method: string; token?: string; contentType?: string; body?: string }, signal: AbortSignal) {
+    const record = this.store.get(id), run = this.runs.get(id)
+    if (record.revision !== input.revision || record.approval?.revision !== input.revision)
+      throw new MicroAppError('approval_required', 'Review the current app version first', 403)
+    if (!run || run.id !== input.runId || !run.origin || run.controller.signal.aborted)
+      throw new MicroAppError('app_stopped', 'Reopen this app from Shadow', 409)
+    const target = new URL(input.path, run.origin)
+    if (!input.path.startsWith('/') || input.path.startsWith('//') || input.path.includes('\\') || target.origin !== run.origin || target.hash)
+      throw new MicroAppError('invalid_app_path', 'Invalid app path', 400)
+    const headers = new Headers({ Host: new URL(run.origin).host, Origin: run.origin })
+    if (input.token) headers.set('Authorization', `Bearer ${input.token}`)
+    if (input.contentType) headers.set('Content-Type', input.contentType)
+    const body = input.body ? Buffer.from(input.body, 'base64') : undefined
+    if (body && body.length > 16 * 1024 * 1024) throw new MicroAppError('body_too_large', 'App request exceeds the transfer limit', 413)
+    const response = await fetch(target, { method: input.method, headers, redirect: 'error',
+      signal: AbortSignal.any([signal, run.controller.signal, AbortSignal.timeout(180_000)]),
+      ...(body ? { body } : {}) })
+    const bytes = await boundedBody(response, 16 * 1024 * 1024)
+    const safeHeaders: Record<string, string> = {}
+    for (const name of ['content-type', 'content-security-policy', 'referrer-policy', 'x-content-type-options']) {
+      const value = response.headers.get(name); if (value) safeHeaders[name] = value
+    }
+    return { status: response.status, headers: safeHeaders, body: Buffer.from(bytes).toString('base64') }
   }
   async stop(id: string, reason?: string) {
     const run = this.runs.get(id)

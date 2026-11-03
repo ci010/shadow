@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { revisionId } from './contracts.ts'
-import { appJson, microAppHttpError, type MicroApps } from './service.ts'
+import { appJson, boundedBody, microAppHttpError, type MicroApps } from './service.ts'
 
 export function microAppsPlugin(service: MicroApps, authorize: (request: Request) => boolean | Promise<boolean>): GatewayPlugin {
   return host => {
@@ -30,9 +30,20 @@ export function microAppsPlugin(service: MicroApps, authorize: (request: Request
       const input = z.object({ revision: revisionId }).strict().parse(await appJson(c.req.raw))
       return c.json(await service.requestTesting(c.req.param('id'), input.revision))
     })
+    app.post('/api/microapps/:id/relay', async c => {
+      const input = z.object({ revision: revisionId, runId: z.string().uuid(), path: z.string().max(8192),
+        method: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']), token: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/).optional(),
+        contentType: z.string().max(256).optional(), body: z.string().max(24 * 1024 * 1024).optional() }).strict()
+        .parse(JSON.parse(Buffer.from(await boundedBody(c.req.raw, 24 * 1024 * 1024)).toString('utf8')))
+      return c.json(await service.relay(c.req.param('id'), input, c.req.raw.signal))
+    })
+    app.post('/api/microapps/:id/open', async c => {
+      const input = z.object({ revision: revisionId.optional() }).strict().parse(await appJson(c.req.raw))
+      return c.json(await service.open(c.req.param('id'), input.revision))
+    })
     app.post('/api/microapps/:id/:action', async c => {
       z.object({}).strict().parse(await appJson(c.req.raw))
-      const action = z.enum(['start', 'stop', 'open', 'revoke']).parse(c.req.param('action'))
+      const action = z.enum(['start', 'stop', 'revoke']).parse(c.req.param('action'))
       return c.json(await service[action](c.req.param('id')))
     })
     host.route('/', app)

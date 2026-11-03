@@ -178,7 +178,7 @@ test('failed native loading releases the started runtime and disconnect closes s
   f.manager.setAuthorization(null)
   assert.equal(f.windows[0]!.input.signal.aborted, true)
   assert.equal(f.windows[0]!.closed, true)
-  await assert.rejects(f.manager.open(identity), /local Shadow Main/)
+  await assert.rejects(f.manager.open(identity), /ready Main/)
   f.manager.setAuthorization({ apiBase: 'http://127.0.0.1:43210', launchToken: 'synthetic-owner' })
   await f.manager.refresh()
   f.failWindow()
