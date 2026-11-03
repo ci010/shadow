@@ -657,6 +657,15 @@ expire with timer cleanup, and are limited to 128 per gateway, eight concurrent
 reads and 32 MiB per file. Paths are decoded once, traversal is rejected and
 symlinks are not supported. Preview leases do not implement a remote executor:
 remote/unavailable resources fail explicitly, never falling back to Main.
+For an approved Child's Main-workspace UI, the Child imports only the capability
+returned by an authenticated preview-create route into its own bounded lease
+store. The upstream token stays server-side. Every read uses a fresh device-UI
+proof and the same upstream capability; Main still revalidates the owning
+resource. Child and Main tokens remain bound to their respective origins/stores.
+Only the exact capability CSP asset prefix is rebased to the Child origin;
+business APIs do not inherit preview authority. Local revocation is immediate
+and requests best-effort upstream disposal (expiry remains the backstop).
+
 Mobile and attachment HTML remain source-only. Real-browser asset loading and
 CSP behavior require browser verification in addition to the gateway tests.
 

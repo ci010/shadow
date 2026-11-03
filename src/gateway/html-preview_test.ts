@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdir, writeFile, symlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { Hono } from 'hono'
 import { folderFixture } from '../folders/test-fixtures.ts'
 import { HtmlPreviewLeases, createHtmlPreview } from './html-preview.ts'
@@ -167,4 +167,59 @@ test('session workspace lease is bound to persisted session existence and rechec
   const second = await (await create()).json()
   exists = false
   assert.equal((await app.request(origin + second.url)).status, 404)
+})
+
+// Real Windows filesystem coverage: fixture paths normally already have canonical
+// spelling, which hid the difference between registry paths and realpath output.
+test('Windows preview accepts registry separator and case spellings and nested filename casing', { skip: process.platform !== 'win32' }, async t => {
+  const { workspace } = await folderFixture(t)
+  const base = join(workspace, 'PreviewCase')
+  await mkdir(join(base, 'PageCase'), { recursive: true })
+  await writeFile(join(base, 'PageCase', 'Index.html'), 'windows-preview')
+  for (const [spelling, path] of [
+    [base.split(sep).join('/'), 'PageCase/Index.html'],
+    [base.toUpperCase(), 'PageCase/Index.html'],
+    [base, 'pagecase/index.html'],
+  ] as const) {
+    const store = new HtmlPreviewLeases()
+    const lease = await store.create(spelling, path, origin, async () => spelling)
+    try {
+      const response = await store.serve(new Request(origin + lease.url))
+      assert.equal(response?.status, 200, spelling)
+      assert.equal(await response!.text(), 'windows-preview')
+    } finally { store.revoke(lease.url.split('/')[3]!) }
+  }
+})
+
+test('relay capabilities stay bounded, origin-bound and locally revocable', async () => {
+  let now = 100
+  let revoked = 0
+  let reads = 0
+  const store = new HtmlPreviewLeases(() => now)
+  const upstreamToken = 'a'.repeat(43)
+  const upstream = { url: `/api/html-preview/${upstreamToken}/index.html`, revokeUrl: `/api/html-preview-leases/${upstreamToken}`, expiresAt: now + 300_000 }
+  const relay = async (path: string, method: string) => {
+    reads++
+    assert.equal(path, 'index.html'); assert.equal(method, 'GET')
+    return new Response('relay', { headers: { 'Content-Security-Policy': `sandbox allow-scripts; script-src http://workspace.internal/api/html-preview/${upstreamToken}/` } })
+  }
+  const revoke = async () => { revoked++ }
+  for (const invalid of [null, {}, { ...upstream, url: 'https://other.invalid/api/private' }, { ...upstream, url: `/api/html-preview/${upstreamToken}/%2e%2e` }, { ...upstream, revokeUrl: '/api/private' }, { ...upstream, expiresAt: Infinity }]) {
+    assert.throws(() => store.importRelay(invalid, origin, relay, revoke))
+  }
+  const owner = new AbortController()
+  const lease = store.importRelay(upstream, origin, relay, revoke, owner.signal)
+  assert.equal((await store.serve(new Request('http://other.test' + lease.url)))?.status, 404)
+  assert.equal(reads, 0)
+  const response = await store.serve(new Request(origin + lease.url))
+  assert.equal(response?.status, 200)
+  assert.ok(response!.headers.get('content-security-policy')!.includes(origin + lease.url.slice(0, lease.url.lastIndexOf('/') + 1)))
+  owner.abort()
+  assert.equal((await store.serve(new Request(origin + lease.url)))?.status, 404)
+  assert.equal(revoked, 1)
+  const leases = Array.from({ length: 128 }, () => store.importRelay(upstream, origin, relay, revoke))
+  assert.throws(() => store.importRelay(upstream, origin, relay, revoke), /preview_capacity/)
+  now += 300_001
+  assert.equal((await store.serve(new Request(origin + leases[0]!.url)))?.status, 404)
+  assert.equal(revoked, 129)
 })

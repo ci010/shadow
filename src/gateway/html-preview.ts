@@ -9,11 +9,19 @@ import { MIME_BY_EXT } from './local-files.ts'
 const TTL = 5 * 60_000
 const MAX_LEASES = 128
 const MAX_FILE = 32 * 1024 * 1024
-interface Lease {
-  root: string; base: string; origin: string; expires: number
-  validate: () => Promise<string | undefined>
+interface LeaseLifetime {
+  origin: string; expires: number
   owner?: AbortSignal; cleanup: () => void
 }
+interface LocalLease extends LeaseLifetime {
+  root: string; base: string
+  validate: () => Promise<string | undefined>
+}
+interface RelayLease extends LeaseLifetime {
+  relay: (path: string, method: string, signal: AbortSignal) => Promise<Response>
+  upstreamPrefix: string
+}
+type Lease = LocalLease | RelayLease
 export const previewContext = new AsyncLocalStorage<{ store: HtmlPreviewLeases; origin: string; owner?: AbortSignal }>()
 
 /** Dedicated bounded capabilities, never business API credentials. In-memory only. */
@@ -25,7 +33,7 @@ export class HtmlPreviewLeases {
     for (const [key, lease] of this.leases) if (lease.expires <= this.now() || lease.owner?.aborted) this.revoke(key)
   }
   revoke(token: string) { const lease = this.leases.get(token); this.leases.delete(token); lease?.cleanup() }
-  async create(base: string, path: string, origin: string, validate: Lease['validate'], owner?: AbortSignal) {
+  async create(base: string, path: string, origin: string, validate: LocalLease['validate'], owner?: AbortSignal) {
     this.prune()
     if (this.leases.size >= MAX_LEASES) throw new Error('preview_capacity')
     const parts = safePath(path)
@@ -47,6 +55,33 @@ export class HtmlPreviewLeases {
       cleanup: () => { clearTimeout(timer); owner?.removeEventListener('abort', revoke) } })
     return { url: `/api/html-preview/${token}/${encodeURIComponent(basename(target))}`, revokeUrl: `/api/html-preview-leases/${token}`, expiresAt: expires }
   }
+  /** Import only a lease returned by an authenticated device-UI create request.
+   * The upstream token stays server-side; the local token cannot select another
+   * upstream capability, API path, host, or filesystem resource.
+   */
+  importRelay(value: unknown, origin: string, relay: RelayLease['relay'], revoke: () => Promise<void>, owner?: AbortSignal) {
+    if (!value || typeof value !== 'object') throw new Error('invalid_preview_lease')
+    const { url, revokeUrl, expiresAt } = value as Record<string, unknown>
+    const match = typeof url === 'string' && /^\/api\/html-preview\/([\w-]{43})\/([^/]+)$/.exec(url)
+    if (!match || revokeUrl !== `/api/html-preview-leases/${match[1]}` || typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || expiresAt <= this.now()) throw new Error('invalid_preview_lease')
+    if (!safePath(decodeURIComponent(match[2]!))) throw new Error('invalid_preview_lease')
+    this.prune()
+    if (this.leases.size >= MAX_LEASES || owner?.aborted) throw new Error('preview_capacity')
+    const token = randomBytes(32).toString('base64url')
+    const expires = Math.min(expiresAt, this.now() + TTL)
+    const stop = () => this.revoke(token)
+    const timer = setTimeout(stop, expires - this.now())
+    timer.unref()
+    owner?.addEventListener('abort', stop, { once: true })
+    this.leases.set(token, { origin, expires, owner, relay,
+      upstreamPrefix: `http://workspace.internal/api/html-preview/${match[1]}/`,
+      cleanup: () => {
+        clearTimeout(timer); owner?.removeEventListener('abort', stop)
+        void revoke().catch(() => {})
+      },
+    })
+    return { url: `/api/html-preview/${token}/${match[2]}`, revokeUrl: `/api/html-preview-leases/${token}`, expiresAt: expires }
+  }
   async serve(request: Request): Promise<Response | undefined> {
     const url = new URL(request.url)
     if (!url.pathname.startsWith('/api/html-preview/')) return
@@ -59,8 +94,32 @@ export class HtmlPreviewLeases {
     if (this.active >= 8) return new Response(null, { status: 429, headers: { 'Cache-Control': 'no-store' } })
     this.active++
     try {
+      if ('relay' in lease) {
+        const parts = safePath(decodeURIComponent(match[2]!))
+        if (!parts) return deny()
+        const response = await lease.relay(parts.map(encodeURIComponent).join('/'), request.method, request.signal)
+        if (this.leases.get(match[1]!) !== lease || lease.owner?.aborted || lease.expires <= this.now()) {
+          await response.body?.cancel(); return deny()
+        }
+        const headers = new Headers(response.headers)
+        // Main binds the upstream lease to its synthetic device-UI origin.
+        // Rebase only that exact capability source, never arbitrary URLs.
+        const csp = headers.get('Content-Security-Policy')
+        if (response.ok && !csp) { await response.body?.cancel(); return deny() }
+        if (csp) headers.set('Content-Security-Policy', csp.replaceAll(lease.upstreamPrefix, `${url.origin}/api/html-preview/${match[1]}/`))
+        headers.delete('set-cookie')
+        headers.set('Cache-Control', 'no-store')
+        headers.set('Access-Control-Allow-Origin', '*')
+        return new Response(response.body, { status: response.status, headers })
+      }
       let base: string | undefined
-      try { base = await lease.validate() } catch { this.revoke(match[1]!); return deny() }
+      try {
+        // Registry spelling may differ from realpath on Windows (slashes,
+        // drive/directory casing). Compare canonical filesystem identities on
+        // both sides, without skipping the ownership check or case-folding.
+        const authorized = await lease.validate()
+        base = authorized === undefined ? undefined : await realpath(authorized)
+      } catch { this.revoke(match[1]!); return deny() }
       if (base !== lease.base) { this.revoke(match[1]!); return deny() }
       const parts = safePath(decodeURIComponent(match[2]!))
       if (!parts) return deny()
@@ -112,7 +171,10 @@ async function checkedPath(root: string, parts: string[]) {
   }
   const rel = relative(root, target)
   if (rel === '..' || rel.startsWith(`..${sep}`)) throw new Error('invalid_preview_path')
-  return target
+  // Preserve the filesystem's canonical spelling (not a blanket case fold:
+  // Windows can also host case-sensitive directories). The lease root is
+  // derived from this path and must survive the next realpath recheck.
+  return await realpath(target)
 }
 
 /** Called only by authenticated, Project-scoped file routes. Closure revalidates ownership on every read. */
