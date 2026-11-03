@@ -44,7 +44,7 @@ export class WorkOrganizer {
   private last?: { phase?:'evidence'|'hierarchy'; mode:OrganizationMode; status:'running'|'completed'|'partial'; coveredCount:number; manifestCount:number; patches:number }
   constructor(private store: Pick<InitiativeStore,'workRecords'|'workObservations'|'projectFocus'|'saveProjectFocus'>, private deps: {
     projectId:string; evidence(id:string,signal:AbortSignal):Promise<{sources:PresentationSource[];partial:boolean}>;
-    busy?(id:string):boolean; now?():number; sessionForWork?(key:string):string|undefined; activity(id:string):string; physical?(id:string):string|undefined; changed():void;
+    busy?(id:string):boolean; now?():number; sessionForWork?(key:string):string|undefined; activity(id:string):string; physical?(id:string):string|undefined; changed(sessionId:string):void;
   }) {}
   status() {
     if (this.last) return this.last
@@ -77,7 +77,7 @@ export class WorkOrganizer {
     const manifest=phase==='hierarchy'?[]:eligible.slice(0,mode==='delta'?3:30)
     this.shownRoots.clear()
     this.run={phase,startRevision:previous?.revision??0,sessionId,signal,mode,manifest,candidates:candidates.length,stale:new Set(),evidence:new Map(),omissions:new Map(),read:new Map(),covered:new Set(),versions:new Map(),receipts:new Map(),patches:0,finished:false,bytes:0}
-    this.last={phase,mode,status:'running',coveredCount:0,manifestCount:manifest.length,patches:0};this.deps.changed()
+    this.last={phase,mode,status:'running',coveredCount:0,manifestCount:manifest.length,patches:0};this.deps.changed(sessionId)
     return JSON.stringify({mode,phase,manifest:manifest.map(r=>({key:r.key,sequence:r.sequence,title:r.workflow?.title,sessionCompleted:r.sessionCompleted,objective:r.definition.objective.slice(0,800),summary:r.notes?.summary?.slice(0,800)})),revision:previous?.revision??0,
       instruction:'Read bounded evidence, then commit valid small patches immediately. Do not wait for a complete project response. Finish explicitly. Manifest is fixed; omission is not deletion. Delta only reclassifies manifest keys, preserving unrelated groups/cards/hierarchy identities except explicit rootRegroup display edges. Prefer few coherent macro roots (3–5 soft target), subthemes and evidence groups; reuse existing hierarchy, never force Other. Existing hierarchy is display interpretation, never authority.'})
   }
@@ -252,7 +252,7 @@ export class WorkOrganizer {
     }
     this.store.saveProjectFocus(value,impacted,revision)
     run.covered=covered;run.patches++;run.bytes+=Buffer.byteLength(body);run.receipts.set(patch.patchId,{body,revision:revision+1})
-    this.last=value.organization;this.deps.changed();return JSON.stringify({revision:revision+1,committed:true,coveredCount:covered.size})
+    this.last=value.organization;this.deps.changed(run.sessionId);return JSON.stringify({revision:revision+1,committed:true,coveredCount:covered.size})
   }
   async finish(args:Record<string,unknown>,context:ExecutionContext):Promise<string> {
     const run=this.bound(context)
@@ -277,7 +277,7 @@ export class WorkOrganizer {
       const value=projectFocusSnapshotSchema.parse({...snapshot,revision:(snapshot.revision??0)+1,inputCount:sources.length,sources,omittedCount:Math.max(0,run.candidates-sources.length),evidence:snapshot.evidence?.filter(s=>used.has(sourceIdentity(s))),result:{groups:retained,hierarchy:keptNodes.map(n=>({id:n.id,title:n.title,purpose:n.purpose,...(n.parentId?{parentId:n.parentId}:{}),groupIndexes:n.groupIds.map(id=>retained.findIndex(g=>g.id===id))}))}})
       const validated=run.manifest.filter(r=>pruneTopicKeys.includes(r.key)).map(r=>({key:r.key,sequence:r.sequence}))
       this.store.saveProjectFocus(value,pruneTopicKeys,snapshot.revision??0,validated)
-      this.deps.changed()
+      this.deps.changed(run.sessionId)
     }
     if(run.phase==='hierarchy'&&!partial) {
       if(!run.patches&&(this.store.projectFocus()?.revision??0)!==run.startRevision)throw new WorkConflict('Presentation revision changed')
@@ -290,7 +290,7 @@ export class WorkOrganizer {
   private persistStatus(status:'completed'|'partial'){
     const run=this.run!;this.last={phase:run.phase,mode:run.mode,status,coveredCount:run.covered.size,manifestCount:run.manifest.length,patches:run.patches}
     const snapshot=this.store.projectFocus();if(snapshot&&(run.patches||run.phase==='hierarchy'))this.store.saveProjectFocus({...snapshot,organization:this.last},[],snapshot.revision??0)
-    this.deps.changed()
+    this.deps.changed(run.sessionId)
   }
   end(){if(!this.run)return;try{if(!this.run.finished)this.persistStatus('partial')
     const run=this.run

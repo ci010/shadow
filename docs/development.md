@@ -495,6 +495,30 @@ this conservative first optimization does not support partial node creation.
 Invalidations during an in-flight read retain their serialized follow-up; no
 additional debounce or event suppression is introduced. Activity/history/Work
 reader behavior and publisher wire contracts are unchanged.
+
+WorkOrganizer presentation callbacks now carry the owning run session ID with a
+`work` hint (begin, patch/prune, finish and interrupted status). These writes
+change the organizer's presentation/coverage, not source-session lineage. Work
+overview consumers still refresh; the graph probes the known run row and retains
+the same topology checks. Begin occurs before run-session creation, so a new or
+unknown run still requires a full inventory read; lifecycle notifications remain
+independent. A real SQLite organizer → realtime publisher → graph-reader test
+uses a synthetic inventory growing from 718 to 719 sessions: initial read, fresh
+run begin, three patches and finish change six full requests into two full plus
+four partial requests, 4,884,219 → 1,632,123 JSON bytes (66.58% less). The fresh
+run begin still requires full recovery. This does not reduce total request count
+or measure live CPU, latency, or HAR event attribution.
+
+Other globals remain intentional/conservative: WorkAlignment changes may notify
+previous/new assignees, descendants and decision holders; successor creation can
+add topology. Cron inventory changes affect enabled existing-session targets
+(`hasCron`); fresh cron/organizer/learning runs add sessions. GitHub and
+learning callbacks still use broad recovery. TopicService folder registration,
+handoff, reset/reconnect, manual refresh and unknown/deleted rows retain full
+recovery. Project SQL exposes Work tables as read-only snapshots, not a second
+Work mutation path; Work-tool writes persist through InitiativeStore and publish
+through WorkAlignment. No blanket Work/cron suppression is applied here.
+
 Without captured SSE payloads, repeated HAR full reads alone cannot establish
 which invalidation caused each request. Request/byte savings for stable scoped
 events are covered by a synthetic 665-session replay, not a measured live CPU
