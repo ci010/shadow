@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict'
+import { writeFile, mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
+import { folderFixture } from '../folders/test-fixtures.ts'
+import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import WebSocket, { WebSocketServer } from 'ws'
@@ -51,7 +55,7 @@ async function fixture(developmentUrl?: string) {
   const child = new Hono()
   registerGatewayRoutes(child, [], { launchCredential: 'child-private' })
   childWorkspacePlugin({ endpoint: 'http://main.test:3124', proof, fetch: networkFetch })(child)
-  return { bridge, main, ingress, child, registry, proof, setEndpoint: (value: string) => { endpoint = value } }
+  return { bridge, main, ingress, child, registry, proof, networkFetch, setEndpoint: (value: string) => { endpoint = value } }
 }
 
 test('workspace tunnels only business routes, never control/credentials or path escapes', () => {
@@ -151,4 +155,72 @@ test('authenticated Child HMR bridges text/binary both ways and closes after dev
   const closed = once(socket, 'close')
   f.registry.revoke({ deviceId: 'device-1', nodeId: 'node-1', credentialId: 'credential-1' }, 'removed', new Date())
   await closed
+})
+
+test('Child preview relay owns create/read/revoke across gateways without sharing API authority', { timeout: 10_000 }, async t => {
+  const f = await fixture(); t.after(() => f.bridge.close())
+  const { workspace } = await folderFixture(t)
+  await mkdir(join(workspace, 'page'))
+  await writeFile(join(workspace, 'page', 'index.html'), '<script src="asset.js"></script>')
+  await writeFile(join(workspace, 'page', 'asset.js'), 'globalThis.preview = true')
+  await writeFile(join(workspace, 'secret.txt'), 'outside-preview')
+  let available = true
+  f.main.post('/projects/test/api/folders/local/html-preview', c => createHtmlPreview(c, async () => available ? workspace : undefined))
+  let upstreamUrl = ''
+  let revokedPath = ''
+  const revoked = Promise.withResolvers<void>()
+  const transport: typeof fetch = async (input, init) => {
+    const response = await f.networkFetch(input, init)
+    const headers = new Headers(init?.headers)
+    if (headers.get('X-Shadow-Ui-Method') === 'POST' && response.ok) upstreamUrl = (await response.clone().json()).url
+    if (headers.get('X-Shadow-Ui-Method') === 'DELETE') { revokedPath = headers.get('X-Shadow-Ui-Path')!; revoked.resolve() }
+    return response
+  }
+  const service = new ChildLocalControlService({ port: 0, launchCredential: 'child-private', requestShutdown: () => {},
+    workspace: childWorkspacePlugin({ endpoint: 'http://main.test:3124', proof: f.proof, fetch: transport }),
+  })
+  t.after(() => service.shutdown())
+  await service.start(new AbortController().signal)
+  const base = `http://127.0.0.1:${service.address!.port}`
+  const headers = { Authorization: 'Bearer child-private', Origin: base }
+  const create = async () => {
+    const response = await fetch(base + '/projects/test/api/folders/local/html-preview?path=page/index.html', { method: 'POST', headers })
+    assert.equal(response.status, 200)
+    return await response.json() as { url: string; revokeUrl: string }
+  }
+  assert.equal((await fetch(base + '/projects/test/api/folders/local/html-preview?path=page/index.html', { method: 'POST' })).status, 401)
+  const lease = await create()
+  const read = (path: string) => fetch(base + path, { headers: { Origin: 'null', 'Sec-Fetch-Site': 'cross-site' } })
+  const response = await read(lease.url)
+  assert.equal(response.status, 200)
+  assert.match(await response.text(), /asset.js/)
+  assert.notEqual(lease.url, upstreamUrl, 'upstream token stays on the server')
+  assert.equal((await read(upstreamUrl)).status, 404, 'upstream token cannot consume the local store')
+  assert.equal((await f.main.request('http://workspace.internal' + upstreamUrl)).status, 200)
+  assert.equal((await f.main.request(base + upstreamUrl)).status, 404, 'Main lease retains its synthetic origin binding')
+  const prefix = lease.url.slice(0, lease.url.lastIndexOf('/') + 1)
+  const csp = response.headers.get('content-security-policy')!
+  assert.ok(csp.includes(base + prefix))
+  assert.ok(!csp.includes('workspace.internal'))
+  assert.match(csp, /sandbox allow-scripts;/)
+  assert.doesNotMatch(csp, /allow-same-origin/)
+  assert.equal((await read(prefix + 'asset.js')).status, 200)
+  assert.equal((await fetch(base + lease.url, { method: 'HEAD' })).status, 200)
+  assert.equal((await read(prefix + '%2e%2e%2fsecret.txt')).status, 404)
+  assert.equal((await read('/api/projects')).status, 401)
+  assert.equal((await f.main.request('http://main.test:3124' + lease.url)).status, 404, 'Child token is not a Main capability')
+  assert.equal((await f.child.request('http://other-child.test' + lease.url, { headers })).status, 404, 'another store/origin cannot consume Child token')
+  assert.equal((await fetch(base + lease.revokeUrl, { method: 'DELETE' })).status, 401)
+  assert.equal((await fetch(base + lease.revokeUrl, { method: 'DELETE', headers })).status, 204)
+  assert.equal((await read(lease.url)).status, 404)
+  await revoked.promise
+  assert.equal(revokedPath, '/api/html-preview-leases/' + upstreamUrl.split('/')[3])
+  assert.equal((await f.main.request('http://workspace.internal' + upstreamUrl)).status, 404, 'local revoke also disposes the Main lease')
+  const removed = await create()
+  available = false
+  assert.equal((await read(removed.url)).status, 404, 'Main ownership is rechecked on relay reads')
+  available = true
+  const untrusted = await create()
+  f.registry.revoke({ deviceId: 'device-1', nodeId: 'node-1', credentialId: 'credential-1' }, 'removed', new Date())
+  assert.equal((await read(untrusted.url)).status, 404, 'fresh device proof is required for every relay read')
 })

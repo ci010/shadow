@@ -4,6 +4,7 @@ import { bridgeSockets } from '../gateway/socket-bridge.ts'
 import { DEVICE_UI_CHALLENGE, DEVICE_UI_REQUEST, DEVICE_UI_HMR, deviceUiHeaders, deviceUiRequestPath, deviceUiResourcePath } from '../cluster/device-ui.ts'
 import { DeviceApprovalUnavailableError, DeviceChallengeRequestError } from '../cluster/device-challenge-client.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
+import { previewContext } from '../gateway/html-preview.ts'
 
 /** Loopback renderer admission is enforced by ChildLocalControl before this proxy. */
 export function childWorkspacePlugin(options: {
@@ -43,6 +44,24 @@ export function childWorkspacePlugin(options: {
         ...(!['GET', 'HEAD'].includes(c.req.method) ? { body: c.req.raw.body, duplex: 'half' } : {}),
       } as RequestInit)
       if (!response.ok) console.error('[child-workspace]', { stage, status: response.status })
+      if (response.ok && c.req.method === 'POST' && /^\/(?:projects\/[^/]+\/)?api\/(?:folders\/[^/]+|sessions\/[^/]+(?:\/workspace)?)\/html-preview$/.test(url.pathname)) {
+        const context = previewContext.getStore()
+        if (!context) { await response.body?.cancel(); return c.json({ error: 'preview_unavailable' }, 503) }
+        const value: unknown = await response.json()
+        // importRelay validates this untrusted response before either callback
+        // can run. Never forward a path supplied by a preview GET verbatim.
+        const upstream = value as { url: string; revokeUrl: string }
+        const forwardLease = async (path: string, method: string, signal: AbortSignal) => {
+          const proof = await options.proof(AbortSignal.any([signal, AbortSignal.timeout(8000)]), DEVICE_UI_CHALLENGE)
+          return (options.fetch ?? fetch)(endpoint, { method: 'POST', redirect: 'error', signal,
+            headers: { 'X-Shadow-Device-Proof': proof, 'X-Shadow-Ui-Path': path, 'X-Shadow-Ui-Method': method },
+          })
+        }
+        const lease = context.store.importRelay(value, context.origin,
+          (suffix, method, signal) => forwardLease(upstream.url.slice(0, upstream.url.lastIndexOf('/') + 1) + suffix, method, signal),
+          async () => { const result = await forwardLease(upstream.revokeUrl, 'DELETE', AbortSignal.timeout(8000)); await result.body?.cancel() }, context.owner)
+        return c.json(lease)
+      }
       // Fetch headers are immutable; the local gateway must still add its CORS headers.
       return new Response(response.body, {
         status: response.status, statusText: response.statusText, headers: new Headers(response.headers),
