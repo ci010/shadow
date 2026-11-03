@@ -14,6 +14,44 @@ Node.js or Python HTTP backend. It does not provide a UI DSL, dependency
 installer, app marketplace, standalone desktop packaging, remote execution,
 mobile/LAN app hosting, or browser microphone/device permission broker.
 
+## Native windows on a paired Child
+
+A ready Electron Child uses its own authenticated loopback control endpoint,
+then the existing paired-device MainDeviceUi challenge/proof channel for app
+catalog, exact-revision approval, open and stop. It does not start a second local
+Main. The app backend and persistent state remain on the connected Main; this
+is not remote-workdir app publication or public LAN app hosting.
+
+Main's isolated loopback app URL is not usable on another machine. Child replaces
+it with a separate ephemeral loopback origin for that app run. Requests relay
+only to the selected Project/app, exact approved revision and current run ID;
+the caller cannot supply a target host or port. Each request obtains fresh device
+proof. Only app-specific one-use tickets and app tokens reach the app renderer;
+Main/Child control credentials never do. Requests from another Origin are rejected.
+The ordinary independent BrowserWindow, nonpersistent partition and focus reuse
+remain unchanged. Closing the window stops the runtime on the connected Main and
+closes the Child relay; Child shutdown also closes its relay listeners. Revocation,
+revision changes, device-proof failure and expired/stopped runs fail closed.
+
+The integration fixture runs real loopback Main device ingress and Child control.
+On a desktop with a display it also launches the installed Electron using a
+throwaway profile: the message bridge opens a real independent BrowserWindow,
+loads the app/SDK through Child, saves and reloads state, focuses on repeat open,
+stops Main on close, reopens on a new origin, and rejects access after revocation.
+It is not a Windows native UI/taskbar or separate-machine acceptance claim.
+
+Child adds its own shared limits: at most 16 app relay listeners (including
+reserved opening slots), 16 in-flight app relay requests across all its apps,
+16 MiB decoded request/response bodies, and 24 MiB transport JSON envelopes.
+A saturated request queue returns 429; oversized app input returns 413 before
+forwarding. HTTP header/request receipt timeouts are 15/30 seconds. Listeners
+close on stop/shutdown or run expiry (at most eight hours). These are additional
+Child limits, not inherited Main listener quotas. The existing MainDeviceUi
+128 active requests and 600 challenges/minute limits, exact-revision approval,
+32 outstanding tickets/run and two concurrent model calls/app remain in force.
+Main relay also bounds decoded request/response bodies to 16 MiB; this does not
+introduce a new global cap on owner-started Main app runtimes.
+
 ## Guided construction from a short request
 
 Agree on shared interfaces and cancellation ownership before parallel coding,

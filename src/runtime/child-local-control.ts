@@ -17,7 +17,7 @@ export interface ChildLocalControlOptions {
   readonly requestShutdown: () => void | Promise<void>
   readonly nodeInventory?: () => NodeInventoryEntry | Promise<NodeInventoryEntry>
   readonly childStatus?: () => unknown
-  readonly workspace?: GatewayPlugin
+  readonly workspace?: GatewayPlugin & { close?(): Promise<void> }
 }
 
 export class ChildLocalControlService implements ChildRuntimeService {
@@ -90,7 +90,7 @@ export class ChildLocalControlService implements ChildRuntimeService {
     this.#abort = undefined
     const server = this.#server
     this.#server = undefined
-    this.#shutdownPromise = server?.shutdown() ?? Promise.resolve()
+    this.#shutdownPromise = Promise.all([server?.shutdown(), this.options.workspace?.close?.()]).then(() => undefined)
     return this.#shutdownPromise
   }
 }

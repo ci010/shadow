@@ -342,7 +342,8 @@ async function start(): Promise<void> {
     const status = runtimeHost.status
     activityAuthorization = status.phase === 'ready' && status.role === 'main' ? authorization : null
     taskbarActivity?.setAuthorization(activityAuthorization)
-    microApps?.setAuthorization(activityAuthorization)
+    // Child authorization is its loopback control credential; business requests use the paired Main proof tunnel.
+    microApps?.setAuthorization(authorization)
     sendRuntimeEndpoint(activityAuthorization
       ? { type: 'shadow:runtime-ready', apiBase: activityAuthorization.apiBase }
       : { type: 'shadow:runtime-stopped' })
@@ -544,11 +545,11 @@ async function start(): Promise<void> {
     setUserTasks: tasks => app.setUserTasks(tasks),
     onError: message => console.error('[desktop] Micro Apps:', message),
   })
-  microApps.setAuthorization(activityAuthorization)
+  microApps.setAuthorization(rendererAuthorization)
   const disposeAppIpc = installMicroAppIpc(ipcMain, () => mainWindow, microApps)
   openTaskApp = async identity => {
     const runtime = await startup.current()
-    if (!runtime.ok || !activityAuthorization) throw new Error('Local Main is unavailable')
+    if (!runtime.ok || !rendererAuthorization) throw new Error('Connected Main is unavailable')
     await microApps!.open(identity)
   }
   mainTray = new Tray(createTrayImage(desktopTrayIconPath(app.isPackaged), nativeImage))

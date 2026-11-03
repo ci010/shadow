@@ -38,7 +38,7 @@ async function main() {
     preload: join(output, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false,
   } })
   const execute = (code: string) => window.webContents.executeJavaScript(code)
-  const authorization = { apiBase: new URL(process.env.MICROAPPS_NATIVE_URL!).origin, launchToken: 'synthetic-owner' }
+  const authorization = { apiBase: new URL(process.env.MICROAPPS_NATIVE_URL!).origin, launchToken: process.env.MICROAPPS_NATIVE_CHILD_ID ? 'fixture-child-secret' : 'synthetic-owner' }
   const update = installRuntimeRequestAuthorization(window.webContents.session, details => details.webContentsId === window.webContents.id)
   update(authorization)
   let appWindow: BrowserWindow | undefined
@@ -76,6 +76,58 @@ async function main() {
   }
   let succeeded = false
   try {
+    if (process.env.MICROAPPS_NATIVE_CHILD_ID) {
+      const identity = { projectId: 'default', appId: process.env.MICROAPPS_NATIVE_CHILD_ID }
+      const base = `${authorization.apiBase}/projects/default/api/microapps/${identity.appId}`
+      const post = (action: string, body: unknown) => fetch(`${base}/${action}`, { method: 'POST', headers: { Authorization: `Bearer ${authorization.launchToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      await window.loadURL('data:text/html,<a id="message-app-link">Open published app</a><output></output>')
+      await execute(`document.querySelector('a').onclick=()=>window.shadowDesktop.microApps.open(${JSON.stringify(identity)}).then(()=>document.querySelector('output').textContent='opened',()=>document.querySelector('output').textContent='review');void 0`)
+      const messageOpen = () => execute(`document.querySelector('output').textContent='';document.querySelector('a').click()`)
+      await messageOpen()
+      await wait(() => execute(`document.querySelector('output').textContent==='review'`), 'Child pending approval stays in review')
+      assert.equal(appWindow, undefined)
+      const status = await (await fetch(base + '/status', { headers: { Authorization: `Bearer ${authorization.launchToken}` } })).json() as { revision: string }
+      assert.equal((await post('approve', { revision: status.revision, confirm: true })).status, 200)
+      await messageOpen()
+      await wait(() => execute(`document.querySelector('output').textContent==='opened'`), 'Child message IPC open')
+      const native = appWindow!
+      const origin = new URL(native.webContents.getURL()).origin
+      assert.notEqual(origin, authorization.apiBase)
+      // Main and Child share loopback in this fixture: explicitly reject accidentally loading Main's own origin.
+      const mainLaunch = await fetch(`${process.env.MICROAPPS_NATIVE_MAIN_URL}/projects/default/api/microapps/${identity.appId}/open`, {
+        method: 'POST', headers: { Authorization: 'Bearer fixture-main-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: status.revision }),
+      })
+      assert.equal(mainLaunch.status, 200)
+      assert.notEqual(origin, new URL((await mainLaunch.json() as { url: string }).url).origin, 'Native document must use Child relay, not Main loopback')
+      assert.equal(native.getParentWindow(), null)
+      assert.notEqual(native.webContents.session, window.webContents.session)
+      assert.equal(await native.webContents.executeJavaScript('typeof window.shadowDesktop'), 'undefined')
+      await wait(() => native.webContents.executeJavaScript(`document.querySelector('output').textContent==='state:0'`), 'Real document and SDK connect/state read through Child')
+      assert.equal(new URL(native.webContents.getURL()).hash, '')
+      await native.webContents.executeJavaScript(`document.querySelector('#save').click()`)
+      await wait(() => native.webContents.executeJavaScript(`document.querySelector('output').textContent==='saved:1'`), 'SDK save through Child')
+      await messageOpen()
+      await wait(() => execute(`document.querySelector('output').textContent==='opened'`), 'Repeated IPC open')
+      await wait(() => native.isFocused(), 'Child native focus reuse')
+      assert.equal(appWindow!.id, native.id)
+      native.close()
+      await wait(async () => (await (await fetch(base + '/status', { headers: { Authorization: `Bearer ${authorization.launchToken}` } })).json()).status === 'stopped', 'Remote Main runtime stopped on close')
+      await messageOpen()
+      await wait(() => execute(`document.querySelector('output').textContent==='opened'`), 'Child reopens')
+      const reopened = appWindow!, newOrigin = new URL(reopened.webContents.getURL()).origin
+      assert.notEqual(newOrigin, origin)
+      await wait(() => reopened.webContents.executeJavaScript(`document.querySelector('output').textContent==='state:1'`), 'State persisted on Main across runs')
+      assert.equal((await post('revoke', {})).status, 200)
+      await assert.rejects(fetch(newOrigin), /fetch failed/)
+      await manager.refresh()
+      await wait(() => reopened.isDestroyed(), 'Revocation closes Child native window')
+      await messageOpen()
+      await wait(() => execute(`document.querySelector('output').textContent==='review'`), 'Revoked version cannot reopen')
+      assert.deepEqual(errors, [])
+      console.log('NATIVE_CHILD_APPS_OK')
+      succeeded = true
+      return
+    }
     if (cold) {
       await manager.open(cold)
       assert.ok(appWindow && !appWindow.isDestroyed())

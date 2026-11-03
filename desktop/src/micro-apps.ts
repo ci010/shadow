@@ -150,7 +150,7 @@ export class DesktopMicroApps {
   private async openWindow(identity: MicroAppIdentity): Promise<void> {
     await this.stops.get(keyOf(identity))
     const authorization = this.authorization, signal = this.epoch.signal
-    if (this.disposed || !authorization) throw new Error('Start the local Shadow Main before opening an app')
+    if (this.disposed || !authorization) throw new Error('Connect Shadow to a ready Main before opening an app')
     const app = parseNativeMicroApp(await this.json(authorization, `${pathOf(identity)}/status`, undefined, signal))
     if (app.id !== identity.appId || !app.approved) throw new Error('Review and approve this app version in Shadow Apps first')
     signal.throwIfAborted()
@@ -163,7 +163,7 @@ export class DesktopMicroApps {
     const icon = await this.asset(authorization, identity, app, signal)
     const entry: WindowEntry = { identity, revision: app.revision, authorization, closed: false, stopOnClose: true, abort: new AbortController() }
     try {
-      const url = parseMicroAppLaunch(await this.json(authorization, `${pathOf(identity)}/open`, {}, signal))
+      const url = parseMicroAppLaunch(await this.json(authorization, `${pathOf(identity)}/open`, { revision: app.revision }, signal))
       signal.throwIfAborted()
       this.windows.set(keyOf(identity), entry)
       entry.handle = await this.options.createWindow({
