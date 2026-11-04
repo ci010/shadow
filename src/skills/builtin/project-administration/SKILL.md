@@ -17,7 +17,7 @@ BOT deployment. No dedicated management session or role exists.
 Read `v:bots/overview`, `v:bots/connections/index` and `v:bots/deployments/index`
 first; expand `v:bots/deployments/<id>/status` and `/listeners`. Read/search are
 owner-only, bounded, read-only projections; no connection or source runs. Read
-`v:project/folders` for registered source Folder IDs. Do not guess IDs or equate a
+`v:project/workspaces` for registered source Folder IDs. Do not guess IDs or equate a
 configured binding/healthy connection with successful processing. Invalid packages
 remain visible and fail closed; processing success is unknown.
 Use `bot_package` propose through `invoke_tool` in an authenticated owner Web

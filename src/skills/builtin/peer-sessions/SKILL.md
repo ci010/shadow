@@ -26,7 +26,7 @@ Choose a stable overarching `topic` and optional current-step `focus`. Put the a
 and stop condition. Do not use metadata as instructions.
 
 Use a registered Folder when file access is needed; omit it for discussion-only
-work. Discover resources through `v:project/folders`, never by interpreting a
+work. Discover resources through `v:project/workspaces`, never by interpreting a
 remote display path on Main. To register a new directory, invoke `session` with `action: "register_folder"`,
 `nodeId` from the runtime device inventory, and the directory `path` on that device.
 Child paths stay opaque on Main and use the same picker selection and Project

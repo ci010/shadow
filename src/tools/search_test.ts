@@ -529,5 +529,5 @@ test('remote workdir web search uses the configured provider without remote file
   assert.equal(await search.execute({ space: 'web', query: 'legacy' }, context), 'web results')
   assert.deepEqual(queries, [{ query: 'docs site:example.com' }, { query: 'legacy' }])
   assert.match(await new SearchTool('.').execute({ handler: 'web', query: 'docs' }, context), /web search is not configured/)
-  await assert.rejects(search.execute({ handler: 'web', query: 'docs', folder: 'remote' }, context), /Explicit Folder selection/)
+  await assert.rejects(search.execute({ handler: 'web', query: 'docs', folder: 'remote' }, context), /Explicit Workspace selection/)
 })

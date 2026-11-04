@@ -74,7 +74,7 @@ test('Folder-targeted read/write operate the bound resource without touching Mai
 })
 
 test('Folder selection rejects raw addresses, virtual/URL/web routes, invalid selectors and absent host resolver', async () => {
-  assert.deepEqual(Object.keys(executionTargetParameters), ['folder'])
+  assert.deepEqual(Object.keys(executionTargetParameters), ['workspace'])
   for (const args of [{ nodeId: 'child' }, { capabilityId: 'approved' }, { workdirId: 'approved' }, { nodeId: 'child', workdirId: 'approved' }, { grant: 'not-a-token' }, { nodeId: 'child', capabilityId: 'approved' }, { folder: '' }, { folder: 'child' }]) {
     await assert.rejects(executionTargetContext(args, base, 'filesystem.read'))
   }
@@ -103,9 +103,9 @@ test('saved V1 tool targeting is reconciliation-only and cannot become a new raw
   const args = { nodeId: 'child', capabilityId: 'approved', script: 'old command' }
   const resolved = await executionTargetContext(args, context, 'workdir.process.execute-once')
   assert.deepEqual(resolved.fileChangeTarget, { nodeId: 'child', workdirId: 'approved' })
-  await assert.rejects(executionTargetContext(args, { ...context, recoveringToolCall: false }, 'workdir.process.execute-once'), /Use folder/)
-  await assert.rejects(executionTargetContext(args, context, 'filesystem.write'), /Use folder/)
-  await assert.rejects(executionTargetContext({ ...args, folder: 'new' }, context, 'workdir.process.execute-once'), /Use folder/)
+  await assert.rejects(executionTargetContext(args, { ...context, recoveringToolCall: false }, 'workdir.process.execute-once'), /Use workspace/)
+  await assert.rejects(executionTargetContext(args, context, 'filesystem.write'), /Use workspace/)
+  await assert.rejects(executionTargetContext({ ...args, folder: 'new' }, context, 'workdir.process.execute-once'), /Use workspace/)
   assert.equal(calls, 1)
 })
 
@@ -139,4 +139,47 @@ test('session Folder resolution preserves host errors, aborts and survives dynam
   assert.equal(verified.length, before)
   const absent = new SessionTools(new Tools('.'), '.')
   await assert.rejects(absent.executionTargetFolder('child', signal), /targeting is unavailable/)
+})
+
+test('workspace is advertised; hidden folder alias is equivalent and mixed selectors fail before resolution', async () => {
+  const seen: string[] = []
+  const context = { signal: new AbortController().signal, async resolveToolTarget(selector: string) {
+    seen.push(selector)
+    return { cwd: '/registered' }
+  } } as unknown as ExecutionContext
+  assert.equal((await executionTargetContext({ workspace: 'child' }, context, 'filesystem.read')).cwd, '/registered')
+  assert.equal((await executionTargetContext({ folder: 'child' }, context, 'filesystem.read')).cwd, '/registered')
+  await assert.rejects(executionTargetContext({ workspace: 'child', folder: 'child' }, context, 'filesystem.read'), /not both/)
+  assert.deepEqual(seen, ['child', 'child'])
+})
+
+test('dynamic validation accepts only builtin hidden alias and rejects mixed selectors', async () => {
+  const tools = new SessionTools(new Tools('.'), '.')
+  tools.registerDynamic(new ReadTool('.'))
+  const context = { ...base, tools }
+  const alias = await tools.executeDynamic('read', { folder: 'child', path: 'note.txt' }, context)
+  assert.match(String(alias), /targeting is unavailable/)
+  assert.doesNotMatch(String(alias), /invalid arguments/)
+  assert.match(String(await tools.executeDynamic('read', { folder: 'child', workspace: 'child', path: 'note.txt' }, context)), /not both/)
+  tools.registerDynamic({ name: 'business', description: 'fixture', parameters: { type: 'object', properties: { folder: { type: 'string' } }, required: ['folder'], additionalProperties: false }, execute: async args => String(args.folder) })
+  assert.equal(await tools.executeDynamic('business', { folder: 'inbox' }, context), 'inbox')
+  assert.match(String(await tools.executeDynamic('business', { workspace: 'inbox' }, context)), /invalid arguments/)
+})
+
+test('use_project advertises required workspace and rejects mixed or extra keys before acquiring access', async () => {
+  let acquired = 0
+  const tool = new UseProjectTool({ projectId: 'test', folders: {
+    list: () => [folder], requireAvailable: async () => folder,
+    requireExecutionAvailable: async () => folder, acquireAccess: () => { acquired++; return () => {} },
+  } })
+  assert.deepEqual(tool.parameters.required, ['workspace'])
+  assert.deepEqual(Object.keys(tool.parameters.properties), ['workspace'])
+  const context = { ...base, projectId: 'test', toolCallName: 'use_project', switchProjectFolder: async () => 'switched' }
+  await assert.rejects(tool.execute({ workspace: 'child', folder: 'child' }, context), /not both/)
+  await assert.rejects(tool.execute({ workspace: 'child', extra: true }, context), /Expected only workspace/)
+  assert.equal(acquired, 0)
+  // The hidden alias still reaches the exact registered remote target and fails
+  // closed at the existing scoped-instruction boundary, without switching.
+  await assert.rejects(tool.execute({ folder: 'child' }, context), /Remote workspace switching is unavailable/)
+  assert.equal(acquired, 1)
 })

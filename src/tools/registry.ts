@@ -1,3 +1,4 @@
+import { executionTargetParameters, workspaceArguments } from './execution-target.ts'
 import { UseProjectTool } from './use-project.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { trace } from '@opentelemetry/api'
@@ -76,7 +77,7 @@ export class Tools {
   /** Per-call selection does not commit a new working context or import Folder instructions. */
   async executionTargetFolder(identifier: string, signal: AbortSignal) {
     const selector = this.tools.get('use_project')
-    if (!(selector instanceof UseProjectTool)) throw new Error('Project Folder targeting is unavailable; no fallback is allowed.')
+    if (!(selector instanceof UseProjectTool)) throw new Error('Project Workspace targeting is unavailable; no fallback is allowed.')
     return selector.executionTargetFolder(identifier, signal)
   }
 
@@ -471,6 +472,12 @@ export class SessionTools extends Tools {
         return `Error: invalid or unsupported input schema for "${name}"; no tool was executed. ${reason}. Ask the server owner to correct the schema.\n` +
           toolInvocationContract([tool])
       }
+    }
+    // Only our own directory schemas carry this exact property object. MCP
+    // tools with a business field named folder must retain their own contract.
+    if (tool.parameters.properties.workspace === executionTargetParameters.workspace) {
+      try { args = workspaceArguments(args) }
+      catch (error) { return `Error: ${error instanceof Error ? error.message : String(error)}` }
     }
     const validation = validate(args)
     if (!validation.valid) {

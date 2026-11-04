@@ -55,7 +55,7 @@ test('system workspace context is stable across selection, locality and inherite
     const prompt = (await provider.getPromptSection(context(overrides)))!
     assert.equal(prompt, baseline)
     for (const path of [home, folder, sessionWorkspacePath(home, 'discord:top'), 'DO-NOT-READ']) assert(!prompt.includes(path))
-    assert.doesNotMatch(prompt, /\*\*Working directory|\*\*Session workspace|\*\*Session uploads|Selected Project folder:/)
+    assert.doesNotMatch(prompt, /\*\*Working directory|\*\*Session workspace|\*\*Session uploads|Selected Project workspace:/)
     assertAttachmentContext(prompt)
     assert.match(prompt, /honor an explicit user destination first; otherwise follow the current working-context snapshot destination policy/)
     assert.match(prompt, /Never remove user files or overwrite an existing destination without permission/)
@@ -93,7 +93,7 @@ test('ordinary workspace exposes discoverable Project resources', async () => {
     agent: { ...agent, name: 'general' },
   })))!
   assertAttachmentContext(prompt)
-  assert.match(prompt, /Virtual workdirs:/)
+  assert.match(prompt, /Virtual resources:/)
   assert.doesNotMatch(prompt, /read\/search relevant Project memory|use `read`\/`search`/)
   for (const path of ['v:project', 'v:sessions', 'v:memory']) assert(prompt.includes(path))
   assert.match(prompt, /v:tools|v:config/)
@@ -108,7 +108,7 @@ test('current session metadata mount is discoverable in the injected workspace p
   fs.mount('v:session', 'self.json: read/write current session title, description and completed as JSON; identity is runtime-bound; task metadata is parent-owned', () => '{}')
   const provider = workspaceProvider(resolve('.test-data', 'self-metadata-prompt'), fs)
   const prompt = (await provider.getPromptSection(context()))!
-  assert.match(prompt, /Virtual workdirs:/)
+  assert.match(prompt, /Virtual resources:/)
   assert.match(prompt, /v:session\/.*self\.json: read\/write current session/)
   assert.match(prompt, /identity is runtime-bound; task metadata is parent-owned/)
   assert.doesNotMatch(prompt, /update_self/)

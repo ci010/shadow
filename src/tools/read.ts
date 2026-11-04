@@ -1,3 +1,4 @@
+import { layerfsRoute } from './layerfs-route.ts'
 import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import { sessionWebFetch } from '../execution/network/session-proxy.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
@@ -228,6 +229,8 @@ export class ReadTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
+    const layerResult = await layerfsRoute('read', args, context)
+    if (layerResult !== undefined) return layerResult
     context = await executionTargetContext(args, context, 'filesystem.read')
     const raw = String(args.path)
     if (args.encoding !== undefined && !isTextEncoding(args.encoding)) throw new TypeError('Unsupported read encoding.')

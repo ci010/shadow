@@ -13,7 +13,7 @@ export function selectFolder<T extends { id: string; name?: string }>(folders: r
   const exact = folders.filter(folder => folder.id === identifier)
   if (exact.length === 1) return exact[0]!
   const matches = folders.filter(folder => folderIdentifier(folder.id, folder.name) === identifier || folder.name && folderSlug(folder.name) === identifier)
-  if (matches.length !== 1) throw new Error('Unknown or ambiguous Project folder identifier. Read v:project/folders; use its name-ID selector or full folder ID, never a path. A plain folder name is accepted only when unique.')
+  if (matches.length !== 1) throw new Error('Unknown or ambiguous Project workspace identifier. Read v:project/workspaces; use its name-ID selector or full workspace ID, never a path. A plain workspace name is accepted only when unique.')
   return matches[0]!
 }
 

@@ -294,24 +294,24 @@ remain `bot_setup`, `bot_package` and `credential_request` under their existing
 private-entry / owner-confirmation boundaries; legacy status actions remain
 compatible, not the default discovery path.
 
-## Per-call Folder selection
+## Per-call Workspace selection
 
-`read`, `write`, `exec` and `search` accept an optional `folder`: the unique short
-name, name-ID selector or full UUID of a registered Folder in the current
-Project. Read `v:project/folders` for selectors. The Folder fixes its device and
+`read`, `write`, `exec` and `search` accept an optional `workspace`: the unique short
+name, name-ID selector or full UUID of a registered Workspace in the current
+Project. Read `v:project/workspaces` for selectors. The Workspace fixes its device and
 directory; tools do not accept raw node/workdir addresses. Omission
-preserves the committed session target. Per-call selection does not change
+preserves the committed session target. Legacy `folder` remains a hidden compatibility alias; supplying both selectors is rejected. Per-call selection does not change
 session cwd, scoped instructions or already-running calls. `exec.shell: "node"`
 still means inline TypeScript, not a device.
 
 ```json
-{"folder":"child-source","path":"notes.txt"}
+{"workspace":"child-source","path":"notes.txt"}
 ```
 
 Pass this to `read`, or add `content` for `write`. For an OS command:
 
 ```json
-{"folder":"child-source","script":"pwd","shell":"sh","cwd":"subdirectory"}
+{"workspace":"child-source","script":"pwd","shell":"sh","cwd":"subdirectory"}
 ```
 
 The owning device resolves relative paths from the selected workdir,

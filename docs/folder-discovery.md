@@ -1,6 +1,6 @@
 # Project folder discovery
 
-Read `v:project/folders` for a compact Markdown inventory of the current Project.
+Read `v:project/workspaces` for a compact Markdown inventory of the current Project.
 The VFS list entry has the same content as the read response. The overview has a
 Project heading, one section per owning node, and `**selector**: path` entries.
 Only unavailable entries carry a status/reason; availability describes the live
@@ -19,8 +19,8 @@ the same name on different nodes. Discovery tries a unique short name, then a
 name-ID selector, then the full folder UUID. Each candidate is checked with the
 same `selectFolder` resolver used by selection; short UUID prefix collisions or
 names resembling another selector cannot silently select the wrong folder.
-Use the listed selector with per-call `read`/`write`/`exec`/`search` `folder`,
-`use_project(folder)`, or `session.create(folderId)`.
+Use the listed selector with per-call `read`/`write`/`exec`/`search` `workspace`,
+`use_project(workspace)`, or `session.create(folderId)`.
 The registered folder determines the node; there is no independent node override.
 `use_project` changes an existing session's folder context, not its node, and does
 not currently implement remote-folder switching. Creating a session still applies
@@ -39,7 +39,7 @@ Existing folders without descriptions remain unchanged. Re-registering an existi
 path returns its original record, without adding or overwriting its description.
 Descriptions are discovery metadata, never agent instructions or access grants.
 
-For full metadata, read `v:project/folders/<uuid>`: this remains JSON, including
+For full metadata, read `v:project/workspaces/<uuid>`: this remains JSON, including
 folder identity, selected identifier, workdir reference and availability. Virtual
 search also exposes these individual detail entries. Discovery neither selects a
 folder nor changes cwd or grants access. An empty Project returns its heading,
@@ -68,3 +68,5 @@ if another claim fails. This is source behavior, not a guarantee that a currentl
 running backend has deployed it.
 
 Implementation: `src/folders/remote-ownership.ts`, `src/projects/catalog.ts`.
+
+Agent-facing discovery uses `v:project/workspaces` and detail JSON key `workspace`. The old `v:project/folders` read paths remain compatible (with legacy detail key `folder`); listings advertise only workspaces. Persistence and API Folder IDs are unchanged.

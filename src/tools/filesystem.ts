@@ -1,3 +1,5 @@
+import { toolResultText, isCompletedToolFailure } from './tool.ts'
+import { layerfsRoute } from './layerfs-route.ts'
 import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { isUtf8 } from 'node:buffer'
@@ -193,6 +195,11 @@ export class WriteTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    const layerResult = await layerfsRoute('write', args, context)
+    if (layerResult !== undefined) {
+      if (isCompletedToolFailure(layerResult)) throw new Error(toolResultText(layerResult))
+      return toolResultText(layerResult)
+    }
     context = await executionTargetContext(args, context, 'filesystem.write')
     context.signal.throwIfAborted()
     const rawPath = String(args.path)

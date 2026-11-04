@@ -33,7 +33,7 @@ test('initial local instructions and discovery use exactly the switch preparatio
       switchProjectFolder: async (prepared: { content: string }) => { switched = prepared.content; return 'receipt' },
     } as unknown as ExecutionContext)
     assert.equal(initial, switched)
-    assert.match(initial, /^# Working context snapshot\n- Selected Project folder: .*\n- Default cwd: .*\n\nThis committed/m)
+    assert.match(initial, /^# Working context snapshot\n- Selected Project workspace: .*\n- Default cwd: .*\n\nThis committed/m)
     assert.match(initial, /- Source: .*\n- Scope: this folder and descendants only\./)
     assert.doesNotMatch(initial, /directory resources|registered resource/)
     assert.match(initial, /Scoped root rules/)
@@ -53,14 +53,14 @@ test('no-folder, unknown metadata, remote and unavailable snapshots do not read 
   ]) {
     const content = await prepareWorkingContext(workdir, folder.id, folder)
     assert(!content.includes('DO-NOT-READ'))
-    assert.doesNotMatch(content, /Applicable folder instructions/)
+    assert.doesNotMatch(content, /Applicable workspace instructions/)
     assert.match(content, /remote|unavailable/)
   }
   const local = { available: true as const, locality: 'local' as const, path: '/effective', workdir: localFolderWorkdirRef('f') }
-  assert.match(await prepareWorkingContext(local), /Selected Project folder: none/)
+  assert.match(await prepareWorkingContext(local), /Selected Project workspace: none/)
   const unknown = await prepareWorkingContext(local, 'unknown')
   assert.match(unknown, /"id":"unknown"/)
-  assert.doesNotMatch(unknown, /Applicable folder instructions|"name"/)
+  assert.doesNotMatch(unknown, /Applicable workspace instructions|"name"/)
 })
 
 
