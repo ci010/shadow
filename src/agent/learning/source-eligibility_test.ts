@@ -9,7 +9,9 @@ test('learning eligibility uses provenance and lineage, not agent names', () => 
   const add = (id: string, extra: Partial<SessionState> = {}) => states[id] = { sessionId: id, segmentIndex: 0, projectId: 'p', ...extra }
   const eligible = (id: string) => isLearningSourceEligible(states[id], id => states[id], id => id === 'managed', 'p')
   add('root', { agentType: 'reflector' }); add('child', { parentSessionId: 'root' })
-  assert(eligible('root')); assert(eligible('child'))
+  assert(eligible('root')); assert(!eligible('child'))
+  add('virtual:user', { workspaceRoot: 'old-topic', reportTo: 'notification-target' }); assert(eligible('virtual:user'))
+  add('orphan-call', { parentToolCallId: 'call' }); assert(!eligible('orphan-call'))
   for (const agentType of ['work-observer', 'work-organizer'] as const) {
     add(agentType, { automation: agentType === 'work-organizer' ? systemAutomationRef(agentType, agentType) : resolveAutomationSession({ sessionId: 'work-observer:work-observer-1700000000000', agentType }) })
     add(`${agentType}-child`, { parentSessionId: agentType })

@@ -54,6 +54,12 @@ events. Tool/product defects are not personal preferences. Existing write and
 provenance rules still apply.
 
 ## Evidence review
+Delegated sessions are not independent learning sources. Learn from the parent
+conversation's bounded result summaries, user acceptance and corrections. A worker's
+success claim is reported evidence, not user acceptance or independent verification;
+preserve that attribution and uncertainty. Do not fetch child-only histories to
+fill a gap; record missing evidence instead. Child-only discoveries may be missed
+unless brought back into the parent conversation.
 Read only the task's pinned physical sessions and bounded ranges. Paginate small
 pages using read.offset/read.limit (1-based lines). First read each /overview
 (dialogue and compact tool index). For tool details read the exact short

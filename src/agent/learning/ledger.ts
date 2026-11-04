@@ -34,6 +34,7 @@ const batchSchema = z.object({
   id: z.string().uuid(), createdAt: z.string().datetime(), pipeline: z.enum(pipelines), sources: z.array(sourceSchema),
   inputEvents: z.array(eventSchema), events: z.array(eventSchema), artifacts: z.array(artifactSchema),
   attempts: z.array(z.string()), state: z.enum(['pending', 'running', 'done']),
+  excluded: z.string().optional(),
   retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative() }).optional(),
   proposal: outcomeSchema.optional(), evaluated: z.array(z.string()), error: z.string().optional(),
 }).strict()
@@ -109,13 +110,13 @@ export class LearningLedger {
     return this.core(source).cursor(source.physicalId)
   }
   pending(pipeline: Pipeline, dueOnly = false): LearningBatch | undefined {
-    return structuredClone(this.state.batches.filter(batch => batch.pipeline === pipeline && batch.state !== 'done'
+    return structuredClone(this.state.batches.filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded
       && (!dueOnly || batch.state === 'running' || (batch.retry?.notBefore ?? 0) <= Date.now()))
       .sort((a, b) => (a.retry?.notBefore ?? 0) - (b.retry?.notBefore ?? 0))[0])
   }
   /** Selection frontier reserves failed work without acknowledging it. */
   selectionCursor(source: Omit<LearningSource, 'offset' | 'end'>): number {
-    return Math.max(this.cursor(source), ...this.state.batches.flatMap(batch =>
+    return Math.max(this.cursor(source), ...this.state.batches.filter(batch => !batch.excluded).flatMap(batch =>
       batch.sources.filter(range => range.physicalId === source.physicalId).map(range => range.end)))
   }
   defer(id: string, retryable: boolean): void {
@@ -140,13 +141,13 @@ export class LearningLedger {
   batchFor(sessionId: string): LearningBatch | undefined {
     return structuredClone(this.state.batches.find(batch => batch.attempts.at(-1) === sessionId && batch.state === 'running'))
   }
-  unfinished(): LearningBatch[] { return structuredClone(this.state.batches.filter(batch => batch.state !== 'done')) }
+  unfinished(): LearningBatch[] { return structuredClone(this.state.batches.filter(batch => batch.state !== 'done' && !batch.excluded)) }
   outcome(sessionId: string): LearningOutcome | undefined { return structuredClone(this.state.outcomes[sessionId]) }
   retry(pipeline: Pipeline): LearningRetry { return structuredClone(this.state.retries[pipeline] ?? { attempts: 0 }) }
   setRetry(pipeline: Pipeline, retry: LearningRetry): void { this.state.retries[pipeline] = retrySchema.parse(retry); this.save() }
   eventsFor(pipeline: 'encapsulator' | 'soulReflector'): LearningEvent[] {
     const consumed = new Set([...this.state.consumed[pipeline], ...this.state.batches
-      .filter(batch => batch.pipeline === pipeline && batch.state !== 'done').flatMap(batch => batch.inputEvents.map(event => event.id))])
+      .filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded).flatMap(batch => batch.inputEvents.map(event => event.id))])
     return structuredClone(this.state.batches.filter(batch => batch.pipeline === 'reflector' && batch.state === 'done')
       .flatMap(batch => batch.events).filter(event => !consumed.has(event.id)).slice(0, 40))
   }
@@ -162,6 +163,7 @@ export class LearningLedger {
   }
   bind(id: string, sessionId: string): void {
     const batch = this.required(id)
+    if (batch.excluded) throw new Error('Learning batch is excluded')
     this.core().claim(id, sessionId); delete batch.proposal
     this.save()
   }
@@ -203,7 +205,7 @@ export class LearningLedger {
       for (const source of batch.sources) {
         let cursor = this.cursor(source)
         while (true) {
-          const next = this.state.batches.filter(item => item.state === 'done').flatMap(item => item.sources)
+          const next = this.state.batches.filter(item => item.state === 'done' && !item.excluded).flatMap(item => item.sources)
             .find(range => range.physicalId === source.physicalId && range.offset === cursor)
           if (!next) break
           cursor = next.end
@@ -213,6 +215,16 @@ export class LearningLedger {
     } else this.core().settle(id, sessionId, false)
     this.save()
     return structuredClone(outcome)
+  }
+  /** Retire a reservation, not a review receipt. Keep all effects, attempts and outcomes.
+   * Mixed batches release their eligible ranges for a fresh bounded review too.
+   */
+  exclude(id: string, reason: string): void {
+    const batch = this.required(id)
+    if (batch.state === 'done' || batch.excluded) return
+    this.core().recover(id)
+    batch.excluded = reason
+    this.save()
   }
   interrupt(id: string, error: string): void {
     error = error.trim().slice(0, 8000) || 'Learning execution interrupted without a diagnostic.'
