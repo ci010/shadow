@@ -1,5 +1,6 @@
-import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { writePrivateFile } from '../utils/private-file.ts'
+export { writePrivateFile } from '../utils/private-file.ts'
 import { normalizePersistedConfig, resolveConfigPath } from './loader.ts'
 import { ChannelsSchema, ConfigSchema, type Config } from './schema.ts'
 import { WEB_SEARCH_KEY_FIELDS } from './web-search.ts'
@@ -59,18 +60,6 @@ function hasPlaceholder(value: unknown): boolean {
   if (value === REDACTED_SECRET) return true
   if (Array.isArray(value)) return value.some(hasPlaceholder)
   return isRecord(value) && Object.values(value).some(hasPlaceholder)
-}
-
-/** Replace a persisted document atomically, without exposing a partially written file. */
-export function writePrivateFile(path: string, content: string): void {
-  const staging = `${path}.${randomUUID()}.new`
-  try {
-    writeFileSync(staging, content, { mode: 0o600, flag: 'wx' })
-    chmodSync(staging, 0o600)
-    renameSync(staging, path)
-  } finally {
-    rmSync(staging, { force: true })
-  }
 }
 
 export interface ConfigStoreOptions {
