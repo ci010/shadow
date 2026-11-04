@@ -57,9 +57,9 @@ Return the matching blocker/failure shape as raw JSON without fences or a preamb
 {"status":"failed","error":"What failed, including any partial work and side effects"}
 Reasons/errors must be nonempty; success returns a normal final answer.
 Permitted exec is local and foreground-only: timeout_ms must be 1 through 120000, never zero;
-timeout/cancellation terminates it, never backgrounds it. Calls have a
-120-second execution deadline plus up to 10 seconds for cleanup. No remote exec or detached
-work via any tool/script.
+timeout/cancellation terminates it, never backgrounds it. Calls have no overall execution
+deadline; the caller waits until completion or cancellation, with up to 10 seconds for cleanup.
+No remote exec or detached work via any tool/script.
 Intermediate work stays in this call's trace. Do not send a duplicate completion notification.
 Inherited context is a snapshot, not a live conversation; filesystem and other external side
 effects are not rolled back.`

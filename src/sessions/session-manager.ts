@@ -71,7 +71,7 @@ import { YieldRecords } from './yield-records.ts'
 import { YieldDiscussions, DECISION_REVIEW_PROMPT } from './yield-discussions.ts'
 import { parseYieldPolicy, type YieldPolicy, type YieldRequest, type YieldReview } from './yield-contract.ts'
 import { allowedSubagentModes, isExecutionMode, type ExecutionMode } from './execution-mode.ts'
-import { delegationOwner, MAX_CALL_TIMEOUT_MS } from './execution-scope.ts'
+import { delegationOwner } from './execution-scope.ts'
 import { addTokenUsage, parseTokenUsage, readTokenUsage } from './usage.ts'
 import { CallTools } from './call-tools.ts'
 import { prepareSessionRecovery, SessionResumeError } from './recovery.ts'
@@ -141,8 +141,6 @@ export interface SessionManagerDeps {
   ownsWorkdir?: (workdir: WorkdirRefV2) => boolean
   assertSessionFolder?: (state: SessionState) => void
   acquireFolderAccess?: () => () => void
-  /** Host/test deadline override: integer 1–120000 ms; default 120000 ms. */
-  callTimeoutMs?: number
   workspace: string
   store: SessionStore
   handoffManager: HandoffManager
@@ -462,10 +460,7 @@ export class SessionManager {
     })
     const cancel = () => { frame.cancelled = true; this.sessions[sessionId]?.cancel() }
     context.signal.addEventListener('abort', cancel, { once: true })
-    const timer = setTimeout(() => {
-      frame.blockedReason = 'Leaf call deadline exceeded; inspect its partial work before retrying.'
-      cancel()
-    }, this.deps.callTimeoutMs ?? MAX_CALL_TIMEOUT_MS)
+    // A call shares its caller's lifetime; only individual tools impose deadlines.
     let snapshotLength = 0
     try {
       const history = this.getActiveSession(context.sessionId)?.history ?? (await this.getHistory(context.sessionId)).messages
@@ -531,7 +526,6 @@ export class SessionManager {
       await this.saveState(sessionId, state)
       return JSON.stringify(receipt)
     } finally {
-      clearTimeout(timer)
       context.signal.removeEventListener('abort', cancel)
       this.calls.delete(sessionId)
       this.deps.bus.emit('session.activity.changed', { sessionId: context.sessionId })
@@ -652,10 +646,6 @@ export class SessionManager {
   ) {
     if (deps.scope && deps.scope.projectId !== deps.projectId) {
       throw new Error('Session manager project scope mismatch')
-    }
-    if (deps.callTimeoutMs !== undefined && (!Number.isInteger(deps.callTimeoutMs)
-      || deps.callTimeoutMs < 1 || deps.callTimeoutMs > MAX_CALL_TIMEOUT_MS)) {
-      throw new RangeError(`callTimeoutMs must be between 1 and ${MAX_CALL_TIMEOUT_MS}.`)
     }
     this.sleepInactivityMs = deps.sleep?.inactivityMs ?? 15 * 60 * 1_000
     const decisionRecords = new YieldRecords(this.store, id => this.getSessionState(id), request => {

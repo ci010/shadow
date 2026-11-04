@@ -56,7 +56,7 @@ async function waitFor(check: () => boolean) {
 }
 
 function fixture(workspace: string, store: SessionStore, settings: {
-  managedReview?: boolean; callTimeoutMs?: number; ignoreAbort?: boolean; projectId?:string; hasInitiative?: (id: string) => boolean
+  managedReview?: boolean; ignoreAbort?: boolean; projectId?:string; hasInitiative?: (id: string) => boolean
 } = {}) {
   const requests: Array<{
     sessionId: string; messages: ChatMessage[]; names: string[]; signal: AbortSignal; model?: string; effort?: string; maxTokens?: number; settled: boolean
@@ -106,7 +106,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
       buildSystemPrompt: async (ctx: any) => JSON.stringify({ sessionId: ctx.sessionId, mode: ctx.mode, role: ctx.agent.name }),
       buildSystemPromptDetails: async () => ({ systemPrompt: 'Synthetic preview', sections: [] }),
     },
-    getLlmRuntimeConfig: () => llm, callTimeoutMs: settings.callTimeoutMs,
+    getLlmRuntimeConfig: () => llm,
     hasInitiative: settings.hasInitiative,
   } as unknown as SessionManagerDeps)
   // Older lifecycle fixtures intentionally exercise persisted manual-review compatibility.
@@ -1300,20 +1300,54 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: leaf deadline releases a caller even when the provider ignores cancellation`, async () => {
+  test(`${Store.name}: leaf call waits beyond two minutes and still completes`, async t => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
-      const f = fixture(workspace, store, { callTimeoutMs: 100, ignoreAbort: true })
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:root')
+        t.mock.timers.enable({ apis: ['setTimeout'] })
+        let settled = false
+        const work = f.subagent.execute({ mode: 'call', task: 'Long work', description: 'No deadline' },
+          sourceContext(workspace, f)).then(result => { settled = true; return result })
+        // Admission performs real store I/O; yield without advancing the mocked clock.
+        for (let i = 0; !f.requests.length && i < 1000; i++) {
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
+        const leaf = f.requests[0]
+        assert.ok(leaf, 'Call must reach the provider')
+        t.mock.timers.tick(10 * 60_000)
+        assert.equal(leaf.signal.aborted, false)
+        assert.equal(settled, false)
+        assert.equal(f.sessions.isWaitingForCall('web:root'), true)
+        leaf.resolve(done('Long work completed'))
+        const receipt = JSON.parse(await work)
+        assert.equal(receipt.status, 'completed')
+        assert.equal(receipt.result, 'Long work completed')
+        assert.equal(f.sessions.isWaitingForCall('web:root'), false)
+      } finally { t.mock.timers.reset(); await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: caller cancellation releases a caller even when the provider ignores cancellation`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store, { ignoreAbort: true })
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
         await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: null })
-        const work = f.subagent.execute({ mode: 'call', task: 'Bounded work', description: 'Deadline' },
-          { ...sourceContext(workspace, f), sessionId: 'web:sub' })
+        const controller = new AbortController()
+        const work = f.subagent.execute({ mode: 'call', task: 'Cancellable work', description: 'Cancellation' },
+          { ...sourceContext(workspace, f), sessionId: 'web:sub', signal: controller.signal })
+        await waitFor(() => f.requests.length > 0)
+        controller.abort()
         const receipt = JSON.parse(await work)
-        assert.equal(receipt.status, 'blocked')
-        assert.match(receipt.blockedReason, /deadline/)
+        assert.equal(receipt.status, 'cancelled')
+        assert.equal(f.requests[0].signal.aborted, true)
         assert.equal(f.sessions.isWaitingForCall('web:sub'), false)
         const history = JSON.stringify((await f.sessions.getHistory(receipt.sessionId)).messages)
         for (const pending of f.requests) pending.resolve(done('LATE RESPONSE MUST NOT WRITE HISTORY'))

@@ -688,7 +688,7 @@ export class SessionTools extends Tools {
       ? { ...def, function: { ...def.function, description: `${def.function.description} In calls, execution stays foreground; timeout or cancellation terminates owned processes.`,
         parameters: { ...def.function.parameters, properties: { ...def.function.parameters.properties,
           timeout_ms: { type: 'integer', minimum: 1, maximum: MAX_CALL_TIMEOUT_MS, default: MAX_CALL_TIMEOUT_MS,
-            description: 'Foreground execution limit in milliseconds. Timeout terminates the process; the enclosing call deadline may expire sooner. Background execution is forbidden.' },
+            description: 'Per-command foreground execution limit in milliseconds. Timeout terminates the process; the enclosing call has no overall deadline. Background execution is forbidden.' },
         } },
       } } : def)
   }
