@@ -86,3 +86,24 @@ test('backend diagnostics bound the project identity map', () => {
   assert.equal(entries.length, 128)
   assert.equal(entries.at(-1)?.projectOrdinal, 128)
 })
+
+test('storage validation markers allow only fixed classifications with bounded framing', () => {
+  const failures: unknown[] = []
+  const parser = new BackendStartupDiagnostics(() => assert.fail('not a timing'), entry => failures.push(entry))
+  const marker = (stage = 'ownership', source = 'sqlite', error = 'SQLITE_CORRUPT') =>
+    `[projects] session_storage_validation_failed stage=${stage} source=${source} error=${error}\n`
+  for (const [stage, source] of [['cron', 'cron'], ['sessions', 'sessions'], ['jsonl', 'jsonl'], ['sqlite', 'sqlite'], ['ownership', 'sqlite'], ['reserve', 'catalog']]) {
+    parser.push('stderr', marker(stage, source))
+  }
+  assert.equal(failures.length, 6)
+  for (const line of [marker('private'), marker('cron', 'private'), marker('cron', 'cron', 'private'), marker().trimEnd() + ' message=private\n', marker().replace('error=', 'path='), marker().replace('\n', '\nprivate\n')]) {
+    parser.push('stdout', line)
+  }
+  assert.equal(failures.length, 7, 'only the intact marker followed by a separate private line is accepted')
+  parser.push('stderr', 'x'.repeat(2049))
+  parser.push('stderr', marker())
+  assert.equal(failures.length, 7)
+  parser.push('stderr', marker().repeat(600))
+  assert.equal(failures.length, 512)
+  assert.doesNotMatch(JSON.stringify(failures), /private|message|path/)
+})

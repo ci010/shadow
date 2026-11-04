@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { safeBackendError, safeBackendTiming, type BackendStartupError, type BackendStartupTiming } from './backend-startup-diagnostics.js'
+import { safeBackendError, safeBackendTiming, safeStorageValidationFailure, type BackendStorageValidationFailure, type BackendStartupError, type BackendStartupTiming } from './backend-startup-diagnostics.js'
 
 export const STARTUP_FAILURE_KINDS = [
   'spawn-error', 'configuration-error', 'port-conflict', 'readiness-timeout',
@@ -35,7 +35,7 @@ export function startupFailure(value: {
 const EVENTS = [
   'starting', 'spawned', 'ready', 'failed', 'probe-error',
   'shutdown-fallback', 'shutdown-forced', 'stopped',
-  'backend-phase',
+  'backend-phase', 'backend-storage-validation-failed',
   'renderer-probe', 'renderer-navigation', 'renderer-ready', 'renderer-timeout',
   'renderer-load-failed', 'renderer-resource-failed',
 ] as const
@@ -48,6 +48,7 @@ export interface StartupDiagnosticEntry {
   readonly kind?: StartupFailureKind
   readonly exitCode?: number
   readonly backend?: BackendStartupTiming
+  readonly storageValidation?: BackendStorageValidationFailure
   readonly backendError?: BackendStartupError
   readonly httpStatus?: number
   readonly netError?: number
@@ -61,6 +62,7 @@ export function startupLogPath(userDataPath: string): string {
 /** Persist only known fields, never error messages, environment or child output. */
 function safeEntry(entry: StartupDiagnosticEntry): StartupDiagnosticEntry | undefined {
   const backend = entry.event === 'backend-phase' ? safeBackendTiming(entry.backend) : undefined
+  const storageValidation = entry.event === 'backend-storage-validation-failed' ? safeStorageValidationFailure(entry.storageValidation) : undefined
   const backendError = entry.event === 'failed' ? safeBackendError(entry.backendError) : undefined
   if (
     (entry.role !== 'main' && entry.role !== 'child')
@@ -68,6 +70,7 @@ function safeEntry(entry: StartupDiagnosticEntry): StartupDiagnosticEntry | unde
     || !Number.isSafeInteger(entry.elapsedMs) || entry.elapsedMs < 0
     || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(entry.timestamp)
     || (entry.event === 'backend-phase' && backend === undefined)
+    || (entry.event === 'backend-storage-validation-failed' && storageValidation === undefined)
   ) return undefined
   return {
     timestamp: entry.timestamp,
@@ -77,6 +80,7 @@ function safeEntry(entry: StartupDiagnosticEntry): StartupDiagnosticEntry | unde
     ...(STARTUP_FAILURE_KINDS.includes(entry.kind!) ? { kind: entry.kind } : {}),
     ...(Number.isSafeInteger(entry.exitCode) ? { exitCode: entry.exitCode } : {}),
     ...(backend ? { backend } : {}),
+    ...(storageValidation ? { storageValidation } : {}),
     ...(backendError ? { backendError } : {}),
     ...(Number.isInteger(entry.httpStatus) && entry.httpStatus! >= 100 && entry.httpStatus! <= 599
       ? { httpStatus: entry.httpStatus } : {}),
