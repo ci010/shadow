@@ -154,7 +154,7 @@ test('adoption refinements cannot revise protected agreements or bypass pause an
   } finally { f.store.close() }
 }))
 
-test('Initiative progress is derived; dependencies and parent cycles cannot bypass acceptance', async () => withTempWorkspace(async home => {
+test('Work progress is derived; dependencies and parent cycles cannot bypass acceptance', async () => withTempWorkspace(async home => {
   const f = setup(home)
   try {
     const root = await f.create('Release')

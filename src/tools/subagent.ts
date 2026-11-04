@@ -7,7 +7,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
 import { isExecutionMode } from '../sessions/execution-mode.ts'
 import { channelAddressFromSessionId } from '../bus/events.ts'
-import { parseInitiativeId } from '../sessions/initiative-metadata.ts'
+import { parseWorkRoot } from '../sessions/initiative-metadata.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
 import { workBindingSchema } from '../sessions/work-policy.ts'
 import { REASONING_EFFORTS, inferenceSettings, type InferenceSettings } from '../agent/llm-config.ts'
@@ -68,9 +68,9 @@ export class SubagentTool implements Tool {
         type: 'string',
         description: 'Parent-owned task discovery description (max 4000 characters); the task child cannot change title or description. Call purpose is unchanged.',
       },
-      initiative_id: {
+      workRoot: {
         type: 'string',
-        description: 'Existing Initiative ID in this Project. The child receives its shared SQL work context; omission inherits the parent association.',
+        description: 'Optional root Work key in this Project. The child receives its shared context; omission inherits the parent association.',
       },
       agent_type: {
         type: 'string',
@@ -147,11 +147,10 @@ export class SubagentTool implements Tool {
     }
     const work = args.work === undefined ? undefined : workBindingSchema.parse(args.work)
     if (work && !this.sessions.alignment) throw new Error('Work policy service is unavailable.')
-    const initiativeId = parseInitiativeId({
-      initiativeId: args.initiative_id,
-      initiativeName: args.initiative_name,
-      projectName: args.project_name,
-    }) ?? parentState?.initiativeId
+    if (['initiative_id', 'initiative_name', 'project_name'].some(key => args[key] !== undefined)) {
+      throw new TypeError('Unsupported context selector. Use workRoot with a canonical Work key.')
+    }
+    const initiativeId = parseWorkRoot(args.workRoot) ?? parentState?.initiativeId
     if (initiativeId) this.sessions.assertInitiativeAccess(initiativeId)
     const inheritedRole = parentState?.agentType ?? 'general'
     const typeName = args.agent_type != null ? String(args.agent_type) : args.mode === 'call' ? inheritedRole : 'general'

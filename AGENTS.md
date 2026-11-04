@@ -66,7 +66,7 @@ particular command covers all packages.
 | Composition and CLI | `src/index.ts`, `src/runtime/`, `src/runtime/main/` |
 | Message routing and session loop | `src/agent/app.ts`, `src/sessions/` |
 | Context, identity, memory | `src/agent/context/`, `src/agent/memory.ts`, `src/sessions/handoff/`, `src/agent/learning/` |
-| Projects, folders, and initiatives | `src/projects/` owns runtime/data boundaries; `src/folders/` owns file resources; `src/initiatives/` owns coordinated work |
+| Projects, folders, and Work | `src/projects/` owns runtime/data boundaries; `src/folders/` owns file resources; `src/initiatives/` owns coordinated work |
 | Provider implementations | `src/providers/` |
 | Tool contracts and implementations | `src/tools/context.ts`, `src/tools/`, `src/script-runtime/`, `src/tools/hooks/` |
 | Skills and runtime agent definitions | `src/skills/`, `src/agent/types/` |
@@ -122,8 +122,8 @@ buttons a localized `aria-label`; keep hints available on keyboard focus too.
   workdir references, and tool-call/result pairing. Changes to persisted state
   must cover **both JSONL and SQLite**, old records, and migration behavior.
 - Project is a runtime/data boundary, not a Git repository. Folder IDs select
-  registered file resources; Initiative IDs select shared work context. Keep
-  project memories partitioned and directory ownership exclusive. Initiative
+  registered file resources; Work IDs select shared work context. Keep
+  project memories partitioned and directory ownership exclusive. Work
   SQL must stay within the runtime-bound Project database; session todos are
   views of shared items, not a second task store.
 - Distinguish shared Home, session data, and effective workdir. Use the locality

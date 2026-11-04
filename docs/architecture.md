@@ -207,8 +207,8 @@ is created for artifact staging or for an absent local control listener.
 ## Projects: ownership, storage, and routing
 
 Project owns a runtime and its data. Folder/Repository names the file resources
-within it. Initiative is
-coordinated work within that Project, not another runtime or isolation boundary.
+within it. Work holds optional shared goals and notes within that Project,
+not another runtime or isolation boundary. Ordinary conversations need no Work record.
 
 ### Ownership is not presentation
 
@@ -779,7 +779,7 @@ The **Project workbench** is a Project view, not a session.
 Its default canvas is an expandable causal outline of goals, approaches, tasks
 and findings, with current notes, optional read-only HTML exhibits and native
 questions anchored at the affected goal. The lower technical origin stays
-available on demand. An Initiative-grouped board and parent/dependency graph
+available on demand. A Work-grouped board and parent/dependency graph
 remain alternate views. Discussing a premise opens an ordinary Web conversation
 with an editable draft, not an automatic message. Work details and GitHub use a
 resizable side panel.
@@ -828,7 +828,7 @@ Durable conversations are `web:chat-UUID` root peers. Topic is no longer a
 separate business object. Project-scoped `search({handler: "grep", path: "v:sessions", query})`
 searches histories and session metadata.
 Read `v:sessions/<session-id>/brief` for topic/focus, folderId,
-initiativeId, createdBySessionId, status and conversationUrl.
+workRoot, createdBySessionId, status and conversationUrl.
 Prefer reuse before creating a session. Metadata and create/update receipts return `conversationUrl` in
 `/projects/<encodedProjectId>/chat/<encodedLogicalSessionId>` form. Coordinator
 handoffs link the session title to that returned URL, making the peer conversation
@@ -837,7 +837,7 @@ Remote-workdir sessions may use `v:sessions` search and typed Project messaging
 as control-plane operations. This does not enable other remote search spaces,
 which remain explicitly rejected.
 `session` creation requires only topic; optional focus, folderId,
-agentType, initiativeId, initialMessage, and requestId refine it. Kickoff admission
+agentType, workRoot, initialMessage, and requestId refine it. Kickoff admission
 is optional and never creates a work item or transfers an assignment. Idempotent requestId
 retries do not replay kickoff; initialMessageStatus distinguishes accepted,
 not_requested, and not_replayed.
@@ -934,7 +934,7 @@ history-address isolation, not a change to shared Project memory or tool permiss
 
 Registered folders have a project-filtered registry backed by the host
 catalog's ownership index.
-Their stable `folderId` is distinct from the `initiativeId` used for coordinated
+Their stable `folderId` is distinct from the `workRoot` used for coordinated
 work and shared context. Creating a folder conversation stores the folder ID
 and a local workdir reference. The locality resolver obtains its
 absolute directory from the backend registry, never from a display-path snapshot.
@@ -964,9 +964,9 @@ awaits their final result and no separate completion event is emitted to the cal
 The message tool enforces execution/ownership boundaries as well as waiting for
 target admission before displaying its sent projection. Optional message intent
 is request/question/progress/handoff/acknowledgement. Project-validated
-initiativeId/itemId references appear in the first trusted sender envelope as
+workRoot/itemId references appear in the first trusted sender envelope as
 context only. Receipt is not acceptance of responsibility, completion, or an
-ownership transfer; use explicit guarded Initiative release/handoff/claim.
+ownership transfer; use explicit guarded Work release/handoff/claim.
 Runtime work-revision references also travel in the trusted envelope. Messages
 already obsolete at admission, or found obsolete when dequeued, are archived as
 historical evidence rather than waking a new execution turn.
@@ -1057,7 +1057,7 @@ For ordinary local Project sessions, `ContextBuilder` concatenates providers in 
 1. **Runtime identity and execution contract:** platform, shell, channel/audience,
    role, permissions, and the session/task/call lifecycle. Role and mode limits
    remain enforced by the runtime, not by prompt ordering.
-2. **Initiative view:** a derived root Work/descendant view when explicitly linked.
+2. **Work view:** a derived root Work/descendant view when explicitly linked.
    There is no independently editable Topic brief or duplicate session goal.
    Recorded definitions are work context, not new human authorization.
 3. **Working context:** Project identity and directory-resource selection,
@@ -1084,7 +1084,7 @@ For ordinary local Project sessions, `ContextBuilder` concatenates providers in 
    explicit supersession; a newer agent report cannot lift a human restriction.
 
 Before each inference, `withCurrentWork` inserts the current work agreement after
-runtime identity, ahead of cached Initiative context and history. It also
+runtime identity, ahead of cached Work context and history. It also
 places agreement facts early in compaction input, without caching them in the
 next segment's base prompt even when prompt rebuilding fails. Stamps and the execution fence
 remain the enforcement mechanism; ordering and labels do not prove understanding.
@@ -1144,14 +1144,14 @@ that should be checked into the repository.
 | Learning progress and outcomes | Project `.learning/state.v1.json`; bounded source cursors, pending batches, verified receipts, event consumption and retry state; legacy `memory/.reflect-watermark.json` is imported without replay |
 | Personality/identity | Project-shared `SOUL.md` and identity-manager files; distinct from user authentication |
 
-Project conventions have no Session or Initiative scope. Work owns task
+Project conventions have no Session or Work scope. Work owns task
 boundaries and acceptance; temporary presentation instructions remain in the
 conversation. Decisions record the choice and its source, not a second rule
 store. See [Project conventions](project-conventions.md) for SQL access,
 human-source validation, limits and legacy handling. Today's own events are
 included eagerly; other sessions' events are relevance-gated by
-initiative/shared modified paths when such signals exist, and capped. With no
-initiative/file signals, related events can still be included up to the cap.
+Work/shared modified paths when such signals exist, and capped. With no
+Work/file signals, related events can still be included up to the cap.
 This is **relevance selection within a project, not a privacy boundary
 between its sessions**. Other projects have separate memory stores.
 
@@ -1375,17 +1375,16 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | `event_subscribe`, `event_source` (lazy) | Subscribe to normalized events or manage restricted Project polling producers; discover via `v:tools/events` and invoke through `invoke_tool` |
 | Lazy tools | Events, cron, search/MCP/tool factories |
 
-### Initiative coordination
+### Work coordination
 
 [`InitiativeStore`](../src/initiatives/store.ts) opens one `initiatives.sqlite`
 per Project Home, independently of the selected JSONL/SQLite session backend.
-Version 6 atomically migrates its old initiative tables into unified records in
-`work_contracts`, preserving keys, definitions, assignments, status, dependencies,
-audit history and effect references. Legacy SQL tables become read-only archives;
-the `initiative` SQL tool is no longer registered. Work without historical
-acceptance is marked for review, never silently human-approved.
+Current notes live in `work_contracts`, preserving keys, definitions, assignments,
+status, dependencies, audit history and effect references. `work` is the current
+mutation interface; SQL Work projections are read-only. Storage format details
+belong to the [storage contract](../src/initiatives/README.md).
 
-An Initiative is a root work item and its descendants. `work list` discovers
+Work is an optional shared notebook of goals and related notes. `work list` discovers
 Project work; `work tree` derives membership and aggregate progress. Both return
 compact paginated indexes (default 5, maximum 20); read `context` with an exact
 key for the definition. Parent/completion dependency cycles are rejected. A completed
@@ -1395,9 +1394,11 @@ Updates use the current record sequence as `version`. Definitions have a
 separate semantic revision; ordinary progress does
 not change the goal. No second editable todo/goal store is maintained.
 
-An explicit `initiativeId` survives delegation, compaction, and storage reload.
-It accepts a canonical root Work key as well as a historical Initiative slug;
-this link selects a derived view, not an assignment.
+The optional `workRoot` selector takes a canonical Work key and selects that
+note and its descendants as context. It does not assign responsibility. In
+contrast, `work: {key}` on session creation links and assigns a note, while
+`message.work` admits an explicit assignment kickoff. Ordinary conversations
+need neither field. Context links survive delegation, compaction and reload.
 Absent that link, prompt summaries show only work the session created, owns, or
 is assigned. Runtime activity is separate from recorded task status; an
 inactive owner or assignee retains responsibility across sleep/recovery and needs
@@ -1418,11 +1419,10 @@ remains a planning-document tool, not another authoritative task list.
 Here active means a live, accepting session without pending recovery, not proof
 that a model turn is currently running.
 
-Startup imports legacy `projects/<slug>/project.md` files once, retaining their
-original contents as an archive and recording migration provenance. Invalid or
-changed legacy inputs fail explicitly. JSONL and SQLite session metadata
-normalize legacy `projectName`/`initiativeName` to `initiativeId`, separately
-from canonical Project/Folder ownership validation.
+JSONL and SQLite preserve the same optional Work context link, separately
+from canonical Project/Folder ownership validation. Current tool and session
+creation inputs use `workRoot`; obsolete selectors are rejected rather than
+silently ignored.
 
 Work operations edit the owning Project's Home, never a remote display path.
 They do not enable arbitrary remote scripts, MCP imports or tool factories.
@@ -1524,7 +1524,7 @@ Users can set `decisionOwnerSessionId` through the reporting-responsibility
 control (`GET/POST /api/sessions/:key/decisions/owner`). The setting persists
 in both stores, targets an existing durable root in this Project, and is
 captured in each question as `reportingSessionId`. It does not reparent a
-session, delegate answering rights or transfer Initiative assignments.
+session, delegate answering rights or transfer Work assignments.
 Changing it while a question is pending is rejected. A separate normal
 SessionManager input asks that reporter to check premises and synthesize a
 self-contained explanation rather than forward worker jargon.
@@ -1550,7 +1550,7 @@ explicit non-approval result; durable sessions/reporters receive notifications,
 and resumed contexts include saved restrictions. Scan/notification failures
 are returned explicitly even when the root invalidation is already saved.
 These events do not roll back completed side effects or automatically mutate
-Initiative items. Assignees must maintain their existing guarded work records;
+Work items. Assignees must maintain their existing guarded work records;
 scope text is not a new per-item scheduler or sandbox.
 
 For a live user-addressed request, `POST /api/sessions/:key/ask/reviews`
@@ -1625,7 +1625,7 @@ fields and semantic definitions, not copies of large HTML/current plans in every
 event. `context` reads current notes and host-built paths without history or
 schemas by default. Mutations return compact receipts. Inference gets a bounded
 goal-path/current-state index, not full notes, HTML, schema dumps or every event.
-Full detail is an explicit read. `list/tree` derive indexes and Initiative progress.
+Full detail is an explicit read. `list/tree` derive indexes and Work progress.
 
 Ordinary changes invalidate the Project live-state UI, without sending messages
 to agents. Material notes.attention wakes the controller once while impact review
@@ -3304,7 +3304,7 @@ or state-save failure leaves the previous working context intact.
 | Memory and learning | Markdown/JSONL under `memory`, `.learning` progress/outcomes and Soul/identity files |
 | Discord policies and scoped memory | Project `bots/runtime/discord-security`: protected reviews/audit, `memory` catalog and immutable blobs, per-scope `learning` journals; session boundary/worker receipts in both session stores |
 | Agent types and skills | Workspace `agents` and `skills`; shipped definitions are application assets |
-| Initiative context | Project-local SQLite work records and bounded prompt summaries; folder ownership lives in the host catalog |
+| Work context | Project-local SQLite work records and bounded prompt summaries; folder ownership lives in the host catalog |
 | Project catalog/config | Sibling host `projects.v2.json`; per-project `config/project.json` and `config/bots.v1.json` |
 | Event subscriptions/sources | `.events/subscriptions.json`, `.events/sources.json`, `.events/polling-sources.json` |
 | Cron definitions | `.cron/jobs.json` |
@@ -3419,7 +3419,7 @@ automatically replaced. Later turns resolve the latest inherited defaults.
   learned files can influence the model. Prompt guidelines are not enforced
   access-control rules.
 - **Project knowledge:** separate stores/context and scoped APIs enforce
-  application ownership. Session/Initiative relevance scopes within a Project are not
+  application ownership. Session/Work relevance scopes within a Project are not
   privacy controls, and project separation is not multi-tenant OS/RBAC
   isolation. Authorized local web access can expose agent-owned state.
 - **Discord memory:** restricted bindings use enforced domain/epoch/source
