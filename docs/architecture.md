@@ -996,8 +996,9 @@ JSON with `status: "blocked"`, `reason`, and `partialWork`, or `status: "failed"
 and `error` (including partial work/side effects), to make non-success explicit.
 Only native subagent tool invocation supports blocking calls; embedding one in
 exec/scripts/invoke_tool is rejected because those wrappers do not establish the
-same caller-bound lifetime. Calls have a 120-second execution deadline and up to
-10 seconds of cancellation cleanup.
+same caller-bound lifetime. Calls have no overall execution deadline: the caller
+waits until completion or cancellation. Individual tools retain their own timeouts,
+and cancellation cleanup is bounded to 10 seconds.
 
 Leaf calls retain role-permitted local exec with a foreground-only policy.
 Its `timeout_ms` is 1–120000, defaults to 120000, and cannot be zero. Timeout/abort

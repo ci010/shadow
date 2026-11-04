@@ -48,7 +48,7 @@ test('call contract overrides orchestration habits without changing tool restric
   assert(prompt?.includes('{"status":"blocked","reason":'))
   assert(prompt?.includes('{"status":"failed","error":'))
   assert(prompt?.includes('foreground-only'))
-  assert(prompt?.includes('120-second execution deadline'))
+  assert(prompt?.includes('Calls have no overall execution'))
   assert(prompt?.includes('Do not send a duplicate completion notification'))
   assert(prompt?.includes('Keep role tool constraints and the current environment context'))
   assert(!general.prompt.includes('both are delegated by default'))
@@ -83,7 +83,7 @@ test('compact call guidance preserves machine-readable outcomes and bounded exec
       /caller decides or asks before issuing a new call/,
       /local and foreground-only: timeout_ms must be 1 through 120000, never zero/,
       /timeout\/cancellation terminates it, never backgrounds it/,
-      /120-second execution deadline plus up to 10 seconds for cleanup/,
+      /Calls have no overall execution deadline; the caller waits until completion or cancellation, with up to 10 seconds for cleanup/,
       /No remote exec or detached work via any tool\/script/,
       /Intermediate work stays in this call's trace/,
       /Inherited context is a snapshot, not a live conversation/,

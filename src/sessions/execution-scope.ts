@@ -2,6 +2,7 @@ import type { SessionState } from './session-store.ts'
 import type { SessionManager } from './session-manager.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 
+/** Per-command foreground exec limit inside a call, not a deadline for the call itself. */
 export const MAX_CALL_TIMEOUT_MS = 120_000
 
 type ExecutionAccess = Pick<SessionManager, 'getSessionState' | 'assertFolderAccess' | 'getDelegationOwner'>
