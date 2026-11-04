@@ -87,15 +87,17 @@ export class LearningRuntime {
     if (skills) this.skillStore = new SkillEditStore(sessions.workspace, skills)
   }
 
+  private excludeIneligible(batch: LearningBatch): boolean {
+    if (!batch.sources.some(source => !isLearningSourceEligible(this.sessions.getSessionState(source.sessionId),
+      id => this.sessions.getSessionState(id), id => this.sessions.isManagedConversation(id), this.projectId))) return false
+    this.ledger.exclude(batch.id, 'Source no longer eligible: delegated, internal, missing or channel-scoped history.')
+    return true
+  }
+
   async recover(): Promise<void> {
     for (const batch of this.ledger.unfinished()) {
+      if (this.excludeIneligible(batch)) continue
       if (batch.state !== 'running') continue
-      if (batch.sources.some(source => !isLearningSourceEligible(this.sessions.getSessionState(source.sessionId),
-        id => this.sessions.getSessionState(id), id => this.sessions.isManagedConversation(id), this.projectId))) {
-        this.ledger.interrupt(batch.id, 'Legacy learning contains ineligible sources (internal analysis, missing lineage or channel scope).')
-        this.ledger.defer(batch.id, false)
-        continue
-      }
       const sessionId = batch.attempts.at(-1)!
       if (this.sessions.getSessionState(sessionId)?.executionStatus === 'completed' && batch.proposal) {
         try {
@@ -272,15 +274,13 @@ export class LearningRuntime {
     let batch: LearningBatch | undefined
     try {
       signal.throwIfAborted()
+      // Also reconcile pending/cooldown batches on manual runs, without dispatch or acknowledgement.
+      for (const previous of this.ledger.unfinished()) this.excludeIneligible(previous)
       const sources = pipeline === 'reflector' ? await this.sources(signal, true) : []
       const events = pipeline === 'reflector' ? [] : this.ledger.eventsFor(pipeline)
       batch = this.ledger.select(pipeline, sources, events, manual)
       if (!batch) return false
       const id = batch.id
-      if (batch.sources.some(source => !isLearningSourceEligible(this.sessions.getSessionState(source.sessionId),
-        id => this.sessions.getSessionState(id), id => this.sessions.isManagedConversation(id), this.projectId))) {
-        throw new LearningRunError('This legacy batch contains ineligible sources (internal analysis, missing lineage or channel scope). Review it before retrying.', false)
-      }
       // Resolve line coordinates at dispatch, including recovered batches whose journal stores message cursors.
       const ranges = new Map<string, { offset: number; end: number; fullOffset: number; fullEnd: number }>()
       for (const source of batch.sources) {

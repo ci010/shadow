@@ -96,6 +96,8 @@ test('reflection guidance asks for evidence-backed behavioral learning without f
     const guideline = await readFile(new URL('../types/builtin/reflector/AGENT.md', import.meta.url), 'utf8')
     assert.match(guideline, /it need not change a future action/)
     assert.match(guideline, /An unresolved challenge is eligible/)
+    assert.match(guideline, /parent.*\nconversation's bounded result summaries, user acceptance and corrections/)
+    assert.match(guideline, /Do not fetch child-only histories/)
     assert.match(guideline, /use a higher bar/)
     assert.match(guideline, /publishable skill needs a reusable procedure/)
     assert.doesNotMatch(guideline, /Retain only facts, stated goals or conditional principles that affect future/)
@@ -422,7 +424,8 @@ test('source scanning and legacy retry exclude internal automation without consu
   assert.deepEqual((await runtime.sources(signal())).map(source => source.sessionId), ['root', 'cron-work'])
   const identity = { sessionId: 'internal', physicalId: physicalSessionId(f.records.get('internal')!), segmentIndex: 0 }
   runtime.ledger.create('reflector', [{ ...identity, offset: 0, end: 3 }], [])
-  await assert.rejects(runtime.run('reflector', signal()), /ineligible sources/)
+  await runtime.recover()
+  assert.equal(runtime.ledger.pending('reflector'), undefined)
   assert.equal(f.started.length, 0)
   assert.equal(runtime.ledger.cursor(identity), 0)
 }))
@@ -471,6 +474,36 @@ test('audit repairs historical oversized reads across attempts while retaining u
     await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /denied/)
   })
 })
+
+for (const running of [false, true]) test(`excluded legacy mixed batch releases root work (running=${running})`, async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace, 3)
+  const root = (await f.runtime.sources(signal()))[0]
+  f.records.set('virtual:child', { sessionId: 'virtual:child', segmentIndex: 0, projectId: 'a', parentSessionId: 'web:source' })
+  const child = { ...root, sessionId: 'virtual:child', physicalId: 'child-0' }
+  const old = f.runtime.ledger.create('reflector', [root, child], [])
+  f.runtime.ledger.artifact(old.id, { path: 'memory/kept.md', revision: 'kept', kind: 'memory' })
+  f.runtime.ledger.event(old.id, { id: 'kept', path: 'events', origin: 'child', when: 'then', who: 'worker', what: 'retained' })
+  if (running) f.runtime.ledger.bind(old.id, 'cron:old')
+  else f.runtime.ledger.defer(old.id, false)
+  const runtime = new LearningRuntime(f.sessions, 'a')
+  if (running) await runtime.recover()
+  f.onRun(async id => {
+    const batch = runtime.ledger.batchFor(id)!
+    assert.deepEqual(batch.sources.map(s => s.sessionId), ['web:source'])
+    runtime.ledger.propose(batch.id, 'no_change', 'Reviewed parent evidence')
+  })
+  await runtime.run('reflector', signal())
+  assert.equal(f.started.length, 1)
+  assert.equal(await runtime.run('reflector', signal(), undefined, undefined, undefined, true), false)
+  const persisted = new LearningLedger(workspace, 'a')
+  assert(persisted.batch(old.id).excluded)
+  assert.equal(persisted.batch(old.id).artifacts.length, 1)
+  assert.equal(persisted.batch(old.id).events.length, 1)
+  assert.equal(persisted.outcome('cron:old'), undefined)
+  assert.equal(persisted.cursor(child), 0)
+  assert.equal(persisted.cursor(root), 3)
+  assert.equal(persisted.pending('reflector'), undefined)
+}))
 
 test('readable-size batching preserves exact cursors and isolates atomic oversized messages', async t => {
   await withTempWorkspace(async workspace => {
