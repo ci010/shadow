@@ -12,7 +12,7 @@ import { isWindows } from '../utils/runtime.ts'
 export class PlanWriteTool implements Tool {
   readonly name = 'plan_write'
   readonly description =
-    'Write or edit a planning document in Project Home/state/plans/. Shared task status belongs in Initiative items, not a second checklist.'
+    'Write or edit a planning document in Project Home/state/plans/. Shared task status belongs in Work items, not a second checklist.'
   readonly optIn = true
   readonly parameters: ToolParameters = {
     type: 'object',

@@ -189,9 +189,9 @@ export interface SessionState {
   workdir?: WorkdirRefV2
   /** Agent type name (e.g. 'general', 'reflector'). Set once at creation. */
   agentType?: string
-  /** Stable Initiative ID for shared work context; legacy projectName is migrated. */
+  /** Canonical Work key for shared context; field name is internal. */
   initiativeId?: string
-  /** Registered directory identity, independent of Initiative work context. */
+  /** Registered directory identity, independent of Work work context. */
   folderId?: string
   /** Prepared committed folder context, replayed as append-only history after restart. */
   workingContext?: string

@@ -32,7 +32,7 @@
       <main v-show="wide || !panel || view === 'history'" class="workbench-main">
         <form v-if="view === 'board'" class="work-filters" :aria-label="t('Filter work')" @submit.prevent>
           <label class="work-search">{{ t('Search') }}<input v-model="filter.query" type="search" :placeholder="t('Find work…')" /></label>
-          <label>{{ t('Initiative') }}<UiSelect v-model="filter.root"><option value="">{{ t('All work') }}</option><option v-for="item in initiatives" :key="item.key" :value="item.key">{{ item.title }}</option></UiSelect></label>
+          <label>{{ t('Work') }}<UiSelect v-model="filter.root"><option value="">{{ t('All work') }}</option><option v-for="item in initiatives" :key="item.key" :value="item.key">{{ item.title }}</option></UiSelect></label>
           <label>{{ t('Assigned to') }}<UiSelect v-model="filter.assignee"><option value="">{{ t('Any session') }}</option><option value="unassigned">{{ t('Unassigned') }}</option>
             <option v-for="session in assignedSessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option>
           </UiSelect></label>
@@ -65,7 +65,7 @@
             <h2>{{ t('No work items yet') }}</h2><p>{{ t('Conversations can stay conversations. Ask in any conversation to organize work when there is an outcome to track.') }}</p>
             <button @click="newWork()">{{ t('Start a conversation') }}</button>
           </div>
-          <div v-else-if="!filtered.length" class="workbench-empty"><h2>{{ t('No matching work') }}</h2><p>{{ t('Try another Initiative, session or search.') }}</p><button @click="clearFilters">{{ t('Clear filters') }}</button></div>
+          <div v-else-if="!filtered.length" class="workbench-empty"><h2>{{ t('No matching work') }}</h2><p>{{ t('Try another Work, session or search.') }}</p><button @click="clearFilters">{{ t('Clear filters') }}</button></div>
           <div v-else-if="view === 'board'" class="work-board" tabindex="0" :aria-label="t('Work board')">
             <section v-for="group in groups" :key="group.key" class="initiative-group" :aria-label="group.title">
               <h2><span v-if="group.initiative" class="i-lucide-layers" aria-hidden="true" />{{ group.title }}<span>{{ group.items.length }}</span></h2>
