@@ -67,3 +67,17 @@ test('log — optional fields carried through', async () => {
     assertEquals(e.refs, ['memory/topics/x.md'])
   })
 })
+
+test('log — summary is normalized, code-point bounded and persisted without truncation', async () => {
+  await withTempWorkspace(async workspace => {
+    const tool = new LogTool(workspace)
+    await tool.execute({ who: 'worker', what: 'Full details', summary: ' 😀 '.repeat(140) })
+    const events = await readTodayEvents(workspace)
+    assertEquals(events[0].summary, '😀 '.repeat(139) + '😀')
+    const { rejects } = await import('node:assert/strict')
+    for (const summary of ['', 'x'.repeat(281), '😀'.repeat(281), 123]) {
+      await rejects(tool.execute({ who: 'worker', what: 'Details', summary }), /summary/)
+    }
+    assertEquals((await readTodayEvents(workspace)).length, 1)
+  })
+})

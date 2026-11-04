@@ -87,7 +87,17 @@ or universal preference. Repeated summaries are not independent observations.
 Search the relevant destination before adding. For Wiki knowledge, read the
 existing page and use write to merge a sourced update; do not force facts into
 a decision template. Use log for a significant event/challenge with its source
-session and stable key. For conditional decisions, prefer revising an applicable
+session and stable key. Every new log event needs a standalone summary of at most
+280 Unicode code points: the significant event/outcome plus material uncertainty,
+not a compressed audit trail. The summary is the default injected briefing; full
+what/why/challenge/refs stay available through the event detail reference.
+- what: observed sequence, attempts and outcomes, with reported versus verified attribution.
+- why: evidenced reasons and context for the action; unsupported motives stay unknown.
+- challenge: obstacles, counterevidence, uncertainty and unresolved scope; do not repeat what.
+Keep exact evidence/source paths in refs. Learning audit (why Wiki was not written,
+routing decisions, candidate omissions and later usefulness not yet observed) belongs
+in learning_result, not in event why/challenge unless itself part of the observed event.
+For conditional decisions, prefer revising an applicable
 decision over duplicates. Read its current revision with learning_memory,
 then save kind, condition, goal, rationale, guidance, exceptions, revalidation,
 batch source sessions, stated/inferred confidence and new/supported/corrected/retired

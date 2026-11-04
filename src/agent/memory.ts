@@ -1,13 +1,15 @@
 import { dirname, join } from 'node:path'
 import { appendFile, mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
-import { streamJsonlObjects } from '../utils/jsonl.ts'
+import { streamJsonlLines, streamJsonlObjects } from '../utils/jsonl.ts'
 
 const MEMORY_DIR = 'memory'
 
 interface EventLogEntry {
   when?: string
   who?: string
+  summary?: string
+  detailLine?: number
   what?: string
   why?: string
   challenge?: string
@@ -16,32 +18,20 @@ interface EventLogEntry {
   origin?: string
 }
 
-function formatEventLogEntry(
-  event: EventLogEntry,
-  showOrigin = false,
-): string {
-  const when = formatEventTime(event.when)
-  const who = sanitizeMarkdownInline(event.who ?? 'unknown')
-  const what = sanitizeMarkdownInline(event.what ?? '')
-  const origin = showOrigin && event.origin
-    ? ` [${sanitizeMarkdownInline(event.origin)}]`
-    : ''
-  const details: string[] = []
+function boundedInline(value: string, max: number): string {
+  const points = Array.from(sanitizeMarkdownInline(value))
+  return points.length > max ? points.slice(0, max).join('') + '…' : points.join('')
+}
 
-  if (event.why) details.push(`why: ${sanitizeMarkdownInline(event.why)}`)
-  if (event.challenge) {
-    details.push(`challenge: ${sanitizeMarkdownInline(event.challenge)}`)
-  }
-  if (Array.isArray(event.refs) && event.refs.length) {
-    details.push(
-      `refs: ${
-        event.refs.map((ref) => sanitizeMarkdownInline(String(ref))).join(', ')
-      }`,
-    )
-  }
-
-  const suffix = details.length ? ` (${details.join('; ')})` : ''
-  return `- ${when}${origin} **${who}** — ${what}${suffix}`
+function formatEventLogEntry(event: EventLogEntry, date: string, showOrigin = false): string {
+  const when = boundedInline(formatEventTime(event.when), 40)
+  const who = boundedInline(event.who ?? 'unknown', 60)
+  const origin = showOrigin && event.origin ? ` [${boundedInline(event.origin, 100)}]` : ''
+  const summary = event.summary && Array.from(event.summary).length <= 280
+    ? sanitizeMarkdownInline(event.summary) : ''
+  // Old records have no authored summary. Never present an excerpt as one.
+  const brief = summary || `[legacy/detail preview, not a summary] ${boundedInline(event.what ?? '', 180)}`
+  return `- ${when}${origin} **${who}** — ${brief} (details: v:memory/events/${date}.jsonl, line ${event.detailLine})`
 }
 
 function formatEventTime(value?: string): string {
@@ -107,6 +97,7 @@ export class MemoryStore {
     opts: {
       maxOwn?: number
       maxRelated?: number
+      maxChars?: number
       currentInitiative?: string
       initiativeOf?: (sessionId: string) => string | undefined
       since?: string
@@ -117,9 +108,13 @@ export class MemoryStore {
 
     const own: EventLogEntry[] = []
     const related: EventLogEntry[] = []
-    for await (
-      const event of streamJsonlObjects<EventLogEntry>(this.eventLogPath(date))
-    ) {
+    let detailLine = 0
+    for await (const line of streamJsonlLines(this.eventLogPath(date), { skipEmpty: false })) {
+      detailLine++
+      let event: EventLogEntry
+      try { event = JSON.parse(line) } catch { continue }
+      if (!event || typeof event !== 'object') continue
+      event.detailLine = detailLine
       if (opts.since && !(Date.parse(event.when ?? '') > Date.parse(opts.since))) continue
       if (event.origin && event.origin === currentSessionId) own.push(event)
       else related.push(event)
@@ -157,25 +152,30 @@ export class MemoryStore {
       else irrelevant++
     }
 
-    const sections: string[] = []
-
-    if (own.length) {
-      const shown = own.slice(-maxOwn)
-      const lines = ['### Recent Events (this session)']
-      for (const e of shown) lines.push(formatEventLogEntry(e))
-      sections.push(lines.join('\n'))
+    const shownOwn = own.slice(-Math.max(0, maxOwn) || own.length)
+    const shownRelated = relevant.slice(-Math.max(0, maxRelated) || relevant.length)
+    let omitted = 0
+    const render = (): string => {
+      const sections: string[] = []
+      if (shownOwn.length) sections.push(['### Recent Events (this session)',
+        ...shownOwn.map(e => formatEventLogEntry(e, date))].join('\n'))
+      const hidden = relevant.length - shownRelated.length + irrelevant
+      if (shownRelated.length || hidden) sections.push(['### Related Events (other sessions)',
+        ...shownRelated.map(e => formatEventLogEntry(e, date, true)),
+        ...(hidden ? [`- +${hidden} more in other sessions`] : [])].join('\n'))
+      if (omitted) sections.push(`- ${omitted} event briefings omitted by budget; details: v:memory/events/${date}.jsonl`)
+      return sections.join('\n\n')
     }
-
-    if (relevant.length || irrelevant) {
-      const shown = relevant.slice(-maxRelated)
-      const lines = ['### Related Events (other sessions)']
-      for (const e of shown) lines.push(formatEventLogEntry(e, true))
-      const hidden = (relevant.length - shown.length) + irrelevant
-      if (hidden > 0) lines.push(`- +${hidden} more in other sessions`)
-      sections.push(lines.join('\n'))
+    const budget = Math.max(0, Math.floor(opts.maxChars ?? 6000))
+    let output = render()
+    while (output.length > budget && (shownRelated.length || shownOwn.length)) {
+      if (shownRelated.length) shownRelated.shift()
+      else shownOwn.shift()
+      omitted++
+      output = render()
     }
-
-    return sections.join('\n\n')
+    // An unusually small requested budget cannot even fit the honest omission notice.
+    return output.length <= budget ? output : ''
   }
 
   // ── Combined context for the system prompt ────────────────────────────

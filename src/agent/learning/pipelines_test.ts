@@ -170,7 +170,7 @@ test('partial effects survive restart and stable event keys prevent duplicate lo
     const f = fixture(workspace)
     f.onRun(async id => {
       await new LogTool(workspace, (entry, key, context) => f.tools.appendEvent(entry, key, context)).execute({
-        who: 'user', what: 'Selected contextual results', session: 'web:source', key: 'message-3-choice',
+        who: 'user', summary: 'User selected contextual results.', what: 'Selected contextual results', session: 'web:source', key: 'message-3-choice',
       }, f.context(id))
       throw new Error('fetch failed')
     })
@@ -180,7 +180,7 @@ test('partial effects survive restart and stable event keys prevent duplicate lo
     const runtime = new LearningRuntime(f.sessions, 'a')
     const tools = new LearningTools(runtime)
     f.onRun(async id => {
-      assert.match(tools.appendEvent({ who: 'user', what: 'Selected contextual results', origin: 'web:source' }, 'message-3-choice', f.context(id))!, /already recorded/)
+      assert.match(tools.appendEvent({ who: 'user', summary: 'User selected contextual results.', what: 'Selected contextual results', origin: 'web:source' }, 'message-3-choice', f.context(id))!, /already recorded/)
       await tools.result.execute({ status: 'applied', summary: 'Recovered the persisted event.' }, f.context(id))
     })
     await runtime.run('reflector', signal(), undefined, undefined, undefined, true)
@@ -263,7 +263,7 @@ test('direct writes and unresolved tool failures cannot masquerade as no-change,
         await assert.rejects(f.tools.result.execute({ status: 'applied', summary: 'All done' }, ctx), /Unresolved/,
           'an earlier successful write must not hide a later failure')
         record(id, path, 'Successfully wrote file')
-        f.tools.appendEvent({ who: 'reflector', what: 'Retained a useful note', origin: 'web:source' }, 'outcomes', ctx)
+        f.tools.appendEvent({ who: 'reflector', summary: 'Retained a useful note.', what: 'Retained a useful note', origin: 'web:source' }, 'outcomes', ctx)
         await f.tools.result.execute({ status: 'applied', summary: 'Recovered the direct write.' }, ctx)
       })
       const id = String(await f.runtime.run('reflector', signal(), undefined, undefined, undefined, true))

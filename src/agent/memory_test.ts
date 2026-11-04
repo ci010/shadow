@@ -209,3 +209,46 @@ test('keywords — derived from topic/identity filenames', async () => {
     assert(!out.includes('notes'))
   })
 })
+
+test('event briefings omit detail, honestly preview legacy entries and bound total injection', async () => {
+  await withTempWorkspace(async workspace => {
+    await writeEvents(workspace, [
+      { who: 'worker', origin: 'other', summary: 'Observed failure; recovery unverified.', what: 'PRIVATE_DETAIL', why: 'PRIVATE_REASON', challenge: 'PRIVATE_CHALLENGE', refs: ['PRIVATE_REF'] },
+      { who: 'old', origin: 'self', what: 'x'.repeat(1000) },
+    ])
+    const memory = new MemoryStore(workspace)
+    const out = await memory.readEvents('self')
+    assert(out.includes('Observed failure; recovery unverified.'))
+    assert(!out.includes('PRIVATE_'))
+    assert(out.includes('[legacy/detail preview, not a summary]'))
+    assert(out.includes('x'.repeat(180) + '…'))
+    assert(out.includes('.jsonl, line 1'))
+    assert(out.includes('.jsonl, line 2'))
+    const bounded = await memory.readEvents('self', { maxChars: 220 })
+    assert(bounded.length <= 220)
+    assert(bounded.includes('omitted by budget'))
+    assertEquals(await memory.readEvents('self', { maxChars: 0 }), '')
+    assertEquals(await memory.readEvents('self', { maxOwn: 0, maxRelated: 0 }), '### Related Events (other sessions)\n- +1 more in other sessions')
+  })
+})
+
+test('event detail references count blank and malformed physical lines', async () => {
+  await withTempWorkspace(async workspace => {
+    const date = new Date().toISOString().slice(0, 10)
+    await mkdir(`${workspace}/memory/events`, { recursive: true })
+    await writeFile(`${workspace}/memory/events/${date}.jsonl`, '\nmalformed\n' + JSON.stringify({ summary: 'Brief', what: 'Full' }) + '\n')
+    const out = await new MemoryStore(workspace).readEvents('self')
+    assert(out.includes('.jsonl, line 3'))
+  })
+})
+
+test('briefing detail path is readable through the memory VFS', async () => {
+  await withTempWorkspace(async workspace => {
+    await writeEvents(workspace, [{ summary: 'Brief', what: 'Original full detail', refs: ['source'] }])
+    const { createMemoryHandler } = await import('../vfs/mounts.ts')
+    const date = new Date().toISOString().slice(0, 10)
+    const detail = await createMemoryHandler(workspace).read(`events/${date}.jsonl`, {} as never)
+    assert(String(detail).includes('Original full detail'))
+    assert(String(detail).includes('source'))
+  })
+})

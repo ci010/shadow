@@ -1,3 +1,4 @@
+import { validateEventSummary } from '../event-summary.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs'
 import { z } from 'zod'
@@ -45,7 +46,7 @@ export class LearningTools {
   }
 
   /** Stable keys are scoped to a retained batch, so a retry cannot append the same event twice. */
-  appendEvent(entry: { who: string; what: string; why?: string; challenge?: string; refs?: string[]; origin?: string },
+  appendEvent(entry: { who: string; what: string; summary?: string; why?: string; challenge?: string; refs?: string[]; origin?: string },
     key: unknown, context: ExecutionContext): string | undefined {
     if (!this.runtime.ledger.batchFor(context.sessionId)) return undefined
     const batch = this.authorize(context)
@@ -55,13 +56,15 @@ export class LearningTools {
     const id = fingerprint(`${batch.id}:${origin}:${text.parse(key)}`)
     const previous = batch.events.find(event => event.id === id)
     if (previous) return `Learning event already recorded: ${id}`
+    const summary = validateEventSummary(entry.summary)
     const when = new Date().toISOString()
     const path = `memory/events/${batch.createdAt.slice(0, 10)}.jsonl`
     const file = projectStoragePath(this.runtime.sessions.workspace, path)
     // Recover an append that committed immediately before the journal write/process failed.
     const prior = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean)
       .map(line => JSON.parse(line) as LearningEvent).find(event => event.id === id) : undefined
-    const event: LearningEvent = prior ?? { ...entry, origin, id, when, path }
+    if (!prior && !summary) throw new Error('New reflector events require a short summary (1–280 Unicode code points).')
+    const event: LearningEvent = prior ?? { ...entry, summary, origin, id, when, path }
     if (!prior) {
       mkdirSync(projectStoragePath(this.runtime.sessions.workspace, 'memory', 'events'), { recursive: true })
       appendFileSync(file, JSON.stringify(event) + '\n')
@@ -116,7 +119,8 @@ export class LearningTools {
       this.runtime.ledger.artifact(batch.id, { path, revision: fingerprint(saved), kind: 'memory' },
         args.evaluation === 'new' ? undefined : `${path}:${evidence.join('|')}`)
       if (batch.pipeline === 'reflector') this.appendEvent({
-        who: 'reflector', what: `${args.evaluation}: ${args.title}`, why: args.rationale,
+        who: 'reflector', summary: `Decision ${args.evaluation}: ${Array.from(args.title).slice(0, 180).join('')}${Array.from(args.title).length > 180 ? '…' : ''}. Consult the decision and source evidence before applying.`,
+        what: `${args.evaluation}: ${args.title}`, why: args.rationale,
         refs: [path], origin: args.evidence[0],
       }, `decision:${args.name}`, context)
       return JSON.stringify({ path, revision: fingerprint(saved), evaluation: args.evaluation })
