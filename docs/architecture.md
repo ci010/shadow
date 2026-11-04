@@ -846,7 +846,7 @@ Session update takes sessionId, topic and optional focus; only
 self or authorized UI may update it. Metadata does not revise work
 goals or acceptance. `register_folder` with path
 uses the existing Project registry for an existing Main-local folder. List with
-`read("v:project/folders")`; never translate a remote session's display path into
+`read("v:project/workspaces")`; never translate a remote session's display path into
 a Main filesystem path. Task/call executions cannot create/manage durable sessions
 or register folders.
 
@@ -1067,7 +1067,7 @@ For ordinary local Project sessions, `ContextBuilder` concatenates providers in 
    not parallel working directories. With no selected Folder, the prompt lists
    available folders and stable short identifiers; with a selection, it includes
    that resource's metadata. Live availability is discovered through
-   `v:project/folders`; discovery alone never switches execution.
+   `v:project/workspaces`; discovery alone never switches execution.
    VFS entry points, memory usage and role-gated `SOUL.md` remain here.
 4. **Behavior and scoped tool guidance:** the selected role owns work strategy;
    compact tool protocols cover work revisions, decisions and coordination.
@@ -3232,11 +3232,11 @@ from the host or other sessions**.
 
 ### Switching the working context
 
-The base [`use_project({folder})`](../src/tools/use-project.ts) tool selects a
-registered Folder **inside the current Project**, not another Project. It accepts
+The base [`use_project({workspace})`](../src/tools/use-project.ts) tool selects a
+registered Workspace **inside the current Project**, not another Project. It accepts
 a unique lowercase folder-name slug (for example `app` or `docs`), a human-readable
 `name-xxxxxxxx` selector (name slug plus eight ID characters), or its full ID.
-[`v:project/folders`](../src/folders/discovery.ts) exposes `identifier` and, when
+[`v:project/workspaces`](../src/folders/discovery.ts) exposes `identifier` and, when
 unambiguous, `shortName`. Name-ID selectors do not depend on registry ordering
 or growth. Duplicate plain names are rejected; a name-ID collision requires
 the full ID, which always wins. Renaming a folder changes its name selectors,

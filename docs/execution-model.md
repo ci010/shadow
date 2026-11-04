@@ -20,7 +20,7 @@ Browser/GPU abstractions and automatic scheduling are outside this change.
 
 ## Directory selection
 
-Directory tools use `folder`. The host resolves that Project Folder to its exact
+Directory tools use `workspace`. The host resolves that Project Folder to its exact
 node and directory. Omission retains session locality. Unknown, ambiguous, missing,
 offline, revoked or incompatible directories fail without Main fallback or device
 substitution. Per-call selection changes neither session cwd nor scoped

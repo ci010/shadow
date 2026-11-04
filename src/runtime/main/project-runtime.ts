@@ -462,6 +462,12 @@ export async function createProjectRuntime(
   const loadable = new Map<string, LoadableEntry>()
   loadable.set('agent_tool_test', agentToolTest)
   loadable.set('session_proxy', new SessionProxyTool())
+  loadable.set('layerfs', {
+    factory: async () => {
+      const { LayerFSTool } = await import('../../tools/layerfs.ts')
+      return new LayerFSTool(project.id)
+    },
+  })
   // One managed copied-profile browser per Project runtime; adapters remain session-local.
   loadable.set('chrome-devtools', {
     config: {
@@ -1032,7 +1038,7 @@ export async function createProjectRuntime(
     path => github.readVirtual(path), () => github.virtualEntries())
   vfs.mount(
     'v:project',
-    'read-only current project folder discovery; read v:project/folders for live metadata and availability, not cwd or access grants',
+    'read-only current project workspace discovery; read v:project/workspaces for live metadata and availability, not cwd or access grants',
     projectFoldersVfs.read,
     projectFoldersVfs.list,
   )
