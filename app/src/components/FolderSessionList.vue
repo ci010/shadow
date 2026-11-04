@@ -4,7 +4,7 @@
       v-for="session in displayedSessions"
       :key="session.sessionId"
       as="li"
-      class="folder-session-row"
+      class="folder-session-row session-list-row"
       :class="{ active: isSelected(session), working: isWorking(session), 'needs-reply': activityStage(session) === 'waiting' }"
       :depth="Math.min(session.depth, 6) + depth"
       :selected="isSelected(session)"
@@ -23,17 +23,9 @@
       @toggle="$emit('toggle', session.sessionId)"
       @select="$emit('select', session.sessionId)"
     >
-      <template v-if="sessionMetadata" #subtitle>
-        <span class="session-metadata">
-          <span class="session-folder-chip" :class="{ 'is-scratch': !session.folderId }" :data-folder-tone="sessionMetadata(session).folderTone" :title="sessionMetadata(session).folderTitle ?? sessionMetadata(session).folder">{{ sessionMetadata(session).folder }}</span>
-          <time v-if="sessionMetadata(session).time" :datetime="session.lastActivityAt" :title="sessionMetadata(session).absoluteTime">{{ sessionMetadata(session).time }}</time>
-        </span>
-      </template>
-      <template #icon>
-        <span v-if="session.groupObservation?.pending" class="i-lucide-message-circle-question w-4 h-4" :title="t('Pending setup approval')" />
-        <span v-else-if="session.groupObservation && !session.groupObservation.enabled" class="i-lucide-circle-dashed w-4 h-4" :title="t('Not enabled')" />
-        <SessionActivity v-else :stage="sidebarSessionIconStage(activityStage(session), session.completed)" :has-cron="session.hasCron" :has-background-tasks="hasBackgroundTasks(session)" :subagents="delegatedActivity(session)" compact icon-only status-icons />
-      </template>
+      <template #default><SessionListItem :session="session" part="title" /></template>
+      <template v-if="sessionMetadata" #subtitle><SessionListItem :session="session" part="metadata" :metadata="sessionMetadata(session)" /></template>
+      <template #icon><SessionListItem :session="session" part="icon" :stage="activityStage(session)" :has-background-tasks="hasBackgroundTasks(session)" :subagents="delegatedActivity(session)" /></template>
       <template #meta><WorkingWave v-if="isAnimating(session)" class="session-working-wave" /></template>
       <template v-if="!session.sessionId.startsWith('observed-group:')" #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
       <template v-if="showInfo" #info="{ close }">
@@ -72,8 +64,9 @@
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import { computed } from 'vue'
-import { sidebarSessionIconStage, sessionNavigationParent, visibleSessions, type SidebarSession } from '../folders-sidebar.ts'
+import { sessionNavigationParent, visibleSessions, type SidebarSession } from '../folders-sidebar.ts'
 import SessionActivity from './SessionActivity.vue'
+import SessionListItem from './SessionListItem.vue'
 import WorkingWave from './WorkingWave.vue'
 import TreeRow from './TreeRow.vue'
 import HoverInfo from './HoverInfo.vue'
@@ -123,19 +116,6 @@ function isWorking(session: SidebarSession) { return isWorkingStage(activityStag
 </script>
 
 <style scoped>
-.session-metadata { display: flex; align-items: center; gap: 6px; height: 16px; min-width: 0; }
-.session-folder-chip { display: block; min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; padding-inline: 6px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--c-bg-muted) 88%, var(--c-text-secondary) 12%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-border) 80%, var(--c-text-secondary) 20%); color: var(--c-text-secondary); font-weight: 500; line-height: 16px; }
-.session-folder-chip[data-folder-tone] { background: color-mix(in srgb, var(--folder-chip-color) 18%, var(--c-bg-card)); color: color-mix(in srgb, var(--folder-chip-color) 65%, var(--c-text)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--folder-chip-color) 50%, var(--c-border)); }
-.session-folder-chip[data-folder-tone="0"] { --folder-chip-color: #579dff; }
-.session-folder-chip[data-folder-tone="1"] { --folder-chip-color: #df8cde; }
-.session-folder-chip[data-folder-tone="2"] { --folder-chip-color: #45c5ac; }
-.session-folder-chip[data-folder-tone="3"] { --folder-chip-color: #edb455; }
-.session-folder-chip[data-folder-tone="4"] { --folder-chip-color: #b196ff; }
-.session-folder-chip[data-folder-tone="5"] { --folder-chip-color: #f08e76; }
-.session-folder-chip[data-folder-tone="6"] { --folder-chip-color: #64c5e4; }
-.session-folder-chip[data-folder-tone="7"] { --folder-chip-color: #c3c65b; }
-.session-folder-chip.is-scratch { background: transparent; box-shadow: none; padding-inline: 0; color: var(--c-text-secondary); font-weight: 400; }
-.session-metadata time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .session-working-wave { color: var(--c-text-secondary); }
 .folder-session-list { list-style: none; padding: 0; margin: 0; }
 /* Animate keyed reordering only; initial rendering and enter/leave stay immediate. */

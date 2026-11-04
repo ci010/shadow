@@ -137,10 +137,10 @@
 <script setup lang="ts">
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { createLiveResourceRefresh } from '../live-resource-refresh.ts'
-import { formatDateTime, i18n, t } from '../i18n.ts'
+import { t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { composerDraftKey, composerDraftEditedAt, composerDraftRevision } from '../composables/useComposerDraft.ts'
-import { formatSidebarActivity } from '../sidebar-chat-time.ts'
+import { sessionListMetadata } from '../session-list-metadata.ts'
 import FolderDialog from './FolderDialog.vue'
 import FolderSessionList from './FolderSessionList.vue'
 import TreeRow from './TreeRow.vue'
@@ -151,7 +151,7 @@ import SessionActivity from './SessionActivity.vue'
 import WorkingWave from './WorkingWave.vue'
 import CopyableId from './CopyableId.vue'
 import AutomationSidebar from './AutomationSidebar.vue'
-import { sidebarFolderLabels, sidebarFolderTones } from '../sidebar-folder-labels.ts'
+import { sidebarFolderLabels } from '../sidebar-folder-labels.ts'
 import { fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
 import { railInitial } from '../folder-rail.ts'
 import { prominentWorkingStage } from '../session-activity.ts'
@@ -212,7 +212,6 @@ watch(folderGrouped, () => {
   try { saveChatListPreferences(window.localStorage, props.apiBase, props.projectId, { folderGrouped: folderGrouped.value, sort: chatSort }) } catch { /* Browser storage may be denied. */ }
 })
 const folderNames = computed(() => sidebarFolderLabels(folders.value, nodes.value, t('This computer')))
-const folderTones = computed(() => sidebarFolderTones(folders.value))
 const chatGroups = computed(() => groupBotConversations(folderGrouped.value ? groups.value.chats : groups.value.unified, props.projectId, props.bots))
 const storageRevision = ref(0)
 const draftActivity = computed(() => {
@@ -241,17 +240,7 @@ function stopActivityClock() {
   activityTimer = undefined
 }
 function sessionMetadata(session: SidebarSession) {
-  const folder = folders.value.find(folder => folder.id === session.folderId)
-  const nodeId = folder?.kind === 'remote' ? folder.workdir.nodeId : undefined
-  const node = nodeId ? nodes.value.find(node => node.nodeId === nodeId) : nodes.value.find(node => node.role === 'main')
-  return {
-    node: folder ? node?.displayName || nodeId || t('This computer') : undefined,
-    folder: session.folderId ? folders.value.find(folder => folder.id === session.folderId)?.name ?? session.folderId : t('from scratch'),
-    folderTitle: session.folderId ? folderNames.value.get(session.folderId) ?? session.folderId : t('from scratch'),
-    folderTone: session.folderId ? folderTones.value.get(session.folderId) : undefined,
-    time: formatSidebarActivity(session.lastActivityAt, activityNow.value, i18n.global.locale.value),
-    absoluteTime: session.lastActivityAt ? formatDateTime(session.lastActivityAt) : '',
-  }
+  return sessionListMetadata(session, folders.value, nodes.value, activityNow.value)
 }
 const collapsedBots = ref(new Set<string>())
 watch(() => [props.apiBase, props.projectId], () => {
