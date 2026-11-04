@@ -1,5 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue'
+import SessionListItem from './SessionListItem.vue'
+import { sessionListMetadata } from '../session-list-metadata.ts'
+import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
+import { hostBase, projectBase } from '../api-url.ts'
+import { activeSubagentsByOwner, summarizeSubagents } from '../subagent-executions.ts'
+import type { SidebarSession } from '../folders-sidebar.ts'
 import { t } from '../i18n.ts'
 import type { ProjectRecord } from '../projects.ts'
 import type { ProjectLiveLease } from '../project-live-state.ts'
@@ -13,6 +19,21 @@ const leases = shallowRef<Array<{ projectId: string; lease: ProjectLiveLease }>>
 const dialog = ref<HTMLDialogElement>()
 const input = ref<HTMLInputElement>()
 const query = ref('')
+const folderCatalogs = ref<Record<string, FolderRecord[]>>({})
+const now = ref(Date.now())
+const clock = setInterval(() => { now.value = Date.now() }, 15_000)
+function entryFor(projectId: string) { return leases.value.find(entry => entry.projectId === projectId) }
+function stageFor(session: SidebarSession & { projectId: string }) {
+  return entryFor(session.projectId)?.lease.activity.state.value?.stages[session.sessionId]
+}
+function delegatedFor(session: SidebarSession & { projectId: string }) {
+  const lease = entryFor(session.projectId)?.lease
+  const stages = lease?.activity.state.value?.stages ?? {}
+  return summarizeSubagents(activeSubagentsByOwner(lease?.graph.state.value ?? [], stages).get(session.sessionId) ?? [], stages)
+}
+function metadataFor(session: SidebarSession & { projectId: string }) {
+  return sessionListMetadata(session, folderCatalogs.value[session.projectId] ?? [], [], now.value)
+}
 const projectFilter = ref('')
 const filteredLeases = computed(() => leases.value.filter(entry => !projectFilter.value || entry.projectId === projectFilter.value))
 watch(() => props.projects, projects => {
@@ -23,12 +44,20 @@ const id = useId()
 let previousFocus: HTMLElement | null = null
 let closing = false
 const composing = ref(false)
-watch(() => [props.apiBase, ...props.projects.map(project => project.id)], () => {
+watch(() => [props.apiBase, ...props.projects.map(project => project.id)], (_, __, onCleanup) => {
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())
+  folderCatalogs.value = {}
   for (const { lease } of leases.value) lease.release()
   leases.value = [...new Set(props.projects.map(project => project.id))].map(projectId => ({
     projectId, lease: live.acquireProject(props.apiBase, projectId),
   }))
-  for (const { lease } of leases.value) void lease.graph.read()
+  for (const { projectId, lease } of leases.value) {
+    void lease.read()
+    void createFoldersClient(projectBase(hostBase(props.apiBase), projectId)).list(controller.signal).then(folders => {
+      if (!controller.signal.aborted) folderCatalogs.value = { ...folderCatalogs.value, [projectId]: folders }
+    }).catch(() => { /* Folder IDs remain truthful fallbacks when the catalog is unavailable. */ })
+  }
 }, { immediate: true })
 const results = computed(() => searchQuickOpenSessions(filteredLeases.value.flatMap(({ projectId, lease }) =>
   (lease.graph.state.value ?? []).map(session => ({ ...session, projectId }))), query.value, props.projects.map(project => project.id), projectFilter.value))
@@ -93,6 +122,7 @@ onMounted(() => {
   input.value?.focus()
 })
 onBeforeUnmount(() => {
+  clearInterval(clock)
   for (const { lease } of leases.value) lease.release()
   dialog.value?.close()
   if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
@@ -129,10 +159,13 @@ onBeforeUnmount(() => {
     </div>
     <ul :id="`${id}-results`" role="listbox" :aria-label="t('Sessions')" class="results">
       <li v-for="(session, index) in results" :id="optionId(index)" :key="JSON.stringify([session.projectId, session.sessionId])"
-        role="option" :aria-selected="selected === index" :class="{ selected: selected === index }"
+        role="option" :aria-selected="selected === index" class="session-list-row" :class="{ selected: selected === index }"
         @pointermove="selected = index" @mousedown.prevent @click="choose(index)">
-        <span class="session-title">{{ session.title || session.label }}</span>
-        <span class="project-label">{{ projectLabel(session.projectId) }}</span>
+        <span class="session-icon" aria-hidden="true"><SessionListItem part="icon" :session="session" :stage="stageFor(session)" :subagents="delegatedFor(session)" /></span>
+        <span class="session-copy">
+          <SessionListItem part="title" :session="session" />
+          <SessionListItem part="metadata" :session="session" :metadata="metadataFor(session)" :project-label="!projectFilter ? projectLabel(session.projectId) : undefined" />
+        </span>
       </li>
     </ul>
   </dialog>
@@ -157,10 +190,9 @@ button:disabled { cursor: default; opacity: .6; }
 .failure { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .failure span { overflow-wrap: anywhere; }
 .results { list-style: none; margin: 0; padding: 4px 0; max-height: 48dvh; overflow-y: auto; border-top: 1px solid var(--c-border-soft); }
-.results li { display: flex; align-items: center; gap: 16px; padding: 10px 16px; min-height: 20px; cursor: pointer; }
-.results li:hover { background: var(--c-bg-muted); }
-.results li.selected { background: var(--c-selection-bg); color: var(--c-primary); }
-.session-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.project-label { max-width: 35%; color: var(--c-text-secondary); overflow-wrap: anywhere; font-size: 12px; }
+.results li { display: flex; align-items: center; gap: 8px; padding: 6px 16px; min-height: 48px; box-sizing: border-box; cursor: pointer; line-height: 20px; }
+.session-icon { display: grid; place-items: center; flex: 0 0 16px; width: 16px; height: 16px; color: var(--c-text-secondary); }
+.session-copy { flex: 1; min-width: 0; }
+.session-copy :deep(.session-metadata) { font-size: 11px; color: var(--c-text-secondary); }
 @media (max-width: 700px), (pointer: coarse) { button { min-height: 44px; } input { font-size: 16px; min-height: 44px; } .results li { min-height: 44px; box-sizing: border-box; } }
 </style>
