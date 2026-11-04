@@ -1,3 +1,4 @@
+import { validateEventSummary } from '../agent/event-summary.ts'
 import { join } from 'node:path'
 import { appendFile, mkdir } from 'node:fs/promises'
 import type { Tool, ToolParameters } from './tool.ts'
@@ -20,6 +21,10 @@ export class LogTool implements Tool {
         type: 'string',
         description:
           'Actor (person, agent, system). A separate wiki page is not required.',
+      },
+      summary: {
+        type: 'string',
+        description: 'Short standalone event briefing (1–280 Unicode code points); include outcome and important uncertainty, not learning audit. Required for new reflector events.',
       },
       what: {
         type: 'string',
@@ -52,7 +57,7 @@ export class LogTool implements Tool {
   }
 
   constructor(private workspace: string, private learningEvent?: (
-    entry: { who: string; what: string; why?: string; challenge?: string; refs?: string[]; origin?: string },
+    entry: { who: string; what: string; summary?: string; why?: string; challenge?: string; refs?: string[]; origin?: string },
     key: unknown, context: ExecutionContext,
   ) => string | undefined) {}
 
@@ -64,6 +69,7 @@ export class LogTool implements Tool {
     args: Record<string, unknown>,
     context?: ExecutionContext,
   ): Promise<string> {
+    const summary = validateEventSummary(args.summary)
     const who = String(args.who)
     const what = String(args.what)
     const why = args.why != null ? String(args.why) : undefined
@@ -75,7 +81,7 @@ export class LogTool implements Tool {
       ? String(args.session)
       : context?.sessionId
     if (context && this.learningEvent) {
-      const result = this.learningEvent({ who, what, why, challenge, refs, origin }, args.key, context)
+      const result = this.learningEvent({ who, what, summary, why, challenge, refs, origin }, args.key, context)
       if (result !== undefined) return result
     }
 
@@ -85,6 +91,7 @@ export class LogTool implements Tool {
       who,
       what,
     }
+    if (summary) entry.summary = summary
     if (why) entry.why = why
     if (challenge) entry.challenge = challenge
     if (refs && refs.length > 0) entry.refs = refs

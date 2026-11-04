@@ -1,3 +1,4 @@
+import { validateEventSummary } from '../event-summary.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -21,6 +22,7 @@ const sourceSchema = z.object({
 export type LearningSource = z.infer<typeof sourceSchema>
 const eventSchema = z.object({
   id: text, path: text, origin: text, when: text, who: text, what: text,
+  summary: z.string().transform(value => validateEventSummary(value)!).optional(),
   why: z.string().optional(), challenge: z.string().optional(), refs: z.array(z.string()).optional(),
 }).strict()
 export type LearningEvent = z.infer<typeof eventSchema>
