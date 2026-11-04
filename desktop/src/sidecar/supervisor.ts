@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process'
 import type { StartupDiagnosticEntry } from './startup-diagnostics.js'
-import { backendStartupError, BackendStartupDiagnostics, type BackendStartupTiming } from './backend-startup-diagnostics.js'
+import { backendStartupError, BackendStartupDiagnostics, type BackendStartupTiming, type BackendStorageValidationFailure } from './backend-startup-diagnostics.js'
 
 export type SidecarRole = 'main' | 'child'
 
@@ -158,7 +158,10 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     this.startedAt = this.clock.now()
     this.role = request.role
     this.probeErrorReported = false
-    this.backendDiagnostics = new BackendStartupDiagnostics(entry => this.diagnostic('backend-phase', undefined, undefined, entry))
+    this.backendDiagnostics = new BackendStartupDiagnostics(
+      entry => this.diagnostic('backend-phase', undefined, undefined, entry),
+      failure => this.diagnostic('backend-storage-validation-failed', undefined, undefined, undefined, failure),
+    )
     this.diagnostic('starting')
     const validationFailure = this.validate(request)
     if (validationFailure) return this.fail(request.role, 'configuration-error', validationFailure)
@@ -438,7 +441,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     return Math.max(0, Math.round(this.clock.now() - this.startedAt))
   }
 
-  private diagnostic(event: StartupDiagnosticEntry['event'], kind?: SidecarFailureKind, exitCode?: number | null, backend?: BackendStartupTiming): void {
+  private diagnostic(event: StartupDiagnosticEntry['event'], kind?: SidecarFailureKind, exitCode?: number | null, backend?: BackendStartupTiming, storageValidation?: BackendStorageValidationFailure): void {
     const backendError = event === 'failed' ? backendStartupError(this.recentOutput) : undefined
     try {
       this.options.diagnosticSink?.({
@@ -449,6 +452,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
         ...(kind ? { kind } : {}),
         ...(exitCode !== undefined && exitCode !== null ? { exitCode } : {}),
         ...(backend ? { backend } : {}),
+        ...(storageValidation ? { storageValidation } : {}),
         ...(backendError ? { backendError } : {}),
       })
     } catch {

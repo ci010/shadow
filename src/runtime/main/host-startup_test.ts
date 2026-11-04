@@ -111,6 +111,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         }
         assert.deepEqual(entered, [healthy.id], 'Invalid Projects must not instantiate services or overwrite metadata')
         assert.doesNotMatch(JSON.stringify(messages), /synthetic-sensitive-text/)
+        const diagnosticText = JSON.stringify(messages)
+        for (const privateValue of [home, state.sessionId, healthy.id]) assert.ok(!diagnosticText.includes(privateValue))
+        const source = Store === JsonlSessionStore ? 'jsonl' : 'sqlite'
+        assert.ok(messages.some(args => args[0] === `[projects] session_storage_validation_failed stage=${source} source=${source} error=OwnershipValidationError`))
+        assert.ok(messages.some(args => args[0] === `[projects] session_storage_validation_failed stage=ownership source=${source} error=Error`))
+        assert.ok(messages.some(args => typeof args[0] === 'string' && args[0].startsWith('[projects] session_storage_unavailable:')))
         await put(encode(state))
         const repaired = await request('/api/projects/default/retry', 'POST')
         assert.deepEqual(await repaired.json(), { state: 'ready' })

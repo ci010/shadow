@@ -41,6 +41,41 @@ export function safeBackendTiming(value: unknown): BackendStartupTiming | undefi
   }
 }
 
+const VALIDATION_STAGES = ['cron', 'sessions', 'jsonl', 'sqlite', 'ownership', 'reserve'] as const
+const VALIDATION_SOURCES = ['cron', 'sessions', 'jsonl', 'sqlite', 'catalog'] as const
+const VALIDATION_ERRORS = ['ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOTDIR', 'EISDIR', 'SQLITE_BUSY', 'SQLITE_CORRUPT', 'SQLITE_NOTADB', 'ERR_SQLITE_ERROR', 'SyntaxError', 'TypeError', 'RangeError', 'Error', 'OwnershipValidationError', 'SessionIdentityError', 'unknown'] as const
+
+// Independent receiving boundary: only these source files and bounded numeric positions.
+const STORAGE_FRAME = /^src\/(?:sessions\/(?:session-store-jsonl|fresh-automation-state|session-metadata|session-name|task-record|initiative-metadata|topic-contract|session-identity|session-store|work-policy|locality|retirement-contract)|projects\/ownership|cron\/contracts|channels\/integration-contract)\.(?:ts|js):[1-9]\d{0,5}:[1-9]\d{0,5}$/
+
+// Match the producer's Vite layout, not arbitrary paths or function/message text.
+const STORAGE_ENTRY_FRAME = /^dist\/src\/index\.js:[1-9]\d{0,5}:[1-9]\d{0,5}$/
+
+const STORAGE_BUNDLE_FRAME = /^dist\/_chunks\/[A-Za-z0-9_][A-Za-z0-9_-]{0,79}-[A-Za-z0-9_-]{8}\.js:[1-9]\d{0,5}:[1-9]\d{0,5}$/
+
+export interface BackendStorageValidationFailure {
+  readonly frames?: readonly string[]
+  readonly stage: typeof VALIDATION_STAGES[number]
+  readonly source: typeof VALIDATION_SOURCES[number]
+  readonly error: typeof VALIDATION_ERRORS[number]
+}
+
+/** Exact fixed vocabulary only; reject additional fields rather than persisting private data. */
+export function safeStorageValidationFailure(value: unknown): BackendStorageValidationFailure | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (Object.keys(record).some(key => !['stage', 'source', 'error', 'frames'].includes(key))) return undefined
+  const frames = record.frames
+  if (frames !== undefined && (!Array.isArray(frames) || frames.length < 1 || frames.length > 4
+    || !frames.every(frame => typeof frame === 'string' && (STORAGE_FRAME.test(frame) || STORAGE_BUNDLE_FRAME.test(frame) || STORAGE_ENTRY_FRAME.test(frame))))) return undefined
+  const stage = VALIDATION_STAGES.find(value => value === record.stage)
+  const source = VALIDATION_SOURCES.find(value => value === record.source)
+  const error = VALIDATION_ERRORS.find(value => value === record.error)
+  if (!stage || !source || !error) return undefined
+  return { stage, source, error, ...(frames ? { frames: [...frames as string[]] } : {}) }
+}
+
+const VALIDATION_MARKER = /^\[projects\] session_storage_validation_failed stage=([A-Za-z]+) source=([A-Za-z]+) error=([A-Za-z_]+)(?: frames=([^\s]+))?$/
 const PREFIX = '[startup] '
 const MAX_LINE_LENGTH = 2_048
 const MAX_RECORDS = 512
@@ -98,7 +133,10 @@ export class BackendStartupDiagnostics {
   private readonly projects = new Map<string, number>()
   private count = 0
 
-  constructor(private readonly emit: (entry: BackendStartupTiming) => void) {}
+  constructor(
+    private readonly emit: (entry: BackendStartupTiming) => void,
+    private readonly emitValidationFailure?: (entry: BackendStorageValidationFailure) => void,
+  ) {}
 
   push(stream: 'stdout' | 'stderr', chunk: string): void {
     if (this.count >= MAX_RECORDS) return
@@ -123,6 +161,15 @@ export class BackendStartupDiagnostics {
   }
 
   private accept(line: string): void {
+    const validation = VALIDATION_MARKER.exec(line)
+    if (validation) {
+      const failure = safeStorageValidationFailure({ stage: validation[1], source: validation[2], error: validation[3], ...(validation[4] ? { frames: validation[4].split(',') } : {}) })
+      if (failure) {
+        this.count++
+        this.emitValidationFailure?.(failure)
+      }
+      return
+    }
     if (!line.startsWith(PREFIX)) return
     let value: unknown
     try { value = JSON.parse(line.slice(PREFIX.length)) } catch { return }

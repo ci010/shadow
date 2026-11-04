@@ -78,7 +78,7 @@ export async function startProjectHost(
       const message = 'Session storage could not be validated. Original data is preserved. Repair the project session data and retry.'
       failures.set(id, message)
       // Never log parser messages: malformed JSON can contain private conversation data.
-      console.error(`[projects:${id}] session_storage_unavailable: ${message}`)
+      console.error(`[projects] session_storage_unavailable: ${message}`)
       return undefined
     }
   }

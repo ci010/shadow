@@ -103,3 +103,69 @@ test('cron-only persisted V1 targets reserve ownership without sessions; invalid
     await assert.rejects(reserveRemoteSessionWorkdirs(home, catalog, 'default'), /another project/)
   })
 })
+
+for (const scenario of ['cron', 'jsonl', 'sqlite', 'ownership', 'reserve'] as const) {
+  test(`reservation failure logs only safe classification at ${scenario} stage`, async t => {
+    await withTempWorkspace(async root => {
+      const { mkdir, writeFile } = await import('node:fs/promises')
+      const home = join(root, 'private-home')
+      const directory = projectStoragePath(home, '.sessions')
+      const catalog = new ProjectCatalog(join(root, 'host'))
+      await catalog.init()
+      const secret = 'PRIVATE_SESSION_CONTENT_AND_ID'
+      const failure = Object.assign(new SyntaxError(`${root}: ${secret}`), { code: secret })
+      const logs: unknown[][] = []
+      t.mock.method(console, 'error', (...args: unknown[]) => { logs.push(args) })
+      if (scenario === 'cron') {
+        await mkdir(projectStoragePath(home, '.cron'), { recursive: true })
+        await writeFile(projectStoragePath(home, '.cron/jobs.json'), `{"${secret}": INVALID}`)
+      } else {
+        await mkdir(directory, { recursive: true })
+        t.mock.method(JsonlSessionStore.prototype, 'listAllStates', async () => {
+          if (scenario === 'jsonl') throw failure
+          return scenario === 'ownership'
+            ? { [secret]: { sessionId: secret, projectId: secret, segmentIndex: 0 } }
+            : {}
+        })
+        if (scenario === 'sqlite') {
+          const sqlite = new SqliteSessionStore(directory)
+          sqlite.close()
+          t.mock.method(SqliteSessionStore.prototype, 'listAllStates', async () => { throw failure })
+        }
+        if (scenario === 'reserve') t.mock.method(catalog, 'reserveRemoteWorkdirs', () => { throw failure })
+      }
+      await assert.rejects(reserveRemoteSessionWorkdirs(home, catalog, 'default'), error => {
+        if (scenario !== 'cron' && scenario !== 'ownership') assert.equal(error, failure, 'original failure is preserved')
+        return true
+      })
+      assert.deepEqual(logs, [[`[projects] session_storage_validation_failed stage=${scenario} source=${scenario === 'ownership' ? 'jsonl' : scenario === 'reserve' ? 'catalog' : scenario} error=${scenario === 'ownership' ? 'Error' : 'SyntaxError'}`]])
+      assert.ok(!JSON.stringify(logs).includes(secret))
+      assert.ok(!JSON.stringify(logs).includes(root))
+      assert.deepEqual(catalog.remoteClaims(), [])
+    })
+  })
+}
+
+test('reservation diagnostics allowlist codes, reject arbitrary names and survive broken sinks', async t => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'host'))
+    await catalog.init()
+    const logs: unknown[][] = []
+    const sink = t.mock.method(console, 'error', (...args: unknown[]) => { logs.push(args) })
+    const errors = [
+      { code: 'SQLITE_CORRUPT', name: 'private-name', message: 'private-content' },
+      { code: 'private-code', name: 'private-name', message: 'private-content' },
+      null,
+      { get code(): string { throw new Error('private-accessor') } },
+    ]
+    let failure: unknown
+    t.mock.method(catalog, 'reserveRemoteWorkdirs', () => { throw failure })
+    for (const [index, error] of errors.entries()) {
+      failure = error
+      await assert.rejects(reserveRemoteSessionWorkdirs(root, catalog, 'default'), actual => { assert.equal(actual, error); return true })
+      assert.deepEqual(logs.at(-1), [`[projects] session_storage_validation_failed stage=reserve source=catalog error=${index === 0 ? 'SQLITE_CORRUPT' : 'unknown'}`])
+    }
+    sink.mock.mockImplementation(() => { throw new Error('sink failure') })
+    await assert.rejects(reserveRemoteSessionWorkdirs(root, catalog, 'default'), actual => { assert.equal(actual, failure); return true })
+  })
+})

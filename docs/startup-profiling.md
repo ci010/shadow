@@ -61,6 +61,36 @@ an explicit desktop user-data override changes that path. It contains the
 supervisor spawn, timeout and readiness timestamps, including a timeout when
 the backend itself cannot run another callback.
 
+During startup, fixed `[projects] session_storage_validation_failed` markers
+also produce `backend-storage-validation-failed` entries in this log and the
+`[desktop:startup]` terminal output. Their `storageValidation` object contains
+only allowlisted `stage`, `source`, and `error` classifications, plus optional
+`frames`: at most four exact-allowlisted storage/schema source filenames or
+Vite bundle locations, with line/column numbers from 1 through 999999.
+Development `.ts` and built `.js` source frames are supported. Production uses
+no sourcemaps: bundle frames retain `dist/_chunks/<name>-<hash>.js:<line>:<column>`
+or the exact default entry `dist/src/index.js:<line>:<column>` (not arbitrary
+`dist/src` files), so they can be looked up in the matching build's actual file
+(not a different build). The default-entry regression test compiles with unchanged
+production entries into isolated scratch storage, executes unchanged extracted
+validators with synthetic inputs and preserved source offsets, and checks the
+producer through the desktop disk/terminal sink against the emitted throw lines.
+Additional-entry chunk tests are supplemental: extra entries change chunk layout
+and cannot establish coverage of the default entry or diagnose production data. Chunk names are 1–80 ASCII alphanumeric/underscore/hyphen characters,
+starting alphanumeric or underscore, with an eight-character hash of the same
+alphabet; subdirectories and traversal are rejected. An absent frame is not
+evidence that a particular validator passed.
+Exception messages, function names, absolute/private paths, Project/session
+identities, extra marker fields and arbitrary child output are not forwarded.
+The disk sink validates classifications and source frames again. Frames locate
+the throwing validator, not the offending stored record; do not infer a data
+repair from `TypeError` alone. This works
+without arming a profile capture and does not change fail-closed ownership
+validation. It uses the supervisor's bounded startup-only stream capture (2 KiB
+lines, at most 512 accepted diagnostic records per attempt), not a general
+runtime console logger. Role-specific user-data selection also applies to the
+log path; each of the three log files is bounded to 256 KiB by default.
+
 ## What is measured
 
 - The supervisor describes the preload using Node `--import` ordering. Electron
