@@ -678,6 +678,15 @@ reports no change and never replays the callback, including while delivery is
 pending. Callback failures remain visible in the execution output; continuation
 is not a delivery retry command.
 
+Background completion callbacks carry a bounded text preview, not unlimited
+process output. Oversized callback content is saved in the owning Project's
+`.tmp` storage and the event includes a `read` reference to the full text. Use
+line-based `offset` and `limit` to page that file. This bounds both persisted
+conversation events and subsequent model input; it does not retroactively
+rewrite oversized events already in history. If saving the full text fails,
+the notification remains bounded and explicitly reports that failure instead
+of claiming a file was saved.
+
 ## Shared work notes and the Project canvas
 
 ### Overview graph disclosure

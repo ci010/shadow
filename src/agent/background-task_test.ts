@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import { test, type TestContext } from 'node:test'
 import { Bus } from '../bus/bus.ts'
 import { EventService } from '../events/service.ts'
-import type { SessionTurnFact, SessionInput } from '../sessions/input.ts'
+import type { SessionTurnFact, SessionInput, SessionMessageInput } from '../sessions/input.ts'
 import { BackgroundTaskManager, backgroundExecutionId, backgroundTaskId } from './background-task.ts'
 import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 import { createProjectScope, getProjectScope } from '../projects/scope.ts'
@@ -312,4 +315,111 @@ test('a failed stop remains retryable and does not release active-work accountin
   assert.equal(await tasks.cancelTask(task.taskId, owner), 'cancelled')
   assert.equal(attempts, 2)
   assert.doesNotMatch(await tasks.getTaskOutput(task.taskId), /Cancellation failed/)
+})
+
+async function outputFixture(t: TestContext) {
+  const root = await mkdtemp(resolve('.background-output-test-'))
+  const home = join(root, 'project-home')
+  const scope = createProjectScope(crypto.randomUUID())
+  const bus = new Bus()
+  const deliveries: SessionMessageInput[] = []
+  const displays: OutboundMessage[] = []
+  const events = new EventService(home, bus, async (sessionId, input) => {
+    assert.equal(getProjectScope(), scope)
+    assert(input.kind === 'message')
+    deliveries.push(input)
+    return { status: 'accepted', sessionId, inputId: input.id }
+  }, scope)
+  const tasks = new BackgroundTaskManager(bus, events, scope, home)
+  bus.on('message.outbound', message => { displays.push(message) })
+  t.after(async () => {
+    await tasks.stop()
+    await events.stop()
+    bus.stopAll()
+    scope.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  return { home, tasks, deliveries, displays }
+}
+
+test('oversized callbacks save exact success/error and prefix in their owning Project, with bounded metadata', async t => {
+  const fixtures = await Promise.all([outputFixture(t), outputFixture(t)])
+  for (const [index, f] of fixtures.entries()) {
+    const failed = index === 1
+    const prefix = failed ? 'Failure continuation' : 'Long continuation\n'.repeat(900)
+    const result = '  \n' + 'large output 界\n'.repeat(220_000) + '\n  END  \n'
+    const task = f.tasks.createDeferredTask({
+      kind: 'process', title: 'Long title'.repeat(2000), sessionId: 'qq:target',
+      callback: { sessionId: 'qq:target', contentPrefix: prefix },
+    })
+    if (failed) task.fail(new Error(result))
+    else task.complete(result)
+    await t.waitFor(() => assert.equal(f.deliveries.length, 1))
+    const input = f.deliveries[0]
+    assert(input.kind === 'message' && input.source.kind === 'event')
+    assert(input.content.length < 12_500)
+    assert(input.content.startsWith(prefix.slice(0, 12_000)))
+    assert(JSON.stringify(input.source.attributes).length < 600)
+    assert.equal(String(input.source.attributes?.status).startsWith(failed ? 'failed: ' : 'completed'), true)
+    const path = /Full output saved to: (\.tmp\/[^\n]+)/.exec(input.content)?.[1]
+    assert(path)
+    const stored = await readFile(projectStoragePath(f.home, path), 'utf8')
+    assert.equal(stored, `${prefix}\n\n${result}`)
+    assert.match(input.content, /line-based offset\/limit/)
+    assert.doesNotMatch(input.content, /offset=12000/)
+    assert((await f.tasks.getTaskOutput(task.taskId)).endsWith(result))
+    assert.equal((await readdir(projectStoragePath(f.home, '.tmp'))).length, 1)
+    assert(f.displays.every(display => display.content.length < 500))
+    await assert.rejects(readFile(projectStoragePath(fixtures[1 - index].home, path)))
+  }
+})
+
+test('small callback semantics and exact threshold remain unchanged without a spill file', async t => {
+  const f = await outputFixture(t)
+  for (const [result, prefix, expected] of [
+    ['  result  ', '  prefix  ', 'prefix\n\nresult'],
+    ['   ', '', '(no result)'],
+    ['x'.repeat(12_000), '', 'x'.repeat(12_000)],
+  ]) {
+    f.tasks.createDeferredTask({ kind: 'process', title: 'Small',
+      callback: { sessionId: 'web:target', contentPrefix: prefix },
+    }).complete(result)
+    await t.waitFor(() => assert.equal(f.deliveries.at(-1)?.content, expected))
+  }
+  await assert.rejects(readdir(projectStoragePath(f.home, '.tmp')))
+})
+
+test('spill failure publishes only a bounded explicit unsaved notice and preserves full error in memory', async t => {
+  const f = await outputFixture(t)
+  await mkdir(f.home, { recursive: true })
+  // A file where the directory belongs deterministically exercises persistence failure.
+  await writeFile(projectStoragePath(f.home, '.tmp'), 'blocked')
+  const error = 'ENOSPC output\n'.repeat(250_000)
+  const task = f.tasks.createDeferredTask({ kind: 'process', title: 'Failed spill',
+    callback: { sessionId: 'qq:target' },
+  })
+  task.fail(new Error(error))
+  await t.waitFor(() => assert.equal(f.deliveries.length, 1))
+  const input = f.deliveries[0]
+  assert(input.content.length < 12_600)
+  assert.match(input.content, /Full output was NOT saved:/)
+  assert.doesNotMatch(input.content, /Full output saved to:/)
+  assert(input.content.includes(`v:bg/${backgroundExecutionId(task.taskId)}`))
+  assert((await f.tasks.getTaskOutput(task.taskId)).endsWith(error))
+  assert(f.displays.every(display => display.content.length < 500))
+})
+
+test('shutdown drains an accepted oversized callback including persistence and event delivery', async t => {
+  const f = await outputFixture(t)
+  const task = f.tasks.createDeferredTask({ kind: 'process', title: 'Drain',
+    callback: { sessionId: 'web:target', contentPrefix: 'continue' },
+  })
+  task.complete('z'.repeat(100_000))
+  assert.equal(f.tasks.hasRunningTasks, true)
+  await f.tasks.stop()
+  assert.equal(f.tasks.hasRunningTasks, false)
+  assert.equal(f.deliveries.length, 1)
+  const files = await readdir(projectStoragePath(f.home, '.tmp'))
+  assert.equal(files.length, 1)
+  assert.equal(await readFile(join(projectStoragePath(f.home, '.tmp'), files[0]), 'utf8'), 'continue\n\n' + 'z'.repeat(100_000))
 })
