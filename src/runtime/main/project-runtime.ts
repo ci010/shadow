@@ -275,7 +275,7 @@ export async function createProjectRuntime(
   cleanup.push(() => events.stop())
   let provider = createAggregatedProvider(config, copilotAuth)
   let activeConfig = config
-  const backgroundTasks = new BackgroundTaskManager(bus, events)
+  const backgroundTasks = new BackgroundTaskManager(bus, events, scope, workspace)
   cleanup.push(() => backgroundTasks.stop())
 
   // OTel ingest/query store (formerly the standalone observer in app/)
