@@ -75,7 +75,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "plan_write",
-      "description": "Write or edit a planning document in .plans/. Shared task status belongs in Initiative items, not a second checklist.",
+      "description": "Write or edit a planning document in .plans/. Shared task status belongs in Work items, not a second checklist.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -381,9 +381,9 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "string",
             "description": "Create only: agent template name, default general."
           },
-          "initiativeId": {
+          "workRoot": {
             "type": "string",
-            "description": "Create only: root Work key for an Initiative view (or a legacy Initiative ID), optional; not an assignment."
+            "description": "Create only: optional root Work key for shared context; not an assignment. Omit for ordinary conversations."
           },
           "initialMessage": {
             "type": "string",
@@ -447,13 +447,13 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             ],
             "description": "Routine status is archived by default. Other values require a response and cannot be silent. Do not hide failures or corrections as routine progress."
           },
-          "initiativeId": {
+          "workRoot": {
             "type": "string",
-            "description": "Optional existing Initiative in this Project."
+            "description": "Optional existing root Work key in this Project; context only."
           },
           "itemId": {
             "type": "string",
-            "description": "Optional existing work item in initiativeId."
+            "description": "Optional existing work item in workRoot; context only."
           }
         },
         "required": [
@@ -631,9 +631,9 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "string",
             "description": "Short description of the sub-agent session's purpose."
           },
-          "initiative_id": {
+          "workRoot": {
             "type": "string",
-            "description": "Existing Initiative ID in this Project. The child receives its shared SQL work context; omission inherits the parent association."
+            "description": "Optional root Work key in this Project. The child receives its shared context; omission inherits the parent association."
           },
           "agent_type": {
             "type": "string",

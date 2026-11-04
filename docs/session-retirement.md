@@ -46,7 +46,7 @@ in **both JSONL and SQLite**. No history migration or physical purge occurs.
 ## Eligibility and closeout
 
 - Only ordinary `web:chat-*` conversations are eligible. System,
-  channel-bound, automation, task/call, remote/unavailable-workdir, Initiative,
+  channel-bound, automation, task/call, remote/unavailable-workdir, Work,
   parent/reporting/shared-workdir and dependent sessions are protected.
 - Age is measured from the last **human message**, not the last assistant
   response, system event or background activity. New human message admissions

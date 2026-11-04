@@ -533,36 +533,36 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: Initiative delegation inherits context, validates explicit scope and survives restart`, async () => {
+  test(`${Store.name}: Work delegation inherits context, validates explicit scope and survives restart`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
-      const f = fixture(workspace, store, { hasInitiative: id => ['cleanup', 'second'].includes(id) })
+      const f = fixture(workspace, store, { hasInitiative: id => ['work:cleanup', 'work:second'].includes(id) })
       try {
         await f.sessions.start()
-        await f.sessions.buildSession('web:root', undefined, { initiativeId: 'cleanup' })
+        await f.sessions.buildSession('web:root', undefined, { initiativeId: 'work:cleanup' })
         const context = sourceContext(workspace, f)
         const inherited = JSON.parse(await f.subagent.execute({ description: 'Inherited', mode: 'task', task: 'Work' }, context))
-        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'cleanup')
+        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'work:cleanup')
         const ids: string[] = []
-        for (const field of ['initiative_id', 'initiative_name', 'project_name']) {
+        for (const field of ['workRoot']) {
           const child = JSON.parse(await f.subagent.execute({
-            description: 'Explicit', mode: 'task', task: 'Work', [field]: 'second',
+            description: 'Explicit', mode: 'task', task: 'Work', [field]: 'work:second',
           }, context))
           ids.push(child.sessionId)
-          assert.equal(f.sessions.getSessionState(child.sessionId)?.initiativeId, 'second')
+          assert.equal(f.sessions.getSessionState(child.sessionId)?.initiativeId, 'work:second')
           assert.equal(f.sessions.getSessionState(child.sessionId)?.folderId, undefined)
         }
         await assert.rejects(f.subagent.execute({
-          description: 'Wrong Project', mode: 'task', task: 'Work', initiative_id: 'missing',
+          description: 'Wrong Project', mode: 'task', task: 'Work', workRoot: 'work:missing',
         }, context), /does not belong/)
         await assert.rejects(f.subagent.execute({
-          description: 'Conflict', mode: 'task', task: 'Work', initiative_id: 'cleanup', project_name: 'second',
-        }, context), /Conflicting/)
+          description: 'Conflict', mode: 'task', task: 'Work', initiative_id: 'work:cleanup', project_name: 'work:second',
+        }, context), /Unsupported/)
         await f.sessions.stop()
         await f.sessions.start()
-        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'cleanup')
-        for (const id of ids) assert.equal(f.sessions.getSessionState(id)?.initiativeId, 'second')
+        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'work:cleanup')
+        for (const id of ids) assert.equal(f.sessions.getSessionState(id)?.initiativeId, 'work:second')
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })

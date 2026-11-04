@@ -776,7 +776,7 @@ Create a note with `data: {title, definition: {objective}, notes: {kind}}`.
 Kinds are `goal`, `approach`, `task` and `finding`. Children also supply parentKey
 and notes.relation with a kind (`supports`, `requires` or `assumption`) and reason.
 Distinguish a chosen approach from a real prerequisite or unverified premise.
-An Initiative derives from a root and descendants; it has no second editable
+The Work tree shows a note and its descendants; it has no second editable
 goal/status store. Parent/completion-dependency cycles are rejected.
 
 Parents maintain causal structure; assigned workers maintain current

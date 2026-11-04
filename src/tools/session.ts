@@ -20,7 +20,7 @@ export class SessionTool implements Tool {
       agentType: { type: 'string', description: 'Create only: agent template name, default general.' },
       model: { type: 'string', description: 'Create only: optional exact model ID from v:models; omission preserves agent/Project defaults.' },
       effort: { type: 'string', enum: [...REASONING_EFFORTS], description: 'Create only: optional reasoning effort supported by the selected model; omission preserves agent/Project defaults.' },
-      initiativeId: { type: 'string', description: 'Create only: root Work key for an Initiative view (or a legacy Initiative ID), optional; not an assignment.' },
+      workRoot: { type: 'string', description: 'Create only: optional root Work key for shared context; not an assignment. Omit for ordinary conversations.' },
       initialMessage: { type: 'string', description: 'Create only: optional kickoff request, with the necessary context and source references.' },
       work: { type: 'object', description: 'Create only: {key:string}, an unassigned note coordinated by this session. Link responsibility and contextual questions before kickoff; no adoption protocol.' },
       nodeId: { type: 'string', description: 'register_folder only: explicit runtime inventory device identity (Main or Child). Required from remote sessions; never inferred from a display path.' },

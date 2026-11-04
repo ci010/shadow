@@ -729,7 +729,7 @@ export class SessionManager {
     const reporter = reportingSessionId === sessionId ? undefined : await this.decisionRecords.context(reportingSessionId)
     return { ...context, ...(this.alignment ? { workContext: this.alignment.decisionContext(sessionId) } : {}),
       userInputs: [...context.userInputs, ...(reporter?.userInputs ?? [])], reportingSessionId,
-      notice: `${context.notice} Reporting responsibility does not change who answers or assign Initiative work.` }
+      notice: `${context.notice} Reporting responsibility does not change who answers or assign Work work.` }
   }
 
   decisionOwners(sessionId: string) {
@@ -762,7 +762,7 @@ export class SessionManager {
       content: `You are the human-selected reporting owner for this decision, not its structural parent or authorized answerer.
 Check the original goal and premises; absorb implementation details and give the user a self-contained brief.
 Do not merely forward the worker's question, treat a proposal as a user constraint, or claim receipt is completion.
-The question is available in its source session. Answer authority and Initiative assignments are unchanged.
+The question is available in its source session. Answer authority and Work assignments are unchanged.
 ${JSON.stringify(request)}`,
     })
   }
@@ -2698,7 +2698,7 @@ ${JSON.stringify(request)}`,
   assertInitiativeAccess(initiativeId: string): void {
     parseInitiativeId({ initiativeId })
     if (this.deps.hasInitiative && !this.deps.hasInitiative(initiativeId)) {
-      throw new Error('Initiative does not belong to this Project.')
+      throw new Error('Work does not belong to this Project.')
     }
   }
 
