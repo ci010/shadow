@@ -4116,5 +4116,11 @@
   "Could not load sessions for {project}": "Could not load sessions for {project}",
   "Sessions": "Sessions",
   "Filter by project": "Filter by project",
-  "All projects": "All projects"
+  "All projects": "All projects",
+  "Add images for model vision (not copied to the selected device)": "Add images for model vision (not copied to the selected device)",
+  "Files and commands run on the selected device. Attached images are sent to the model through Main, not copied to that device. Other local files and folder context are not supported.": "Files and commands run on the selected device. Attached images are sent to the model through Main, not copied to that device. Other local files and folder context are not supported.",
+  "Remove non-image attachments and file or folder context before selecting a remote workspace. Files are not transferred between devices.": "Remove non-image attachments and file or folder context before selecting a remote workspace. Files are not transferred between devices.",
+  "Remove non-image attachments and file or folder context before sending to a remote workspace.": "Remove non-image attachments and file or folder context before sending to a remote workspace.",
+  "File and folder context is unavailable in remote conversations. Attach an image instead.": "File and folder context is unavailable in remote conversations. Attach an image instead.",
+  "Remote conversations support PNG, JPEG, GIF and WebP images only. Other files and folder context are not transferred to the selected device.": "Remote conversations support PNG, JPEG, GIF and WebP images only. Other files and folder context are not transferred to the selected device."
 }

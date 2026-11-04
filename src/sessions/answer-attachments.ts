@@ -4,12 +4,18 @@ import { sessionWorkspacePath } from '../utils/paths.ts'
 import { resolveLegacyProjectPath } from '../storage/legacy-paths.ts'
 import { isImagePath, readImage } from '../utils/image-input.ts'
 
-export async function validateAnswerUploads(workspace: string, owner: string, media: string[], signal?: AbortSignal): Promise<void> {
+export async function validateAnswerUploads(workspace: string, owner: string, media: string[], signal?: AbortSignal, imagesOnly = false): Promise<void> {
   const root = join(sessionWorkspacePath(workspace, owner), 'uploads')
   try {
     const realRoot = await realpath(root)
+    if (imagesOnly) {
+      const sessionRoot = await realpath(sessionWorkspacePath(workspace, owner))
+      const rel = relative(sessionRoot, realRoot)
+      if (rel === '..' || rel.startsWith('../') || rel.startsWith('..\\') || isAbsolute(rel)) throw new TypeError('Attach images uploaded to this conversation.')
+    }
     for (const path of media) {
       signal?.throwIfAborted()
+      if (imagesOnly && !isImagePath(path)) throw new TypeError('Remote answer attachments support images only.')
       if (!isAbsolute(path) || path.includes('\0')) throw new TypeError('Attach files uploaded to this conversation.')
       const target = await realpath(resolveLegacyProjectPath(workspace, resolve(path)))
       const rel = relative(realRoot, target)

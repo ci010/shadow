@@ -6,6 +6,8 @@ import type { Tool, ToolParameters } from './tool.ts'
 
 export class ContinuationTool implements Tool {
   readonly name = 'continuation'
+  // Updates an owned Main task record; never interprets the Child's path.
+  readonly supportsRemoteWorkdir = true
   readonly readonly = false
   readonly description =
     'Set a continuation string on a background task. ' +

@@ -4116,5 +4116,11 @@
   "Could not load sessions for {project}": "无法加载项目 {project} 的会话",
   "Sessions": "会话",
   "Filter by project": "按项目筛选",
-  "All projects": "所有项目"
+  "All projects": "所有项目",
+  "Add images for model vision (not copied to the selected device)": "添加供模型视觉读取的图片（不会复制到所选设备）",
+  "Files and commands run on the selected device. Attached images are sent to the model through Main, not copied to that device. Other local files and folder context are not supported.": "文件和命令在所选设备上运行。图片附件通过 Main 发送给模型，不会复制到该设备。暂不支持其他本地文件及文件夹上下文。",
+  "Remove non-image attachments and file or folder context before selecting a remote workspace. Files are not transferred between devices.": "选择远程工作区前，请移除非图片附件及文件或文件夹上下文。文件不会在设备间传输。",
+  "Remove non-image attachments and file or folder context before sending to a remote workspace.": "发送到远程工作区前，请移除非图片附件及文件或文件夹上下文。",
+  "File and folder context is unavailable in remote conversations. Attach an image instead.": "远程对话不支持文件和文件夹上下文，请改为添加图片。",
+  "Remote conversations support PNG, JPEG, GIF and WebP images only. Other files and folder context are not transferred to the selected device.": "远程对话仅支持 PNG、JPEG、GIF 和 WebP 图片。其他文件和文件夹上下文不会传输到所选设备。"
 }

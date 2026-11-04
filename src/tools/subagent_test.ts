@@ -8,6 +8,7 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 import { SubagentTool } from './subagent.ts'
 import type { InferenceSettings } from '../agent/llm-config.ts'
+import { Tools } from './registry.ts'
 
 test('subagent only creates temporary work, preserving explicit workdir and ignoring reusable role defaults', async () => {
   const workdir = { version: 2 as const, nodeId: 'node-a', workdirId: 'folder-a' }
@@ -108,4 +109,50 @@ test('subagent permits task inference overrides but calls reject explicit fields
   await assert.rejects(tool.execute({ description: 'Bad', task: 'Work', effort: 'invalid' }, context))
   await assert.rejects(tool.execute({ description: 'Bad', task: 'Work', model: 'unsupported' }, context), /not selectable/)
   assert.equal(fields.length, 3)
+})
+
+// Exercise the public registry gate, not just SubagentTool.execute: this was
+// where remote parents were rejected before orchestration could run on Main.
+test('registry delegates remote tasks with opaque parent binding and rejects calls before creation', async () => {
+  const workdir = { version: 2 as const, nodeId: 'child-node', workdirId: 'opaque-folder', displayPathSnapshot: 'Z:\\not-a-main-path' }
+  const parent: SessionState = { sessionId: 'web:parent', segmentIndex: 2, mode: 'session', workdir, folderId: 'registered-folder', workspaceRoot: 'web:root' }
+  const fields: Array<Parameters<SessionManager['buildSession']>[2]> = []
+  let starts = 0
+  let calls = 0
+  const sessions = {
+    getSessionState: () => parent, getAllowedSubagentModes: () => ['task', 'call'], assertCanCreateChild() {},
+    executeOnce: (_key: string, run: () => Promise<string>) => run(),
+    buildSession: async (_id: string, _parent: unknown, next: Parameters<SessionManager['buildSession']>[2]) => { fields.push(next) },
+    configureTaskReview: async () => {},
+    startChild: async () => { starts++ }, startCall: async () => { calls++; return 'unexpected' },
+  } as unknown as SessionManager
+  const types = { resolve: () => ({ name: 'general' }), allNames: () => ['general'] } as unknown as AgentTypesManager
+  const tools = new Tools('.')
+  tools.register(new SubagentTool({} as Bus, sessions, types, {} as ChannelManager))
+  const context = {
+    sessionId: parent.sessionId, physicalSessionId: 'parent-2', messageId: 'input',
+    tools, signal: new AbortController().signal,
+    remoteWorkdir: { nodeId: workdir.nodeId, workdirId: workdir.workdirId, executor: {} },
+  } as unknown as ExecutionContext
+  for (const mode of [undefined, 'task']) {
+    const result = await tools.execute('subagent', { ...(mode ? { mode } : {}), task: 'Inspect the child folder', description: 'Remote task' }, context)
+    assert.equal(typeof result, 'string')
+    assert.equal(JSON.parse(result as string).mode, 'task')
+    const child = fields.at(-1)!
+    assert.deepEqual(child?.workdir, workdir)
+    assert.equal(child?.folderId, parent.folderId)
+    assert.equal(child?.workspaceRoot, parent.workspaceRoot)
+  }
+  assert.equal(starts, 2)
+  const result = await tools.execute('subagent', { mode: 'call', task: 'Inspect', description: 'Remote call' }, context)
+  assert.match(String(result), /call mode is not supported on remote workdirs/)
+  assert.match(String(result), /Use task mode.*no subagent was started/)
+  assert.equal(fields.length, 2)
+  assert.equal(calls, 0)
+  for (const binding of [undefined, { ...workdir, workdirId: 'stale' }]) {
+    parent.workdir = binding
+    const denied = await tools.execute('subagent', { mode: 'task', task: 'Inspect', description: 'Stale context' }, context)
+    assert.match(String(denied), /remote parent workdir binding is missing or changed/)
+    assert.equal(fields.length, 2, 'Never fall back to Main when the parent binding is stale')
+  }
 })

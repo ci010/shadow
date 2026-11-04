@@ -103,6 +103,14 @@ export function isImageAttachment(file: Pick<File, 'name' | 'type'>): boolean {
   return IMAGE_EXTENSIONS.has(ext)
 }
 
+/** Remote images are model input stored on Main, not files copied to the Child. */
+export function assertRemoteChatImages(files: readonly Pick<File, 'name' | 'type'>[]): void {
+  if (files.some(file => !/\.(png|jpe?g|gif|webp)$/i.test(file.name)
+    && !/^image\/(png|jpeg|gif|webp)$/i.test(file.type))) {
+    throw new Error(t('Remote conversations support PNG, JPEG, GIF and WebP images only. Other files and folder context are not transferred to the selected device.'))
+  }
+}
+
 export function clipboardChatFiles(data: {
   files?: Iterable<File>
   items?: Iterable<Pick<DataTransferItem, 'kind' | 'type' | 'getAsFile'> & {

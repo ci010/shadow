@@ -328,14 +328,14 @@ test('folder upload and media reject unavailable and remote workdirs without loc
       const form = new FormData()
       form.set('chatId', chatId)
       form.set('file', new File(['not written'], 'attachment.txt'))
-      assertEquals((await app.request('/api/chat/upload', { method: 'POST', body: form })).status, 409)
+      assertEquals((await app.request('/api/chat/upload', { method: 'POST', body: form })).status, chatId === 'remote' ? 400 : 409)
       assertEquals((await app.request(`/api/media?chatId=${chatId}&path=file.txt`)).status, 404)
       assertEquals(existsSync(sessionWorkspacePath(workspace, `web:${chatId}`)), false)
       const forkForm = new FormData()
       forkForm.set('chatId', 'unsent-fork')
       forkForm.set('parentSessionId', `web:${chatId}`)
       forkForm.set('file', new File(['not written'], 'attachment.txt'))
-      assertEquals((await app.request('/api/chat/upload', { method: 'POST', body: forkForm })).status, 409)
+      assertEquals((await app.request('/api/chat/upload', { method: 'POST', body: forkForm })).status, chatId === 'remote' ? 400 : 409)
       assertEquals(existsSync(sessionWorkspacePath(workspace, 'web:unsent-fork')), false)
     }
   } finally {
@@ -756,4 +756,58 @@ test('history block reuse requires exact hash/count and bounded offset', async (
     history.unshift({ role: 'system', content: 'beyond bound' })
     assert.ok((await read(params)).data, 'offset 17 is outside bounded reuse')
   } finally { await channel.stop() }
+})
+
+
+test('remote session images stay in Main uploads, preview safely and reach multimodal input', async () => {
+  const workspace = await createTempWorkspace()
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
+  const { app, channel } = await createWebApp(workspace, sessionId => ({
+    sessionId, workdir: { version: 2, nodeId: 'child', workdirId: 'opaque', displayPathSnapshot: 'Z:\\private\\child' },
+  }), () => ({ node: 'online', workdir: { online: true, path: 'Z:\\private\\child' } }))
+  const messages: ChatMessage[] = []
+  channel.setReceiver(async message => {
+    const input = channelMessageInput(message)
+    assert.equal(input.kind, 'message')
+    if (input.kind === 'message') messages.push(await buildUserChatMessage(input, workspace, sessionWorkspacePath(workspace, `web:${message.chatId}`)))
+    return { status: 'accepted', sessionId: `web:${message.chatId}`, inputId: message.messageId }
+  })
+  const send = (media: string[]) => app.request('/api/chat/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'remote', content: 'Describe fixture', media }) })
+  try {
+    const form = new FormData()
+    form.set('chatId', 'remote')
+    // Native clipboard files can have no extension/MIME. Bytes determine the saved image format.
+    form.set('file', new File([png], 'clipboard'))
+    const uploaded = await app.request('/api/chat/upload', { method: 'POST', body: form })
+    assert.equal(uploaded.status, 200)
+    const { path } = await uploaded.json()
+    assert.equal(path.startsWith(join(sessionWorkspacePath(workspace, 'web:remote'), 'uploads')), true)
+    assert.equal(path.endsWith('.png'), true)
+    for (const method of ['GET', 'HEAD']) {
+      for (const url of [
+        `/api/media?chatId=remote&path=${encodeURIComponent(path)}`,
+        `/api/media?sessionId=web:remote&path=${encodeURIComponent(path)}`,
+        `/api/chat/uploads/${basename(path)}?chatId=remote`,
+      ]) assert.equal((await app.request(url, { method })).status, 200, url)
+    }
+    assert.equal((await send([path])).status, 200)
+    assert.ok(Array.isArray(messages[0].content) && messages[0].content.some(part => part.type === 'image_url' && part.image_url.url.startsWith('data:image/')))
+    const other = join(sessionWorkspacePath(workspace, 'web:other'), 'uploads', 'other.png')
+    const arbitrary = join(workspace, 'arbitrary.png')
+    await mkdir(join(sessionWorkspacePath(workspace, 'web:other'), 'uploads'), { recursive: true })
+    await writeFile(other, png)
+    await writeFile(arbitrary, png)
+    const link = join(sessionWorkspacePath(workspace, 'web:remote'), 'uploads', 'link.png')
+    await symlink(arbitrary, link)
+    for (const forbidden of [other, arbitrary, 'child.png', 'Z:\\private\\child\\image.png', link, 'data:image/png;base64,' + png.toString('base64')]) {
+      assert.equal((await send([forbidden])).status, 403, forbidden)
+      assert.equal((await app.request(`/api/media?chatId=remote&path=${encodeURIComponent(forbidden)}`)).status, 404)
+    }
+    assert.equal(messages.length, 1)
+    for (const file of [new File(['text'], 'note.txt'), new File(['fake'], 'fake.png', { type: 'image/png' })]) {
+      const invalid = new FormData()
+      invalid.set('chatId', 'remote'); invalid.set('file', file)
+      assert.equal((await app.request('/api/chat/upload', { method: 'POST', body: invalid })).status, 400)
+    }
+  } finally { await channel.stop(); await rm(workspace, { recursive: true }) }
 })

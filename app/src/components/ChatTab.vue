@@ -361,7 +361,7 @@
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
             :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && route.name === 'chat'"
             @complete="completeSessionReference" />
-          <input ref="attachmentInput" class="composer-file-input" type="file" multiple @change="handleAttachmentInput">
+          <input ref="attachmentInput" class="composer-file-input" type="file" :accept="remoteConversation ? 'image/png,image/jpeg,image/gif,image/webp' : undefined" multiple @change="handleAttachmentInput">
           <div v-if="pendingAttachments.length" class="composer-context composer-attachments" :aria-label="t('Attached files')">
             <span v-for="attachment in pendingAttachments" :key="attachment.key" class="context-chip attachment-chip" :class="{ 'attachment-reference': attachment.sourceKey }" :title="attachment.source?.path ?? attachment.file.name">
               <button v-if="attachment.previewUrl" type="button" class="attachment-preview" aria-haspopup="dialog" :aria-label="t('View image: {name}', { name: attachment.file.name })"
@@ -471,7 +471,7 @@
           <p v-if="stageError && requestBusy" class="composer-error" role="status">{{ stageError }}</p>
           <p v-if="settingsError" class="composer-error" role="alert">{{ settingsError }}</p>
           <p v-if="composerDraft.error.value" class="composer-error" role="alert">{{ composerDraft.error.value }}</p>
-          <p v-if="remoteConversation" class="remote-execution-note" role="status">{{ t('Files and commands run on the selected device. Local file attachments are not transferred to that device.') }}</p>
+          <p v-if="remoteConversation" class="remote-execution-note" role="status">{{ t('Files and commands run on the selected device. Attached images are sent to the model through Main, not copied to that device. Other local files and folder context are not supported.') }}</p>
         </div>
       </div>
     </template>
@@ -583,7 +583,7 @@ import { createExecutionLocationDraft, type ExecutionLocation } from '../executi
 import AutomationPayload from './AutomationPayload.vue'
 import { readableAutomationTitle } from '../automation-presentation.ts'
 import type { SessionDetails } from '../session-details.ts'
-import { appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
+import { assertRemoteChatImages, appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasFileReference, readFileReference } from '../file-reference-drag.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
@@ -754,11 +754,11 @@ const submittingMessage = ref(false)
 const pickingContext = ref(false)
 const pastingFiles = ref(false)
 const attachmentInput = ref<HTMLInputElement>()
-const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && typeof File === 'function' && typeof FormData === 'function')
+const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && typeof File === 'function' && typeof FormData === 'function')
 const canPickContext = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
 const canOpenComposerPopover = computed(() => canAttachFiles.value || canPickContext.value)
 const composerPopoverTitle = computed(() =>
-  remoteConversation.value ? t('Local attachments are not transferred to remote workspaces')
+  remoteConversation.value ? t('Add images for model vision (not copied to the selected device)')
     : canAttachFiles.value && canPickContext.value
     ? t('Add files or folders')
     : canAttachFiles.value
@@ -1800,8 +1800,8 @@ function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePic
 
 function selectExecutionLocation(target: ExecutionLocation | undefined): void {
   if (preparingSend.value || activeSessionId.value) return
-  if ((target?.kind === 'node' || target?.kind === 'folder' && target.folder.kind === 'remote') && (contextItems.value.length || pendingAttachments.value.length)) {
-    composerError.value = t('Remove local attachments before selecting a remote workspace. Files are not transferred between devices.')
+  if ((target?.kind === 'node' || target?.kind === 'folder' && target.folder.kind === 'remote') && (contextItems.value.length || pendingAttachments.value.some(item => item.kind !== 'image'))) {
+    composerError.value = t('Remove non-image attachments and file or folder context before selecting a remote workspace. Files are not transferred between devices.')
     return
   }
   try {
@@ -1884,6 +1884,7 @@ function handleAttachmentDrop(event: DragEvent): void {
   }
   try {
     if (hasFileReference(event.dataTransfer)) {
+      if (remoteConversation.value) throw new Error(t('File and folder context is unavailable in remote conversations. Attach an image instead.'))
       const reference = readFileReference(event.dataTransfer)
       if (!reference || reference.apiBase !== props.apiBase) throw new Error(t('Drag a file from this project’s file tree again.'))
       contextItems.value = addChatContext(contextItems.value, reference.kind, [reference.path])
@@ -1897,6 +1898,7 @@ function handleAttachmentDrop(event: DragEvent): void {
     } else {
       const files = droppedChatFiles(event.dataTransfer)
       if (!files.length) throw new Error(t('No files were found in this drop. Drop files or use Add file.'))
+      if (remoteConversation.value) assertRemoteChatImages(files)
       pendingAttachments.value = appendChatAttachments(pendingAttachments.value, files)
     }
     composerError.value = ''
@@ -1932,7 +1934,13 @@ function handleAttachmentInput(event: Event): void {
     composerError.value = composerPopoverTitle.value
     return
   }
-  pendingAttachments.value = appendChatAttachments(pendingAttachments.value, files)
+  try {
+    if (remoteConversation.value) assertRemoteChatImages(files)
+    pendingAttachments.value = appendChatAttachments(pendingAttachments.value, files)
+    composerError.value = ''
+  } catch (cause) {
+    composerError.value = cause instanceof Error ? cause.message : t('Could not attach the files. Drop them again.')
+  }
   input.value = ''
   chatInput.value?.focus({ preventScroll: true })
 }
@@ -1964,12 +1972,13 @@ async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
       if (generation !== sessionSelectionGeneration || !canAttachFiles.value || !canQuoteSelection.value) return
       files = nativeClipboardChatFiles(copied)
     }
+    if (remoteConversation.value) assertRemoteChatImages(files)
     pendingAttachments.value = appendChatAttachments(pendingAttachments.value, files)
     composerError.value = ''
   } catch (cause) {
     if (!event.clipboardData?.getData('text/plain')) event.preventDefault()
     if (generation === sessionSelectionGeneration) {
-      composerError.value = t('Could not paste the files. Copy readable files (not folders), up to 100 files and 100 MiB, and try again or use Add file.')
+      composerError.value = cause instanceof Error ? cause.message : t('Could not paste the files. Copy readable files (not folders), up to 100 files and 100 MiB, and try again or use Add file.')
       console.warn('[chat] Clipboard attachment read failed', cause)
     }
   } finally {
@@ -2689,8 +2698,8 @@ async function sendMessage(overrideContent?: string, opts?: {
   const attachments = retry ? [] : [...pendingAttachments.value]
   const model = explicitModel.value
   const savedDraftKey = pendingDraftSettings.value ? draftSettingsKey.value : undefined
-  if (remoteConversation.value && (attachments.length || contextItems.value.length)) {
-    composerError.value = t('Remove local attachments before sending to a remote workspace.')
+  if (remoteConversation.value && (attachments.some(item => item.kind !== 'image') || contextItems.value.length)) {
+    composerError.value = t('Remove non-image attachments and file or folder context before sending to a remote workspace.')
     return
   }
   if ((!content && !retry && attachments.length === 0) || submissionBusy.value || currentRequest.value?.state.stopping

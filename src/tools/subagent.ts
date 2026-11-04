@@ -49,13 +49,16 @@ function reviewError(error: z.ZodError): string {
 /** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
   readonly name = 'subagent'
+  // Orchestration remains on Main; buildSession preserves the parent's opaque
+  // workdir/folder binding and child tools dispatch through its remote executor.
+  readonly supportsRemoteWorkdir = true
   readonly description = 'Create an asynchronous reviewable local task, or invoke a blocking bounded leaf call. Declare review at creation: parent (default) or an independently managed agent. Structured verdicts automatically rerun requested changes in the same worker history; only PASS delivers success. Remote A2A tasks remain legacy one-shot and do not support this review lifecycle. Use session creation for independent long-lived conversations. These are executions, not work items. Blocking calls must use this tool directly, not an exec/invoke bridge.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
       mode: {
         type: 'string', enum: ['task', 'call'],
-        description: 'Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Omission defaults to task in a long-lived session; tasks must explicitly choose call.',
+        description: 'Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Remote workdirs support task only; call is rejected before creation because remote exec has no foreground lifecycle. Omission defaults to task in a long-lived session; tasks must explicitly choose call.',
       },
       task: { type: 'string', description: 'Initial work. Required for task/call.' },
       model: { type: 'string', description: 'Task only: optional exact model ID from v:models; omission preserves role defaults. Forbidden in call mode, which always inherits caller settings.' },
@@ -116,6 +119,11 @@ export class SubagentTool implements Tool {
     if (args.mode === 'call' && (Object.hasOwn(args, 'model') || Object.hasOwn(args, 'effort'))) {
       return 'Error: call mode cannot specify model or effort; it always inherits caller inference settings.'
     }
+    // A remote call cannot enforce the foreground exec lifecycle. Reject before
+    // creating a child rather than starting a leaf that fails on its first exec.
+    if (args.mode === 'call' && ctx.remoteWorkdir) {
+      return 'Error: call mode is not supported on remote workdirs because remote exec cannot enforce a foreground process lifecycle. Use task mode for remote work; no subagent was started.'
+    }
     const allowedModes = this.sessions.getAllowedSubagentModes(ctx.sessionId)
     if (args.mode === undefined && !allowedModes.includes('task')) {
       return `Error: mode is required in this scope; choose ${allowedModes.join(', ') || 'nothing'}.`
@@ -132,6 +140,11 @@ export class SubagentTool implements Tool {
       return this.remote.start(args.agent_type, args.task, ctx)
     }
     const parentState = this.sessions.getSessionState(ctx.sessionId)
+    if (ctx.remoteWorkdir && (parentState?.workdir?.version !== 2
+      || parentState.workdir.nodeId !== ctx.remoteWorkdir.nodeId
+      || parentState.workdir.workdirId !== ctx.remoteWorkdir.workdirId)) {
+      return 'Error: remote parent workdir binding is missing or changed; no subagent was started. Refresh the working context before delegating.'
+    }
     const work = args.work === undefined ? undefined : workBindingSchema.parse(args.work)
     if (work && !this.sessions.alignment) throw new Error('Work policy service is unavailable.')
     const initiativeId = parseInitiativeId({

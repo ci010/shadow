@@ -179,7 +179,7 @@ test('remote selector and chat surfaces compile with accessible device selection
     if (file === 'ChatTab.vue') {
       assert.match(source, /v-if="\(installation.mode === 'main' \|\| installation.mainWorkspace === true\)"/)
       assert.match(source, /await draft.value.prepare\(controller.signal\)/)
-      assert.match(source, /Remove local attachments before selecting a remote workspace/)
+      assert.match(source, /Remove non-image attachments and file or folder context before selecting a remote workspace/)
     }
     if (file === 'ExecutionLocationSelector.vue') {
       assert.match(source, /:label="t\('Execution location'\)"/)
