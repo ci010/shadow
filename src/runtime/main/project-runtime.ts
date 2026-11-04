@@ -802,7 +802,6 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('download', new DownloadTool(new Aria2Downloader(), project.id, backgroundTasks))
 
   const initiatives = new InitiativeStore(workspace, {
-    trackWork: true,
     sessionTopicSequence: id => { const state = sessions.getSessionState(id); return state && isLightweightTopic(state) ? sessionTopicSequence(state) : undefined },
     isSessionKnown: id => sessions.getSessionState(id) !== null,
     isSessionActive: id => {

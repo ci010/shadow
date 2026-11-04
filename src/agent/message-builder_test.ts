@@ -97,7 +97,7 @@ test('peer work reference metadata is separate from untrusted content and does n
   assert(Array.isArray(built.content))
   assert.deepEqual(built.content[0], {
     type: 'text',
-    text: '<sender id="web:peer" name="web:peer" source="session" intent="handoff" initiative-id="work&lt;&amp;&quot;" item-id="item" />',
+    text: '<sender id="web:peer" name="web:peer" source="session" intent="handoff" work-root="work&lt;&amp;&quot;" item-id="item" />',
   })
   assert.deepEqual(built.content[1], { type: 'text', text: input.content })
 })

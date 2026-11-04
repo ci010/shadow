@@ -49,9 +49,9 @@ subagent({
 ```
 
 Only `task` text leaves Shadow. No transcript, memory, files, local role,
-workdir, Initiative, or tool grants are inherited. Send only authorized text;
+workdir, Work, or tool grants are inherited. Send only authorized text;
 do not copy private context into it. Remote delegation does not accept
-`report_to`, `preload_tools`, or Initiative selectors.
+`report_to`, `preload_tools`, or Work selectors.
 
 Keep both returned references:
 

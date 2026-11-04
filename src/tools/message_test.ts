@@ -28,20 +28,23 @@ test('peer work messages validate references and distinguish admission from owne
     inputs.push(input)
     return { status: 'accepted', sessionId, inputId: input.id }
   }, () => true, (initiativeId, itemId) => {
-    if (initiativeId !== 'work' || itemId !== 'item') throw new Error('Work reference belongs to another Project or Initiative')
+    if (initiativeId !== 'work:root' || itemId !== 'item') throw new Error('Work reference belongs to another Project or Work')
     checks.push([initiativeId, itemId])
   })
   const receipt = await tool.execute({
-    sessionId: 'web:target', content: 'Please review this boundary.', intent: 'handoff', initiativeId: 'work', itemId: 'item',
+    sessionId: 'web:target', content: 'Please review this boundary.', intent: 'handoff', workRoot: 'work:root', itemId: 'item',
   }, context())
-  assert.deepEqual(checks, [['work', 'item']])
+  assert.deepEqual(checks, [['work:root', 'item']])
   assert(inputs[0].source.kind === 'session')
-  assert.deepEqual(inputs[0].source.coordination, { intent: 'handoff', initiativeId: 'work', itemId: 'item' })
+  assert.deepEqual(inputs[0].source.coordination, { intent: 'handoff', initiativeId: 'work:root', itemId: 'item' })
   assert.equal(inputs[0].source.sessionId, 'web:source')
   assert.match(receipt, /admission only.*ownership is unchanged/)
-  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', itemId: 'item' }, context()), /requires initiativeId/)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', itemId: 'item' }, context()), /requires workRoot/)
   await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', intent: 'assign' }, context()))
-  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', initiativeId: 'foreign', itemId: 'item' }, context()), /another Project/)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', workRoot: 'work:foreign', itemId: 'item' }, context()), /another Project/)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', initiativeId: 'work:root' }, context()), /Unsupported context selector/)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', workRoot: 'old-slug' }, context()), /canonical Work key/)
+  assert.equal('initiativeId' in tool.parameters.properties!, false)
   assert.equal(inputs.length, 1)
 })
 

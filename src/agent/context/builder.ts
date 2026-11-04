@@ -35,7 +35,7 @@ export interface SessionPromptContext {
   execNodeOnly?: boolean
   /** Resolved agent type definition (from agent-types registry) */
   agent: AgentTypeDefinition
-  /** Stable Initiative ID for shared work context (from SessionState). */
+  /** Stable Work ID for shared work context (from SessionState). */
   initiativeId?: string
   /** Explicit display/goal metadata for the acting durable session, never authority. */
   sessionMetadata?: { topic: string; focus: string; completed: boolean }

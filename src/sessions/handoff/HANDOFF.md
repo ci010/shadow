@@ -41,7 +41,7 @@ input merely because their chat role is user.
 List corrected or retired premises explicitly, along with completed artifacts,
 in-flight external operations and unknown outcomes. Preserve factual evidence;
 do not preserve superseded interpretations as current instructions. This
-continuity summary cannot approve a task revision, transfer an Initiative
+continuity summary cannot approve a task revision, transfer a Work
 assignment, cancel an external operation or acknowledge for another executor.
 After resumption, the runtime's current work agreement supersedes conflicting
 summaries, memory conclusions and historical decision answers.
