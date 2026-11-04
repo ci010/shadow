@@ -630,10 +630,10 @@ export function sessionsApiPlugin(
         if (cancel || !parsed.success || typeof body.option === 'string') return c.json({ error: 'invalid_request', message: 'Attachments require a custom answer.' }, 400)
         const state = sessions.getSessionState(key)!
         const { workdir } = resolveSessionLocations(sessions.workspace, state, undefined, sessions.workdirLookup)
-        if (!key.startsWith('web:') || !workdir.available || workdir.locality === 'remote') {
-          return c.json({ error: 'invalid_request', message: 'Answer attachments require a local web conversation.' }, 400)
+        if (!key.startsWith('web:') || !workdir.available) {
+          return c.json({ error: 'invalid_request', message: 'Answer attachments require an available web conversation.' }, 400)
         }
-        try { await validateAnswerUploads(sessions.workspace, state.workspaceRoot ?? key, parsed.data, c.req.raw.signal) }
+        try { await validateAnswerUploads(sessions.workspace, state.workspaceRoot ?? key, parsed.data, c.req.raw.signal, workdir.locality === 'remote') }
         catch (error) {
           if (!(error instanceof TypeError)) throw error
           return c.json({ error: 'invalid_request', message: error.message }, 400)

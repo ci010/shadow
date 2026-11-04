@@ -1,3 +1,4 @@
+import { imageFromBytes, readImage, MAX_IMAGE_BYTES, isImagePath } from '../utils/image-input.ts'
 import { presenceReportSchema } from '../sessions/presence.ts'
 import { AbstractChannel, ChannelAdmissionError } from './base.ts'
 import type { ChannelCapabilities } from './capabilities.ts'
@@ -236,13 +237,21 @@ export class WebChannel extends AbstractChannel {
           undefined,
           this.sessionManager?.workdirLookup,
         ).workdir
-        if (!workdir.available || workdir.locality === 'remote') {
-          return c.json({ error: 'Upload unavailable' }, 409)
+        if (!workdir.available) return c.json({ error: 'Upload unavailable' }, 409)
+        let imageExtension: string | undefined
+        if (workdir.locality === 'remote') {
+          if (file.size > MAX_IMAGE_BYTES) return c.json({ error: 'Image exceeds 5 MiB.' }, 400)
+          try {
+            const image = imageFromBytes(new Uint8Array(await file.arrayBuffer()))
+            imageExtension = image.mime === 'image/jpeg' ? '.jpg' : `.${image.mime.slice(6)}`
+          } catch (error) {
+            return c.json({ error: error instanceof Error ? error.message : 'Remote conversations support images only' }, 400)
+          }
         }
 
         // Sanitize filename: keep only safe characters
         const rawName = file.name || 'upload'
-        const ext = extname(rawName) || ''
+        const ext = imageExtension ?? (extname(rawName) || '')
         const baseName = rawName.replace(ext, '').replace(
           /[^a-zA-Z0-9_\-.\u4e00-\u9fff]/g,
           '_',
@@ -289,7 +298,8 @@ export class WebChannel extends AbstractChannel {
           this.workspace, state ?? { sessionId }, undefined,
           this.sessionManager?.workdirLookup,
         )
-        if (!workdir.available || workdir.locality === 'remote') {
+        if (!workdir.available) return c.json({ error: 'Media unavailable' }, 404)
+        if (workdir.locality === 'remote' && !await this.remoteImage(sessionId, `uploads/${filename}`)) {
           return c.json({ error: 'Media unavailable' }, 404)
         }
       }
@@ -328,6 +338,7 @@ export class WebChannel extends AbstractChannel {
 
       try {
         await this.prepareSession?.(`${this.name}:${chatId}`)
+        await this.validateRemoteMedia(`${this.name}:${chatId}`, body.media)
         if (!await this.authorize(c.req.raw)) throw new ChannelAdmissionError('Web authorization revoked', 403)
         const completed = new Promise<
           { content: string; media?: string[] }
@@ -458,6 +469,7 @@ export class WebChannel extends AbstractChannel {
 
       try {
         await this.prepareSession?.(sessionId)
+        await this.validateRemoteMedia(sessionId, media)
         if (!await this.authorize(c.req.raw)) throw new ChannelAdmissionError('Web authorization revoked', 403)
         const receipt = await this.handleIncoming(
           'web-user',
@@ -606,8 +618,11 @@ export class WebChannel extends AbstractChannel {
         this.sessionManager?.workdirLookup,
       )
       const workdir = locations.workdir
-      if (!workdir.available || workdir.locality === 'remote') {
-        return c.json({ error: 'Media unavailable' }, 404)
+      if (!workdir.available) return c.json({ error: 'Media unavailable' }, 404)
+      if (workdir.locality === 'remote') {
+        const image = await this.remoteImage(sessionId, rawPath)
+        if (!image) return c.json({ error: 'Media unavailable' }, 404)
+        return mediaFileResponse(image, c.req.raw, c.req.query('download') === '1')
       }
 
       const uploadsRoot = join(locations.sessionDataDir, 'uploads')
@@ -645,6 +660,32 @@ export class WebChannel extends AbstractChannel {
     console.info(
       '[web] Web channel started — POST /api/chat/send, GET /api/chat/session, GET /api/media; realtime via /api/live',
     )
+  }
+
+  /** Main-private uploads are independent of the opaque Child workdir. */
+  private async remoteImage(sessionId: string, path: string): Promise<string | null> {
+    const state = this.sessionManager?.getSessionState(sessionId)
+    const root = sessionWorkspacePath(this.workspace, state?.workspaceRoot ?? sessionId)
+    const uploads = join(root, 'uploads')
+    const candidate = isAbsolute(path) ? path : resolve(root, path)
+    if (escapesRoot(uploads, candidate) || !isImagePath(candidate)) return null
+    // Check both the uploads directory and the file against symlink escapes.
+    if (!await resolveSessionMediaPath(root, 'uploads')) return null
+    const resolved = await resolveSessionMediaPath(uploads, relative(uploads, candidate))
+    if (!resolved) return null
+    try { await readImage(resolved); return resolved } catch { return null }
+  }
+
+  private async validateRemoteMedia(sessionId: string, media?: string[]): Promise<void> {
+    if (!media?.length) return
+    const state = this.sessionManager?.getSessionState(sessionId)
+    const { workdir } = resolveSessionLocations(this.workspace, state ?? { sessionId }, undefined, this.sessionManager?.workdirLookup)
+    if (!workdir.available || workdir.locality !== 'remote') return
+    for (const path of media) {
+      if (!await this.remoteImage(sessionId, path)) {
+        throw new ChannelAdmissionError('Remote conversations accept only PNG, JPEG, GIF and WebP images from this session’s Main uploads. Other files are not transferred to the selected device.', 403)
+      }
+    }
   }
 
   async stop(): Promise<void> {

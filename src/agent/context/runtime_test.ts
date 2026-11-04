@@ -185,6 +185,10 @@ test('remote execution prompt does not advertise Main shell detection or inline 
   assert.match(remote, /remote node `wsl`/)
   assert.match(remote, /Child chooses its default OS shell/)
   assert.match(remote, /not an OS sandbox/)
+  assert.match(remote, /timeout_ms must be an integer from 1 to 120000/)
+  assert.match(remote, /timeout terminates the Child command/)
+  assert.match(remote, /subagent mode=task.*inherits the selected Workspace and opaque remote workdir automatically/)
+  assert.match(remote, /Do not copy paths to Main or switch away from the Child to delegate/)
   assert.doesNotMatch(remote, /Available Exec Shells|Default Exec Shell|node \| inline TypeScript/)
   const local = (await provider.getPromptSection({ ...ctx, workdir: undefined }))!
   assert.match(local, /Default Exec Shell.*powershell/)

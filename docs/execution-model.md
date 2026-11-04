@@ -31,6 +31,35 @@ instruction preparation is still unsupported; this refactor does not invent it.
 Project Home, Main-local session data/uploads and the effective execution workdir
 remain separate. Explicit session-storage browsing is not an execution fallback.
 
+Remote chat drafts and existing conversations can paste, drop or upload PNG,
+JPEG, GIF and WebP images for model vision (up to 5 MiB and 25 million pixels per
+image). The web upload endpoint validates image bytes and saves them in the
+conversation's Main-private uploads; message admission and GET/HEAD previews
+accept only validated images inside that session's uploads, including symlink
+containment checks. The model receives image content, not a Child filesystem
+reference. This does not copy files to the Child or permit Main to resolve Child
+display paths. Other local attachments and file/folder context remain unsupported
+for remote chats; use explicit supported remote file tools for Child files.
+
+## Delegation from a Child-bound session
+
+`subagent` task orchestration runs on Main, but the worker inherits its parent's
+registered `folderId` and opaque remote workdir. The agent need not switch back to
+a Main Folder or copy a Child display path to delegate. Worker OS commands use the
+same remote executor; review/retry preserve the worker binding. `cancel` and
+`continuation` are also Main control-plane operations and remain usable from a
+Child-bound session, subject to the same Project and execution ownership checks.
+These controls do not imply remote background-process support.
+
+Remote blocking leaf calls are rejected before creating a worker: the call
+foreground cleanup contract is not yet implemented for Child commands. Use an
+asynchronous task for delegated remote execution. Remote `exec` still requires a
+positive integer timeout of at most 120000 ms, terminates the Child command on
+timeout, and does not support `timeout_ms=0` or inline Node/tool bridging. This is
+not full local/remote parity; persistent remote processes, reconnectable output
+and foreground cancellation need their own lifecycle implementation and device
+acceptance tests. No unsupported route falls back to Main.
+
 ## Small internal contracts
 
 An internal workdir reference contains the exact existing node and directory ID:

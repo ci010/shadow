@@ -24,9 +24,9 @@ const graph = () => ({ nodes: [], sessions: [
 
 function fixture(t: TestContext, canWrite = false) {
   const subscriptions: Array<{ projectId: string; observer: LiveObserver; closed: boolean }> = []
-  const requests: Array<{ path: string; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
+  const requests: Array<{ path: string; body: RequestInit['body']; signal: AbortSignal; finish: (value: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: URL, init: RequestInit) => new Promise<Response>(resolve => {
-    requests.push({ path: new URL(url).pathname, signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
+    requests.push({ path: new URL(url).pathname, body: init.body, signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
   }))
   const pool = { client: (): Pick<LiveClient, 'subscribe'> => ({
     subscribe: (topic, observer) => {
@@ -410,7 +410,7 @@ test('history navigation cancels queued bottom jumps and resumes following only 
   assert.equal(container.scrollTop, 2000)
 })
 
-test('composer file drops preserve drafts, deduplicate mixed batches and reject remote or read-only attachments', async t => {
+test('composer file drops preserve drafts, deduplicate mixed batches and allow remote images but reject mixed and read-only attachments', async t => {
   const f = fixture(t)
   const state = f.mount('a').state()
   state.currentWorkdir = { kind: 'local', displayPath: 'C:\\synthetic' }
@@ -448,16 +448,27 @@ test('composer file drops preserve drafts, deduplicate mixed batches and reject 
   state.clearPendingAttachments()
   await Vue.nextTick()
   assert.equal(state.imagePreview, undefined, 'Removing draft attachments closes previews before their blob URLs can remain stale')
-  for (const mode of ['remote', 'readonly']) {
-    state.currentWorkdir = { kind: mode === 'remote' ? 'remote' : 'local', displayPath: 'C:\\synthetic' }
-    state.selectedMode = mode === 'readonly' ? 'task' : 'session'
-    state.handleAttachmentDragOver(event)
-    assert.equal(state.attachmentDropTarget, false)
-    assert.equal(event.dataTransfer.dropEffect, 'none')
-    state.handleAttachmentDrop(event)
+  state.currentWorkdir = { kind: 'remote', displayPath: 'C:\\synthetic' }
+  state.handleAttachmentDragOver(event)
+  assert.equal(state.attachmentDropTarget, true)
+  assert.equal(event.dataTransfer.dropEffect, 'copy')
+  for (const batch of [files, [files[0]]]) {
+    state.handleAttachmentDrop({ ...event, dataTransfer: { ...event.dataTransfer, files: batch } })
     assert.equal(state.pendingAttachments.length, 0)
-    assert.match(state.composerError, mode === 'remote' ? /remote workspaces/ : /cannot receive file attachments/)
+    assert.match(state.composerError, /images only/)
   }
+  state.handleAttachmentDrop({ ...event, dataTransfer: { ...event.dataTransfer, files: [files[1]] } })
+  assert.equal(state.pendingAttachments.length, 1)
+  assert.equal(state.pendingAttachments[0].kind, 'image')
+  state.clearPendingAttachments()
+  state.currentWorkdir = { kind: 'local', displayPath: 'C:\\synthetic' }
+  state.selectedMode = 'task'
+  state.handleAttachmentDragOver(event)
+  assert.equal(state.attachmentDropTarget, false)
+  assert.equal(event.dataTransfer.dropEffect, 'none')
+  state.handleAttachmentDrop(event)
+  assert.equal(state.pendingAttachments.length, 0)
+  assert.match(state.composerError, /cannot receive file attachments/)
 })
 
 test('filetree drops add deduplicated references without upload or draft changes and reject expired/cross-project tokens', t => {
@@ -652,4 +663,60 @@ test('navigation selection callback ensures shared snapshots while explicit relo
   f.requests.filter(request => request.path.endsWith('/graph')).at(-1)!.finish(graph())
   f.requests.filter(request => request.path.endsWith('/stages')).at(-1)!.finish({ stages: {} })
   await reload
+})
+
+for (const draft of [false, true]) test(`remote ${draft ? 'draft' : 'existing session'} paste invokes real composer and uploads before send`, async t => {
+  const f = fixture(t, true)
+  const state = f.mount('a', draft ? '' : root).state()
+  if (draft) state.selectExecutionLocation({ kind: 'node', node: { nodeId: 'fixture-child', nodeName: 'Fixture', displayName: 'From scratch', available: true } })
+  else state.currentWorkdir = { kind: 'remote', displayPath: 'Z:\\fixture' }
+  assert.equal(state.remoteConversation, true)
+  assert.equal(state.canAttachFiles, true)
+  const image = new File(['synthetic image'], 'clipboard.png', { type: 'image/png' })
+  const text = new File(['synthetic text'], 'notes.txt', { type: 'text/plain' })
+  let prevented = 0
+  const paste = (files: File[]) => state.handleComposerPaste({
+    clipboardData: { files, getData: () => '' }, preventDefault: () => { prevented++ },
+  })
+  t.mock.method(console, 'warn', () => {})
+  for (const files of [[text], [image, text]]) {
+    await paste(files)
+    assert.equal(state.pendingAttachments.length, 0)
+    assert.match(state.composerError, /images only/)
+  }
+  await paste([image])
+  assert.equal(prevented, 5)
+  assert.equal(state.pendingAttachments.length, 1)
+  assert.equal(state.pendingAttachments[0].file, image)
+  assert.equal(state.pendingAttachments[0].kind, 'image')
+  assert.equal(state.composerError, '')
+  assert.equal(f.requests.length, 0, 'Pasting must not prepare, upload or send')
+  const transferData = new Map<string, string>()
+  const transfer = { get types() { return [...transferData.keys()] }, effectAllowed: 'none', dropEffect: 'none',
+    setData(type: string, value: string) { transferData.set(type, value) }, getData(type: string) { return transferData.get(type) ?? '' } }
+  const release = startFileReferenceDrag(transfer, 'http://fixture/projects/a', { kind: 'local', displayPath: '/fixture' }, 'notes.txt', 'file')!
+  state.handleAttachmentDrop({ dataTransfer: transfer, preventDefault() {}, stopPropagation() {} })
+  release()
+  assert.equal(state.contextItems.length, 0)
+  assert.match(state.composerError, /File and folder context is unavailable/)
+  assert.equal(state.pendingAttachments.length, 1)
+  const sending = state.sendMessage()
+  await settle()
+  if (draft) {
+    assert.deepEqual(f.requests.filter(request => /\/(remote|upload|send)$/.test(request.path)).map(request => request.path), ['/projects/a/api/sessions/remote'])
+    f.requests[0].finish({ sessionId: 'web:chat-prepared-remote', chatId: 'chat-prepared-remote', workdir: { version: 2, nodeId: 'fixture-child', workdirId: 'opaque' } })
+    await settle()
+  }
+  const upload = f.requests.find(request => request.path.endsWith('/upload'))!
+  assert.ok(upload)
+  assert.equal(f.requests.some(request => request.path.endsWith('/send')), false, 'Send waits for completed Main upload')
+  assert.equal((upload.body as FormData).get('chatId'), draft ? 'chat-prepared-remote' : root.slice(4))
+  upload.finish({ path: '/fixture/main/uploads/clipboard.png' })
+  await settle()
+  const send = f.requests.find(request => request.path.endsWith('/send'))!
+  assert.ok(send)
+  assert.deepEqual(JSON.parse(send.body as string).media, ['/fixture/main/uploads/clipboard.png'])
+  send.finish({ chatId: draft ? 'chat-prepared-remote' : root.slice(4), requestId: 'fixture-send' })
+  await sending
+  assert.equal(state.pendingAttachments.length, 0)
 })
