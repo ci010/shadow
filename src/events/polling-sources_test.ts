@@ -87,6 +87,10 @@ test('polling source uses host-held credential, restores checkpoint, and avoids 
     await sources.stop()
     await events.stop()
 
+    // Legacy definitions predate the pause flag; checksum identity remains valid.
+    const legacy = JSON.parse(persisted)
+    delete legacy[0].enabled
+    await writeFile(projectStoragePath(workspace, '.events', 'polling-sources.json'), JSON.stringify(legacy))
     const restartedEvents = await makeEvents()
     const restarted = new PollingSources(workspace, restartedEvents, makeBroker(), id => id === 'owner', () => true)
     restarted.start()
@@ -179,10 +183,22 @@ test('event source tool accepts only direct user creation and does not return so
     try {
       assert.match(await tool.execute(args, { ...context, inputSource: 'event' }), /direct user turn/)
       assert.match(await tool.execute(args, context), /Created event source custom:issue-watch/)
+      const simpleArgs = { action: 'create', id: 'simple-watch', grant_json: JSON.stringify(grant), interval_seconds: 60,
+        simple_json: JSON.stringify({ mode: 'snapshot', request: { method: 'GET', path: '/repos/test/repo/issues/1/events' }, select: [], eventType: 'remote.changed', completeResponse: true }) }
+      assert.match(await tool.execute(simpleArgs, { ...context, inputSource: 'event' }), /direct user turn/)
+      assert.match(await tool.execute(simpleArgs, context), /Created event source custom:simple-watch/)
+      assert.match(await tool.execute({ ...simpleArgs, code }, context), /exactly one/)
+
       await assert.rejects(tool.execute(args, context), /already exists/)
       const listing = await tool.execute({ action: 'list' }, context)
       assert.match(listing, /issue-watch/)
       assert.doesNotMatch(listing, /export async function|synthetic-secret/)
+      assert.match(await tool.execute({ action: 'inspect', id: 'issue-watch' }, { ...context, inputSource: 'event' }), /checkpoint/)
+      assert.match(await tool.execute({ action: 'pause', id: 'issue-watch' }, { ...context, inputSource: 'event' }), /direct user turn/)
+      assert.match(await tool.execute({ action: 'pause', id: 'issue-watch' }, context), /Paused/)
+      await assert.rejects(tool.execute({ action: 'run', id: 'issue-watch' }, context), /paused/)
+      assert.match(await tool.execute({ action: 'resume', id: 'issue-watch' }, context), /Resumed/)
+      assert.match(await tool.execute({ action: 'inspect', id: 'issue-watch' }, { ...context, sessionId: 'foreign' }), /owner session/)
       assert.match(await tool.execute({ action: 'remove', id: 'issue-watch' }, context), /Removed event source/)
     } finally {
       await sources.stop()
@@ -239,5 +255,77 @@ test('event tools are discoverable and invoked lazily without entering the base 
     await sources.stop()
     await events.stop()
   }
+  })
+})
+
+
+test('owner diagnostics and pause/resume preserve checkpoints across restart without leaking code', async () => {
+  await withTempWorkspace(async workspace => {
+    const events = new EventService(workspace, new Bus(), async (id, input) => ({ status: 'accepted', sessionId: id, inputId: input.id }))
+    await events.start()
+    const broker = new CapabilityBroker({ projectId: 'project', directory: join(workspace, 'receipts'),
+      resolveSecret: async () => undefined, deliver: async () => undefined, canDeliver: () => false })
+    const make = () => new PollingSources(workspace, events, broker, id => id === 'owner', () => false)
+    let sources = make()
+    sources.start()
+    try {
+      events.subscribe({ sessionId: 'owner', event: 'changed', source: 'custom:generic', delivery: { urgency: 'queue' } })
+      sources.create({ id: 'generic', ownerSessionId: 'owner', intervalMs: 30000,
+        grant: { id: 'fetch', kind: 'http', origin: 'https://example.com', routes: [{ method: 'GET', path: '/signal' }] },
+        code: 'export async function run({checkpoint}) { return {events:[], checkpoint: checkpoint ?? "private-cursor"} }' })
+      assert.equal(await sources.run('generic', 'owner'), 0)
+      assert.throws(() => sources.inspect('generic', 'foreign'), /not found/)
+      await assert.rejects(sources.setEnabled('generic', 'foreign', false), /not found/)
+      const evidence = sources.inspect('generic', 'owner')
+      assert.equal(evidence.checkpoint, 'private-cursor')
+      assert.equal(evidence.subscriptions[0].delivery?.urgency, 'queue')
+      assert.doesNotMatch(JSON.stringify(evidence), /export async|code/)
+      await sources.setEnabled('generic', 'owner', false)
+      await assert.rejects(sources.run('generic', 'owner'), /paused/)
+      await sources.stop()
+      sources = make()
+      sources.start()
+      assert.equal(sources.inspect('generic', 'owner').enabled, false)
+      assert.equal(sources.inspect('generic', 'owner').checkpoint, 'private-cursor')
+      await assert.rejects(sources.run('generic', 'owner'), /paused/)
+      await sources.setEnabled('generic', 'owner', true)
+      assert.equal(await sources.run('generic', 'owner'), 0)
+      assert.equal(sources.inspect('generic', 'owner').checkpoint, 'private-cursor')
+      assert.equal(await sources.remove('generic', 'owner'), true)
+      assert.throws(() => sources.inspect('generic', 'owner'), /not found/)
+    } finally { await sources.stop(); await events.stop() }
+  })
+})
+
+
+test('pausing a polling source aborts in-flight HTTP without advancing its checkpoint', async () => {
+  await withTempWorkspace(async workspace => {
+    const events = new EventService(workspace, new Bus(), async (id, input) => ({ status: 'accepted', sessionId: id, inputId: input.id }))
+    await events.start()
+    const started = Promise.withResolvers<void>()
+    const broker = new CapabilityBroker({ projectId: 'fixture', directory: join(workspace, 'receipts'),
+      resolveSecret: async () => undefined, deliver: async () => undefined, canDeliver: () => false,
+      request: async (_url, options) => {
+        started.resolve()
+        const signal = options?.signal
+        return await new Promise<Response>((_resolve, reject) => {
+          if (signal?.aborted) reject(signal.reason)
+          else signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+      } })
+    const sources = new PollingSources(workspace, events, broker, id => id === 'owner', () => false)
+    sources.start()
+    try {
+      events.subscribe({ sessionId: 'owner', event: '*', source: 'custom:cancel-test' })
+      sources.create({ id: 'cancel-test', ownerSessionId: 'owner', intervalMs: 86400000,
+        grant: { id: 'fetch', kind: 'http', origin: 'https://example.com', routes: [{ method: 'GET', path: '/signal' }] },
+        code: `import { fetch } from '@shadow/fetch'; export async function run() { await fetch('/signal'); return {events:[],checkpoint:'advanced'} }` })
+      const run = assert.rejects(sources.run('cancel-test', 'owner'))
+      await started.promise
+      await sources.setEnabled('cancel-test', 'owner', false)
+      await run
+      assert.equal(sources.inspect('cancel-test', 'owner').checkpoint, null)
+      assert.equal(sources.inspect('cancel-test', 'owner').running, false)
+    } finally { await sources.stop(); await events.stop() }
   })
 })

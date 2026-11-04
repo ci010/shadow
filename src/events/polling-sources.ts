@@ -7,6 +7,7 @@ import { CapabilityGrantSchema, type CapabilityGrant } from '../execution/grant-
 import { CapabilityBroker } from '../execution/grants.ts'
 import { writePrivateFile } from '../config/store.ts'
 import { executeGrantedScript } from '../script-runtime/granted-script.ts'
+import { SimplePollingSchema, simplePollingResult } from './simple-polling.ts'
 import type { EventService } from './service.ts'
 
 const identifier = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)
@@ -27,23 +28,26 @@ const result = z.object({
 const definition = z.object({
   id: identifier,
   ownerSessionId: z.string().min(1),
-  code: z.string().min(1).max(512_000),
+  code: z.string().min(1).max(512_000).optional(),
+  simple: SimplePollingSchema.optional(),
   hash: z.string().regex(/^[a-f0-9]{64}$/),
   intervalMs: z.number().int().min(30_000).max(86_400_000),
   grant: httpGrant,
   checkpoint: z.unknown(),
+  enabled: z.boolean().default(true),
   seen: z.array(z.string()).max(1000),
-}).strict()
+}).strict().refine(value => Boolean(value.code) !== Boolean(value.simple), 'Provide exactly one of code or simple')
 export type PollingSource = z.infer<typeof definition>
-export type NewPollingSource = Pick<PollingSource, 'id' | 'ownerSessionId' | 'code' | 'intervalMs' | 'grant'>
+export type NewPollingSource = Pick<PollingSource, 'id' | 'ownerSessionId' | 'code' | 'intervalMs' | 'grant' | 'simple'>
 
-function hash(source: Pick<PollingSource, 'id' | 'ownerSessionId' | 'code' | 'intervalMs' | 'grant'>): string {
+function hash(source: Pick<PollingSource, 'id' | 'ownerSessionId' | 'code' | 'intervalMs' | 'grant' | 'simple'>): string {
   return createHash('sha256').update(JSON.stringify([
     source.id, source.ownerSessionId, source.code, source.intervalMs, source.grant,
+    ...(source.simple ? [source.simple] : []),
   ])).digest('hex')
 }
 
-/** Project-owned polling sources; scripts run only in disposable restricted children. */
+/** Project-owned polling sources; advanced scripts run in disposable restricted children. */
 export class PollingSources {
   private readonly path: string
   private readonly sources = new Map<string, PollingSource>()
@@ -105,6 +109,36 @@ export class PollingSources {
         ({ ...structuredClone(details), running: this.running.has(details.id), ...this.status.get(details.id) }))
   }
 
+  /** Owner-only diagnostic evidence; checkpoint is external data, never authority. */
+  inspect(id: string, ownerSessionId: string) {
+    const source = this.sources.get(id)
+    if (!source || source.ownerSessionId !== ownerSessionId) throw new Error('Event source not found for this session')
+    return {
+      ...this.list(ownerSessionId).find(item => item.id === id),
+      checkpoint: structuredClone(source.checkpoint), seenCount: source.seen.length,
+      subscriptions: this.events.list(ownerSessionId).filter(item => item.source === `custom:${id}`),
+      statusScope: 'Run status is process-local; checkpoint and deduplication are persisted. Delivery counts mean router acceptance, not completed session processing.',
+      provenance: 'Checkpoint is external source data, not instructions or authorization.',
+    }
+  }
+
+  /** Pause without discarding the cursor; permission/code replacement still requires remove/create. */
+  async setEnabled(id: string, ownerSessionId: string, enabled: boolean): Promise<void> {
+    const source = this.sources.get(id)
+    if (!source || source.ownerSessionId !== ownerSessionId) throw new Error('Event source not found for this session')
+    if (this.stopped) throw new Error('Polling sources are stopped')
+    const previous = source.enabled
+    source.enabled = enabled
+    try { this.save() } catch (error) { source.enabled = previous; throw error }
+    const timer = this.timers.get(id)
+    if (timer) clearInterval(timer)
+    this.timers.delete(id)
+    if (!enabled) {
+      const run = this.running.get(id)
+      if (run) { run.controller.abort(); await Promise.allSettled([run.promise]) }
+    } else if (!this.timers.has(id)) this.schedule(source)
+  }
+
   create(input: NewPollingSource): PollingSource {
     if (this.stopped) throw new Error('Polling sources are stopped')
     const grant = httpGrant.parse(input.grant)
@@ -153,6 +187,7 @@ export class PollingSources {
     const source = this.sources.get(id)
     if (!source || source.ownerSessionId !== ownerSessionId) throw new Error('Event source not found for this session')
     if (this.stopped) throw new Error('Polling sources are stopped')
+    if (!source.enabled) throw new Error('Event source is paused')
     const previous = this.running.get(id)
     if (previous) return previous.promise
     const controller = new AbortController()
@@ -178,6 +213,7 @@ export class PollingSources {
   }
 
   private schedule(source: PollingSource): void {
+    if (!source.enabled || this.stopped) return
     const timer = setInterval(() => {
       void this.run(source.id, source.ownerSessionId).catch(error => {
         console.error('[events] Polling source failed', { id: source.id, error: error instanceof Error ? error.name : 'Error' })
@@ -194,26 +230,31 @@ export class PollingSources {
       !subscription.channel && !subscription.chatId)) {
       throw new Error(`Subscribe this session to custom:${source.id} before polling`)
     }
-    const output = await executeGrantedScript({
-      code: source.code, args: { checkpoint: structuredClone(source.checkpoint) },
-      signal, imports: ['@shadow/fetch'], allowedModules: ['@shadow/fetch'],
-      callModule: (name, input, callSignal) => {
-        if (name !== 'fetch') throw new Error('Unknown event source capability')
-        if (!this.canDeliver(source.ownerSessionId) || this.stopped || this.sources.get(source.id) !== source) {
-          throw new Error('Event source authorization changed')
-        }
-        return this.broker.execute(source.grant, input, {
-          sessionId: source.ownerSessionId, inputId: `event-source:${source.id}`,
-          toolCallId: `event-source:${source.id}`, bindingKey: `event-source:${source.id}`,
-          revision: source.hash, signal: callSignal,
-          assertCurrent: () => {
-            if (this.stopped || this.sources.get(source.id) !== source || !this.canDeliver(source.ownerSessionId)) {
-              throw new Error('Event source authorization changed')
-            }
-          },
-        })
-      },
-    })
+    const fetch = (input: Record<string, unknown>, callSignal: AbortSignal) => {
+      if (!this.canDeliver(source.ownerSessionId) || this.stopped || !source.enabled || this.sources.get(source.id) !== source) {
+        throw new Error('Event source authorization changed')
+      }
+      return this.broker.execute(source.grant, input, {
+        sessionId: source.ownerSessionId, inputId: `event-source:${source.id}`,
+        toolCallId: `event-source:${source.id}`, bindingKey: `event-source:${source.id}`,
+        revision: source.hash, signal: callSignal,
+        assertCurrent: () => {
+          if (this.stopped || !source.enabled || this.sources.get(source.id) !== source || !this.canDeliver(source.ownerSessionId)) {
+            throw new Error('Event source authorization changed')
+          }
+        },
+      })
+    }
+    const output = source.simple
+      ? simplePollingResult(source.simple, (await fetch(source.simple.request, signal) as { body: unknown }).body, structuredClone(source.checkpoint))
+      : await executeGrantedScript({
+        code: source.code!, args: { checkpoint: structuredClone(source.checkpoint) },
+        signal, imports: ['@shadow/fetch'], allowedModules: ['@shadow/fetch'],
+        callModule: (name, input, callSignal) => {
+          if (name !== 'fetch') throw new Error('Unknown event source capability')
+          return fetch(input, callSignal)
+        },
+      })
     const data = result.parse(output)
     const checkpoint = JSON.stringify(data.checkpoint)
     if (checkpoint === undefined || Buffer.byteLength(checkpoint) > 65_536) throw new Error('Invalid event source checkpoint')
@@ -238,6 +279,7 @@ export class PollingSources {
       try { this.save() } catch (error) { source.seen = previousSeen; throw error }
       delivered++
     }
+    signal.throwIfAborted()
     const previousCheckpoint = source.checkpoint
     source.checkpoint = JSON.parse(checkpoint)
     try { this.save() } catch (error) { source.checkpoint = previousCheckpoint; throw error }
