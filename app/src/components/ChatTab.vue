@@ -131,7 +131,6 @@
               :data-msg-idx="index" :can-manage="true" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
           </div>
           <template v-for="{ msg, idx } in mountedHistoryRows" :key="msg.timelineKey ?? `${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
-          <ConversationBoundary v-for="previousId in timelineBoundaries.get(idx) ?? []" :key="previousId" :previous-id="previousId" @select="selectTimelineBoundary" />
           <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx" :data-timeline-key="msg.timelineKey" :data-history-row-key="historyRowKey({ msg, idx })">
             <div v-if="automationConversation?.automation.value?.source === 'system' && (msg.role === 'user' || (msg.role === 'assistant' && !msg.event && !!msg.content))"
               class="chat-bubble automation-bubble" :class="msg.role === 'user' ? 'chat-user' : 'chat-assistant'" :data-msg-idx="idx"
@@ -225,7 +224,6 @@
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </div>
           </template>
-          <ConversationBoundary v-for="previousId in timelineBoundaries.get(displayMessages.length) ?? []" :key="previousId" :previous-id="previousId" @select="selectTimelineBoundary" />
           <p v-if="decisionRecordError" class="composer-error" role="alert">{{ decisionRecordError }}
             <button type="button" @click="refreshDecisionRecords">{{ t('Retry decision history') }}</button>
           </p>
@@ -537,7 +535,6 @@ import { insertQuote } from '../selection-actions.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import SessionActivity from './SessionActivity.vue'
 import SegmentNavigation from './SegmentNavigation.vue'
-import ConversationBoundary from './ConversationBoundary.vue'
 import HoverInfo from './HoverInfo.vue'
 import ConversationHistoryMenu from './ConversationHistoryMenu.vue'
 import WorkingWave from './WorkingWave.vue'
@@ -1341,6 +1338,20 @@ function applyCurrentTimeline(items: ChatMsg[], records: YieldDecisionRecord[], 
     const retained = [...(container?.querySelectorAll<HTMLElement>('[data-timeline-key]') ?? [])].find(element => element.dataset.timelineKey === anchorKey)
     if (container && retained && historyBrowsing.value) container.scrollTop += retained.getBoundingClientRect().top - anchorTop
   })
+}
+// A freshly reopened compacted session may contain only its handoff. Seed one
+// recent segment before the initial bottom-follow, without entering history mode.
+async function seedRecentTimeline(controller: AbortController): Promise<void> {
+  const id = previousPhysicalId.value
+  if (!id || olderSegments.value.length || messages.value.filter(msg => !msg.isSummary && !msg.event && !msg.isSystemEvent).length >= 20) return
+  const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(id)}`), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) })
+  if (!res.ok) throw new Error(t('Could not load this historical segment. Refresh to retry.'))
+  const data = await res.json()
+  if (controller.signal.aborted) return
+  const segment = { id, previousId: data.previousPhysicalId ?? null, messages: tagTimelineMessages(mergeCommandResults(collapseHistory(data.messages ?? []), data.commandResults)), decisions: parseDecisionRecords(data.decisionRecords ?? []) }
+  olderSegments.value = [segment]
+  messages.value = [...segment.messages, ...messages.value]
+  decisionRecords.value = [...new Map([...segment.decisions, ...decisionRecords.value].map(record => [record.request.id, record])).values()]
 }
 async function prependOlderSegment(): Promise<void> {
   const id = oldestPhysicalId.value
@@ -2223,6 +2234,7 @@ async function loadDirectChat(background = false): Promise<void> {
       systemPrompt?: string; tools?: ToolDef[]
     }
     if (controller.signal.aborted) return
+    const initialTimeline = currentTimelinePrevious === undefined
     const container = messagesContainer.value
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
     applyCurrentTimeline(mergeCommandResults(collapseHistory(data.history ?? []), data.commandResults), parseDecisionRecords(data.decisionRecords ?? []), data.previousPhysicalId ?? null, data.currentPhysicalId)
@@ -2238,6 +2250,7 @@ async function loadDirectChat(background = false): Promise<void> {
     previousPhysicalId.value = data.previousPhysicalId ?? null
     viewingPhysicalId.value = null
     physicalIdStack.value = []
+    if (initialTimeline) await seedRecentTimeline(controller)
   } catch (error) {
     if (!controller.signal.aborted) composerError.value = error instanceof Error ? error.message : t('Could not load conversation. Refresh to retry.')
   } finally {
@@ -2289,6 +2302,7 @@ async function loadReadonlySession(background = false): Promise<void> {
     if (!histRes.ok) throw new Error(t('Could not update this conversation. Reopen it to retry.'))
     const histData = await histRes.json()
     if (controller.signal.aborted) return
+    const initialTimeline = currentTimelinePrevious === undefined
     const container = messagesContainer.value
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
     const rawMessages: RawMessage[] = histData.messages ?? []
@@ -2300,6 +2314,7 @@ async function loadReadonlySession(background = false): Promise<void> {
       physicalIdStack.value = []
     }
     composerError.value = ''
+    if (initialTimeline) await seedRecentTimeline(controller)
 
     if (context) {
       readonlyContextError.value = context.failed ? t('Could not load execution context. Reopen it to retry.') : ''
@@ -2318,14 +2333,6 @@ async function loadReadonlySession(background = false): Promise<void> {
 }
 
 // ── Segment navigation ───────────────────────────────────────────────────────
-
-async function selectTimelineBoundary(id: string): Promise<void> {
-  const index = olderSegments.value.findIndex(segment => segment.id === id)
-  const newer = viewingPhysicalId.value
-    ? [...physicalIdStack.value.map(value => value || null), viewingPhysicalId.value]
-    : [null, ...olderSegments.value.slice(index + 1).map(segment => segment.id).reverse()]
-  await selectHistorySegment(id, newer)
-}
 
 async function selectHistorySegment(id: string | null, newer: (string | null)[]): Promise<void> {
   if (loadingHistory.value) return

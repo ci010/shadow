@@ -450,9 +450,12 @@ banner.
 
 The live conversation is a continuous timeline. Older physical segments load on
 approaching the top or using Load older messages; prepending preserves the reading
-position and keeps the live composer available. History disclosures sit at actual
-segment boundaries, retaining summary/event rows without inferring a compact or
-handoff reason from the segment link. Return to latest resumes bottom following. Its icon-only square arrow control
+position and keeps the live composer available. The timeline does not add History / View previous segment disclosures at segment
+boundaries; lazy loading and the heading history navigation provide access to
+older messages. Persisted summary/event rows remain in chronological order,
+without inferring a compact or handoff reason from the segment link. On initial
+open, a current segment with fewer than 20 non-summary, non-event rows seeds one
+recent segment above the current handoff, while continuing to follow latest. Return to latest resumes bottom following. Its icon-only square arrow control
 floats inside the conversation pane above the measured composer allowance, with
 space reserved for the history rail. Use shared HoverInfo and a localized accessible
 label, not a visible text banner. Load older messages is a quiet centered text
@@ -471,7 +474,7 @@ return to current, and next. In targeted history, next retraces visited segments
 one at a time; the middle control jumps directly to the live session.
 Automation run navigation retains its existing run semantics. If multiple physical
 rollovers were missed, retained messages keep their known physical identity;
-unloaded intervening segments remain reachable through boundary History links,
+unloaded intervening segments remain reachable through targeted history navigation,
 rather than being fabricated or eagerly fetched.
 Keep all three slots stable, disable unavailable directions and navigation while
 loading, and provide explicit hover/accessibility labels. On narrow or touch
