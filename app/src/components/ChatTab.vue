@@ -491,7 +491,7 @@
 
 <script setup lang="ts">
 import { createInitialLiveSnapshot } from '../initial-live-snapshot'
-import { markdownHighlight } from '../markdown-highlight.ts'
+import { createMarkdown } from '../markdown.ts'
 import { t, formatNumber } from '../i18n.ts'
 import { formatUsageCost, validCostUsage, type CostUsage } from '../usage-cost.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
@@ -502,12 +502,10 @@ import DOMPurify from 'dompurify'
 import SessionReferenceMenu from './SessionReferenceMenu.vue'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
-import { Marked } from 'marked'
-import { answerHtmlExtension, sanitizeAnswerHtmlRoots } from '../answer-html'
+import { exitAnswerHtml, sanitizeAnswerHtmlRoots } from '../answer-html'
 import MarkdownContent from './MarkdownContent.vue'
 import MessageCopyActions from './MessageCopyActions.vue'
-import { paddedStrongCompatibility } from '../markdown-strong-compat.ts'
-import { markedMath } from '../marked-math.ts'
+import { exitStrongCompatibility } from '../markdown-strong-compat.ts'
 import MessageAttachments from './MessageAttachments.vue'
 import ImageViewer from './ImageViewer.vue'
 import { imagePreviewFromEvent, imagePreviewMarkup, type ImagePreview } from '../image-viewer.ts'
@@ -651,19 +649,13 @@ function openConversationLink(event: MouseEvent) {
   else requestSession(id)
 }
 
-const marked = new Marked({ breaks: true })
-marked.use(markdownHighlight())
-marked.use(markedMath())
-marked.use(paddedStrongCompatibility())
-marked.use(answerHtmlExtension())
-marked.use({
-  renderer: {
-    link({ href, title, text }) {
-      const titleAttr = title ? ` title="${title}"` : ''
-      return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
-    },
-  },
-})
+const marked = createMarkdown().use(exitStrongCompatibility).use(exitAnswerHtml)
+const defaultLinkOpen = marked.renderer.rules.link_open
+marked.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
+  tokens[index]!.attrSet('target', '_blank')
+  tokens[index]!.attrSet('rel', 'noopener noreferrer')
+  return defaultLinkOpen ? defaultLinkOpen(tokens, index, options, env, renderer) : renderer.renderToken(tokens, index, options)
+}
 
 // Allow KaTeX/MathML tags and attributes through DOMPurify
 const KATEX_TAGS = [
@@ -3005,7 +2997,7 @@ function renderMarkdown(text: string): string {
   if (!text) return ''
 
   const src = preprocessCustomXml(text)
-  const html = marked.parse(src, { async: false }) as string
+  const html = marked.render(src)
 
   return imagePreviewMarkup(mobileResources.html(DOMPurify.sanitize(sanitizeAnswerHtmlRoots(html), {
     ADD_TAGS: [...KATEX_TAGS, 'img'],

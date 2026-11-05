@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { Marked } from 'marked'
-import { markdownHighlight, prepareMarkdownLanguage } from './markdown-highlight.ts'
+import { createMarkdown } from './markdown.ts'
+import { prepareMarkdownLanguage } from './markdown-highlight.ts'
 
-const markdown = new Marked().use(markdownHighlight())
-const render = (source: string) => markdown.parse(source, { async: false }) as string
+const markdown = createMarkdown({ math: false })
+const render = (source: string) => markdown.render(source)
 
 test('plain and unknown fences remain escaped, including diagrams and malicious labels', async () => {
   for (const lang of ['', 'ascii', 'text', 'not-a-language', '"><script>']) {

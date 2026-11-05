@@ -10,7 +10,7 @@ import test from 'node:test'
 import ts from 'typescript'
 import { createServer } from 'vite'
 
-// Exercise the component's actual rendering functions with real Marked, KaTeX,
+// Exercise the component's actual rendering functions with real markdown-exit, KaTeX,
 // DOMPurify and a browser DOM, rather than substituting a sanitizer mock.
 test('system prompt treats HTML as text without losing the tail or generated formatting', { timeout: 90_000 }, async t => {
   const source = readFileSync(new URL('./components/SystemPromptCard.vue', import.meta.url), 'utf8')
@@ -19,7 +19,9 @@ test('system prompt treats HTML as text without losing the tail or generated for
   const js = ts.transpileModule(rendering, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   const script = `import { Marked } from '/node_modules/marked/lib/marked.esm.js';
 import DOMPurify from '/node_modules/dompurify/dist/purify.es.mjs';
-import { markedMath } from '/src/marked-math.ts';
+import { createMarkdown } from '/src/markdown.ts';
+import { renderKnowledgeMarkdown } from '/src/knowledge-markdown.ts';
+import { markdownHighlight } from '/src/markdown-highlight.ts';
 const mobileResources = {html: s => s};
 ${js}
 const check = (ok, message) => {if (!ok) throw Error(message)};
@@ -37,7 +39,7 @@ for (const example of ['Visual fragments are sanitized: isolated <style>', '<sty
 box.innerHTML = renderMarkdown('~~~html\\n<style>code</style>\\n~~~\\n\\ninline \`<script>example</script>\`');
 check(box.querySelector('pre code')?.textContent.includes('<style>code</style>'), 'fenced code changed');
 check(box.textContent.includes('<script>example</script>'), 'inline code changed');
-box.innerHTML = renderMarkdown('<available_skills>\\n<skill name="demo">Description</skill>\\n<category name="tools" count="2" skills="one, <style>">Category</category>\\n</available_skills>\\n\\n<available_agent_types><agent_type name="explore">Read only</agent_type></available_agent_types>\\n\\nInline $x^2$ and display $$x+1$$' + tail);
+box.innerHTML = renderMarkdown('<available_skills>\\n<skill name="demo">Description</skill>\\n<category name="tools" count="2" skills="one, <style>">Category</category>\\n</available_skills>\\n\\n<available_agent_types><agent_type name="explore">Read only</agent_type></available_agent_types>\\n\\nInline $x^2$ and display\\n\\n$$x+1$$' + tail);
 check(box.textContent.includes('Available Skills') && box.textContent.includes('Available Agent Types'), 'XML preprocessing lost');
 check(box.querySelector('sub')?.textContent === 'one, <style>', 'generated sub lost or content interpreted');
 check(!box.querySelector('style,script'), 'category HTML escaped boundary');
@@ -54,6 +56,10 @@ check(box.querySelectorAll('.katex').length === 3 && box.querySelector('math'), 
 box.innerHTML = renderMarkdown(${JSON.stringify(String.raw`Code: \`$x$ \(x\)\` and currency $5 and $10, escaped \$x\$.`.replaceAll('\\`', '`'))});
 check(!box.querySelector('.katex') && box.querySelector('code')?.textContent.includes('$x$'), 'code or currency parsed as math');
 check(!window.executed, 'HTML executed');
+box.innerHTML = renderKnowledgeMarkdown('[Wiki](v:memory/demo.md) [External](https://example.com) [Bad](javascript:alert(1))', [{href:'v:memory/demo.md',target:'demo'}], id => '/knowledge/' + id);
+check(box.querySelector('[data-knowledge-id="demo"]')?.getAttribute('href') === '/knowledge/demo', 'knowledge canonical link lost');
+check(box.querySelector('a[target="_blank"]')?.getAttribute('rel') === 'noopener noreferrer', 'knowledge external link lost');
+check(!box.querySelector('[href^="javascript:"]'), 'knowledge unsafe URL survived');
 window.result = 'SYSTEM_PROMPT_OK';
 } catch(e) { window.result = e.stack; }
 `
