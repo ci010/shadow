@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdirSync } from 'node:fs'
@@ -530,7 +531,7 @@ const server = createServer(async (request, response) => {
 let window: BrowserWindow | undefined
 let disposeDocumentShortcuts: (() => void) | undefined
 let focusEmulated = false
-const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(activeWorkspaceScript(source))
+const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(withComposerTestAdapter(activeWorkspaceScript(source)))
 async function waitFor(source: string): Promise<void> {
   const end = Date.now() + 12000
   while (Date.now() < end) {
@@ -724,7 +725,7 @@ async function assertFileComposer(): Promise<void> {
   await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
   assert.equal(await evaluate(`(() => {
     const file = Array.from(document.querySelectorAll('.file-document')).find(node => node.getClientRects().length);
-    const input = document.querySelector('.composer-input textarea');
+    const input = document.querySelector('.composer-input .reference-composer');
     const box = document.querySelector('.composer-box');
     const hint = box.querySelector('.composer-submit .composer-hint');
     const send = box.querySelector('.composer-send');
@@ -732,7 +733,7 @@ async function assertFileComposer(): Promise<void> {
     const preview = file.getBoundingClientRect(), composer = box.getBoundingClientRect();
     const body = file.querySelector('.file-modal-body'), dock = document.querySelector('.conversation-dock');
     const content = document.querySelector('.workbench-content').getBoundingClientRect();
-    return document.querySelectorAll('.composer-input textarea').length === 1
+    return document.querySelectorAll('.composer-input .reference-composer').length === 1
       && getComputedStyle(dock).position === 'absolute' && preview.height >= 100
       && Math.abs(preview.bottom - content.bottom) < 2 && Math.abs(body.getBoundingClientRect().bottom - content.bottom) < 2
       && body.getBoundingClientRect().bottom > composer.top
@@ -785,7 +786,7 @@ async function pasteFixture(options: { images?: string[]; text?: string; nonImag
       files: [], getData: type => data.getData(type),
       items: options.unavailable ? [{ kind: 'file', type: 'image/png', getAsFile: () => null }] : Array.from(data.items),
     } });
-    document.querySelector('.composer-input textarea').dispatchEvent(event);
+    document.querySelector('.composer-input .reference-composer').dispatchEvent(event);
     return event.defaultPrevented;
   })()`)
 }
@@ -1031,7 +1032,7 @@ async function main(): Promise<void> {
     assert.equal(await evaluate(`Array.from(document.querySelectorAll('.chat-session')).filter(row => row.textContent.includes('First live progress')).length`), 1)
     await evaluate(`Array.from(document.querySelectorAll('button.chat-session-source')).find(button => button.textContent.includes(${JSON.stringify(idB)})).click()`)
     await waitFor(`Array.from(document.querySelectorAll('.chat-user')).some(row => row.textContent.includes('Only the second session.'))`)
-    assert.equal(await evaluate(`!!document.querySelector('.composer-input textarea')?.getClientRects().length`), true, 'The source heading opens the destination conversation with its composer')
+    assert.equal(await evaluate(`!!document.querySelector('.composer-input .reference-composer')?.getClientRects().length`), true, 'The source heading opens the destination conversation with its composer')
     assert.equal(sentMessages.length, 0, 'Navigation does not send a message')
     assert.deepEqual(unexpected, [])
     console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: true, mode: 'message-source' })}`)
@@ -1048,7 +1049,7 @@ async function main(): Promise<void> {
           document.documentElement.classList.toggle('dark', ${dark});
           const dock = document.querySelector('.primary-conversation .conversation-dock');
           const fade = getComputedStyle(dock, '::before');
-          const input = dock.querySelector('textarea');
+          const input = dock.querySelector('.reference-composer');
           const rect = input.getBoundingClientRect();
           const surface = getComputedStyle(document.body).backgroundColor;
           return fade.content === '""' && fade.pointerEvents === 'none' && fade.zIndex === '-1'
@@ -1195,7 +1196,7 @@ async function main(): Promise<void> {
   await click('.tool-activity-summary')
   await evaluate(`document.querySelector('.chat-messages').scrollTop = 0`)
   await evaluate(`(() => {
-    const input = document.querySelector('.composer-input textarea');
+    const input = document.querySelector('.composer-input .reference-composer');
     input.value = 'Keep draft and selection';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.focus();
@@ -1207,7 +1208,7 @@ async function main(): Promise<void> {
   await click('.session-select[aria-current="page"]')
   await new Promise(resolve => setTimeout(resolve, 150))
   assert.equal(chatHistoryRequests.length, historyBeforeRepeat, 'Selecting the current conversation must not fetch history again')
-  assert.equal(await evaluate(`document.querySelector('.chat-bubble') === window.stableMessage && document.querySelector('.composer-input textarea') === window.stableComposerInput && window.stableComposerInput.value === 'Keep draft and selection' && window.stableComposerInput.selectionStart === 2`), true)
+  assert.equal(await evaluate(`document.querySelector('.chat-bubble') === window.stableMessage && document.querySelector('.composer-input .reference-composer') === window.stableComposerInput && window.stableComposerInput.value === 'Keep draft and selection' && window.stableComposerInput.selectionStart === 2`), true)
   await click('.folder-folder')
   await waitFor(`document.querySelector('.folder-toggle').getAttribute('aria-expanded') === 'true'`)
   assert.equal(await evaluate(`!document.querySelector('.folder-folder-row.selected') && !!document.querySelector('.folder-session-row.active.selected')`), true, 'Selecting a folder header does not duplicate the active conversation highlight')
@@ -1268,7 +1269,7 @@ async function main(): Promise<void> {
   releaseModel()
   await waitFor(`document.querySelector('.model-label').textContent === 'synthetic-other' && document.querySelector('.composer-controls [aria-label="Choose model"]').getAttribute('aria-busy') !== 'true'`)
   assert.deepEqual(await composerBounds(), boundsBeforeModel)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea') === window.stableComposerInput && window.stableComposerInput.value === 'Keep draft and selection' && window.stableComposerInput.selectionStart === 2`), true)
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer') === window.stableComposerInput && window.stableComposerInput.value === 'Keep draft and selection' && window.stableComposerInput.selectionStart === 2`), true)
   const savesBeforeRepeat = providerSaves.length
   await click('.composer-controls [aria-label="Choose model"]')
   await click('.model-menu-model')
@@ -1333,7 +1334,7 @@ async function main(): Promise<void> {
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).hasPointerCapture(window.sidebarPointerId)`), false, `${end} releases sidebar pointer capture`)
   }
   const historyBeforeResize = chatHistoryRequests.length
-  await evaluate(`window.sidebarStableInput = document.querySelector('.composer-input textarea'); window.sidebarStableMessage = document.querySelector('.chat-bubble')`)
+  await evaluate(`window.sidebarStableInput = document.querySelector('.composer-input .reference-composer'); window.sidebarStableMessage = document.querySelector('.chat-bubble')`)
   for (const side of [
     { selector: '.folders-resizer', root: '.folders-sidebar', label: 'Resize folders', initial: 260, min: 200, max: 400 },
     { selector: '.files-resizer', root: '.workbench-explorer', label: 'Resize files', initial: 220, min: 180, max: 360 },
@@ -1374,10 +1375,10 @@ async function main(): Promise<void> {
   await dragSidebar('.folders-resizer', 60)
   await waitFor(`document.querySelector('.files-resizer') && Math.abs(document.querySelector('.workbench-explorer').getBoundingClientRect().width - 220) < 2`)
   assert.equal(chatHistoryRequests.length, historyBeforeResize)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea') === window.sidebarStableInput && document.querySelector('.chat-bubble') === window.sidebarStableMessage`), true, 'Resizing and responsive transitions preserve conversation DOM')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer') === window.sidebarStableInput && document.querySelector('.chat-bubble') === window.sidebarStableMessage`), true, 'Resizing and responsive transitions preserve conversation DOM')
   const prepareComposer = async (value: string, start = value.length, end = start) => {
     await evaluate(`(() => {
-      const input = document.querySelector('.composer-input textarea');
+      const input = document.querySelector('.composer-input .reference-composer');
       input.focus(); input.value = ${JSON.stringify(value)};
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.setSelectionRange(${start}, ${end}); input.blur();
@@ -1385,38 +1386,38 @@ async function main(): Promise<void> {
   }
   await prepareComposer('')
   await nativeKey('a', 'KeyA', 65, 'a')
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), 'a', 'Native first key must be inserted exactly once after focus')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), 'a', 'Native first key must be inserted exactly once after focus')
   await evaluate(`document.activeElement.blur()`)
   await nativeKey('Backspace', 'Backspace', 8)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '', 'Backspace must focus and delete on the same press')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), '', 'Backspace must focus and delete on the same press')
   await prepareComposer('A\u{1F642}')
   await nativeKey('Backspace', 'Backspace', 8)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), 'A', 'Native deletion must not split a surrogate pair')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), 'A', 'Native deletion must not split a surrogate pair')
   await prepareComposer('abcde', 1, 4)
   await nativeKey('Backspace', 'Backspace', 8)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), 'ae', 'Backspace should respect the retained selection')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), 'ae', 'Backspace should respect the retained selection')
   await nativeKey('z', 'KeyZ', 90, undefined, process.platform === 'darwin' ? 4 : 2)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), 'abcde', 'Redirected deletion must remain undoable')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), 'abcde', 'Redirected deletion must remain undoable')
   await evaluate(`(() => { const input = document.createElement('input'); input.id = 'keyboard-focus-fixture'; input.value = 'safe'; document.body.append(input); input.focus(); })()`)
   await nativeKey('Backspace', 'Backspace', 8)
   assert.equal(await evaluate(`document.querySelector('#keyboard-focus-fixture').value`), 'saf')
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), 'abcde')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), 'abcde')
   await evaluate(`document.querySelector('#keyboard-focus-fixture').remove()`)
   await prepareComposer('')
   await nativeKey('Backspace', 'Backspace', 8)
-  assert.equal(await evaluate(`document.activeElement === document.querySelector('.composer-input textarea') && document.activeElement.value === ''`), true)
+  assert.equal(await evaluate(`document.activeElement === document.querySelector('.composer-input .reference-composer') && document.activeElement.value === ''`), true)
   await prepareComposer('')
   await nativeKey('Process', 'KeyN', 229)
-  assert.equal(await evaluate(`document.activeElement === document.querySelector('.composer-input textarea') && document.activeElement.value === ''`), true, 'IME start focuses without inserting an English key')
+  assert.equal(await evaluate(`document.activeElement === document.querySelector('.composer-input .reference-composer') && document.activeElement.value === ''`), true, 'IME start focuses without inserting an English key')
   await evaluate(`(() => {
     window.keyboardImeEvents = [];
-    const input = document.querySelector('.composer-input textarea');
+    const input = document.querySelector('.composer-input .reference-composer');
     for (const name of ['compositionstart', 'compositionend']) input.addEventListener(name, () => window.keyboardImeEvents.push(name), { once: true });
   })()`)
   await keyboard.sendCommand('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 })
   await evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }))`)
   await keyboard.sendCommand('Input.insertText', { text: '\u4f60' })
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '\u4f60')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), '\u4f60')
   assert.deepEqual(await evaluate(`window.keyboardImeEvents`), ['compositionstart', 'compositionend'])
   assert.equal(await evaluate(`document.querySelector('.composer-send').disabled`), false, 'Committed IME text must update the Vue draft')
   await evaluate(`(() => {
@@ -1435,19 +1436,19 @@ async function main(): Promise<void> {
   await prepareComposer('before after', 7)
   await selectMessage('.primary-conversation')
   assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.selection-menu [role="menuitem"]'), item => item.querySelector('span:nth-child(2)').textContent)`), ['Quote', 'Copy'])
-  assert.equal(await evaluate(`document.querySelector('textarea').value`), 'before after', 'Selecting text must not alter the composer')
+  assert.equal(await evaluate(`document.querySelector('.reference-composer').value`), 'before after', 'Selecting text must not alter the composer')
   assert.equal(await evaluate(`!document.querySelector('.selection-highlight-overlay, .has-selection, .selection-indicator') && getSelection().toString().length > 0`), true, 'Selection retains only the native browser highlight')
   for (const key of ['q', 'c']) {
     for (const modifiers of [{ ctrlKey: true }, { shiftKey: true }, { isComposing: true }, { repeat: true }]) {
       await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true, ...${JSON.stringify(modifiers)} }))`)
-      assert.equal(await evaluate(`document.querySelector('textarea').value`), 'before after')
+      assert.equal(await evaluate(`document.querySelector('.reference-composer').value`), 'before after')
       assert.equal(await evaluate(`Boolean(document.querySelector('.selection-menu'))`), true)
     }
   }
   const quoteText = await evaluate<string>(`getSelection().toString()`)
   await nativeKey('q', 'KeyQ', 81, 'q')
-  await waitFor(`!document.querySelector('.selection-menu') && document.activeElement === document.querySelector('textarea')`)
-  assert.equal(await evaluate(`document.querySelector('textarea').value`), `before \n\n> ${quoteText.split(/\r?\n/).join('\n> ')}\n\nafter`)
+  await waitFor(`!document.querySelector('.selection-menu') && document.activeElement === document.querySelector('.reference-composer')`)
+  assert.equal(await evaluate(`document.querySelector('.reference-composer').value`), `before \n\n> ${quoteText.split(/\r?\n/).join('\n> ')}\n\nafter`)
   assert.equal(sentMessages.length, sendsBeforeSelection)
   assert.equal(extraSessions.length, sessionsBeforeSelection, 'Quote inserts into the current composer without forking a session')
   await captureSelectionMenu('selection-menu-desktop.png')
@@ -1518,7 +1519,7 @@ async function main(): Promise<void> {
   assert.ok(fileRequests.some(request => request.sessionId === idA), 'The visible persistent explorer loads the selected session')
   const historyBeforeDocuments = chatHistoryRequests.length
   await evaluate(`(() => {
-    window.documentInput = document.querySelector('.composer-input textarea');
+    window.documentInput = document.querySelector('.composer-input .reference-composer');
     window.documentMessage = document.querySelector('.chat-bubble');
     const scroll = document.querySelector('.chat-messages');
     scroll.scrollTop = 120; window.documentScroll = scroll.scrollTop;
@@ -1526,7 +1527,7 @@ async function main(): Promise<void> {
   })()`)
   await click('[aria-label="Collapse files"]')
   await waitFor(`!document.querySelector('.workbench-explorer').getClientRects().length`)
-  assert.equal(await evaluate(`document.querySelector('.workbench-editor').getBoundingClientRect().width > window.expandedEditorWidth + 180 && document.querySelector('.composer-input textarea') === window.documentInput && document.querySelector('.chat-bubble') === window.documentMessage`), true, 'Collapsing the explorer expands horizontally without remounting chat')
+  assert.equal(await evaluate(`document.querySelector('.workbench-editor').getBoundingClientRect().width > window.expandedEditorWidth + 180 && document.querySelector('.composer-input .reference-composer') === window.documentInput && document.querySelector('.chat-bubble') === window.documentMessage`), true, 'Collapsing the explorer expands horizontally without remounting chat')
   await click('.explorer-toggle')
   await waitFor(`document.querySelector('.tree-row[data-path="README.md"]')`)
   await click('.tree-row[data-path="src"]')
@@ -1557,7 +1558,7 @@ async function main(): Promise<void> {
   await nativeKey('a', 'KeyA', 65, 'a')
   await nativeKey('Backspace', 'Backspace', 8)
   assert.equal(await evaluate(`window.documentInput.value`), '\u4f60', 'Keys outside the file composer must not redirect into it')
-  assert.equal(await evaluate(`window.documentInput === document.querySelector('.composer-input textarea') && window.documentInput.getClientRects().length > 0`), true, 'Opening a file keeps the same composer visible')
+  assert.equal(await evaluate(`window.documentInput === document.querySelector('.composer-input .reference-composer') && window.documentInput.getClientRects().length > 0`), true, 'Opening a file keeps the same composer visible')
   await assertFileComposer()
   await click('.tree-row[data-path="src/main.ts"]')
   assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"][aria-label="src/main.ts"]').length`), 1, 'Opening the same file must deduplicate its document tab')
@@ -1596,7 +1597,7 @@ async function main(): Promise<void> {
   assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.document-tablist [role="tab"]'), node => node.getAttribute('aria-label') || node.textContent.trim())`), ['Conversation', 'Diagnosis', 'README.md', 'src/main.ts'])
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
   await waitFor(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation'`)
-  await evaluate(`document.querySelector('.composer-input textarea').focus()`)
+  await evaluate(`document.querySelector('.composer-input .reference-composer').focus()`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
   await waitFor(`document.querySelector('.diagnosis-tab [role="tab"]').getAttribute('aria-selected') === 'true'`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
@@ -1622,7 +1623,7 @@ async function main(): Promise<void> {
   await evaluate(`document.querySelector('.document-tablist [aria-label="src/main.ts"]').focus()`)
   await nativeKey('Home', 'Home', 36)
   await waitFor(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation'`)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea') === window.documentInput && window.documentInput.value === '\\u4f60' && document.querySelector('.chat-bubble') === window.documentMessage && document.querySelector('.chat-messages').scrollTop === window.documentScroll`), true, 'Returning to Conversation preserves input DOM, draft, message DOM and scroll')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer') === window.documentInput && window.documentInput.value === '\\u4f60' && document.querySelector('.chat-bubble') === window.documentMessage && document.querySelector('.chat-messages').scrollTop === window.documentScroll`), true, 'Returning to Conversation preserves input DOM, draft, message DOM and scroll')
   await nativeKey('End', 'End', 35)
   assert.equal(await evaluate(`document.activeElement.getAttribute('aria-label')`), 'src/main.ts')
   await nativeKey('ArrowLeft', 'ArrowLeft', 37)
@@ -1664,7 +1665,7 @@ async function main(): Promise<void> {
   const htmlSelectedText = await selectFileText('.file-modal-text', htmlStart, htmlEnd)
   await click('.selection-menu button:first-of-type')
   await waitFor(`!document.querySelector('.selection-menu')`)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), `> File: preview.html\n> Lines: 4\n> \n> ${htmlSelectedText}\n\n`, 'HTML Source quotes literal source with line context without executing it')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), `> File: preview.html\n> Lines: 4\n> \n> ${htmlSelectedText}\n\n`, 'HTML Source quotes literal source with line context without executing it')
   assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').getAttribute('aria-label')`), 'preview.html')
   await prepareComposer('\u4f60')
   await click('.document-tablist [aria-label="Close preview.html"]')
@@ -1673,7 +1674,7 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`Array.from(document.querySelectorAll('.file-modal-text .file-syntax-token')).every(token => !token.style.getPropertyValue('--file-token-light') && !token.style.getPropertyValue('--file-token-dark'))`), true, 'Unknown suffixes remain uncolored plaintext')
   await prepareComposer('prefix suffix', 7)
   await evaluate(`(() => {
-    window.fileComposer = document.querySelector('.composer-input textarea');
+    window.fileComposer = document.querySelector('.composer-input .reference-composer');
     window.fileControls = document.querySelector('.composer-controls').textContent;
     const transfer = new DataTransfer();
     transfer.items.add(new File(['Synthetic pending context'], 'context.txt', { type: 'text/plain' }));
@@ -1739,7 +1740,7 @@ async function main(): Promise<void> {
   await click('.document-tablist [aria-label="settings.arbitrary-suffix"]')
   await evaluate(`window.fileComposer.setSelectionRange(3, 3)`)
   await click('.document-tablist [role="tab"]')
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea') === window.fileComposer && window.fileComposer.value === ${JSON.stringify(quotedDraft)} && window.fileComposer.selectionStart === 3 && !!document.querySelector('[aria-label="Remove context.txt"]') && document.querySelector('.attachment-thumb')?.naturalWidth === 1 && document.querySelector('.composer-controls').textContent === window.fileControls`), true, 'Conversation and file share the input node, caret, draft, pending/pasted attachments, model and reasoning controls')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer') === window.fileComposer && window.fileComposer.value === ${JSON.stringify(quotedDraft)} && window.fileComposer.selectionStart === 3 && !!document.querySelector('[aria-label="Remove context.txt"]') && document.querySelector('.attachment-thumb')?.naturalWidth === 1 && document.querySelector('.composer-controls').textContent === window.fileControls`), true, 'Conversation and file share the input node, caret, draft, pending/pasted attachments, model and reasoning controls')
   await click('.document-tablist [aria-label="settings.arbitrary-suffix"]')
   await selectFileText('.file-modal-text', excerptOffsets.start, excerptOffsets.end)
   await click('.document-tablist [role="tab"]')
@@ -1762,7 +1763,7 @@ async function main(): Promise<void> {
   await click('.document-tablist [aria-label="Close src/main.ts"]')
   await click('.document-tablist [aria-label="Close settings.arbitrary-suffix"]')
   await waitFor(`!document.querySelector('.selection-menu')`)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea') === window.fileComposer`), true, 'Closing a file never remounts the composer')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer') === window.fileComposer`), true, 'Closing a file never remounts the composer')
   window.webContents.disableDeviceEmulation()
   await waitFor(`innerWidth > 1280`)
   await click('[aria-label="Remove context.txt"]')
@@ -1785,7 +1786,7 @@ async function main(): Promise<void> {
     if (name === '.node-version') await assertFileEndAboveOverlay()
   }
   await click('.document-tablist [role="tab"]')
-  await evaluate(`document.querySelector('.document-tabs').style.maxWidth = '260px'; document.querySelector('.document-tabs').scrollLeft = 0; document.querySelector('textarea').focus()`)
+  await evaluate(`document.querySelector('.document-tabs').style.maxWidth = '260px'; document.querySelector('.document-tabs').scrollLeft = 0; document.querySelector('.reference-composer').focus()`)
   const pinnedBounds = await evaluate(`document.querySelector('.conversation-tab').getBoundingClientRect().toJSON()`)
   const wheelPoint = await evaluate<{ x: number; y: number }>(`(() => { const rect = document.querySelector('.conversation-tab').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; })()`)
   await keyboard.sendCommand('Input.dispatchMouseEvent', { type: 'mouseWheel', ...wheelPoint, deltaX: 0, deltaY: 180 })
@@ -1801,7 +1802,7 @@ async function main(): Promise<void> {
   }
   await middleClick('.document-tablist [aria-label="settings.arbitrary-suffix"]')
   await waitFor(`!document.querySelector('.document-tablist [aria-label="settings.arbitrary-suffix"]')`)
-  assert.equal(await evaluate(`document.activeElement === document.querySelector('textarea')`), true, 'Middle-closing an inactive file must not steal composer focus')
+  assert.equal(await evaluate(`document.activeElement === document.querySelector('.reference-composer')`), true, 'Middle-closing an inactive file must not steal composer focus')
   await middleClick('.document-tablist [role="tab"]')
   assert.equal(await evaluate(`document.querySelector('.document-tablist [role="tab"]').textContent.trim()`), 'Conversation', 'Conversation cannot be middle-closed')
   await click('.document-tablist [aria-label="binary.unknown"]')
@@ -1849,12 +1850,12 @@ async function main(): Promise<void> {
   window.webContents.disableDeviceEmulation()
   await waitFor(`innerWidth > 700`)
   await showSessionView(false)
-  await evaluate(`(() => { const input = document.querySelector('.composer-input textarea'); window.retainedInput = input; input.value = 'Keep this unsent draft'; input.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('.chat-messages').scrollTop = 120; window.retainedScroll = document.querySelector('.chat-messages').scrollTop; })()`)
+  await evaluate(`(() => { const input = document.querySelector('.composer-input .reference-composer'); window.retainedInput = input; input.value = 'Keep this unsent draft'; input.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('.chat-messages').scrollTop = 120; window.retainedScroll = document.querySelector('.chat-messages').scrollTop; })()`)
   await showSessionView(true)
   await waitFor(`document.querySelectorAll('.lane-bar.model').length === 2`)
   assert.equal(traceQueries.at(-1)?.searchParams.get('sessionId'), idA)
   assert.equal(traceQueries.at(-1)?.searchParams.get('physicalSessionId'), 'physical-a')
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').getClientRects().length`), 0)
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').getClientRects().length`), 0)
   assert.equal(await evaluate(`Boolean(document.querySelector('.right-pane'))`), false)
   await click('[aria-label="Zoom into trace"]')
   await waitFor(`Boolean(document.querySelector('[aria-label="Pan trace timeline"]'))`)
@@ -1869,7 +1870,7 @@ async function main(): Promise<void> {
   await evaluate(`document.activeElement.blur()`)
   await nativeKey('a', 'KeyA', 65, 'a')
   await nativeKey('Backspace', 'Backspace', 8)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), 'Keep this unsent draft')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), 'Keep this unsent draft')
   keyboard.detach()
   await click('.lane-bar.tools')
   await waitFor(`document.querySelector('.span-inspector')?.textContent.includes('Synthetic README result')`)
@@ -1883,8 +1884,8 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`document.querySelectorAll('.system-prompt-content .katex math').length`), 2)
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('#diagnosis-prompt .i-lucide-copy')).maskImage.includes('data:image/svg+xml')`), true)
   await showSessionView(false)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea') === window.retainedInput`), true)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), 'Keep this unsent draft')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer') === window.retainedInput`), true)
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), 'Keep this unsent draft')
   assert.equal(await evaluate(`document.querySelector('.chat-messages').scrollTop === window.retainedScroll`), true)
   await showSessionView(true)
   await click('#diagnosis-trace-tab')
@@ -1938,7 +1939,7 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`document.querySelector('#diagnosis-trace').textContent.includes('Synthetic README result')`), false)
   await showSessionView(false)
   const send = async (text: string) => {
-    await evaluate(`(() => { const input = document.querySelector('.composer-input textarea'); input.value = ${JSON.stringify(text)}; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+    await evaluate(`(() => { const input = document.querySelector('.composer-input .reference-composer'); input.value = ${JSON.stringify(text)}; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
     await click('.composer-send')
   }
   await send('Timestamp input')
@@ -1961,15 +1962,15 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`window.streamActivity === document.querySelector('.tool-activity') && window.streamActivity.open`), true, 'Streaming result updates must preserve expansion and DOM identity')
   assert.ok(completeSend)
   completeSend()
-  await waitFor(`document.querySelector('.chat-messages').textContent.includes('Final timestamped response') && !document.querySelector('.composer-input textarea').disabled`)
+  await waitFor(`document.querySelector('.chat-messages').textContent.includes('Final timestamped response') && !document.querySelector('.composer-input .reference-composer').disabled`)
   assert.equal(await evaluate(`document.querySelectorAll('.tool-activity').length`), 1)
   assert.equal(await evaluate(`document.querySelector('.tool-activity-summary .lines-added').textContent`), '+2', 'Committing streaming tools must not duplicate counts')
   assert.equal(await evaluate(`Array.from(document.querySelectorAll('.chat-assistant')).find(bubble => bubble.textContent.includes('A streamed response')).querySelector('.message-time').dateTime`), partialTime)
   assert.ok(await evaluate(`Array.from(document.querySelectorAll('.chat-assistant .message-time')).every(time => Number.isFinite(Date.parse(time.dateTime)))`))
   await send('Interrupted timestamp')
-  await waitFor(`Array.from(document.querySelectorAll('.chat-assistant')).filter(bubble => bubble.textContent.includes('A streamed response')).length === 2 && !document.querySelector('.composer-input textarea').disabled`)
+  await waitFor(`Array.from(document.querySelectorAll('.chat-assistant')).filter(bubble => bubble.textContent.includes('A streamed response')).length === 2 && !document.querySelector('.composer-input .reference-composer').disabled`)
   await send('Failed timestamp')
-  await waitFor(`document.querySelector('.chat-messages').textContent.includes('Error:') && !document.querySelector('.composer-input textarea').disabled`)
+  await waitFor(`document.querySelector('.chat-messages').textContent.includes('Error:') && !document.querySelector('.composer-input .reference-composer').disabled`)
   assert.ok(realtime.hub.stats.clients > 0)
   realtime.chat(idB, { event: 'response', content: 'Background timestamped reply.', done: true })
   realtime.finish(idB)
@@ -1988,7 +1989,7 @@ async function main(): Promise<void> {
   await click('.tree-row[data-path=".node-version"]')
   await waitFor(`document.querySelector('.file-modal-text')?.textContent.includes('.node-version')`)
   const readonlyFileText = await selectFileText('.file-modal-text')
-  assert.equal(await evaluate(`!document.querySelector('.composer-input textarea') && document.querySelector('.selection-menu button:first-of-type').disabled`), true, 'Read-only file previews offer Copy without creating a composer or enabling Quote')
+  assert.equal(await evaluate(`!document.querySelector('.composer-input .reference-composer') && document.querySelector('.selection-menu button:first-of-type').disabled`), true, 'Read-only file previews offer Copy without creating a composer or enabling Quote')
   await click('.selection-menu button:last-of-type')
   await waitFor(`!document.querySelector('.selection-menu')`)
   assert.equal(await evaluate(`window.copiedSelections.at(-1)`), readonlyFileText)
@@ -2024,36 +2025,36 @@ async function main(): Promise<void> {
   await click('.primary-conversation .document-tablist [role="tab"]')
   await click('.primary-conversation [aria-label="Collapse files"]')
   await evaluate(`(() => {
-    const input = document.querySelector('.primary-conversation textarea');
+    const input = document.querySelector('.primary-conversation .reference-composer');
     input.value = 'Keep main draft'; input.dispatchEvent(new Event('input', { bubbles: true }));
     window.splitParentInput = input;
     document.querySelector('.primary-conversation .chat-messages').scrollTop = 80;
   })()`)
   await selectConversation(idChild)
   await waitFor(`document.querySelector('.child-conversation .chat-messages')?.textContent.includes('This response belongs only to the child')`)
-  assert.equal(await evaluate(`document.querySelector('.primary-conversation textarea') === window.splitParentInput && window.splitParentInput.value === 'Keep main draft'`), true)
+  assert.equal(await evaluate(`document.querySelector('.primary-conversation .reference-composer') === window.splitParentInput && window.splitParentInput.value === 'Keep main draft'`), true)
   assert.equal(await evaluate(`document.querySelector('.primary-conversation .chat-messages').scrollTop < 500`), true, 'Opening a child must not scroll the parent to the bottom')
   assert.equal(await evaluate(`document.querySelector('.conversation-workspace').classList.contains('is-split') && document.querySelectorAll('.folders-sidebar').length === 1`), true)
   assert.equal(await evaluate(`new URLSearchParams(location.search).get('child')`), idChild)
   keyboard.attach('1.3')
-  await evaluate(`document.querySelector('.child-conversation textarea').focus()`)
+  await evaluate(`document.querySelector('.child-conversation .reference-composer').focus()`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
   await nativeKey('Tab', 'Tab', 9, undefined, 10)
   assert.equal(await evaluate(`document.querySelector('.primary-conversation .document-tablist [aria-selected="true"]').textContent.trim()`), 'Conversation', 'Cycling a side chat between its fixed views must not change the inactive main pane')
-  await evaluate(`(() => { const input = document.querySelector('.child-conversation textarea'); input.focus(); input.value = 'Keep child draft'; input.dispatchEvent(new Event('input', { bubbles: true })); input.setSelectionRange(input.value.length, input.value.length); input.blur(); })()`)
+  await evaluate(`(() => { const input = document.querySelector('.child-conversation .reference-composer'); input.focus(); input.value = 'Keep child draft'; input.dispatchEvent(new Event('input', { bubbles: true })); input.setSelectionRange(input.value.length, input.value.length); input.blur(); })()`)
   await nativeKey('a', 'KeyA', 65, 'a')
-  assert.equal(await evaluate(`document.querySelector('.child-conversation textarea').value`), 'Keep child drafta')
+  assert.equal(await evaluate(`document.querySelector('.child-conversation .reference-composer').value`), 'Keep child drafta')
   assert.equal(await evaluate(`window.splitParentInput.value`), 'Keep main draft')
   await evaluate(`document.activeElement.blur(); document.querySelector('.primary-conversation .chat-messages').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))`)
   await nativeKey('Backspace', 'Backspace', 8)
   assert.equal(await evaluate(`window.splitParentInput.value`), 'Keep main draf')
-  assert.equal(await evaluate(`document.querySelector('.child-conversation textarea').value`), 'Keep child drafta')
+  assert.equal(await evaluate(`document.querySelector('.child-conversation .reference-composer').value`), 'Keep child drafta')
   await selectMessage('.child-conversation')
   assert.equal(await evaluate(`document.querySelectorAll('.selection-menu').length`), 1, 'Only the active child owns the selection menu')
   await nativeKey('q', 'KeyQ', 81, 'q')
-  await waitFor(`document.querySelector('.child-conversation textarea').value.includes('> This response belongs only to the child.')`)
+  await waitFor(`document.querySelector('.child-conversation .reference-composer').value.includes('> This response belongs only to the child.')`)
   assert.equal(await evaluate(`window.splitParentInput.value`), 'Keep main draf', 'Child quote must never mutate the main composer')
-  await evaluate(`(() => { const input = document.querySelector('.child-conversation textarea'); input.value = 'Keep child drafta'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  await evaluate(`(() => { const input = document.querySelector('.child-conversation .reference-composer'); input.value = 'Keep child drafta'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   const divider = await evaluate<{ x: number; y: number }>(`(() => { const rect = document.querySelector('.conversation-resizer').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + 120 }; })()`)
   const beforeResize = await evaluate<number>(`document.querySelector('.child-conversation').getBoundingClientRect().width`)
   await keyboard.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', ...divider, button: 'left', buttons: 1, clickCount: 1 })
@@ -2076,10 +2077,10 @@ async function main(): Promise<void> {
     assert.equal(await evaluate(`(() => { const pane = document.querySelector('.${side}-conversation'); const last = Array.from(pane.querySelectorAll('.chat-bubble')).at(-1); return last.getBoundingClientRect().bottom <= pane.querySelector('.composer-box').getBoundingClientRect().top; })()`), true, 'The final bubble must remain above the overlay at scroll end')
   }
   const beforeGrow = await evaluate<number>(`document.querySelector('.child-conversation .conversation-dock').getBoundingClientRect().height`)
-  await evaluate(`(() => { const input = document.querySelector('.child-conversation textarea'); input.value = 'Wrapped draft\\n'.repeat(9); input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  await evaluate(`(() => { const input = document.querySelector('.child-conversation .reference-composer'); input.value = 'Wrapped draft\\n'.repeat(9); input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   await waitFor(`document.querySelector('.child-conversation .conversation-dock').getBoundingClientRect().height > ${beforeGrow + 60}`)
   await waitFor(`(() => { const pane = document.querySelector('.child-conversation'); return parseFloat(getComputedStyle(pane.querySelector('.chat-messages')).paddingBottom) >= pane.querySelector('.conversation-dock').getBoundingClientRect().height && pane.querySelector('.message-history-rail').getBoundingClientRect().bottom < pane.querySelector('.composer-box').getBoundingClientRect().top; })()`)
-  await evaluate(`(() => { const input = document.querySelector('.child-conversation textarea'); input.value = 'Keep child drafta'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  await evaluate(`(() => { const input = document.querySelector('.child-conversation .reference-composer'); input.value = 'Keep child drafta'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   await showSessionView(true, '.child-conversation')
   await waitFor(`document.querySelector('.child-conversation .trace-event')?.textContent.includes('child-only')`)
   await showSessionView(true)
@@ -2112,25 +2113,25 @@ async function main(): Promise<void> {
   realtime.chat(idChild, { content: ' completed.', done: true })
   realtime.finish(idA)
   realtime.finish(idChild)
-  await waitFor(`!document.querySelector('.primary-conversation textarea').disabled && !document.querySelector('.child-conversation textarea').disabled`)
+  await waitFor(`!document.querySelector('.primary-conversation .reference-composer').disabled && !document.querySelector('.child-conversation .reference-composer').disabled`)
   const savedWidth = await evaluate<string>(`document.querySelector('.conversation-resizer').getAttribute('aria-valuenow')`)
   window.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 390, height: 844 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 390, height: 844 }, deviceScaleFactor: 1, scale: 1 })
   await waitFor(`!document.querySelector('.conversation-resizer') && !document.querySelector('.primary-conversation').getClientRects().length`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
   assert.equal(await evaluate(`document.querySelector('.primary-conversation .document-tablist [aria-selected="true"]').textContent.trim()`), 'Conversation', 'Hidden main panes must ignore document shortcuts')
-  assert.equal(await evaluate(`document.querySelector('.child-conversation textarea').value`), 'Keep child drafta')
+  assert.equal(await evaluate(`document.querySelector('.child-conversation .reference-composer').value`), 'Keep child drafta')
   assert.equal(await evaluate(`Boolean(document.querySelector('.child-conversation .workbench-explorer, .child-conversation .explorer-toggle, .child-conversation .explorer-backdrop'))`), false, 'Narrow side chats must not expose a file drawer')
   assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth && document.querySelector('.child-conversation .composer-box').getBoundingClientRect().bottom <= innerHeight`), true)
   await writeFile(join(directory, 'parallel-conversations-mobile.png'), (await window.webContents.capturePage({ x: 0, y: 0, width: 390, height: 844 })).toPNG())
   window.webContents.disableDeviceEmulation()
   await waitFor(`Boolean(document.querySelector('.conversation-resizer'))`)
   assert.equal(await evaluate(`document.querySelector('.conversation-resizer').getAttribute('aria-valuenow')`), savedWidth)
-  assert.equal(await evaluate(`document.querySelector('.primary-conversation textarea') === window.splitParentInput && window.splitParentInput.value === 'Keep main draf'`), true)
+  assert.equal(await evaluate(`document.querySelector('.primary-conversation .reference-composer') === window.splitParentInput && window.splitParentInput.value === 'Keep main draf'`), true)
   agentWorking = true
   await selectConversation(idAgent)
   await waitFor(`document.querySelector('.child-conversation .chat-messages').textContent.includes('The agent is examining the files')`)
   assert.equal(await evaluate(`Boolean(document.querySelector('.child-conversation .workbench-explorer, .child-conversation .explorer-toggle'))`), false, 'Read-only subagent side chats do not expose files')
-  assert.equal(await evaluate(`Boolean(document.querySelector('.child-conversation textarea'))`), false)
+  assert.equal(await evaluate(`Boolean(document.querySelector('.child-conversation .reference-composer'))`), false)
   const readonlySelection = await selectMessage('.child-conversation')
   assert.equal(await evaluate(`document.querySelector('.selection-menu [role="menuitem"]').disabled`), true, 'Read-only conversations disable Quote')
   await nativeKey('q', 'KeyQ', 81, 'q')
@@ -2157,20 +2158,20 @@ async function main(): Promise<void> {
   assert.equal(fileRequests.some(request => request.sessionId === idChild || request.sessionId === idAgent), false, 'Switching side chats never fetches their filesystem')
   await click('[aria-label="Close child conversation"]')
   await waitFor(`!document.querySelector('.child-conversation')`)
-  assert.equal(await evaluate(`document.querySelector('.primary-conversation textarea') === window.splitParentInput && window.splitParentInput.value === 'Keep main draf'`), true)
+  assert.equal(await evaluate(`document.querySelector('.primary-conversation .reference-composer') === window.splitParentInput && window.splitParentInput.value === 'Keep main draf'`), true)
   keyboard.detach()
   await window.loadURL(`${origin}/chat/${encodeURIComponent(idA)}?child=${encodeURIComponent(idChild)}`)
   await waitFor(`document.querySelector('.child-conversation .chat-messages')?.textContent.includes('child-only') && document.querySelector('.primary-conversation .heading-name')?.textContent === 'Trace preview'`)
   keyboard.attach('1.3')
   await nativeKey('a', 'KeyA', 65, 'a')
-  assert.equal(await evaluate(`document.querySelector('.child-conversation textarea').value`), 'a')
-  assert.equal(await evaluate(`document.querySelector('.primary-conversation textarea').value`), '')
+  assert.equal(await evaluate(`document.querySelector('.child-conversation .reference-composer').value`), 'a')
+  assert.equal(await evaluate(`document.querySelector('.primary-conversation .reference-composer').value`), '')
   keyboard.detach()
   await click('[aria-label="Close child conversation"]')
   await window.loadURL(`${origin}/chat/${encodeURIComponent(idA)}?child=web%3Achat-missing`)
   await waitFor(`document.querySelector('.child-conversation .composer-error')?.textContent.includes('unavailable')`)
   const beforeUnknownSend = sentMessages.length
-  await evaluate(`(() => { const input = document.querySelector('.child-conversation textarea'); input.value = 'Do not create this missing session'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`)
+  await evaluate(`(() => { const input = document.querySelector('.child-conversation .reference-composer'); input.value = 'Do not create this missing session'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`)
   assert.equal(sentMessages.length, beforeUnknownSend)
   assert.equal(chatHistoryRequests.includes('chat-missing'), false, 'An unknown child URL must not materialize a session')
   await click('[aria-label="Close child conversation"]')
@@ -2237,12 +2238,12 @@ async function main(): Promise<void> {
   await waitFor(`innerWidth > 1280`)
   failUpload = true
   const sendsBeforeUpload = sentMessages.length
-  await evaluate(`document.querySelector('.composer-input textarea').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`)
+  await evaluate(`document.querySelector('.composer-input .reference-composer').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`)
   await waitFor(`document.querySelector('.composer-error')?.textContent.includes('Synthetic upload failure')`)
   assert.equal(sentMessages.length, sendsBeforeUpload)
   assert.equal(await evaluate(`Boolean(document.querySelector('.attachment-thumb'))`), true, 'Failed uploads must remain retryable in the composer')
   failUpload = false
-  await evaluate(`document.querySelector('.composer-input textarea').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`)
+  await evaluate(`document.querySelector('.composer-input .reference-composer').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`)
   await waitFor(`document.querySelector('.chat-messages').textContent.includes('A streamed response')`)
   assert.equal(sentMessages.at(-1)?.content, '')
   assert.deepEqual(sentMessages.at(-1)?.media, [...uploadedImages.keys()])
@@ -2251,7 +2252,7 @@ async function main(): Promise<void> {
   assert.deepEqual(sentMessages.at(-1)?.config, { thinking: { type: 'enabled' }, reasoningEffort: 'high' })
   assert.ok(completeSend)
   completeSend()
-  await waitFor(`!document.querySelector('.composer-input textarea').disabled`)
+  await waitFor(`!document.querySelector('.composer-input .reference-composer').disabled`)
   await waitFor(`document.querySelector('.chat-user img')?.src.startsWith('data:image/png;') && document.querySelector('.chat-user img').naturalWidth === 1`)
   inventoryGate = new Promise(resolve => { releaseInventory = resolve })
   await window.loadURL(`${origin}/workspaces`)
@@ -2309,8 +2310,8 @@ async function main(): Promise<void> {
   const stoppedInventoryRequests = inventoryRequests
   await new Promise(resolve => setTimeout(resolve, 5200))
   assert.equal(inventoryRequests, stoppedInventoryRequests, 'Unmounted Nodes must stop polling')
-  await waitFor(`Boolean(document.querySelector('.composer-input textarea'))`)
-  await evaluate(`(() => { const input = document.querySelector('.composer-input textarea'); input.value = 'Keep this draft while configuring providers'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  await waitFor(`Boolean(document.querySelector('.composer-input .reference-composer'))`)
+  await evaluate(`(() => { const input = document.querySelector('.composer-input .reference-composer'); input.value = 'Keep this draft while configuring providers'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   await evaluate(`Array.from(document.querySelectorAll('.tab-nav .tab')).find(node => node.textContent.trim() === 'Settings').click()`)
   await waitFor(`document.querySelectorAll('.provider-card').length === 3 && document.querySelector('.provider-form')`)
   assert.equal(await evaluate(`document.querySelectorAll('.provider-selected').length`), 1)
@@ -2359,7 +2360,7 @@ async function main(): Promise<void> {
   await waitFor(`document.querySelector('.provider-form select').value === 'anthropic'`)
   await evaluate(`(() => { const input = document.querySelector('.provider-form input[type="password"]'); input.value = 'synthetic-new-key'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   await evaluate(`document.querySelector('.provider-form form').requestSubmit()`)
-  await waitFor(`location.pathname === '/chat' && document.querySelector('.composer-input textarea')?.value === 'Keep this draft while configuring providers'`)
+  await waitFor(`location.pathname === '/chat' && document.querySelector('.composer-input .reference-composer')?.value === 'Keep this draft while configuring providers'`)
   assert.equal(providerSaves.at(-1)?.provider, 'anthropic')
   await evaluate(`Array.from(document.querySelectorAll('.tab-nav .tab')).find(node => node.textContent.trim() === 'Settings').click()`)
   await waitFor(`document.querySelectorAll('.provider-card').length === 4`)
@@ -2442,19 +2443,19 @@ async function main(): Promise<void> {
   await click('.document-tablist [aria-label="README.md"]')
   await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-folder-two'`)
   await click('[aria-label="New conversation in Second folder"]')
-  await waitFor(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation' && document.activeElement === document.querySelector('textarea')`)
+  await waitFor(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation' && document.activeElement === document.querySelector('.reference-composer')`)
   assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 2, 'The same folder + action returns to Conversation without discarding its open file tabs')
   assert.equal(folderSessionRequests.length, 0)
   const uploadsBeforeFolderPaste = uploadAttempts
   await prepareComposer('')
   assert.equal(await pasteFixture({ images: ['red.png'] }), true)
   await waitFor(`document.querySelector('.attachment-thumb')?.naturalWidth === 1 && !document.querySelector('.composer-send').disabled`)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '', 'An image-only folder draft is sendable without inserting text')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), '', 'An image-only folder draft is sendable without inserting text')
   assert.equal(folderSessionRequests.length, 0)
   assert.equal(extraSessions.length, sessionsBeforeFolderDraft)
   assert.equal(uploadAttempts, uploadsBeforeFolderPaste, 'Folder draft paste does not upload or materialize a session')
   await prepareComposer('Create folder conversation after browsing')
-  await evaluate(`window.folderFileComposer = document.querySelector('.composer-input textarea')`)
+  await evaluate(`window.folderFileComposer = document.querySelector('.composer-input .reference-composer')`)
   await click('.document-tablist [aria-label="README.md"]')
   await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-folder-two'`)
   const draftFileRequestsBeforeQuote = folderFileRequests.length
@@ -2471,7 +2472,7 @@ async function main(): Promise<void> {
   failFolderSessionCreate = true
   await click('.composer-send')
   await waitFor(`document.querySelector('.composer-error')?.textContent.includes('Main could not complete') && !document.querySelector('.composer-send').disabled`)
-  assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').getAttribute('aria-label') === 'README.md' && document.querySelector('.composer-input textarea') === window.folderFileComposer && window.folderFileComposer.value === ${JSON.stringify(folderFilePayload)}`), true, 'Failure before session preparation keeps the file and shared draft composer intact')
+  assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').getAttribute('aria-label') === 'README.md' && document.querySelector('.composer-input .reference-composer') === window.folderFileComposer && window.folderFileComposer.value === ${JSON.stringify(folderFilePayload)}`), true, 'Failure before session preparation keeps the file and shared draft composer intact')
   assert.equal(folderSessionRequests.length, 0)
   assert.equal(uploadAttempts, uploadsBeforeFolderPaste, 'Failure before folder creation leaves pasted images pending and unuploaded')
   assert.equal(await evaluate(`document.querySelector('.attachment-thumb')?.naturalWidth`), 1)
@@ -2484,9 +2485,9 @@ async function main(): Promise<void> {
   assert.equal(sentMessages.at(-1)?.content, folderFilePayload.trim())
   assert.deepEqual(sentMessages.at(-1)?.media, ['C:\\synthetic\\uploads\\chat-folder-created-1\\red.png'])
   assert.equal(uploadAttempts, uploadsBeforeFolderPaste + 1)
-  assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation' && document.querySelector('.composer-input textarea') === window.folderFileComposer`), true, 'Sending from a file returns to Conversation without replacing the composer')
+  assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation' && document.querySelector('.composer-input .reference-composer') === window.folderFileComposer`), true, 'Sending from a file returns to Conversation without replacing the composer')
   completeSend!()
-  await waitFor(`!document.querySelector('textarea').disabled && document.querySelector('.tree-row[data-path="src"]')`)
+  await waitFor(`!document.querySelector('.reference-composer').disabled && document.querySelector('.tree-row[data-path="src"]')`)
   assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 2, 'Created sessions start with Conversation and Diagnosis')
   assert.equal(fileRequests.at(-1)?.sessionId, 'web:chat-folder-created-1')
   await click('.tree-row[data-path="README.md"]')
@@ -2537,14 +2538,14 @@ async function main(): Promise<void> {
   await window.loadURL(`${origin}/chat/${encodeURIComponent(idA)}`)
   await waitFor(`document.querySelector('.tree-row[data-path="new.ts"] .git-status')?.textContent === 'U'`)
   keyboard.attach('1.3')
-  await evaluate(`Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.gitCopied = text } } }); window.gitComposer = document.querySelector('textarea')`)
+  await evaluate(`Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.gitCopied = text } } }); window.gitComposer = document.querySelector('.reference-composer')`)
   await click('.tree-row[data-path="README.md"]')
   await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'README.md'`)
   const expandedFoldersWidth = await evaluate(`document.querySelector('.folders-sidebar').getBoundingClientRect().width`)
   await click('[aria-label="Collapse folders"]')
   await waitFor(`document.querySelector('.folders-sidebar.is-rail')`)
   assert.equal(await evaluate(`document.querySelector('.folders-sidebar').getBoundingClientRect().width`), 64)
-  assert.equal(await evaluate(`!document.querySelector('.folders-resizer') && !document.querySelector('.folder-conversations') && document.querySelector('textarea') === window.gitComposer`), true, 'Rail hides inline families and resizing without remounting the conversation')
+  assert.equal(await evaluate(`!document.querySelector('.folders-resizer') && !document.querySelector('.folder-conversations') && document.querySelector('.reference-composer') === window.gitComposer`), true, 'Rail hides inline families and resizing without remounting the conversation')
   assert.equal(await evaluate(`document.querySelectorAll('.folders-sidebar [title], .tree-row[title], .document-tab[title]').length`), 0, 'Component hover information replaces native titles')
   const focusBeforeRailHover = await evaluate(`document.activeElement.getAttribute('aria-label')`)
   const railFolder = await evaluate(`(() => { const rect = document.querySelector('.folder-folder[aria-label="Synthetic folder"]').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } })()`) as { x: number; y: number }
@@ -2617,7 +2618,7 @@ async function main(): Promise<void> {
   await click('.tree-row[data-path="src/main.ts"]')
   await waitFor(`document.querySelectorAll('.diff-row').length === 5 && document.querySelector('.diff-token[style*="--file-token-light"]')`)
   assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 3, 'Source and HEAD-to-working changes coexist beside pinned Conversation')
-  assert.equal(await evaluate(`document.querySelector('textarea') === window.gitComposer && Array.from(document.querySelectorAll('.diff-line-number')).every(node => node.textContent === '')`), true, 'One shared composer and presentation-only line gutters')
+  assert.equal(await evaluate(`document.querySelector('.reference-composer') === window.gitComposer && Array.from(document.querySelectorAll('.diff-line-number')).every(node => node.textContent === '')`), true, 'One shared composer and presentation-only line gutters')
   assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.diff-row'), row => [row.dataset.oldLine ?? null, row.dataset.newLine ?? null])`), [['1', '1'], ['2', null], [null, '2'], [null, '3'], ['3', '4']])
   await click('.file-tree-modes [role="tab"]:first-child')
   await waitFor(`document.querySelector('.tree-row[data-path="clean.txt"]')`)
@@ -2634,15 +2635,15 @@ async function main(): Promise<void> {
   await prepareComposer('')
   await selectFileText(diffCode)
   await nativeKey('q', 'KeyQ', 81, 'q')
-  await waitFor(`!document.querySelector('.selection-menu') && document.querySelector('textarea').value.includes('HEAD lines: 2')`)
-  assert.equal(await evaluate(`document.querySelector('textarea').value.includes('File: "src/main.ts"') && document.querySelector('textarea').value.includes('Diff: HEAD -> working tree') && !document.querySelector('textarea').value.includes('Working tree lines:')`), true)
+  await waitFor(`!document.querySelector('.selection-menu') && document.querySelector('.reference-composer').value.includes('HEAD lines: 2')`)
+  assert.equal(await evaluate(`document.querySelector('.reference-composer').value.includes('File: "src/main.ts"') && document.querySelector('.reference-composer').value.includes('Diff: HEAD -> working tree') && !document.querySelector('.reference-composer').value.includes('Working tree lines:')`), true)
   assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').getAttribute('aria-label')`), 'src/main.ts changes')
   assert.equal(sentMessages.length, gitSends, 'Diff quotes never send implicitly')
   await selectFileText('.diff-row[data-new-line="2"] .diff-code')
   await click('.selection-menu button:first-of-type')
-  await waitFor(`document.querySelector('textarea').value.includes('Working tree lines: 2')`)
+  await waitFor(`document.querySelector('.reference-composer').value.includes('Working tree lines: 2')`)
   const pinnedBeforeGitCycle = await evaluate(`document.querySelector('.conversation-tab').getBoundingClientRect().x`)
-  await evaluate(`document.querySelector('textarea').focus()`)
+  await evaluate(`document.querySelector('.reference-composer').focus()`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
   await waitFor(`document.querySelector('.conversation-tab [role="tab"]').getAttribute('aria-selected') === 'true'`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
@@ -2674,7 +2675,7 @@ async function main(): Promise<void> {
       return getComputedStyle(dock).position === 'absolute' && parseFloat(getComputedStyle(scroller).paddingBottom) >= dock.getBoundingClientRect().height
         && last.getBoundingClientRect().bottom <= dock.getBoundingClientRect().top + 1
         && scroller.getBoundingClientRect().bottom >= dock.getBoundingClientRect().bottom
-        && document.querySelector('textarea') === window.gitComposer;
+        && document.querySelector('.reference-composer') === window.gitComposer;
     })()`), true, 'Diff final rows and notices scroll above the shared overlay composer')
   }
   await assertDiffOverlay()

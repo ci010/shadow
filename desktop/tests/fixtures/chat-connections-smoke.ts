@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -208,7 +209,7 @@ const server = createServer(async (request, response) => {
     response.writeHead(500).end()
   }
 })
-const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(source)
+const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(withComposerTestAdapter(source))
 async function waitFor(predicate: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const end = Date.now() + 5000
   while (Date.now() < end) {
@@ -222,7 +223,7 @@ async function navigate(name: string, sessionId?: string): Promise<void> {
   const location = { name, ...(sessionId ? { params: { projectId: 'default', sessionId } } : {}) }
   await evaluate(`document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(${JSON.stringify(location)})`)
 }
-const input = `.project-conversation:not([style*="display: none"]) textarea[aria-label="Message"]`
+const input = `.project-conversation:not([style*="display: none"]) .reference-composer[aria-label="Message"]`
 const pane = '.project-conversation:not([style*="display: none"]) .chat-workspace'
 const hasMessage = (content: string) => evaluate<boolean>(`Array.from(document.querySelectorAll(${JSON.stringify(`${pane} .chat-content`)})).filter(element => element.textContent.trim() === ${JSON.stringify(content)}).length === 1`)
 async function message(content: string) {

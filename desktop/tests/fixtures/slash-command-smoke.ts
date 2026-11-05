@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -130,7 +131,7 @@ const server = createServer(async (request, response) => {
 
 async function evaluate<T = unknown>(window: BrowserWindow, script: string): Promise<T> {
   assert.equal(window.isVisible(), false, 'Only inspect the isolated hidden renderer')
-  return window.webContents.executeJavaScript(script) as Promise<T>
+  return window.webContents.executeJavaScript(withComposerTestAdapter(script)) as Promise<T>
 }
 async function settle(window: BrowserWindow) {
   await evaluate(window, 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
@@ -235,7 +236,7 @@ async function runViewport(origin: string, width: number, height: number) {
   })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => { if (!url.startsWith(`${origin}/`)) event.preventDefault() })
-  const input = '.primary-conversation .composer-input textarea'
+  const input = '.primary-conversation .composer-input .reference-composer'
   const options = `document.querySelectorAll('.slash-option').length`
   const names = `Array.from(document.querySelectorAll('.slash-name'), element => element.textContent)`
   const ready = async (selector: string, text: string, count: number) => {
@@ -359,7 +360,7 @@ async function runViewport(origin: string, width: number, height: number) {
     })
     await check(window, `embedded-administrator-${width}`, async () => {
       await window.loadURL(`${origin}/projects/default/chat/${encodeURIComponent(root)}?child=${encodeURIComponent(administrator)}`)
-      const childInput = '.child-conversation .composer-input textarea'
+      const childInput = '.child-conversation .composer-input .reference-composer'
       await waitFor(window, `!!document.querySelector(${JSON.stringify(childInput)}) && !!document.querySelector('.child-conversation .is-embedded')`)
       const before = sends.length
       await ready(childInput, '/agent', 1)

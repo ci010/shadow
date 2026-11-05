@@ -22,12 +22,13 @@ test('session references render compact title-only options with real global styl
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
 
-  const fixture=`<template><div class="composer-box" style="position:fixed;bottom:20px;left:12px;width:calc(100% - 24px)"><textarea ref="input" /></div><SessionReferenceMenu project-id="p" session-id="self" :sessions="sessions" text="@" :input="input" focused active :selection-start="1" :selection-end="1" /></template>
+  const fixture=`<template><div class="composer-box" style="position:fixed;bottom:20px;left:12px;width:calc(100% - 24px)"><ReferenceComposer ref="input" v-model="text" /></div><SessionReferenceMenu project-id="p" session-id="self" :sessions="sessions" text="@" :input="input" focused active :selection-start="1" :selection-end="1" /></template>
 <script setup>
 import {ref} from 'vue';
 import SessionReferenceMenu from '/src/components/SessionReferenceMenu.vue';
+import ReferenceComposer from '/src/components/ReferenceComposer.vue';
 import {parseSessionGraph} from '/src/folders-sidebar.ts';
-const input=ref();const sessions=parseSessionGraph({sessions:Array.from({length:20},(_,i)=>({sessionId:'web:chat-'+i+'x'.repeat(300),title:i===0?'Long title '+ 'W'.repeat(400):undefined})),nodes:[]});
+const input=ref();const text=ref('@');const sessions=parseSessionGraph({sessions:Array.from({length:20},(_,i)=>({sessionId:'web:chat-'+i+'x'.repeat(300),title:i===0?'Long title '+ 'W'.repeat(400):undefined})),nodes:[]});
 </script>`
   const server=await createServer({configFile:false,root:resolve(root,'app'),logLevel:'error',cacheDir:resolve(directory,'vite-cache'),optimizeDeps:{noDiscovery:true,include:[]},plugins:[vue(),UnoCSS({configFile:resolve(root,'app/unocss.config.ts')}),{
   name:'activity-fixture',resolveId:id=>id==='/activity-entry.ts'?'\0activity-entry':id==='/activity-fixture.vue'?resolve(root,'app/activity-fixture.vue').replaceAll('\\', '/'):undefined,load:id=>id==='\0activity-entry'?`import 'uno.css';import '/src/styles.css';import {createApp} from 'vue';import Fixture from '/activity-fixture.vue';createApp(Fixture).mount('#app');`:id===resolve(root,'app/activity-fixture.vue').replaceAll('\\', '/')?fixture:undefined,

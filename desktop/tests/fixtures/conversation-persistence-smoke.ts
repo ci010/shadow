@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { join } from 'node:path'
@@ -13,13 +14,13 @@ async function main() {
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
   const errors: string[] = []
   window.webContents.on('console-message', (_event, level, message) => { if (level >= 2) errors.push(message) })
-  const execute = (code: string) => window.webContents.executeJavaScript(code)
+  const execute = (code: string) => window.webContents.executeJavaScript(withComposerTestAdapter(code))
   const wait = async (code: string) => {
     const deadline = Date.now() + 12_000
     while (Date.now() < deadline) { if (await execute(code)) return; await delay(50) }
     throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}\n${errors.join('\n')}`)
   }
-  const ready = () => wait(`document.querySelector('textarea[aria-label="Message"]') && !document.body.textContent.includes('Loading conversation')`)
+  const ready = () => wait(`document.querySelector('.reference-composer[aria-label="Message"]') && !document.body.textContent.includes('Loading conversation')`)
   const reload = async () => {
     const loaded = once(window.webContents, 'did-finish-load')
     window.webContents.reload()
@@ -28,7 +29,7 @@ async function main() {
     await delay(250)
   }
   const input = async (text: string) => {
-    await execute(`{ const input = document.querySelector('textarea[aria-label="Message"]'); input.value = ${JSON.stringify(text)}; input.dispatchEvent(new Event('input', {bubbles:true})); }`)
+    await execute(`{ const input = document.querySelector('.reference-composer[aria-label="Message"]'); input.value = ${JSON.stringify(text)}; input.dispatchEvent(new Event('input', {bubbles:true})); }`)
   }
   const conversation = () => execute(`document.querySelector('.conversation-tab [role="tab"]').click()`)
   const promptSelected = () => wait(`document.querySelector('.diagnosis-tab [role="tab"]')?.getAttribute('aria-selected') === 'true' && document.querySelector('[id$="diagnosis-prompt-tab"]')?.getAttribute('aria-selected') === 'true'`)
@@ -65,8 +66,8 @@ async function main() {
     await conversation()
     await input('Unsent draft\nSecond line')
     await reload()
-    assert.equal(await execute(`document.querySelector('textarea').value`), 'Unsent draft\nSecond line')
-    await execute(`window.__composerBeforeSettings = document.querySelector('textarea[aria-label="Message"]')`)
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), 'Unsent draft\nSecond line')
+    await execute(`window.__composerBeforeSettings = document.querySelector('.reference-composer[aria-label="Message"]')`)
     await execute(`window.__navigate('/projects/a/settings/general')`)
     await wait(`document.querySelector('.project-settings-view input')?.value === 'Project A'`)
     for (const [width, height] of [[1100, 800], [600, 650]]) {
@@ -78,13 +79,13 @@ async function main() {
         return dock && !dock.getClientRects().length && settings?.getClientRects().length
           && getComputedStyle(workbench).getPropertyValue('--composer-height').trim() === '0px';
       })()`)
-      assert.equal(await execute(`document.querySelector('textarea[aria-label="Message"]') === window.__composerBeforeSettings`), true)
+      assert.equal(await execute(`document.querySelector('.reference-composer[aria-label="Message"]') === window.__composerBeforeSettings`), true)
       assert.equal(await execute(`window.__composerBeforeSettings.value`), 'Unsent draft\nSecond line')
     }
     window.setContentSize(1100, 800)
     await execute(`window.__navigate('/projects/a/chat/web%3Achat-one')`)
     await wait(`document.querySelector('.conversation-dock')?.getClientRects().length > 0`)
-    assert.equal(await execute(`document.querySelector('textarea[aria-label="Message"]') === window.__composerBeforeSettings`), true)
+    assert.equal(await execute(`document.querySelector('.reference-composer[aria-label="Message"]') === window.__composerBeforeSettings`), true)
     assert.equal(await execute(`window.__composerBeforeSettings.value`), 'Unsent draft\nSecond line')
     await execute(`document.querySelector('.diagnosis-tab [role="tab"]').click()`)
     await wait(`!!document.querySelector('[id$="diagnosis-prompt-tab"]')`)
@@ -103,33 +104,33 @@ async function main() {
     await wait(`new URL(location.href).searchParams.get('panel') === 'diagnosis'`)
     await conversation()
     await wait(`!new URL(location.href).searchParams.has('panel')`)
-    assert.equal(await execute(`document.querySelector('textarea').value`), 'Unsent draft\nSecond line')
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), 'Unsent draft\nSecond line')
     await execute(`window.__navigate('/projects/a/chat/web%3Achat-two')`)
     await ready()
-    assert.equal(await execute(`document.querySelector('textarea').value`), '')
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), '')
     await input('Draft two')
     await execute(`window.__navigate('/projects/a/chat/web%3Achat-one?panel=diagnosis&diagnosis=prompt')`)
     await promptSelected()
     await conversation()
-    assert.equal(await execute(`document.querySelector('textarea').value`), 'Unsent draft\nSecond line')
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), 'Unsent draft\nSecond line')
     await execute(`fetch('/fixture-reject?value=true')`)
     await execute(`document.querySelector('[aria-label="Send message"]').click()`)
     await wait(`document.querySelector('.composer-error')?.textContent.includes('503')`)
     await reload()
-    assert.equal(await execute(`document.querySelector('textarea').value`), 'Unsent draft\nSecond line')
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), 'Unsent draft\nSecond line')
     await execute(`fetch('/fixture-reject?value=false')`)
     await execute(`document.querySelector('[aria-label="Send message"]').click()`)
-    await wait(`document.querySelector('textarea').value === ''`)
+    await wait(`document.querySelector('.reference-composer').value === ''`)
     await reload()
-    assert.equal(await execute(`document.querySelector('textarea').value`), '')
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), '')
     await execute(`window.__navigate('/projects/a/chat/web%3Achat-two')`)
     await ready()
-    assert.equal(await execute(`document.querySelector('textarea').value`), 'Draft two')
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), 'Draft two')
     await execute(`window.__navigate('/projects/a/chat')`)
     await ready()
     await input('New conversation draft')
     await reload()
-    assert.equal(await execute(`document.querySelector('textarea').value`), 'New conversation draft')
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), 'New conversation draft')
     assert.ok(!errors.some(error => error.includes('Unhandled error')), errors.join('\n'))
     console.log('PERSISTENCE_SMOKE_OK')
   } finally { window.destroy() }

@@ -27,7 +27,7 @@ async function main() {
   }
   const close = async (panel: string) => {
     await execute(`document.querySelector('.session-work-panel').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
-    await wait(panel === 'composer' ? `document.activeElement?.tagName === 'TEXTAREA'`
+    await wait(panel === 'composer' ? `document.activeElement?.matches('.reference-composer')`
       : `document.activeElement?.matches(${JSON.stringify(chip(panel))})`)
   }
   try {
@@ -77,7 +77,7 @@ async function main() {
     await click('[data-subagent-id="worker"]')
     await wait(`new URL(location.href).searchParams.get('child') === 'worker'`)
     await execute(`window.__navigate('web:chat-other')`)
-    await wait(`!document.querySelector('${chip('subagents')}') && document.querySelector('textarea')`)
+    await wait(`!document.querySelector('${chip('subagents')}') && document.querySelector('.reference-composer')`)
     assert.ok(await execute(`(${ownerRow})?.querySelector('.subagent-wave')`), 'Hidden owner retains live delegated activity')
     await change('phase=completed')
     await wait(`!(${ownerRow})?.querySelector('.subagent-activity')`)
