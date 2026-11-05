@@ -6,8 +6,12 @@
       <div :id="listId" class="session-ref-options" role="listbox" :aria-label="t('Reference a conversation')">
         <button v-for="(command, index) in matches" :id="optionId(index)" :key="command.sessionId"
           type="button" role="option" tabindex="-1" :aria-selected="index === selected"
-          class="session-ref-option" @pointermove="selected = index" @click="choose(command)">
-          <span class="session-ref-name">{{ referenceSessionTitle(command) }}</span>
+          class="session-ref-option session-list-row" :class="{ selected: index === selected }" @pointermove="selected = index" @click="choose(command)">
+          <span class="session-icon" aria-hidden="true"><SessionListItem part="icon" :session="command" :stage="stages?.[command.sessionId]" :subagents="delegatedFor(command)" /></span>
+          <span class="session-copy">
+            <SessionListItem part="title" :session="{ ...command, title: referenceSessionTitle(command) }" />
+            <SessionListItem part="metadata" :session="command" :metadata="sessionListMetadata(command, folders, [], now)" />
+          </span>
         </button>
       </div>
       <div v-if="matches.length" class="session-ref-keys" aria-hidden="true">
@@ -26,10 +30,17 @@ import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { referenceSessionTitle, filterReferenceSessions, sessionReferenceQuery, insertSessionReference, type ReferenceSession } from '../session-references.ts'
 import OverlayTransition from './OverlayTransition.vue'
+import SessionListItem from './SessionListItem.vue'
+import type { SidebarSession } from '../folders-sidebar.ts'
+import { sessionListMetadata } from '../session-list-metadata.ts'
+import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
+import { activeSubagentsByOwner, summarizeSubagents } from '../subagent-executions.ts'
 
 const props = defineProps<{
   projectId: string
-  sessions: ReferenceSession[]
+  sessions: SidebarSession[]
+  apiBase?: string
+  stages?: Record<string, string>
   sessionId: string
   text: string
   input?: ComposerInput
@@ -48,6 +59,23 @@ const open = computed(() => props.active && props.focused && query.value !== nul
 const matches = computed(() => filterReferenceSessions(props.sessions, props.sessionId, query.value?.query ?? ''))
 const activeId = computed(() => open.value && matches.value[selected.value] ? optionId(selected.value) : undefined)
 const position = ref<Record<string, string>>({})
+const folders = ref<FolderRecord[]>([])
+const now = ref(Date.now())
+const clock = setInterval(() => { now.value = Date.now() }, 15_000)
+onUnmounted(() => clearInterval(clock))
+const delegated = computed(() => activeSubagentsByOwner(props.sessions, props.stages ?? {}))
+function delegatedFor(session: SidebarSession) {
+  return summarizeSubagents(delegated.value.get(session.sessionId) ?? [], props.stages ?? {})
+}
+watch([open, () => props.apiBase, () => props.projectId], ([visible], _, onCleanup) => {
+  folders.value = []
+  if (!visible || !props.apiBase) return
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())
+  void createFoldersClient(props.apiBase).list(controller.signal).then(value => {
+    if (!controller.signal.aborted) folders.value = value
+  }).catch(() => { /* Keep folder IDs as truthful fallbacks. */ })
+}, { immediate: true })
 
 watch(() => [props.text, props.projectId, props.sessionId], () => { dismissed.value = false; selected.value = 0 }, { flush: 'sync' })
 watch(matches, () => { selected.value = 0 })
@@ -114,14 +142,18 @@ defineExpose({ open, activeId, listId, handleKeyDown })
 <style scoped>
 .session-reference-menu { position: fixed; z-index: 940; display: flex; flex-direction: column; overflow: hidden; min-width: 0; max-width: min(480px, calc(100vw - 24px)); max-height: 340px; box-sizing: border-box; padding: 5px; border: 1px solid var(--c-border-hover); border-radius: var(--radius-overlay); background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 8px 24px var(--c-shadow); }
 .session-ref-options { flex: 0 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-.session-ref-option { appearance: none; box-sizing: border-box; display: flex; align-items: center; flex: none; min-width: 0; max-width: 100%; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); text-align: left; font: inherit; font-size: 13px; cursor: pointer; }
-.session-ref-option[aria-selected="true"] { background: var(--c-bg-muted); outline: 1px solid var(--c-border-hover); outline-offset: -1px; }
-.session-ref-name { flex: 1 1 0%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 500; }
-.session-ref-description { min-width: 0; color: var(--c-text-secondary); overflow-wrap: anywhere; line-height: 1.45; }
+.session-ref-option { appearance: none; box-sizing: border-box; display: flex; align-items: center; flex: none; min-width: 0; max-width: 100%; width: 100%; min-height: 48px; gap: 8px; padding: 6px 10px; line-height: 20px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); text-align: left; font: inherit; font-size: 13px; cursor: pointer; }
+.session-ref-option.selected { background: var(--c-selection-bg); color: var(--c-primary); }
+.session-ref-option:hover:not(.selected) { background: var(--c-bg-muted); }
+.session-ref-option { line-height: 20px; }
+.session-icon { display: grid; place-items: center; flex: 0 0 16px; width: 16px; height: 16px; color: var(--c-text-secondary); }
+.session-copy { flex: 1; min-width: 0; }
+.session-copy :deep(.session-metadata) { font-size: 11px; color: var(--c-text-secondary); }
 .session-ref-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; color: var(--c-text-secondary); font-size: 13px; }
 .session-ref-status button { padding: 5px 10px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); font: inherit; cursor: pointer; }
 .session-ref-keys { flex: none; display: flex; flex-wrap: wrap; gap: 14px; padding: 9px 10px 4px; border-top: 1px solid var(--c-border); color: var(--c-text-secondary); font-size: 11px; }
 .session-ref-keys span { display: inline-flex; align-items: center; gap: 4px; }
 .session-ref-keys kbd { font: inherit; }
-@media (max-width: 540px) { .session-ref-option { min-height: 40px; } .session-ref-keys { display: none; } }
+@media (max-width: 700px), (pointer: coarse) { .session-ref-option { min-height: 44px; } }
+@media (max-width: 540px) { .session-ref-keys { display: none; } }
 </style>

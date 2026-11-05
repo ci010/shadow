@@ -13,7 +13,7 @@ export function sessionReferenceQuery(text: string, start: number, end: number) 
   return match ? { query: match[1]!, start: start - match[1]!.length - 1, end: start } : null
 }
 
-export function filterReferenceSessions(sessions: readonly ReferenceSession[], currentId: string, query: string) {
+export function filterReferenceSessions<T extends ReferenceSession>(sessions: readonly T[], currentId: string, query: string) {
   const needle = query.toLocaleLowerCase()
   return sessions.filter(session => session.sessionId !== currentId
     && !!session.sessionId && !/[\/\\\s\u0000-\u001f]/u.test(session.sessionId)

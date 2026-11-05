@@ -356,7 +356,7 @@
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
             :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && route.name === 'chat'"
             @complete="completeSlashCommand" />
-          <SessionReferenceMenu ref="sessionReferenceMenu" :project-id="projectId || liveProjectId(apiBase)" :sessions="allSessions" :session-id="activeSessionId || ''"
+          <SessionReferenceMenu ref="sessionReferenceMenu" :api-base="apiBase" :stages="displayedSessionStages" :project-id="projectId || liveProjectId(apiBase)" :sessions="allSessions" :session-id="activeSessionId || ''"
             :text="inputText" :input="chatInput" :focused="composerFocused"
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
             :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && route.name === 'chat'"

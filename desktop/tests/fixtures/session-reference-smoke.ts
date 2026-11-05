@@ -15,13 +15,16 @@ async function main() {
       window.setSize(width, 800)
       await delay(250)
       const metrics = await run(`(() => {
-        const menu = document.querySelector('.session-reference-menu'), list = document.querySelector('.session-ref-options'), row = document.querySelector('.session-ref-option'), name = row.querySelector('span');
-        return { width:menu.getBoundingClientRect().width, height:menu.getBoundingClientRect().height, scroll:list.scrollWidth, client:list.clientWidth, rowHeight:row.getBoundingClientRect().height, border:getComputedStyle(row).borderTopWidth, ellipsis:getComputedStyle(name).textOverflow, text:menu.textContent, overflow: document.documentElement.scrollWidth > innerWidth, truncated:name.scrollWidth > name.clientWidth };
+        const menu = document.querySelector('.session-reference-menu'), list = document.querySelector('.session-ref-options'), row = document.querySelector('.session-ref-option'), name = row.querySelector('.session-item-title');
+        return { width:menu.getBoundingClientRect().width, height:menu.getBoundingClientRect().height, scroll:list.scrollWidth, client:list.clientWidth, icon:!!row.querySelector('.session-icon'), metadata:!!row.querySelector('.session-metadata'), selected:getComputedStyle(row).backgroundColor, expectedSelected:(()=>{const probe=document.createElement('span');probe.style.backgroundColor='var(--c-selection-bg)';document.body.append(probe);const value=getComputedStyle(probe).backgroundColor;probe.remove();return value})(), rowHeight:row.getBoundingClientRect().height, border:getComputedStyle(row).borderTopWidth, ellipsis:getComputedStyle(name).textOverflow, text:menu.textContent, overflow: document.documentElement.scrollWidth > innerWidth, truncated:name.scrollWidth > name.clientWidth };
       })()`)
       assert.ok(metrics.width <= Math.min(480, width - 24), JSON.stringify(metrics))
       assert.ok(metrics.height <= 340 && metrics.height > 100)
       assert.equal(metrics.scroll, metrics.client, 'no horizontal list scroll')
-      assert.ok(metrics.rowHeight <= 44, 'no stretched or wrapped rows')
+      assert.ok(metrics.rowHeight >= 44 && metrics.rowHeight <= 52, 'compact two-line rows')
+      assert.equal(metrics.selected, metrics.expectedSelected)
+      assert.equal(metrics.icon, true)
+      assert.equal(metrics.metadata, true)
       assert.equal(metrics.border, '0px', 'component styles beat global button defaults')
       assert.equal(metrics.ellipsis, 'ellipsis')
       assert.equal(metrics.truncated, true)
