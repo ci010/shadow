@@ -190,3 +190,18 @@ test('offline SQLite readers do not migrate or permit writes', async () => {
     }
   })
 })
+
+test('image redaction retains only payload size before text truncation, including encoded trace JSON', () => {
+  const projection = diagnosisProjection(1)
+  for (const part of [
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,YQ==' } },
+    { type: 'input_image', image_url: 'data:image/png;base64,YQ==' },
+    { type: 'image', source: { type: 'base64', data: 'YQ==', media_type: 'image/png' } },
+  ]) {
+    assert.deepEqual(projection.project(JSON.stringify(part)), {
+      type: part.type, omitted: 'non-text-content', imageSize: { base64Characters: 4, base64Bytes: 4, decodedBytes: 1 },
+    })
+  }
+  assert.deepEqual(projection.project({ type: 'image_url', image_url: { url: 'https://private.example/a' } }), { type: 'image_url', omitted: 'non-text-content' })
+  assert.equal(projection.redactedPaths.length, 4)
+})

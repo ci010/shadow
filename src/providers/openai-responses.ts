@@ -1,4 +1,5 @@
 import { httpFailure, safeProviderCode } from './http-failure.ts'
+import { prepareRequestBody } from './request-body.ts'
 import { withProviderRetry, providerRetryScope } from './retry.ts'
 import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
@@ -378,6 +379,7 @@ export async function openaiResponses(params: {
   maxTokens?: number
   temperature?: number
   providerName?: string
+  requestCompression?: 'gzip'
   signal?: AbortSignal
   thinking?: ThinkingConfig
   reasoningEffort?: ReasoningEffort
@@ -402,11 +404,12 @@ export async function openaiResponses(params: {
   if (params.tools.length) body.tools = params.tools.map(({ function: fn }) => ({
     type: 'function', name: fn.name, description: fn.description, parameters: fn.parameters, strict: false,
   }))
+  const prepared = await prepareRequestBody(body, params.requestCompression, params.signal)
   return withProviderRetry(async () => {
     const response = await fetch(params.url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${params.apiKey}`, ...params.headers },
-      body: JSON.stringify(body), signal: params.signal,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${params.apiKey}`, ...params.headers, ...prepared.headers },
+      body: prepared.body, signal: params.signal,
     }).catch(error => { throw providerTransportFailure(error, 'connect', params.signal) })
     if (!response.ok) throw await httpFailure(response, params.providerName ?? 'LLM', params.model, params.signal)
 
