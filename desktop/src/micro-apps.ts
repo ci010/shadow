@@ -103,7 +103,7 @@ export class DesktopMicroApps {
     })
     if (!response.ok) {
       await response.body?.cancel()
-      throw new Error(`Micro App request failed (HTTP ${response.status}); check Project availability and approval`)
+      throw new Error(`Micro App request failed (HTTP ${response.status}); check Project availability and access`)
     }
     return response
   }
@@ -152,7 +152,7 @@ export class DesktopMicroApps {
     const authorization = this.authorization, signal = this.epoch.signal
     if (this.disposed || !authorization) throw new Error('Connect Shadow to a ready Main before opening an app')
     const app = parseNativeMicroApp(await this.json(authorization, `${pathOf(identity)}/status`, undefined, signal))
-    if (app.id !== identity.appId || !app.approved) throw new Error('Review and approve this app version in Shadow Apps first')
+    if (app.id !== identity.appId) throw new Error('App identity does not match the selected app')
     signal.throwIfAborted()
     const existing = this.windows.get(keyOf(identity))
     if (existing && !existing.closed && existing.revision === app.revision && app.status === 'running') {
@@ -251,13 +251,12 @@ export class DesktopMicroApps {
       const projectId = entry.identity.projectId
       if (!projects.includes(projectId) || checked.has(projectId)) {
         const current = this.catalogs.get(projectId)?.find(app => app.id === entry.identity.appId)
-        if (!current?.approved || current.revision !== entry.revision || current.status !== 'running') this.closeWindow(entry)
+        if (!current || current.revision !== entry.revision || current.status !== 'running') this.closeWindow(entry)
       }
     }
     if ((this.options.platform ?? process.platform) === 'win32') {
       const tasks: Task[] = []
       for (const projectId of [...this.catalogs.keys()].sort()) for (const app of this.catalogs.get(projectId)!) {
-        if (!app.approved) continue
         signal.throwIfAborted()
         const identity = { projectId, appId: app.id }, icon = await this.asset(authorization, identity, app, signal)
         const args = [

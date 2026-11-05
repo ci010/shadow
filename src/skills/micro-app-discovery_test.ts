@@ -27,14 +27,14 @@ test('micro-app discovery requires Shadow Apps delivery, not merely a reusable w
   } finally { await skills.stopWatching() }
 }))
 
-test('compact app guide keeps approval boundaries and points to stage-specific protocols', async () => withTempWorkspace(async home => {
+test('compact app guide keeps testing boundaries and points to stage-specific protocols', async () => withTempWorkspace(async home => {
   const skills = new SkillsManager(home)
   try {
     await skills.load()
     const body = skills.getSkillBody('micro-app')!
     assert.ok(body.split('\n').length < 210, 'Keep the default guide compact')
-    for (const text of ['shadow-app.json', 'awaiting_approval', '/_shadow/sdk.js',
-      'exact-version owner review', 'not an OS sandbox', 'never executes tools',
+    for (const text of ['shadow-app.json', 'stopped', '/_shadow/sdk.js',
+      'Author runtime testing still requires explicit owner continuation', 'not an OS sandbox', 'never executes tools',
       'retain earlier answers, constraints and verified behavior', 'cannot replace it']) {
       assert.ok(body.includes(text), text)
     }

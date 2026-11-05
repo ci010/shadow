@@ -4125,5 +4125,13 @@
   "Remove non-image attachments and file or folder context before selecting a remote workspace. Files are not transferred between devices.": "选择远程工作区前，请移除非图片附件及文件或文件夹上下文。文件不会在设备间传输。",
   "Remove non-image attachments and file or folder context before sending to a remote workspace.": "发送到远程工作区前，请移除非图片附件及文件或文件夹上下文。",
   "File and folder context is unavailable in remote conversations. Attach an image instead.": "远程对话不支持文件和文件夹上下文，请改为添加图片。",
-  "Remote conversations support PNG, JPEG, GIF and WebP images only. Other files and folder context are not transferred to the selected device.": "远程对话仅支持 PNG、JPEG、GIF 和 WebP 图片。其他文件和文件夹上下文不会传输到所选设备。"
+  "Remote conversations support PNG, JPEG, GIF and WebP images only. Other files and folder context are not transferred to the selected device.": "远程对话仅支持 PNG、JPEG、GIF 和 WebP 图片。其他文件和文件夹上下文不会传输到所选设备。",
+  "Publishing does not run code. Open starts the app with its declared model allowance.": "发布不会运行代码。打开应用时会使用其声明的模型额度。",
+  "{maxCalls} attempts per publication; up to {maxOutputTokens} output tokens each": "每次发布最多尝试 {maxCalls} 次，每次最多输出 {maxOutputTokens} 个词元",
+  "Project default on first open, if requested": "首次打开时使用项目默认模型（如有请求）",
+  "App pages are isolated from Shadow. A local backend has normal host file and process access — it is not an OS sandbox. Review the code and external effects before opening.": "应用页面与 Shadow 隔离。本地后端拥有普通的主机文件和进程访问权限，并非操作系统沙箱。打开前请检查代码及外部影响。",
+  "Binary asset; inspect the source file before opening.": "二进制资源；打开前请检查源文件。",
+  "Project owner access is required to run apps.": "运行应用需要项目所有者权限。",
+  "Cancel author testing and stop": "取消作者测试并停止应用",
+  "Closing that window stops the app. Its saved data and usage remain.": "关闭该窗口会停止应用，已保存的数据和使用量仍会保留。"
 }

@@ -5,7 +5,7 @@ import { apiUrl } from './api-url.ts'
 import { parseMicroAppIdentity } from '../../desktop/src/micro-app-contract.ts'
 
 export const microAppView = appRecordSchema.extend({
-  status: z.enum(['awaiting_approval', 'starting', 'running', 'stopped', 'failed', 'interrupted']),
+  status: z.enum(['starting', 'running', 'stopped', 'failed', 'interrupted']),
   uiPath: z.string(),
   cleanupPending: z.boolean().optional(),
   acceptanceAvailable: z.boolean().optional(),
@@ -48,7 +48,7 @@ export async function microAppRequest(base: string, path: string, body?: unknown
   return value
 }
 export const microAppStatus: Record<MicroAppView['status'], string> = {
-  get awaiting_approval() { return t('Needs review') }, get starting() { return t('Starting') }, get running() { return t('Running') },
+  get starting() { return t('Starting') }, get running() { return t('Running') },
   get stopped() { return t('Stopped') }, get failed() { return t('Failed') }, get interrupted() { return t('Interrupted') },
 }
 export const microAppTestingStatus: Record<NonNullable<MicroAppView['acceptance']>['status'], string> = {

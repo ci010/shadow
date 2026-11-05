@@ -138,7 +138,7 @@ test('native Apps use a branded isolated window and Windows tasks launch warm an
     assert.match(output, cold ? /NATIVE_COLD_OK/ : /NATIVE_APPS_OK/)
   }
   await run(false)
-  assert.ok(service.get(record.id).approval)
+  assert.ok(service.get(record.id).model)
   assert.equal(service.get(record.id).status, 'stopped')
   await run(true)
   assert.equal(calls, 2)
