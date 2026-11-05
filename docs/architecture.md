@@ -685,7 +685,17 @@ to find its previous segment. `GET /api/sessions/:key` history pagination requir
 a positive integer `pageSize`; omitted `offset` defaults to zero, negative offsets
 count from the end, and offset-only or malformed numeric queries return 400.
 `shallow=true` selects the current physical segment; it is not a metadata-only
-or automatically small response.
+or automatically small response. Direct-chat history responses negotiate gzip
+through Hono's route-scoped compression middleware. Compressed responses vary on
+`Accept-Encoding` and use weak HTTP ETags; snapshot revisions continue to hash
+the uncompressed representation. Realtime streams and media/range routes are not
+covered by this middleware. Enabling this server-side change requires a backend
+restart; browsers transparently decode the response. The frontend snapshot layer
+returns an owned parsed object rather than serializing it through an intermediate
+`Response`. Its cache remains limited to 16 MiB/eight entries: JSON UTF-8 size is
+counted without constructing another full JSON string, and oversized/deep bodies
+remain displayable but uncached. Compressed `Content-Length` is never used as the
+decoded cache-size budget. Cached bases stay isolated from caller mutation.
 
 `app/src/chat-request-control.ts` manages composer Stop state across preparation,
 admission, streaming and cancellation. The Send button becomes Stop in the same

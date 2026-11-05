@@ -1750,7 +1750,8 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
           }
         } else if (cur.role === 'tool') {
           const result = rawTextContent(cur)
-          if (result || toolImages(cur.content).length) {
+          const media = toolImages(cur.content)
+          if (result || media.length) {
             out.push({
               role: 'assistant',
               content: result,
@@ -1758,7 +1759,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
               toolName: cur.name,
               toolCallId: cur.tool_call_id,
               timestamp: cur.timestamp,
-              media: toolImages(cur.content),
+              media,
             })
           }
         }
@@ -2214,7 +2215,13 @@ async function loadDirectChat(background = false): Promise<void> {
       return
     }
     if (!res.ok) throw new Error(t('Could not load conversation. Refresh to retry.'))
-    const data = await res.json()
+    // Snapshot transport is already parsed; presentation parsers retain their
+    // existing field validation independently of the snapshot envelope checks.
+    const data = res.data as {
+      history?: RawMessage[]; commandResults?: unknown; decisionRecords?: unknown
+      previousPhysicalId?: string | null; currentPhysicalId?: string
+      systemPrompt?: string; tools?: ToolDef[]
+    }
     if (controller.signal.aborted) return
     const container = messagesContainer.value
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32

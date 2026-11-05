@@ -1,3 +1,53 @@
+/** Successful reads transfer an independently owned parsed body to the caller.
+ * Non-2xx responses are not parsed and never fall back to a cached body. */
+export type ChatHistorySnapshotResult =
+  | { ok: true; status: number; data: Record<string, unknown> }
+  | { ok: false; status: number; response: Response }
+
+/** JSON UTF-8 byte budget without allocating serialized strings/buffers. Stops as soon
+ * as the budget is exceeded (including before scanning an oversized string).
+ * Deep values are conservatively uncacheable, not rejected as history. */
+function jsonBytes(value: unknown, limit: number, depth = 0): number {
+  if (limit < 0 || depth > 100) return Infinity
+  if (typeof value === 'string') {
+    if (value.length + 2 > limit) return Infinity
+    let size = 2
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i)
+      if (code === 34 || code === 92) size += 2
+      else if (code < 32) size += code === 8 || code === 9 || code === 10 || code === 12 || code === 13 ? 2 : 6
+      else if (code < 128) size++
+      else if (code < 2048) size += 2
+      else if (code >= 0xd800 && code <= 0xdbff && i + 1 < value.length
+        && value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff) { size += 4; i++ }
+      else if (code >= 0xd800 && code <= 0xdfff) size += 6 // JSON escapes lone surrogates
+      else size += 3
+      if (size > limit) return Infinity
+    }
+    return size
+  }
+  if (value === null) return 4
+  if (typeof value === 'boolean') return value ? 4 : 5
+  if (typeof value === 'number') return String(value).length
+  if (!value || typeof value !== 'object') return Infinity // only parsed JSON is supported
+  let size = 2
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      size += (i ? 1 : 0) + jsonBytes(value[i], limit - size - (i ? 1 : 0), depth + 1)
+      if (size > limit) return Infinity
+    }
+  } else {
+    let first = true
+    for (const key of Object.keys(value)) {
+      size += (first ? 0 : 1) + jsonBytes(key, limit - size - (first ? 0 : 1), depth + 1) + 1
+      size += jsonBytes((value as Record<string, unknown>)[key], limit - size, depth + 1)
+      if (size > limit) return Infinity
+      first = false
+    }
+  }
+  return size
+}
+
 interface Snapshot { revision: string; historyRevision?: string; metadataRevision?: string; body: Record<string, unknown>; bytes: number }
 interface Pool { onDispose(callback: () => void): () => void }
 const pools = new WeakMap<Pool, ReturnType<typeof createChatHistorySnapshots>>()
@@ -13,7 +63,7 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
     if (old) { bytes -= old.bytes; entries.delete(key) }
   }
   return {
-    async read(url: string | URL, signal: AbortSignal): Promise<Response> {
+    async read(url: string | URL, signal: AbortSignal): Promise<ChatHistorySnapshotResult> {
       if (disposed) throw new Error('History snapshots disposed')
       const target = new URL(url)
       const key = target.toString()
@@ -27,7 +77,7 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
       if (cached && Array.isArray(cached.body.history)) target.searchParams.set('historyCount', String(cached.body.history.length))
       const response = await request(target.toString(), { signal, cache: 'no-store' }).catch(error => { remove(key); throw error })
       if (signal.aborted || disposed) throw new Error('History read cancelled')
-      if (!response.ok) { remove(key); return response }
+      if (!response.ok) { remove(key); return { ok: false, status: response.status, response } }
       const envelope: unknown = await response.json().catch(error => { remove(key); throw error })
       if (signal.aborted || disposed) throw new Error('History read cancelled')
       if (!envelope || typeof envelope !== 'object' || !('revision' in envelope)
@@ -40,7 +90,10 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
           remove(key)
           throw new Error('History snapshot unavailable')
         }
-        return Response.json(cached.body)
+        // Refresh LRU only after successful validation. Never expose the private base.
+        entries.delete(key)
+        entries.set(key, cached)
+        return { ok: true, status: response.status, data: structuredClone(cached.body) }
       }
       const historyRevision = 'historyRevision' in envelope ? envelope.historyRevision : undefined
       if (historyRevision !== undefined && (typeof historyRevision !== 'string' || !/^[a-f0-9]{64}$/.test(historyRevision))) {
@@ -112,14 +165,16 @@ export function createChatHistorySnapshots(request: typeof fetch = fetch, maxByt
         remove(key)
         throw new Error('Invalid history identity')
       }
-      const size = new TextEncoder().encode(JSON.stringify(body)).byteLength
+      const size = maxEntries > 0 ? jsonBytes(body, maxBytes) : Infinity
       remove(key)
       if (size <= maxBytes && maxEntries > 0) {
-        entries.set(key, { revision: envelope.revision, historyRevision, metadataRevision, body, bytes: size })
+        // Full responses belong to the caller; deltas may share the private base.
+        entries.set(key, { revision: envelope.revision, historyRevision, metadataRevision,
+          body: 'delta' in envelope ? body : structuredClone(body), bytes: size })
         bytes += size
         while (entries.size > maxEntries || bytes > maxBytes) remove(entries.keys().next().value!)
       }
-      return Response.json(body)
+      return { ok: true, status: response.status, data: 'delta' in envelope ? structuredClone(body) : body }
     },
     dispose() { disposed = true; entries.clear(); bytes = 0 },
   }

@@ -4,6 +4,7 @@ import { mkdir, rm, symlink, writeFile, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createTempWorkspace } from '../testing/workspace.ts'
 import { Hono } from 'hono'
+import { gunzipSync } from 'node:zlib'
 import { basename, isAbsolute, join } from 'node:path'
 import { Bus } from '../bus/bus.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
@@ -810,4 +811,74 @@ test('remote session images stay in Main uploads, preview safely and reach multi
       assert.equal((await app.request('/api/chat/upload', { method: 'POST', body: invalid })).status, 400)
     }
   } finally { await channel.stop(); await rm(workspace, { recursive: true }) }
+})
+
+
+test('history gzip negotiates encoding without changing validators, snapshots or access failures', async () => {
+  const app = new Hono()
+  let exists = true
+  let authorized = true
+  // Deterministic high-entropy bytes resemble image base64 rather than an
+  // unrealistically compressible repeated-character image fixture.
+  const image = Buffer.alloc(128 * 1024)
+  let seed = 0x12345678
+  for (let i = 0; i < image.length; i++) {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5
+    image[i] = seed & 255
+  }
+  const history = [{ role: 'tool', content: [{ type: 'image_url', image_url: {
+    url: 'data:image/png;base64,' + image.toString('base64'),
+  } }] }]
+  const channel = new WebChannel(new Bus(), { authorize: () => authorized, sessionManager: {
+    getSessionState: () => exists ? { sessionId: 'web:gzip-history', segmentIndex: 0 } : null,
+    getContext: async () => ({ systemPrompt: 'Prompt', tools: [] }),
+    getHistory: async () => ({ messages: history }),
+    getCommandResults: async () => [], getYieldRecords: async () => [],
+  } as unknown as SessionManager })
+  await channel.start(app)
+  const read = (encoding?: string, query = '', etag?: string) => app.request('/api/chat/session?chatId=gzip-history' + query, {
+    headers: { ...(encoding ? { 'Accept-Encoding': encoding } : {}), ...(etag ? { 'If-None-Match': etag } : {}) },
+  })
+  const decode = async (response: Response) => {
+    const bytes = Buffer.from(await response.arrayBuffer())
+    return { bytes, text: response.headers.get('Content-Encoding') === 'gzip' ? gunzipSync(bytes).toString('utf8') : bytes.toString('utf8') }
+  }
+  try {
+    const plain = await read()
+    const etag = plain.headers.get('ETag')!
+    const expected = await plain.text()
+    assert.equal(plain.headers.get('Content-Encoding'), null)
+    const compressed = await read('br, gzip;q=0.8, deflate;q=0.5')
+    assert.equal(compressed.status, 200)
+    assert.equal(compressed.headers.get('Content-Encoding'), 'gzip')
+    assert.match(compressed.headers.get('Vary')!, /Accept-Encoding/i)
+    assert.equal(compressed.headers.get('ETag'), `W/${etag}`)
+    assert.equal(compressed.headers.get('Cache-Control'), 'private, no-cache')
+    const decoded = await decode(compressed)
+    assert.equal(decoded.text, expected, 'compression must preserve exact JSON bytes')
+    assert.ok(decoded.bytes.length < Buffer.byteLength(expected) * 0.85, 'realistic base64 still benefits from transfer compression')
+    for (const encoding of ['identity', 'gzip;q=0, *;q=1']) {
+      const denied = await read(encoding)
+      assert.equal(denied.headers.get('Content-Encoding'), null)
+      assert.equal(await denied.text(), expected)
+    }
+    const unchanged = await read('gzip', '', `W/${etag}`)
+    assert.equal(unchanged.status, 304)
+    assert.equal(await unchanged.text(), '')
+    const initial = await decode(await read('gzip', '&snapshot='))
+    const snapshot = JSON.parse(initial.text)
+    assert.deepEqual(snapshot.data.history, history)
+    const delta = await read('gzip', '&snapshot=' + snapshot.revision + '&historyCount=1')
+    assert.equal(delta.headers.get('Cache-Control'), 'no-store')
+    assert.deepEqual(JSON.parse((await decode(delta)).text), { revision: snapshot.revision, unchanged: true })
+    exists = false
+    const missing = await read('gzip', '&snapshot=' + snapshot.revision)
+    assert.equal(missing.status, 404)
+    assert.equal(JSON.parse((await decode(missing)).text).error, 'session_not_found')
+    authorized = false
+    const blocked = await read('gzip')
+    assert.equal(blocked.status, 401)
+    assert.deepEqual(await blocked.json(), { error: 'unauthorized' })
+    assert.equal(blocked.headers.get('Content-Encoding'), null, 'authorization guard precedes history middleware')
+  } finally { await channel.stop() }
 })
