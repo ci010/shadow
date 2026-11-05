@@ -20,9 +20,9 @@ test('answer fragments are strict and render natively across themes and widths',
   const style = compileStyle({ source: descriptor.styles[0]!.content, filename: 'ChatTab.vue', id: 'data-v-answer', scoped: true }).code
   const fixture = readFileSync(resolve(appRoot, 'src/fixtures/answer-architecture.md'), 'utf8')
   const themeCss = readFileSync(resolve(appRoot, 'src/styles.css'), 'utf8')
-  const script = `import { Marked } from '/node_modules/marked/lib/marked.esm.js';
+  const script = `import { createMarkdown } from '/src/markdown.ts';
 import DOMPurify from '/node_modules/dompurify/dist/purify.es.mjs';
-import { renderAnswerHtml, answerHtmlExtension, sanitizeAnswerHtmlRoots, mountAnswerHtml, vAnswerHtml, sanitizeAnswerCss } from '/src/answer-html.ts';
+import { renderAnswerHtml, exitAnswerHtml, sanitizeAnswerHtmlRoots, mountAnswerHtml, vAnswerHtml, sanitizeAnswerCss } from '/src/answer-html.ts';
 import { createApp, h, withDirectives, ref, nextTick } from 'vue';
 const check = (ok, message) => { if (!ok) throw new Error(message) };
 try {
@@ -37,8 +37,8 @@ for (const dark of [false, true]) {
   check(computed.getPropertyValue('--answer-radius').trim() === '0px', 'square theme lost');
 }
 document.documentElement.classList.remove('dark');
-const marked = new Marked({breaks:true}); marked.use(answerHtmlExtension());
-const render = s => DOMPurify.sanitize(sanitizeAnswerHtmlRoots(marked.parse(s)));
+const marked = createMarkdown(); marked.use(exitAnswerHtml);
+const render = s => DOMPurify.sanitize(sanitizeAnswerHtmlRoots(marked.render(s)));
 const hostile = renderAnswerHtml('<style>@import "https://example.com/a.css"; @font-face{font-family:evil;src:url(https://example.com/f)} *{background-image:url(https://example.com/x)} body{display:none} :host{position:fixed!important;inset:0!important} .evil{position:fixed;inset:0;background:red;animation:bad 1s infinite}</style><div class="answer-card composer-send evil" id="bad" style="color:red" onclick="alert(1)"><script>alert(1)</script><iframe src="https://example.com"></iframe><img src="https://example.com/x"><svg><image href="https://example.com"/></svg><form><input></form><a href="javascript:alert(1)">bad</a><a href="https://example.com" target="_blank">good</a><div data-md>**Bold** ![image](https://example.com/x)</div></div>');
 const box = document.createElement('div'); box.innerHTML=hostile; document.body.append(box); mountAnswerHtml(box);
 const shadow = box.firstElementChild.shadowRoot;
@@ -93,7 +93,7 @@ check(stores[0].getEdges.value[0].source==='n:a' && stores[0].getEdges.value[0].
 check(hosts[0].querySelector('.vue-flow__edge-path') && hosts[0].querySelector('.vue-flow__node-boundary'),'native path/group boundary missing');
 check(flowBox.textContent.includes('delivers') && flowBox.textContent.includes('unverified'),'edge evidence label missing');
 check(!flowBox.querySelector('img,script,iframe') && !window.executed,'HTML/Vue code executed');
-check(stores.every(s=>s.zoomOnScroll.value && !s.panOnScroll.value && s.preventScrolling.value),'wheel configuration missing');
+check(stores.every(s=>!s.zoomOnScroll.value && !s.panOnScroll.value && !s.preventScrolling.value && s.zoomActivationKeyCode.value === 'Control'),'wheel configuration missing');
 check(stores.every(s=>!s.nodesDraggable.value && !s.nodesConnectable.value && s.deleteKeyCode.value===null),'read-only config missing');
 check(stores[0].findNode('n:b').position.y>stores[0].findNode('n:a').position.y,'TB layout incorrect');
 check(stores[1].findNode('n:b').position.x>stores[1].findNode('n:a').position.x,'LR layout incorrect');
@@ -139,10 +139,12 @@ await w.webContents.executeJavaScript(\`document.querySelector('#persistent-flow
 await new Promise(r=>setTimeout(r,150));
 const before=await w.webContents.executeJavaScript(\`(()=>{const c=document.querySelector('#persistent-flow .answer-flow-canvas').getBoundingClientRect();const v=document.querySelector('#persistent-flow .vue-flow__transformationpane');return {x:Math.round(c.left+c.width/2),y:Math.round(c.top+Math.min(c.height/2,100)),transform:v.style.transform,scroll:scrollY};})()\`);
 w.webContents.sendInputEvent({type:'mouseMove',x:before.x,y:before.y});
-w.webContents.sendInputEvent({type:'mouseWheel',x:before.x,y:before.y,deltaY:120,deltaX:0,canScroll:true});
+w.webContents.sendInputEvent({type:'keyDown',keyCode:'Control'});
+w.webContents.sendInputEvent({type:'mouseWheel',x:before.x,y:before.y,deltaY:120,deltaX:0,canScroll:true,modifiers:['control']});
+w.webContents.sendInputEvent({type:'keyUp',keyCode:'Control'});
 await new Promise(r=>setTimeout(r,350));
 const after=await w.webContents.executeJavaScript(\`({transform:document.querySelector('#persistent-flow .vue-flow__transformationpane').style.transform,scroll:scrollY})\`);
-if(after.transform===before.transform||after.scroll!==before.scroll)throw Error('hover wheel failed '+JSON.stringify({before,after}));
+if(after.transform===before.transform||after.scroll!==before.scroll)throw Error('Ctrl+wheel failed '+JSON.stringify({before,after}));
 w.webContents.sendInputEvent({type:'mouseMove',x:4,y:200});w.webContents.sendInputEvent({type:'mouseWheel',x:4,y:200,deltaY:120,deltaX:0,canScroll:true});await new Promise(r=>setTimeout(r,350));
 if(await w.webContents.executeJavaScript('scrollY')===after.scroll)throw Error('outside canvas wheel did not scroll page');
 if(!opened.includes('https://example.com/'))throw Error('safe shadow external link failed');if(externalRequests.length)throw Error('external loads '+externalRequests.join(','));console.log('ANSWER_HTML_OK');app.exit(0);}catch(e){console.error(e);app.exit(1);}});`
