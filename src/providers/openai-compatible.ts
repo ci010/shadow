@@ -1,4 +1,5 @@
 import { httpFailure } from './http-failure.ts'
+import { prepareRequestBody } from './request-body.ts'
 import { withProviderRetry, providerRetryScope } from './retry.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { isGptModel, type ReasoningEffort, type ThinkingConfig } from '../agent/llm-config.ts'
@@ -54,6 +55,7 @@ export async function openaiChat(params: {
   maxTokens?: number
   temperature?: number
   providerName?: string
+  requestCompression?: 'gzip'
   signal?: AbortSignal
   thinking?: ThinkingConfig
   reasoningEffort?: ReasoningEffort
@@ -99,6 +101,7 @@ export async function openaiChat(params: {
     body.reasoning_effort = params.reasoningEffort
   }
 
+  const prepared = await prepareRequestBody(body, params.requestCompression, params.signal)
   console.debug(`Calling LLM`)
 
   return withProviderRetry(async () => {
@@ -110,8 +113,9 @@ export async function openaiChat(params: {
           'content-type': 'application/json',
           authorization: `Bearer ${params.apiKey}`,
           ...params.headers,
+          ...prepared.headers,
         },
-        body: JSON.stringify(body),
+        body: prepared.body,
         signal: params.signal,
       })
       phase = 'response'

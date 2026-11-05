@@ -590,6 +590,9 @@ export class CopilotProvider implements LLMProvider {
           thinking: options.thinking,
           reasoningEffort: options.reasoningEffort,
           providerName: 'copilot',
+          // Gzip is verified on Copilot HTTP Responses. Do not assume the
+          // legacy Chat Completions route accepts the same request encoding.
+          requestCompression: endpoint === '/responses' ? 'gzip' as const : undefined,
           signal: options.signal,
         }
         const result = endpoint === '/responses'
