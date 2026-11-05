@@ -214,7 +214,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
   const artifact = async (name: string, value: unknown) => writeAcceptanceArtifact(join(output, name), redact(JSON.stringify(value, null, 2)))
   let calls = 0
   let timeline: AcceptanceTimeline | undefined
-  let approvalGate: Promise<void> | undefined
+  let testingRequestGate: Promise<void> | undefined
   const chat = provider.chat.bind(provider)
   provider.chat = async (...args) => {
     const [messages, tools, options] = args
@@ -234,7 +234,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
     if (c.req.method === 'POST') {
       const body = await c.req.json()
       if (body.model !== model) return c.json({ error: 'test_model_not_allowed' }, 403)
-      await approvalGate
+      await testingRequestGate
       const rejection = acceptanceRequestRejection(timeline, calls, maxCalls)
       if (rejection) return c.json({ error: rejection.error }, rejection.status)
       calls++
@@ -402,35 +402,36 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
         const command = control
         const result = await acceptanceOperatorAttempt(command.id, command.action, async () => {
           const control = command
-          if (control.action === 'review' || control.action === 'approve') {
+          if (control.action === 'review' || control.action === 'request-testing') {
             if (!appId.safeParse(control.appId).success || !revisionId.safeParse(control.revision).success) {
               throw new AcceptanceControlError('Operator review requires an exact app ID and revision')
             }
-            if (!acceptanceTaskTerminal(task!)) throw new AcceptanceControlError('Wait for the creation task to finish before review or approval')
+            if (!acceptanceTaskTerminal(task!)) throw new AcceptanceControlError('Wait for the creation task to finish before review or testing request')
             const reviewed = await owner(`/${control.appId}`)
             if (reviewed.revision !== control.revision) throw new AcceptanceControlError('Review is stale; inspect the current exact app revision')
             if (timeline!.snapshot().phase !== 'testing') timeline!.review()
-            if (timeline!.snapshot().remainingMs === 0) throw new Error('Review/testing deadline expired before approval')
+            if (timeline!.snapshot().remainingMs === 0) throw new Error('Review/testing deadline expired before testing request')
             await artifact('timeline.json', timeline!.snapshot())
             await artifact('review.json', { reviewed, at: new Date().toISOString(), timeline: timeline!.snapshot() })
             await exportAcceptanceBundles(project.home, output)
-            if (control.action === 'approve') {
+            if (control.action === 'request-testing') {
               // Hold concurrent model admissions until the exact owner operation has a known outcome.
               const gate = Promise.withResolvers<void>()
-              approvalGate = gate.promise
+              testingRequestGate = gate.promise
               try {
-                if (timeline!.snapshot().remainingMs === 0) throw new Error('Review/testing deadline expired before approval')
-                const approved = appRecordSchema.strip().parse(await owner(`/${control.appId}/approve`, { revision: control.revision, confirm: true }))
-                if (approved.id !== control.appId || approved.revision !== control.revision || approved.approval?.revision !== control.revision) {
-                  throw new Error('Owner approval response does not match the reviewed version')
+                if (timeline!.snapshot().remainingMs === 0) throw new Error('Review/testing deadline expired before testing request')
+                const requested = appRecordSchema.strip().parse(await owner(`/${control.appId}/test`, { revision: control.revision }))
+                if (requested.id !== control.appId || requested.revision !== control.revision) {
+                  throw new Error('Testing request response does not match the reviewed version')
                 }
-                await artifact('approval.json', { id: approved.id, revision: approved.revision, approvedAt: approved.approval.at })
-                timeline!.approved(approved.approval.at)
+                const requestedAt = new Date().toISOString()
+                await artifact('testing-request.json', { id: requested.id, revision: requested.revision, requestedAt: requestedAt })
+                timeline!.testingRequested(requestedAt)
                 await artifact('timeline.json', timeline!.snapshot())
-              } finally { approvalGate = undefined; gate.resolve() }
+              } finally { testingRequestGate = undefined; gate.resolve() }
             }
           } else if (control.action === 'answer-testing') {
-            // Version approval and permission to resume the author are separate owner operations.
+            // Requesting testing and permission to resume the author are separate owner operations.
             const app = appRecordSchema.strip().parse(await owner(`/${control.appId}`))
             const acceptance = app.acceptance
             if (app.revision !== control.revision || acceptance?.status !== 'asking' ||
@@ -449,7 +450,7 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
             const detail = await ownerRequest(path)
             await artifact('work-review.json', detail)
           } else if (control.action === 'approve-work') {
-            throw new AcceptanceControlError('Work notes no longer require approval. Correct goals in the Project canvas; app authorization still requires approve with the exact app ID and revision.')
+            throw new AcceptanceControlError('Work notes no longer require approval. Correct goals in the Project canvas; apps open without approval. Use request-testing for author testing.')
           } else if (control.action === 'open') {
             const opened = await owner(`/${control.appId}/open`, {})
             // A launch ticket is intentionally kept out of logs/reports; only this private operator handoff contains it.

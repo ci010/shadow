@@ -17,8 +17,8 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 async function fixture(t: TestContext, hasIcon = false, launch: { packaged?: boolean } = {}) {
   const directory = resolve(import.meta.dirname, '..', '..', '.test-artifacts', `native-app-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
-  const app: { id: string; revision: string; manifest: { name: string; icon?: string }; approval?: { revision: string }; status: string } = {
-    id, revision, manifest: { name: 'Voice helper', ...(hasIcon ? { icon: 'icon.png' } : {}) }, approval: { revision }, status: 'stopped',
+  const app: { id: string; revision: string; manifest: { name: string; icon?: string }; status: string } = {
+    id, revision, manifest: { name: 'Voice helper', ...(hasIcon ? { icon: 'icon.png' } : {}) }, status: 'stopped',
   }
   const calls: string[] = [], errors: string[] = [], tasks: Task[][] = [], windows: Array<{ input: MicroAppWindowInput; focused: number; closed: boolean }> = []
   let failCatalog = false, failWindow = false, failOpen = false
@@ -135,7 +135,7 @@ test('concurrent/repeated opens focus one window; closing stops before reopening
   assert.ok(!JSON.stringify(f.windows.map(w => w.input)).includes('synthetic-owner'))
 })
 
-test('only approved apps become persistent task entries; custom PNG becomes a Windows ICO', async t => {
+test('published apps become persistent task entries without approval; custom PNG becomes a Windows ICO', async t => {
   const f = await fixture(t, true)
   const task = f.tasks.at(-1)![0]!
   assert.match(task.arguments!, /--shadow-micro-app=p:/)
@@ -146,11 +146,11 @@ test('only approved apps become persistent task entries; custom PNG becomes a Wi
   assert.deepEqual(ico, pngIconContainer(png, 1, 1))
   await f.manager.open(identity)
   assert.match(f.windows[0]!.input.iconPath, /\.png$/)
-  delete f.app.approval; f.app.status = 'awaiting_approval'
+  f.app.revision = 'b'.repeat(64); f.app.status = 'stopped'
   await f.manager.refresh()
   assert.equal(f.windows[0]!.closed, true)
-  assert.deepEqual(f.tasks.at(-1), [])
-  await assert.rejects(f.manager.open(identity), /approve/)
+  assert.equal(f.tasks.at(-1)!.length, 1)
+  await f.manager.open(identity)
 })
 
 test('transient catalog failures do not remove valid tasks; shutdown retains cold-start tasks', async t => {
@@ -224,12 +224,12 @@ test('a lost launch response still stops the runtime that might have started', a
   assert.equal(f.calls.filter(path => path.endsWith('/stop')).length, 1)
 })
 
-test('revoking an app while its native page loads cancels the pending window and stops once', async t => {
+test('changing a revision while its native page loads cancels the pending window and stops once', async t => {
   const f = await fixture(t)
   const pause = f.pauseWindow()
   const opening = f.manager.open(identity)
   await pause.entered
-  delete f.app.approval
+  f.app.revision = 'b'.repeat(64)
   await f.manager.refresh()
   assert.equal(f.windows[0]!.input.signal.aborted, true)
   pause.release()

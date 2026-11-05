@@ -1677,8 +1677,9 @@ or another authorization surface.
 
 Micro App publication separately captures the selected/unambiguous goal path's
 version-bound acceptance criteria; removal of general inference Work stamps
-does not drop that report baseline. Exact-version app owner approval and the
-owning integration's uncertain-operation recovery remain separate.
+does not drop that report baseline. Explicit owner continuation for author testing
+and the owning integration's uncertain-operation recovery remain separate. Apps
+open directly after publication without a separate execution approval.
 Native failures retain their no-effect/returned-error/unknown distinctions, but
 ordinary failed tools do not add mandatory notebook settlement paperwork.
 
@@ -2940,16 +2941,18 @@ do not embed provider secrets or the broad host launch credential in generated
 frontend code.
 
 `src/microapps/` supplies a separate Project-owned app registry, immutable source
-revisions, owner approval, start/stop/reopen lifecycle and an app-scoped model
+revisions, direct open after publication, start/stop/reopen lifecycle and an app-scoped model
 bridge. `micro_app` is a discoverable agent tool, not an approval API. The
 Project workbench's Apps workspace reviews source. Web opens an isolated loopback
 iframe; Electron opens a separate sandboxed BrowserWindow with no host preload
-or credentials. Approved apps have Windows task-menu launch entries that retain
+or credentials. Published apps have Windows task-menu launch entries that retain
 only stable Project/app identities and request fresh authorization on open.
 Optional PNG branding is part of the reviewed revision. Electron authorizes host
 requests from its workbench main frame only, not app windows or subframes.
 The model bridge calls the provider with no tools and enforces the
-approved model, output limit, persistent attempt allowance and concurrency cap.
+pinned Project model, manifest output limit, persistent per-publication attempt
+allowance and concurrency cap. Legacy approval records migrate without starting
+apps or resetting used calls; owner authentication and device permissions remain.
 
 Static Web assets may use an optional Node/Python backend. The backend is a
 normal host process, not a sandbox, and dependencies are not auto-installed.

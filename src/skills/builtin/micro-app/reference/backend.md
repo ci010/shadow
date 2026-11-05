@@ -48,11 +48,11 @@ Maximum transfer
 app token. Keep a single model-call path per action to avoid double spending.
 
 The backend has normal host filesystem/process permissions, **not an OS
-sandbox**. User approval is required even without LLM access. Do not spawn
+sandbox**. Opening starts code without a separate app approval gate. Do not spawn
 detached descendants. Stop must end the owned process tree. Unexpected host
 termination is reported as interrupted; do not assume external effects rolled
-back. App source is immutable for a run, but writable data is not executable
-code approval. Source assets contain no secrets and are served on loopback.
+back. App source is immutable for a run, but writable data is not part of the executable
+publication. Source assets contain no secrets and are served on loopback.
 
 `TEMP`, `TMP` and `TMPDIR` also point to `SHADOW_APP_TEMP`. Use it instead of a
 persistent `data/temp` directory for transient audio and scratch output. Normal

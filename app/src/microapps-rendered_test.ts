@@ -116,22 +116,15 @@ test('Apps owner review, isolated live SDK page, repeat calls, stop and reopen r
         import '/src/styles.css';
         import { createApp, h, reactive } from 'vue';
         import { createRouter, createMemoryHistory } from 'vue-router';
-        import ProjectWorkbench from '/src/components/ProjectDashboard.vue';
-        import { createProjectLiveState } from '/src/project-live-state.ts';
-        import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
-        import { createLocalMainAdminContext } from '/src/installation-context.ts';
-        const state=reactive({draft:'Preserved draft'});
-        const installation=reactive(createLocalMainAdminContext(location.origin));
-        window.setAdmin=value=>{installation.uiScopes=value ? createLocalMainAdminContext(location.origin).uiScopes : ['chat:read'];};
-        const live=createProjectLiveState({client:()=>({subscribe:()=>({ready:async()=>{},close:()=>{}})})});
+        import ProjectMicroApps from '/src/components/ProjectMicroApps.vue';
+        const state=reactive({canWrite:true});
+        window.setAdmin=value=>{state.canWrite=value;};
         const router=createRouter({history:createMemoryHistory(),routes:[{path:'/',component:{render:()=>null}}]});
         await router.push('/');await router.isReady();
-        const app=createApp({render:()=>h(ProjectWorkbench,{
-          apiBase:location.origin+'/projects/p',projectId:'p',projectName:'App workspace',visible:true,style:'height:100vh',
-          onCompose:text=>{state.draft+='\\n'+text},
-        },{default:()=>h('textarea',{value:state.draft})})});
-        app.provide(Symbol.for('shadow.project-live-state'),live);
-        app.use(router);app.use(createInstallationContextProvider(installation));app.mount('#app');`,
+        const app=createApp({render:()=>h(ProjectMicroApps,{
+          apiBase:location.origin+'/projects/p',active:true,canWrite:state.canWrite,style:'height:100vh',
+        })});
+        app.use(router);app.mount('#app');`,
       configureServer(server) {
         server.middlewares.use(async (req, res, next) => {
           try {
@@ -179,5 +172,5 @@ test('Apps owner review, isolated live SDK page, repeat calls, stop and reopen r
   assert.match(output, /MICROAPPS_SMOKE_OK/)
   assert.equal(calls, 2)
   assert.equal(failCleanup, false)
-  assert.equal(service.list()[0].status, 'awaiting_approval')
+  assert.equal(service.list()[0].status, 'stopped')
 })

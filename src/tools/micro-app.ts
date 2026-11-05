@@ -28,7 +28,7 @@ export function microAppReceipt(record: ReturnType<MicroApps['get']>) {
   const acceptance = record.acceptance
   return {
     id: record.id, revision: record.revision, name: record.manifest.name, createdBy: record.createdBy,
-    status: record.status, approval: record.approval ?? null, calls: record.calls, llm: record.manifest.llm,
+    status: record.status, model: record.model ?? null, calls: record.calls, llm: record.manifest.llm,
     lastRun: record.lastRun, cleanupPending: record.cleanupPending, acceptanceAvailable: record.acceptanceAvailable,
     workRefs: record.work?.map(work => ({ key: work.key, revision: work.revision, acceptanceCount: work.acceptance.length })),
     acceptanceSummary: acceptance ? {
@@ -43,13 +43,13 @@ export function microAppReceipt(record: ReturnType<MicroApps['get']>) {
 export class MicroAppTool implements Tool {
   readonly name = 'micro_app'
   readonly readonly = (args: Record<string, unknown>) => ['capabilities', 'list', 'get', 'check', 'evidence'].includes(String(args.action))
-  readonly description = 'Publish and manage reusable Project Web apps, with optional local Node/Python backend and owner-approved LLM calls. Read v:skills/micro-app and action:capabilities for runtime limits. publish/check return compact receipts; get returns full manifest, requirements and acceptance evidence. check compares source bytes, not runtime acceptance. After owner review and the testing question, test opens the exact version in an isolated browser; evidence resolves your recorded tool IDs and exact excerpts into canonical references; report saves version-bound assessments. This tool cannot approve or issue model credentials. No automatic install.'
+  readonly description = 'Publish and manage reusable Project Web apps, with optional local Node/Python backend and bounded Project-model calls. Read v:skills/micro-app and action:capabilities for runtime limits. publish/check return compact receipts; get returns full manifest, requirements and acceptance evidence. check compares source bytes, not runtime acceptance. After explicit owner continuation for author testing, test opens the exact version in an isolated browser; evidence resolves your recorded tool IDs and exact excerpts into canonical references; report saves version-bound assessments. Publication is ready to open without separate owner approval; it does not start code or issue model credentials. No automatic install.'
   readonly parameters: ToolParameters = {
     type: 'object', properties: {
       action: { type: 'string', enum: ['capabilities', 'list', 'get', 'check', 'publish', 'start', 'stop', 'test', 'evidence', 'report'] },
       directory: { type: 'string', description: 'publish/check: local workdir-relative directory containing shadow-app.json and its explicitly listed files.' },
       id: { type: 'string', description: 'App UUID. Omit on first publish.' },
-      revision: { type: 'string', description: 'Required for check, test, evidence, report and publish updates: exact revision from get. Stop before publishing; updates invalidate approval and testing permission.' },
+      revision: { type: 'string', description: 'Required for check, test, evidence, report and publish updates: exact revision from get. Stop before publishing; updates reset the per-publication allowance and invalidate testing permission.' },
       sources: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'object',
         properties: { id: { type: 'string' }, quote: { type: 'string' } }, required: ['id', 'quote'], additionalProperties: false },
         description: 'evidence only: 1-12 {id: recorded tool call ID, quote: exact receipt excerpt (1-2000 chars)}. Returns canonical {sessionId,physicalId,kind,id,quote} references from your own historical/current segments. Copy into report; never guess physicalId. Unknown/ambiguous IDs and inexact excerpts are rejected.' },
@@ -132,7 +132,7 @@ export class MicroAppTool implements Tool {
             return opened
           })
         return JSON.stringify({ ...this.service.get(input.id), browser,
-          notice: 'Approved app opened in an isolated author-owned browser. Inspect and exercise the actual UI/SDK. Save report with recorded tool evidence; startup is not functional acceptance. Stop the app and close the browser when finished.' })
+          notice: 'Published app opened in an isolated author-owned browser. Inspect and exercise the actual UI/SDK. Save report with recorded tool evidence; startup is not functional acceptance. Stop the app and close the browser when finished.' })
       } catch (error) {
         if (context.signal.aborted && openedRunId && this.service.get(input.id).lastRun?.id === openedRunId) await this.service.stop(input.id)
         throw error
