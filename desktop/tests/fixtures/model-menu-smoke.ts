@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
@@ -144,7 +145,7 @@ const server = createServer(async (request, response) => {
     response.writeHead(500).end()
   }
 })
-const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(activeWorkspaceScript(source))
+const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(withComposerTestAdapter(activeWorkspaceScript(source)))
 async function waitFor(source: string): Promise<void> {
   const end = Date.now() + 8000
   while (Date.now() < end) {
@@ -255,7 +256,7 @@ async function main(): Promise<void> {
   await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 180))))`)
   phase = 'busy session effort save'
   await evaluate(`(() => {
-    const input = document.querySelector('.composer-input textarea'); window.menuDraft = input;
+    const input = document.querySelector('.composer-input .reference-composer'); window.menuDraft = input;
     input.value = 'Preserve this conversation draft'; input.dispatchEvent(new Event('input', { bubbles: true })); input.setSelectionRange(2, 7);
   })()`)
   let release!: () => void
@@ -267,7 +268,7 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`document.activeElement === document.querySelector('${trigger}') && getComputedStyle(document.activeElement).opacity === '1'`), true)
   await click(trigger)
   assert.equal(await evaluate(`!!document.querySelector('.composer-popover')`), false)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea') === window.menuDraft && window.menuDraft.value === 'Preserve this conversation draft' && window.menuDraft.selectionStart === 2 && window.menuDraft.selectionEnd === 7`), true)
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer') === window.menuDraft && window.menuDraft.value === 'Preserve this conversation draft' && window.menuDraft.selectionStart === 2 && window.menuDraft.selectionEnd === 7`), true)
   release()
   await waitFor(`document.querySelector('${trigger}').getAttribute('aria-busy') !== 'true' && document.querySelector('.model-effort').textContent.includes('None')`)
   const beforeRepeat = patches.length
@@ -329,7 +330,7 @@ async function main(): Promise<void> {
   await click('.model-menu-model')
   await evaluate(`Array.from(document.querySelectorAll('.model-option')).find(button => button.textContent.includes('Follow project default')).click()`)
   await waitFor(`document.querySelector('.model-label').textContent === 'Project · gpt-6-astra'`)
-  await evaluate(`(() => { const input = document.querySelector('.composer-input textarea'); input.value = 'Draft with paired reasoning settings'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  await evaluate(`(() => { const input = document.querySelector('.composer-input .reference-composer'); input.value = 'Draft with paired reasoning settings'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   await click('.composer-send')
   await waitRequest(() => sends.length === 1, 'first draft admission')
   await waitFor(`!document.querySelector('.draft-heading') && document.querySelector('.chat-messages').textContent.includes('Draft with paired reasoning settings')`)
@@ -352,7 +353,7 @@ async function main(): Promise<void> {
   assert.equal(sends[0].config?.model, null, 'Changing the next-turn model does not mutate the admitted request')
   assert.equal(providerSaves.length, 0, 'Changing the next-turn model does not mutate the admitted request')
   finishSend!()
-  await waitFor(`!document.querySelector('.composer-input textarea').disabled`)
+  await waitFor(`!document.querySelector('.composer-input .reference-composer').disabled`)
   phase = 'App providers do not override conversation models'
   await evaluate(`Array.from(document.querySelectorAll('.tab-nav .tab')).find(button => button.textContent.trim().toLowerCase() === 'settings').click()`)
   await waitFor(`location.pathname === '/settings' && !!document.querySelector('.provider-card')`)

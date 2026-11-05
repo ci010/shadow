@@ -21,6 +21,7 @@
 </template>
 
 <script setup lang="ts">
+import type { ComposerInput } from '../composer-references.ts'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { referenceSessionTitle, filterReferenceSessions, sessionReferenceQuery, insertSessionReference, type ReferenceSession } from '../session-references.ts'
@@ -31,7 +32,7 @@ const props = defineProps<{
   sessions: ReferenceSession[]
   sessionId: string
   text: string
-  input?: HTMLTextAreaElement
+  input?: ComposerInput
   focused: boolean
   active: boolean
   selectionStart: number

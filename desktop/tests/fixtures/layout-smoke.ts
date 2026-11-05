@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdirSync } from 'node:fs'
@@ -251,7 +252,7 @@ const selectors = [
   'html', 'body', '.desktop-frame', '.desktop-title-bar', '.runtime-status-bar',
   '.desktop-content', '.app-main', '.route-content', '.chat-workspace',
   '.projects-sidebar', '.project-groups', '.chat-panel', '.conversation-heading-row',
-  '.chat-messages', '.chat-composer', '.composer-input textarea',
+  '.chat-messages', '.chat-composer', '.composer-input .reference-composer',
   '.composer-toolbar', '.composer-controls', '[aria-label="Choose model"]', '.composer-send',
   '.session-diagnosis', '.diagnosis-toggle', '.window-controls', '.desktop-window-title',
   '.mouse-glow', '.mouse-glow-layer',
@@ -260,7 +261,7 @@ const selectors = [
 
 async function evaluate<T>(window: BrowserWindow, script: string): Promise<T> {
   assert.ok(ownedWindows.has(window) && !window.isVisible(), 'Only hidden test-owned windows may be inspected')
-  return window.webContents.executeJavaScript(activeWorkspaceScript(script)) as Promise<T>
+  return window.webContents.executeJavaScript(withComposerTestAdapter(activeWorkspaceScript(script))) as Promise<T>
 }
 async function waitFor(window: BrowserWindow, expression: string): Promise<void> {
   const deadline = Date.now() + 15_000
@@ -338,7 +339,7 @@ function documentChecks(metrics: Measurements, label: string): void {
 }
 function chatChecks(metrics: Measurements, label: string, mobile: boolean, expectedModel = initialModel): void {
   documentChecks(metrics, label)
-  for (const selector of ['.chat-workspace', '.chat-panel', '.conversation-heading-row', '.chat-messages', '.chat-composer', '.composer-input textarea', '.composer-toolbar', '.composer-controls', '[aria-label="Choose model"]', '.composer-send']) bounded(metrics, selector, label)
+  for (const selector of ['.chat-workspace', '.chat-panel', '.conversation-heading-row', '.chat-messages', '.chat-composer', '.composer-input .reference-composer', '.composer-toolbar', '.composer-controls', '[aria-label="Choose model"]', '.composer-send']) bounded(metrics, selector, label)
   check(metrics.sendUncovered, `${label}: .composer-send is covered or outside hit-test viewport; hit=${metrics.sendHitTarget}`)
   check(metrics.sessionCount === sessions.length, `${label}: synthetic session list did not mount (${metrics.sessionCount}/${sessions.length})`)
   check(metrics.messageCount === 72, `${label}: synthetic history did not mount`)
@@ -347,7 +348,7 @@ function chatChecks(metrics: Measurements, label: string, mobile: boolean, expec
   check(['auto', 'scroll'].includes(messages.overflowY) && messages.scrollHeight > messages.clientHeight,
     `${label}: .chat-messages must scroll internally`)
   const composer = box(metrics, '.chat-composer')
-  const textarea = box(metrics, '.composer-input textarea')
+  const textarea = box(metrics, '.composer-input .reference-composer')
   const toolbar = box(metrics, '.composer-toolbar')
   const model = box(metrics, '.composer-controls')
   const send = box(metrics, '.composer-send')
@@ -509,7 +510,7 @@ async function runFolders(window: BrowserWindow, width: number, desktop: boolean
   }
 
   await menu('Start from scratch')
-  await waitFor(window, `location.pathname !== ${JSON.stringify(previousRoute)} && Boolean(document.querySelector('.composer-input textarea'))`)
+  await waitFor(window, `location.pathname !== ${JSON.stringify(previousRoute)} && Boolean(document.querySelector('.composer-input .reference-composer'))`)
   check(folders.createdSessions.length === createdBeforeOpen, `${label}: Scratch must not create a folder-bound conversation`)
   await showSidebar()
   await evaluate(window, `${group(openedPath)}.querySelector('.folder-add').click()`)
@@ -695,7 +696,7 @@ async function runViewport(origin: string, width: number, height: number, deskto
     if (!mobile) await scrollProof(window, '.project-groups')
 
     await evaluate(window, `(() => {
-      const textarea = document.querySelector('.composer-input textarea');
+      const textarea = document.querySelector('.composer-input .reference-composer');
       textarea.value = Array.from({ length: 30 }, (_, i) => 'Synthetic draft line ' + i).join('\\n');
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
     })()`)
@@ -703,11 +704,11 @@ async function runViewport(origin: string, width: number, height: number, deskto
     metrics = await measure(window)
     report(`${label}-long-draft`, metrics)
     chatChecks(metrics, `${label}-long-draft`, mobile)
-    const textarea = box(metrics, '.composer-input textarea')
+    const textarea = box(metrics, '.composer-input .reference-composer')
     check(textarea.scrollHeight > textarea.clientHeight && ['auto', 'scroll'].includes(textarea.overflowY), `${label}: long textarea must scroll internally`)
 
     await evaluate(window, `(() => {
-      const textarea = document.querySelector('.composer-input textarea');
+      const textarea = document.querySelector('.composer-input .reference-composer');
       textarea.value = ''; textarea.dispatchEvent(new Event('input', { bubbles: true }));
       document.querySelector('.diagnosis-toggle').click();
     })()`)
@@ -727,14 +728,14 @@ async function runViewport(origin: string, width: number, height: number, deskto
     const modelSelector = '.chat-composer [aria-label="Choose model"]'
     const draft = 'Synthetic unsent draft\nMust survive model saves and provider settings.'
     await evaluate(window, `(() => {
-      const input = document.querySelector('.composer-input textarea');
+      const input = document.querySelector('.composer-input .reference-composer');
       window.layoutDraftInput = input;
       input.dataset.layoutRetained = 'true';
       input.value = ${JSON.stringify(draft)};
       input.dispatchEvent(new Event('input', { bubbles: true }));
     })()`)
     const draftRetained = () => evaluate<boolean>(window, `(() => {
-      const input = document.querySelector('.composer-input textarea');
+      const input = document.querySelector('.composer-input .reference-composer');
       return input === window.layoutDraftInput && input?.dataset.layoutRetained === 'true' && input.value === ${JSON.stringify(draft)};
     })()`)
     const chatUrl = await evaluate<string>(window, 'location.pathname + location.search + location.hash')
@@ -790,7 +791,7 @@ async function runViewport(origin: string, width: number, height: number, deskto
     check(await evaluate(window, `!Array.from(document.querySelectorAll('[aria-label="Choose model"]')).some(node => node.getClientRects().length)`), `${label}: App provider settings must not expose a global conversation model picker`)
     await clickTab(window, 'Chat')
     await waitForTab(window, 'Chat')
-    await waitFor(window, `Boolean(document.querySelector('.composer-input textarea'))`)
+    await waitFor(window, `Boolean(document.querySelector('.composer-input .reference-composer'))`)
     check(await draftRetained(), `${label}: Chat tab return lost draft or textarea identity`)
     check(await evaluate(window, `document.querySelector(${JSON.stringify(modelSelector)}).title.includes(${JSON.stringify(alternateModel)})`), `${label}: cached conversation must retain its own next-turn model`)
     check(await evaluate(window, 'location.pathname + location.search + location.hash') === chatUrl, `${label}: Chat tab must return to the remembered session URL`)
@@ -813,7 +814,7 @@ async function runViewport(origin: string, width: number, height: number, deskto
     check(await evaluate(window, `!document.querySelector('.device-panel')`), `${label}: Providers must remount without stale pending login`)
     await evaluate(window, `Array.from(document.querySelectorAll('.provider-setup button')).find(node => node.textContent.trim() === 'Back to workspace').click()`)
     await waitForTab(window, 'Chat')
-    await waitFor(window, `!document.querySelector('.provider-setup') && Boolean(document.querySelector('.composer-input textarea'))`)
+    await waitFor(window, `!document.querySelector('.provider-setup') && Boolean(document.querySelector('.composer-input .reference-composer'))`)
     check(await draftRetained(), `${label}: closing provider settings lost the chat draft`)
     check(await evaluate(window, 'location.pathname + location.search + location.hash') === chatUrl, `${label}: Back to workspace must restore the remembered session URL`)
     metrics = await measure(window)
@@ -856,7 +857,7 @@ async function runViewport(origin: string, width: number, height: number, deskto
     })()`)
     await evaluate(window, `document.querySelector('.provider-setup form').requestSubmit()`)
     await waitForTab(window, 'Chat')
-    await waitFor(window, `Boolean(document.querySelector('.composer-input textarea')) && !document.querySelector(${JSON.stringify(modelSelector)})?.disabled`)
+    await waitFor(window, `Boolean(document.querySelector('.composer-input .reference-composer')) && !document.querySelector(${JSON.stringify(modelSelector)})?.disabled`)
     check(providerReads > readsBeforeProviderSave, `${label}: successful ProviderSetup save must refresh App's provider source`)
     check(selectedProvider === 'layout-provider', `${label}: keyless synthetic provider form was not saved`)
     check(await draftRetained(), `${label}: successful provider save lost cached Chat draft`)

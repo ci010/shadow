@@ -171,7 +171,7 @@ async function main(){
  assert.ok(Math.abs(await run("anchor.getBoundingClientRect().top-anchorY"))<2);
  assert.deepEqual(await run("[...document.querySelectorAll('[data-history-boundary]')].map(x=>x.dataset.historyBoundary)"),['old-zero','old-one']);
  // Search reasoning inside a collapsed current tool group after lazy prepend.
- await run("document.querySelector('textarea').dispatchEvent(new KeyboardEvent('keydown',{key:'f',ctrlKey:true,bubbles:true,cancelable:true}))");
+ await run("document.querySelector('.reference-composer').dispatchEvent(new KeyboardEvent('keydown',{key:'f',ctrlKey:true,bubbles:true,cancelable:true}))");
  await wait("!!document.querySelector('.conversation-search input')");
  await run("const input=document.querySelector('.conversation-search input'); input.value='Unique-current-tool-search-result'; input.dispatchEvent(new Event('input',{bubbles:true}))");
  await wait("document.querySelector('.search-count')?.textContent==='1 / 1' && CSS.highlights.get('shadow-conversation-active')?.size>0");
@@ -191,7 +191,7 @@ async function main(){
  assert.deepEqual(await run("[...document.querySelectorAll('.compaction-summary-title')].map(x=>x.textContent)"),['Previous Conversation Summary','Previous Conversation Summary']);
  assert.equal(await run("document.querySelector('[data-event-id=handoff-fixture] strong')?.textContent"),'Recorded handoff transition');
  assert.equal(await run("!!document.querySelector('.timeline-latest')"),true);
- assert.equal(await run("document.querySelector('textarea').readOnly || document.querySelector('textarea').disabled"),false);
+ assert.equal(await run("document.querySelector('.reference-composer').getAttribute('aria-disabled') === 'true'"),false);
  await run("document.querySelector('.timeline-latest').click()");
  await wait("!document.querySelector('.timeline-latest')");
  assert.ok(await run("(()=>{const c=document.querySelector('.chat-messages');return c.scrollHeight-c.scrollTop-c.clientHeight<2})()"));

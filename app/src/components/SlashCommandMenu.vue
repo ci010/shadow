@@ -27,6 +27,7 @@
 </template>
 
 <script setup lang="ts">
+import type { ComposerInput } from '../composer-references.ts'
 import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { filterSlashCommands, slashCommandQuery, useSlashCommandCatalog, type SlashCommand } from '../slash-commands.ts'
@@ -36,7 +37,7 @@ const props = defineProps<{
   apiBase: string
   sessionId: string
   text: string
-  input?: HTMLTextAreaElement
+  input?: ComposerInput
   focused: boolean
   active: boolean
   selectionStart: number

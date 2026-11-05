@@ -105,8 +105,8 @@ test('project settings and Knowledge click through history and observed groups w
     await run('[...document.querySelectorAll(".work-view-switch button")].find(e=>e.textContent==="Dashboard").click()');
     await run('document.querySelector(".new-work").click()');
     await wait('window.fixture.router.currentRoute.value.name==="chat"');
-    await wait(visible('textarea'));
-    await wait('('+visible('textarea')+').value.includes("Help me organize a new work item:")');
+    await wait(visible('.reference-composer'));
+    await wait('('+visible('.reference-composer')+').textContent.includes("Help me organize a new work item:")');
     assert.equal((await route()).params.projectId,'b');
     await run('window.fixture.router.push({name:"project-dashboard",params:{projectId:"a"}})');
     await wait(visible('[data-overview-canvas]'));

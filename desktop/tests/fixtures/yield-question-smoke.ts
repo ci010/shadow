@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdirSync } from 'node:fs'
@@ -225,7 +226,7 @@ const server = createServer(async (request, response) => {
 
 async function evaluate<T>(window: BrowserWindow, script: string): Promise<T> {
   assert.equal(window.isVisible(), false, 'Only inspect the isolated hidden fixture')
-  return window.webContents.executeJavaScript(script) as Promise<T>
+  return window.webContents.executeJavaScript(withComposerTestAdapter(script)) as Promise<T>
 }
 async function waitFor(window: BrowserWindow, expression: string) {
   const deadline = Date.now() + 15000
@@ -280,11 +281,11 @@ async function runViewport(origin: string, width: number, height: number) {
     await window.loadURL(`${origin}/chat/${encodeURIComponent(root)}`)
     window.webContents.debugger.attach('1.3')
     await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
-    await waitFor(window, `!!document.querySelector('.composer-input textarea') && !!document.querySelector('.chat-bubble')`)
+    await waitFor(window, `!!document.querySelector('.composer-input .reference-composer') && !!document.querySelector('.chat-bubble')`)
     const beforeReads = reads
     await new Promise(resolve => setTimeout(resolve, 1600))
     assert.equal(reads, beforeReads, 'Ordinary idle chats must not query a potentially unsupported yield endpoint')
-    await evaluate(window, `(() => { const input = document.querySelector('.composer-input textarea'); input.value = 'Keep my unsent draft'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+    await evaluate(window, `(() => { const input = document.querySelector('.composer-input .reference-composer'); input.value = 'Keep my unsent draft'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
     assert.equal(await evaluate(window, `document.querySelector('[data-session-work="reporting"]')`), null, 'Reporting settings are no longer a permanent chat control')
     owners.set(root, reflector)
     const initial = { ...question(root, `root-${width}`), brief: decisionBrief, reportingSessionId: reflector,
@@ -298,7 +299,7 @@ async function runViewport(origin: string, width: number, height: number) {
     assert.match(await evaluate<string>(window, `document.querySelector('.yield-decision .decision-status').textContent`), /Needs your reply/)
     assert.match(await evaluate<string>(window, `document.querySelector('.yield-question .decision-brief').textContent`), /Original goal.*Unverified assumption.*Blocked until decided/s)
     live.chat(root, { event: 'tool_call', content: 'Waiting', toolCall: { name: 'ask', arguments: {} } })
-    await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input textarea')?.disabled === false`)
+    await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input .reference-composer')?.disabled === false`)
     assert.match(await evaluate<string>(window, `document.querySelector('.chat-working').textContent`), /Waiting for a response/)
     await inspect(window, width > 600 ? 'yield-question-desktop' : 'yield-question-mobile')
     for (const theme of ['light', 'dark']) {
@@ -332,7 +333,7 @@ async function runViewport(origin: string, width: number, height: number) {
     await waitFor(window, `document.querySelector('.yield-question').textContent.includes('Choose a bounded change')`)
     assert.equal(answers.length, beforeAnswers)
     assert.equal(sends, 0)
-    assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+    assert.equal(await evaluate(window, `document.querySelector('.composer-input .reference-composer').value`), 'Keep my unsent draft')
     assert.equal(await evaluate(window, `document.querySelectorAll('.yield-question input[type="radio"]').length`), 2)
     assert.equal(await evaluate(window, `document.documentElement.scrollWidth > innerWidth`), false)
     await evaluate(window, `document.querySelector('${discussion}').open = false`)
@@ -341,14 +342,14 @@ async function runViewport(origin: string, width: number, height: number) {
     await evaluate(window, `document.querySelector('.yield-continue').click()`)
     await waitFor(window, `document.querySelector('.yield-error')?.textContent.includes('Synthetic answer rejection')`)
     assert.equal(await evaluate(window, `document.querySelector('.yield-question input:checked').value`), 'Refactor the implementation with focused tests')
-    assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+    assert.equal(await evaluate(window, `document.querySelector('.composer-input .reference-composer').value`), 'Keep my unsent draft')
     await evaluate(window, `document.querySelector('.yield-continue').click()`)
-    await waitFor(window, `!document.querySelector('.yield-question') && !document.querySelector('.composer-input textarea').disabled`)
+    await waitFor(window, `!document.querySelector('.yield-question') && !document.querySelector('.composer-input .reference-composer').disabled`)
     assert.equal(await evaluate(window, `!!document.querySelector('.yield-decision.waiting-user')`), false)
     await waitFor(window, `document.querySelector('.yield-decision.user')?.textContent.includes('Refactor the implementation')`)
     assert.match(await evaluate<string>(window, `document.querySelector('.yield-decision.user').textContent`), new RegExp(`root-${width}`), 'The original request identity survives response and history refresh')
     assert.equal(answers.at(-1)?.option, 'Refactor the implementation with focused tests')
-    assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+    assert.equal(await evaluate(window, `document.querySelector('.composer-input .reference-composer').value`), 'Keep my unsent draft')
 
     await evaluate(window, `document.querySelector('.yield-decision.user .decision-graph').open = true`)
     await waitFor(window, `!!document.querySelector('.graph-inspector .basis-graph')`)
@@ -379,7 +380,7 @@ async function runViewport(origin: string, width: number, height: number) {
       assert.equal(followUps.at(-1)?.kind, kind)
       assert.equal(answers.length, beforeFollowUp)
       assert.equal(sends, 0)
-      assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+      assert.equal(await evaluate(window, `document.querySelector('.composer-input .reference-composer').value`), 'Keep my unsent draft')
     }
 
     for (const count of [2, 3]) {
@@ -415,7 +416,7 @@ async function runViewport(origin: string, width: number, height: number) {
       await evaluate(window, `document.querySelector('.yield-continue').click()`)
       await waitFor(window, `document.querySelector('.yield-error')?.textContent.includes('Synthetic answer rejection')`)
       assert.equal(await evaluate(window, `document.querySelector('.yield-custom textarea').value`), 'My own approach\nwith details')
-      assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+      assert.equal(await evaluate(window, `document.querySelector('.composer-input .reference-composer').value`), 'Keep my unsent draft')
       assert.equal(await evaluate(window, `(() => {
         const button = document.querySelector('.yield-continue'), rect = button.getBoundingClientRect();
         const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
@@ -424,7 +425,7 @@ async function runViewport(origin: string, width: number, height: number) {
       await evaluate(window, `document.querySelector('.yield-continue').click()`)
       await waitFor(window, `!document.querySelector('.yield-question')`)
       assert.deepEqual(answers.at(-1), { requestId: current.id, customText: 'My own approach\nwith details' })
-      assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+      assert.equal(await evaluate(window, `document.querySelector('.composer-input .reference-composer').value`), 'Keep my unsent draft')
       console.log(`LAYOUT_YIELD_CUSTOM ${JSON.stringify({ width, count, bounds })}`)
     }
 
@@ -468,7 +469,7 @@ async function runViewport(origin: string, width: number, height: number) {
     await evaluate(window, `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}))`)
     await waitFor(window, `!document.querySelector('.yield-question')`)
     assert.deepEqual(answers.at(-1), { requestId: `binary-${width}`, option: binaryOptions[0] })
-    assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+    assert.equal(await evaluate(window, `document.querySelector('.composer-input .reference-composer').value`), 'Keep my unsent draft')
 
     pending.set(root, { ...question(root, `work-${width}`), question: 'Apply this saved work proposal?',
       options: [WORK_APPROVE, WORK_REJECT], defaultOption: WORK_REJECT, brief: decisionBrief,
@@ -499,13 +500,13 @@ async function runViewport(origin: string, width: number, height: number) {
     await new Promise(resolve => setTimeout(resolve, 1600))
     assert.equal(answers.length, expiredAnswers, 'Client expiry must never resolve the question')
     live.chat(root, { event: 'tool_call', content: 'Waiting', toolCall: { name: 'ask', arguments: {} } })
-    await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input textarea')?.disabled === false`)
+    await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input .reference-composer')?.disabled === false`)
     assert.equal(await evaluate(window, `!!document.querySelector('[aria-label="Stop waiting"]')`), false, 'Do not add an unrelated composer Stop control')
     await evaluate(window, `document.querySelector('.yield-cancel').click()`)
-    await waitFor(window, `!document.querySelector('.yield-question') && !document.querySelector('.composer-input textarea').disabled`)
+    await waitFor(window, `!document.querySelector('.yield-question') && !document.querySelector('.composer-input .reference-composer').disabled`)
     assert.equal(cancellations.at(-1)?.requestId, expiring.id)
     assert.equal(answers.length, expiredAnswers, 'Cancel task must cancel without adopting the default')
-    assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+    assert.equal(await evaluate(window, `document.querySelector('.composer-input .reference-composer').value`), 'Keep my unsent draft')
     pending.set(root, question(root, `cancel-card-${width}`))
     live.publisher.invalidateSessions(root)
     await waitFor(window, `!!document.querySelector('.yield-cancel')`)
@@ -533,7 +534,7 @@ async function runViewport(origin: string, width: number, height: number) {
     pending.set(reflector, question(reflector, `reflector-${width}`))
     await window.loadURL(`${origin}/chat/${encodeURIComponent(reflector)}`)
     await waitFor(window, `!!document.querySelector('.yield-continue')`)
-    assert.equal(await evaluate(window, `!!document.querySelector('.composer-input textarea')`), false)
+    assert.equal(await evaluate(window, `!!document.querySelector('.composer-input .reference-composer')`), false)
     await inspect(window, `yield-reflector-${width}`)
 
     pending.set(child, question(child, `child-${width}`, true))
