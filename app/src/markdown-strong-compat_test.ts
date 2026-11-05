@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Marked } from 'marked'
-import { paddedStrongCompatibility } from './markdown-strong-compat.ts'
+import { createMarkdown } from './markdown.ts'
+import { exitStrongCompatibility } from './markdown-strong-compat.ts'
 
-const standard = new Marked({ breaks: true })
-const compatible = new Marked({ breaks: true }).use(paddedStrongCompatibility())
-const render = (source: string) => compatible.parse(source, { async: false })
+const standard = createMarkdown({ math: false })
+const compatible = createMarkdown({ math: false }).use(exitStrongCompatibility)
+const render = (source: string) => compatible.render(source)
 
 test('display tolerates padded Chinese strong labels without changing source', () => {
   const source = '**验证： **4 项专项测试及 Vue 类型检查通过。'
@@ -32,13 +32,13 @@ test('standard Markdown stays byte-for-byte compatible', () => {
     'a** label **b', '** line\nbreak **', '** nested *text* **', '** [link](url) **',
     '** $math$ **', '** `code` **', '** <b>html</b> **',
   ]
-  for (const source of cases) assert.equal(render(source), standard.parse(source, { async: false }), source)
+  for (const source of cases) assert.equal(render(source), standard.render(source), source)
 })
 
 test('compatibility applies in blockquotes and tables, with escape boundaries intact', () => {
   assert.match(render('> ** 验证 **通过'), /<blockquote>\n<p><strong>验证<\/strong>通过/)
   assert.match(render('| 结果 |\n| --- |\n| ** 验证 ** |'), /<td><strong>验证<\/strong><\/td>/)
-  assert.equal(render(String.raw`\** 验证 **`), standard.parse(String.raw`\** 验证 **`, { async: false }))
+  assert.equal(render(String.raw`\** 验证 **`), standard.render(String.raw`\** 验证 **`))
 })
 
 test('CJK punctuation-ended strong remains bold before adjacent prose', () => {
@@ -66,7 +66,7 @@ test('CJK repair preserves protected, ambiguous and incomplete Markdown', () => 
     'a**label.**b', 'a**重点。**说明', '**重点。**English',
     '**重点。', '**重点。*', '**重点。**',
   ]
-  for (const source of cases) assert.equal(render(source), standard.parse(source, { async: false }), source)
+  for (const source of cases) assert.equal(render(source), standard.render(source), source)
   // Streaming reparses the accumulated source; only the completed boundary changes.
   assert.equal(render('**重点。**说'), '<p><strong>重点。</strong>说</p>\n')
 })

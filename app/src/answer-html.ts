@@ -1,12 +1,12 @@
 import DOMPurify from 'dompurify'
-import { Marked, type MarkedExtension } from 'marked'
+import { createMarkdown } from './markdown.ts'
 import { createApp, type App, type Directive } from 'vue'
 import AnswerFlowView from './components/AnswerFlow.vue'
 import { parseAnswerFlow, ANSWER_FLOW_SOURCE_LIMIT } from './answer-flow'
 
 export const ANSWER_CLASSES = ['answer-html', 'answer-grid', 'answer-card', 'answer-flow', 'answer-callout', 'answer-muted', 'answer-badge'] as const
 const tags = ['div', 'section', 'article', 'header', 'footer', 'aside', 'p', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 's', 'br', 'hr', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'a', 'details', 'summary', 'table', 'thead', 'tbody', 'tr', 'th', 'td']
-const markdown = new Marked({ breaks: true })
+const markdown = createMarkdown({ math: false })
 const themeVariables = new Set(('bg surface surface-soft surface-muted code-bg code-inline-bg border border-soft border-strong border-hover text text-body text-secondary text-muted text-faint text-on-dark text-on-accent accent accent-hover accent-bg accent-bg-hover info info-bg success success-bg warning warning-bg danger danger-bg selection-bg selection-border radius radius-sm radius-control radius-overlay shadow-color shadow-soft-color font font-mono').split(' ').map(name => `--answer-${name}`))
 // Decode CSS escapes before inspecting parsed tokens (including escaped resource functions).
 function decoded(value: string): string {
@@ -71,7 +71,7 @@ function fragment(source: string): { html: string; css: string } {
   const template = clean(inert.innerHTML, true)
   for (const element of template.content.querySelectorAll('[data-md]')) {
     if (element.parentElement?.closest('[data-md]')) continue
-    element.innerHTML = markdown.parse(element.textContent || '', { async: false }) as string
+    element.innerHTML = markdown.render(element.textContent || '')
     element.removeAttribute('data-md')
   }
   return { html: clean(template.innerHTML).innerHTML, css }
@@ -80,13 +80,6 @@ function fragment(source: string): { html: string; css: string } {
 export function renderAnswerHtml(source: string): string {
   const payload = fragment(source)
   return `<div class="answer-html" data-answer-fragment="${encodeURIComponent(JSON.stringify(payload))}"></div>`
-}
-export function answerHtmlExtension(): MarkedExtension {
-  return { renderer: { code(token) {
-    if (token.lang?.trim() === 'answer-flow') return renderAnswerFlow(token.text)
-    if (token.lang?.trim() !== 'answer-html') return false
-    return renderAnswerHtml(token.text)
-  } } }
 }
 // Answer payloads are already inert/encoded here. Unlike normal Markdown,
 // their contents are re-sanitized at mounting, after all caller postprocessing.
@@ -150,3 +143,13 @@ export function mountAnswerHtml(root: HTMLElement): void {
 }
 // Dispose native Vue stores/listeners before v-html replaces their DOM, and on teardown.
 export const vAnswerHtml: Directive<HTMLElement> = { mounted: mountAnswerHtml, beforeUpdate: (root, _binding, vnode, previous) => { if (vnode.props?.innerHTML !== previous.props?.innerHTML) disposeAnswerHtml(root) }, updated: mountAnswerHtml, beforeUnmount: disposeAnswerHtml }
+
+export function exitAnswerHtml(md: import('markdown-exit').MarkdownExit): void {
+  const fence = md.renderer.rules.fence!
+  md.renderer.rules.fence = (tokens, index, ...args) => {
+    const token = tokens[index]!
+    if (token.info.trim() === 'answer-html') return renderAnswerHtml(token.content.replace(/\n$/, ''))
+    if (token.info.trim() === 'answer-flow') return renderAnswerFlow(token.content.replace(/\n$/, ''))
+    return fence(tokens, index, ...args)
+  }
+}
