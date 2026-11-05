@@ -88,3 +88,23 @@ Installation does not make conversations available offline or keep the backend
 running. The production service worker does not cache application pages, API
 responses, or conversation history; the installed app still needs a connection
 and may require a separate login.
+
+## Inline image references in chat
+
+Pasted browser images with generic clipboard names (such as `image.png`) receive
+an explicit “Pasted image” name with a distinguishing suffix. This is a generated
+label, not recovery of an unavailable original filename. Other supplied names,
+including names from the file picker or desktop native file clipboard, are kept.
+
+Each attached image chip has an **Insert image reference** action, available by
+keyboard as well as pointer. It inserts a literal Markdown code-span reference at
+the message selection/caret. References contain the readable filename and stable
+draft identity; removing another image does not renumber them. Removing an image
+also removes its exact inserted tokens from the current draft. Image annotation
+retains that identity.
+
+On send (including answers to pending questions), the ordinary message text
+includes a reference table pairing each image token with its uploaded path and
+its position in the message's media array. This table remains readable in chat
+history and model input; it does not require a separate rich-text format or
+backend persistence schema.
