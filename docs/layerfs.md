@@ -25,6 +25,29 @@ in that source layout), not an arbitrary module suggested by a model.
   across Projects; operators must also avoid filesystem aliases to shared data.
 - Provision the image, volume, daemon and worker before calling this tool.
   This version does not implement `@layerfs/runtime` provisioning or project removal.
+- Use a plain Docker local volume with no bind-driver options. The tested upstream
+  rejects bind-backed volumes even when the backing directory is on ext4.
+- The tested Windows Store installer requires the official WSL worker to run as
+  uid 0, matching the daemon's Store ownership. This requires explicit operator
+  authorization; the Shadow adapter does not elevate privileges.
+
+### Verified Windows compatibility (2026-11-05)
+
+Focused real Windows/WSL tests passed on official upstream commit
+`73d974dea8a8d0b056a16dc6b2380d89438ce484`, using matching SDK, daemon and sealed
+addon bundle, Docker 29.1.3/API 1.52, an authorized root worker and a private plain
+local volume. Verified: create/fork/mount, ordinary Shadow read/write/exec,
+concurrent workspace isolation, commit/history/load restoration, dirty-unmount
+refusal and clean unmount. This is not a qualification of crash durability,
+large-workspace performance, merge/publish, or cross-worker/WSL lifecycle survival.
+
+Release tag v1.1.0 (`9f97a7ec95b662e9cb288704afa165feff132cfa`) hard-codes Docker
+API 1.54 and failed mount on that Docker server. The fixed commit above negotiates
+API 1.48–1.54; do not identify compatible builds by the package version alone.
+SDK layouts differ: the release tag uses `api/agent/sdk/src/index.js`, whereas
+that fixed commit uses `api/agent/src/index.js`. Select the entry from the pinned
+checkout and keep the SDK/native bundle matched. Mac qualification is separate;
+Windows success is not evidence that the Mac deployment works.
 
 Set `SHADOW_LAYERFS_CONFIG` in the Shadow backend's environment to an absolute
 operator-owned JSON file, outside model-editable workspaces. Do not put credentials
