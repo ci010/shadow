@@ -27,9 +27,7 @@ test('one release entry selects desktop/mobile/all, shares preparation and retai
     assert(steps.some((step: { run?: string }) => step.run?.includes('pnpm desktop:package')))
     assert(steps.some((step: { uses?: string }) => step.uses === './.github/actions/restore-prepared'))
     assert(!steps.some((step: { run?: string }) => step.run?.includes('pnpm typecheck')))
-    const source = steps.find((step: { with?: { repository?: string } }) => step.with?.repository === 'aria2/aria2')
-    assert.equal(source.with.ref, '02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a')
-    const nativeBuild = steps.find((step: { run?: string }) => step.run?.includes('scripts/build-aria2-native.sh'))
+    const nativeBuild = steps.find((step: { uses?: string }) => step.uses === './.github/actions/build-aria2')
     const packageIndex = steps.findIndex((step: { run?: string }) => step.run?.includes('pnpm desktop:package'))
     assert(steps.indexOf(nativeBuild) >= 0 && steps.indexOf(nativeBuild) < packageIndex)
   }
@@ -118,4 +116,11 @@ test('daily builds reuse native release gates and skip only previously successfu
     })
     assert.equal(output, expected)
   }
+})
+
+test('aria2 uses pinned release downloads without build dependencies', async () => {
+  const action = await yaml('../.github/actions/build-aria2/action.yml')
+  assert.equal(action.runs.steps.length, 1)
+  assert.match(action.runs.steps[0].run, /scripts\/download-aria2.ts/)
+  assert.doesNotMatch(JSON.stringify(action), /checkout|brew|apt-get|msys2|actions\/cache/)
 })

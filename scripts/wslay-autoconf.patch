@@ -1,0 +1,15 @@
+--- a/deps/wslay/configure.ac
++++ b/deps/wslay/configure.ac
+@@ -88,11 +88,7 @@
+ ])
+ 
+ # Need winsock2.h for ntoh*/hton* functions.
+-case "$target" in
+-  *mingw*)
+-    AC_CHECK_HEADERS([winsock2.h])
+-    ;;
+-esac
++AS_CASE(["$target"], [*mingw*], [AC_CHECK_HEADERS([winsock2.h])])
+ 
+ # Checks for typedefs, structures, and compiler characteristics.
+ AC_TYPE_SIZE_T
