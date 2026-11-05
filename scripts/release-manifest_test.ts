@@ -267,3 +267,19 @@ test('native safegit preparation preserves shared source identity on Windows and
     })
   }
 })
+
+test('downloaded aria2 notices preserve prepared identity but remain required by the package inventory', async () => {
+  await withTempWorkspace(async root => {
+    const target = desktopTarget('linux', 'x64')
+    const packaged = await fixture(root, target)
+    const before = await sourceFingerprint(root)
+    await file(root, 'desktop/aria2/THIRD-PARTY-NOTICES.txt', 'dependency license notices')
+    assert.equal(await sourceFingerprint(root), before)
+    const manifest = await createReleaseManifest(root, before, target)
+    assert(manifest.files['resources/aria2/THIRD-PARTY-NOTICES.txt'])
+    await file(packaged, 'resources/release-manifest.v1.json', JSON.stringify(manifest))
+    await assert.rejects(verifyReleaseManifest(packaged, root, target), /inventory differs/)
+    await file(packaged, 'resources/aria2/THIRD-PARTY-NOTICES.txt', 'dependency license notices')
+    await verifyReleaseManifest(packaged, root, target)
+  })
+})

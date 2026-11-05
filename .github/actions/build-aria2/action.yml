@@ -1,0 +1,8 @@
+name: Download pinned native aria2
+description: Verify the pinned archive digest, safely unpack and validate the complete native bundle.
+runs:
+  using: composite
+  steps:
+    - name: Download and validate native aria2 bundle
+      shell: bash
+      run: pnpm exec tsx scripts/download-aria2.ts
