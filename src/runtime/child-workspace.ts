@@ -1,4 +1,5 @@
 import WebSocket from 'ws'
+import { compress } from 'hono/compress'
 import { ChildMicroApps } from './child-microapps.ts'
 import { upgradeGatewayWebSocket } from '../gateway/websocket.ts'
 import { bridgeSockets } from '../gateway/socket-bridge.ts'
@@ -14,7 +15,15 @@ export function childWorkspacePlugin(options: {
   fetch?: typeof fetch
 }): GatewayPlugin & { close(): Promise<void> } {
   const microApps = new ChildMicroApps()
-  const plugin: GatewayPlugin = app => app.all('*', async c => {
+  const compressHistory = compress({ encoding: 'gzip' })
+  // Upstream fetch decodes the tunnel response. Negotiate the last loopback hop
+  // independently; do not compress realtime or binary/range media responses.
+  const plugin: GatewayPlugin = app => app.all('*', async (c, next) => {
+    if (c.req.method === 'GET' && /^\/(?:projects\/[^/]+\/)?api\/chat\/session$/.test(c.req.path)) {
+      return compressHistory(c, next)
+    }
+    return next()
+  }, async c => {
     const url = new URL(c.req.url)
     const path = `${url.pathname}${url.search}`
     if (!deviceUiRequestPath(path, c.req.method)) return c.json({ error: 'not_found' }, 404)
@@ -30,6 +39,10 @@ export function childWorkspacePlugin(options: {
       headers.set('X-Shadow-Device-Proof', proof)
       headers.set('X-Shadow-Ui-Path', path)
       headers.set('X-Shadow-Ui-Method', c.req.method)
+      // Older Child versions forwarded fetch-decoded bodies with wire headers.
+      // Main must only send compressed inner responses to clients declaring
+      // that they can normalize those headers and negotiate the last hop.
+      headers.set('X-Shadow-Ui-Compression', 'decoded-v1')
       if (c.req.header('upgrade')?.toLowerCase() === 'websocket') {
         if (!deviceUiResourcePath(path) || c.req.header('sec-websocket-protocol') !== 'vite-hmr') return c.notFound()
         endpoint.pathname = endpoint.pathname.slice(0, -DEVICE_UI_REQUEST.length) + DEVICE_UI_HMR
@@ -77,9 +90,19 @@ export function childWorkspacePlugin(options: {
         }
         await microApps.stop(appPath)
       }
+      // Node fetch transparently decodes gzip/deflate/br but retains wire headers.
+      // Do not label decoded bytes as compressed (or keep their encoded length).
+      // The transport's chunk framing is hop-by-hop, not part of this response.
+      const responseHeaders = new Headers(response.headers)
+      responseHeaders.delete('transfer-encoding')
+      const encoding = responseHeaders.get('content-encoding')
+      if (encoding && encoding.split(',').every(value => ['gzip', 'x-gzip', 'deflate', 'br'].includes(value.trim().toLowerCase()))) {
+        responseHeaders.delete('content-encoding')
+        responseHeaders.delete('content-length')
+      }
       // Fetch headers are immutable; the local gateway must still add its CORS headers.
       return new Response(response.body, {
-        status: response.status, statusText: response.statusText, headers: new Headers(response.headers),
+        status: response.status, statusText: response.statusText, headers: responseHeaders,
       })
     } catch (error) {
       // Never log endpoint, proof, credentials, arbitrary exception messages or response bodies.

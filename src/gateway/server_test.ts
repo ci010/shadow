@@ -367,3 +367,17 @@ test('gateway CORS preserves route-exposed image provenance and range headers', 
   const range = await app.request('/api/range', { headers })
   assertEquals(range.headers.get('Access-Control-Expose-Headers'), 'Content-Length, Content-Range, Accept-Ranges, etag')
 })
+
+
+test('CORS adds Origin without replacing response negotiation Vary fields', async () => {
+  const app = new Hono()
+  registerGatewayRoutes(app, [gateway => {
+    gateway.get('/api/encoding', c => c.text('fixture', 200, { Vary: 'Accept-Encoding' }))
+    gateway.get('/api/wildcard', c => c.text('fixture', 200, { Vary: '*' }))
+    gateway.get('/api/origin', c => c.text('fixture', 200, { Vary: 'accept-encoding, origin' }))
+  }], { allowedOrigins: ['http://localhost:5273'] }, {})
+  const headers = { Origin: 'http://localhost:5273' }
+  assert.equal((await app.request('/api/encoding', { headers })).headers.get('Vary'), 'Accept-Encoding, Origin')
+  assert.equal((await app.request('/api/wildcard', { headers })).headers.get('Vary'), '*')
+  assert.equal((await app.request('/api/origin', { headers })).headers.get('Vary'), 'accept-encoding, origin')
+})
