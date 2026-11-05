@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { basename, join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { Hono } from 'hono'
 import { CopilotAuthenticatorV2, CopilotProviderV2 } from './copilot-v2.ts'
 import { copilotModelEndpoint } from './copilot.ts'
@@ -43,7 +44,7 @@ function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, ca
     },
     fetch: async () => { throw new Error('Unexpected OAuth exchange') },
   })
-  const posts: Array<{ path: string; body: Record<string, unknown> }> = []
+  const posts: Array<{ path: string; body: Record<string, unknown>; encoding: string | null }> = []
   let modelReads = 0
   let modelResponse = metadata
   let postResponse: Response | undefined
@@ -56,7 +57,9 @@ function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, ca
     }
 
     assert.equal(init?.method, 'POST')
-    posts.push({ path, body: JSON.parse(String(init.body)) })
+    const encoding = new Headers(init.headers).get('content-encoding')
+    const json = encoding === 'gzip' ? gunzipSync(init.body as Buffer).toString('utf8') : String(init.body)
+    posts.push({ path, body: JSON.parse(json), encoding })
     if (postResponse) return postResponse.clone()
     if (path === '/responses') return Response.json(responsesReply)
     assert.equal(path, '/chat/completions')
@@ -75,7 +78,7 @@ for (const model of [astra.id, dual.id]) test(`${model}: persisted runtime event
   const f = fixture(t)
   const history: ChatMessage[] = [
     { role: 'system', content: 'Stable policy. Current runtime contracts remain authoritative.' },
-    { role: 'user', content: 'Synthetic task' },
+    { role: 'user', content: 'Synthetic task 检查🔎\n'.repeat(1500) },
     { role: 'assistant', content: null, tool_calls: [{ id: 'first', type: 'function', function: { name: 'read', arguments: '{}' } }] },
     { role: 'tool', tool_call_id: 'first', content: 'First result' },
   ]
@@ -95,6 +98,7 @@ for (const model of [astra.id, dual.id]) test(`${model}: persisted runtime event
       { role: 'tool', tool_call_id: 'second', content: 'Second result' },
     )
   }
+  assert(f.posts.every(post => post.encoding === (model === astra.id ? 'gzip' : null)))
   assert(f.posts.every(post => !('prompt_cache_key' in post.body)))
   const field = model === astra.id ? 'input' : 'messages'
   const first = f.posts[0].body[field] as unknown[]

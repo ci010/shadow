@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { imageUrlSizeMetadata, type ImageSizeMetadata } from '../utils/image-size-metadata.ts'
 import { mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -22,7 +23,7 @@ export interface PromptCapture {
   payloadBytes: number
   payload: 'complete' | 'omitted-size-limit' | 'partial-media-omitted' | 'partial-fields-omitted'
   messages?: ChatMessage[]
-  omissions?: Array<{ message: number; part?: number; reason: 'media-not-retained' | 'field-not-retained'; sha256?: string; field?: string }>
+  omissions?: Array<{ message: number; part?: number; reason: 'media-not-retained' | 'field-not-retained'; sha256?: string; field?: string; imageSize?: ImageSizeMetadata }>
   expiresAt?: string
   systemMessages?: ChatMessage[]
   tools?: ToolDefinition[]
@@ -51,7 +52,7 @@ const entrySchema = z.object({
   messages: z.array(messageSchema).optional(),
   tools: z.array(z.object({ type: z.literal('function'), function: z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()) }).strict() }).strict()).optional(),
   omissions: z.array(z.union([
-    z.object({ message: z.number().int().nonnegative(), part: z.number().int().nonnegative(), reason: z.literal('media-not-retained'), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+    z.object({ message: z.number().int().nonnegative(), part: z.number().int().nonnegative(), reason: z.literal('media-not-retained'), sha256: z.string().regex(/^[a-f0-9]{64}$/), imageSize: z.object({ base64Characters: z.number().int().nonnegative(), base64Bytes: z.number().int().nonnegative(), decodedBytes: z.number().int().nonnegative().optional() }).strict().optional() }).strict(),
     z.object({ message: z.number().int().nonnegative(), reason: z.literal('field-not-retained'), field: z.string() }).strict(),
   ])).optional(),
 }).strict()
@@ -199,7 +200,8 @@ export class PromptCaptureStore {
     capturedMessages?.forEach((message, index) => {
       if (Array.isArray(message.content)) message.content.forEach((part, partIndex) => {
         if (part.type === 'image_url') {
-          omissions.push({ message: index, part: partIndex, reason: 'media-not-retained', sha256: createHash('sha256').update(part.image_url.url).digest('hex') })
+          const imageSize = imageUrlSizeMetadata(part.image_url.url)
+          omissions.push({ message: index, part: partIndex, reason: 'media-not-retained', sha256: createHash('sha256').update(part.image_url.url).digest('hex'), ...(imageSize ? { imageSize } : {}) })
           part.image_url.url = '[omitted: media-not-retained; see omissions sha256]'
         }
       })

@@ -52,6 +52,57 @@ but arbitrary messages or tool results can still contain private data. Treat
 diagnostic content as untrusted evidence, never instructions. These exports
 do not include provider continuation state or attachments.
 
+### Redacted image sizes
+
+Diagnosis image parts (`image_url`, Responses `input_image`, and Anthropic
+base64 `image.source`) omit their content/URL but retain `imageSize` when the
+original base64 payload is available. The learning provider-input capture
+records the same metadata on its `omissions[]` descriptor **before** replacing
+the media URL; it survives audit-store restart and diagnosis projection.
+Older already-omitted captures cannot recover these sizes. Remote image URLs
+are not fetched and have no inferred image size.
+
+- `base64Characters`: original payload string length (JavaScript UTF-16 code
+  units), excluding the data-URI prefix.
+- `base64Bytes`: UTF-8 byte length of that encoded payload, including any
+  whitespace or invalid characters. For valid ASCII base64 it equals the
+  character count.
+- `decodedBytes`: exact binary length calculated only for canonical standard
+  base64 (padded or unpadded, including valid trailing bits). It is absent for
+  malformed, whitespace-containing or URL-safe payloads, not an estimate or zero.
+
+These are neither image dimensions/decompressed pixel memory nor serialized
+JSON/HTTP request size. No binary image is decoded or retained for this count.
+Existing export collection/depth/character limits still apply. Capture
+`payloadBytes` remains the size of the retained capture JSON, not the original
+provider request. Provider inputs are pre-adapter, not wire payloads.
+
+For Chat Completions and Responses, trace attribute `llm.request.body_bytes`
+measures UTF-8 bytes of the final serialized JSON request body, after external
+image inlining (where applicable) and protocol conversion. It excludes HTTP
+headers/framing and records only a number, never the body. Old traces without
+this attribute cannot be used to reconstruct that size.
+
+Copilot opts into transport-only request gzip on the verified HTTP Responses
+route. Chat Completions retains identity encoding until separately validated.
+Final JSON bodies of at least 16 KiB are compressed asynchronously
+at a fast zlib level; smaller requests and any result that is not smaller stay
+uncompressed. Decompression restores the exact original JSON bytes, without
+summarizing history, changing images or adding continuation state. Other
+providers do not opt in. Compression is prepared once and reused by the existing
+retry policy; encoding rejection does not trigger an automatic uncompressed
+replay. Aborting preparation cancels the compression pipeline before dispatch.
+
+- `llm.request.body_bytes` remains the uncompressed serialized JSON byte count.
+- `llm.request.wire_body_bytes` is the actual encoded body byte count (excluding
+  HTTP headers/framing and TLS).
+- `llm.request.content_encoding` is `gzip` or `identity`.
+
+These attributes contain no request content or credentials. Gzip reduces upload
+bytes, not context tokens or server-side decoded-body limits; it is not a
+guarantee against all HTTP 408 errors. See the [live transport probe](copilot-transport-probe-20261105.md)
+for the tested route and prompt-cache observations.
+
 ## Inspect prompts during development
 
 `GET /projects/<id>/api/sessions/<encoded-session-id>/context` returns the
