@@ -17,6 +17,7 @@ async function fixture(root: string) {
   await mkdir(join(root, 'scripts'))
   const script = await readFile(new URL('./build-aria2-native.sh', import.meta.url))
   await writeFile(join(root, 'scripts', 'build-aria2-native.sh'), script)
+  await writeFile(join(root, 'scripts', 'wslay-autoconf.patch'), await readFile(new URL('./wslay-autoconf.patch', import.meta.url)))
   await writeFile(join(directory, 'BUILD.md'), Buffer.alloc(200, 68))
   const binary = Buffer.alloc(2304)
   binary.write('MZ')

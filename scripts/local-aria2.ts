@@ -85,6 +85,7 @@ export async function prepareLocalAria2(root: string, runner: PreparationOperati
   const source = join(directory, `aria2-${ARIA2_VERSION}-source.tar.gz`)
   await mkdir(directory, { recursive: true })
   await cp(join(root, 'scripts', 'build-aria2-native.sh'), join(directory, 'build-aria2-native.sh'))
+  await cp(join(root, 'scripts', 'wslay-autoconf.patch'), join(directory, 'wslay-autoconf.patch'))
   const needsBinary = !await exists(binary)
   const needsSource = !await exists(source) || !await exists(join(directory, 'COPYING'))
     || !await exists(join(directory, 'LICENSE.OpenSSL'))
