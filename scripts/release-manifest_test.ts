@@ -35,6 +35,8 @@ async function fixture(root: string, target: DesktopTarget = windows): Promise<s
     ['desktop/aria2/aria2-1.37.0-source.tar.gz', 'synthetic source'],
     ['desktop/aria2/BUILD.md', 'synthetic build guide'],
     ['desktop/aria2/build-aria2-native.sh', 'synthetic build script'],
+    ['desktop/aria2/wslay-autoconf.patch', 'synthetic build patch'],
+    ['desktop/aria2/THIRD-PARTY-NOTICES.txt', 'synthetic third-party notices'],
   ]) await file(root, path, text)
   const sourceHash = await sourceFingerprint(root)
   await createReleaseManifest(root, sourceHash, target)
@@ -45,7 +47,9 @@ async function fixture(root: string, target: DesktopTarget = windows): Promise<s
     ['desktop/backend/dist/src/index.js', 'resources/backend/dist/src/index.js'],
     ['app/dist/index.html', 'resources/app-dist/index.html'],
     ['desktop/service/ShadowService.exe', 'resources/service/ShadowService.exe'],
-    ...['COPYING', 'LICENSE.OpenSSL', 'aria2-1.37.0-source.tar.gz', 'BUILD.md', 'build-aria2-native.sh',
+    // Model the real electron-builder allowlist, not a separately maintained copy.
+    ...[...JSON.parse(await readFile(new URL('../desktop/package.json', import.meta.url), 'utf8'))
+      .build.extraResources.find((resource: { from: string }) => resource.from === 'aria2').filter,
       target.platform === 'win32' ? 'aria2c.exe' : 'aria2c'].map(name =>
       [`desktop/aria2/${name}`, `resources/aria2/${name}`]),
     ['desktop/package.json', 'archive/package.json'],
@@ -89,6 +93,25 @@ test('release verification rejects tampered or extra packaged resources', async 
     await assert.rejects(verifyReleaseManifest(packaged, root, windows), /inventory/)
   })
 })
+
+for (const target of [windows, desktopTarget('darwin', 'arm64'), desktopTarget('darwin', 'x64')]) {
+  test(`${target.platform}/${target.arch} packages and verifies native aria2 notices and source patch`, async () => {
+    await withTempWorkspace(async root => {
+      const packaged = await fixture(root, target)
+      await verifyReleaseManifest(packaged, root, target)
+      for (const name of ['THIRD-PARTY-NOTICES.txt', 'wslay-autoconf.patch']) {
+        const path = join(packaged, target.resourcesRelativePath, 'aria2', name)
+        const original = await readFile(path, 'utf8')
+        await writeFile(path, 'tampered')
+        await assert.rejects(verifyReleaseManifest(packaged, root, target), /Packaged file differs/)
+        await rm(path)
+        await assert.rejects(verifyReleaseManifest(packaged, root, target), /inventory/)
+        await writeFile(path, original)
+      }
+      await verifyReleaseManifest(packaged, root, target)
+    })
+  })
+}
 
 test('release inventory omits dependency Git placeholders removed by packaging but still rejects extras', async () => {
   await withTempWorkspace(async root => {
@@ -266,4 +289,21 @@ test('native safegit preparation preserves shared source identity on Windows and
       await assert.rejects(createReleaseManifest(root, source, windows), /Source changed/)
     })
   }
+})
+
+test('downloaded aria2 notices preserve prepared identity but remain required by the package inventory', async () => {
+  await withTempWorkspace(async root => {
+    const target = desktopTarget('linux', 'x64')
+    const packaged = await fixture(root, target)
+    const before = await sourceFingerprint(root)
+    await file(root, 'desktop/aria2/THIRD-PARTY-NOTICES.txt', 'dependency license notices')
+    assert.equal(await sourceFingerprint(root), before)
+    const manifest = await createReleaseManifest(root, before, target)
+    assert(manifest.files['resources/aria2/THIRD-PARTY-NOTICES.txt'])
+    await file(packaged, 'resources/release-manifest.v1.json', JSON.stringify(manifest))
+    await rm(join(packaged, 'resources/aria2/THIRD-PARTY-NOTICES.txt'))
+    await assert.rejects(verifyReleaseManifest(packaged, root, target), /inventory differs/)
+    await file(packaged, 'resources/aria2/THIRD-PARTY-NOTICES.txt', 'dependency license notices')
+    await verifyReleaseManifest(packaged, root, target)
+  })
 })

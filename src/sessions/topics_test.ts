@@ -64,7 +64,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         await store.saveState(id, state)
       },
       assertFolderAccess(id) { assert(states.has(id)) },
-      assertInitiativeAccess(id) { if (id !== 'work') throw new Error('Unknown Project initiative') },
+      assertInitiativeAccess(id) { if (id !== 'work:root') throw new Error('Unknown Project initiative') },
       async updateConversationMetadata(id, topic) {
         const state = states.get(id)
         assert(state)
@@ -95,8 +95,10 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       requestId: randomUUID(), topic: 'MCP configuration',
       model: 'synthetic', effort: 'high',
       focus: 'MCP configuration and skill declarations',
-      folderId: folder.id, initiativeId: 'work', initialMessage: 'Read the selected skill and explain how to configure MCP.',
+      folderId: folder.id, workRoot: 'work:root', initialMessage: 'Read the selected skill and explain how to configure MCP.',
     }
+    await assert.rejects(service.create({ ...request, initiativeId: 'old-slug' }, 'web:chat-admin'), /Unrecognized key/)
+    await assert.rejects(service.create({ ...request, workRoot: 'old-slug' }, 'web:chat-admin'), /canonical Work key/)
     const [created, retry] = await Promise.all([
       service.create(request, 'web:chat-admin'), service.create(request, 'web:chat-admin'),
     ])
@@ -113,7 +115,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.equal(saved.workspaceRoot, undefined)
     assert.equal(saved.createdBySessionId, 'web:chat-admin')
     assert.equal(saved.workdir?.workdirId, `local-project-v1:${folder.id}`)
-    assert.equal(saved.initiativeId, 'work')
+    assert.equal(saved.initiativeId, 'work:root')
     assert.match(saved.topicRequestHash ?? '', /^[a-f0-9]{64}$/)
     assert.equal((await store.getState(created.sessionId))?.topicRequestHash, saved.topicRequestHash)
     assert.equal(changes.filter(id => id === created.sessionId).length, 1)

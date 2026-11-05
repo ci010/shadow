@@ -80,7 +80,7 @@ export async function sourceFingerprint(root: string): Promise<string> {
         if (input === 'desktop/service' && name === 'ShadowService.exe') continue
         if (input === 'desktop/safegit' && ['safegit', 'safegit.exe', 'release.json', 'LICENSE'].includes(name)) continue
         if (input === 'desktop/aria2' && ['aria2c', 'aria2c.exe', 'COPYING', 'LICENSE.OpenSSL',
-          'aria2-1.37.0-source.tar.gz', 'build-aria2-native.sh'].includes(name)) continue
+          'aria2-1.37.0-source.tar.gz', 'build-aria2-native.sh', 'THIRD-PARTY-NOTICES.txt', 'wslay-autoconf.patch'].includes(name)) continue
         entries.push([`${input}/${name}`, hash(bytes)])
       }
     } else {

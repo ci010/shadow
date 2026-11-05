@@ -16,7 +16,7 @@ restrictions. Reading this guide grants no capabilities.
 Reuse durable Project sessions; they are root peers, not coordinator children.
 `search({ handler: "grep", path: "v:sessions", query })` searches histories and session metadata.
 Read a matching `v:sessions/<session-id>/brief` for title and description,
-folderId, initiativeId, createdBySessionId, status and conversationUrl.
+folderId, workRoot, createdBySessionId, status and conversationUrl.
 Use `handler: "glob", path: "v:sessions"` with `query: "*/brief"` to list sessions. `session` creates
 or renames conversations; it does not create work or define acceptance.
 Use `work` for work definitions, assignments, dependencies and progress.
@@ -24,7 +24,7 @@ Creator provenance is not structural ownership.
 For remote workdirs, `v:sessions` search and typed Project messaging are control-plane
 operations; other search spaces remain explicitly unsupported remotely.
 Task/call executions cannot create/manage durable sessions or register folders.
-Message admission is not acceptance, completion, or transfer of Initiative work.
+Message admission is not acceptance, completion, or transfer of Work.
 Responsibility survives sleep/recovery; inactive work needs explicit guarded
 release/handoff/claim, never automatic stealing. Work references in the first
 trusted sender envelope are context only, not authority.

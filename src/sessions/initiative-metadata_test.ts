@@ -1,27 +1,22 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { normalizeInitiativeMetadata, parseInitiativeId } from './initiative-metadata.ts'
+import { normalizeInitiativeMetadata, parseInitiativeId, parseWorkRoot } from './initiative-metadata.ts'
 
-test('legacy planning names normalize without colliding with Project or Folder identities', () => {
-  const old = { projectId: 'domain', folderId: 'resource', projectName: 'cleanup', segmentIndex: 2 }
-  assert.deepEqual(normalizeInitiativeMetadata(old), {
-    projectId: 'domain', folderId: 'resource', initiativeId: 'cleanup', segmentIndex: 2,
-  })
-  assert.equal(old.projectName, 'cleanup')
-  assert.deepEqual(normalizeInitiativeMetadata({ initiativeName: 'cleanup' }), { initiativeId: 'cleanup' })
-  assert.deepEqual(normalizeInitiativeMetadata({ initiativeId: 'cleanup' }), { initiativeId: 'cleanup' })
-  const root = 'work:11111111-1111-4111-8111-111111111111'
-  assert.deepEqual(normalizeInitiativeMetadata({ initiativeId: root }), { initiativeId: root })
+test('current Work keys retain Project and Folder metadata without old identity conversion', () => {
+  const current = { projectId: 'domain', folderId: 'resource', initiativeId: 'work:cleanup', segmentIndex: 2 }
+  assert.deepEqual(normalizeInitiativeMetadata(current), current)
+  assert.equal(parseWorkRoot('work:cleanup'), 'work:cleanup')
   assert.equal(parseInitiativeId({}), undefined)
-  assert.deepEqual(normalizeInitiativeMetadata({ preloadTools: { project: [], cron: [] } }), {
-    preloadTools: { initiative: [], cron: [] },
-  })
+  // These are persisted current Work keys, not aliases for old slugs.
+  for (const key of ['initiative:retained', 'item:retained', 'topic:web:owner']) assert.equal(parseWorkRoot(key), key)
 })
 
-test('initiative metadata rejects corrupt, unsafe and conflicting identities', () => {
-  for (const projectName of ['', '../other', 'a/b', 'a\\b', '.', 'a'.repeat(65), 'work:../escape', 'topic:a\\b', 'work:', 42, null]) {
-    assert.throws(() => parseInitiativeId({ projectName }), TypeError)
+test('old selectors, slugs and tool preloads fail explicitly', () => {
+  for (const record of [{ projectName: 'cleanup' }, { initiativeName: 'cleanup' }, { initiativeId: 'cleanup' },
+    { preloadTools: { project: [] } }, { preloadTools: { initiative: [] } }]) {
+    assert.throws(() => normalizeInitiativeMetadata(record), /Unsupported legacy|canonical Work key/)
   }
-  assert.throws(() => parseInitiativeId({ initiativeId: 'one', projectName: 'two' }), /Conflicting/)
-  assert.equal(parseInitiativeId({ initiativeId: 'one', projectName: 'one' }), 'one')
+  for (const key of ['', '../other', 'work:a/b', 'work:a\\b', 'work:', 'work:has space', 42, null]) {
+    assert.throws(() => parseWorkRoot(key), /canonical Work key/)
+  }
 })
