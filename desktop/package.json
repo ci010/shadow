@@ -41,7 +41,7 @@
       {
         "from": "aria2",
         "to": "aria2",
-        "filter": ["COPYING", "LICENSE.OpenSSL", "aria2-1.37.0-source.tar.gz", "BUILD.md", "build-aria2-native.sh"]
+        "filter": ["COPYING", "LICENSE.OpenSSL", "aria2-1.37.0-source.tar.gz", "BUILD.md", "build-aria2-native.sh", "wslay-autoconf.patch", "THIRD-PARTY-NOTICES.txt"]
       },
       {
         "from": "../app/dist",
