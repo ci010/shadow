@@ -69,7 +69,7 @@ test('Ctrl+F searches real conversations across all segments, split panes and li
             sessionId:state.sessionId, childSessionId:state.childSessionId, visible:state.visible,
             style:'height:100dvh',
           })});
-          app.provide(Symbol.for('shadow.live-client-pool'), {observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
+          app.provide(Symbol.for('shadow.live-client-pool'), {onDispose:() => () => {}, observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
             subscribe:() => ({close(){},ready:async()=>{}})
           })});
           app.use(router).mount('#app');`
@@ -89,7 +89,10 @@ test('Ctrl+F searches real conversations across all segments, split panes and li
           } else if (path === '/__fail') { failHistory = url.searchParams.get('value') === 'true'; json({ ok: true }) }
           else if (path.endsWith('/api/sessions/graph')) json({ sessions: ['web:chat-one', 'web:child', 'web:chat-two'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
           else if (path.endsWith('/api/sessions/stages')) json({ stages: {}, activeRequestIds: {}, recoveries: {} })
-          else if (path.endsWith('/api/chat/session')) json({ history: histories[`web:${url.searchParams.get('chatId')}`]?.messages ?? [], systemPrompt: '', tools: [] })
+          else if (path.endsWith('/api/chat/session')) {
+            const data = { history: histories[`web:${url.searchParams.get('chatId')}`]?.messages ?? [], systemPrompt: '', tools: [] }
+            json(url.searchParams.has('snapshot') ? { revision: 'a'.repeat(64), data } : data)
+          }
           else if (/\/api\/sessions\/[^/]+$/.test(path)) {
             const key = decodeURIComponent(path.split('/').at(-1)!)
             searchReads.push(key)

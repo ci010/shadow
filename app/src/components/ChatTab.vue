@@ -49,7 +49,7 @@
         <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">{{ t('Back to owning execution') }}</button>
         <details v-if="historyMarkers.length && conversationDocumentVisible && activePanel === 'conversation'" class="mobile-history">
           <summary>{{ t('Message history') }}</summary>
-          <MessageHistoryRail list :entries="historyMarkers" :container="messagesContainer" :active="visible && route.name === 'chat'" @navigate="browseHistory(); close()" />
+          <MessageHistoryRail list :entries="historyMarkers" :container="messagesContainer" :reveal="revealHistoryIndex" :active="visible && route.name === 'chat'" @navigate="browseHistory(); close()" />
         </details>
       </template>
     </template>
@@ -130,9 +130,9 @@
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :data-msg-idx="index" :can-manage="true" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
           </div>
-          <template v-for="(msg, idx) in displayMessages" :key="msg.timelineKey ?? `${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
+          <template v-for="{ msg, idx } in mountedHistoryRows" :key="msg.timelineKey ?? `${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
           <ConversationBoundary v-for="previousId in timelineBoundaries.get(idx) ?? []" :key="previousId" :previous-id="previousId" @select="selectTimelineBoundary" />
-          <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx" :data-timeline-key="msg.timelineKey">
+          <div v-if="toolActivity.has(idx) || inlineExecutions.entries.has(idx) || messageActions.entries.has(idx) || inputQuestions.entries.has(idx) || yieldDecisions.entries.has(idx) || !(msg.role === 'assistant' && !msg.event && !msg.content.trim() && !msg.media?.length && !(msg.reasoningContent || msg.reasoningText || '').trim() && !msg.isError && !msg.isSummary && !msg.sessionSource && !msg.commandReceipt) || ioAfter.get(idx)?.length || yieldDecisions.after.get(idx)?.length" class="chat-message-entry" :data-search-message-idx="idx" :data-timeline-key="msg.timelineKey" :data-history-row-key="historyRowKey({ msg, idx })">
             <div v-if="automationConversation?.automation.value?.source === 'system' && (msg.role === 'user' || (msg.role === 'assistant' && !msg.event && !!msg.content))"
               class="chat-bubble automation-bubble" :class="msg.role === 'user' ? 'chat-user' : 'chat-assistant'" :data-msg-idx="idx"
               role="article" :aria-label="t(msg.role === 'user' ? 'User message' : 'Assistant message')">
@@ -249,7 +249,7 @@
         <div v-if="historyBrowsing && !viewingPhysicalId" class="timeline-latest-anchor"><HoverInfo :text="t('Return to latest')" v-slot="{ triggerProps }">
           <button v-bind="triggerProps" type="button" class="timeline-latest" :aria-label="t('Return to latest')" @click="returnToLatest"><span class="i-lucide-arrow-down" aria-hidden="true" /></button>
         </HoverInfo></div>
-        <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
+        <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :reveal="revealHistoryIndex" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
         </div>
       </template>
     </div>
@@ -497,6 +497,7 @@ import { createMarkdown } from '../markdown.ts'
 import { t, formatNumber } from '../i18n.ts'
 import { formatUsageCost, validCostUsage, type CostUsage } from '../usage-cost.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
+import { captureHistoryScroll, historyPresentationRows, historyRevealRow, useProgressiveHistory } from '../progressive-history'
 import { useRoute, useRouter } from 'vue-router'
 import { useProviderReadiness, providerReadinessMessage, providerBlocksSubmission } from '../provider-readiness.ts'
 import { providerFailureMessage } from '../provider-setup.ts'
@@ -574,7 +575,7 @@ import AutomationConversationInfo from './AutomationConversationInfo.vue'
 import { provideModelSelection, useModelSelection } from '../model-selection.ts'
 import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
-import { timelineCanPrepend, prependScrollTop, retainTimelineRollover, timelineBoundaryPositions, reconcileTimelineKeys, limitFollowingTimeline, type TimelineSegment } from '../conversation-timeline.ts'
+import { timelineCanPrepend, retainTimelineRollover, timelineBoundaryPositions, reconcileTimelineKeys, limitFollowingTimeline, type TimelineSegment } from '../conversation-timeline.ts'
 import { chatHistorySnapshots } from '../chat-history-snapshot.ts'
 import { readonlyHistorySnapshots } from '../readonly-history-snapshot.ts'
 import type { LiveSubscription } from '../live-client.ts'
@@ -1330,7 +1331,11 @@ function applyCurrentTimeline(items: ChatMsg[], records: YieldDecisionRecord[], 
   currentTimelineDecisions = records
   currentTimelinePhysicalId = physicalId
   if (!historyBrowsing.value) pruneFollowingTimeline()
+  const anchorContext = `${activeSessionId.value}:${viewingPhysicalId.value ?? ''}:${route.fullPath}`
+  const anchorVersion = historyScrollVersion
   if (anchorKey && anchorTop !== undefined) void nextTick(() => {
+    if (!progressiveActive() || anchorVersion !== historyScrollVersion
+      || anchorContext !== `${activeSessionId.value}:${viewingPhysicalId.value ?? ''}:${route.fullPath}`) return
     const retained = [...(container?.querySelectorAll<HTMLElement>('[data-timeline-key]') ?? [])].find(element => element.dataset.timelineKey === anchorKey)
     if (container && retained && historyBrowsing.value) container.scrollTop += retained.getBoundingClientRect().top - anchorTop
   })
@@ -1349,7 +1354,7 @@ async function prependOlderSegment(): Promise<void> {
     const data = await res.json()
     if (controller.signal.aborted) return
     const segment = { id, previousId: data.previousPhysicalId ?? null, messages: tagTimelineMessages(mergeCommandResults(collapseHistory(data.messages ?? []), data.commandResults)), decisions: parseDecisionRecords(data.decisionRecords ?? []) }
-    const before = container ? { top: container.scrollTop, height: container.scrollHeight } : undefined
+    const restore = container ? captureHistoryScroll(container, false) : undefined
     olderSegments.value = [segment, ...olderSegments.value]
     const expanded = [...expandedThinking]
     expandedThinking.clear()
@@ -1358,7 +1363,12 @@ async function prependOlderSegment(): Promise<void> {
     decisionRecords.value = [...new Map([...segment.decisions, ...decisionRecords.value].map(record => [record.request.id, record])).values()]
     composerError.value = ''
     await nextTick()
-    if (container && before) container.scrollTop = prependScrollTop(before, container.scrollHeight)
+    // Retain the old row across any newly inserted boundary on this first
+    // commit. Later batches each retain their own CURRENT viewport; a final
+    // height-delta jump would overwrite user scrolling during the multi-frame load.
+    if (!controller.signal.aborted && progressiveActive() && restore) progressiveScrollTop = restore()
+    const first = historyRows.value[0]
+    if (first) await revealHistoryRow(historyRowKey(first), controller.signal)
   } catch (cause) {
     if (!controller.signal.aborted) composerError.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -1491,6 +1501,49 @@ const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation
     : undefined,
   () => displayMessages.value,
 )
+
+// Schedule presentation rows, not raw messages: a tool group anchored before a
+// raw-message tail cut must still be present immediately when it is the latest row.
+// All projections/search/rail keep the complete displayMessages and original idx.
+const historyRows = computed(() => historyPresentationRows(displayMessages.value, {
+  entries: [toolActivity.value, inlineExecutions.value.entries, messageActions.value.entries,
+    inputQuestions.value.entries, yieldDecisions.value.entries],
+  after: [ioAfter.value, yieldDecisions.value.after],
+  boundaries: timelineBoundaries.value,
+}))
+function historyRowKey(row: { msg: ChatMsg; idx: number }): string {
+  return row.msg.timelineKey ?? `${activeSessionId.value}:${viewingPhysicalId.value ?? ''}:${row.msg.responseContext?.responseId ?? row.idx}`
+}
+let historyScrollVersion = 0
+let progressiveScrollTop: number | undefined
+const progressiveActive = () => paneActive.value && conversationDocumentVisible.value
+  && activePanel.value === 'conversation' && route.name === 'chat'
+const { mountedRows: mountedHistoryRows, reveal: revealHistoryRow } = useProgressiveHistory({
+  rows: historyRows,
+  key: historyRowKey,
+  context: () => `${props.apiBase}:${activeSessionId.value}:${viewingPhysicalId.value ?? ''}`,
+  active: progressiveActive,
+  navigation: () => route.fullPath,
+  beforeBatch: () => {
+    const container = messagesContainer.value
+    if (!container) return
+    const version = historyScrollVersion
+    const following = !historyBrowsing.value && !searchOpen.value
+    const restore = captureHistoryScroll(container, following)
+    return () => {
+      if (version !== historyScrollVersion || following && (historyBrowsing.value || searchOpen.value)) return
+      progressiveScrollTop = restore()
+    }
+  },
+})
+async function revealHistoryIndex(index: number, signal?: AbortSignal): Promise<boolean> {
+  const row = historyRevealRow(index, historyRows.value, toolActivity.value, yieldDecisions.value.after)
+  if (row) return await revealHistoryRow(historyRowKey(row), signal)
+  // Streaming output and unlinked decisions live outside the scheduled loop.
+  return !signal?.aborted && progressiveActive() && !!messagesContainer.value?.querySelector(
+    `[data-msg-idx="${index}"], [data-search-message-idx="${index}"]`,
+  )
+}
 
 // ── Text selection state ──────────────────────────────────────────────────────
 const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
@@ -2435,6 +2488,11 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   await nextTick()
   signal.throwIfAborted()
   const renderedIndex = match.entry.messageIndex + (match.entry.segmentId === null ? timelinePrefixLength.value : 0)
+  if (!await revealHistoryIndex(renderedIndex, signal)) {
+    signal.throwIfAborted()
+    throw new Error(t('This message changed while searching. Retry search.'))
+  }
+  signal.throwIfAborted()
   const processNode = messagesContainer.value?.querySelector<HTMLElement>(`.tool-entry[data-msg-idx="${renderedIndex}"]`)
   const wrapper = messagesContainer.value?.querySelector<HTMLElement>(`[data-search-message-idx="${renderedIndex}"]`)
     ?? processNode?.closest<HTMLElement>('[data-search-message-idx]')
@@ -2938,6 +2996,7 @@ watch(() => props.visible && conversationDocumentVisible.value && activePanel.va
 })
 
 function browseHistory(): void {
+  historyScrollVersion++
   historyBrowsing.value = true
   historyLeftBottom = false
 }
@@ -2948,6 +3007,12 @@ function trackHistoryScroll(): void {
   if (loadingHistory.value) return
   const container = messagesContainer.value
   if (!container) return
+  if (progressiveScrollTop !== undefined && Math.abs(container.scrollTop - progressiveScrollTop) < 1) {
+    progressiveScrollTop = undefined
+    return
+  }
+  progressiveScrollTop = undefined
+  historyScrollVersion++
   const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 32
   // A smooth jump starts at the bottom; only resume following after returning there.
   if (!atBottom) {
@@ -2958,11 +3023,27 @@ function trackHistoryScroll(): void {
   if (container.scrollTop < 80 && !viewingPhysicalId.value) void prependOlderSegment()
 }
 
+let bottomScrollQueued = false
+let bottomScrollRequest = { generation: 0, version: 0 }
+let bottomScrollGeneration = 0
+watch([activeSessionId, viewingPhysicalId, () => route.fullPath, progressiveActive], () => {
+  bottomScrollGeneration++
+  progressiveScrollTop = undefined
+}, { flush: 'sync' })
 function scrollToBottom(): void {
+  bottomScrollRequest = { generation: bottomScrollGeneration, version: historyScrollVersion }
+  if (bottomScrollQueued) return
+  bottomScrollQueued = true
   nextTick(() => {
-    if (searchOpen.value || historyBrowsing.value || !props.visible || !conversationDocumentVisible.value || activePanel.value !== 'conversation') return
+    bottomScrollQueued = false
+    const { generation, version } = bottomScrollRequest
+    if (disposed || generation !== bottomScrollGeneration || version !== historyScrollVersion
+      || searchOpen.value || historyBrowsing.value || !progressiveActive()) return
     const el = messagesContainer.value
-    if (el) el.scrollTop = el.scrollHeight
+    if (el) {
+      el.scrollTop = el.scrollHeight
+      progressiveScrollTop = el.scrollTop
+    }
   })
 }
 
