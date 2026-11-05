@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  imageAttachmentReference,
+  insertAttachmentReference,
+  namePastedChatImages,
   appendChatAttachments,
   canSendChatMessage,
   clipboardChatFiles,
@@ -193,7 +196,7 @@ test('source metadata follows replacement, repeat drag and upload; removal drops
     async () => Response.json({ path: 'uploads/123-image-marked.png' }))
   assert.deepEqual(uploaded[0]?.source, source)
   assert.equal(composeImageReferenceMessage('Fix the marked area.', uploaded),
-    'Fix the marked area.\n\nImage references (source metadata):\n'
+    `Fix the marked area.\n\nAttachment references:\n- ${imageAttachmentReference(uploaded[0]!)}\n  Uploaded file: \"uploads/123-image-marked.png\"\n  Media item: 1 of 1 (message attachment order).\n\nImage references (source metadata):\n`
     + '- Attached image: "uploads/123-image-marked.png"\n'
     + `  Original file: ${JSON.stringify(source.path)}\n`
     + '  Version: marked copy; original file unchanged.\n'
@@ -213,12 +216,13 @@ test('same-named images remain paired with their exact upload and source paths; 
   const content = composeImageReferenceMessage('', attachments)
   assert.ok(content.includes('Attached image: "uploads/first.png"\n  Original file: "/folder-a/images/image.png"\n  Version: marked copy; original file unchanged.'))
   assert.ok(content.includes('Attached image: "uploads/second.png"\n  Original file: "/folder-b/images/image.png"\n  Version: original image (unmarked).'))
-  assert.ok(!content.includes('clipboard'))
+  assert.ok(content.includes('Uploaded file: \"uploads/clipboard.png\"'))
+  assert.ok(!content.includes('Original file: \"uploads/clipboard.png\"'))
   const mixed = composeImageReferenceMessage('', [attachments[2]!, attachments[0]!, attachments[1]!])
   assert.ok(mixed.includes('Media item: 2 of 3 (message attachment order).'))
   assert.ok(mixed.includes('Media item: 3 of 3 (message attachment order).'))
-  assert.ok(!mixed.includes('Media item: 1 of 3'))
-  assert.equal(composeImageReferenceMessage('Pasted image', [attachments[2]!]), 'Pasted image')
+  assert.ok(mixed.includes('Media item: 1 of 3'))
+  assert.ok(composeImageReferenceMessage('Pasted image', [attachments[2]!]).startsWith('Pasted image\n\nAttachment references:'))
   const unusual = { ...attachments[0]!, source: { path: '/folder/"quoted"\nname.png', modified: true } }
   assert.ok(composeImageReferenceMessage('', [unusual]).includes(JSON.stringify(unusual.source.path)))
 })
@@ -314,4 +318,42 @@ test('draft annotation replaces the original slot and clear restores the origina
   assert.equal(cleared[1]!.file, original)
   assert.deepEqual(revoked, ['blob:paste.png', 'blob:paste-marked.png'])
   assert.deepEqual(replaceDraftImageAttachment([], key, marked, options), [])
+})
+
+
+test('browser paste names generic images truthfully and preserves supplied real names', () => {
+  const real = new File(['real'], '预算 [v2], "终稿"!.png', { type: 'image/png' })
+  const picker = new File(['picker'], 'image.png', { type: 'image/png' })
+  let id = 0
+  const named = namePastedChatImages([picker, picker, real], () => `unique-${++id}`)
+  assert.notEqual(named[0]!.name, named[1]!.name)
+  assert.match(named[0]!.name, /unique-1.png$/)
+  assert.equal(named[2], real)
+  assert.equal(picker.name, 'image.png')
+  assert.equal(named[0]!.type, picker.type)
+})
+
+test('inline references retain exact upload pairing across deletion, duplicate names and edits', async () => {
+  let id = 0
+  const files = ['a', 'b', 'c'].map((value, index) => new File([value], 'same [x] `name`!.png', { type: 'image/png', lastModified: index }))
+  const pending = appendChatAttachments([], files, { createId: () => `stable-${++id}`, createObjectUrl: () => 'blob:test' })
+  const first = imageAttachmentReference(pending[0]!)
+  const third = imageAttachmentReference(pending[2]!)
+  assert.notEqual(first, third)
+  assert.ok(third.startsWith('`` '))
+  const insertion = insertAttachmentReference('比较这里。', third, 2, 4)
+  assert.equal(insertion.text, `比较 ${third} 。`)
+  assert.equal(insertion.text.slice(insertion.cursor), '。')
+  const remaining = [pending[0]!, pending[2]!]
+  const uploaded = await uploadChatAttachments('http://main', 'chat', remaining, new AbortController().signal,
+    async (_url, init) => {
+      const file = (init!.body as FormData).get('file') as File
+      return Response.json({ path: `uploads/${await file.text()}.png` })
+    })
+  const body = composeImageReferenceMessage(insertion.text, uploaded)
+  assert.ok(body.includes(`- ${third}\n  Uploaded file: "uploads/c.png"\n  Media item: 2 of 2`))
+  assert.ok(body.includes(`- ${first}\n  Uploaded file: "uploads/a.png"\n  Media item: 1 of 2`))
+  assert.ok(!body.includes('uploads/b.png'))
+  const edited = replaceDraftImageAttachment(remaining, pending[2]!.key, new File(['edit'], 'marked.png', { type: 'image/png' }), { createObjectUrl: () => 'blob:edit', revokeObjectUrl: () => {} })
+  assert.equal(imageAttachmentReference(edited[1]!), third)
 })

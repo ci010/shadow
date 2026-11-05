@@ -370,6 +370,9 @@
               </button>
               <span v-else class="context-icon i-lucide-paperclip" aria-hidden="true" />
               <span class="attachment-caption"><span>{{ attachment.file.name }}</span><span v-if="attachment.sourceKey" class="attachment-reference-label">{{ t('Image reference') }}</span><span v-if="attachment.source" class="attachment-source-path">{{ attachment.source.path }}</span></span>
+              <HoverInfo v-if="attachment.kind === 'image'" :text="t('Insert image reference')" v-slot="{ triggerProps }">
+                <button v-bind="triggerProps" type="button" class="attachment-insert" :disabled="submissionBusy" :aria-label="t('Insert reference to {name}', { name: attachment.file.name })" @click="insertImageReference(attachment)"><span class="i-lucide-text-cursor-input w-3.5 h-3.5" aria-hidden="true" /></button>
+              </HoverInfo>
               <button :disabled="submissionBusy" :aria-label="t('Remove {name}', { name: attachment.file.name })" @click="removePendingAttachment(attachment.key)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
             </span>
           </div>
@@ -583,7 +586,7 @@ import { createExecutionLocationDraft, type ExecutionLocation } from '../executi
 import AutomationPayload from './AutomationPayload.vue'
 import { readableAutomationTitle } from '../automation-presentation.ts'
 import type { SessionDetails } from '../session-details.ts'
-import { assertRemoteChatImages, appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
+import { imageAttachmentReference, insertAttachmentReference, namePastedChatImages, assertRemoteChatImages, appendChatAttachments, canSendChatMessage, clipboardChatFiles, nativeClipboardChatFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, replaceDraftImageAttachment, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasFileReference, readFileReference } from '../file-reference-drag.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
@@ -1907,9 +1910,19 @@ function handleAttachmentDrop(event: DragEvent): void {
   }
 }
 
+async function insertImageReference(attachment: PendingChatAttachment): Promise<void> {
+  const inserted = insertAttachmentReference(inputText.value, imageAttachmentReference(attachment), composerSelection.start, composerSelection.end)
+  inputText.value = inserted.text
+  await nextTick()
+  chatInput.value?.focus({ preventScroll: true })
+  chatInput.value?.setSelectionRange(inserted.cursor, inserted.cursor)
+  updateComposerSelection()
+}
+
 function removePendingAttachment(key: string): void {
   const attachment = pendingAttachments.value.find(item => item.key === key)
   if (!attachment) return
+  if (attachment.kind === 'image') inputText.value = inputText.value.replaceAll(imageAttachmentReference(attachment), '')
   revokeChatAttachmentPreviews([attachment])
   pendingAttachments.value = pendingAttachments.value.filter(item => item.key !== key)
 }
@@ -1953,7 +1966,7 @@ async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
     const text = event.clipboardData?.getData('text/plain')
     const native = window.shadowDesktop?.clipboardFiles
     let files: File[]
-    try { files = clipboardChatFiles(event.clipboardData) }
+    try { files = namePastedChatImages(clipboardChatFiles(event.clipboardData)) }
     catch (error) {
       if (!native || text) throw error
       files = []
@@ -3282,7 +3295,11 @@ function resendLastMessage() {
 .attachment-thumb { width: 24px; height: 24px; flex-shrink: 0; border-radius: var(--radius-control); object-fit: cover; }
 .attachment-reference { max-width: min(100%, 340px); padding-left: 5px; gap: 10px; }
 .attachment-reference .attachment-thumb { width: 72px; height: 48px; object-fit: contain; background: var(--c-bg); }
-.attachment-caption { display: flex; flex-direction: column; gap: 4px; }
+.attachment-caption { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.context-chip .attachment-insert { display: grid; place-items: center; width: 32px; min-height: 32px; }
+@media (max-width: 700px), (pointer: coarse) {
+  .context-chip .attachment-insert { width: 44px; min-height: 44px; }
+}
 .attachment-caption > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-reference-label { color: var(--c-text-secondary); font-size: 11px; }
 .attachment-source-path { color: var(--c-text-secondary); font-size: 11px; }
