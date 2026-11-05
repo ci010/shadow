@@ -8,6 +8,8 @@ export interface PendingChatAttachment {
   file: File
   kind: 'image' | 'file'
   previewUrl?: string
+  /** Stable draft token, retained when an image is edited or other files are removed. */
+  reference?: string
   sourceKey?: string
   source?: ImageSource
 }
@@ -37,6 +39,7 @@ export function updateImageAttachment(
     kind: 'image',
     previewUrl: (options.createObjectUrl ?? (image => URL.createObjectURL(image)))(file),
   } : undefined
+  if (next) next.reference = previous?.reference ?? imageAttachmentReference(next)
   if (previous) revokeChatAttachmentPreviews([previous], options.revokeObjectUrl)
   if (!previous) return next ? [...existing, next] : [...existing]
   return existing.flatMap(attachment => attachment === previous ? next ? [next] : [] : [attachment])
@@ -65,6 +68,27 @@ export interface UploadedChatAttachment extends PendingChatAttachment {
   path: string
 }
 
+export function imageAttachmentReference(attachment: PendingChatAttachment): string {
+  // Code spans keep punctuation/Markdown in real filenames literal and readable.
+  const label = `${JSON.stringify(attachment.file.name)} · image:${attachment.key}`
+  const fence = '`'.repeat(Math.max(0, ...Array.from(label.matchAll(/`+/g), match => match[0].length)) + 1)
+  return attachment.reference ?? `${fence} ${label} ${fence}`
+}
+
+export function insertAttachmentReference(text: string, reference: string, start: number, end = start): { text: string; cursor: number } {
+  const before = text.slice(0, start)
+  const after = text.slice(end)
+  const inserted = `${before && !/\s$/.test(before) ? ' ' : ''}${reference}${after && !/^\s/.test(after) ? ' ' : ''}`
+  return { text: before + inserted + after, cursor: before.length + inserted.length }
+}
+
+/** Only browser clipboard generic names are synthesized, never picker/native names. */
+export function namePastedChatImages(files: readonly File[], createId: () => string = createUuid): File[] {
+  return files.map(file => isImageAttachment(file) && /^(?:image|clipboard|pasted[- ]?image)(?:\.(?:png|jpe?g|gif|webp|bmp))?$/i.test(file.name)
+    ? new File([file], `${t('Pasted image')} ${createId().slice(0, 8)}.${file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase() : (file.type.split('/')[1] || 'png')}`, { type: file.type, lastModified: file.lastModified })
+    : file)
+}
+
 export function composeImageReferenceMessage(content: string, attachments: readonly UploadedChatAttachment[]): string {
   const lines = attachments.flatMap((attachment, index) => {
     const source = attachment.source
@@ -74,8 +98,13 @@ export function composeImageReferenceMessage(content: string, attachments: reado
       + `  Version: ${source.modified ? 'marked copy; original file unchanged.' : 'original image (unmarked).'}\n`
       + `  Media item: ${index + 1} of ${attachments.length} (message attachment order).`]
   })
-  if (!lines.length) return content
-  return [content, `Image references (source metadata):\n${lines.join('\n')}`].filter(Boolean).join('\n\n')
+  const references = attachments.flatMap((attachment, index) => attachment.kind === 'image'
+    ? [`- ${imageAttachmentReference(attachment)}\n  Uploaded file: ${JSON.stringify(attachment.path)}\n  Media item: ${index + 1} of ${attachments.length} (message attachment order).`]
+    : [])
+  return [content,
+    references.length ? `Attachment references:\n${references.join('\n')}` : '',
+    lines.length ? `Image references (source metadata):\n${lines.join('\n')}` : '',
+  ].filter(Boolean).join('\n\n')
 }
 
 const IMAGE_EXTENSIONS = new Set([
@@ -183,12 +212,14 @@ export function appendChatAttachments(
     if (seen.has(signature)) continue
     seen.add(signature)
     const image = isImageAttachment(file)
-    next.push({
+    const attachment: PendingChatAttachment = {
       key: createId(),
       file,
       kind: image ? 'image' : 'file',
       ...(image ? { previewUrl: createObjectUrl(file) } : {}),
-    })
+    }
+    if (image) attachment.reference = imageAttachmentReference(attachment)
+    next.push(attachment)
   }
   return next
 }
