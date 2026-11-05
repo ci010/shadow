@@ -92,6 +92,7 @@ test('continuous ChatTab prepends, preserves boundaries and handles live rollove
           else if (path.endsWith('/api/sessions/graph')) json({ sessions: ['web:chat-one', 'web:chat-two'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
           else if (path.endsWith('/api/sessions/stages')) json({ stages: {}, activeRequestIds: {}, recoveries: {} })
           else if (path === '/fixture-append') { extraLive = true; json({ok:true}) }
+          else if (path === '/fixture-sleep') { extraLive = false; json({ok:true}) }
           else if (path === '/fixture-rollover') { rollover = true; json({ok:true}) }
           else if (path.endsWith('/api/chat/session')) json({revision:(rollover?'b':'a').repeat(64),data:{ history: rollover ? [{role:'user',name:'__compaction_summary__',content:'New actual compaction summary'}, {role:'assistant',content:'New live answer'}, ...(extraLive ? old('Latest live') : [])] : initial, previousPhysicalId:rollover?'closed-current':'old-one', currentPhysicalId:rollover?'live-new':'closed-current', systemPrompt:'Synthetic prompt', tools:[] }})
           else if (path.endsWith('/static/layout.html')) {
@@ -117,7 +118,7 @@ test('continuous ChatTab prepends, preserves boundaries and handles live rollove
           else if (/\/api\/sessions\/[^/]+$/.test(path)) {
             const id = decodeURIComponent(path.split('/').at(-1)!)
             if (id === 'old-zero') await new Promise(resolve => setTimeout(resolve, 350))
-            json({currentPhysicalId:id,previousPhysicalId:id==='old-one'?'old-zero':null,messages:id==='old-one'?[{role:'user',name:'__compaction_summary__',content:'Older actual summary'},...old('Old one')]:old('Old zero')})
+            json({currentPhysicalId:id,previousPhysicalId:id==='old-one'?'old-zero':null,messages:id==='closed-current'?initial:id==='old-one'?[{role:'user',name:'__compaction_summary__',content:'Older actual summary'},...old('Old one')]:old('Old zero')})
           }
           else if (path.endsWith('/api/slash-commands')) json({ commands: [] })
           else if (path.startsWith('/projects/') && path.includes('/api/')) json({})
@@ -165,11 +166,11 @@ async function main(){
  try {
  await win.loadURL(new URL('projects/a/chat/web:chat-one',process.env.PERSISTENCE_URL).href);
  await wait("document.body.innerText.includes('Current message 29') && !document.querySelector('.chat-history').getAttribute('aria-busy').includes('true')");
- await run("window.anchor=document.querySelectorAll('.chat-message-entry')[24]; window.anchorKey=anchor.dataset.timelineKey; const c=document.querySelector('.chat-messages'); c.scrollTop=60; window.anchorY=anchor.getBoundingClientRect().top; c.dispatchEvent(new Event('scroll'))");
+ await run("window.anchor=[...document.querySelectorAll('.chat-message-entry')].find(x=>x.textContent.includes('Current message 29')); window.anchorKey=anchor.dataset.timelineKey; const c=document.querySelector('.chat-messages'); c.scrollTop=60; window.anchorY=anchor.getBoundingClientRect().top; c.dispatchEvent(new Event('scroll'))");
  await wait("document.body.innerText.includes('Old one message 19') && document.querySelector('.chat-history').getAttribute('aria-busy')==='false'");
  assert.equal(await run("document.body.innerText.includes('Current message 29')"),true);
  assert.ok(Math.abs(await run("anchor.getBoundingClientRect().top-anchorY"))<2);
- assert.deepEqual(await run("[...document.querySelectorAll('[data-history-boundary]')].map(x=>x.dataset.historyBoundary)"),['old-zero','old-one']);
+ assert.deepEqual(await run("[...document.querySelectorAll('[data-history-boundary]')].map(x=>x.dataset.historyBoundary)"),[]);
  // Search reasoning inside a collapsed current tool group after lazy prepend.
  await run("document.querySelector('.reference-composer').dispatchEvent(new KeyboardEvent('keydown',{key:'f',ctrlKey:true,bubbles:true,cancelable:true}))");
  await wait("!!document.querySelector('.conversation-search input')");
@@ -186,7 +187,7 @@ async function main(){
  assert.equal(await run("document.body.innerText.includes('Current message 29')"),true);
  assert.equal(await run("anchor.dataset.timelineKey===anchorKey && anchor.isConnected"),true);
  assert.ok(Math.abs(await run("anchor.getBoundingClientRect().top-anchorY"))<2);
- assert.deepEqual(await run("[...document.querySelectorAll('[data-history-boundary]')].map(x=>x.dataset.historyBoundary)"),['old-zero','old-one','closed-current']);
+ assert.deepEqual(await run("[...document.querySelectorAll('[data-history-boundary]')].map(x=>x.dataset.historyBoundary)"),[]);
  assert.equal(await run("document.querySelectorAll('.compaction-summary').length"),2);
  assert.deepEqual(await run("[...document.querySelectorAll('.compaction-summary-title')].map(x=>x.textContent)"),['Previous Conversation Summary','Previous Conversation Summary']);
  assert.equal(await run("document.querySelector('[data-event-id=handoff-fixture] strong')?.textContent"),'Recorded handoff transition');
@@ -199,11 +200,15 @@ async function main(){
  await wait("document.body.innerText.includes('Latest live message 19')");
  await delay(80);
  assert.ok(await run("(()=>{const c=document.querySelector('.chat-messages');return c.scrollHeight-c.scrollTop-c.clientHeight<2})()"));
- assert.equal(await run("document.querySelectorAll('[data-history-boundary]').length"),3);
- // Targeted navigation remains read-only and does not keep unrelated timeline prefixes.
- await run("document.querySelector('[data-history-boundary] summary').click();document.querySelector('[data-history-boundary] button').click()");
- await wait("document.body.innerText.includes('Viewing previous session')");
- assert.equal(await run("document.body.innerText.includes('New live answer')"),false);
+ assert.equal(await run("document.querySelectorAll('[data-history-boundary]').length"),0);
+ // Reopening after sleep compaction starts from the persisted handoff, but
+ // automatically seeds recent history above it without a boundary control.
+ await run("fetch('/fixture-sleep')");
+ await new Promise(resolve=>{win.webContents.once('did-finish-load',resolve);win.reload()});
+ await wait("document.body.innerText.includes('Current message 29') && document.querySelector('.compaction-summary') && document.querySelector('.chat-history').getAttribute('aria-busy')==='false'");
+ assert.equal(await run("document.querySelectorAll('[data-history-boundary]').length"),0);
+ assert.equal(await run("!!document.querySelector('.timeline-latest')"),false);
+ assert.equal(await run("(()=>{const rows=[...document.querySelectorAll('.chat-message-entry')];return rows.findIndex(x=>x.textContent.includes('Current message 29')) < rows.findIndex(x=>x.querySelector('.compaction-summary'))})()"),true);
  console.log('TIMELINE_SMOKE_OK');
  }finally{win.destroy()}
 }
