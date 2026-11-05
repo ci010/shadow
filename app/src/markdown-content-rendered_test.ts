@@ -232,7 +232,7 @@ try {
   await server.listen()
   t.after(() => server.close())
   const url = server.resolvedUrls!.local[0] + '__markdown-content'
-  await writeFile(resolve(directory, 'main.cjs'), `const {app,BrowserWindow}=require('electron');app.whenReady().then(async()=>{try{const w=new BrowserWindow({show:false,webPreferences:{sandbox:true}});await w.loadURL(${JSON.stringify(url)});let result;for(let i=0;i<200;i++){result=await w.webContents.executeJavaScript('window.result');if(result)break;await new Promise(r=>setTimeout(r,50));}if(result!=='MARKDOWN_CONTENT_OK')throw Error(result||'fixture timed out');console.log(result);app.exit(0)}catch(e){console.error(e);app.exit(1)}});`)
+  await writeFile(resolve(directory, 'main.cjs'), `const {app,BrowserWindow}=require('electron');app.setPath('userData',require('node:path').join(__dirname,'profile'));app.whenReady().then(async()=>{try{const w=new BrowserWindow({show:false,webPreferences:{sandbox:true}});await w.loadURL(${JSON.stringify(url)});let result;for(let i=0;i<200;i++){result=await w.webContents.executeJavaScript('window.result');if(result)break;await new Promise(r=>setTimeout(r,50));}if(result!=='MARKDOWN_CONTENT_OK')throw Error(result||'fixture timed out');console.log(result);app.exit(0)}catch(e){console.error(e);app.exit(1)}});`)
   const env: NodeJS.ProcessEnv = {}
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
