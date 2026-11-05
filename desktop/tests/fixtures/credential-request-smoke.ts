@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -146,7 +147,7 @@ async function runViewport(origin: string, width: number, height: number) {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   const evaluate = <T = unknown>(source: string): Promise<T> => {
     assert.equal(window.isVisible(), false)
-    return window.webContents.executeJavaScript(source)
+    return window.webContents.executeJavaScript(withComposerTestAdapter(source))
   }
   async function waitFor(expression: string) {
     const deadline = Date.now() + 10000
@@ -161,11 +162,11 @@ async function runViewport(origin: string, width: number, height: number) {
   })()`)
   try {
     await window.loadURL(`${origin}/chat/${encodeURIComponent(sessionId)}`)
-    await waitFor(`!!document.querySelector('.composer-input textarea')`)
+    await waitFor(`!!document.querySelector('.composer-input .reference-composer')`)
     const idleReads = reads
     await new Promise(resolve => setTimeout(resolve, 1600))
     assert.equal(reads, idleReads)
-    await evaluate(`(() => { const input = document.querySelector('.composer-input textarea'); input.value = 'Preserve my draft'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+    await evaluate(`(() => { const input = document.querySelector('.composer-input .reference-composer'); input.value = 'Preserve my draft'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
     pending = createRequest()
     live.publisher.invalidateSessions(sessionId)
     await waitFor(`!!document.querySelector('.credential-request input')`)
@@ -195,7 +196,7 @@ async function runViewport(origin: string, width: number, height: number) {
     await waitFor(`!document.querySelector('.credential-request')`)
     assert.equal(writes.length, beforeWrites + 2)
     assert.deepEqual(writes.at(-1), { method: 'POST', body: { value: 'SYNTHETIC-PRIVATE-VALUE' } })
-    assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), 'Preserve my draft')
+    assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), 'Preserve my draft')
     pending = createRequest()
     live.publisher.invalidateSessions(sessionId)
     await waitFor(`!!document.querySelector('.credential-request input')`)
@@ -239,7 +240,7 @@ async function runViewport(origin: string, width: number, height: number) {
     await evaluate(`document.querySelector('.publication-confirm').click()`)
     await waitFor(`document.querySelector('.publication-notice')?.textContent.includes('published')`)
     assert.equal(decisions.at(-1)?.method, 'POST')
-    assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), 'Preserve my draft')
+    assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), 'Preserve my draft')
     console.log(`LAYOUT_PUBLICATION ${JSON.stringify({ width, ...approvalGeometry, explicitDecision: true, revisionBound: true, cancellation: true })}`)
     console.log(`LAYOUT_CREDENTIAL ${JSON.stringify({ width, ...geometry, privateSubmission: true, cancellation: true, draftPreserved: true })}`)
   } finally { window.destroy() }

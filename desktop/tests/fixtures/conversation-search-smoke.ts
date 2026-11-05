@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -13,7 +14,7 @@ async function main() {
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
   const errors: string[] = []
   window.webContents.on('console-message', (_event, level, message) => { if (level >= 2) errors.push(message) })
-  const execute = (code: string) => window.webContents.executeJavaScript(code)
+  const execute = (code: string) => window.webContents.executeJavaScript(withComposerTestAdapter(code))
   const wait = async (code: string) => {
     const deadline = Date.now() + 12_000
     while (Date.now() < deadline) { if (await execute(code)) return; await delay(50) }
@@ -26,7 +27,7 @@ async function main() {
   try {
     await window.loadURL(new URL('__search', process.env.CONVERSATION_SEARCH_URL).href)
     await wait(`document.querySelector('.chat-content')?.textContent.includes('当前消息')`)
-    await execute(`{const input=document.querySelector('textarea'); input.value='Unsent draft'; input.dispatchEvent(new Event('input',{bubbles:true})); input.focus();}`)
+    await execute(`{const input=document.querySelector('.reference-composer'); input.value='Unsent draft'; input.dispatchEvent(new Event('input',{bubbles:true})); input.focus();}`)
     await execute(`{const dialog=document.createElement('div'); dialog.id='fixture-dialog'; dialog.setAttribute('role','dialog'); dialog.textContent='Synthetic active dialog'; document.body.append(dialog);}`)
     assert.equal(await key('f', 'ctrlKey:true'), true, 'Search does not steal shortcuts from a dialog')
     assert.equal(await execute(`!!document.querySelector('.conversation-search')`), false)
@@ -51,7 +52,7 @@ async function main() {
     await key('Enter')
     await count('4 / 4')
     assert.deepEqual(await highlighted(), ['historical'])
-    assert.equal(await execute(`document.querySelector('textarea').value`), 'Unsent draft')
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), 'Unsent draft')
     assert.equal(await execute(`!!document.querySelector('.prose a[href="note.md"]')`), true, 'Search preserves markup and links')
     await key('Enter')
     await count('1 / 4')
@@ -88,7 +89,7 @@ async function main() {
     assert.equal(await execute(`CSS.highlights.has('shadow-conversation-active')`), false)
     await key('Escape')
     await wait(`!document.querySelector('.conversation-search')`)
-    assert.equal(await execute(`document.activeElement === document.querySelector('textarea')`), true, 'Escape restores the composer even after historical navigation remounts it')
+    assert.equal(await execute(`document.activeElement === document.querySelector('.reference-composer')`), true, 'Escape restores the composer even after historical navigation remounts it')
     await execute(`document.querySelector('.diagnosis-tab [role="tab"]').click()`)
     await wait(`document.querySelector('.diagnosis-tab [role="tab"]').getAttribute('aria-selected') === 'true'`)
     assert.equal(await key('f', 'ctrlKey:true'), true, 'Diagnosis does not open conversation search')
@@ -106,7 +107,7 @@ async function main() {
     await key('Escape')
     await execute(`window.__searchFixture.state.childSessionId=''`)
     await wait(`!document.querySelector('.child-conversation')`)
-    await execute(`document.querySelector('textarea').focus()`)
+    await execute(`document.querySelector('.reference-composer').focus()`)
     await execute(`fetch('/__fail?value=true')`)
     await key('f', 'ctrlKey:true')
     await query('historical')

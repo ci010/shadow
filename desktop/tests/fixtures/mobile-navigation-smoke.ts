@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -23,7 +24,7 @@ async function main() {
     if (!allowed) external.push(details.url)
     callback({ cancel: !allowed })
   })
-  const execute = (code: string) => window.webContents.executeJavaScript(code)
+  const execute = (code: string) => window.webContents.executeJavaScript(withComposerTestAdapter(code))
   const frame = () => execute('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   const resize = async (width: number, height = 844) => {
     window.setContentSize(width, height)
@@ -106,7 +107,7 @@ async function main() {
     await resize(390)
     await execute(`window.__isVisible = el => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
       window.__visible = selector => [...document.querySelectorAll(selector)].find(window.__isVisible); void 0;`)
-    await wait(`!!${visible('textarea[aria-label="Message"]')} && document.body.innerText.includes('Synthetic reply: ready to continue.')`)
+    await wait(`!!${visible('.reference-composer[aria-label="Message"]')} && document.body.innerText.includes('Synthetic reply: ready to continue.')`)
     for (const width of [320, 390]) {
       await resize(width)
       for (const theme of ['light', 'dark']) {
@@ -114,13 +115,13 @@ async function main() {
         const layout = await execute(`(() => {
           const q = window.__visible;
           const rect = selector => q(selector).getBoundingClientRect();
-          const header = rect('.mobile-title-bar'), history = rect('.chat-history'), input = rect('textarea[aria-label="Message"]');
+          const header = rect('.mobile-title-bar'), history = rect('.chat-history'), input = rect('.reference-composer[aria-label="Message"]');
           const plus = rect('[aria-label="Message options"]'), send = rect('[aria-label="Send message"]');
           return { layers:['.mobile-title-bar','.desktop-title-bar','.projects-toolbar','.document-toolbar','.conversation-heading-row'].filter(q),
             headerBottom:header.bottom, contentTop:history.top, width:innerWidth,
             overflow:document.documentElement.scrollWidth > innerWidth,
             titleCount:[...document.querySelectorAll('.mobile-header-content [aria-label="Switch view"]')].filter(window.__isVisible).length,
-            input:{height:input.height, font:getComputedStyle(q('textarea')).fontSize, rows:q('textarea').rows},
+            input:{height:input.height, font:getComputedStyle(q('.reference-composer')).fontSize, minHeight:getComputedStyle(q('.reference-composer')).minHeight},
             plus:{width:plus.width,height:plus.height,top:plus.top,bottom:plus.bottom},
             send:{width:send.width,height:send.height,top:send.top,bottom:send.bottom},
             composer:rect('.composer-box').height, inputTop:input.top,inputBottom:input.bottom };
@@ -132,7 +133,7 @@ async function main() {
         assert.ok(Math.abs(layout.headerBottom - 57) <= 1, JSON.stringify(layout))
         assert.ok(Math.abs(layout.contentTop - layout.headerBottom) <= 1, JSON.stringify(layout))
         assert.equal(layout.input.font, '16px')
-        assert.equal(layout.input.rows, 1)
+        assert.equal(layout.input.minHeight, '44px')
         assert.ok(layout.plus.width >= 44 && layout.plus.height >= 44 && layout.send.width >= 44 && layout.send.height >= 44, JSON.stringify(layout))
         // The action toolbar intentionally occupies a separate row (ccbf101),
         // keeping a full-width input clear of stop/send/queue actions.
@@ -172,13 +173,13 @@ async function main() {
         }
       }
     }
-    await execute(`${visible('textarea')}.focus(); document.querySelector('.mobile-menu-trigger').click()`)
+    await execute(`${visible('.reference-composer')}.focus(); document.querySelector('.mobile-menu-trigger').click()`)
     await drawerOpen()
     await escape()
     await drawerClosed()
     assert.equal(await execute(`document.activeElement === document.querySelector('.mobile-menu-trigger')`), true,
       'Navigation restores its explicit trigger even when opening did not focus it')
-    await execute(`${visible('textarea')}.focus()`)
+    await execute(`${visible('.reference-composer')}.focus()`)
     window.webContents.debugger.attach('1.3')
     await window.webContents.debugger.sendCommand('Input.insertText', { text: 'First line' })
     await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
@@ -189,12 +190,12 @@ async function main() {
     })
     await window.webContents.debugger.sendCommand('Input.insertText', { text: 'Second line' })
     window.webContents.debugger.detach()
-    await wait(`${visible('textarea')}?.value === 'First line\\nSecond line'`)
-    assert.equal(await execute(`${visible('textarea')}.placeholder`), 'Message...')
+    await wait(`${visible('.reference-composer')}?.value === 'First line\\nSecond line'`)
+    assert.equal(await execute(`${visible('.reference-composer')}.getAttribute('data-placeholder')`), 'Message...')
     assert.equal(await execute(`${visible('[aria-label="Send message"]')}.disabled`), false, 'Typing updates the real composer state without sending')
     await resize(390, 530)
     const typing = await execute(`(() => {
-      const input = ${visible('textarea')}, dock = ${visible('.conversation-dock')};
+      const input = ${visible('.reference-composer')}, dock = ${visible('.conversation-dock')};
       const rect = input.getBoundingClientRect(), bottom = dock.getBoundingClientRect().bottom;
       return {value:input.value, height:rect.height, bottom, viewport:visualViewport.height,
         plus:${visible('[aria-label="Message options"]')}.getBoundingClientRect().height,
@@ -206,13 +207,13 @@ async function main() {
     assert.equal(typing.plus, 44)
     assert.equal(typing.send, 44)
     await resize(390)
-    await execute(`{ const input = ${visible('textarea')}; input.value=''; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
+    await execute(`{ const input = ${visible('.reference-composer')}; input.value=''; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
     await frame()
     assert.ok(await execute(`${visible('.composer-box')}.getBoundingClientRect().height <= 112`), 'Clearing multiline text returns to compact two-row geometry')
     for (const gesture of [
       { selector: '.chat-history', x: 220, y: 200, endX: 320, endY: 202 },
       { selector: '.chat-history', x: 12, y: 200, endX: 100, endY: 350 },
-      { selector: 'textarea', x: 12, y: 750, endX: 120, endY: 752 },
+      { selector: '.reference-composer', x: 12, y: 750, endX: 120, endY: 752 },
       { selector: '.chat-history', x: 12, y: 200, endX: 120, endY: 202, count: 2 },
       { selector: '.chat-history', x: 12, y: 200, endX: 120, endY: 202, cancel: true },
     ]) {
@@ -261,7 +262,7 @@ async function main() {
       const clamped = Math.max(0, Math.min(container.scrollHeight - container.clientHeight, aligned));
       return Math.abs(container.scrollTop - clamped) < 1 && target.top >= bounds.top - 1 && target.top < bounds.bottom;
     })()`)
-    await execute(`{ const input = ${visible('textarea')}; input.value='Unsent investigation draft'; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
+    await execute(`{ const input = ${visible('.reference-composer')}; input.value='Unsent investigation draft'; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
     await open()
     await text('Settings', '.mobile-global-navigation button')
     await drawerClosed()
@@ -270,16 +271,16 @@ async function main() {
     await open()
     await text('Chat', '.mobile-global-navigation button')
     await drawerClosed()
-    await wait(`${visible('textarea')}?.value === 'Unsent investigation draft'`)
+    await wait(`${visible('.reference-composer')}?.value === 'Unsent investigation draft'`)
     await open()
     await text('Second investigation', '[data-project-id="work"] .session-select')
     await drawerClosed()
     await wait(`${visible('.mobile-document-title')}?.textContent.includes('Second investigation')`)
-    await execute(`{ const input = ${visible('textarea')}; input.value='Second cached draft'; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
+    await execute(`{ const input = ${visible('.reference-composer')}; input.value='Second cached draft'; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
     await open()
     await text('First investigation', '[data-project-id="work"] .session-select')
     await drawerClosed()
-    await wait(`${visible('textarea')}?.value === 'Unsent investigation draft'`)
+    await wait(`${visible('.reference-composer')}?.value === 'Unsent investigation draft'`)
     await more('Session details')
     await wait(`!!${visible('[role="dialog"][aria-label="Session details"]')}`)
     assert.match(await execute(`${visible('.session-details')}.innerText`), /C:\\synthetic/)
@@ -302,14 +303,14 @@ async function main() {
     // follows the bottom when the composer dock is measured again after v-show.
     // Short platform-dependent text layout previously put scrollTop=60 only 7px
     // from the bottom on Linux, testing follow-bottom instead of scroll retention.
-    await execute(`window.__retainedComposer = ${visible('textarea')}; window.__retainedHistory = ${visible('.chat-messages')}; window.__retainedHistory.scrollTop = 60; window.__retainedScroll = window.__retainedHistory.scrollTop; void 0;`)
+    await execute(`window.__retainedComposer = ${visible('.reference-composer')}; window.__retainedHistory = ${visible('.chat-messages')}; window.__retainedHistory.scrollTop = 60; window.__retainedScroll = window.__retainedHistory.scrollTop; void 0;`)
     assert.equal(await execute(`window.__retainedScroll === 60 && window.__retainedHistory.scrollHeight - window.__retainedScroll - window.__retainedHistory.clientHeight > 32`), true,
       'Scroll-retention fixture must be scrollable and outside the composer follow-bottom zone')
     await click('[aria-label="Switch view"]')
     assert.equal(await execute(`[...document.querySelectorAll('.mobile-view-row button')].filter(window.__isVisible).find(el => el.textContent.trim() === 'Diagnosis').getBoundingClientRect().height >= 44`), true)
     await text('Diagnosis', '.mobile-view-row button')
     await wait(`!!${visible('.session-diagnosis')}`)
-    assert.equal(await execute(`!!${visible('textarea')}`), false)
+    assert.equal(await execute(`!!${visible('.reference-composer')}`), false)
     assert.equal(await execute(`${visible('.mobile-document-title')}.textContent.trim()`), 'Diagnosis')
     await captureDiagnosis('mobile')
     await click('[id$="diagnosis-prompt-tab"]')
@@ -321,8 +322,8 @@ async function main() {
     await wait(`!!${visible('.chat-history')}`)
     // Showing the retained v-show panel precedes completion of Chromium layout.
     // Require the same DOM nodes AND exact saved scroll position, not visibility alone.
-    await wait(`${visible('textarea')} === window.__retainedComposer && ${visible('.chat-messages')} === window.__retainedHistory && window.__retainedHistory.scrollTop === window.__retainedScroll`,
-      `({ composerRetained: ${visible('textarea')} === window.__retainedComposer, historyRetained: ${visible('.chat-messages')} === window.__retainedHistory,
+    await wait(`${visible('.reference-composer')} === window.__retainedComposer && ${visible('.chat-messages')} === window.__retainedHistory && window.__retainedHistory.scrollTop === window.__retainedScroll`,
+      `({ composerRetained: ${visible('.reference-composer')} === window.__retainedComposer, historyRetained: ${visible('.chat-messages')} === window.__retainedHistory,
         scrollTop: window.__retainedHistory.scrollTop, expectedScrollTop: window.__retainedScroll,
         scrollHeight: window.__retainedHistory.scrollHeight, clientHeight: window.__retainedHistory.clientHeight })`)
     await click('[aria-label="Message options"]')
@@ -352,7 +353,7 @@ async function main() {
     await wait(`!!${visible('[role="dialog"][aria-label="Open views"]')}`)
     assert.equal(await execute(`!!${visible('[aria-label="Close notes.txt"]')}`), true)
     await text('Renamed on phone', '.mobile-view-row button')
-    await wait(`${visible('textarea')}?.value === 'Unsent investigation draft'`)
+    await wait(`${visible('.reference-composer')}?.value === 'Unsent investigation draft'`)
     await resize(1100)
     for (const theme of ['light', 'dark']) {
       await execute(`document.documentElement.classList.toggle('dark', ${theme === 'dark'})`)
@@ -385,7 +386,7 @@ async function main() {
     assert.equal(await execute(`${visible('.diagnosis-tab button')}.getAttribute('aria-selected')`), 'true', 'Close all removes files without closing or deselecting Diagnosis')
     assert.equal(await execute(`[...document.querySelectorAll('.document-tablist [role="tab"]')].filter(window.__isVisible).every(tab => document.getElementById(tab.getAttribute('aria-controls'))?.getAttribute('aria-labelledby') === tab.id)`), true)
     await key('Home')
-    assert.equal(await execute(`${visible('textarea')} === window.__retainedComposer && window.__retainedComposer.value === 'Unsent investigation draft'`), true)
+    assert.equal(await execute(`${visible('.reference-composer')} === window.__retainedComposer && window.__retainedComposer.value === 'Unsent investigation draft'`), true)
     for (const width of [700, 701, 1100, 390]) {
       await resize(width)
       const mobile = width <= 700
@@ -393,7 +394,7 @@ async function main() {
       assert.equal(await execute(`!!${visible('.desktop-title-bar')}`), !mobile)
       assert.equal(await execute(`!!${visible('.document-toolbar')}`), !mobile)
       assert.equal(await execute(`!!${visible('.conversation-heading-row')}`), !mobile)
-      assert.equal(await execute(`${visible('textarea')}?.value`), 'Unsent investigation draft')
+      assert.equal(await execute(`${visible('.reference-composer')}?.value`), 'Unsent investigation draft')
       if (!mobile) {
         assert.equal(await execute(`!!${visible('.chat-history .message-history-rail')}`), true)
         assert.equal(await execute(`getComputedStyle(${visible('.chat-messages')}).scrollbarGutter`), 'stable both-edges')

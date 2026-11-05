@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -167,7 +168,7 @@ const server = createServer(async (request, response) => {
     response.end()
   }
 })
-const evaluate = <T = unknown>(window: BrowserWindow, source: string): Promise<T> => window.webContents.executeJavaScript(source)
+const evaluate = <T = unknown>(window: BrowserWindow, source: string): Promise<T> => window.webContents.executeJavaScript(withComposerTestAdapter(source))
 async function waitFor(window: BrowserWindow, source: string): Promise<void> {
   const deadline = Date.now() + 15000
   while (!await evaluate(window, source)) {
@@ -212,7 +213,7 @@ async function runViewport(origin: string, width: number, height: number) {
   const viewport = width > 700 ? 'desktop' : 'mobile'
   try {
     await window.loadURL(`${origin}/chat/${encodeURIComponent(root)}`)
-    await waitFor(window, `!!document.querySelector(${JSON.stringify(card(task))}) && !!document.querySelector('.primary-conversation textarea')`)
+    await waitFor(window, `!!document.querySelector(${JSON.stringify(card(task))}) && !!document.querySelector('.primary-conversation .reference-composer')`)
     assert.equal(await evaluate(window, `(() => {
       const spinner = document.querySelector(${JSON.stringify(card(task))})?.querySelector('.activity-spinner');
       if (!spinner) return false;
@@ -223,9 +224,9 @@ async function runViewport(origin: string, width: number, height: number) {
     await waitFor(window, `!document.querySelector('.primary-conversation .chat-messages')?.textContent.includes('Loading history') && document.querySelector('.primary-conversation .heading-folder')?.textContent.includes('subagent-modes')`)
     if (width > 700) await waitFor(window, `!!document.querySelector('.primary-conversation .tree-row[data-path="fixture.txt"]')`)
     assert.equal(await evaluate(window, `!!document.querySelector('.primary-conversation .chat-working, .primary-conversation .yield-question')`), false, 'Async child execution does not suspend the idle parent or invite a human response')
-    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').disabled`), false, 'Caller can continue while async children execute')
+    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .reference-composer').disabled`), false, 'Caller can continue while async children execute')
     await evaluate(window, `(() => {
-      const input = document.querySelector('.primary-conversation textarea');
+      const input = document.querySelector('.primary-conversation .reference-composer');
       input.value = 'Keep this exact unsent draft'; input.dispatchEvent(new Event('input', { bubbles: true }));
       window.modeRefs = { card: document.querySelector(${JSON.stringify(card(task))}), input, tree: document.querySelector('.folders-sidebar .session-select') };
     })()`)
@@ -255,26 +256,26 @@ async function runViewport(origin: string, width: number, height: number) {
     live.publisher.invalidateSessions(task)
     await waitFor(window, `document.querySelector(${JSON.stringify(card(task))})?.textContent.includes('Waiting for call')`)
     assert.ok(graphRequests > before)
-    assert.equal(await evaluate(window, `window.modeRefs.card === document.querySelector(${JSON.stringify(card(task))}) && window.modeRefs.input === document.querySelector('.primary-conversation textarea') && window.modeRefs.tree.isConnected`), true, 'Graph refresh preserves actual card, tree and composer DOM identity')
+    assert.equal(await evaluate(window, `window.modeRefs.card === document.querySelector(${JSON.stringify(card(task))}) && window.modeRefs.input === document.querySelector('.primary-conversation .reference-composer') && window.modeRefs.tree.isConnected`), true, 'Graph refresh preserves actual card, tree and composer DOM identity')
     malformedGraph = true
     live.publisher.invalidateSessions()
     await waitFor(window, `document.querySelector('.folders-sidebar')?.textContent.includes('Cannot read conversations')`)
-    assert.equal(await evaluate(window, `window.modeRefs.card.isConnected && document.querySelector('.primary-conversation textarea').value === 'Keep this exact unsent draft'`), true)
+    assert.equal(await evaluate(window, `window.modeRefs.card.isConnected && document.querySelector('.primary-conversation .reference-composer').value === 'Keep this exact unsent draft'`), true)
     malformedGraph = false
     live.publisher.invalidateSessions()
     await waitFor(window, `!document.querySelector('.folders-sidebar')?.textContent.includes('Cannot read conversations')`)
 
     await click(window, card(task))
     await waitFor(window, `document.querySelector('.child-conversation .chat-content')?.textContent.includes(${JSON.stringify(task)})`)
-    assert.equal(await evaluate(window, `!!document.querySelector('.child-conversation textarea') || !!document.querySelector('.child-conversation .workbench-explorer') || !!document.querySelector('.child-conversation .explorer-toggle')`), false, 'Execution inspection has no composer or file tree')
+    assert.equal(await evaluate(window, `!!document.querySelector('.child-conversation .reference-composer') || !!document.querySelector('.child-conversation .workbench-explorer') || !!document.querySelector('.child-conversation .explorer-toggle')`), false, 'Execution inspection has no composer or file tree')
     assert.equal(fileReads.includes(task), false)
-    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').value`), 'Keep this exact unsent draft')
+    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .reference-composer').value`), 'Keep this exact unsent draft')
     assert.equal(await evaluate(window, `document.querySelector('.child-conversation .execution-summary').textContent.includes('Waiting for call')`), true)
     assert.equal(await evaluate(window, `!!document.querySelector('.child-conversation .execution-summary .activity-spinner, .child-conversation .working-wave, .child-conversation .yield-question')`), false, 'Task suspended on a call is neither thinking nor waiting for human input')
     await screenshot(window, `subagent-mode-inspect-${viewport}`)
     await click(window, card(nested, '.child-conversation'))
     await waitFor(window, `document.querySelector('.child-conversation .chat-content')?.textContent.includes(${JSON.stringify(nested)})`)
-    assert.equal(await evaluate(window, `!!document.querySelector('.child-conversation textarea, .child-conversation .yield-question, .child-conversation .execution-cards')`), false, 'Leaf call has no message, yield, or child-execution controls')
+    assert.equal(await evaluate(window, `!!document.querySelector('.child-conversation .reference-composer, .child-conversation .yield-question, .child-conversation .execution-cards')`), false, 'Leaf call has no message, yield, or child-execution controls')
     assert.equal(await evaluate(window, `document.querySelector('.child-conversation .execution-summary').textContent.includes('Call · inherited context · blocking')`), true)
     assert.equal(fileReads.includes(nested), false)
     assert.equal(yieldReads.includes(nested), false, 'Call inspector must not poll the yield endpoint')
@@ -300,17 +301,17 @@ async function runViewport(origin: string, width: number, height: number) {
     rejectHistory = ''
     await click(window, '.close-child')
     await waitFor(window, `!document.querySelector('.child-conversation')`)
-    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').value`), 'Keep this exact unsent draft')
+    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .reference-composer').value`), 'Keep this exact unsent draft')
 
     if (width <= 700) await click(window, '.projects-toggle')
     await click(window, '.folders-sidebar .session-select[aria-label="Quoted side chat"]')
-    await waitFor(window, `document.querySelector('.child-conversation .chat-content')?.textContent.includes('Side chat quotation source.') && !!document.querySelector('.child-conversation textarea') && !document.querySelector('.child-conversation .chat-messages')?.textContent.includes('Loading history')`)
-    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea') === window.modeRefs.input && window.modeRefs.input.value === 'Keep this exact unsent draft'`), true, 'Context-only fork must retain its original primary pane and draft')
+    await waitFor(window, `document.querySelector('.child-conversation .chat-content')?.textContent.includes('Side chat quotation source.') && !!document.querySelector('.child-conversation .reference-composer') && !document.querySelector('.child-conversation .chat-messages')?.textContent.includes('Loading history')`)
+    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .reference-composer') === window.modeRefs.input && window.modeRefs.input.value === 'Keep this exact unsent draft'`), true, 'Context-only fork must retain its original primary pane and draft')
     assert.equal(await evaluate(window, `new URLSearchParams(location.search).get('child')`), userFork)
     assert.equal(await evaluate(window, `!!document.querySelector('.child-conversation .workbench-explorer, .child-conversation .explorer-toggle')`), false)
     const beforeForkRefresh = graphRequests
     await evaluate(window, `(() => {
-      const input = document.querySelector('.child-conversation textarea');
+      const input = document.querySelector('.child-conversation .reference-composer');
       input.focus(); input.value = 'Side chat draft'; input.dispatchEvent(new Event('input', { bubbles: true }));
       input.blur(); window.forkInput = input;
     })()`)
@@ -322,34 +323,34 @@ async function runViewport(origin: string, width: number, height: number) {
       document.dispatchEvent(new Event('selectionchange'));
     })()`)
     await click(window, '.selection-menu button[aria-keyshortcuts="Q"]')
-    await waitFor(window, `document.querySelector('.child-conversation textarea')?.value.includes('> Side chat quotation source.')`)
+    await waitFor(window, `document.querySelector('.child-conversation .reference-composer')?.value.includes('> Side chat quotation source.')`)
     live.publisher.invalidateSessions(userFork)
     const refreshDeadline = Date.now() + 10000
     while (graphRequests <= beforeForkRefresh && Date.now() < refreshDeadline) await new Promise(resolve => setTimeout(resolve, 50))
     assert.ok(graphRequests > beforeForkRefresh)
-    assert.equal(await evaluate(window, `document.querySelector('.child-conversation textarea') === window.forkInput && window.forkInput.value.includes('Side chat draft') && window.forkInput.value.includes('> Side chat quotation source.') && window.modeRefs.input.value === 'Keep this exact unsent draft'`), true, 'Quoting and graph refresh retain side-chat input identity without touching the primary draft')
+    assert.equal(await evaluate(window, `document.querySelector('.child-conversation .reference-composer') === window.forkInput && window.forkInput.value.includes('Side chat draft') && window.forkInput.value.includes('> Side chat quotation source.') && window.modeRefs.input.value === 'Keep this exact unsent draft'`), true, 'Quoting and graph refresh retain side-chat input identity without touching the primary draft')
     assert.equal(fileReads.includes(userFork), false)
     await click(window, '.close-child')
     await waitFor(window, `!document.querySelector('.child-conversation')`)
 
     if (width <= 700) await click(window, '.projects-toggle')
     await click(window, '.folders-sidebar .session-select[aria-label="Reusable explorer"]')
-    await waitFor(window, `!!document.querySelector('.child-conversation textarea')`)
+    await waitFor(window, `!!document.querySelector('.child-conversation .reference-composer')`)
     await evaluate(window, `(() => {
-      const input = document.querySelector('.child-conversation textarea');
+      const input = document.querySelector('.child-conversation .reference-composer');
       input.value = 'Keep reusable draft'; input.dispatchEvent(new Event('input', { bubbles: true }));
     })()`)
     sessions.find(item => item.sessionId === reusable)!.waitingForCall = true
     sessions.find(item => item.sessionId === reusableCall)!.executionStatus = 'running'
     live.publisher.invalidateSessions(reusable)
-    await waitFor(window, `document.querySelector('.child-conversation .chat-working')?.textContent.includes('Waiting for call') && document.querySelector('.child-conversation textarea')?.disabled === false`)
+    await waitFor(window, `document.querySelector('.child-conversation .chat-working')?.textContent.includes('Waiting for call') && document.querySelector('.child-conversation .reference-composer')?.disabled === false`)
     assert.equal(await evaluate(window, `!!document.querySelector('.child-conversation .chat-working .activity-spinner, .child-conversation .working-wave, .child-conversation .yield-question')`), false)
-    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').value`), 'Keep this exact unsent draft')
+    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .reference-composer').value`), 'Keep this exact unsent draft')
     sessions.find(item => item.sessionId === reusable)!.waitingForCall = false
     sessions.find(item => item.sessionId === reusableCall)!.executionStatus = 'completed'
     live.publisher.invalidateSessions(reusable)
-    await waitFor(window, `document.querySelector('.child-conversation textarea')?.disabled === false`)
-    assert.equal(await evaluate(window, `document.querySelector('.child-conversation textarea').value`), 'Keep reusable draft')
+    await waitFor(window, `document.querySelector('.child-conversation .reference-composer')?.disabled === false`)
+    assert.equal(await evaluate(window, `document.querySelector('.child-conversation .reference-composer').value`), 'Keep reusable draft')
     reusableYield = true
     live.publisher.invalidateSessions(reusable)
     await waitFor(window, `document.querySelector('.child-conversation .yield-question')?.textContent.includes('Which verification should continue?')`)
@@ -366,17 +367,17 @@ async function runViewport(origin: string, width: number, height: number) {
       await waitFor(window, `document.querySelector('.primary-conversation .file-document')?.textContent.includes('Synthetic preview content')`)
       rootStreaming = true
       live.chat(root, { event: 'response', content: 'Synthetic live response', done: false })
-      await waitFor(window, `!!document.querySelector('.primary-conversation [aria-label="Stop current request"]') && document.querySelector('.primary-conversation textarea')?.disabled === false`)
+      await waitFor(window, `!!document.querySelector('.primary-conversation [aria-label="Stop current request"]') && document.querySelector('.primary-conversation .reference-composer')?.disabled === false`)
       assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .conversation-document').getClientRects().length`), 0)
       await click(window, '.primary-conversation .conversation-tab button')
       await click(window, card(task))
       await waitFor(window, `!!document.querySelector('.child-conversation .execution-summary')`)
-      assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').value`), 'Keep this exact unsent draft')
+      assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .reference-composer').value`), 'Keep this exact unsent draft')
       await click(window, '.close-child')
       rootStreaming = false
       live.finish(root)
     }
-    await waitFor(window, `document.querySelector('.primary-conversation textarea')?.disabled === false`)
+    await waitFor(window, `document.querySelector('.primary-conversation .reference-composer')?.disabled === false`)
     const emit = (payload: Parameters<LiveFixture['chat']>[1]) => live.chat(root, payload)
     const liveId = `web:chat-mode-live-${width}`
     liveExecutions.add(liveId)
@@ -395,7 +396,7 @@ async function runViewport(origin: string, width: number, height: number) {
       content: JSON.stringify({ sessionId: liveId, mode: 'task', status: 'running' }), done: false })
     emit({ event: 'response', content: 'Parent continues after admission.', done: true })
     live.finish(root)
-    await waitFor(window, `document.querySelector('.primary-conversation textarea')?.disabled === false`)
+    await waitFor(window, `document.querySelector('.primary-conversation .reference-composer')?.disabled === false`)
     assert.equal(await evaluate(window, `document.querySelector(${JSON.stringify(card(parallelId))})?.textContent.includes('Parallel delegated work')`), true, 'Parallel results keep their originating tool card')
     assert.equal(await evaluate(window, `document.querySelector(${JSON.stringify(card(liveId))})?.textContent.includes('Live delegated work')`), true, 'The later result cannot overwrite the earlier parallel result')
     const completion = {
@@ -410,7 +411,7 @@ async function runViewport(origin: string, width: number, height: number) {
     emit({ event: 'session_message', message: completion })
     live.publisher.chat(root, { event: 'session_message', message: completion })
     await waitFor(window, `document.querySelector('[data-event-id="inline-result"] .event-body')?.innerText.includes('Synthetic result: 56')`)
-    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').disabled`), false, 'Receiving a task result does not pretend the parent is working')
+    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .reference-composer').disabled`), false, 'Receiving a task result does not pretend the parent is working')
     emit({ event: 'response', content: 'Parent acknowledges the completed task.', done: true })
     live.finish(root)
     await waitFor(window, `document.querySelector('.primary-conversation .chat-messages')?.textContent.includes('Parent acknowledges')`)
@@ -420,7 +421,7 @@ async function runViewport(origin: string, width: number, height: number) {
       const reply = Array.from(document.querySelectorAll('.primary-conversation .chat-content')).find(node => node.textContent.includes('Parent acknowledges'));
       return event.open && !event.querySelector('.event-metadata').open && !!(event.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING);
     })()`), true, 'Completion body is expanded before the parent response; metadata remains secondary')
-    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').value`), 'Keep this exact unsent draft')
+    assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .reference-composer').value`), 'Keep this exact unsent draft')
     await screenshot(window, `subagent-mode-events-${viewport}`)
     await window.reload()
     await waitFor(window, `document.querySelector('[data-event-id="inline-result"] .event-body')?.innerText.includes('Synthetic result: 56')`)

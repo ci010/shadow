@@ -19,10 +19,10 @@ async function main() {
     throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}`)
   }
   const type = async (text: string) => {
-    await execute(`{const input=document.querySelector('.composer-input textarea');input.focus();input.value=${JSON.stringify(text)};input.dispatchEvent(new Event('input',{bubbles:true}));}`)
+    await execute(`{const input=document.querySelector('.composer-input .reference-composer');input.focus();input.textContent=${JSON.stringify(text)};input.dispatchEvent(new Event('input',{bubbles:true}));}`)
     await delay(20)
   }
-  const key = (extra = '') => execute(`(() => {const input=document.querySelector('.composer-input textarea');const event=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true,${extra}});input.dispatchEvent(event);return event.defaultPrevented;})()`)
+  const key = (extra = '') => execute(`(() => {const input=document.querySelector('.composer-input .reference-composer');const event=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true,${extra}});input.dispatchEvent(event);return event.defaultPrevented;})()`)
   const screenshot = async (name: string) => {
     if (!process.env.COMPOSER_SCREENSHOTS) return
     await delay(60)
@@ -30,7 +30,7 @@ async function main() {
   }
   try {
     await window.loadURL(new URL('__composer', process.env.COMPOSER_SMOKE_URL).href)
-    await wait(`window.__composerFixture?.state().activeSessionId === 'web:chat-composer-fixture' && window.__composerFixture.state().mounted && !window.__composerFixture.state().loadingHistory && !!document.querySelector('.composer-input textarea')`)
+    await wait(`window.__composerFixture?.state().activeSessionId === 'web:chat-composer-fixture' && window.__composerFixture.state().mounted && !window.__composerFixture.state().loadingHistory && !!document.querySelector('.composer-input .reference-composer')`)
     await execute(`window.__composerFixture.state().currentWorkdir={kind:'local',displayPath:'C:\\\\fixture',available:true}`)
     if (process.env.CONTEXT_ONLY === '1') {
       await execute(`window.__composerFixture.showQQ()`)
@@ -70,7 +70,7 @@ async function main() {
       }
       await execute(`window.__composerFixture.showAutomation()`)
       await wait(`!!document.querySelector('.channel-conversation-settings button') && !window.__composerFixture.state().loadingHistory`)
-      assert.equal(await execute(`document.querySelectorAll('.composer-input textarea').length`), 0)
+      assert.equal(await execute(`document.querySelectorAll('.composer-input .reference-composer').length`), 0)
       assert.match(await execute(`document.querySelector('.channel-conversation-settings').textContent`), /This automation conversation/)
       assert.match(await execute(`document.querySelector('.channel-conversation-settings button').textContent`), /Project.*gpt-project/)
       await openAutomationSettings('model')
@@ -128,24 +128,24 @@ async function main() {
     assert.equal(await execute(`window.__composerFixture.sent[2].delivery`), undefined)
     await execute(`window.__composerFixture.ask()`)
     await wait(`!!document.querySelector('.yield-question .yield-custom-toggle') && !!document.querySelector('.composer-reply-context')`)
-    assert.equal(await execute(`document.querySelectorAll('textarea').length`), 1)
-    assert.equal(await execute(`document.querySelector('.yield-custom-toggle').getAttribute('aria-controls')`), await execute(`document.querySelector('.composer-input textarea').id`))
+    assert.equal(await execute(`document.querySelectorAll('.reference-composer, textarea').length`), 1)
+    assert.equal(await execute(`document.querySelector('.yield-custom-toggle').getAttribute('aria-controls')`), await execute(`document.querySelector('.composer-input .reference-composer').id`))
     await execute(`document.querySelector('.yield-custom-toggle').click()`)
-    await wait(`document.activeElement === document.querySelector('.composer-input textarea')`)
+    await wait(`document.activeElement === document.querySelector('.composer-input .reference-composer')`)
     await type('/my literal custom answer')
     await execute(`{const input=document.querySelector('.composer-file-input');const files=new DataTransfer();files.items.add(new File(['Fixture attachment'],'notes.txt'));input.files=files.files;input.dispatchEvent(new Event('change',{bubbles:true}));window.__composerFixture.reject=true;}`)
     await wait(`!!document.querySelector('.attachment-chip')`)
     const sentBefore = await execute(`window.__composerFixture.sent.length`)
     await key()
     await wait(`document.querySelector('.yield-error')?.textContent.includes('Synthetic answer conflict')`)
-    assert.equal(await execute(`document.querySelector('.composer-input textarea').value`), '/my literal custom answer')
+    assert.equal(await execute(`document.querySelector('.composer-input .reference-composer').textContent`), '/my literal custom answer')
     assert.equal(await execute(`document.querySelectorAll('.attachment-chip').length`), 1)
     assert.equal(await execute(`window.__composerFixture.sent.length`), sentBefore)
     await execute(`window.__composerFixture.reject=false`)
     await key()
     await wait(`window.__composerFixture.answers.length === 2 && !document.querySelector('.yield-question')`)
     assert.deepEqual(await execute(`window.__composerFixture.answers.at(-1).media`), ['C:\\fixture\\uploads\\notes.txt'])
-    assert.equal(await execute(`document.querySelector('.composer-input textarea').value`), '')
+    assert.equal(await execute(`document.querySelector('.composer-input .reference-composer').textContent`), '')
     await execute(`window.__composerFixture.ask('input')`)
     await wait(`!!document.querySelector('.yield-question') && !!document.querySelector('.composer-reply-context')`)
     await screenshot('composer-desktop')
@@ -153,9 +153,9 @@ async function main() {
     await delay(100)
     await wait(`document.querySelector('.chat-workspace').classList.contains('mobile-chat')`)
     assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false)
-    assert.equal(await execute(`document.querySelectorAll('textarea').length`), 1)
+    assert.equal(await execute(`document.querySelectorAll('.reference-composer, textarea').length`), 1)
     const inputOverlapsAction = await execute(`(() => {
-      const input=document.querySelector('.composer-input textarea').getBoundingClientRect();
+      const input=document.querySelector('.composer-input .reference-composer').getBoundingClientRect();
       return Array.from(document.querySelectorAll('.composer-submit button')).some(button => {
         const rect=button.getBoundingClientRect();
         return rect.width>0 && rect.height>0 && input.left<rect.right && input.right>rect.left && input.top<rect.bottom && input.bottom>rect.top;
@@ -169,7 +169,7 @@ async function main() {
     await wait(`window.__composerFixture.answers.at(-1)?.text === 'My narrow-screen answer'`)
     await execute(`window.__composerFixture.showQQ()`)
     await wait(`!!document.querySelector('.channel-conversation-settings button') && !window.__composerFixture.state().loadingHistory`)
-    assert.equal(await execute(`document.querySelectorAll('.composer-input textarea').length`), 0, 'QQ history stays read-only')
+    assert.equal(await execute(`document.querySelectorAll('.composer-input .reference-composer').length`), 0, 'QQ history stays read-only')
     assert.match(await execute(`document.querySelector('.channel-conversation-settings button').textContent`), /Default.*gpt-agent.*Low/)
     assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false)
     await screenshot('qq-model-mobile')
@@ -223,7 +223,7 @@ async function main() {
       window.setContentSize(index % 2 ? 390 : 1100, 844)
       await execute(`window.__composerFixture.showChannel(${JSON.stringify(id)})`)
       await wait(`!!document.querySelector('.channel-conversation-settings button') && !window.__composerFixture.state().loadingHistory`)
-      assert.equal(await execute(`document.querySelectorAll('.composer-input textarea').length`), 0)
+      assert.equal(await execute(`document.querySelectorAll('.composer-input .reference-composer').length`), 0)
       assert.match(await execute(`document.querySelector('.channel-conversation-settings button').textContent`), /Default.*gpt-agent.*Low/)
       const previous = await execute(`window.__composerFixture.patches.length`)
       await openSettings('model')
@@ -241,7 +241,7 @@ async function main() {
     }
     assert.deepEqual(await execute(`window.__composerFixture.configs['bot:fixture:bot:qq:group%3Afixture']`), {}, 'Other channel changes leave QQ untouched')
     await execute(`window.__composerFixture.showWeb()`)
-    await wait(`!!document.querySelector('.composer-input textarea') && !window.__composerFixture.state().loadingHistory`)
+    await wait(`!!document.querySelector('.composer-input .reference-composer') && !window.__composerFixture.state().loadingHistory`)
     await execute(`window.__composerFixture.ask('input');window.__composerFixture.showDedicated()`)
     await wait(`!!document.querySelector('.yield-custom textarea')`)
     await execute(`{const input=document.querySelector('.yield-custom textarea');input.value='Enter submits the dedicated answer';input.dispatchEvent(new Event('input',{bubbles:true}));}`)
