@@ -27,7 +27,11 @@ test('history revalidation works through gateway no-store without readable ETag 
     getHistory: async () => ({ messages: [{ role: 'user', content }, ...appended] }),
     getCommandResults: async () => [], getYieldRecords: async () => [],
   } as unknown as SessionManager })
-  registerGatewayRoutes(app, [], { allowedOrigins: ['http://localhost:5273'], authorizeClient: () => authorized })
+  registerGatewayRoutes(app, [], {
+    allowedOrigins: ['http://localhost:5273'],
+    launchCredential: 'synthetic-snapshot-test-credential',
+    authorizeClient: () => authorized,
+  }, {})
   // Model outer security middleware and the browser's CORS header filtering.
   app.use('*', async (c, next) => { await next(); c.header('Cache-Control', 'no-store') })
   await channel.start(app)
@@ -464,4 +468,63 @@ test('aggregate UTF-8 bytes evict LRU even when each entry fits individually', a
   }) as typeof fetch, Buffer.byteLength(JSON.stringify(body)) * 2 - 1, 8)
   for (const key of ['a', 'b', 'a']) await cache.read(`http://main/${key}`, new AbortController().signal)
   assert.deepEqual(validators, ['', '', ''], 'byte budget, not entry count, evicts the prior entry')
+})
+
+
+test('multi-image 17.86/18MiB trees fail the length-only screen before any content scan', async () => {
+  for (const mib of [17.86, 18]) {
+    const total = Math.floor(mib * 1024 * 1024)
+    const imageSizes = [5, 4, 3, 2, 1].map(n => n * 1024 * 1024)
+    const body = {
+      history: imageSizes.map(size => ({ role: 'user', content: [{ type: 'image', data: 'a'.repeat(size) }] })),
+      metadata: { prompt: 'p'.repeat(total - imageSizes.reduce((a, b) => a + b, 0)), tools: ['read'] },
+    }
+    const validators: string[] = []
+    const cache = createChatHistorySnapshots((async url => {
+      validators.push(new URL(String(url)).searchParams.get('snapshot')!)
+      return { ok: true, status: 200, json: async () => ({ revision, data: body }) } as Response
+    }) as typeof fetch)
+    const charCodeAt = String.prototype.charCodeAt
+    const stringify = JSON.stringify
+    const encode = TextEncoder.prototype.encode
+    const regexTest = RegExp.prototype.test
+    let chars = 0, serializations = 0, encodings = 0, largeRegexScans = 0
+    try {
+      String.prototype.charCodeAt = function (i) { chars++; return charCodeAt.call(this, i) }
+      JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => { serializations++; return stringify(...args) }) as typeof JSON.stringify
+      TextEncoder.prototype.encode = function (...args) { encodings++; return encode.apply(this, args) }
+      RegExp.prototype.test = function (s) { if (s.length > 1024) largeRegexScans++; return regexTest.call(this, s) }
+      for (let i = 0; i < 2; i++) assert.equal(data(await cache.read('http://main/history', new AbortController().signal)), body)
+    } finally {
+      String.prototype.charCodeAt = charCodeAt
+      JSON.stringify = stringify
+      TextEncoder.prototype.encode = encode
+      RegExp.prototype.test = regexTest
+      cache.dispose()
+    }
+    assert.deepEqual(validators, ['', ''], `${mib}MiB aggregate must not cache`)
+    assert.deepEqual({ chars, serializations, encodings, largeRegexScans }, { chars: 0, serializations: 0, encodings: 0, largeRegexScans: 0 })
+  }
+})
+
+test('large ASCII images fit exact boundary while escaped keys, emoji and deep objects remain safe', async () => {
+  let deep: unknown = 'leaf'
+  for (let i = 0; i < 105; i++) deep = { child: deep }
+  for (const body of [
+    { history: [1, 2, 3].map(() => ({ image: 'a'.repeat(1024 * 1024) })) },
+    { 'escaped"\\\nkey': ['😀'.repeat(1024), '\ud800', '\u0000', '\\', '"'] },
+    { deep },
+  ]) {
+    const exact = Buffer.byteLength(JSON.stringify(body))
+    for (const budget of [exact - 1, exact]) {
+      const validators: string[] = []
+      const cache = createChatHistorySnapshots((async url => {
+        validators.push(new URL(String(url)).searchParams.get('snapshot')!)
+        return { ok: true, status: 200, json: async () => ({ revision, data: body }) } as Response
+      }) as typeof fetch, budget)
+      for (let i = 0; i < 2; i++) await cache.read('http://main/history', new AbortController().signal)
+      assert.equal(validators[1], budget === exact && !('deep' in body) ? revision : '')
+      cache.dispose()
+    }
+  }
 })

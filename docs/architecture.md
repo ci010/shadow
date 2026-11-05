@@ -690,10 +690,21 @@ through Hono's route-scoped compression middleware. Compressed responses vary on
 `Accept-Encoding` and use weak HTTP ETags; snapshot revisions continue to hash
 the uncompressed representation. Realtime streams and media/range routes are not
 covered by this middleware. Enabling this server-side change requires a backend
-restart; browsers transparently decode the response. The frontend snapshot layer
+restart; browsers transparently decode the response. Child workspace tunneling
+preserves `Accept-Encoding` through the authenticated device header allowlist.
+An explicit `decoded-v1` compatibility signal opts updated Child versions into
+compressed inner responses; older/unknown Child versions retain identity bytes.
+This signal is encoding negotiation, never authentication or device authority.
+Because Child's Node fetch decodes the Main response, Child removes the upstream
+encoding/length/framing headers and separately negotiates gzip for the final
+history-response hop. CORS merges `Vary: Origin` with existing encoding validators
+instead of replacing them. Both Main and Child backends need updated builds and
+restarts for the complete compression path. The frontend snapshot layer
 returns an owned parsed object rather than serializing it through an intermediate
-`Response`. Its cache remains limited to 16 MiB/eight entries: JSON UTF-8 size is
-counted without constructing another full JSON string, and oversized/deep bodies
+`Response`. Its cache remains limited to 16 MiB/eight entries: a string-length-only
+lower-bound pass rejects collectively oversized image/history trees before any
+per-character scan. Only candidates that may fit receive exact JSON UTF-8 size
+counting, with an ASCII fast path and no additional full JSON string. Oversized/deep bodies
 remain displayable but uncached. Compressed `Content-Length` is never used as the
 decoded cache-size budget. Cached bases stay isolated from caller mutation.
 

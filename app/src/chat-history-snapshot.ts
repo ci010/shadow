@@ -4,13 +4,24 @@ export type ChatHistorySnapshotResult =
   | { ok: true; status: number; data: Record<string, unknown> }
   | { ok: false; status: number; response: Response }
 
-/** JSON UTF-8 byte budget without allocating serialized strings/buffers. Stops as soon
- * as the budget is exceeded (including before scanning an oversized string).
- * Deep values are conservatively uncacheable, not rejected as history. */
-function jsonBytes(value: unknown, limit: number, depth = 0): number {
+/** Screen the entire tree using only string lengths before inspecting any string
+ * contents. UTF-16 length is a lower bound for JSON UTF-8 (including surrogates).
+ * Oversized multi-image bodies therefore never pay a per-character scan. */
+function jsonBytes(value: unknown, limit: number): number {
+  if (jsonSize(value, limit, true) > limit) return Infinity
+  return jsonSize(value, limit, false)
+}
+
+// A single native character-class search: no nested quantifiers/backtracking,
+// no intermediate JSON or UTF-8 buffer. Most image/base64 strings take this path.
+const needsJsonCounting = /["\\\x00-\x1f\x80-\uffff]/
+
+/** Deep values are conservatively uncacheable, not rejected as history. */
+function jsonSize(value: unknown, limit: number, lowerBound: boolean, depth = 0): number {
   if (limit < 0 || depth > 100) return Infinity
   if (typeof value === 'string') {
     if (value.length + 2 > limit) return Infinity
+    if (lowerBound || !needsJsonCounting.test(value)) return value.length + 2
     let size = 2
     for (let i = 0; i < value.length; i++) {
       const code = value.charCodeAt(i)
@@ -33,14 +44,14 @@ function jsonBytes(value: unknown, limit: number, depth = 0): number {
   let size = 2
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      size += (i ? 1 : 0) + jsonBytes(value[i], limit - size - (i ? 1 : 0), depth + 1)
+      size += (i ? 1 : 0) + jsonSize(value[i], limit - size - (i ? 1 : 0), lowerBound, depth + 1)
       if (size > limit) return Infinity
     }
   } else {
     let first = true
     for (const key of Object.keys(value)) {
-      size += (first ? 0 : 1) + jsonBytes(key, limit - size - (first ? 0 : 1), depth + 1) + 1
-      size += jsonBytes((value as Record<string, unknown>)[key], limit - size, depth + 1)
+      size += (first ? 0 : 1) + jsonSize(key, limit - size - (first ? 0 : 1), lowerBound, depth + 1) + 1
+      size += jsonSize((value as Record<string, unknown>)[key], limit - size, lowerBound, depth + 1)
       if (size > limit) return Infinity
       first = false
     }
