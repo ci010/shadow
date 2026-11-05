@@ -273,7 +273,10 @@ function registerGatewayRoutes(
     await previewContext.run({ store: htmlPreviews, origin: new URL(c.req.url).origin, owner: browserSession?.controller.signal }, next)
     if (normalizedRequestOrigin) {
       c.header('Access-Control-Allow-Origin', normalizedRequestOrigin)
-      c.header('Access-Control-Expose-Headers', 'ETag')
+      const exposedHeaders = (c.res.headers.get('Access-Control-Expose-Headers') ?? '')
+        .split(',').map(header => header.trim()).filter(Boolean)
+      if (!exposedHeaders.some(header => header.toLowerCase() === 'etag')) exposedHeaders.push('ETag')
+      c.header('Access-Control-Expose-Headers', exposedHeaders.join(', '))
       c.header('Vary', 'Origin')
     }
   })
