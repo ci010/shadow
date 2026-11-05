@@ -26,6 +26,22 @@ commit/push**. Only explicit human authorization for the specified repository an
 permits that fallback, subject to higher-priority restrictions; it does not expand
 force/reset/clean, hook bypass or publication permissions.
 
+## Isolated working trees
+
+Use a separate working tree when isolation is needed, not as mandatory setup.
+Keep Git worktrees **beside** the repository (for example,
+`../shadow-task-name`), never nested inside it (`.tmp-*`, `worktrees/`, etc.).
+Sibling worktrees keep source searches, file watchers and build tooling from
+traversing another checkout. Preserve other sessions' edits; review and commit
+only task-owned changes, and remove temporary worktrees with `git worktree remove`
+after verifying the work is committed and no unique edits remain.
+
+For large repositories or many concurrent isolated tasks, prefer **layerfs** when
+available rather than materializing many full Git worktrees. Read its Skill and
+check availability and supported operations first; layerfs does not replace Git
+review, commit/push safeguards, or permission checks. If unavailable, use a sibling
+Git worktree.
+
 Prefer **gh** for GitHub search/file reading over fetching pages with `fetch` or
 `read`; authentication improves quotas, not unlimited requests. If missing,
 offer setup from https://cli.github.com/; manual downloads follow
