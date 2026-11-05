@@ -345,3 +345,25 @@ test('conditional GET CORS exposes validators and preflight caching never grants
   assertEquals(actual.status, 200)
   assertEquals(actual.headers.get('Access-Control-Expose-Headers'), 'ETag')
 })
+
+
+test('gateway CORS preserves route-exposed image provenance and range headers', async () => {
+  const app = new Hono()
+  registerGatewayRoutes(app, [gateway => {
+    gateway.get('/api/image', c => c.body('image fixture', 200, {
+      'X-Shadow-Source-Path': encodeURIComponent('/fixture/image.png'),
+      'Access-Control-Expose-Headers': 'X-Shadow-Source-Path',
+    }))
+    gateway.get('/api/range', c => c.body('range fixture', 200, {
+      'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges, etag',
+    }))
+  }], { allowedOrigins: ['http://localhost:5273'] }, {})
+  const headers = { Origin: 'http://localhost:5273' }
+  const image = await app.request('/api/image', { headers })
+  assertEquals(image.status, 200)
+  assertEquals(image.headers.get('Access-Control-Allow-Origin'), headers.Origin)
+  assertEquals(image.headers.get('X-Shadow-Source-Path'), encodeURIComponent('/fixture/image.png'))
+  assertEquals(image.headers.get('Access-Control-Expose-Headers'), 'X-Shadow-Source-Path, ETag')
+  const range = await app.request('/api/range', { headers })
+  assertEquals(range.headers.get('Access-Control-Expose-Headers'), 'Content-Length, Content-Range, Accept-Ranges, etag')
+})
