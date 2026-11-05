@@ -90,11 +90,14 @@ try {
   const writes=[];
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{writes.push(value)}}});
   const source=ref('first');
+  let htmlCalls=0;
+  const renderer=ref(text=>{htmlCalls++;return '<p>'+text+'</p>'});
   const copyApp=createApp({setup:()=>()=>h('main',[
     h(MarkdownContent,{text:source.value,renderContent:text=>'<pre><code>'+text+'&lt;tag&gt;\\n</code></pre>'}),
-    h(MessageCopyActions,{text:source.value,renderContent:text=>'<p>'+text+'</p>'})
+    h(MessageCopyActions,{text:source.value,renderContent:renderer.value})
   ])});
   copyApp.mount('#app');await nextTick();await nextTick();
+  check(htmlCalls===0,'mount eagerly rendered HTML');
   const click=async selector=>{document.querySelector(selector).click();await new Promise(resolve=>setTimeout(resolve,0));await nextTick()};
   check(document.querySelectorAll('pre .code-copy button').length===1,'missing code copy action');
   check(getComputedStyle(document.querySelector('pre')).marginBottom==='0px','Markdown wrapper must not reintroduce last-block bottom spacing');
@@ -102,13 +105,34 @@ try {
   check(writes.at(-1)==='first<tag>\\n','code copy must preserve raw text, not markup');
   await click('.message-copy-actions button');
   check(writes.at(-1)==='first','Markdown copy changed source');
+  check(htmlCalls===0,'Markdown copy or tooltip label rendered HTML');
   await click('.message-copy-actions .copy-icon-control:last-child button');
   check(writes.at(-1)==='<p>first</p>','HTML copy did not use rendered HTML');
+  check(htmlCalls===1,'HTML click must evaluate exactly once');
   source.value='second';await nextTick();await nextTick();
   check(document.querySelectorAll('pre .code-copy button').length===1,'code update duplicated copy action');
   await click('pre .code-copy button');
   check(writes.at(-1)==='second<tag>\\n','code copy stale after update');
+  check(htmlCalls===1,'text change eagerly rendered HTML');
+  source.value='long message '.repeat(10000);await nextTick();
+  check(htmlCalls===1,'long message update eagerly rendered HTML');
+  renderer.value=text=>{htmlCalls++;return '<article>'+text+'</article>'};await nextTick();
+  check(htmlCalls===1,'renderer change eagerly rendered HTML');
+  const htmlButton=document.querySelector('.message-copy-actions .copy-icon-control:last-child button');
+  htmlButton.dispatchEvent(new PointerEvent('pointerenter',{bubbles:true,pointerType:'mouse'}));
+  await new Promise(resolve=>setTimeout(resolve,200));await nextTick();
+  check(htmlCalls===1,'hover rendered HTML');
+  htmlButton.click();
+  check(htmlCalls===2 && writes.at(-1)==='<article>'+source.value+'</article>','click must synchronously copy latest text and renderer once');
+  await nextTick();
   copyApp.unmount();
+  const beforeLongMount=htmlCalls;
+  const longApp=createApp({setup:()=>()=>h(MessageCopyActions,{text:source.value,renderContent:renderer.value})});
+  longApp.mount('#app');await nextTick();await nextTick();
+  check(htmlCalls===beforeLongMount,'mounting long message rendered HTML');
+  await click('.message-copy-actions .copy-icon-control:last-child button');
+  check(htmlCalls===beforeLongMount+1,'long message click did not render exactly once');
+  longApp.unmount();
   window.result='MARKDOWN_CONTENT_OK';
 } catch(error) {window.result=error.stack || String(error)}
 `

@@ -13,8 +13,11 @@
 import HoverInfo from './HoverInfo.vue'
 import { useTextCopy } from '../composables/useTextCopy.ts'
 import { t } from '../i18n.ts'
-const props = withDefaults(defineProps<{ value: string; label: string; icon?: string }>(), { icon: 'i-lucide-copy' })
-const { copied, busy, error, copy } = useTextCopy(() => props.value)
+const props = withDefaults(defineProps<{ value?: string; getValue?: () => string; invalidationSource?: () => unknown; label: string; icon?: string }>(), { icon: 'i-lucide-copy' })
+const { copied, busy, error, copy } = useTextCopy(
+  () => props.getValue ? props.getValue() : props.value ?? '',
+  () => [props.value, props.getValue, props.invalidationSource?.()],
+)
 </script>
 
 <style scoped>

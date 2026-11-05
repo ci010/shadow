@@ -65,6 +65,7 @@ const triggerProps = computed(() => props.disabled ? {} : {
 let openTimer: ReturnType<typeof setTimeout> | undefined
 let closeTimer: ReturnType<typeof setTimeout> | undefined
 let observer: ResizeObserver | undefined
+let listenersAttached = false
 let suppressFocus = false
 const focusable = 'button:not(:disabled), a[href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
 const trigger = () => props.target ?? anchor.value?.querySelector<HTMLElement>(`[data-hover-info-trigger="${id}"]`)
@@ -72,8 +73,9 @@ const trigger = () => props.target ?? anchor.value?.querySelector<HTMLElement>(`
 function contains(target: EventTarget | null) {
   return target instanceof Node && (!!props.target?.contains(target) || !!anchor.value?.contains(target) || !!popupElement()?.contains(target))
 }
-function cancelClose() { clearTimeout(closeTimer); closeTimer = undefined }
-function clearTimers() { clearTimeout(openTimer); openTimer = undefined; cancelClose() }
+function cancelClose() { if (closeTimer !== undefined) clearTimeout(closeTimer); closeTimer = undefined }
+function clearOpenTimer() { if (openTimer !== undefined) clearTimeout(openTimer); openTimer = undefined }
+function clearTimers() { clearOpenTimer(); cancelClose() }
 function measure() {
   const source = trigger()
   const card = popupElement()
@@ -103,6 +105,7 @@ async function show() {
   }
   sharedTooltip.position.value = { ...sharedTooltip.position.value, moving, visibility: moving ? 'visible' : 'hidden' }
   sharedTooltip.visible.value = true
+  listenersAttached = true
   document.addEventListener('pointerdown', outside, true)
   document.addEventListener('keydown', documentKey, true)
   document.addEventListener('scroll', scroll, true)
@@ -119,11 +122,14 @@ function close(restoreFocus = false) {
   observer?.disconnect()
   observer = undefined
   if (dismissCurrent === close) dismissCurrent = undefined
-  document.removeEventListener('pointerdown', outside, true)
-  document.removeEventListener('keydown', documentKey, true)
-  document.removeEventListener('scroll', scroll, true)
-  window.removeEventListener('resize', dismiss)
-  window.removeEventListener('blur', dismiss)
+  if (listenersAttached) {
+    listenersAttached = false
+    document.removeEventListener('pointerdown', outside, true)
+    document.removeEventListener('keydown', documentKey, true)
+    document.removeEventListener('scroll', scroll, true)
+    window.removeEventListener('resize', dismiss)
+    window.removeEventListener('blur', dismiss)
+  }
   if (restoreFocus) {
     suppressFocus = true
     trigger()?.focus({ preventScroll: true })
@@ -146,19 +152,20 @@ function pointerEnter(event: PointerEvent) {
   if (event.pointerType === 'touch' || props.disabled) return
   clearTimers()
   if (sharedTooltip.visible.value) { void show(); return }
-  openTimer = setTimeout(() => { void show() }, 180)
+  openTimer = setTimeout(() => { openTimer = undefined; void show() }, 180)
 }
 function scheduleClose() {
-  clearTimeout(openTimer)
+  clearOpenTimer()
   cancelClose()
   closeTimer = setTimeout(() => {
+    closeTimer = undefined
     if (!contains(document.activeElement)) close()
   }, 180)
 }
 function focusIn(event: FocusEvent) {
   if (!suppressFocus && event.target instanceof HTMLElement && event.target.matches(':focus-visible')) void show()
 }
-function focusOut(event: FocusEvent) { if (!contains(event.relatedTarget)) { clearTimers(); closeTimer = setTimeout(() => close(), 0) } }
+function focusOut(event: FocusEvent) { if (!contains(event.relatedTarget)) { clearTimers(); closeTimer = setTimeout(() => { closeTimer = undefined; close() }, 0) } }
 function anchorClick() { if (props.interactive) void show() }
 async function focusPopup() {
   await show()
