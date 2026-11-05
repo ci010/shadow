@@ -1,38 +1,28 @@
-const INITIATIVE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 const WORK_KEY = /^(?:work|initiative|item|topic):[^/\\\s]+$/
 
 export class InitiativeMetadataError extends TypeError {}
 
-export function parseInitiativeId(record: Record<string, unknown>): string | undefined {
-  let result: string | undefined
-  for (const key of ['initiativeId', 'initiativeName', 'projectName']) {
-    const value = record[key]
-    if (value === undefined) continue
-    if (typeof value !== 'string' || !(INITIATIVE_ID.test(value) || value.length <= 600 && WORK_KEY.test(value))) {
-      throw new InitiativeMetadataError(`${key} must be an initiative ID: a legacy slug or canonical Work key.`)
-    }
-    if (result !== undefined && result !== value) {
-      throw new InitiativeMetadataError('Conflicting current and legacy initiative identities.')
-    }
-    result = value
+/** Public context selector; stored metadata retains its internal field name. */
+export function parseWorkRoot(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length > 600 || !WORK_KEY.test(value)) {
+    throw new InitiativeMetadataError('Work context must use a canonical Work key.')
   }
-  return result
+  return value
+}
+
+export function parseInitiativeId(record: Record<string, unknown>): string | undefined {
+  if (record.initiativeName !== undefined || record.projectName !== undefined) {
+    throw new InitiativeMetadataError('Unsupported legacy Work context metadata. Preserve the record; legacy planning identities are not imported.')
+  }
+  return parseWorkRoot(record.initiativeId)
 }
 
 export function normalizeInitiativeMetadata(record: Record<string, unknown>): Record<string, unknown> {
   const initiativeId = parseInitiativeId(record)
-  const result = { ...record }
-  delete result.projectName
-  delete result.initiativeName
-  if (initiativeId !== undefined) result.initiativeId = initiativeId
-  const preloads = result.preloadTools
-  if (preloads && typeof preloads === 'object' && !Array.isArray(preloads) && 'project' in preloads) {
-    const renamed = { ...preloads }
-    if ('initiative' in renamed && JSON.stringify(renamed.initiative) !== JSON.stringify(renamed.project)) {
-      throw new InitiativeMetadataError('Conflicting current and legacy initiative preloads.')
-    }
-    const { project, ...remaining } = renamed
-    result.preloadTools = { ...remaining, initiative: project }
+  const preloads = record.preloadTools
+  if (preloads && typeof preloads === 'object' && !Array.isArray(preloads) && ('project' in preloads || 'initiative' in preloads)) {
+    throw new InitiativeMetadataError('Unsupported legacy planning tool preload. Use the current Work tool.')
   }
-  return result
+  return { ...record, ...(initiativeId === undefined ? {} : { initiativeId }) }
 }

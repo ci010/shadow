@@ -53,7 +53,7 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     builder.register(memoryProvider(memory, () => undefined))
     const built = await builder.buildSystemPromptDetails(ctx)
     assert.deepEqual(built.sections.map(section => section.name), [
-      'runtime', 'execution-contract', 'initiative', 'workspace-intro',
+      'runtime', 'execution-contract', 'work-context', 'workspace-intro',
       'guideline', 'capability-discovery', 'memory',
     ])
     const work = '# Current work contracts (runtime facts)\nRevision 2: current human-confirmed outcome. Boundary: No external publication.'
@@ -63,7 +63,7 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     assert.equal(composed.at(-1)!.role, 'user')
     assert.match(contentText(composed.at(-1)!.content), /Revision 2: current human-confirmed outcome/)
     const prompt = composed.map(message => contentText(message.content)).join('\n\n')
-    const order = ['# Runtime', 'Execution Contract:', '# Initiative Context',
+    const order = ['# Runtime', 'Execution Contract:', '# Work Context',
       '# Working context', '# Agent Guideline', '# Capability discovery', '# Historical reference', work]
       .map(text => prompt.indexOf(text))
     assert(order.every((position, index) => position >= 0 && (!index || position > order[index - 1])))

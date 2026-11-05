@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { projectStoragePath } from '../utils/data-paths.ts'
 import type { Bus } from '../bus/bus.ts'
 import { errMsg } from '../utils/truncate.ts'
 import type { ExecutionContext } from '../tools/context.ts'
@@ -7,6 +10,13 @@ import { parseMediaFromContent } from '../utils/media-parse.ts'
 import type { EventService } from '../events/service.ts'
 import { sessionReplyAddress, type InputOrigin, type ReplyAddress } from '../sessions/input.ts'
 import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
+
+// Match ordinary tool output's default preview budget (tools/registry.ts).
+const CALLBACK_OUTPUT_LIMIT = 12_000
+const CALLBACK_METADATA_LIMIT = 200
+const callbackSummary = (text: string) => text.length > CALLBACK_METADATA_LIMIT
+  ? `${text.slice(0, CALLBACK_METADATA_LIMIT)}…`
+  : text
 
 export type BackgroundTaskStatus = 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled'
 export type BackgroundTaskKind = 'tool' | 'subagent' | 'process'
@@ -76,6 +86,8 @@ export class BackgroundTaskManager {
     private bus: Bus,
     private events: EventService,
     private scope: ProjectScope | undefined = getProjectScope(),
+    /** Owning Project Home, never the caller's effective folder/cwd. */
+    private workspace?: string,
   ) {
     // Auto-complete session-bound tasks when the session finishes.
     this.subscriptionId = this.bus.on('session.turn.finished', (fact) => this.runOwned(() => {
@@ -453,12 +465,34 @@ export class BackgroundTaskManager {
 
     const statusLine = task.status === 'completed'
       ? 'completed'
-      : `failed: ${task.error ?? 'unknown error'}`
+      : `failed: ${callbackSummary(task.error ?? 'unknown error')}`
     const detail = task.status === 'completed'
       ? task.result?.trim() || '(no result)'
       : task.error ?? 'unknown error'
     const prefix = task.callback.contentPrefix?.trim()
-    const content = prefix ? `${prefix}\n\n${detail}` : detail
+    let content = prefix ? `${prefix}\n\n${detail}` : detail
+    // Keep the exact result/error (including whitespace) in the spill file.
+    // The prefix shares the preview budget; it cannot bypass the event limit.
+    const rawDetail = task.status === 'completed' ? task.result ?? '' : task.error ?? 'unknown error'
+    const rawContent = task.callback.contentPrefix
+      ? `${task.callback.contentPrefix}\n\n${rawDetail}` : rawDetail
+    if (rawContent.length > CALLBACK_OUTPUT_LIMIT) {
+      content = rawContent.slice(0, CALLBACK_OUTPUT_LIMIT) +
+        `\n...[truncated: ${rawContent.length - CALLBACK_OUTPUT_LIMIT} chars remaining]\n`
+      try {
+        if (!this.workspace) throw new Error('Project Home is unavailable')
+        const filename = `background-task-${task.id}-${crypto.randomUUID()}.txt`
+        const directory = projectStoragePath(this.workspace, '.tmp')
+        await mkdir(directory, { recursive: true })
+        await writeFile(join(directory, filename), rawContent, { encoding: 'utf8', flag: 'wx' })
+        content += `Full output saved to: .tmp/${filename}\n` +
+          'Use read with this path and line-based offset/limit to read more.'
+      } catch (error) {
+        // Fail closed, including ENOSPC: no unbounded fallback or false saved-file claim.
+        content += `Full output was NOT saved: ${callbackSummary(errMsg(error))}.\n` +
+          `The full result/error remains available in memory at v:bg/${backgroundExecutionId(task.id)} while this runtime is alive.`
+      }
+    }
 
     const eventType = task.callback.eventType ?? 'background-task-complete'
 
@@ -473,7 +507,7 @@ export class BackgroundTaskManager {
       meta: {
         'task-id': task.id,
         kind: task.kind,
-        title: task.title,
+        title: callbackSummary(task.title),
         status: statusLine,
       },
     })

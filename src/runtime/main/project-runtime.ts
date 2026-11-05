@@ -275,7 +275,7 @@ export async function createProjectRuntime(
   cleanup.push(() => events.stop())
   let provider = createAggregatedProvider(config, copilotAuth)
   let activeConfig = config
-  const backgroundTasks = new BackgroundTaskManager(bus, events)
+  const backgroundTasks = new BackgroundTaskManager(bus, events, scope, workspace)
   cleanup.push(() => backgroundTasks.stop())
 
   // OTel ingest/query store (formerly the standalone observer in app/)
@@ -808,7 +808,6 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('download', new DownloadTool(new Aria2Downloader(), project.id, backgroundTasks))
 
   const initiatives = new InitiativeStore(workspace, {
-    trackWork: true,
     sessionTopicSequence: id => { const state = sessions.getSessionState(id); return state && isLightweightTopic(state) ? sessionTopicSequence(state) : undefined },
     isSessionKnown: id => sessions.getSessionState(id) !== null,
     isSessionActive: id => {

@@ -7,14 +7,15 @@ import { parseMediaFromContent } from '../utils/media-parse.ts'
 import { sessionReplyAddress, type DeliverInput, type SessionInputSource, type SessionMessageInput } from '../sessions/input.ts'
 import { buildSenderTag } from '../agent/message-builder.ts'
 import { z } from 'zod'
+import { parseWorkRoot } from '../sessions/initiative-metadata.ts'
 import type { WorkStamp } from '../initiatives/work-contract.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
 
 const coordinationSchema = z.object({
   intent: z.enum(['request', 'question', 'progress', 'handoff', 'acknowledgement']).default('request'),
   initiativeId: z.string().trim().min(1).max(600).optional(),
-  itemId: z.string().trim().min(1).max(128).optional(),
-}).refine(value => !value.itemId || !!value.initiativeId, 'itemId requires initiativeId.')
+  itemId: z.string().trim().min(1).max(600).optional(),
+}).refine(value => !value.itemId || !!value.initiativeId, 'itemId requires workRoot.')
 
 /**
  * Tool that lets the agent send a message to another session.
@@ -38,8 +39,8 @@ export class MessageTool implements Tool {
       },
       intent: { type: 'string', enum: ['request', 'question', 'progress', 'handoff', 'acknowledgement'], description: 'Progress and acknowledgement default to routine archival; required action/materials use request. handoff does not mutate work ownership.' },
       attention: { type: 'string', enum: ['routine', 'milestone', 'blocker', 'decision', 'correction'], description: 'Routine status is archived by default. Other values require a response and cannot be silent. Do not hide failures or corrections as routine progress.' },
-      initiativeId: { type: 'string', description: 'Optional existing Initiative in this Project.' },
-      itemId: { type: 'string', description: 'Optional existing work item in initiativeId.' },
+      workRoot: { type: 'string', description: 'Optional existing root Work key in this Project; context only.' },
+      itemId: { type: 'string', description: 'Optional existing work item in workRoot; context only.' },
       work: { type: 'object', description: 'Explicit assignment kickoff: {key, assignmentRevision}. Current manager to current assignee only. One durable admission per assignment; unconfirmed attempts are not replayed.' },
     },
     required: ['content', 'sessionId'],
@@ -79,7 +80,7 @@ export class MessageTool implements Tool {
     if (targetSessionId.startsWith('remote:')) {
       if (!this.remote) throw new Error('A2A is not configured in this Project.')
       if (Object.keys(args).some(key => !['sessionId', 'content'].includes(key))) {
-        throw new Error('Remote messages accept only sessionId and content; silent, coordination and Initiative metadata are not supported.')
+        throw new Error('Remote messages accept only sessionId and content; silent, coordination and Work metadata are not supported.')
       }
       if (context.workStamps?.length && this.workIsCurrent?.(context.workStamps) === false) {
         throw new Error('Work basis changed; an obsolete message cannot be sent to a remote agent.')
@@ -121,8 +122,10 @@ export class MessageTool implements Tool {
     }
 
     let coordination: SessionInputSource['coordination']
-    if (args.intent !== undefined || args.initiativeId !== undefined || args.itemId !== undefined) {
-      coordination = coordinationSchema.parse({ intent: args.intent, initiativeId: args.initiativeId, itemId: args.itemId })
+    if (args.initiativeId !== undefined) throw new TypeError('Unsupported context selector. Use workRoot with a canonical Work key.')
+    if (args.intent !== undefined || args.workRoot !== undefined || args.itemId !== undefined) {
+      const initiativeId = parseWorkRoot(args.workRoot)
+      coordination = coordinationSchema.parse({ intent: args.intent, initiativeId, itemId: args.itemId })
       if (coordination.initiativeId) {
         if (!this.assertWorkReference) throw new Error('Work-reference validation is not configured.')
         this.assertWorkReference(coordination.initiativeId, coordination.itemId)
