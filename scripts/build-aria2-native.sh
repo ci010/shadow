@@ -25,7 +25,21 @@ if [[ "$script_path" != "$output_dir/build-aria2-native.sh" ]]; then
   cp "$script_path" "$output_dir/build-aria2-native.sh"
 fi
 
+# Keep the immutable baseline source archive plus this exact build-system patch.
+patch_path="$(dirname "$script_path")/wslay-autoconf.patch"
+if [[ "$patch_path" != "$output_dir/wslay-autoconf.patch" ]]; then
+  cp "$patch_path" "$output_dir/wslay-autoconf.patch"
+fi
+if patch -p1 --dry-run < "$patch_path" >/dev/null 2>&1; then
+  patch -p1 < "$patch_path"
+elif ! patch -R -p1 --dry-run < "$patch_path" >/dev/null 2>&1; then
+  echo "Unexpected wslay source; refusing an unreviewed patch" >&2
+  exit 1
+fi
 autoreconf -i
+# Regression gate: raw shell case + AC_CHECK_HEADERS can generate invalid shell.
+bash -n configure
+bash -n deps/wslay/configure
 common=(--disable-nls --disable-bittorrent --disable-metalink
   --without-libxml2 --without-libexpat --without-libcares
   --without-libssh2 --without-sqlite3)
