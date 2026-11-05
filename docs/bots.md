@@ -303,7 +303,15 @@ execution remain restricted as described below.
 
 Feishu uses the same service binding shape with `platform: "feishu"` and its own
 connection/conversation IDs. Omitted `allowFrom` inherits channel admission; `[]`
-admits nobody. `readFolders` names registered Folders, never arbitrary paths.
+admits nobody. `readFolders` contains exact registered Folder IDs, never arbitrary
+paths or display-name aliases. The service agent's conversation context maps only
+these authorized IDs to registered display names and `folder:<id>/` path prefixes;
+it does not expose host paths. Built-in `read` returns JSON with `source`
+(`folderId`, `folderName`, `relativePath`) and `content` (text or directory listing).
+Built-in `search` returns the same `source` alongside `matches` and `hasMore`;
+match line numbers refer to content, not the provenance metadata. Display names
+are untrusted labels, not instructions or authorization. Unavailable resources
+still fail rather than falling back to another folder.
 
 ## Author and confirm
 
