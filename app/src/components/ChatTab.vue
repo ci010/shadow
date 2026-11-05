@@ -496,8 +496,9 @@ import { createInitialLiveSnapshot } from '../initial-live-snapshot'
 import { createMarkdown } from '../markdown.ts'
 import { t, formatNumber } from '../i18n.ts'
 import { formatUsageCost, validCostUsage, type CostUsage } from '../usage-cost.ts'
-import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
+import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUpdated, onUnmounted, useId, watch } from 'vue'
 import { captureHistoryScroll, historyPresentationRows, historyRevealRow, useProgressiveHistory } from '../progressive-history'
+import { createCommitBottomScroll, firstSessionIndex } from '../chat-render-hotspots'
 import { useRoute, useRouter } from 'vue-router'
 import { useProviderReadiness, providerReadinessMessage, providerBlocksSubmission } from '../provider-readiness.ts'
 import { providerFailureMessage } from '../provider-setup.ts'
@@ -929,7 +930,8 @@ function handleYieldCancelled(sessionId: string): void {
   // state until the terminal event or a fresh server activity read confirms it.
   void refreshSessionActivity()
 }
-const activeSession = computed(() => allSessions.value.find(session => session.sessionId === activeSessionId.value))
+const sessionsById = computed(() => firstSessionIndex(allSessions.value))
+const activeSession = computed(() => sessionsById.value.get(activeSessionId.value))
 const isExecution = computed(() => !!activeSessionId.value && isOneShot({ mode: activeSession.value?.mode ?? selectedMode.value }))
 const isCall = computed(() => !!activeSessionId.value && (activeSession.value?.mode ?? selectedMode.value) === 'call')
 const executionParent = computed(() => allSessions.value.find(session =>
@@ -1516,6 +1518,9 @@ function historyRowKey(row: { msg: ChatMsg; idx: number }): string {
 }
 let historyScrollVersion = 0
 let progressiveScrollTop: number | undefined
+let scrollCommit = 0
+onUpdated(() => { scrollCommit++ })
+const followCommittedBottom = createCommitBottomScroll()
 const progressiveActive = () => paneActive.value && conversationDocumentVisible.value
   && activePanel.value === 'conversation' && route.name === 'chat'
 const { mountedRows: mountedHistoryRows, reveal: revealHistoryRow } = useProgressiveHistory({
@@ -1529,10 +1534,13 @@ const { mountedRows: mountedHistoryRows, reveal: revealHistoryRow } = useProgres
     if (!container) return
     const version = historyScrollVersion
     const following = !historyBrowsing.value && !searchOpen.value
-    const restore = captureHistoryScroll(container, following)
+    // Browsing retains its pre-commit anchor; following needs no pre-commit read.
+    const restore = following ? undefined : captureHistoryScroll(container, false)
     return () => {
       if (version !== historyScrollVersion || following && (historyBrowsing.value || searchOpen.value)) return
-      progressiveScrollTop = restore()
+      progressiveScrollTop = following
+        ? followCommittedBottom(container, scrollCommit, version, bottomScrollGeneration)
+        : restore!()
     }
   },
 })
@@ -1568,7 +1576,8 @@ function buildUrl(path: string, params?: Record<string, string>): string {
 }
 
 function sourceForEvent(meta: ChatEventMeta): SidebarSession | undefined {
-  return allSessions.value.find(session => session.sessionId === eventSourceSession(meta))
+  const sourceId = eventSourceSession(meta)
+  return sourceId === undefined ? undefined : sessionsById.value.get(sourceId)
 }
 
 function setThinkingExpanded(idx: number, open: boolean): void {
@@ -2081,7 +2090,7 @@ async function pickContext(kind: ChatContextItem['kind']): Promise<void> {
 
 function deleteSession(sessionId: string): void {
   if (deletion.value) return
-  deletion.value = { apiBase: props.apiBase, sessionId, name: allSessions.value.find(session => session.sessionId === sessionId)?.label || sessionId }
+  deletion.value = { apiBase: props.apiBase, sessionId, name: sessionsById.value.get(sessionId)?.label || sessionId }
 }
 async function sessionsDeleted(ids: string[]): Promise<void> {
   deletion.value = undefined
@@ -3041,8 +3050,7 @@ function scrollToBottom(): void {
       || searchOpen.value || historyBrowsing.value || !progressiveActive()) return
     const el = messagesContainer.value
     if (el) {
-      el.scrollTop = el.scrollHeight
-      progressiveScrollTop = el.scrollTop
+      progressiveScrollTop = followCommittedBottom(el, scrollCommit, version, generation)
     }
   })
 }
