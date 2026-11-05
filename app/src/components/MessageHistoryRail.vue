@@ -46,7 +46,7 @@ import { nextTick, onActivated, onDeactivated, onUnmounted, ref, useId, watch } 
 import { formatMessageTime, type MessageHistoryMarker } from '../message-history.ts'
 import OverlayTransition from './OverlayTransition.vue'
 
-const props = withDefaults(defineProps<{ entries: readonly MessageHistoryMarker[]; container?: HTMLElement; active?: boolean; list?: boolean }>(), { active: true })
+const props = withDefaults(defineProps<{ entries: readonly MessageHistoryMarker[]; container?: HTMLElement; active?: boolean; list?: boolean; reveal?: (index: number, signal: AbortSignal) => Promise<boolean> }>(), { active: true })
 const emit = defineEmits<{ navigate: [] }>()
 const rail = ref<HTMLElement>()
 const canScrollUp = ref(false)
@@ -89,11 +89,18 @@ async function selectEntry(entry: MessageHistoryMarker, event: Event) {
   await nextTick()
   document.getElementById(tooltipId)?.querySelector<HTMLButtonElement>('button')?.focus()
 }
-function jumpTo(index: number) {
+let navigation: AbortController | undefined
+async function jumpTo(index: number) {
+  navigation?.abort()
+  const controller = new AbortController()
+  navigation = controller
   const container = props.container
-  const element = container?.querySelector<HTMLElement>(`[data-msg-idx="${index}"]`)
-  if (!container || !element) return
+  if (!container) return
   emit('navigate')
+  if (props.reveal && !await props.reveal(index, controller.signal)) return
+  if (controller.signal.aborted || container !== props.container || !props.active) return
+  const element = container.querySelector<HTMLElement>(`[data-msg-idx="${index}"]`)
+  if (!element) return
   container.scrollTo({
     top: container.scrollTop + element.getBoundingClientRect().top - container.getBoundingClientRect().top,
     behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
@@ -143,6 +150,8 @@ function navigate(event: KeyboardEvent) {
 }
 function resize() { hidePreview(); scheduleUpdate() }
 function deactivate() {
+  navigation?.abort()
+  navigation = undefined
   active = false
   observer?.disconnect()
   props.container?.removeEventListener('scroll', scheduleUpdate)

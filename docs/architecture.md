@@ -2679,6 +2679,15 @@ show their origin. Their session links open the source conversation (or its read
 execution trace). Human-history markers scroll to the corresponding rendered
 message in the current pane. Manual scrolling away from the bottom also suspends
 automatic jumps during incoming messages, streaming output, and history refreshes.
+Initial conversation history mounts the latest four presentation rows first, then
+prepends up to four more per animation frame after the preceding DOM commit. A
+presentation row can contain a complete tool group; all message indices, keys and
+execution/question/decision/I/O projections still derive from the full loaded
+history. Rail and search navigation wait for the requested row to mount. Each
+prepend preserves either bottom-following or a retained row's viewport offset;
+hidden/deactivated panes pause the scheduler, and context changes/unmount cancel
+pending navigation and scroll restoration. This bounds row counts, not individual
+Markdown or tool-group execution time, and is not history truncation or virtualization.
 Following resumes when the user returns within 32px of the bottom or starts sending
 another message; a delayed send acknowledgement does not override subsequent
 scrolling. Explicit peer progress and

@@ -33,6 +33,10 @@ import DOMPurify from 'dompurify';
 import MarkdownContent from '/src/components/MarkdownContent.vue';
 import MessageCopyActions from '/src/components/MessageCopyActions.vue';
 import {renderAnswerHtml} from '/src/answer-html.ts';
+import {computed} from 'vue';
+import {captureHistoryScroll,historyRevealRow,useProgressiveHistory} from '/src/progressive-history.ts';
+import YieldDecision from '/src/components/YieldDecision.vue';
+import MessageHistoryRail from '/src/components/MessageHistoryRail.vue';
 const check=(ok,message)=>{if(!ok)throw Error(message)};
 try {
   let calls=0;
@@ -133,6 +137,78 @@ try {
   await click('.message-copy-actions .copy-icon-control:last-child button');
   check(htmlCalls===beforeLongMount+1,'long message click did not render exactly once');
   longApp.unmount();
+  // Deterministic frames, real MarkdownContent and real history rail. Record
+  // actual sanitizer/render calls in each DOM commit, not a timing threshold.
+  const nativeMatchMedia=window.matchMedia.bind(window);
+  window.matchMedia=query=>{const result=nativeMatchMedia(query);if(query.includes('prefers-reduced-motion'))Object.defineProperty(result,'matches',{value:true});return result};
+  const queued=new Map();let frameId=0;let progressiveCalls=0;
+  const enabled=ref(true);const context=ref('a');const container=ref();
+  const rows=ref(Array.from({length:21},(_,idx)=>({idx,key:'stable-'+idx,text:'**message '+idx+'**'})));
+  let progressive;
+  const scheduler={request:callback=>{queued.set(++frameId,callback);return frameId},cancel:id=>queued.delete(id)};
+  const step=async()=>{check(queued.size===1,'multiple batches queued in one frame');const [id,callback]=queued.entries().next().value;queued.delete(id);callback();await nextTick();await nextTick()};
+  const showDecision=ref(false);
+  const decision={action:'ask',question:'External decision on old anchor',options:['Proceed','Wait'],defaultOption:'Wait',status:'unknown',sources:[]};
+  const decisionAfter=computed(()=>new Map([[rows.value.find(row=>row.key==='stable-0').idx,[[99,decision]]]]));
+  const mounted=()=>Array.from(document.querySelectorAll('[data-history-row-key]')).map(node=>Number(node.dataset.msgIdx));
+  const progressiveApp=createApp({setup(){
+    progressive=useProgressiveHistory({rows:computed(()=>rows.value.map(row=>row)),key:row=>row.key,context:()=>context.value,active:()=>enabled.value,beforeBatch:()=>container.value ? captureHistoryScroll(container.value,false) : undefined,scheduler});
+    const reveal=async(index,signal)=>progressive.reveal(historyRevealRow(index,rows.value,new Map(),decisionAfter.value)?.key ?? '',signal);
+    const render=text=>{progressiveCalls++;return DOMPurify.sanitize(marked.parse(text))};
+    return ()=>h('main',[
+      h('div',{ref:container,style:'height:100px;overflow:auto'},progressive.mountedRows.value.flatMap(row=>[h(MarkdownContent,{key:row.key,'data-msg-idx':row.idx,'data-history-row-key':row.key,text:row.text,renderContent:render,style:'display:block;height:40px'}),...(showDecision.value && decisionAfter.value.has(row.idx) ? [h(YieldDecision,{key:'external-decision',decision,'data-msg-idx':99})] : [])])),
+      h(MessageHistoryRail,{entries:[...rows.value.map(row=>({index:row.idx,kind:'user',label:'User',source:'User',preview:row.text,timestamp:'2026-01-01T00:00:00Z'})),...(showDecision.value ? [{index:99,kind:'decision',label:'Decision',source:'User',preview:decision.question,timestamp:'2026-01-01T00:00:00Z'}] : [])],container:container.value,active:enabled.value,reveal})
+    ])
+  }});
+  progressiveApp.mount('#app');await nextTick();await nextTick();
+  const callBatches=[progressiveCalls];
+  check(JSON.stringify(mounted())==='[17,18,19,20]' && progressiveCalls===4,'initial mount did not bound actual Markdown renders');
+  document.querySelector('.history-marker').click();await nextTick();
+  check(!mounted().includes(0),'rail jump synchronously mounted all history');
+  while(queued.size){
+    const before=progressiveCalls;const anchor=document.querySelector('[data-history-row-key]');const top=anchor.getBoundingClientRect().top;
+    await step();callBatches.push(progressiveCalls-before);check(progressiveCalls-before<=4,'a single frame rendered more than its batch');
+    if(queued.size)check(Math.abs(anchor.getBoundingClientRect().top-top)<1,'prepend moved the retained browsing anchor');
+  }
+  await nextTick();
+  check(JSON.stringify(callBatches)==='[4,4,4,4,4,1]','unexpected actual render batches '+JSON.stringify(callBatches));
+  check(mounted().length===21 && mounted()[0]===0 && progressiveCalls===21,'history indices or render counts changed');
+  await new Promise(resolve=>setTimeout(resolve,0));await nextTick();
+  check(document.querySelector('.history-marker').getAttribute('aria-current')==='true','rail did not finish its asynchronous jump to old DOM');
+  check(container.value.scrollTop===0,'rail did not scroll to the revealed target');
+  rows.value[20].text='**live update**<img src="data:," onerror="window.unsafe=true">';await nextTick();await nextTick();
+  check(progressiveCalls===22 && !document.querySelector('[onerror]') && !window.unsafe,'streaming update rerendered neighbors or bypassed sanitizer');
+  container.value.scrollTop=80;
+  rows.value=[{key:'older',idx:0,text:'older segment'},...rows.value.map(row=>({...row,idx:row.idx+1}))];await nextTick();await nextTick();
+  check(!mounted().includes(0) && mounted()[0]===1,'older prepend renumbered or synchronously mounted the pending prefix');
+  container.value.scrollTop+=27; // deliberate browsing while older loading is pending
+  const retained=document.querySelector('[data-history-row-key="stable-0"]');const retainedTop=retained.getBoundingClientRect().top;
+  await step();
+  check(mounted()[0]===0 && Math.abs(retained.getBoundingClientRect().top-retainedTop)<1,'older loading overwrote the latest user viewport');
+  showDecision.value=true;context.value='b';await nextTick();await nextTick();
+  const railJumps=[];const nativeScrollTo=container.value.scrollTo.bind(container.value);
+  container.value.scrollTo=options=>{railJumps.push(options.top);nativeScrollTo(options)};
+  check(!document.querySelector('.yield-decision[data-msg-idx="99"]'),'external decision anchor was not initially deferred');
+  document.querySelector('.history-entry:last-child .history-marker').click();await nextTick();
+  check(!railJumps.length && !document.querySelector('.yield-decision'),'decision rail jump skipped progressive reveal');
+  while(queued.size)await step();await new Promise(resolve=>setTimeout(resolve,0));await nextTick();
+  const decisionNode=document.querySelector('.yield-decision[data-msg-idx="99"]');
+  check(decisionNode && decisionNode.textContent.includes(decision.question),'real external decision did not mount at its old anchor');
+  check(railJumps.length===1 && Math.abs(decisionNode.getBoundingClientRect().top-container.value.getBoundingClientRect().top)<1,'external decision rail marker did not locate the revealed card');
+  context.value='c';await nextTick();await nextTick();railJumps.length=0;
+  check(!document.querySelector('.yield-decision'),'second decision reveal was not deferred');
+  document.querySelector('.history-entry:last-child .history-marker').click();await nextTick();
+  context.value='d';await nextTick();while(queued.size)await step();
+  await new Promise(resolve=>setTimeout(resolve,0));await nextTick();
+  check(railJumps.length===0,'cancelled external decision navigation jumped in the replacement context');
+  context.value='e';await nextTick();await nextTick();
+  document.querySelector('.history-marker').click();enabled.value=false;await nextTick();await nextTick();
+  check(queued.size===0 && !mounted().includes(0),'hidden pane completed a stale rail reveal');
+  enabled.value=true;await nextTick();
+  check(queued.size===1,'keepalive resume did not schedule remaining history');
+  progressiveApp.unmount();await nextTick();
+  check(queued.size===0,'unmount left a progressive batch scheduled');
+  console.log('PROGRESSIVE_RENDER_BATCHES '+JSON.stringify(callBatches));
   window.result='MARKDOWN_CONTENT_OK';
 } catch(error) {window.result=error.stack || String(error)}
 `
