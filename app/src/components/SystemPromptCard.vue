@@ -42,28 +42,17 @@
 
 <script setup lang="ts">
 import { vMarkdownLinkHints } from '../markdown-link-hints'
-import { markdownHighlight } from '../markdown-highlight.ts'
+import { createMarkdown } from '../markdown.ts'
 import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
-import { Marked } from 'marked'
-import { markedMath } from '../marked-math.ts'
 import { useTextCopy } from '../composables/useTextCopy.ts'
 
 // Prompt HTML is documentation, not executable markup. Disable both block and
 // inline HTML tokenization so an unclosed raw-text tag cannot consume the tail.
-const marked = new Marked({
-  breaks: true,
-  tokenizer: {
-    html() { return undefined },
-    tag() { return undefined },
-  },
-})
-
-marked.use(markedMath())
-marked.use(markdownHighlight())
+const marked = createMarkdown({ html: false })
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -112,7 +101,7 @@ function preprocessCustomXml(text: string, fragments: string[]): string {
           lines.push(`- **${catName}** (${count}) — ${desc.trim()}`)
           // Only this generated wrapper is HTML; category content stays literal.
           const idx = fragments.push(`<sub>${escapeHtml(skillNames)}</sub>`) - 1
-          lines.push(`  \x00FRAGMENT${idx}\x00`)
+          lines.push(`  \uE000FRAGMENT${idx}\uE001`)
         }
       }
       return '### Available Skills\n\n' + lines.join('\n')
@@ -134,8 +123,8 @@ function renderMarkdown(text: string): string {
   if (!text) return ''
   const fragments: string[] = []
   const src = preprocessCustomXml(text, fragments)
-  let html = marked.parse(src, { async: false }) as string
-  html = html.replace(/\x00FRAGMENT(\d+)\x00/g, (_, i) => fragments[parseInt(i)])
+  let html = marked.render(src)
+  html = html.replace(/\uE000FRAGMENT(\d+)\uE001/g, (_, i) => fragments[parseInt(i)])
 
   return mobileResources.html(DOMPurify.sanitize(html, {
     ADD_TAGS: KATEX_TAGS,

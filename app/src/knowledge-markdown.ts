@@ -1,26 +1,22 @@
-import { markdownHighlight } from './markdown-highlight.ts'
+import { createMarkdown } from './markdown.ts'
 import DOMPurify from 'dompurify'
-import { Marked } from 'marked'
 import type { KnowledgeLink } from './knowledge.ts'
-
-const escapeAttribute = (value: string) => value.replace(/&(?!(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);)/gi, '&amp;')
-  .replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 export function renderKnowledgeMarkdown(
   content: string,
   links: readonly KnowledgeLink[],
   entryHref: (id: string, fragment: string) => string,
 ): string {
-  const markdown = new Marked({
-    renderer: {
-      link({ href, title, tokens }) {
-        // Keep virtual destinations as inert data until Main's canonical links resolve them.
-        return `<a data-knowledge-href="${escapeAttribute(href)}"${title ? ` title="${escapeAttribute(title)}"` : ''}>${this.parser.parseInline(tokens)}</a>`
-      },
-    },
-  })
-  markdown.use(markdownHighlight())
-  const fragment = DOMPurify.sanitize(markdown.parse(content, { async: false }), {
+  const markdown = createMarkdown({ math: false, breaks: false })
+  markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
+    const token = tokens[index]!
+    const href = token.attrGet('href') ?? ''
+    const attrs = token.attrs ?? []
+    token.attrs = attrs.filter(([name]) => name !== 'href')
+    token.attrSet('data-knowledge-href', href)
+    return renderer.renderToken(tokens, index, options)
+  }
+  const fragment = DOMPurify.sanitize(markdown.render(content), {
     ALLOWED_TAGS: ['p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'span', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a'],
     ALLOWED_ATTR: ['class', 'href', 'title', 'id', 'data-knowledge-href'],
     ALLOW_DATA_ATTR: false,

@@ -33,8 +33,7 @@ export async function prepareMarkdownLanguage(language: string): Promise<void> {
   return loading
 }
 
-export function markdownHighlight(): MarkedExtension {
-  return { renderer: { code({ text, lang }) {
+export function highlightMarkdownCode(text: string, lang?: string): string {
     void revision.value
     const label = lang?.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
     const language = fenceLanguage(label) ?? label
@@ -58,5 +57,9 @@ export function markdownHighlight(): MarkedExtension {
       cache.set(key, html)
       return html
     } catch { return plain() }
-  } } }
+}
+
+// Retained for source-provenance Marked callers.
+export function markdownHighlight(): MarkedExtension {
+  return { renderer: { code: ({ text, lang }) => highlightMarkdownCode(text, lang) } }
 }
