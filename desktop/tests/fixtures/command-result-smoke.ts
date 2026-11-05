@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -178,7 +179,7 @@ const server = createServer(async (request, response) => {
 async function evaluate<T = unknown>(window: BrowserWindow, script: string): Promise<T> {
   assert.equal(window.isVisible(), false)
   try {
-    return await window.webContents.executeJavaScript(script) as T
+    return await window.webContents.executeJavaScript(withComposerTestAdapter(script)) as T
   } catch (cause) {
     throw new Error(`Renderer evaluation failed: ${script}`, { cause })
   }
@@ -216,7 +217,7 @@ async function check(window: BrowserWindow, label: string, run: () => Promise<vo
   }
   console.log(`LAYOUT_COMMAND ${JSON.stringify(results.at(-1))}`)
 }
-const input = '.primary-conversation .composer-input textarea'
+const input = '.primary-conversation .composer-input .reference-composer'
 const stop = '[aria-label="Stop current request"]'
 const card = (receipt: CommandReceipt) => `article.command-result[data-command-id="${receipt.id}"]`
 async function submit(window: BrowserWindow, content: string): Promise<Admission> {

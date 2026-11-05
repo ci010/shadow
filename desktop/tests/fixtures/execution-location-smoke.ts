@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -118,7 +119,7 @@ const server = createServer(async (request, response) => {
     response.writeHead(500).end()
   }
 })
-const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(activeWorkspaceScript(source))
+const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(withComposerTestAdapter(activeWorkspaceScript(source)))
 async function waitFor(source: string): Promise<void> {
   const end = Date.now() + 8000
   while (Date.now() < end) {
@@ -168,7 +169,7 @@ async function main(): Promise<void> {
     await click('.composer-controls [aria-label="Execution location"]')
     await click(`.location-option[aria-label="${label}"]`)
     const before = writes.length
-    await evaluate(`(() => { const input = document.querySelector('.composer-input textarea'); input.value = 'Synthetic location request'; input.dispatchEvent(new Event('input', { bubbles: true })) })()`)
+    await evaluate(`(() => { const input = document.querySelector('.composer-input .reference-composer'); input.value = 'Synthetic location request'; input.dispatchEvent(new Event('input', { bubbles: true })) })()`)
     await click('.composer-send')
     await waitFor(`!document.querySelector('.draft-heading')`)
     const end = Date.now() + 8000

@@ -384,8 +384,11 @@
             </span>
           </div>
           <div class="composer-input">
-            <textarea
+            <ReferenceComposer
               ref="chatInput"
+              :key="composerKey"
+              :images="composerImages"
+              @preview="previewComposerImage"
               :id="domId('message-input')"
               v-model="inputText"
               :placeholder="answeringQuestion ? t('Type your answer...') : mobileLayout ? t('Message...') : remoteConversation ? t('Ask anything about this remote workspace...') : t('Ask anything, or add files and folders for context...')"
@@ -397,18 +400,17 @@
               :aria-expanded="!!(sessionReferenceMenu?.open || slashMenu?.open)"
               :aria-controls="sessionReferenceMenu?.open ? sessionReferenceMenu.listId : slashMenu?.open ? slashMenu.listId : undefined"
               :aria-activedescendant="sessionReferenceMenu?.activeId || slashMenu?.activeId"
-              :rows="mobileLayout ? 1 : 3"
               :disabled="submissionBusy"
               @keydown="handleKeyDown"
               @input="updateComposerSelection()"
               @focus="composerFocused = true; updateComposerSelection()"
               @blur="composerFocused = false"
-              @click="updateComposerSelection"
+              @click="updateComposerSelection(); openConversationLink($event)"
               @keyup="updateComposerSelection"
               @select="updateComposerSelection"
               @compositionstart="composerComposing = true"
               @compositionend="composerComposing = false; updateComposerSelection()"
-              @paste="handleComposerPaste"
+              @paste.capture="handleComposerPaste"
             />
           </div>
           <div class="composer-toolbar">
@@ -520,6 +522,8 @@ import type { SessionDeletionTarget } from '../session-deletion.ts'
 import type { ToolDef } from './ToolsCard.vue'
 import ModelSelector from './ModelSelector.vue'
 import ComposerPopover from './ComposerPopover.vue'
+import ReferenceComposer from './ReferenceComposer.vue'
+import type { ComposerInput } from '../composer-references.ts'
 import AudioSetupButton from './AudioSetupButton.vue'
 import SlashCommandMenu from './SlashCommandMenu.vue'
 import MessageHistoryRail from './MessageHistoryRail.vue'
@@ -739,6 +743,13 @@ const currentWorkdir = ref<SessionDetails['workdir']>()
 const remoteConversation = computed(() => !activeSessionId.value ? !!draftRemote.value : currentWorkdir.value?.kind === 'remote')
 const contextItems = ref<ChatContextItem[]>([])
 const pendingAttachments = ref<PendingChatAttachment[]>([])
+const composerImages = computed(() => pendingAttachments.value.filter(item => item.kind === 'image').map(item => ({
+  key: item.key, label: item.file.name, reference: imageAttachmentReference(item), previewUrl: item.previewUrl,
+})))
+function previewComposerImage(key: string) {
+  const item = pendingAttachments.value.find(item => item.key === key)
+  if (item?.previewUrl) openImagePreview({ src: item.previewUrl, name: item.file.name })
+}
 const imageEditsBusy = ref(new Set<string>())
 const attachmentDropTarget = ref(false)
 const composerError = ref('')
@@ -795,7 +806,7 @@ const isDirectChat = computed(() => {
   const id = activeSessionId.value
   return isDirectConversation(id) && (!props.embedded || !!activeSession.value) && !isExecution.value
 })
-const chatInput = ref<HTMLTextAreaElement>()
+const chatInput = ref<ComposerInput>()
 const messagesContainer = ref<HTMLElement>()
 const historyBrowsing = ref(false)
 let historyLeftBottom = false

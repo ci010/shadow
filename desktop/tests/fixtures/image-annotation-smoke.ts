@@ -1,3 +1,4 @@
+import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { readFile, realpath, unlink, writeFile } from 'node:fs/promises'
@@ -172,7 +173,7 @@ const server = createServer(async (request, response) => {
     response.writeHead(500).end()
   }
 })
-const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(source)
+const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(withComposerTestAdapter(source))
 async function waitFor(source: string): Promise<void> {
   const end = Date.now() + 8000
   while (Date.now() < end) {
@@ -358,7 +359,7 @@ async function assertJsonClearance(): Promise<Clearance> {
 }
 async function setComposerText(text: string): Promise<void> {
   await evaluate(`(() => {
-    const input = document.querySelector('.composer-input textarea');
+    const input = document.querySelector('.composer-input .reference-composer');
     input.value = ${JSON.stringify(text)};
     input.dispatchEvent(new Event('input', { bubbles: true }));
   })()`)
@@ -559,7 +560,7 @@ async function dragReference(): Promise<void> {
     canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, ctrlKey: true }));
     return { types: [...data.types], over: over.defaultPrevented, drop: drop.defaultPrevented,
       selected: document.querySelector('[role="tab"][aria-label="${fileName}"]').getAttribute('aria-selected') === 'true',
-      focused: document.activeElement === document.querySelector('.composer-input textarea') };
+      focused: document.activeElement === document.querySelector('.composer-input .reference-composer') };
   })()`)
   assert.ok(result.types.includes('application/x-shadow-image-reference'), 'Production dragstart registers the owned image reference')
   assert.equal(result.over, true)
@@ -718,7 +719,7 @@ async function main(): Promise<void> {
     const revoke = URL.revokeObjectURL.bind(URL);
     URL.revokeObjectURL = value => { window.revokedImageUrls.push(value); revoke(value); };
   })()`)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '')
+  assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), '')
   phase = 'original Ctrl-drag'
   await dragReference()
   assert.deepEqual(await attachedBytes(), original, 'Original Ctrl-drag references the exact original file bytes')
@@ -739,7 +740,7 @@ async function main(): Promise<void> {
   phase = 'textarea Ctrl+Z leaves image untouched'
   const beforeTextUndo = await canvasBytes()
   const beforeTextReference = await attachedBytes()
-  await undoShortcut('.composer-input textarea', false)
+  await undoShortcut('.composer-input .reference-composer', false)
   assert.deepEqual(await canvasBytes(), beforeTextUndo)
   assert.deepEqual(await attachedBytes(), beforeTextReference)
   phase = 'native image Ctrl+Z removes last stroke'
@@ -899,7 +900,7 @@ async function fileDropRegression(): Promise<void> {
     })()`)
     await waitFor(`document.querySelectorAll('.attachment-chip').length === ${count} && !document.querySelector('.composer-send').disabled`)
     assert.equal(await evaluate(`document.querySelectorAll('.attachment-thumb').length`), mixed ? 1 : 0)
-    assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '')
+    assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), '')
     assert.equal(uploads.length, before, 'Dropping and repeating a drop do not upload')
     await click('.composer-send')
     await waitRequest(() => sends.length === sent + 1, 'file-only send')
@@ -920,7 +921,7 @@ async function fileDropRegression(): Promise<void> {
 
 async function clipboardRegression(): Promise<void> {
   phase = 'native Windows clipboard files'
-  await waitFor(`!!document.querySelector('.composer-input textarea') && !document.querySelector('.composer-input textarea').disabled`)
+  await waitFor(`!!document.querySelector('.composer-input .reference-composer') && !document.querySelector('.composer-input .reference-composer').disabled`)
   const saved = await Promise.all((await clipboard.read()).map(async item => new ClipboardItem(Object.fromEntries(
     await Promise.all(item.types.map(async type => [type, await item.getType(type)])),
   ))))
@@ -943,7 +944,7 @@ $files.AddRange([string[]]$paths)
     ], { windowsHide: true, timeout: 10_000 })
   }
   const paste = async () => {
-    await evaluate(`document.querySelector('.composer-input textarea').focus()`)
+    await evaluate(`document.querySelector('.composer-input .reference-composer').focus()`)
     window!.webContents.paste()
   }
   try {
@@ -958,7 +959,7 @@ $files.AddRange([string[]]$paths)
     }, true)`)
     await paste()
     await waitFor(`document.querySelectorAll('.attachment-chip').length === 3 && !document.querySelector('.composer-send').disabled`)
-    assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '')
+    assert.equal(await evaluate(`document.querySelector('.composer-input .reference-composer').value`), '')
     assert.equal(await evaluate(`document.querySelectorAll('.attachment-thumb').length`), 1)
     assert.equal(uploads.length, 0, 'Pasting stages attachments without uploading')
     await paste()
@@ -966,7 +967,7 @@ $files.AddRange([string[]]$paths)
     assert.equal(await evaluate(`(async () => {
       const data = new DataTransfer()
       data.setData('text/plain', 'ordinary text')
-      document.querySelector('.composer-input textarea').dispatchEvent(new ClipboardEvent('paste', {
+      document.querySelector('.composer-input .reference-composer').dispatchEvent(new ClipboardEvent('paste', {
         clipboardData: data, bubbles: true, cancelable: true,
       }))
       await new Promise(resolve => setTimeout(resolve, 0))
@@ -985,7 +986,7 @@ $files.AddRange([string[]]$paths)
     await waitFor(`document.querySelectorAll('.attachment-chip').length === 0 && !document.querySelector('.composer-stop')`)
     await clipboard.writeText('C:\\plain-text-path.pdf')
     await paste()
-    await waitFor(`document.querySelector('.composer-input textarea').value === 'C:\\\\plain-text-path.pdf'`)
+    await waitFor(`document.querySelector('.composer-input .reference-composer').value === 'C:\\\\plain-text-path.pdf'`)
     assert.equal(await evaluate(`document.querySelectorAll('.attachment-chip').length`), 0, 'Text paths remain text')
     assert.deepEqual(errors, [])
     console.log('LAYOUT_RESULT ' + JSON.stringify({ ok: true, fixture: 'clipboard-files', uploads: uploads.length, sends: sends.length }))
