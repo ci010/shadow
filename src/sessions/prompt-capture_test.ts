@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { join } from 'node:path'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { Hono } from 'hono'
+import { diagnosisProjection } from './diagnosis.ts'
 import { PromptCaptureStore, createPromptCaptureStore } from './prompt-capture.ts'
 import type { ChatMessage, LLMProvider, LLMProviderOptions } from '../providers/provider.ts'
 import { transientToolResult, type ToolDefinition } from '../tools/tool.ts'
@@ -379,5 +380,22 @@ test('learning audit rejects forged byte declarations, payload shapes and unexpe
       writeFileSync(path, JSON.stringify(saved))
       assert.throws(() => new PromptCaptureStore('project-a', 2, 4096, { directory }), /could not be loaded/)
     }
+  })
+})
+
+test('learning media omission preserves payload sizes through persistence without retaining image data', async () => {
+  await withTempWorkspace(async workspace => {
+    const directory = join(workspace, 'audit-image-size')
+    const store = new PromptCaptureStore('project-a', 20, 100000, { directory, debugEnabled: false })
+    const messages: ChatMessage[] = [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,YQ==' } }] }]
+    store.capture(captureContext, messages, [], { model: 'm' }, true)
+    const reopened = new PromptCaptureStore('project-a', 20, 100000, { directory, debugEnabled: false })
+    const entry = reopened.list('web:one')[0]!
+    assert.deepEqual(entry.omissions?.[0]?.imageSize, { base64Characters: 4, base64Bytes: 4, decodedBytes: 1 })
+    const projected = diagnosisProjection(16000).project(entry) as unknown as PromptCapture
+    assert.deepEqual(projected.omissions?.[0]?.imageSize, entry.omissions?.[0]?.imageSize)
+    assert.equal(JSON.stringify(projected).includes('YQ=='), false)
+    assert.equal(JSON.stringify(entry).includes('YQ=='), false)
+    assert.equal(JSON.stringify(messages).includes('YQ=='), true)
   })
 })

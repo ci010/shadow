@@ -1,3 +1,4 @@
+import { imagePartSizeMetadata } from '../utils/image-size-metadata.ts'
 import type { OtelStore } from '../otel/store.ts'
 import type { SessionTraceResponse } from '../otel/session-trace.ts'
 import type { PromptCapture } from './prompt-capture.ts'
@@ -102,9 +103,10 @@ export function diagnosisProjection(textLimit: number, maxCharacters = 500_000) 
       return value.slice(0, 100).map((entry, index) => project(entry, `${path}[${index}]`, depth + 1))
     }
     if (value && typeof value === 'object') {
-      if ('type' in value && ['image_url', 'image', 'input_audio', 'audio', 'video', 'file', 'file_url'].includes(String(value.type))) {
+      if ('type' in value && ['image_url', 'input_image', 'image', 'input_audio', 'audio', 'video', 'file', 'file_url'].includes(String(value.type))) {
         mark(redactedPaths, path)
-        return { type: String(value.type), omitted: 'non-text-content' }
+        const imageSize = imagePartSizeMetadata(value as Record<string, unknown>)
+        return { type: String(value.type), omitted: 'non-text-content', ...(imageSize ? { imageSize: { ...imageSize } } : {}) }
       }
       const entries = Object.entries(value)
       if (entries.length > 100) mark(truncatedPaths, path)
