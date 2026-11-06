@@ -1552,6 +1552,7 @@ const { mountedRows: mountedHistoryRows, reveal: revealHistoryRow } = useProgres
       progressiveScrollTop = following
         ? followCommittedBottom(container, scrollCommit, version, bottomScrollGeneration)
         : restore!()
+      retainedHistoryScrollTop = progressiveScrollTop
     }
   },
 })
@@ -3012,11 +3013,10 @@ function flushStreamingTool(): void {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// A newly loaded pane may have been hidden when its history finished loading.
-// Retry once it can be laid out, but retain intentional history/search positions.
-watch(() => props.visible && conversationDocumentVisible.value && activePanel.value === 'conversation', visible => {
-  if (visible) scrollToBottom()
-})
+// KeepAlive can reset scrollTop while moving the scrollport into detached
+// storage. Retain the active position, not a later hidden-layout scroll event.
+let retainedHistoryScrollTop = 0
+watch([activeSessionId, viewingPhysicalId], () => { retainedHistoryScrollTop = 0 }, { flush: 'sync' })
 
 function browseHistory(): void {
   historyScrollVersion++
@@ -3027,9 +3027,10 @@ function browseHistory(): void {
 function trackHistoryScroll(): void {
   // Replacing the loading skeleton/history can emit scroll events before the
   // final bottom jump. Those layout events are not deliberate history browsing.
-  if (loadingHistory.value) return
+  if (loadingHistory.value || !progressiveActive()) return
   const container = messagesContainer.value
   if (!container) return
+  retainedHistoryScrollTop = container.scrollTop
   if (progressiveScrollTop !== undefined && Math.abs(container.scrollTop - progressiveScrollTop) < 1) {
     progressiveScrollTop = undefined
     return
@@ -3053,6 +3054,28 @@ watch([activeSessionId, viewingPhysicalId, () => route.fullPath, progressiveActi
   bottomScrollGeneration++
   progressiveScrollTop = undefined
 }, { flush: 'sync' })
+let historyActivationRevision = 0
+watch(progressiveActive, active => {
+  const revision = ++historyActivationRevision
+  const container = messagesContainer.value
+  if (!active) {
+    if (container?.isConnected) retainedHistoryScrollTop = container.scrollTop
+    return
+  }
+  const sessionId = activeSessionId.value
+  const physicalId = viewingPhysicalId.value
+  const path = route.fullPath
+  const version = historyScrollVersion
+  void nextTick(() => {
+    if (disposed || !progressiveActive() || revision !== historyActivationRevision
+      || sessionId !== activeSessionId.value || physicalId !== viewingPhysicalId.value || path !== route.fullPath
+      || version !== historyScrollVersion || container !== messagesContainer.value) return
+    if (historyBrowsing.value && container) {
+      container.scrollTop = retainedHistoryScrollTop
+      progressiveScrollTop = container.scrollTop
+    } else scrollToBottom()
+  })
+}, { flush: 'sync' })
 function scrollToBottom(): void {
   bottomScrollRequest = { generation: bottomScrollGeneration, version: historyScrollVersion }
   if (bottomScrollQueued) return
@@ -3065,6 +3088,7 @@ function scrollToBottom(): void {
     const el = messagesContainer.value
     if (el) {
       progressiveScrollTop = followCommittedBottom(el, scrollCommit, version, generation)
+      retainedHistoryScrollTop = progressiveScrollTop
     }
   })
 }
@@ -3338,7 +3362,19 @@ function resendLastMessage() {
 .draft-heading .draft-scratch { margin-top: 14px; }
 .draft-io { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 18px; }
 .chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; container-type: inline-size; }
-.chat-message-entry { display: contents; }
+/* Keep row state/searchable DOM, but do not lay out every retained Markdown
+ * subtree when KeepAlive restores a long conversation. A real row box is needed
+ * for containment and lets the rail measure anchors without unlocking children. */
+.chat-message-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  flex-shrink: 0;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 160px;
+}
+@media print { .chat-message-entry { content-visibility: visible; } }
 .conversation-find, .conversation-actions { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); cursor: pointer; }
 .conversation-actions { flex-basis: auto; width: auto; padding: 0 8px; margin-left: auto; font: inherit; font-size: 13px; }
 .conversation-find { margin-left: 0; }

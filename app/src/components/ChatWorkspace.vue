@@ -107,20 +107,29 @@ function resizeKey(event: KeyboardEvent) {
   preferredWidth.value = clampChildWidth(event.key === 'Home' ? bounds.value.min : event.key === 'End' ? bounds.value.max
     : childWidth.value + (event.key === 'ArrowLeft' ? 24 : -24), workspaceWidth.value)
 }
-function measure() {
-  if (workspace.value) workspaceWidth.value = workspace.value.getBoundingClientRect().width
-}
 function activate() {
-  observer?.disconnect()
-  observer = new ResizeObserver(measure)
-  if (workspace.value) observer.observe(workspace.value)
-  measure()
+  // KeepAlive calls both mounted and activated on the initial mount.
+  if (observer || !workspace.value) return
+  const target = workspace.value
+  const current = new ResizeObserver(entries => {
+    // Ignore a queued delivery from a disconnected activation.
+    if (observer !== current) return
+    const entry = entries.find(entry => entry.target === target)
+    if (!entry) return
+    // This horizontal workspace uses border-box width for split bounds. Its
+    // border/padding-free root also permits contentRect on older observers.
+    workspaceWidth.value = entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width
+  })
+  observer = current
+  current.observe(target, { box: 'border-box' })
   window.addEventListener('blur', stopResize)
 }
 function deactivate() {
+  const current = observer
+  observer = undefined
+  current?.disconnect()
   stopResize()
-  observer?.disconnect()
-  window.removeEventListener('blur', stopResize)
+  if (current) window.removeEventListener('blur', stopResize)
 }
 watch(wide, value => { if (!value) stopResize() })
 watch(() => [route.name, route.params.sessionId, route.query.child], () => {

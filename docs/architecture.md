@@ -2709,6 +2709,17 @@ prepend preserves either bottom-following or a retained row's viewport offset;
 hidden/deactivated panes pause the scheduler, and context changes/unmount cancel
 pending navigation and scroll restoration. This bounds row counts, not individual
 Markdown or tool-group execution time, and is not history truncation or virtualization.
+Retained presentation rows are independent flex boxes with `content-visibility: auto`
+and remembered intrinsic block sizes, allowing the browser to skip offscreen
+layout/paint when a cached conversation returns. Row components, disclosures and
+searchable text remain mounted; this is rendering containment, not a bound on DOM
+memory or a conversation-cache eviction policy. Passive history-rail tracking
+measures the outer row boxes rather than forcing skipped descendants to lay out;
+explicit navigation still resolves the exact message. Printing disables skipping.
+KeepAlive reactivation restores the last active scroll offset when browsing, or
+resumes bottom following; hidden-layout scroll events do not change that intent.
+Workspace split widths come from `ResizeObserver` deliveries rather than a
+synchronous geometry read during mount/KeepAlive activation.
 Following resumes when the user returns within 32px of the bottom or starts sending
 another message; a delayed send acknowledgement does not override subsequent
 scrolling. Explicit peer progress and

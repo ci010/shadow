@@ -15,10 +15,10 @@ async function main() {
   const errors: string[] = []
   window.webContents.on('console-message', (_event, level, message) => { if (level >= 2) errors.push(message) })
   const execute = (code: string) => window.webContents.executeJavaScript(withComposerTestAdapter(code))
-  const wait = async (code: string) => {
-    const deadline = Date.now() + 12_000
+  const wait = async (code: string, timeout = 12_000) => {
+    const deadline = Date.now() + timeout
     while (Date.now() < deadline) { if (await execute(code)) return; await delay(50) }
-    throw new Error(`Timed out: ${code}\n${await execute('JSON.stringify({width:innerWidth,height:innerHeight})')}\n${await execute('document.body.innerText')}\n${errors.join('\n')}`)
+    throw new Error(`Timed out: ${code}\n${await execute('JSON.stringify({width:innerWidth,height:innerHeight,scrollTop:document.querySelector(".chat-messages")?.scrollTop,scrollHeight:document.querySelector(".chat-messages")?.scrollHeight,rows:document.querySelectorAll("[data-history-row-key]").length})')}\n${await execute('document.body.innerText.slice(0,2000)')}\n${errors.slice(-10).join('\n')}`)
   }
   const key = (key: string, modifiers = '') => execute(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:${JSON.stringify(key)},bubbles:true,cancelable:true,${modifiers}}))`)
   const query = (value: string) => execute(`{const input=document.querySelector('.conversation-search input'); input.value=${JSON.stringify(value)}; input.dispatchEvent(new Event('input',{bubbles:true}));}`)
@@ -125,6 +125,71 @@ async function main() {
     await execute(`window.__searchFixture.select('web:chat-two')`)
     await wait(`!document.querySelector('.conversation-search') && document.querySelector('.chat-content')?.textContent.includes('Second conversation')`)
     assert.equal(await execute(`CSS.highlights.has('shadow-conversation-active')`), false)
+    // A cached, fully mounted math/table history must not lay out every subtree
+    // when returning from settings. This uses real ChatWorkspace/ChatTab rows.
+    await execute(`window.__searchFixture.select('web:chat-heavy')`)
+    await wait(`document.querySelectorAll('[data-history-row-key]').length === 48`, 45_000)
+    await wait(`(() => {const e=document.querySelector('.chat-messages');return e.scrollHeight-e.scrollTop-e.clientHeight<32})()`)
+    const skipped = await execute(`Array.from(document.querySelectorAll('.chat-message-entry .chat-content')).filter(e => !e.checkVisibility({contentVisibilityAuto:true})).length`)
+    assert(skipped > 32, `Offscreen history should skip rendering, skipped only ${skipped}/48 rows`)
+    const forcedReads = await execute(`(async () => {
+      const original=Element.prototype.getBoundingClientRect; let reads=0;
+      Element.prototype.getBoundingClientRect=function() {
+        if(this.matches('[data-msg-idx]') && this.closest('[data-history-row-key]') && !this.checkVisibility({contentVisibilityAuto:true})) reads++;
+        return original.call(this);
+      };
+      try {
+        const container=document.querySelector('.chat-messages');container.scrollTop-=400;
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+        container.scrollTop=container.scrollHeight;
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        return reads;
+      } finally {Element.prototype.getBoundingClientRect=original}
+    })()`)
+    assert.equal(forcedReads, 0, 'Passive rail tracking must not force layout of skipped message descendants')
+    await wait(`(() => {const e=document.querySelector('.chat-messages');return e.scrollHeight-e.scrollTop-e.clientHeight<32})()`)
+    await execute(`window.__retainedHistoryRow=document.querySelector('[data-history-row-key]'); const input=document.querySelector('.reference-composer'); input.value='Retained heavy-history draft'; input.dispatchEvent(new Event('input',{bubbles:true}));`)
+    await execute(`window.__searchFixture.settings(true)`)
+    await wait(`!!document.getElementById('fixture-settings') && !document.querySelector('.chat-messages')`)
+    const restoredAt = Date.now()
+    await execute(`window.__searchFixture.settings(false)`)
+    await wait(`document.querySelectorAll('[data-history-row-key]').length === 48`)
+    await wait(`(() => {const e=document.querySelector('.chat-messages');return e.scrollHeight-e.scrollTop-e.clientHeight<32})()`)
+    assert.equal(await execute(`window.__retainedHistoryRow===document.querySelector('[data-history-row-key]')`), true, 'KeepAlive retains row/component state, rather than remounting all messages')
+    assert.equal(await execute(`document.querySelector('.reference-composer').value`), 'Retained heavy-history draft')
+    console.log('HISTORY_RESTORE_MS', Date.now() - restoredAt, 'SKIPPED_ROWS', skipped)
+    // Search must unlock an old skipped row and still highlight its real text.
+    await execute(`document.querySelector('.reference-composer').focus()`)
+    await key('f', 'ctrlKey:true')
+    await query('UniqueOldHistoryTarget')
+    await count('1 / 1')
+    assert.deepEqual(await highlighted(), ['UniqueOldHistoryTarget'])
+    assert.equal(await execute(`document.querySelector('.chat-messages').scrollTop < 80`), true)
+    await key('Escape')
+    await execute(`window.__searchFixture.settings(true)`)
+    await wait(`!!document.getElementById('fixture-settings')`)
+    await execute(`window.__searchFixture.settings(false)`)
+    await wait(`!!document.querySelector('.chat-messages')`)
+    assert.equal(await execute(`document.querySelector('.chat-messages').scrollTop < 80`), true, 'Reactivation preserves intentional historical browsing')
+    // Jump to a middle row that was skipped, not only the first/last rows.
+    await execute(`document.querySelectorAll('.history-marker')[3].click()`)
+    await wait(`(() => {const e=document.querySelector('[data-msg-idx="24"]');const c=document.querySelector('.chat-messages');const top=e.getBoundingClientRect().top-c.getBoundingClientRect().top;return top>=-2 && top<80})()`)
+    const browsingTop = await execute(`document.querySelector('.chat-messages').scrollTop`)
+    await execute(`window.__searchFixture.settings(true)`)
+    await wait(`!!document.getElementById('fixture-settings')`)
+    await execute(`window.__searchFixture.settings(false)`)
+    await wait(`!!document.querySelector('.chat-messages') && Math.abs(document.querySelector('.chat-messages').scrollTop-${browsingTop})<2`)
+    // Rail navigation reads the target only, and passive tracking must not
+    // defeat containment by measuring every offscreen descendant.
+    await execute(`document.querySelector('.history-marker').click()`)
+    await wait(`document.querySelector('.chat-messages').scrollTop < 80`)
+    for (const width of [1100, 390]) {
+      window.setContentSize(width, 800)
+      await wait(`Math.abs(innerWidth-${width})<=2`)
+      const geometry = await execute(`(() => {const row=document.querySelector('.chat-message-entry');const bubble=row.querySelector('.chat-user');const a=row.getBoundingClientRect(),b=bubble.getBoundingClientRect();return {overflow:document.documentElement.scrollWidth>innerWidth,rightGap:a.right-b.right,width:b.width,rowWidth:a.width}})()`)
+      assert.equal(geometry.overflow, false, JSON.stringify(geometry))
+      assert(Math.abs(geometry.rightGap) < 2 && geometry.width <= geometry.rowWidth, JSON.stringify(geometry))
+    }
     console.log('CONVERSATION_SEARCH_OK')
   } finally {
     window.destroy()
