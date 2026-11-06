@@ -75,8 +75,9 @@ export function registerEventTools(
   events: EventService,
   sources: PollingSources,
   canAuthor: (sessionId: string) => boolean,
+  additionalTools: Tool[] = [],
 ): void {
-  const tools = [new EventSubscribeTool(events), new EventSourceTool(sources, canAuthor)]
+  const tools = [new EventSubscribeTool(events), new EventSourceTool(sources, canAuthor), ...additionalTools]
   for (const tool of tools) importer.registerBuiltin(tool.name, tool)
   importer.registerBuiltin('events', { contracts: tools, factory: async () => tools })
 }

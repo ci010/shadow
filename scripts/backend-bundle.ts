@@ -2,7 +2,7 @@ import { builtinModules, createRequire } from 'node:module'
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { build, type Plugin } from 'vite'
-import { transform } from 'esbuild'
+import { build as buildScriptModule, transform } from 'esbuild'
 import { copyAgentDesktopAssets } from './agent-desktop-assets.ts'
 
 // Keep every out-of-graph process entry: Node cannot discover these from imports.
@@ -119,6 +119,14 @@ export async function compileBackend(root: string, output: string, entries = bac
       },
     },
     ssr: { noExternal: true },
+  })
+  // Self-contained, import-free code evaluated inside the restricted guest realm.
+  await buildScriptModule({
+    entryPoints: [join(src, 'script-runtime/html-module.ts')],
+    outfile: join(output, 'src/script-runtime/html-module.bundle.js'),
+    inject: [join(src, 'script-runtime/html-base64.ts')],
+    bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
+    legalComments: 'eof',
   })
   await copyAssets(join(root, 'src'), join(output, 'src'))
   await copyAgentDesktopAssets(root, output)
