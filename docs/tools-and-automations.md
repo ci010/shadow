@@ -1201,3 +1201,20 @@ not another instructions object. Task/call discovery title/description remain
 separate parent-owned contracts. Self views adapt task title to read-only topic,
 never task description to focus. New focus is persisted independently; clearing it
 falls back to topic without erasing any historical discovery metadata.
+
+## Programmable EventSourceProviders
+
+The lazy `event_provider` tool is independent of legacy polling subscriptions.
+Author a local manifest/restricted module and reload for REST JSON APIs, cursor
+feeds or public HTML/text acquisition. Discover/inspect exposes demand/event
+schemas, examples and HTTP declarations. Shared Project instances capture narrow
+authorized origin/routes/methods/query/body/optional credential bindings that code
+reload cannot expand. Public sources need no secret. Exact demands deduplicate
+across allowed sessions; each subscription has an isolated processor/outbox.
+Snapshot and bounded-retention delta modes commit checkpoints with fanout jobs.
+The built-in `github-issues@1` retains broker-enforced fixed read-only GraphQL
+batching and host-injected PAT. See [EventSourceProviders](event-source-providers.md)
+for complete REST/HTML authoring examples, discovery/reload/create/subscribe,
+security, pagination/dedup bounds and inbox-acceptance reliability limitations.
+No arbitrary browser/JS-site support or exactly-once claim; fixture tests do not
+verify live sources.

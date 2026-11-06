@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import type { DeliverInput } from '../sessions/input.ts'
 import { CapabilityGrantSchema, type CapabilityGrant } from './grant-contract.ts'
+import { assertReadQuery } from './graphql-read.ts'
 
 export type DeliverInputPayload = Parameters<DeliverInput>[1]
 export interface CapabilityInvocationContext {
@@ -18,6 +19,8 @@ export interface CapabilityInvocationContext {
   revision: string
   signal: AbortSignal
   assertCurrent: () => void
+  /** Host-only browser route, never supplied by guest input. Must drain cancellation. */
+  browserRequest?: typeof fetch
   onHttpProgress?: (event: { stage: 'request' } | { stage: 'response'; status: number }) => void
 }
 
@@ -570,8 +573,16 @@ export class CapabilityBroker {
     const match = routes.find(value => value.route.method === input.method && value.segments.length === segments.length &&
       value.segments.every((segment, index) => segment === '*' ? !!segments[index] : segment === segments[index]))
     if (!match) fail('route_denied', 'HTTP method and path are not granted.')
+    if (match.route.querySchema) validateJsonSchema(match.route.querySchema, input.query ?? {})
     if (input.method === 'GET' && Object.hasOwn(raw, 'body')) fail('invalid_input', 'GET requests must not contain a body.')
-    if (input.method !== 'GET' && !input.idempotencyKey) fail('invalid_input', 'HTTP mutations require a stable idempotencyKey.')
+    const readOnlyGraphql = grant.readOnlyGraphqlQueries !== undefined
+    if (readOnlyGraphql) {
+      try { grant.readOnlyGraphqlQueries!.forEach(assertReadQuery) } catch { fail('invalid_grant', 'Invalid read-only GraphQL query allowlist.') }
+      const body = z.object({ query: z.string(), variables: z.record(z.unknown()) }).strict().safeParse(input.body)
+      if (input.method !== 'POST' || input.path !== '/graphql' || input.query !== undefined || !body.success ||
+        !grant.readOnlyGraphqlQueries!.includes(body.data.query)) fail('route_denied', 'Only exact approved read-only GraphQL POST bodies are granted.')
+    }
+    if (input.method !== 'GET' && !readOnlyGraphql && !input.idempotencyKey) fail('invalid_input', 'HTTP mutations require a stable idempotencyKey.')
     if (match.route.bodySchema) {
       validateJsonSchema(match.route.bodySchema, input.body)
     }
@@ -581,6 +592,7 @@ export class CapabilityBroker {
     const headers: Record<string, string> = { accept: 'application/json', 'user-agent': 'Shadow' }
     const body = Object.hasOwn(raw, 'body') ? canonical(input.body) : undefined
     if (body !== undefined) headers['content-type'] = 'application/json'
+    if (context.browserRequest && grant.credential) fail('browser_policy', 'Browser cookie auth cannot be combined with credential injection.')
     let secret: string | undefined
     if (grant.credential) {
       if (/^(host|connection|content-length|transfer-encoding|cookie|set-cookie|proxy-.*|sec-.*|origin|referer|upgrade|trailer|te)$/i.test(grant.credential.header) ||
@@ -603,7 +615,7 @@ export class CapabilityBroker {
         fail('network_error', 'HTTP capability transport failed.')
       }
     }
-    if (input.method === 'GET' && !input.idempotencyKey) return perform()
+    if (readOnlyGraphql || (input.method === 'GET' && !input.idempotencyKey)) return perform()
     return this.keyed(grant, input.idempotencyKey!, raw, context, async (record, save) => {
       // Existence, not an in-memory flag, distinguishes a crashed pending write
       // from a new operation. No automatic retry is safe for such mutations.
@@ -629,6 +641,9 @@ export class CapabilityBroker {
         // Persist if still authorized; otherwise the pending record itself is
         // the fail-closed uncertain receipt on the next execution.
         try { await save({ ...record, state: 'uncertain' }) } catch { /* Pending already forbids mutation replay. */ }
+        // Receipt uncertainty and host browser cleanup uncertainty are separate.
+        // Keep no-replay protection, but do not hide an unconfirmed drain from lifecycle.
+        if (error instanceof CapabilityError && error.code === 'browser_cleanup_unconfirmed') throw error
         fail('uncertain_outcome', 'HTTP write outcome is uncertain; do not blindly repeat it or use a new key.')
       }
     })
@@ -644,13 +659,14 @@ export class CapabilityBroker {
       if (signal.aborted) fail('timeout', 'HTTP capability timed out.')
     }
     check()
-    if (this.options.request) {
-      // An injected transport is trusted host code, never guest configurable.
-      // It must honor the same DNS policy if used outside synthetic tests.
+    if (context.browserRequest || this.options.request) {
+      // Both routes are trusted host code; browser cancellation must drain its controller.
       context.onHttpProgress?.({ stage: 'request' })
-      const response = await abortable(this.options.request(url, {
-        method, headers, body, signal, redirect: 'error', credentials: 'omit',
-      }), signal)
+      const request = context.browserRequest ?? this.options.request!
+      const pending = request(url, {
+        method, headers, body, signal, redirect: 'error', credentials: context.browserRequest ? 'include' : 'omit',
+      })
+      const response = context.browserRequest ? await pending : await abortable(pending, signal)
       context.onHttpProgress?.({ stage: 'response', status: response.status })
       check()
       if (response.redirected || (response.url && new URL(response.url).origin !== url.origin)) {

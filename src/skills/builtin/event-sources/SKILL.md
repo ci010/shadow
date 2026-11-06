@@ -1,12 +1,40 @@
 ---
 name: event-sources
-description: Create persistent, user-requested polling event sources and subscribe sessions to their events. Use for external changes such as a GitHub issue closing.
+description: Author and reload programmable REST/HTML EventSourceProviders with shared instances and per-session processors; also manage isolated legacy polling sources. Use for external changes such as a GitHub issue closing.
 metadata:
   core: true
   category: scheduling
 ---
 
-# Polling event sources
+# Programmable providers (preferred for new authored sources)
+
+Discover `event_provider` under `v:tools/events` and read its live contract.
+Use `discover` / `inspect` for self-describing demand/event schemas, examples,
+HTTP capability declarations and restricted code. See
+`docs/event-source-providers.md` in the Shadow source for complete working REST
+cursor and public HTML examples. Write a local JSON manifest and adjacent `.ts`
+module, then `event_provider({action:"reload",path:"providers/source.json"})`.
+Code edit/reload needs no extra approval; actual instance/network/credential and
+subscription bindings retain the tool's direct-user authority checks. Definitions
+alone grant no IO. Instances retain immutable HTTP permissions across reload;
+a new origin, route, method, query/body schema or credential header requires a
+separately authorized instance. Public sources need no secret. Scripts import
+`{call} from '@shadow/fetch'`, passing `{method,path,query?,body?,idempotencyKey?}`
+and receiving `{status,body}` (JSON or bounded text). This API is NOT the legacy
+`fetch(path, options)` below. GitHub uses the same broker with fixed read-only
+GraphQL queries and host-injected PAT. Do not mix provider and legacy state,
+subscription tools or script contracts. Providers and subscriber processors may
+also import `{parseHtml} from '@shadow/html'` for pure local static HTML parsing:
+`parseHtml(html).querySelector('h1')?.textContent`, `querySelectorAll(css)`,
+`element.getAttribute(name)`, and bounded `element.getHtml()` outer fragments.
+Cheerio is internal, not an arbitrary npm import grant. Limits: 1 MiB UTF-8 input,
+1024-code-unit selectors, 256 nodes per querySelectorAll, 64 KiB fragments;
+violations throw rather than truncate. Text includes script/style source (never
+executed). No live browser DOM or dynamic JS-site execution is provided by this
+parser. Processors still have no IO capabilities. See the provider documentation
+for malformed HTML, entity and selector semantics.
+
+# Legacy isolated polling event sources
 
 Read `v:events/sources` and `v:events` first. Existing channel, cron, or
 custom sources may already produce the event. The event tools are dynamically

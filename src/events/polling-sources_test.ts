@@ -1,3 +1,5 @@
+import { EventProviderRuntime } from './providers/runtime.ts'
+import { EventProviderTool } from '../tools/event-provider.ts'
 import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -219,13 +221,15 @@ test('event tools are discoverable and invoked lazily without entering the base 
   })
   const sources = new PollingSources(workspace, events, broker, id => id === 'owner', () => false)
   sources.start()
+  const providers = new EventProviderRuntime(workspace, broker, async (id, input) => ({ status: 'accepted', sessionId: id, inputId: input.id }), id => id === 'owner', () => false)
+  providers.start()
   try {
     const base = new Tools(workspace)
     const importer = new ImportTool(new Map(), workspace)
     const invoke = new InvokeTool(importer)
     base.register(new ReadTool(workspace))
     base.register(invoke)
-    registerEventTools(importer, events, sources, id => id === 'owner')
+    registerEventTools(importer, events, sources, id => id === 'owner', [new EventProviderTool(providers, 'project')])
     const session = new SessionTools(base, workspace)
     const context: ExecutionContext = {
       projectId: 'project', sessionId: 'owner', physicalSessionId: 'owner.0',
@@ -238,6 +242,13 @@ test('event tools are discoverable and invoked lazily without entering the base 
     const catalog = await importer.virtualEntries(context, { subpath: 'events' })
     assert(catalog.some(entry => entry.name === 'events/event_subscribe'))
     assert(catalog.some(entry => entry.name === 'events/event_source'))
+    assert(catalog.some(entry => entry.name === 'events/event_provider'))
+    assert.equal(session.hasDynamic('event_provider'), false)
+    const discovered = JSON.parse(String(await invoke.execute({name:'event_provider',args:{action:'discover'}},context)))
+    assert.equal(discovered.providers[0].id, 'github-issues')
+    assert.ok(discovered.providers[0].demandSchema)
+    assert.ok(discovered.providers[0].examples.length)
+    assert.equal(session.hasDynamic('event_provider'), true)
     assert.match(String(await invoke.execute({
       name: 'event_subscribe', args: { action: 'subscribe', event: 'issue.closed' },
     }, context)), /Subscribed owner to issue.closed/)
@@ -252,6 +263,7 @@ test('event tools are discoverable and invoked lazily without entering the base 
     }, { ...context, tools: call })), /not active and could not be imported/)
     assert.deepEqual(events.list('owner').map(sub => sub.event), ['issue.closed'])
   } finally {
+    await providers.stop()
     await sources.stop()
     await events.stop()
   }

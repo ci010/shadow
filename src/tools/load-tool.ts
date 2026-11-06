@@ -22,6 +22,7 @@ import { SkillToolDeclarationsSchema, resolveSkillToolSource, type SkillToolDecl
 import type { Skill } from '../skills/loader.ts'
 import { readSkillDirectory } from '../skills/edit-store.ts'
 import { parseSkillFile } from '../skills/parse.ts'
+import { browserProviderFetch, providerBrowserTargets, type ProviderBrowserBinding, type ProviderBrowserAccess } from '../browser/provider-fetch.ts'
 import { SharedChrome } from '../browser/shared-chrome.ts'
 import { attachmentTarget, SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
 import { chromeToolAllowed } from '../browser/chrome-contract.ts'
@@ -296,6 +297,37 @@ export class ImportTool implements Tool {
           return JSON.stringify(this.browserReceipt(instance))
         })
       }, () => this.sharedChrome.selectedChoice()))
+    }
+  }
+
+  private providerBrowser(context: ExecutionContext, id: string): { endpoint: string; check: () => void; signal: AbortSignal } {
+    const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, context)
+    if (denied || !this.sessionBrowsersEnabled() || context.tools.dynamicOwner !== context.tools || context.tools.executionMode === 'call') throw new Error('Browser provider requires the owning authorized local session')
+    const instance = this.browsers.resolve(context.tools, id)
+    if (typeof instance === 'string' || instance.target.mode !== 'managed' || !instance.providerEndpoint) throw new Error('Explicit connected managed browser instance required')
+    const endpoint = instance.providerEndpoint
+    const signal = AbortSignal.any([context.tools.dynamicSignal, instance.tools.dynamicSignal])
+    const check = () => {
+      signal.throwIfAborted()
+      if (!instance.active || !instance.ready || instance.providerEndpoint !== endpoint ||
+        !context.tools.has('invoke_tool') || ['browser_setup', 'chrome-devtools__evaluate_script'].some(name => !context.tools.canUseDynamic(name))) throw new Error('Browser provider authorization unavailable')
+    }
+    check()
+    return { endpoint, check, signal }
+  }
+
+  async providerBrowserContexts(context: ExecutionContext, instance: string) {
+    const access = this.providerBrowser(context, instance)
+    const targets = await providerBrowserTargets(access.endpoint)
+    access.check()
+    return targets
+  }
+
+  bindProviderBrowser(context: ExecutionContext, binding: ProviderBrowserBinding): ProviderBrowserAccess {
+    const access = this.providerBrowser(context, binding.instance)
+    return { binding: { ...binding }, assertCurrent: access.check,
+      request: (url, init) => browserProviderFetch(access.endpoint, binding.targetId, url,
+        { ...init, signal: AbortSignal.any([access.signal, ...(init?.signal ? [init.signal] : [])]) }, access.check),
     }
   }
 
@@ -954,6 +986,7 @@ export class ImportTool implements Tool {
           ? attachmentTarget(await this.sharedChrome.ensure(instance.target, options.signal)).arguments
           : instance.target.arguments
         options.signal.throwIfAborted()
+        if (instance.target.mode === 'managed') instance.providerEndpoint = targetArgs[0]?.replace(/^--wsEndpoint=/, '')
         effectiveArgs = [adapterEntry, ...parsed.args, '--page-id-routing', ...targetArgs]
       } catch (error) {
         return `Error loading Chrome: ${error instanceof Error ? error.message : String(error)}`

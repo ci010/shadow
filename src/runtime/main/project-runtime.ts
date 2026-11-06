@@ -168,6 +168,8 @@ import { projectActionsPlugin } from '../../projects/action-routes.ts'
 import { ProjectActionTool } from '../../tools/project-action.ts'
 import { EventService } from '../../events/service.ts'
 import { PollingSources } from '../../events/polling-sources.ts'
+import { EventProviderRuntime } from '../../events/providers/runtime.ts'
+import { EventProviderTool } from '../../tools/event-provider.ts'
 import { watchAutomationSessions } from '../../cron/notifications.ts'
 import { CronService } from '../../cron/service.ts'
 import { CronDispatcher } from '../../cron/dispatch.ts'
@@ -1180,6 +1182,16 @@ export async function createProjectRuntime(
     ref => agentCredentials.names().includes(ref),
   )
   cleanup.push(() => pollingSources.stop())
+  const eventProviders = new EventProviderRuntime(
+    workspace, capabilityBroker, (id, input) => deliverInput(id, input),
+    id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
+    ref => agentCredentials.names().includes(ref),
+  )
+  cleanup.push(() => eventProviders.stop())
+  const eventProviderTool = new EventProviderTool(eventProviders, project.id, {
+    contexts: (context, instance) => importTool.providerBrowserContexts(context, instance),
+    bind: (context, binding) => importTool.bindProviderBrowser(context, binding),
+  })
   const learningRuntime = new LearningRuntime(sessions, project.id, skills)
   const discordLearning = new DiscordLearning({
     projectId: project.id, directory: resolve(integrationDirectory, 'learning'), runtime: discordIntegration,
@@ -1322,7 +1334,7 @@ export async function createProjectRuntime(
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
   }
   registerCronTools(importTool, cronService, sessions, name => !!agentTypes.resolve(name))
-  registerEventTools(importTool, events, pollingSources, canAuthor)
+  registerEventTools(importTool, events, pollingSources, canAuthor, [eventProviderTool])
   // Clean up event subscriptions linked to one-shot cron jobs when they are
   // auto-removed after firing (prevents orphaned subscriptions in `list`).
   cronService.setOnJobRemoved((jobId) => {
@@ -1627,6 +1639,7 @@ export async function createProjectRuntime(
       () => knowledgeSchedule.stop(),
       () => knowledgeMaintenance.stop(),
       () => pollingSources.stop(),
+      () => eventProviders.stop(),
       () => github.stop(),
       () => cronService.stop(),
       () => stopLearning,
@@ -1679,6 +1692,7 @@ export async function createProjectRuntime(
   await ready
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
   pollingSources.start()
+  eventProviders.start()
   events.registerManagedSource({ source: 'github', kind: 'custom', description: 'Explicit Project GitHub resource subscriptions' })
   github.start()
   a2a.validate()
