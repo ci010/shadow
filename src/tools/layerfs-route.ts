@@ -8,7 +8,7 @@ const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'"
 function refuse(message: string): never { throw new ToolNoEffectError(`LayerFS: ${message}. No operation was executed.`) }
 
 /** Only the explicit namespace is intercepted. Old opaque IDs remain accepted by layerfs itself. */
-export async function layerfsRoute(kind: 'read' | 'write' | 'exec', input: Record<string, unknown>, context: ExecutionContext): Promise<ToolResult | undefined> {
+export async function layerfsRoute(kind: 'read' | 'write' | 'exec', input: Record<string, unknown>, context: ExecutionContext, home?: string): Promise<ToolResult | undefined> {
   const a = workspaceArguments(input)
   if (typeof a.workspace !== 'string' || !a.workspace.startsWith('layerfs:')) return undefined
   if (!context.projectId) refuse('Project scope is required')
@@ -43,7 +43,7 @@ export async function layerfsRoute(kind: 'read' | 'write' | 'exec', input: Recor
       request = { ...request, action: 'write', path: a.path, content: a.content }
     }
   }
-  const result = await new LayerFSTool(context.projectId!).execute(request, context)
+  const result = await new LayerFSTool(context.projectId!, home).execute(request, context)
   if (isCompletedToolFailure(result)) return result
   const receipt = JSON.parse(toolResultText(result))
   const code = receipt.result?.code ?? receipt.result?.exitCode

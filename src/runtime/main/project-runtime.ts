@@ -462,12 +462,29 @@ export async function createProjectRuntime(
   const loadable = new Map<string, LoadableEntry>()
   loadable.set('agent_tool_test', agentToolTest)
   loadable.set('session_proxy', new SessionProxyTool())
+  let layerfsBootstrap: import('../../execution/layerfs/bootstrap.ts').LayerFSBootstrap | undefined
+  let layerfsWorkflow: import('../../execution/layerfs/workflow.ts').LayerFSWorkflow | undefined
   loadable.set('layerfs', {
     factory: async () => {
       const { LayerFSTool } = await import('../../tools/layerfs.ts')
-      return new LayerFSTool(project.id)
+      const { managedLayerFS } = await import('../../execution/layerfs/managed.ts')
+      const { LayerFSBootstrap, matchesBootstrapApproval } = await import('../../execution/layerfs/bootstrap.ts')
+      const managed = managedLayerFS(project.id, workspace)
+      const verify: import('../../execution/layerfs/bootstrap.ts').BootstrapApprovalVerifier = async (question, reference, context) => matchesBootstrapApproval(question, reference,
+        await sessions.getYieldRecords(reference.sessionId, reference.physicalId), context.sessionId)
+      layerfsBootstrap ??= new LayerFSBootstrap(project.id, workspace, backgroundTasks, managed, undefined, process.platform, process.arch, verify)
+      const { LayerFSWorkflow } = await import('../../execution/layerfs/workflow.ts')
+      layerfsWorkflow ??= new LayerFSWorkflow(project.id, managed, verify,
+        (path, signal) => folderRegistry.register(path, signal, 'Separate LayerFS baseline candidate; original checkout preserved. Content review is required before import.'), backgroundTasks)
+      return new LayerFSTool(project.id, workspace, managed, layerfsBootstrap, backgroundTasks, layerfsWorkflow)
     },
   })
+  // Ordinary LayerFS routes share this Project-owned worker; sessions never close it.
+  const closeLayerFS = async () => {
+    const { closeManagedLayerFS } = await import('../../execution/layerfs/managed.ts')
+    await closeManagedLayerFS(project.id, workspace)
+  }
+  cleanup.push(closeLayerFS)
   // One managed copied-profile browser per Project runtime; adapters remain session-local.
   loadable.set('chrome-devtools', {
     config: {
@@ -1635,6 +1652,7 @@ export async function createProjectRuntime(
       () => handoffManager.stop(),
       () => backgroundTasks.stop(),
       () => agent.shutdown(),
+      closeLayerFS,
       () => discordIntegration.stop(),
       () => skills.stopWatching(),
       () => agentTypes.stopWatching(),

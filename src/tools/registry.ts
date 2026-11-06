@@ -184,7 +184,8 @@ export class Tools {
       return images.length ? { content: [{ type: 'text', text }, ...images], ...(typeof result !== 'string' && result.isError ? { isError: true } : {}) } : text
     } catch (err) {
       admission?.finish(true, !context.signal?.aborted && err instanceof ToolNoEffectError ? 'none' : undefined)
-      // An interrupted invocation has no result to persist or send to the model.
+      // Preserve cancellation and missing-effect evidence through nested callers.
+      // The session boundary records typed uncertainty without replaying the call.
       if (context.signal?.aborted || err instanceof ToolOutcomeUnknownError) throw err
       // handle abort
       if (err instanceof Error && err.name === 'AbortError') {

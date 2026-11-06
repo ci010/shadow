@@ -3,7 +3,12 @@
 Shadow includes an opt-in dynamically imported `layerfs` tool and the builtin
 `layerfs` skill. It does not ship or install the LayerFS SDK, native addon,
 Linux daemon, runtime image, Docker, worker or WSL. This is a real SDK bridge,
-not a file-copy snapshot implementation. No npm dependency was added.
+not a file-copy snapshot implementation. No npm dependency was added. Windows can
+now connect an explicitly approved existing installation through managed setup;
+Shadow owns configuration and worker lifecycle without an environment variable or
+backend restart. A first-run approval-gated source bootstrap now acquires/builds
+the pinned runtime automatically on a supported existing Windows/WSL environment.
+OS/WSL/Docker installation remains separate.
 
 ## Operator prerequisites
 
@@ -23,8 +28,11 @@ in that source layout), not an arbitrary module suggested by a model.
 - Provision a separate private LayerFS home, Store path and volume per Shadow
   Project. The adapter rejects identical configured home/Store/volume strings
   across Projects; operators must also avoid filesystem aliases to shared data.
-- Provision the image, volume, daemon and worker before calling this tool.
-  This version does not implement `@layerfs/runtime` provisioning or project removal.
+- For operator-environment mode, provision the image, volume, daemon and worker
+  before calling this tool. Managed Windows setup uses `@layerfs/runtime` to start
+  an approved existing installation; managed create allocates its labeled volume.
+  The approval-gated bootstrap can build/stage the pinned SDK; no mode installs
+  OS/WSL/Docker prerequisites or exposes project removal.
 - Use a plain Docker local volume with no bind-driver options. The tested upstream
   rejects bind-backed volumes even when the backing directory is on ext4.
 - The tested Windows Store installer requires the official WSL worker to run as
@@ -66,7 +74,8 @@ as stable or automatically retry these failed operations. See
 [layerfs-e2e-macos-20261105.md](layerfs-e2e-macos-20261105.md) for evidence, retained
 resources and unresolved lifecycle boundaries.
 
-Set `SHADOW_LAYERFS_CONFIG` in the Shadow backend's environment to an absolute
+For the alternative **operator-environment mode**, set `SHADOW_LAYERFS_CONFIG`
+in the Shadow backend's environment to an absolute
 operator-owned JSON file, outside model-editable workspaces. Do not put credentials
 in it. The model cannot select SDK modules, environment variables or source paths.
 Example (replace placeholders with an actual, separately provisioned installation):
@@ -98,23 +107,311 @@ are stripped from each bridge child before explicit Project settings are applied
 Other normal host environment variables remain inherited; the child is not an OS
 security sandbox. SDK singleton state is confined to that child.
 
-SDK project names are deterministic: `shadow-` plus the first 40 hexadecimal
-characters of SHA-256 of the Shadow Project ID. Use that exact name if provisioning
-an existing upstream project. `create` explicitly calls `LayerFS.init`; subsequent
+Legacy SDK project names are deterministic: `shadow-` plus the first 40 hexadecimal
+characters of SHA-256 of the Shadow Project ID. Operator mode retains that naming.
+Managed import quarantine selects a new generation: its SDK project name hashes
+the Project ID plus the generated namespace ID, with distinct host/Linux homes and
+container prefixes. Tool routes resolve the active generation and pin its identity;
+old mount IDs cannot alias a newly imported Store. `create` explicitly calls `LayerFS.init`; subsequent
 operations call `LayerFS.open` and never reacquire/overwrite source. Source is
 resolved only through the host's authorized registered local workspace selector
 with the existing `filesystem.read` operation. This authorizes selecting the source
 workspace, not a new remote grant. Init recursively reads the entire selected tree,
 including dotfiles and untracked files: use a curated credential-free source. This
-adapter does not implement ignore rules or a credential scanner.
+adapter does not implement ignore rules or a content credential scanner.
+`import_preview` now enforces a metadata/name preflight before `create`: it blocks
+VCS/dependency trees, symlinks, known credential/config/private-key artifacts,
+unreadable entries and unbounded scans. Credential-related code/test/docs/assets
+names (such as `credentials.svg` and `secret-redaction.ts`) are bounded content-review
+warnings, not proof that those files contain secrets. The owner must review a separate curated baseline and pass the
+returned single-use `sourceReview` plus `sourceReviewed:true`. Tokens bind the
+session and resolved source, expire in 15 minutes, and require a matching metadata
+rescan. A preview is not a secret-free certification or immutable snapshot; the
+original checkout must not be deleted/modified merely to make preview pass.
 Remote targets fail without fallback. SDK home ownership checks remain upstream.
+
+## Fresh-session automatic bootstrap
+
+Acceptance goal: the unchanged parallel-development prompt in a fresh session
+must not require a human to supply SDK paths, image IDs, JSON or environment
+variables. `connect` now returns an automatically discovered first-run plan when
+there is no approved installation. `bootstrap_plan` inventories WSL distribution
+names only; it does not start root code or download artifacts. A unique eligible
+distro is selected; ambiguous choices need only a distro name. Docker Desktop's
+internal distributions are excluded.
+
+The owner approves the exact plan once, including pinned downloads/source build,
+root execution in the selected WSL distro, potentially several GiB/lengthy build,
+retained private resources and subsequent runtime reuse. `bootstrap` requires the
+session-bound plan, `approved`, `allowRootWorker`, `allowDownloads` and the
+`approval` reference returned by ask. The agent passes the exact plan-generated
+question/options to ask; admission verifies the stored human answer, origin,
+question/options and uninvalidated status through the owning SessionManager.
+Model booleans alone, parent/time-out/custom/deferred answers or linked unrelated
+decisions cannot authorize bootstrap. It accepts no source URL, script, image or
+installation path from the model. Plans expire
+after fifteen minutes. Setup is a Project background task with a `bg:` handle,
+normal cancellation/inspection and a completion callback to the originating
+session, instructing it to continue the original task rather than stop at setup.
+
+The fixed recipe downloads the public MIT upstream source at
+`73d974dea8a8d0b056a16dc6b2380d89438ce484`, uses pinned official rust/node images,
+and runs official `tools/worktree.py register/prepare/build`. It verifies source
+revision, image platform/digest, sealed manifest and file hashes; retains license
+notices; extracts private Node; stages matching host APIs/shims; and automatically
+registers/connects the resulting installation. No backend restart is needed.
+The pinned Windows identity-read path needs a byte-identical host-only mirror
+under `api/node_modules/@layerfs/src`; original shims and API module identity are
+preserved and the sealed Linux bundle is never modified.
+
+Supported recipe: Windows x64, existing x86-64 WSL2 distro, Python >=3.9, git,
+FUSE, supported local filesystems and rootful Docker API >=1.48 at the default
+`/var/lib/docker` data root. The Bookworm build conservatively requires glibc >=2.36.
+Privileged preflight checks precede downloads/resource allocation, after consent.
+The recipe does not install OS packages/WSL/Docker, reconfigure daemons or networking,
+change TLS, or import OfficeAgent. Missing platform prerequisites produce bounded
+machine-readable refusal codes rather than fabricated install/download success.
+
+A durable journal records background ownership and phase. A definite preflight
+refusal allows a newly approved plan after correction. Any failed/unknown build,
+cancellation or crash retains artifacts and blocks blind retry.
+
+WSL startup and path conversion now have separate no-input probes: `/bin/true`
+with a 120-second startup budget, then `wslpath` with 30 seconds. Ignored stdin
+avoids spurious empty-pipe failures. The command runner retains bounded stdout/
+stderr and differentiates timeout, cancellation, spawn/stdin error, signal exit
+and normal nonzero exit; status exposes safe elapsed/deadline/exit/launcher data,
+not native output. Private per-step logs survive failures as well as successes.
+If a log cannot be written, `evidenceWriteFailed` reports that gap without masking
+the original command/refusal code. Manual setup, bootstrap (including its background
+lifetime) and recovery share a Project setup-ownership guard.
+
+The journal persists `provisioningStarted:true` **before** dispatching the source
+build. Terminal earlier failures are `probe_failed`, not evidence of an uncertain
+installation. WSL itself may have started services; this is not a no-OS-effects
+claim. `bootstrap_recover` takes the exact failed execution ID, enforces local
+owner context, verifies the pre-build boundary/launcher closure/absence of build
+artifacts or an installation, and archives the prior journal before marking it
+recovered. Legacy terminal `resolve_paths` records additionally require a
+read-only inventory showing the distro stopped. It never deletes state, terminates
+a distro, retries a command or launches provisioning. Running work, unconfirmed
+launchers and dispatched builds are refused. A recovered attempt can receive a
+fresh plan/approval; prior attempt history is preserved when a new one is admitted. Native output is
+bounded and retained privately, not returned to the model. `bootstrap_status`
+reports historical setup state, never current runtime health. After successful
+bootstrap, normal connect/branch tools continue the original work with the same
+managed service. Live provisioning and the actual fresh-provider-session acceptance
+remain to be qualified; synthetic tests do not establish that result.
+
+## Managed Windows setup and reuse
+
+`layerfs {action:"connect"}` is the everyday entry. Without a saved approved
+installation the owning runtime returns a bootstrap plan; discovery starts no
+root code. The advanced existing-installation path remains available: after
+explicit owner consent, `setup` accepts `approved:true`,
+`allowRootWorker:true` and an `installation` object containing:
+
+- `apiRoot`: absolute host root with the matching `api/agent/src/index.js` and
+  `api/runtime/src/index.js`, package metadata and module-resolution shims;
+- `bundle`: absolute sealed Linux bundle path in the chosen distribution;
+- `distribution`, absolute Linux `node`, and installed `image` ID (`sha256:…`).
+
+The supported API contract/layout is pinned to commit
+`73d974dea8a8d0b056a16dc6b2380d89438ce484`. Setup requires a direct durable local
+owner Web session, not tasks, scripts, borrowed tools or a recovered tool call.
+The installation is trusted executable code selected with human approval; package
+names and the upstream sealed manifest do not establish publisher authenticity.
+No SDK/environment module path is chosen incidentally on an ordinary operation.
+
+Shadow persists the approved choice under Project config `layerfs-managed.json`.
+It derives a private host runtime directory, a Linux home keyed by Project ID and
+Project Home, and a unique container prefix. No manual Store/volume paths, parent
+environment mutation or backend restart are needed. A separate long-lived helper
+calls `LayerFSRuntime.open` with `sweep:false` and starts the root WSL worker.
+It reports worker/Docker health without secrets; `ready:true` does not qualify
+sandbox behavior, and `sandboxVerified` remains false. Both managed and one-shot
+SDK helpers explicitly set `ELECTRON_RUN_AS_NODE=1` in their child environment:
+the desktop utility backend removes that flag, but its `process.execPath` still
+points to Electron. Omitting it launches Electron instead of the Node helper and
+can leave IPC requests waiting until their deadline. The parent environment is
+not changed. Synthetic launch tests cover plain Node and Electron without a real
+WSL worker or SDK.
+
+Managed `create` uses the official `project.start_init/get_init` job API and,
+in the owning Project runtime, returns a background task handle promptly. Its
+completion event—not task admission—confirms the initialization result. Background
+import admission is restricted to the direct durable owning session: tasks, leaf
+calls, nested scripts, borrowed tools and recovered calls are refused before the
+review token is consumed or any work starts. The
+runtime creates a labeled plain local Docker volume and retains its own Project
+record. `import_status` reports allowlisted stage, job ID, counts and failure code,
+including safe classification of older retained SDK `Project(Deadline)` records.
+Raw native diagnostics may contain catalog keys and are never returned by this path.
+
+`importTimeoutMs` is the single import budget (default 300000 ms, range
+1000–1800000), validated by one shared policy and passed unchanged to the SDK in
+both managed and operator modes. The managed runtime's preparatory counting pass
+precedes this budget; native scanning and construction share it. Native deadline
+checks are cooperative, so completion/unwind can occur after the nominal budget.
+Shadow does not impose a competing import wall-clock timeout: both the old
+330-second cutoff and the budget-plus-15-minute observation cap are removed.
+Managed progress heartbeats and operator-bridge IPC heartbeats renew a 90-second
+helper-silence watchdog. They attest only helper liveness, not native progress or
+completion. A live but stalled native operation can remain observed until its
+own result or explicit cancellation. Silence/disconnection/cancellation means
+unknown effects, not `ImportDeadline`, rollback, or permission to retry; stopping
+an operator bridge does not prove that the worker stopped native work.
+Progress and terminal observations are retained privately in `import-state.json`;
+any prior import attempt and uncertain worker marker block reimport.
+
+Health and import-status IPC bypass the mutation queue. While a mutation is active,
+health returns `health:"not_checked"`, unknown worker/Docker values and import
+progress rather than inventing a failed health check. Idle health probes are bounded
+and single-flight. These diagnostics never reset retained state or initialize a
+worker. Subsequent isolated bridge processes get their environment from that
+record and the private worker endpoint. Ordinary read/write/exec and dedicated
+LayerFS calls share the owning Project service. Session sleep/reset does not
+stop it. Project startup failure and normal shutdown both gracefully close it,
+after agents quiesce in normal shutdown. Clean shutdown allows on-demand reuse of
+the saved choice on the next backend instance.
+
+`runtime_status` inspects saved/current state without starting code. An unresolved
+worker start, lost reply, failed Windows Init, or failed graceful close leaves a
+durable uncertain/ownership marker, blocking automatic restart and reimport.
+Inspection is allowed; blindly clearing journals or retrying is not.
+
+`bootstrap_recover_connection` is a narrow owner-approved exception for the
+original `uncertain/connect_worker` bootstrap with a retained completed build.
+It requires the exact execution ID, explicit approval/root-worker consent,
+matching saved installation, absent SDK host runtime directory, no retained
+managed helper, and valid installed/running WSL inventories proving the selected
+distro is stopped. It archives the original bootstrap/worker evidence and writes
+`recover_connect_worker` before one launch, never exposing a reusable `stopped`
+phase in between. Failed recovery cannot replay itself. It never rebuilds,
+imports a repository, deletes resources, kills processes, or stops WSL. An
+existing runtime directory (including a symlink) or possible Init/import stays
+blocked for operator reconciliation. Shutdown owns the full recovery lifecycle;
+recovery cannot start a worker after Project closure. A connected but unhealthy
+runtime reports `not_ready`, not successful readiness.
+
+A live Windows/WSL smoke test on 2026-11-06 recovered a retained built-but-unstarted
+installation through this path using the Electron Node-mode helper: one helper
+launch, worker answering, Docker healthy, no rebuild or repository import. Graceful
+close then persisted `stopped`. This qualifies that connection/recovery case only;
+parallel sandbox edits, checkpoint recovery and merge behavior remain unverified
+by that test.
+
+Graceful
+shutdown failures disconnect the helper through EOF without force-killing the
+daemon and report uncertainty; admitted daemon work may continue. Worker/WSL
+lifecycle survival and crash recovery remain unqualified upstream boundaries.
+
+An explicit `SHADOW_LAYERFS_CONFIG` takes precedence: invalid configuration never
+falls back to a managed worker, and setup never overwrites that override. Linux
+and macOS still use operator configuration. Advanced `setup` uses existing artifacts;
+`bootstrap` performs the pinned source build described above. Neither installs
+WSL/Docker or a system service. Upstream releases have no prebuilt assets; the
+source recipe is used instead of a fabricated npm/download URL. Bundled workflow:
+`v:skills/layerfs/setup.md`.
+
+## Failed-import quarantine and baseline preparation
+
+`import_recovery_plan` observes retained failed/unknown import metadata and creates
+a source-state fingerprinted, session-bound 15-minute plan. `import_recover`
+requires the exact recorded human decision returned for that plan, plus explicit
+approval/root-worker flags in a direct durable owner session. Flags, old decisions,
+custom/deferred answers, task/call/script contexts and replayed tool calls cannot
+admit it. The owning background task reports completion; admission is not recovery.
+
+The action serializes against setup/import/shutdown, holds an exclusive on-disk
+recovery lock, and checks its evidence fingerprint before effects and before pointer
+commit. An owned helper is gracefully closed only after a fresh healthy response
+proves zero active calls. Complete host inventories must show no retained helper;
+a stopped installed distro needs no root execution, while a running distro receives
+a bounded root read-only `/proc` census. The exact approval covers a possible WSL
+startup race. Active/ambiguous ownership fails closed, without kills or WSL shutdown.
+These are moment-in-time observations, not a universal OS ownership lease.
+
+Success does **not** retry or repair the failed Init. All old runtime/worker/import
+journals and Store volumes remain in place. A fresh, empty generation under
+`state/layerfs/generations/<id>` gets a disjoint SDK project, host/Linux home and
+container prefix. `active-generation.json` is the atomic selection point;
+`generation.json` records its previous namespace and safe quarantine evidence.
+The original installation approval is reused, without build/download/import.
+`namespace_status` exposes a bounded, sanitized quarantine chain. Explicit namespace
+assertions and pinned in-flight identities reject old requests/mount IDs instead
+of redirecting them. Use the returned namespace on the next connect/create.
+
+A durable `namespace-history.json` tombstone is written before generation creation.
+Missing/foreign/malformed pointers, dangling descriptors or interrupted preparation
+never silently fall back to legacy—even after restart. An interrupted prepared
+directory stays retained and unselected. Do not clear locks/pointers/history or guess
+a generation; an ambiguous state requires operator inspection. The tests cover
+pointer loss, stale requests, shutdown and preserved original bytes.
+
+`baseline_plan {workspace,destinationWorkspace}` performs metadata and fixed,
+bounded `git ls-files --cached -z` inventory through authorized registered local
+source-read and destination-write routes. Git hooks/fsmonitor and inherited Git
+configuration are disabled for this inventory. The plan selects tracked working-tree
+regular files (not committed versions), excludes untracked files, VCS/dependency
+trees and known credential artifacts, and reports bounded exclusions/warnings/counts.
+Source and destination must not overlap. It performs no copying or registration.
+
+After its exact human approval, `baseline_prepare` runs as owner-session background
+work. Its source/destination-bound token is single-use, expires after 15 minutes,
+and is revalidated against metadata. It creates an exclusive new directory under
+the destination workspace's `.layerfs-baselines`, copies bounded selected contents
+without exposing them, checks metadata again, and registers the complete baseline.
+No original files or Git index are edited; existing destinations are never replaced.
+Project Home is deliberately not the destination because it cannot be registered as
+a workspace. Partial copies and uncertain registration stay retained, never reported
+ready, cleaned automatically, or silently replayed.
+
+These helpers are not a secret scanner or hostile-filesystem sandbox. Metadata
+checks cannot eliminate races; Windows copy validation excludes read-induced change
+time but retains identity/mode/link/size/mtime/birthtime checks. Human content review
+and `import_preview` on the returned workspace are still required before `create`.
+Warnings alone are not evidence of secrets or a credential-free certification.
+
+This iteration was exercised with synthetic ownership/SDK fixtures and temporary
+Git repositories only. Live post-import quarantine, copied OfficeAgent baseline,
+parallel edits, isolation, checkpoints and merge remain to be tested by the owner.
+
+## Setup diagnostic
+
+Updating Shadow does not provision LayerFS. Before using it, invoke
+`layerfs {action:"doctor"}`. This reads and validates the operator-selected JSON
+configuration without loading SDK code, starting a worker or creating a sandbox.
+In operator mode it returns `configured:false` with a stable diagnostic `code`
+and actionable message for missing/invalid configuration, or `configured:true`
+after validation. Managed mode reports the saved phase and next setup/connect
+action without starting the worker.
+Both return `runtime:"not_checked"`: neither validates SDK artifacts, connectivity,
+Store, Docker or sandbox health. Raw configuration contents and environment values
+are not included. Other operations continue to refuse invalid configuration with
+an explicit no-effect error before dispatch. Project/remote-target guards apply
+to the diagnostic as well.
+
+Only for operator-environment mode, set `SHADOW_LAYERFS_CONFIG` in the **backend
+launch environment** and restart the backend after operator setup. Setting it in an agent's exec child cannot update
+the parent backend. The bundled `v:skills/layerfs/setup.md` explains prerequisites
+without requiring a source checkout; this document is repository documentation,
+not a skill-relative resource.
 
 ## Workflow and API
 
-Read `v:skills/layerfs`, discover/import `v:tools/layerfs`, then invoke `layerfs`:
+Read `v:skills/layerfs`, discover/import `v:tools/layerfs`, use `connect` (or
+configuration-only `doctor`), complete any required approved setup, then invoke
+`layerfs`:
 
-1. `create` with `workspace` = registered source selector. Source is read for Init;
-   no original files are overwritten. Initialization has a 300-second SDK deadline.
+1. `import_preview` with `workspace` = a registered curated source selector. Review
+   the source contents and freeze the baseline; do not strip files from the original
+   checkout. Then `create` with the same selector, returned `sourceReview` token and
+   `sourceReviewed:true`. No original files are overwritten. Managed imports return
+   a background handle; wait for its completion event before fork/mount. The SDK
+   Init deadline defaults to 300 seconds after the managed preparatory counting
+   pass; native scanning is included. `importTimeoutMs` configures this single
+   budget; progress is available through `import_status`.
 2. `fork` with `branch` and optional baseline `ref` (use a fixed ref for concurrent
    agents). `load` requires a historical `ref` and a **new** `branch`; it is not an
    in-place rollback. For >1 GiB multi-agent jobs, share baseline Store data and
@@ -176,8 +473,10 @@ List/history/diff use pages of 100, with optional nonnegative `offset`.
   host export, automatic source merge-back, or remote route. Old unprefixed opaque
   IDs remain supported by the dedicated layerfs tool only, never guessed by ordinary tools.
 - Only one operation per workspace is admitted; overlapping calls fail busy before dispatch (wait for the receipt, do not replay). different workspaces can run in
-  parallel. Project management operations have a separate lock. Commands have a 330-second
-  bridge deadline. Cancellation kills the bridge, **not necessarily the daemon
+  parallel. Project management operations have a separate lock. Non-import SDK
+  operations have a default 330-second bridge receipt deadline; ordinary routed
+  exec uses its explicit receipt timeout. Imports use the single SDK budget and
+  renewable silence watchdog described above. Cancellation kills the bridge, **not necessarily the daemon
   command**. Lost/invalid receipts, SDK Unknown, abnormal bridge exit, or oversized
   protocol output raise outcome-unknown; nothing is automatically resent.
   Inspect status/history and reconcile manually before retrying any mutation.
@@ -193,6 +492,13 @@ List/history/diff use pages of 100, with optional nonnegative `offset`.
   independently backed-up durable outputs. Credentials must not enter snapshots.
 
 ## Verification scope
+
+Managed-setup tests use synthetic Runtime/SDK modules and injected subprocesses,
+not WSL or root execution. They cover approval/context gates, private paths,
+persistence/reuse after clean shutdown, real helper IPC, automatic bridge wiring,
+uncertain-state no-replay, SDK Unknown handling and graceful-close failure cleanup.
+These are application integration tests, not live qualification of managed setup
+against the real upstream worker on this host.
 
 Focused tests use a synthetic SDK to verify real child-process dispatch, bounded
 Writable capture, Project-bound selectors, dirty unmount arguments, cancellation,

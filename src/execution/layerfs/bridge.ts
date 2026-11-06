@@ -2,29 +2,52 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { ToolOutcomeUnknownError } from '../../tools/tool.ts'
+import { ToolNoEffectError, ToolOutcomeUnknownError } from '../../tools/tool.ts'
+import { IMPORT_TIMEOUT, importTimeoutMs } from './import-timeout.ts'
 
 export const layerfsName = (project: string) => `shadow-${createHash('sha256').update(project).digest('hex').slice(0, 40)}`
 const allowedEnvironment = new Set(['LAYERFS_HOME', 'LAYERFS_STORE_PATH', 'LAYERFS_DOCKER', 'LAYERFS_IMAGE', 'LAYERFS_VOLUME', 'LAYERFS_DAEMON', 'LAYERFS_NATIVE', 'LAYERFS_WORKER_ENDPOINT', 'LAYERFS_CONTAINER_PREFIX', 'LAYERFS_DAEMON_HOST', 'LAYERFS_STORE_POLICY'])
 export interface LayerConfig { sdkModule: string; env: Record<string, string> }
+export class LayerFSConfigurationError extends ToolNoEffectError {
+  constructor(readonly code: string, message: string) {
+    super(`${message} No SDK or worker was started. Ask the operator to configure LayerFS for this Project in the Shadow backend; read v:skills/layerfs/setup.md. Installing or updating Shadow alone does not provision LayerFS.`)
+    this.name = 'LayerFSConfigurationError'
+  }
+}
+const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 export async function configuration(project: string): Promise<LayerConfig> {
   const path = process.env.SHADOW_LAYERFS_CONFIG
-  if (!path || !isAbsolute(path)) throw new Error('LayerFS disabled: SHADOW_LAYERFS_CONFIG must name an absolute operator-owned JSON file.')
-  const projects = JSON.parse(await readFile(path, 'utf8'))?.projects
-  const config = projects?.[project]
-  if (config?.env) for (const [id, other] of Object.entries(projects) as Array<[string, { env?: Record<string, string> }]>) {
+  if (!path) throw new LayerFSConfigurationError('CONFIG_NOT_SET', 'LayerFS disabled: SHADOW_LAYERFS_CONFIG is not set; it must name an absolute operator-owned JSON file in the backend environment.')
+  if (!isAbsolute(path)) throw new LayerFSConfigurationError('CONFIG_PATH_INVALID', 'SHADOW_LAYERFS_CONFIG must name an absolute operator-owned JSON file.')
+  let text: string
+  try { text = await readFile(path, 'utf8') } catch {
+    throw new LayerFSConfigurationError('CONFIG_UNREADABLE', 'The operator-configured LayerFS JSON file could not be read.')
+  }
+  let document: unknown
+  try { document = JSON.parse(text) } catch {
+    // JSON parser diagnostics may include configuration bytes; never return them.
+    throw new LayerFSConfigurationError('CONFIG_INVALID', 'The operator-configured LayerFS file is not valid JSON.')
+  }
+  if (!record(document) || !record(document.projects)) throw new LayerFSConfigurationError('CONFIG_INVALID', 'LayerFS configuration requires a projects object.')
+  const projects = document.projects
+  if (!Object.hasOwn(projects, project)) throw new LayerFSConfigurationError('PROJECT_NOT_CONFIGURED', 'No explicit LayerFS SDK/environment configuration for this Project.')
+  const config = projects[project]
+  if (!record(config) || typeof config.sdkModule !== 'string' || !isAbsolute(config.sdkModule) || !record(config.env)) throw new LayerFSConfigurationError('CONFIG_INVALID', 'LayerFS requires an absolute SDK module path and an environment object for this Project.')
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(config.env)) {
+    if (!allowedEnvironment.has(key) || typeof value !== 'string') throw new LayerFSConfigurationError('CONFIG_INVALID', 'Invalid LayerFS environment setting.')
+    env[key] = value
+  }
+  if (!env.LAYERFS_HOME || !env.LAYERFS_STORE_PATH) throw new LayerFSConfigurationError('CONFIG_INVALID', 'Explicit private LAYERFS_HOME and LAYERFS_STORE_PATH are required.')
+  for (const [id, other] of Object.entries(projects)) {
     if (id === project) continue
+    if (!record(other) || !record(other.env)) throw new LayerFSConfigurationError('CONFIG_INVALID', 'Each configured LayerFS Project requires an environment object.')
     for (const key of ['LAYERFS_HOME', 'LAYERFS_STORE_PATH', 'LAYERFS_VOLUME']) {
-      if (config.env[key] && config.env[key] === other.env?.[key]) throw new Error(`LayerFS Projects must not share ${key}.`)
+      if (env[key] && env[key] === other.env[key]) throw new LayerFSConfigurationError('PROJECT_STORAGE_SHARED', `LayerFS Projects must not share ${key}.`)
     }
   }
-  if (!config || !isAbsolute(config.sdkModule ?? '') || !config.env || typeof config.env !== 'object') throw new Error('No explicit LayerFS SDK/environment configuration for this Project.')
-  for (const [key, value] of Object.entries(config.env)) {
-    if (!allowedEnvironment.has(key) || typeof value !== 'string') throw new Error('Invalid LayerFS environment setting.')
-  }
-  if (!config.env.LAYERFS_HOME || !config.env.LAYERFS_STORE_PATH) throw new Error('Explicit private LAYERFS_HOME and LAYERFS_STORE_PATH are required.')
-  if (process.platform !== 'linux' && !config.env.LAYERFS_WORKER_ENDPOINT) throw new Error('LayerFS requires a provisioned Linux worker (Docker on macOS, WSL on Windows).')
-  return config
+  if (process.platform !== 'linux' && !env.LAYERFS_WORKER_ENDPOINT) throw new LayerFSConfigurationError('WORKER_REQUIRED', 'LayerFS requires a provisioned Linux worker (Docker on macOS, WSL on Windows).')
+  return { sdkModule: config.sdkModule, env }
 }
 
 // A fresh process prevents the SDK singleton/environment/worker binding from crossing Projects.
@@ -44,10 +67,14 @@ async function execute(client, ws, command, message) {
 }
 let input = ''; for await (const chunk of process.stdin) input += chunk;
 const { sdkModule, project, action, args: a } = JSON.parse(input);
+// Liveness only: a heartbeat does not claim that native Init is progressing.
+const beat = () => { if (process.connected) process.send?.({ type: 'layerfs-import-heartbeat' }, () => {}); };
+const heartbeat = action === 'create' ? setInterval(beat, ${IMPORT_TIMEOUT.heartbeatMs}) : undefined;
+if (heartbeat) beat();
 let client;
 try {
  const { LayerFS } = await import(pathToFileURL(sdkModule).href);
- client = action === 'create' ? await LayerFS.init(project, a.source, 300000) : await LayerFS.open(project);
+ client = action === 'create' ? await LayerFS.init(project, a.source, a.importTimeoutMs) : await LayerFS.open(project);
  const ws = ['status', 'read', 'write', 'exec', 'commit', 'close'].includes(action) ? JSON.parse(Buffer.from(a.workspace.replace(/^layerfs:/, ''), 'base64url').toString()) : undefined;
  let result;
  switch(action) {
@@ -79,21 +106,32 @@ try {
  }
  console.log(JSON.stringify({ ok: true, result }));
 } catch(e) { console.log(JSON.stringify({ ok: false, error: { message: String(e.message || e), code: e.code, detail: e.detail } })); }
-finally { if (client) await client.close(); }
+finally {
+ try { if (client) await client.close(); }
+ finally { clearInterval(heartbeat); if (process.connected) process.disconnect(); }
+}
 `
 
-export function runBridge(config: LayerConfig, project: string, action: string, args: Record<string, unknown>, signal: AbortSignal, timeoutMs = 330000): Promise<string> {
+/** For create, timeoutMs is a helper-silence watchdog, not an Init budget.
+ * Other operations retain their existing wall-clock receipt timeout.
+ */
+export function runBridge(config: LayerConfig, project: string, action: string, args: Record<string, unknown>, signal: AbortSignal, timeoutMs = action === 'create' ? IMPORT_TIMEOUT.silenceMs : 330000): Promise<string> {
   signal.throwIfAborted()
+  if (action === 'create') args = { ...args, importTimeoutMs: importTimeoutMs(args.importTimeoutMs) }
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('LAYERFS_')))
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--input-type=module', '-e', runner], { env: { ...env, ...config.env }, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, ['--input-type=module', '-e', runner], { env: { ...env, ...config.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, stdio: action === 'create' ? ['pipe', 'pipe', 'pipe', 'ipc'] : ['pipe', 'pipe', 'pipe'] })
     let output = '', bytes = 0, settled = false
     const finish = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); signal.removeEventListener('abort', abort); if (error) { child.kill(); reject(error) } else resolve(output) }
     const unknown = (reason: string) => finish(new ToolOutcomeUnknownError(`LayerFS outcome unknown (${reason}); inspect status/history before any manual retry. Daemon work may continue.`))
     const abort = () => unknown('cancelled')
-    const timer = setTimeout(() => unknown('deadline'), timeoutMs)
+    const timer = setTimeout(() => unknown(action === 'create' ? 'import helper heartbeat lost' : 'deadline'), timeoutMs)
+    child.on('message', message => {
+      if (!settled && action === 'create' && message && typeof message === 'object'
+        && Object.keys(message).length === 1 && (message as { type?: unknown }).type === 'layerfs-import-heartbeat') timer.refresh()
+    })
     signal.addEventListener('abort', abort, { once: true })
-    for (const stream of [child.stdout, child.stderr]) stream.on('data', (data: Buffer) => {
+    for (const stream of [child.stdout!, child.stderr!]) stream.on('data', (data: Buffer) => {
       bytes += data.length
       if (bytes > 1024 * 1024) return unknown('output exceeds 1 MiB')
       if (stream === child.stdout) output += data.toString()
@@ -107,8 +145,8 @@ export function runBridge(config: LayerConfig, project: string, action: string, 
         finish()
       } catch { unknown('invalid bridge output') }
     } })
-    child.stdin.on('error', () => unknown('bridge input failure'))
-    child.stdin.end(JSON.stringify({ sdkModule: config.sdkModule, project, action, args }))
+    child.stdin!.on('error', () => unknown('bridge input failure'))
+    child.stdin!.end(JSON.stringify({ sdkModule: config.sdkModule, project, action, args }))
     if (signal.aborted) abort()
   })
 }
