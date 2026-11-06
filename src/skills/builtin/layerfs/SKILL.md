@@ -1,6 +1,6 @@
 ---
 name: layerfs
-description: "Optional LayerFS 1.1 isolated branches, disposable sandbox workspaces and checkpoints for large concurrent tasks; requires operator-installed SDK and Linux Store/worker."
+description: "LayerFS isolated branches for parallel development; first-run Windows/WSL discovery, one-consent pinned source bootstrap, automatic configuration and reuse. No manual SDK paths/env; existing WSL/Docker prerequisites required."
 core: true
 metadata:
   category: tools
@@ -8,18 +8,116 @@ metadata:
 
 # Optional LayerFS
 
-Discover `v:tools/layerfs`, then invoke `layerfs`. Reading this skill installs nothing.
-The host must configure SHADOW_LAYERFS_CONFIG per Project with a real built SDK,
-private home, Store, runtime image/daemon/volume and platform prerequisites. The
-upstream 1.1 source package is private: do not assume npm install works. Linux
-Store requires a supported local filesystem. macOS needs a provisioned Docker
-Linux worker; Windows needs the upstream WSL worker. Never download big binaries,
-install Docker or change user data as an incidental setup step. Report missing
-prerequisites instead. Full setup and boundary details: docs/layerfs.md.
+Discover `v:tools/layerfs`, then invoke `layerfs {action:"connect"}`. In a fresh
+owner Web session, missing installation returns a discovered first-run plan—not
+an instruction to supply SDK paths or environment variables. Read
+`v:skills/layerfs/setup.md`. If multiple eligible WSL distributions exist, select
+one with `bootstrap_plan {distribution:"discovered-name"}`; never use Docker
+Desktop's internal distributions.
+
+For `status:"needs_approval"`, call ask with the **exact** returned
+`approvalRequest` fields (kind, question, options, default_option). Explain the
+pinned downloads/source build (potentially several GiB and lengthy), root WSL
+execution, private retained resources and future reuse; do not rewrite the
+plan-bound question/options. After explicit human approval, invoke
+`layerfs {action:"bootstrap", plan:"returned-token", approval:answer.reference,
+approved:true, allowRootWorker:true, allowDownloads:true}`. The host checks the
+recorded human decision; flags or an unrelated approval cannot authorize setup. The tool discovers all
+paths and builds/configures/connects automatically. Wait for its background
+completion event; do not poll or resend bootstrap. On success, **continue the
+original user request**—runtime setup is not completion of the parallel test.
+
+Do not ask humans for SDK paths, image IDs, JSON or environment edits on this
+normal path. Do not substitute ad hoc shell installers. Existing approved setups
+are reused with no environment variable or backend restart. A code-change request
+is not approval to provision this machine. Setup/start is forbidden if the user declined it.
+
+`doctor` is configuration-only; `runtime_status` inspects saved/current runtime
+state without starting a worker. `ready:true` from managed connect means the
+worker answers and Docker is reachable, not that sandbox operations passed.
+Normal session close/sleep does not stop the Project-owned worker. After a clean
+backend shutdown it can be restored on demand; uncertain state is never replayed.
+An explicit operator SHADOW_LAYERFS_CONFIG takes precedence without fallback and
+retains operator-owned lifecycle. Its connect result has `runtime:"not_checked"`.
+
+Reading this skill installs nothing. The upstream packages are private and the
+checked releases have no prebuilt assets; bootstrap uses a bundled pinned official
+source-build recipe instead. Never invent npm installs or binary URLs. Automated
+bootstrap targets Windows x64 with an existing compatible WSL2/Docker/Python/git/
+FUSE environment; it does not install OS packages or change Docker configuration.
+If prerequisites are blocked, report the exact code and request the affected
+platform setup rather than asking for manual LayerFS configuration. A definite
+preflight refusal may receive a new plan after its cause is corrected; uncertain
+builds cannot be replayed. Readiness/path-probe failures are different: inspect
+`bootstrap_status` for `probeRecoveryCandidate`, then use `bootstrap_recover` with
+the exact `executionId`. It checks and archives the failed attempt without
+restarting WSL or provisioning; legacy path failures additionally require a
+stopped-distro inventory. If refused, stop—never clear/edit the journal. A distinct
+`connectionRecoveryCandidate` may allow `bootstrap_recover_connection` for a
+completed build whose SDK host runtime never opened: get explicit owner consent
+for one connection attempt, then pass the exact `executionId`, `approved:true`
+and `allowRootWorker:true`. It verifies absent runtime state, no managed helper,
+and a stopped installed distro; preserves evidence; and never rebuilds, imports,
+deletes or kills. Any failed recovery or existing SDK runtime needs operator
+reconciliation, not another automatic attempt. After
+successful recovery, get a fresh bootstrap plan and approval. `bootstrap_status`
+is retained-state inspection, not proof of current worker health. Advanced `setup` connects an operator-supplied
+existing installation; Linux/macOS retain operator configuration. Full workflow:
+`v:skills/layerfs/setup.md`; operator details: repository `docs/layerfs.md`.
+
+## Failed-import recovery and a separate baseline
+
+A retained failed/unknown import is **not** a bootstrap probe failure. Use
+`import_recovery_plan` in the direct owner session. It reads safe retained evidence
+and returns an exact `approvalRequest`; call ask with those fields unchanged and
+wait. Only after approval call `import_recover {plan,approval,approved:true,
+allowRootWorker:true}`. Wait for its background result, never replay it.
+It can gracefully close this runtime's worker only after proving it idle, then
+checks host/WSL ownership (root read-only process census if the distro is running).
+Active or ambiguous ownership is refused—no force kill, WSL shutdown or cleanup.
+
+A successful result is `quarantined`, not imported: all old runtime/journal/Store
+resources remain in their old namespace. A fresh private namespace is selected
+without a worker start, rebuild or import. Use its returned `namespace` on
+subsequent `connect`/`create`; this is a genuinely new resource, not a replay of
+the old uncertain call. `namespace_status` exposes safe quarantine history. Old
+mount IDs and stale in-flight requests are refused, never redirected. Missing or
+inconsistent namespace pointers do not fall back to legacy; stop for inspection.
+
+To prepare a baseline without hand-editing or stripping the checkout, call
+`baseline_plan {workspace:"source-selector",destinationWorkspace:"separate-target"}`.
+Both must be registered local workspaces; destination must authorize writes and
+not overlap the source. It plans selected **Git-tracked working-tree** files,
+excluding VCS/dependencies/known credential artifacts and all untracked files.
+Review its bounded exclusions/warnings/counts. Ask its exact approvalRequest; after
+approval call `baseline_prepare` with the same selectors, plan, approval reference
+and `approved:true`. Wait for its background event. It creates an exclusive new
+directory under the destination's `.layerfs-baselines` and registers that complete
+baseline. The original source is unchanged. Partial output is retained, not
+reported ready or silently overwritten. A copy/registration is not source-content
+review or an import; use the returned workspace for `import_preview` next.
 
 For >1 GiB repositories with concurrent agents, import a stable baseline once:
-- `layerfs {action:"create", workspace:"registered-source-workspace-id"}`. The selector
-  resolves through Shadow's authorized local workspace route, not a path.
+- Run `layerfs {action:"import_preview", workspace:"registered-source-workspace-id"}`
+  first. It reads names/metadata only and blocks dependency/VCS trees, symlinks and
+  credential artifacts. Names such as `credentials.svg` or `secret-redaction.ts`
+  are review warnings, not evidence that the files contain secrets. Use a
+  **separate curated baseline**; never delete from
+  the original checkout to satisfy preview. It is not a content/secret scanner.
+- After human content review, call `layerfs {action:"create", workspace:"same-selector",
+  sourceReview:"returned-reviewToken", sourceReviewed:true}`. The token is single-use,
+  session/source-bound, expires after 15 minutes, and requires unchanged metadata.
+  Freeze the source during import; metadata review is not an immutable snapshot.
+  The selector resolves through Shadow's authorized local workspace route, not a path.
+  Managed imports return a `bg:` execution ID: **wait for completion**, do not poll or
+  repeat create. `import_status` reports safe progress/retained failures; runtime
+  health reports `health:"not_checked"` while busy rather than waiting behind Init.
+  Optional `importTimeoutMs` is the single native Init budget in both modes
+  (300000 default, 1000–1800000 ms). Managed pre-counting is outside it; native
+  scan/construction share it. Shadow has no competing import wall-clock cutoff.
+  A 90-second renewable helper-silence watchdog is only a liveness check, not
+  evidence of native progress. Silence or cancellation means unknown effects;
+  it stops observation, not necessarily native work.
 - `fork` with a distinct `branch` and the same baseline `ref` for each agent.
 - `mount` each branch; pass the returned opaque `workspace` ID to that agent.
 - `read {workspace,path,start,end}`, `write {workspace,path,content}`, and
@@ -45,15 +143,17 @@ manual retry; daemon commands may continue. Never automatically resend a mutatio
 
 ## Important execution boundary
 
-These IDs are **not registered host workspaces**. Ordinary read/write/exec and
-use_project do not transparently target LayerFS in this first version. Use the
-LayerFS-specific tool. `/workspaces/1` is a container path, never a local Folder.
-Agents must receive IDs and explicitly call LayerFS; subagent cwd is not changed.
+These IDs are **not registered host workspaces**. Ordinary read/write/exec accept
+new `layerfs:` mount IDs explicitly in `workspace`; the dedicated LayerFS tool
+also accepts them. Search/use_project do not. `/workspaces/1` is a container path,
+never a local Folder. Give each agent its mount ID and require explicit workspace
+routing; subagent cwd is not changed.
 Remote Shadow executors are refused, with no Main fallback. Commands can access
 whatever the configured LayerFS sandbox permits; this is not a universal sandbox.
 LayerFS is disposable working state, **not a reliable backup**. Keep the original
 source and independently backed-up durable outputs; source export/removal and
-runtime provisioning are operator tasks outside this integration.
+OS provisioning remain outside this integration. Pinned artifact bootstrap and
+managed Windows worker startup require explicit approval.
 
 ## Ordinary tools
 
@@ -66,4 +166,5 @@ bash, relative cwd, positive timeout_ms up to 300000 (default 120000); no args,
 node, background or leaf calls. Timeout is UNKNOWN, not a background handle;
 daemon work may continue. Never retry automatically. Same-workspace overlap is
 refused; wait for its receipt. Old unprefixed IDs work only in the dedicated tool.
-Search/use_project/host cwd do not support these IDs. Full contract: docs/layerfs.md.
+Search/use_project/host cwd do not support these IDs. Setup and boundaries:
+`v:skills/layerfs/setup.md`; full contract in the repository's `docs/layerfs.md`.

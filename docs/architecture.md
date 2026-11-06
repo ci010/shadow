@@ -745,6 +745,27 @@ user/event instruction to the model context. Pending calls from the trailing
 assistant tool batch execute with their original IDs and arguments before the
 next provider request; calls with persisted results are not executed again.
 
+Typed `ToolOutcomeUnknownError` is different from a provider failure or user
+cancellation. Nested tool wrappers preserve the exception until the session tool
+boundary, which persists an `outcome_unknown` tool result and continues inference.
+The result explicitly says effects may exist or work may still be running; it is
+not a success, rollback, or proof of no effects. The model can explain the issue
+and use distinct read-only inspection tools without a generic failed-turn Continue
+prompt. Ordinary definite tool errors likewise remain tool results.
+
+Uncertainty receipts carry a canonical invocation fingerprint. While those receipts
+remain in session history, an identical invocation (including a new tool-call ID,
+reordered JSON keys, or the equivalent `invoke_tool` wrapper) returns
+`replay_blocked` without dispatch. This duplicate guard also rehydrates from JSONL
+and SQLite after restart. It is not a semantic/OS sandbox: changed arguments,
+other wrappers, separate sessions, and compacted-away history still require the
+tool's own resource-specific no-replay/reconciliation protections. No automatic
+unlock or underlying operation cancellation is implied. Failure to persist an
+uncertainty receipt stops continuation. Existing old unfinished calls are not
+silently rewritten or replayed by this change. A later provider failure can still
+require Continue, but the recorded uncertain call is no longer pending and is
+not re-executed by recovery. User cancellation retains the stopped-turn path.
+
 Startup recovery marks interrupted reusable sessions without invoking a model.
 It changes recovery metadata only: unfinished calls remain unfinished, without
 fabricated result messages. Reusable sessions persist each completed tool result

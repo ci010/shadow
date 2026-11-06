@@ -120,22 +120,18 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: unknown tool effects pause inference and Continue only reconciles the saved call`, async () => {
+  test(`${Store.name}: unknown tool effects persist one result and allow inference to explain and finish`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
       const f = fixture(workspace, store)
       const id = 'web:chat-unknown-effect'
       let starts = 0
-      let checks = 0
-      let known = false
       f.tools.register({
         name: 'fixture_remote', description: '', parameters: { type: 'object', properties: {} },
-        execute: async (_args, context) => {
-          if (context.recoveringToolCall) checks++
-          else starts++
-          if (!known) throw new ToolOutcomeUnknownError('Remote result is unknown')
-          return 'Durable original result'
+        execute: async () => {
+          starts++
+          throw new ToolOutcomeUnknownError('Remote result is unknown')
         },
       })
       try {
@@ -143,25 +139,98 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.deliver(id, input('original'))
         await waitFor(() => f.calls.length === 1)
         f.calls[0].resolve({ content: null, toolCalls: [{ id: 'remote-call', name: 'fixture_remote', arguments: {} }] })
-        await waitFor(() => !!f.sessions.getSessionRecovery(id))
-        assert.equal(f.calls.length, 1, 'The model must not receive an error result and automatically retry')
-        const recovery = f.sessions.getSessionRecovery(id)!
-        assert.equal(recovery.pendingToolCalls, 1)
-        await post(f.app, id, 'resume', { recoveryId: recovery.id, acknowledgeToolReplay: true })
-        await waitFor(() => !!f.sessions.getSessionRecovery(id))
-        assert.equal(f.calls.length, 1)
-        assert.equal(starts, 1)
-        assert.equal(checks, 1)
-        assert.equal(f.toolResults.length, 0)
-        known = true
-        await post(f.app, id, 'resume', { recoveryId: f.sessions.getSessionRecovery(id)!.id, acknowledgeToolReplay: true })
         await waitFor(() => f.calls.length === 2)
         assert.equal(starts, 1)
-        assert.equal(checks, 2)
-        assert.equal(f.calls[1].messages.filter(message => message.tool_call_id === 'remote-call').length, 1)
-        f.calls[1].resolve(done())
-        await waitFor(() => f.facts.length === 3)
+        assert.equal(f.sessions.getSessionRecovery(id), undefined)
+        assert.equal(f.facts.length, 0, 'Uncertainty is a tool outcome, not a failed turn')
+        const results = f.calls[1].messages.filter(message => message.tool_call_id === 'remote-call')
+        assert.equal(results.length, 1)
+        assert.equal(results[0].role, 'tool')
+        assert.equal(typeof results[0].content, 'string')
+        const receipt = JSON.parse(results[0].content as string)
+        assert.equal(receipt.status, 'outcome_unknown')
+        assert.equal(receipt.message, 'Remote result is unknown')
+        assert.equal(receipt.retryAllowed, false)
+        const explanation = 'The remote result is unknown; I did not repeat the operation.'
+        f.calls[1].resolve({ content: explanation, toolCalls: [] })
+        await waitFor(() => f.facts.length === 1)
+        assert.equal(f.sessions.getSessionRecovery(id), undefined)
+        assert.equal(starts, 1)
+        assert.deepEqual(f.toolResults, ['remote-call'])
+        const records = await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!)))
+        assert.deepEqual(records.filter(message => message.tool_call_id === 'remote-call').map(message => ({
+          role: message.role, content: message.content,
+        })), [{ role: 'tool', content: results[0].content }])
+        assert.equal(records.filter(message => message.role === 'assistant').at(-1)?.content, explanation)
       } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: provider failure after uncertainty permits Continue after restart without replay acknowledgement`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const id = 'web:chat-unknown-effect-resume'
+      let starts = 0
+      let restarted: ReturnType<typeof fixture> | undefined
+      const tool = {
+        name: 'fixture_remote', description: '', parameters: { type: 'object' as const, properties: {} },
+        execute: async () => {
+          starts++
+          throw new ToolOutcomeUnknownError('Remote result is unknown')
+        },
+      }
+      f.tools.register(tool)
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver(id, input('original'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0].resolve({ content: null, toolCalls: [{ id: 'remote-call', name: 'fixture_remote', arguments: {} }] })
+        await waitFor(() => f.calls.length === 2)
+        const originalResult = f.calls[1].messages.filter(message => message.tool_call_id === 'remote-call')
+        assert.equal(originalResult.length, 1)
+        assert.equal(JSON.parse(originalResult[0].content as string).status, 'outcome_unknown')
+        f.calls[1].reject(new ProviderTransportError('response', 'UND_ERR_SOCKET'))
+        await waitFor(() => !!f.sessions.getSessionRecovery(id))
+        const recovery = f.sessions.getSessionRecovery(id)!
+        assert.equal(recovery.reason, 'failed')
+        assert.equal(recovery.providerFailure, 'network')
+        assert.equal(recovery.pendingToolCalls, 0)
+        assert.equal(starts, 1)
+        await f.sessions.stop()
+        restarted = fixture(workspace, store)
+        const restored = restarted
+        restored.tools.register(tool)
+        await restored.sessions.start()
+        assert.equal(restored.calls.length, 0, 'Restart must not automatically resume inference')
+        assert.equal(starts, 1, 'Restart must not repeat the uncertain operation')
+        assert.deepEqual(restored.sessions.getSessionRecovery(id), recovery)
+        assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
+        await waitFor(() => restored.calls.length === 1)
+        assert.equal(starts, 1, 'Continue must not recover or repeat a completed uncertainty receipt')
+        // Hydration adds explicit undefined optional fields; compare the persisted wire data.
+        assert.deepEqual(JSON.parse(JSON.stringify(restored.calls[0].messages.filter(message => message.tool_call_id === 'remote-call'))),
+          JSON.parse(JSON.stringify(originalResult)))
+        restored.calls[0].resolve({ content: null, toolCalls: [{ id: 'remote-repeat', name: 'fixture_remote', arguments: {} }] })
+        await waitFor(() => restored.calls.length === 2)
+        assert.equal(starts, 1, 'The hydrated uncertainty receipt must block an exact invocation under a new call ID')
+        const blocked = restored.calls[1].messages.filter(message => message.tool_call_id === 'remote-repeat')
+        assert.equal(blocked.length, 1)
+        assert.equal(blocked[0].role, 'tool')
+        const blockedReceipt = JSON.parse(blocked[0].content as string)
+        assert.equal(blockedReceipt.status, 'replay_blocked')
+        assert.equal(blockedReceipt.retryAllowed, false)
+        restored.calls[1].resolve(done())
+        await waitFor(() => restored.facts.length === 1)
+        assert.equal(restored.sessions.getSessionRecovery(id), undefined)
+        assert.equal(starts, 1)
+        assert.deepEqual(f.toolResults, ['remote-call'])
+        assert.deepEqual(restored.toolResults, ['remote-repeat'])
+        const records = await Array.fromAsync(store.readSessionLog(physicalSessionId(restored.sessions.getSessionState(id)!)))
+        assert.equal(records.filter(message => message.tool_call_id === 'remote-call').length, 1)
+        assert.equal(records.filter(message => message.tool_call_id === 'remote-repeat').length, 1)
+      } finally { await f.sessions.stop(); await restarted?.sessions.stop(); store.close?.() }
     })
   })
 

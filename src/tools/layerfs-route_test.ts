@@ -13,16 +13,19 @@ import { layerfsRoute } from './layerfs-route.ts'
 import { layerfsName } from '../execution/layerfs/bridge.ts'
 import { toolResultText, ToolOutcomeUnknownError, isCompletedToolFailure } from './tool.ts'
 import type { ExecutionContext } from './context.ts'
+import { resolveExecShell } from '../execution/processes/shells.ts'
 
-test('ordinary tool execute entrypoints: Project isolation, bounded text/overwrite provenance, subdirectory shell and timeout', async () => {
+test('ordinary tool execute entrypoints: Project isolation, bounded text/overwrite provenance, subdirectory shell and timeout', async t => {
+ const shell = await resolveExecShell(process.platform === 'win32' ? 'git-bash' : 'sh')
+ if (!shell) { t.skip('POSIX shell required for the local SDK fixture'); return }
  const dir = await mkdtemp(join(process.cwd(), '.layer-route-'))
  const prior = process.env.SHADOW_LAYERFS_CONFIG
  try {
   const sdkModule = join(dir, 'sdk.mjs'), config = join(dir, 'config.json')
   await mkdir(join(dir, 'sub'))
-  await writeFile(sdkModule, `import {exec} from 'node:child_process';
+  await writeFile(sdkModule, `import {execFile} from 'node:child_process';
    export const LayerFS={open:async()=>({workspace:{exec:async(ws,command,message,sinks)=>new Promise(resolve=>{
-    const child=exec(command,{cwd:${JSON.stringify(dir)}},(error)=>resolve({exitCode:error?.code??0}));
+    const child=execFile(${JSON.stringify(shell.command)},['-lc',command],{cwd:${JSON.stringify(dir)},encoding:'buffer'},(error)=>resolve({exitCode:error?.code??0}));
     child.stdout.pipe(sinks.stdout); child.stderr.pipe(sinks.stderr);
    })},close:async()=>{}})};`)
   await writeFile(config, JSON.stringify({projects:{one:{sdkModule,env:{LAYERFS_HOME:dir,LAYERFS_STORE_PATH:join(dir,'store'),LAYERFS_WORKER_ENDPOINT:'fake-worker'}}}}))
@@ -71,6 +74,8 @@ test('ordinary tool execute entrypoints: Project isolation, bounded text/overwri
   await assert.rejects(route('exec',{script:'sleep 0.3',timeout_ms:50}),ToolOutcomeUnknownError)
  } finally {
   if(prior===undefined) delete process.env.SHADOW_LAYERFS_CONFIG; else process.env.SHADOW_LAYERFS_CONFIG=prior
-  await rm(dir,{recursive:true,force:true})
+  // UNKNOWN deliberately does not kill the fixture's shell; allow its short command
+  // to release the cwd handle before deleting this test-owned directory on Windows.
+  await rm(dir,{recursive:true,force:true,maxRetries:10,retryDelay:100})
  }
 })

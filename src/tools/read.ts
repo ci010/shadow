@@ -229,7 +229,7 @@ export class ReadTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
-    const layerResult = await layerfsRoute('read', args, context)
+    const layerResult = await layerfsRoute('read', args, context, this.workspace)
     if (layerResult !== undefined) return layerResult
     context = await executionTargetContext(args, context, 'filesystem.read')
     const raw = String(args.path)
