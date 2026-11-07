@@ -74,6 +74,18 @@ as stable or automatically retry these failed operations. See
 [layerfs-e2e-macos-20261105.md](layerfs-e2e-macos-20261105.md) for evidence, retained
 resources and unresolved lifecycle boundaries.
 
+Restart investigation corrected a historical path-search omission: official
+`35d36575c1eb4d23d4b54534a7030d855db890e7` (#500) fixes stalled normal unmount
+under the relocated engine paths. That official build still reproduced a fresh
+sandbox connection failure on this Mac. A matching **patched upstream** build
+with explicit `LAYERFS_DAEMON_HOST=docker-bridge` then passed four fresh Projects,
+12 new-sandbox mounts and 12 clean closes. This is a same-Engine default-bridge
+qualification, not readiness of the unpatched release or the running Shadow
+service. No production configuration was activated. The environment key is
+already accepted by Shadow; installing the matched patched bundle and private
+worker/Store remains an operator prerequisite. Patch, pins, harness and durable
+receipts: [Mac restart repair](layerfs-e2e-macos-restart-20261105.md).
+
 For the alternative **operator-environment mode**, set `SHADOW_LAYERFS_CONFIG`
 in the Shadow backend's environment to an absolute
 operator-owned JSON file, outside model-editable workspaces. Do not put credentials
