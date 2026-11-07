@@ -29,6 +29,7 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
   const facts:string[]=[`mode ${bot.mode}`, ...(bot.mode === 'personal' ? [`personal connection ${bot.connection}; role ${bot.agent}; ordinary verified-owner tools/context`] : [])]
   facts.push(...subscribedBindings(bot).map(binding => `input subscription ${botSubscriptionKey(bindingSubscription(binding))}`))
   facts.push(...bot.tools.flatMap(tool=>tool.imports.map(name=>`tool ${tool.name}: service module ${name}`)))
+  for(const operation of bot.hostCapabilities ?? [])facts.push(`BOT host capability ${operation} (invoking binding only)`)
   for(const name of bot.allowedModules)facts.push(`BOT module ceiling ${name}`)
   for(const id of bot.sourceFolders ?? [])facts.push(`BOT source-folder ceiling ${id}`)
   for(const id of bot.readDomains ?? [])facts.push(`BOT memory-domain ceiling ${id}`)
@@ -38,7 +39,7 @@ function authorities(bot: ReturnType<typeof parseBot> | undefined): Set<string> 
     facts.push(`${target}: ${binding.enabled ? 'enabled' : 'disabled'}`)
     facts.push(`${target}: trigger ${binding.trigger}`)
     for(const name of binding.tools)facts.push(`${target}: tool ${name}`)
-    for(const grant of binding.grants ?? [])facts.push(`${target}: ${grant.kind === 'http' ? grant.routes.map(route=>`${route.method} ${grant.origin}${route.path}`).join(', ') : 'inbox '+(grant.kind === 'inbox' ? grant.sessionId : grant.inbox)+(grant.kind === 'proposal-inbox' ? ' public-issue-proposal '+grant.disclosurePolicy.repository+' (bounded issue/enums only)' : ' (raw content)')}`)
+    for(const grant of binding.grants ?? [])facts.push(`${target}: ${grant.kind === 'http' ? grant.routes.map(route=>`${route.method} ${grant.origin}${route.path}`).join(', ') : 'inbox '+grant.sessionId+' (raw content)'}`)
     if(binding.platform==='discord'){
       facts.push(`${target}: participants ${binding.participants.everyone ? 'everyone' : [...binding.participants.userIds.map(id=>'user '+id),...binding.participants.roleIds.map(id=>'role '+id)].join(', ')}`)
       for(const folder of binding.sourceFolders ?? [])facts.push(`${target}: folder ${folder}`)
@@ -99,9 +100,11 @@ export function botPackageTool(options: Options): Tool {
       if (baseline && baseline.bot.id !== bot.id) throw new Error('BOT active identity mismatch.')
       const before = baseline?.bot
       const oldAuthority=authorities(before),newAuthority=authorities(bot)
-      const repair = baseline?.removedBindingSkills.length ? {
-        activeInvalid: true, reason: 'Retired binding.skills selectors; the active package fails the current strict schema.',
-        removedBindingSkills: baseline.removedBindingSkills,
+      if (baseline?.removedProposalGrants?.length) for (const operation of before?.hostCapabilities ?? []) oldAuthority.delete(`BOT host capability ${operation} (invoking binding only)`)
+      for (const grant of baseline?.removedProposalGrants ?? []) oldAuthority.add(`Retired proposal-inbox grant ${grant.id}: ${grant.repository}/${grant.inbox} (inactive; no Work authority)`)
+      const repair = baseline && (baseline.removedBindingSkills.length || baseline.removedProposalGrants?.length) ? {
+        activeInvalid: true, reason: 'Retired binding.skills selectors or proposal-inbox grants; the active package fails the current strict schema. Removed proposal grants never grant Work authority.',
+        removedBindingSkills: baseline.removedBindingSkills, removedProposalGrants: baseline.removedProposalGrants ?? [],
         effect: 'Deployment restores a valid BOT definition and its enabled input subscriptions/runtime; it is not only a format change.',
         candidatePermissions: [...newAuthority], expectedRevision: current!.revision, exactContent: frozen.revision,
       } : undefined
@@ -112,7 +115,7 @@ export function botPackageTool(options: Options): Tool {
         affected,addedPermissions:added,removedPermissions:removed,candidatePermissions:[...newAuthority],
         credentialDisclosure:'Credential configuration is represented only by its presence; private references and header values are withheld. Origins, routes and body restrictions remain visible.',
         mode:bot.mode,connection:bot.connection,agent:bot.agent,bindings:disclosedBindings(bot),subscriptions:subscribedBindings(bot).map(bindingSubscription),subscriptionMigration:bot.subscriptions === undefined ? 'legacy bindings (same authority)' : 'explicit',toolDeclarations:bot.tools.map(({name,description,parameters,imports})=>({name,description,parameters,imports})),
-        modules:bot.allowedModules,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders ?? [],discordHistory:bot.discordHistory ?? null,
+        hostCapabilities:bot.hostCapabilities ?? [],modules:bot.allowedModules,readDomains:bot.readDomains ?? [],sourceFolders:bot.sourceFolders ?? [],discordHistory:bot.discordHistory ?? null,
         storage:'BOT- and binding-scoped mutable data, separate from immutable deployment files',
         execution:bot.mode === 'personal' ? 'Normal verified-owner session, ordinary role tools/context; BOT prompt only, no custom modules' : 'Restricted child runtime, no raw credentials/platform clients; no source executes during deployment'}
       const approve = '部署'

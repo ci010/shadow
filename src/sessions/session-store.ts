@@ -107,6 +107,8 @@ export interface ArchivedStateQuery {
 export interface ArchiveReference { projectId: string; folderId?: string; workdir?: WorkdirRefV2 }
 
 export interface SessionState {
+  /** Host-created durable isolated Work executor, persisted by both stores. */
+  automaticWork?: import('../cron/work-dispatch-contract.ts').AutomaticWorkSession
   /** Human input admission time, independent of assistant/event activity. Legacy unknown is protected. */
   lastUserMessageAt?: string
   /** Recoverable retirement only: logs and directories remain intact. */

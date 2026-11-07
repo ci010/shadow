@@ -12,6 +12,7 @@ export class CronDispatcher {
 
   async dispatch(job: CronJob, signal: AbortSignal, task = job.task ?? '', onAccepted?: (sessionId: string) => void, executionLimits?: NonNullable<Parameters<SessionManager['startSession']>[0]['executionLimits']>): Promise<string> {
     signal.throwIfAborted()
+    if (job.program) throw new Error('Program automation requires its host handler; agent dispatch is forbidden.')
     const mode = cronContextMode(job)
     if (mode === 'existing') {
       const target = job.target?.sessionId

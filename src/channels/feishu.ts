@@ -634,6 +634,40 @@ export class FeishuChannel extends AbstractChannel {
     return state?.workspaceRoot ?? sessionId
   }
 
+  /** Strict SDK send. Unlike ordinary presentation this never swallows a
+   * platform failure, falls back from a reply, or returns a fabricated receipt. */
+  async sendExplicitText(chatId: string, content: string, callerSignal: AbortSignal, beforeRequest?: () => void): Promise<string> {
+    const signal = AbortSignal.any([callerSignal, this.controller.signal])
+    signal.throwIfAborted(); this.assertConnection()
+    const client = this._client
+    if (!client) throw new Error('Feishu channel is disconnected.')
+    if (!content.trim() || content.length > 2000) throw new Error('Explicit Feishu text must contain 1–2000 characters.')
+    if (!/^(?:oc|ou|om)_[A-Za-z0-9_-]+$/.test(chatId)) throw new Error('Unsupported explicit Feishu destination.')
+    const thread = this._isThreadChatId(chatId)
+    const destination = thread ? this._topicParent(chatId) : chatId
+    if (!destination) throw new Error('Explicit Feishu thread has no authorized original chat.')
+    // Do not reuse the display metadata cache as permission proof. Conservative:
+    // restricted-posting groups need a separately verified moderator capability,
+    // which this SDK does not have. Let the platform validate direct recipients.
+    if (destination.startsWith('oc_')) {
+      const metadata = await client.im.chat.get({ path: { chat_id: destination }, signal })
+      signal.throwIfAborted(); this.assertConnection()
+      if (metadata.code !== 0 || !metadata.data || metadata.data.chat_status === 'dissolved' ||
+        (metadata.data.chat_mode !== 'p2p' && (metadata.data.chat_mode !== 'group' && metadata.data.chat_mode !== 'topic' || metadata.data.chat_post_permission !== 'all'))) throw new Error('Explicit Feishu send permission is unavailable.')
+    }
+    signal.throwIfAborted(); this.assertConnection()
+    if (this._client !== client) throw new Error('Feishu connection changed.')
+    const data = { msg_type: 'text', content: JSON.stringify({ text: content }) }
+    const response = thread
+      ? await client.im.message.reply({ path: { message_id: chatId }, data: { ...data, reply_in_thread: true }, signal, beforeRequest })
+      : await client.im.message.create({ params: { receive_id_type: destination.startsWith('oc_') ? 'chat_id' : 'open_id' }, data: { ...data, receive_id: destination }, signal, beforeRequest })
+    signal.throwIfAborted(); this.assertConnection()
+    if (this._client !== client) throw new Error('Feishu connection changed.')
+    if (response.code !== 0 || typeof response.data?.message_id !== 'string' || !response.data.message_id) throw new Error(`Explicit Feishu send failed: code=${Number.isInteger(response.code) ? response.code : 'unknown'}.`)
+    this._trackBotMessage(response.data.message_id)
+    return response.data.message_id
+  }
+
   @Span('FeishuChannel.send')
   async send(msg: OutboundMessage): Promise<string | null> {
     this.assertConnection()

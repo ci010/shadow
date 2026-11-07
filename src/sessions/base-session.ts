@@ -60,6 +60,8 @@ import { providerFailureKind, type ProviderFailureKind } from '../providers/prov
 export abstract class BaseSession {
   protected usage: LLMResponseUsage | undefined
   protected responseContext: ResponseContext | undefined
+  /** Wake output is persisted as history but must never enter platform outbound routing. */
+  private suppressWakeOutput = false
   private messagePersistenceFailed = false
   private boundedSystemTask = false
   private providerFailure?: ProviderFailureKind
@@ -216,6 +218,7 @@ export abstract class BaseSession {
   protected onToolPhaseEnd(): void {}
 
   protected emitOutbound(message: OutboundMessage): void {
+    if (this.suppressWakeOutput) return
     this.bus.emit('message.outbound', this.tools.boundary?.stamp(message) ?? message)
   }
 
@@ -640,6 +643,7 @@ export abstract class BaseSession {
       && this.tools.getWorkGuard()?.current(input.source.workStamps) === false) {
       input = { ...input, policy: 'silent', content: `[Historical input from an obsolete work revision; archive only, not new authority.]\n${input.content}` }
     }
+    this.suppressWakeOutput = input.source.kind === 'event' && input.source.source === 'bot-wake' && input.source.type === 'bot-wake'
     const silent = input.kind === 'message' && input.policy === 'silent'
     const msg = inputContext(this.id, input)
     this.boundedSystemTask = this.isBoundedSystemTask(msg.channel)
@@ -802,7 +806,7 @@ export abstract class BaseSession {
       if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
         fact.status = 'cancelled'
         if (!silent && !this.tools.boundary) {
-          this.bus.emit('message.outbound', {
+          this.emitOutbound({
             channel: msg.channel,
             chatId: msg.chatId,
             channelAddress: msg.channelAddress,
@@ -817,7 +821,7 @@ export abstract class BaseSession {
       fact.status = 'failed'
       fact.error = errMsg(err)
       console.error(errDetail(err), 'LLM provider error')
-      this.bus.emit('message.outbound', {
+      this.emitOutbound({
         channel: msg.channel,
         chatId: msg.chatId,
         channelAddress: msg.channelAddress,
@@ -833,6 +837,7 @@ export abstract class BaseSession {
       } finally {
         this.tools.boundary?.finish()
         this.responseContext = undefined
+        this.suppressWakeOutput = false
       }
     }
 

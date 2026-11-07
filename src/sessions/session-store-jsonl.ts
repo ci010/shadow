@@ -3,6 +3,7 @@ import { parseTaskRecord } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
 import { retirementReceiptSchema } from './retirement-contract.ts'
 import { join } from 'node:path'
+import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
 import { readStatePool } from './state-read-pool.ts'
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { parseSessionName } from './session-name.ts'
@@ -41,6 +42,7 @@ function parseStoredState(raw: string): SessionState {
     validateOwnership(value as Record<string, unknown>),
   )) as unknown as SessionState
   if (typeof state.sessionId !== 'string' || !state.sessionId.trim()) throw new SessionIdentityError('Missing session identity')
+  if (state.automaticWork !== undefined) state.automaticWork = automaticWorkSessionSchema.parse(state.automaticWork)
   if (state.task !== undefined) state.task = parseTaskRecord(state.task)
   if (state.focus !== undefined) state.focus = parseSessionFocus(state.focus)
   if (state.generatedTitle !== undefined) state.generatedTitle = parseSessionName(state.generatedTitle)
@@ -103,6 +105,7 @@ export class JsonlSessionStore implements SessionStore {
     if (state.name !== undefined) state = { ...state, name: parseSessionName(state.name) }
     if (state.chatName !== undefined) state = { ...state, chatName: parseSessionName(state.chatName) }
     state = normalizeInitiativeMetadata(validateOwnership({ ...state, ownershipVersion: state.ownershipVersion ?? 2 })) as unknown as SessionState
+    if (state.automaticWork !== undefined) state.automaticWork = automaticWorkSessionSchema.parse(state.automaticWork)
     if (state.task !== undefined) state.task = parseTaskRecord(state.task)
     parseAutomationSessionRef(state.automation)
     parsePhysicalIdVersion(state.physicalIdVersion)

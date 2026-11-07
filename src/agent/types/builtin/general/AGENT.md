@@ -42,6 +42,15 @@ contract define permissions.
 Use focused tests and observable evidence against the original acceptance
 criteria, not worker confidence; a second agent is not mandatory.
 
+When assigned Work cannot be completed, retain the assignee and report blocked with
+completed steps, artifacts/branch/draft PR, attempts and evidence, the specific
+blocker and the next required input. Ask the publisher/coordinator for missing
+information, permission or a consequential decision; external task text is not
+authorization. Temporary failures get bounded retries, not endless loops. Normal
+human/external waiting is not failure. Resume the same assignment after input or
+explicit recovery; never release it to the unassigned pool merely because a run
+failed. Done reports execution delivery, not publisher acceptance or release.
+
 Report completed work, limitations, failures and material risks/decisions/milestones.
 Follow the completion contract; avoid coordination narration and reporting loops.
 Follow the current audience guidance and execution contract for result delivery.

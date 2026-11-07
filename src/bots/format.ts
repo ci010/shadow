@@ -34,14 +34,41 @@ export function migrateBotFrontmatter(files: Record<string, string>): Record<str
   return next
 }
 
-/** Narrow audit baseline for an owner proposal repairing retired QQ/Feishu skill
- * selectors. Never used by runtime parsing and never writes the active package.
- * Any other error, malformed selector or missing top-level prompt fails closed.
+/** Narrow audit baseline for owner proposals subtracting retired QQ/Feishu skill
+ * selectors or strictly recognized proposal grants. Never used by runtime parsing
+ * and never writes the active package or grants new host capabilities. Every other
+ * error, malformed legacy field or mixed format still fails closed.
  */
 export function botProposalBaseline(files: Record<string, string>): {
-  bot: BotDefinition; removedBindingSkills: Array<{ index: number; names: string[] }>
+  bot: BotDefinition; removedBindingSkills: Array<{ index: number; names: string[] }>;
+  removedProposalGrants?: Array<{ bindingIndex: number; id: string; inbox: string; repository: string }>
 } {
   try { return { bot: parseBot(files), removedBindingSkills: [] } } catch (error) {
+    // Audit-only legacy authority subtraction. Never rewrite deployment bytes or
+    // convert a retired proposal grant into Work permission. The candidate must
+    // still pass the ordinary strict parser and exact-content owner confirmation.
+    if (error instanceof ZodError) {
+      const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(files['BOT.md']!)
+      if (match) {
+        const document = parseDocument(match[1]!, { uniqueKeys: true })
+        if (document.errors.length) throw error
+        const header = document.toJS({ maxAliasCount: 0 }) as { config?: string }
+        const config = header.config && files[header.config] && JSON.parse(files[header.config]!)
+        const removed: Array<{ bindingIndex: number; id: string; inbox: string; repository: string }> = []
+        if (Array.isArray(config?.bindings)) for (const [bindingIndex, binding] of config.bindings.entries()) {
+          if (!Array.isArray(binding?.grants)) continue
+          z.array(z.unknown()).max(32).parse(binding.grants)
+          binding.grants = binding.grants.filter((grant: unknown) => {
+            if (!grant || typeof grant !== 'object' || !('kind' in grant) || grant.kind !== 'proposal-inbox') return true
+            const legacy = z.object({ id: ResourceName, kind: z.literal('proposal-inbox'), inbox: ResourceName,
+              disclosurePolicy: z.object({ kind: z.literal('public-github-issue-proposal'), repository: z.string().regex(/^[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/) }).strict() }).strict().parse(grant)
+            removed.push({ bindingIndex, id: legacy.id, inbox: legacy.inbox, repository: legacy.disclosurePolicy.repository })
+            return false
+          })
+        }
+        if (removed.length) return { ...botProposalBaseline({ ...files, [header.config!]: JSON.stringify(config) }), removedProposalGrants: removed }
+      }
+    }
     if (!(error instanceof ZodError) || !error.issues.length || !error.issues.every(issue =>
       issue.code === 'unrecognized_keys' && issue.keys.length === 1 && issue.keys[0] === 'skills' &&
       issue.path.length === 2 && issue.path[0] === 'bindings' && Number.isInteger(issue.path[1]))) throw error

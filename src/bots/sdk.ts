@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { BotHostCapabilities } from './host-contract.ts'
 import { agentInferenceSchema } from '../agent/inference-schema.ts'
 import { inferenceSettings, validateInferenceCapabilities, type LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { ModelInfo } from '../providers/provider.ts'
@@ -52,6 +53,8 @@ const baseDefinition = z.object({
   bindings: z.array(BotBindingSchema).max(1000),
   /** Omission migrates legacy bindings to subscriptions in memory; [] explicitly receives nothing. */
   subscriptions: z.array(BotSubscriptionSchema).max(1000).optional(),
+  /** Owner-approved host SDK operations; omission grants none. Always scoped to the invoking binding. */
+  hostCapabilities: BotHostCapabilities.optional(),
   readDomains: z.array(z.string().uuid()).max(32).optional(),
   sourceFolders: SourceFoldersSchema.optional(),
   discordHistory: DiscordHistoryScopeSchema.optional(),
@@ -63,7 +66,7 @@ const definition = z.discriminatedUnion('mode', [
 ]).superRefine((bot, ctx) => {
   if (bot.mode === 'personal') {
     if (!bot.connection || !bot.agent) ctx.addIssue({ code: 'custom', message: 'Personal BOT requires connection and agent' })
-    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.readDomains || bot.sourceFolders || bot.discordHistory || bot.skills)
+    if (bot.bindings.length || bot.subscriptions?.length || bot.tools.length || bot.allowedModules.length || bot.hostCapabilities?.length || bot.readDomains || bot.sourceFolders || bot.discordHistory || bot.skills)
       ctx.addIssue({ code: 'custom', message: 'Personal BOT uses ordinary role tools/context; custom tools, service bindings and scopes are not supported' })
   } else if (bot.connection || bot.agent) ctx.addIssue({ code: 'custom', message: 'Service BOT cannot select a personal connection or role' })
   const bindingKeys = bot.bindings.map(value => botSubscriptionKey(bindingSubscription(value)))
@@ -102,6 +105,14 @@ export function validateBotInference(bot: BotDefinition, defaults: LlmRuntimeCon
 /** Validate generated data. Deployed configuration is declarative YAML/JSON, never executable TS. */
 export function defineBot(definition: BotDefinition): BotDefinition { return BotDefinitionSchema.parse(definition) }
 export interface BotToolContext {
+  /** Owner must approve each operation in hostCapabilities. No destinations or local sessions are accepted. */
+  wake: { call(input: { action: 'inspect' | 'stop' } | { action: 'set'; intervalMinutes: number }): Promise<unknown> }
+  watermark: { call(input: Record<string, unknown>): Promise<unknown> }
+  /** Incremental actually-received events from this conversation only; read never acknowledges. */
+  messages: { call(input: Record<string, unknown>): Promise<unknown> }
+  work: { call(input: Record<string, unknown>): Promise<unknown> }
+  /** Explicit send to this invocation's original conversation only; unsupported platforms fail. */
+  send: { call(input: { content: string; idempotencyKey: string }): Promise<unknown> }
   services: { call(name: string, input: Record<string, unknown>): Promise<unknown> }
   channel: { call(operation: string, input: Record<string, unknown>): Promise<unknown> }
   storage: { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<unknown>; delete(key: string): Promise<unknown> }

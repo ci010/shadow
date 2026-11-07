@@ -683,6 +683,38 @@ export class ChannelManager {
     }
   }
 
+  /** Strict receipt-returning SDK adapter. The caller supplies only the host-bound
+   * original address, never a model-selected destination. Discord keeps its
+   * existing inspected REST adapter. No message is placed on the outbound bus. */
+  async sendBotText(address: ChannelAddress, content: string, signal: AbortSignal): Promise<{ id: string }> {
+    signal.throwIfAborted()
+    if (!this.options || this.closing || address.projectId !== this.projectId || !['qq', 'feishu'].includes(address.platform)) throw new Error('Explicit BOT send Project/platform is unavailable.')
+    if (typeof content !== 'string' || !content.trim() || content.length > 2000) throw new Error('Explicit BOT text must contain 1–2000 characters.')
+    const key = this.resolveKey(address.platform, address)
+    const bot = key ? this.options.instanceStore.get(key) : undefined
+    if (!bot || bot.projectId !== this.projectId || bot.purpose !== 'service' || bot.platform !== address.platform) throw new Error('Explicit BOT send requires the original service connection.')
+    this.assertStreamAccess(bot.id, address.conversationId)
+    const channel = this.availableByKey(bot.id)
+    if (!(address.platform === 'qq' && channel instanceof QQChannel || address.platform === 'feishu' && channel instanceof FeishuChannel)) throw new Error('The original BOT connection must be connected.')
+    const verify = channel.connectionGuard()
+    const guard = () => {
+      signal.throwIfAborted(); verify()
+      this.assertStreamAccess(bot.id, address.conversationId)
+      if (this.closing || this.availableByKey(bot.id) !== channel) throw new Error('The original BOT connection changed.')
+    }
+    const result = await channel.withDeliveryGuard(async () => guard(), () => channel.withConnection(async () => {
+      guard()
+      const id = channel instanceof FeishuChannel
+        ? await channel.sendExplicitText(address.conversationId, content, signal, guard)
+        : await channel.sendExplicitText(address.conversationId, content, signal)
+      guard()
+      if (typeof id !== 'string' || !id) throw new Error('The platform did not return a valid message receipt.')
+      return { id }
+    })).catch(error => { guard(); throw error })
+    guard()
+    return result
+  }
+
   async trustedDiscordRequest(botId: string, path: string, init: RequestInit): Promise<unknown> {
     const bot = this.options?.instanceStore.list().find(value => value.id === botId && value.platform === 'discord')
     if (!bot || this.closing) throw new Error('Discord Bot is not in this Project')

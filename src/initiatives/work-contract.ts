@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { workDispatchExecutionSchema } from '../cron/work-dispatch-contract.ts'
 import { decisionEvidenceSchema, parseDecisionEvidence } from '../sessions/decision-brief.ts'
 import { workNotesSchema } from './work-notes.ts'
 
@@ -85,7 +86,22 @@ export const workFocusInferenceSchema = z.object({
     id: z.string().min(1).max(512), physicalId: z.string().min(1).max(1024),
   }).strict()).min(1).max(12),
 }).strict()
+export const botWorkSourceSchema = z.object({
+  projectId: z.string().min(1).max(512), botId: z.string().min(1).max(128), bindingKey: z.string().min(1).max(2048),
+  revision: z.string().min(1).max(512), sessionId: z.string().min(1).max(512), sourceInputId: z.string().min(1).max(512),
+  idempotencyKey: z.string().min(1).max(200), fingerprint: z.string().length(64),
+  title: z.string().min(1).max(160), definition: workDefinitionSchema,
+  supplements: z.array(z.object({
+    id: z.string().uuid(), idempotencyKey: z.string().min(1).max(200), fingerprint: z.string().length(64),
+    content: z.string().min(1).max(4000), revision: z.string().min(1).max(512),
+    sessionId: z.string().min(1).max(512), sourceInputId: z.string().min(1).max(512), at: z.string().datetime(),
+  }).strict()).max(100),
+}).strict()
 export const workRecordSchema = z.object({
+  /** Host-owned automatic execution receipt; never an authorization grant. */
+  automaticExecution: workDispatchExecutionSchema.optional(),
+  /** Host-stamped external intake, never an assignment or owner authorization. */
+  botSource: botWorkSourceSchema.optional(),
   key: z.string().min(1).max(600), subject: workSubjectSchema,
   revision: z.number().int().positive(), sequence: z.number().int().positive(),
   definition: workDefinitionSchema,

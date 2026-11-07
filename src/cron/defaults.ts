@@ -23,3 +23,10 @@ export const SESSION_CLEANUP_AUTOMATION: CronJobDef = {
     'Report candidates, successes and blocked reasons in the automation run history. No physical deletion or purge is supported.',
   ].join('\n'),
 }
+
+/** A program job: idle scans do not create a session or make an inference request. */
+export const WORK_DISPATCH_AUTOMATION: CronJobDef = {
+  name: 'Work auto-dispatch', source: 'cron', session: 'fresh', agentType: 'general',
+  schedule: 'every 60s', enabled: false,
+  program: { kind: 'work-dispatch', inferenceRequests: 100, toolCalls: 200, argumentBytes: 1000000 },
+}
