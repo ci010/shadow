@@ -248,6 +248,7 @@ export interface DiscordAdapterIntegration {
   processorStorageId?: string
   classifyObservation?(proof:DiscordObservationProof,data:Record<string,unknown>,signal:AbortSignal):Promise<import('../events/input-classifier.ts').Classification>
   /** Production source-only lookup and lazy BOT-owned strategy dispatch. */
+  observationRevision?: (scopeId: string) => string | undefined
   observationScopes?(data: Record<string, unknown>): string[]
   runObservationPolicy?(scopeId: string, runPolicy: () => Promise<void>): Promise<void>
   observe?(data: Record<string, unknown>, signal: AbortSignal, scopeId?: string): Promise<DiscordObservationProof[]>

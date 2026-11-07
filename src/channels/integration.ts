@@ -208,14 +208,35 @@ export class DiscordIntegration implements ConversationPolicies {
   }
 
   private binding(botId: string, location: DiscordLocation): DiscordBinding | undefined {
+    if (![0, 1, 5, 10, 11].includes(location.type)) return undefined
     const bindings = this.options.store.bindings().filter(binding => binding.botInstanceId === botId)
     const direct = bindings.find(binding => binding.target.kind === 'dm'
       ? location.type === 1 && binding.target.userId === location.recipientId
       : binding.target.channelId === location.id && binding.target.guildId === location.guildId)
     if (direct) return direct
-    if (![10, 11, 12].includes(location.type) || !location.parentId) return undefined
+    if (![10, 11].includes(location.type) || !location.parentId) return undefined
     return bindings.find(binding => binding.target.kind === 'channel' && binding.target.channelId === location.parentId &&
       binding.target.guildId === location.guildId && binding.inheritThreads)
+  }
+
+  /** Arrival-time selection only. Live ingress and output must still revalidate all permissions. */
+  snapshotInputAssignment(botId: string): (location: DiscordLocation) => { assigned: boolean; assertCurrent: () => void } {
+    const bot = this.options.bots.get(botId)
+    const bindings = this.closed || !bot.enabled || bot.purpose !== 'service' ? [] : structuredClone(this.options.store.bindings().filter(binding => binding.botInstanceId === botId && binding.enabled))
+    return location => {
+      const captured = [0, 1, 5, 10, 11].includes(location.type) ? bindings.find(binding => binding.target.kind === 'dm'
+        ? location.type === 1 && binding.target.userId === location.recipientId
+        : binding.target.guildId === location.guildId && (binding.target.channelId === location.id || !!location.parentId && binding.inheritThreads && binding.target.channelId === location.parentId)) : undefined
+      return { assigned: !!captured, assertCurrent: () => {
+        const current = captured && this.options.store.bindings().find(binding => binding.id === captured.id && binding.enabled)
+        if (!captured || !current || JSON.stringify(current) !== JSON.stringify(captured)) throw new Error('Arrival assignment changed; retained in inbox only')
+      } }
+    }
+  }
+
+  observationRevision(botId: string, scopeId: string): string | undefined {
+    const binding = this.options.store.bindings().find(binding => binding.id === scopeId && binding.botInstanceId === botId && binding.enabled && binding.observation?.enabled)
+    return binding ? createHash('sha256').update(JSON.stringify(binding)).digest('hex') : undefined
   }
 
   /** Scope-only trusted Web collection gate; sender/platform permissions still use prepareIngress. */

@@ -220,7 +220,8 @@ export abstract class BaseSession {
 
   protected emitOutbound(message: OutboundMessage): void {
     if (this.suppressWakeOutput) return
-    this.bus.emit('message.outbound', this.tools.boundary?.stamp(message) ?? message)
+    const stamped = this.tools.stampOutput?.(message) ?? message
+    this.bus.emit('message.outbound', this.tools.boundary?.stamp(stamped) ?? stamped)
   }
 
   /** Persist snapshots before use. Fail closed rather than send an event absent from recovery history. */
@@ -354,18 +355,23 @@ export abstract class BaseSession {
             this.providerWaiting = wait
             this.activityChanged()
             this.bus.emit('session.provider.waiting', { sessionId: this.id, wait })
-          }, () => this.provider.chat(inferenceMessages, toolDefs, {
+          }, () => {
+            this.tools.assertSnapshot?.()
+            signal.throwIfAborted()
+            return this.provider.chat(inferenceMessages, toolDefs, {
             model,
             maxTokens,
             temperature,
             signal,
             thinking,
             reasoningEffort,
-          })).catch(error => {
+          })
+          }).catch(error => {
             this.providerFailure = providerFailureKind(error)
             throw error
           })
           signal.throwIfAborted()
+          this.tools.assertSnapshot?.()
           this.tools.boundary?.assertCurrent()
           // Keep the returned message with its call, including across compaction.
           // Provider continuity (including encrypted state) is not display content.

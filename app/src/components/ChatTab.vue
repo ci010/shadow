@@ -97,6 +97,7 @@
         <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" :class="{ 'has-history-rail': !mobileLayout }" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
         <div ref="messagesContainer" class="chat-messages" tabindex="-1" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
           <ChannelGroupContext v-if="/^(qq:|feishu:|bot:)/.test(activeSessionId) && !viewingPhysicalId" :key="activeSessionId" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :group-key="activeSession?.channelAddress ? serviceGroupKey(activeSession.channelAddress) : undefined" :session-id="activeSessionId" :active="visible && route.name === 'chat'" />
+          <ChannelInboxNotice v-if="activeSession?.channelSource" :source="activeSession.channelSource" />
           <div class="chat-message-list">
           <div v-if="!viewingPhysicalId && oldestPhysicalId" class="timeline-older">
             <button v-if="canLoadOlder || loadingHistory" type="button" :disabled="loadingHistory" @click="prependOlderSegment">{{ loadingHistory ? t('Loading older messages…') : t('Load older messages') }}</button>
@@ -553,6 +554,7 @@ import { isInputRequest, MAX_YIELD_CUSTOM_TEXT_LENGTH, type AskRequest } from '.
 import { MAX_ANSWER_ATTACHMENTS } from '../../../src/sessions/answer-media.ts'
 import CredentialRequest from './CredentialRequest.vue'
 import BotChatSetup from './BotChatSetup.vue'
+import ChannelInboxNotice from './ChannelInboxNotice.vue'
 import ChannelGroupContext from './ChannelGroupContext.vue'
 import { serviceGroupKey } from '../service-groups.ts'
 import ExecutionMessage from './ExecutionMessage.vue'

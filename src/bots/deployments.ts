@@ -4,8 +4,9 @@ import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 
 export interface BotSource { folderId: string; directory: string }
-/** revision is the SHA-256 source identity, not a Git commit. gitCommit is local history only. */
-export interface BotDeployment { id: string; revision: string; previous?: string; source: BotSource; mode: 'git' | 'bounded'; gitCommit?: string }
+/** revision is the SHA-256 source identity, not a Git commit. gitCommit is local history only.
+ * generation identifies a committed activation, so restoring the same source hash cannot revive an old context. */
+export interface BotDeployment { generation?: string; id: string; revision: string; previous?: string; source: BotSource; mode: 'git' | 'bounded'; gitCommit?: string }
 export interface FrozenBotSource { revision: string; files: Record<string, string> }
 export type GitRunner = (args: readonly string[], options: { cwd: string; env: NodeJS.ProcessEnv; input?: string }) => Promise<string>;
 export interface BotDeploymentsOptions { directory: string; projectId: string; runGit?: GitRunner; validate?: (files: Readonly<Record<string, string>>) => void | Promise<void> }
@@ -158,7 +159,7 @@ export class BotDeployments {
   }
   private validateDeployment(bot: string, value: unknown): asserts value is BotDeployment {
     const deployment = value as BotDeployment;
-    if (!deployment || typeof deployment !== 'object' || !validSource(deployment.source) || (deployment.previous !== undefined && (typeof deployment.previous !== 'string' || !/^[a-f0-9]{64}$/.test(deployment.previous))) || (deployment.gitCommit !== undefined && (typeof deployment.gitCommit !== 'string' || !/^[a-f0-9]{40,64}$/.test(deployment.gitCommit)))) throw new Error('Invalid deployment metadata');
+    if (!deployment || (deployment.generation !== undefined && (typeof deployment.generation !== 'string' || !/^[a-f0-9-]{36}$/.test(deployment.generation))) || typeof deployment !== 'object' || !validSource(deployment.source) || (deployment.previous !== undefined && (typeof deployment.previous !== 'string' || !/^[a-f0-9]{64}$/.test(deployment.previous))) || (deployment.gitCommit !== undefined && (typeof deployment.gitCommit !== 'string' || !/^[a-f0-9]{40,64}$/.test(deployment.gitCommit)))) throw new Error('Invalid deployment metadata');
     identifier(deployment.id);
     if (this.bot(deployment.id) !== bot || !/^[a-f0-9]{64}$/.test(deployment.revision) || !['git', 'bounded'].includes(deployment.mode)) throw new Error('Invalid deployment metadata');
   }
@@ -256,7 +257,7 @@ export class BotDeployments {
       const managed = exists(path.join(bot, 'history.git'));
       if (!available && (managed || active?.mode === 'git')) throw new Error('Git unavailable for Git-managed BOT');
       if (active?.revision === frozen.revision) return active;
-      const deployment: BotDeployment = { id: input.id, source: { ...input.source }, revision: frozen.revision, previous: active?.revision, mode: available ? 'git' : 'bounded' };
+      const deployment: BotDeployment = { generation: randomUUID(), id: input.id, source: { ...input.source }, revision: frozen.revision, previous: active?.revision, mode: available ? 'git' : 'bounded' };
       staged = path.join(bot, `.staged-${randomUUID()}`); fs.mkdirSync(staged, { mode: 0o700 });
       fs.mkdirSync(this.dataDirectory(input.id), { recursive: true, mode: 0o700 });
       for (const [name, content] of Object.entries(frozen.files)) {

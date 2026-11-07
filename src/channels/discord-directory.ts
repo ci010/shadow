@@ -102,7 +102,7 @@ export async function discordDirectory(api: DiscordApi, signal: AbortSignal, gui
   return result
 }
 
-export async function inspectDiscordConversation(api: DiscordApi, chatId: string, senderId: string, signal: AbortSignal): Promise<DiscordInspection> {
+export async function inspectDiscordConversation(api: DiscordApi, chatId: string, senderId: string, signal: AbortSignal, passive = false): Promise<DiscordInspection> {
   id.parse(chatId); id.parse(senderId)
   const [botUserId, rawChannel] = await Promise.all([
     discordBotIdentity(api, signal), api(`/channels/${chatId}`, { signal }),
@@ -130,7 +130,7 @@ export async function inspectDiscordConversation(api: DiscordApi, chatId: string
     thread(channel.type) ? api(`/channels/${id.parse(channel.parent_id)}`, { signal }).then(value => channelSchema.parse(value)) : Promise.resolve(channel),
   ])
   const sender = memberSchema.parse(rawSender)
-  if (sender.user.id !== senderId || sender.user.bot || parent.guild_id !== channel.guild_id ||
+  if (sender.user.id !== senderId || sender.user.bot && !passive || parent.guild_id !== channel.guild_id ||
     thread(channel.type) && parent.id !== channel.parent_id || !parent.permission_overwrites) {
     throw new Error('Discord membership or channel permission metadata does not match.')
   }

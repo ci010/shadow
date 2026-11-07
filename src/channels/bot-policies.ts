@@ -1,3 +1,4 @@
+import { assertServiceOutput, stampServiceOutput } from '../bots/service-output.ts'
 import { channelAddressFromSessionId, channelSessionId } from '../bus/events.ts'
 import type { ConversationPolicies } from '../bots/conversation-policy.ts'
 import type { DirectoryBots } from '../bots/runtime.ts'
@@ -53,7 +54,20 @@ export function botConversationPolicies(store: BotInstanceStore, existing: Conve
       }
       existing.authorize(id, input)
     },
-    tools: (policy, id, state) => { resolve(id); return existing.tools(policy, id, state) },
+    tools: (policy, id, state) => {
+      resolve(id)
+      const tools = existing.tools(policy, id, state), bot = botFor(id)
+      if (bot?.purpose === 'service' && tools.stampOutput) {
+        const verify = store.accessGuard(bot.id), stamp = tools.stampOutput, snapshot = tools.assertSnapshot
+        tools.assertSnapshot = () => { verify(); resolve(id); snapshot?.() }
+        tools.stampOutput = message => {
+          verify(); resolve(id)
+          const inner = stamp(message)
+          return stampServiceOutput(inner, () => { verify(); resolve(id); assertServiceOutput(inner) })
+        }
+      }
+      return tools
+    },
     prompt: (policy, id, state) => { resolve(id); return existing.prompt(policy, id, state) },
     boundary: (policy, id, state) => { resolve(id); return existing.boundary?.(policy, id, state) },
   }

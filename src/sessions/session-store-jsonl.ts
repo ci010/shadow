@@ -1,3 +1,4 @@
+import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
 import { parseSessionFocus } from './session-metadata.ts'
 import { parseTaskRecord } from './task-record.ts'
 import { FreshAutomationStateStore } from './fresh-automation-state.ts'
@@ -52,6 +53,8 @@ function parseStoredState(raw: string): SessionState {
   parseContextResetAt(state.contextResetAt)
   parseContextResetAt(state.lastUserMessageAt)
   if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
+  parseServiceGeneration(state.serviceGeneration)
+  parseChannelSource(state.channelSource, state.sessionId, state.projectId)
   parseChannelBoundary(state.channelBoundary)
   parseDecisionOwner(state.decisionOwnerSessionId)
   if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
@@ -112,7 +115,9 @@ export class JsonlSessionStore implements SessionStore {
     parseContextResetAt(state.contextResetAt)
     parseContextResetAt(state.lastUserMessageAt)
     if (state.retirement !== undefined) retirementReceiptSchema.parse(state.retirement)
-    parseChannelBoundary(state.channelBoundary)
+    parseServiceGeneration(state.serviceGeneration)
+  parseChannelSource(state.channelSource, state.sessionId, state.projectId)
+  parseChannelBoundary(state.channelBoundary)
     parseDecisionOwner(state.decisionOwnerSessionId)
     state = { ...state, workPolicy: parseWorkPolicy(state.workPolicy) }
     state = { ...state, ...parseTopicSessionFields(state) }

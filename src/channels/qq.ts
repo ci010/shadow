@@ -1,3 +1,4 @@
+import { passiveAttachmentReferences } from './passive-contract.ts'
 import { ingressDispatchEvent, ingressErrorDetail } from './ingress-diagnostic.ts'
 /**
  * QQ Bot channel (官方机器人 / 群聊 + 单聊 + 频道).
@@ -909,12 +910,16 @@ export class QQChannel extends AbstractChannel {
     if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `group:${groupId}`
     const chatName = typeof data.group_name === 'string' ? data.group_name : undefined
+    const passive = qqIncomingContent(data, typeof data.content === 'string' ? data.content : '')
+    const arrival = await this.collectPassive({ senderId, chatId, messageId: msgId, platformMessageId: msgId, content: passive.content, isGroup: true, chatName,
+      ...(typeof author?.username === 'string' ? { senderName: author.username } : {}), attachmentReferences: passiveAttachmentReferences(passive.attachments) })
+    if (arrival && !arrival.eligible) return
     // Discovery without business trigger evaluation; unassigned sources stay closed.
     if (!this.admitGroup(chatId, chatName)) {
       this.admitGroup(chatId, chatName, { id: msgId, sender: senderId, text: typeof data.content === 'string' ? data.content : '[attachment]' })
       return
     }
-    await this.runReceivePolicy({ senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: true }, async configuration => {
+    await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: true }, async configuration => {
     // Service receives frozen package configuration from its selected BOT. Only
     // personal/standalone adapters (no service policy) read the legacy option.
     const triggerMode = configuration?.platform === 'qq' ? configuration.trigger : this.triggerMode
@@ -949,9 +954,12 @@ export class QQChannel extends AbstractChannel {
     if (!msgId || !senderId) return
     if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `c2c:${senderId}`
+    const passive = qqIncomingContent(data, typeof data.content === 'string' ? data.content : '')
+    const arrival = await this.collectPassive({ senderId, chatId, messageId: msgId, platformMessageId: msgId, content: passive.content, isGroup: false, senderName: author?.username, attachmentReferences: passiveAttachmentReferences(passive.attachments) })
+    if (arrival && !arrival.eligible) return
     if (!this.isNewIncoming(chatId, msgId, data)) return
 
-    await this.runReceivePolicy({ senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: false }, async () => {
+    await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: false }, async () => {
     const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, ((data.content as string) ?? '').trim())
     if (!content && !media) return
 
@@ -977,11 +985,14 @@ export class QQChannel extends AbstractChannel {
     const chatId = isDirect
       ? `dms:${data.guild_id as string}`
       : `channel:${data.channel_id as string}`
+    const passive = qqIncomingContent(data, typeof data.content === 'string' ? data.content : '')
+    const arrival = await this.collectPassive({ senderId, chatId, messageId: msgId, platformMessageId: msgId, content: passive.content, isGroup: !isDirect, senderName: author?.username, attachmentReferences: passiveAttachmentReferences(passive.attachments) })
+    if (arrival && !arrival.eligible) return
     if (!isDirect && !this.admitGroup(chatId)) return
     if (!this.isNewIncoming(chatId, msgId, data)) return
     this._lastMsgId.set(chatId, msgId)
 
-    await this.runReceivePolicy({ senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: !isDirect }, async () => {
+    await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId, chatId, messageId: msgId, content: typeof data.content === 'string' ? data.content : '', isGroup: !isDirect }, async () => {
     const member = data.member as Record<string, unknown> | undefined
     const senderName = (member?.nick as string) ?? author?.username ?? senderId
     const chatName = isDirect ? senderName : await this.resolveChannelName(data.channel_id)

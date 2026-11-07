@@ -25,6 +25,7 @@ export interface PolicyTool {
 }
 export type PublishedAgent = AgentTypeDefinition
 export interface ResolvedConversationPolicy {
+  generation?: string
   revision: string
   binding: ConversationBinding
   agent: PublishedAgent

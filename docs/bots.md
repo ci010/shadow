@@ -211,6 +211,15 @@ are deduplicated by input ID within the current context epoch. Channel-stream co
 remains separate and is not itself Session history; unbound or unauthorized messages
 cannot use this archive path.
 
+This describes **BOT execution history**, not passive transport receipt. Enabled
+service connections also record separate read-only channel inbox sessions before
+subscription/trigger selection, without invoking an Agent, tools or replies.
+Those inboxes can be referenced in owner Web chat to prepare exact source-file
+binding edits, but references grant no authority and old inbox history is never
+automatically replayed. Changed deployments use activation generations so a
+reactivated or newly assigned BOT starts a fresh execution context. See
+[Connections, passive inboxes and chat assignment](bot-settings.md).
+
 Migration is read-time and non-destructive: omitting `subscriptions` retains the
 same legacy binding subscriptions (including enabled/disabled state and all
 existing restrictions); explicit `[]` receives **nothing**, even with enabled

@@ -4138,5 +4138,14 @@
   "Configure BOT behavior and bindings in chat using BOT.md and bot.json in the registered source folder. This page only shows deployment status; it does not maintain a second binding configuration.": "Configure BOT behavior and bindings in chat using BOT.md and bot.json in the registered source folder. This page only shows deployment status; it does not maintain a second binding configuration.",
   "Configure BOTs in chat": "Configure BOTs in chat",
   "In chat, describe the BOT and source folder to configure. Review the exact content and permissions before deployment. For credentials, an authorized owner Web chat can open a private connection card; never paste secrets into chat or ordinary ask replies. QQ and Discord chats cannot open this private card.": "In chat, describe the BOT and source folder to configure. Review the exact content and permissions before deployment. For credentials, an authorized owner Web chat can open a private connection card; never paste secrets into chat or ordinary ask replies. QQ and Discord chats cannot open this private card.",
-  "Manage platform connections": "Manage platform connections"
+  "Manage platform connections": "Manage platform connections",
+  "Passive channel inbox": "Passive channel inbox",
+  "Received messages are stored here without invoking an Agent, tools or replies. Only messages delivered by the platform can be recorded. Attachments are metadata references, not downloaded files.": "Received messages are stored here without invoking an Agent, tools or replies. Only messages delivered by the platform can be recorded. Attachments are metadata references, not downloaded files.",
+  "Channel source": "Channel source",
+  "In an owner Web chat, type @ and select this inbox to assign a BOT. The reference identifies the target, not permission. BOT files and exact deployment approval still control execution. Old inbox history is never replayed automatically; unassigning stops inference, not receipt.": "In an owner Web chat, type {'@'} and select this inbox to assign a BOT. The reference identifies the target, not permission. BOT files and exact deployment approval still control execution. Old inbox history is never replayed automatically; unassigning stops inference, not receipt.",
+  "Open owner chat": "Open owner chat",
+  "{name} · passive inbox": "{name} · passive inbox",
+  "Parent channel rule": "Parent channel rule",
+  "Exact conversation": "Exact conversation",
+  "One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed.": "One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed."
 }

@@ -1,3 +1,6 @@
+import { validateServiceAssignments } from '../../bots/assignment-validation.ts'
+import { publishBotChange } from '../../bots/publication.ts'
+import { parseChannelSource } from '../../channels/passive-contract.ts'
 import { observeSessionInvalidations } from './session-realtime.ts'
 import { learningInterval, updateLearningInterval, updateLearningEnabled } from '../../cron/learning-controls.ts'
 import { InputRouter } from '../../input/router.ts'
@@ -1479,6 +1482,7 @@ export async function createProjectRuntime(
     routeObservation: async (connection, bindingId, runPolicy) => requirePolicyReceipt(await inputs.route(observationEnvelope(botStore, connection, bindingId, runPolicy))),
     // Admission checks must not invoke the throwing managed-conversation policy resolver.
     serviceAssigned: directoryBots.serviceAssigned,
+    serviceGeneration: address => { const policy = directoryBots.resolve(address); return policy?.binding.enabled ? policy.generation ?? policy.revision : undefined },
   })
   const botChatSetup = new BotChatSetup(project.id, () => realtime.invalidateResource?.('interactions'))
   cleanup.push(() => botChatSetup.stop())
@@ -1557,6 +1561,16 @@ export async function createProjectRuntime(
   const botPackageOptions = {
     projectId:project.id,deployments:botDeployments,runtime:directoryBots,folders:folderRegistry,
     ask:tools.get('ask')!,canAuthor,inventory:botInventory,pending:new Map<string,unknown>(),
+    channelSource: (sessionId: string) => {
+      const state = sessions.getSessionState(sessionId)
+      if (!state || state.projectId !== project.id) throw new Error('Channel session must belong to this Project')
+      const source = parseChannelSource(state.channelSource, sessionId, project.id)
+      if (!source) throw new Error('Reference a passive channel inbox session')
+      botStore.assertAccess(source.botInstanceId)
+      const connection = botStore.get(source.botInstanceId)
+      if (connection.purpose !== 'service' || connection.platform !== source.platform) throw new Error('Channel source connection is no longer a matching service connection')
+      return source
+    },
     validate:async (files:Record<string,string>,signal:AbortSignal) => {
       const bot = parseBot(files)
       if (bot.mode === 'service' && (bot.model !== undefined || bot.reasoningEffort !== undefined)) {
@@ -1576,25 +1590,16 @@ export async function createProjectRuntime(
       await channelIntegrations.validateBotDeployment(candidate.agents,candidate.bindings,signal)
       const other = directoryBots.definitions().filter(item => item.bot.id !== bot.id)
       directoryBots.discord([...other,{bot,files,deployment:{id:bot.id,revision:botDeployments.freeze(files).revision,source:{folderId:'validation',directory:''},mode:'bounded'}}])
-      const keys = new Set<string>()
-      for (const binding of [...other.flatMap(item=>item.bot.bindings),...bot.bindings]) {
-        if (binding.platform === 'discord') continue
-        const connection = botStore.get(binding.botInstanceId)
-        if (connection.platform !== binding.platform || connection.purpose !== 'service') throw new Error('BOT bindings require a matching service connection/platform.')
-        const key = JSON.stringify([binding.botInstanceId,binding.platform,binding.conversationId])
-        if(keys.has(key))throw new Error('Conversation already belongs to another BOT.')
-        keys.add(key)
-        for(const id of binding.readFolders) await folderRegistry.requireAvailable(id)
-      }
+      await validateServiceAssignments(project.id, botStore, bot, other.map(item => item.bot), id => folderRegistry.requireAvailable(id))
     },
     publish:async <T>(id:string,change:()=>Promise<T>,candidate?:BotDefinition):Promise<T> => {
       const definitions = directoryBots.definitions().filter(item=>item.bot.id===id)
       const personalConnections = [...definitions.filter(item=>item.bot.mode==='personal').map(item=>item.bot.connection), ...(candidate?.mode === 'personal' ? [candidate.connection] : [])].filter((id): id is string => !!id)
       const bindings = definitions.flatMap(item=>item.bot.bindings)
       const beforeRevision = botDeployments.read(id)?.deployment.revision
-      const result = await botPolicies.changePublished(async () => { await sessions.retireIdleConversationContexts(sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
+      const result = await publishBotChange(sessions, botPolicies, sessionId => personalConnections.some(id => id === channelAddressFromSessionId(sessionId)?.botInstanceId) || bindings.some(binding => binding.platform === 'discord'
         ? sessions.getSessionState(sessionId)?.channelBoundary?.bindingId === binding.id
-        : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId}))) },async () => {
+        : sessionId === channelSessionId({projectId:project.id,botInstanceId:binding.botInstanceId,platform:binding.platform,conversationId:binding.conversationId,...(botStore.get(binding.botInstanceId).legacySessionId ? {legacySessionId:true} : {})})), personalConnections.length > 0, async () => {
         channelIntegrations.setBotPublication(true)
         try{return await change()}finally{channelIntegrations.setBotPublication(false)}
       })

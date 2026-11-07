@@ -71,7 +71,7 @@ test('real graph title precedence and friendly fallback survive sidebar mapping'
     {sessionId:'web:chat-a', name:'Named', title:'Old'},
     {sessionId:'web:chat-b', title:'Graph title'},
     {sessionId:'web:chat-c', title:'   '},
-    {sessionId:'web:chat-topic', title:'Old', topic:{title:'Topic title', goal:'g', scope:'s'}},
+    {sessionId:'web:chat-topic', title:'Old', topic:'Topic title'},
     {sessionId:'web:chat-admin'},
   ], nodes:[] })
   assert.deepEqual(graph.map(referenceSessionTitle), ['Named', 'Graph title', 'New conversation', 'Topic title', 'New conversation'])

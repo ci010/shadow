@@ -1,3 +1,5 @@
+import { ChannelAdmissionError } from './base.ts'
+import { passiveChannelId, passiveFeishuBody } from './passive-contract.ts'
 /**
  * Feishu/Lark channel using WebSocket long connection.
  *
@@ -620,7 +622,9 @@ export class FeishuChannel extends AbstractChannel {
         && address.platform === this.name && address.conversationId.startsWith('oc_') ? address.conversationId : undefined
       return (!own || own.legacySessionId) && parent.startsWith('feishu:oc_') ? parent.slice('feishu:'.length) : undefined
     }
-    return this.topicParents.get(rootId)
+    const own = this.address(rootId)
+    const stored = own && this.hasPassiveCollector ? this.sessionManager?.getSessionState(passiveChannelId(own))?.channelSource : undefined
+    return this.topicParents.get(rootId) ?? (stored?.kind === 'thread' && stored.platform === 'feishu' && stored.projectId === own?.projectId && stored.botInstanceId === own?.botInstanceId ? stored.parentId : undefined)
   }
 
   private _mediaSessionId(chatId: string): string {
@@ -1022,7 +1026,6 @@ export class FeishuChannel extends AbstractChannel {
       if (!messageId || !senderId || !this.isAllowed(senderId)) return
 
       // Dedup — Feishu may deliver the same event multiple times
-      if (!this._seenIds.add(messageId)) return
 
       const chatId = message['chat_id'] as string | undefined ?? senderId
       const chatType = message['chat_type'] as string | undefined // 'p2p' | 'group'
@@ -1036,21 +1039,33 @@ export class FeishuChannel extends AbstractChannel {
       if (this.conversations.size > CHAT_CACHE_LIMIT) this.conversations.delete(this.conversations.keys().next().value!)
       const threadId = message['thread_id']
       const rootId = message['root_id']
-      // root_id also appears on ordinary replies: only omt_ identifies a topic.
-      const managedTopic = isGroup && typeof threadId === 'string' && threadId.startsWith('omt_')
-        && typeof rootId === 'string' && rootId.startsWith('om_')
-        && this._topicParent(rootId) === outerChatId
+      // Platform-delivered topic ancestry is transport evidence, never a BOT assignment.
+      // Keep every real topic separate even before the owner assigns it.
+      const platformTopic = isGroup && typeof threadId === 'string' && /^omt_[A-Za-z0-9_-]+$/.test(threadId)
+        && typeof rootId === 'string' && /^om_[A-Za-z0-9_-]+$/.test(rootId)
+      if (platformTopic && this.hasPassiveCollector) {
+        const previous = this._topicParent(rootId)
+        if (previous && previous !== outerChatId) throw new ChannelAdmissionError('Feishu topic ancestry changed', 403)
+        this.topicParents.set(rootId, outerChatId)
+        if (this.topicParents.size > CHAT_CACHE_LIMIT) this.topicParents.delete(this.topicParents.keys().next().value!)
+      }
+      const managedTopic = platformTopic && this._topicParent(rootId) === outerChatId
       const replyTo = managedTopic ? rootId as string : outerChatId
 
       let observedText = `[${msgType}]`
       if (msgType === 'text') {
         try { const parsed = JSON.parse(message['content'] as string); if (typeof parsed.text === 'string') observedText = parsed.text } catch { /* malformed platform content is not displayed */ }
       }
+      const passiveBody = passiveFeishuBody(msgType, message['content'])
+      const arrival = await this.collectPassive({ senderId, chatId: replyTo, messageId, platformMessageId: messageId, content: passiveBody.text, isGroup,
+        ...(managedTopic ? { passiveParentId: outerChatId } : {}), attachmentReferences: passiveBody.attachments })
+      if (arrival && !arrival.eligible) return
+      if (!this._seenIds.add(messageId)) return
       if (isGroup && !this.admitGroup(replyTo)) {
         this.admitGroup(replyTo, undefined, { id: messageId, sender: senderId, text: observedText })
         return
       }
-      await this.runReceivePolicy({ senderId, chatId: replyTo, messageId, content: observedText, isGroup }, async configuration => {
+      await this.runReceivePolicy({ channelInputGuard: arrival?.assertCurrent, senderId, chatId: replyTo, messageId, content: observedText, isGroup }, async configuration => {
       // The default preserves Feishu's mention/reply/managed-topic behavior. Only
       // an explicitly published binding may broaden a Service BOT to all messages.
       const triggerMode = configuration?.platform === 'feishu' ? configuration.trigger : 'mention'

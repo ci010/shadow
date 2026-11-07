@@ -1,3 +1,4 @@
+import { stampServiceOutput } from './service-output.ts'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
@@ -93,7 +94,7 @@ export class DirectoryBotService implements ConversationPolicies {
 
   assertCurrent(policy: ResolvedConversationPolicy, sessionId: string): void {
     const current = this.resolve(sessionId)
-    const samePolicy = current && (current.revision === policy.revision ||
+    const samePolicy = current && current.generation === policy.generation && (current.revision === policy.revision ||
       isDeepStrictEqual(
         { binding: current.binding, agent: current.agent, skillPrompts: current.skillPrompts, tools: current.tools },
         { binding: policy.binding, agent: policy.agent, skillPrompts: policy.skillPrompts, tools: policy.tools },
@@ -193,6 +194,8 @@ export class DirectoryBotService implements ConversationPolicies {
       policy.agent.allowedModules ?? [],
     )
     tools.setExecutionScope('session', [])
+    tools.assertSnapshot = () => this.assertCurrent(policy, sessionId)
+    tools.stampOutput = message => stampServiceOutput(message, () => this.assertCurrent(policy, sessionId))
     return tools
   }
 
