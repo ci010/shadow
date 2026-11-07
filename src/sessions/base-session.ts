@@ -1,3 +1,4 @@
+import { LEARNING_RECEIPT_RECORDED } from '../agent/learning/receipt.ts'
 import { resolveExplicitToolTarget, resolveWorkdirToolTarget } from '../execution/tool-target.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
 import { prepareWorkingContext } from '../agent/context/working-context.ts'
@@ -68,6 +69,7 @@ export abstract class BaseSession {
   private suppressWakeOutput = false
   private messagePersistenceFailed = false
   private boundedSystemTask = false
+  private boundedLearningTask = false
   private imagePreparationSignal?: AbortSignal
   private providerFailure?: ProviderFailureKind
   private providerWaiting?: RateLimitWait
@@ -289,6 +291,12 @@ export abstract class BaseSession {
     const reasoningEffort = executionContext.reasoningEffort ??
       llm.reasoningEffort
     executionContext = { ...executionContext, model, temperature, maxTokens, thinking, reasoningEffort }
+    const boundedLearning = this.state.mode === 'task' && executionContext.channel === 'cron'
+      && this.state.automation?.config?.source === 'learning'
+      && ['reflector', 'encapsulator', 'soul-reflector'].includes(this.state.agentType ?? '')
+      && this.tools.inferenceRequestLimit !== undefined
+    this.boundedLearningTask = boundedLearning
+    if (boundedLearning) this.tools.reserveReceipt('learning_result')
     const budget = new InferenceBudget(this.tools.inferenceRequestLimit)
     let contextRecoveryAttempted = false
     let timeoutRecovery: { error: ProviderHttpError; sourcePhysicalId: string } | undefined
@@ -333,7 +341,12 @@ export abstract class BaseSession {
         } : undefined,
       }
       if (!this.boundedSystemTask && this.state.workingContext !== undefined) await this.recordContextEvent('working-context', this.state.workingContext)
-      const toolDefs = this.tools.getDefinitions()
+      const receiptOnly = boundedLearning && budget.remaining === 1
+      if (receiptOnly) {
+        this.tools.restrictToReceipt('learning_result')
+        await this.appendMessages(llm, { role: 'user', content: 'Host finish boundary: only learning_result is available now. Submit an honest receipt using evidence already read. Use partial or blocked for unread or unresolved scope; do not claim no_change merely because the budget is ending. No further writes or reads are allowed.' })
+      }
+      const toolDefs = this.tools.getDefinitions().filter(def => !receiptOnly || def.function.name === 'learning_result')
       signal.throwIfAborted()
 
       // Hook: drain pending messages (e.g. steer queue in Session).
@@ -562,6 +575,10 @@ export abstract class BaseSession {
           if (receipt.status === 'completed' || receipt.status === 'partial') terminal = result
         } catch { /* Tool errors are not terminal receipts. */ }
       }
+      // learning_result already verified/proposed the receipt. No extra inference is
+      // needed to turn its successful tool result into session completion.
+      if (this.boundedLearningTask && call.name === 'learning_result'
+        && result === LEARNING_RECEIPT_RECORDED) terminal = result
       const transient = transientToolSummary(result)
       // Prepare before closing the durable tool pair: cancellation/validation
       // errors must not append a second result after a summary was persisted.

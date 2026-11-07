@@ -1,3 +1,4 @@
+import { LEARNING_RECEIPT_RECORDED } from './receipt.ts'
 import { validateEventSummary } from '../event-summary.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs'
@@ -190,7 +191,7 @@ export class LearningTools {
       if (args.status === 'applied' || args.status === 'no_change') await this.runtime.verify(batch, false, context.signal)
       context.signal.throwIfAborted()
       this.runtime.ledger.propose(batch.id, args.status, args.summary)
-      return 'Learning result recorded. End the session now; final acknowledgement follows successful session completion.'
+      return LEARNING_RECEIPT_RECORDED
     }),
   }
 

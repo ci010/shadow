@@ -542,3 +542,189 @@ test('new reflector events require bounded briefings; persisted briefings surviv
   assert.equal(reloaded.eventsFor('encapsulator')[0].summary, '😀'.repeat(280))
   assert.equal(reloaded.eventsFor('encapsulator')[0].what, 'Full observed details')
 }))
+
+test('Wiki-only unresolved challenge can produce an experimental discoverable skill and verified receipt', async () => withTempWorkspace(async workspace => {
+  await mkdir(join(workspace, 'memory/topics'), { recursive: true })
+  await writeFile(join(workspace, 'memory/topics/delivery.md'), '# Delivery challenge\nBuild passed but recipient still reports missing file. Separate status, loaded build and actual recipient delivery; cause unknown.')
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  f.onRun(async id => {
+    const batch = f.runtime.ledger.batchFor(id)!
+    assert.equal(batch.inputEvents.length, 1)
+    assert.equal(batch.inputEvents[0].origin, 'v:memory/topics/delivery.md')
+    const task = learningTask(batch)
+    assert.match(task, /Narrow experimental skills need not have prior cross-event success/)
+    const content = '---\nname: delivery-evidence-separation\ndescription: Diagnose disagreement between passing builds and missing recipient files\n---\n# Experimental diagnostic workflow\nSource: v:memory/topics/delivery.md (fixture). Outcome remains unresolved.\nWhen delivery is disputed, separately check status projection, loaded build and actual recipient receipt. Passing tests do not establish delivery. Do not retry sends without authorization. Revalidate after a real recipient outcome; retire if these distinctions do not help.\nExample: passing build plus missing file requires recipient evidence. Counterexample: a verified recipient receipt already settles that attempt, not every future delivery.\n'
+    const baseline = JSON.parse(await f.tools.skill.execute({ action: 'read', name: 'delivery-evidence-separation' }, f.context(id)))
+    await f.tools.skill.execute({ action: 'save', name: 'delivery-evidence-separation', revision: baseline.revision, content }, f.context(id))
+    await f.tools.result.execute({ status: 'applied', summary: 'Installed a narrow experimental diagnostic lesson, not a delivery fix or script tool.' }, f.context(id))
+  })
+  const id = await f.runtime.run('encapsulator', signal())
+  assert.equal(f.runtime.ledger.outcome(String(id))?.artifacts, 1)
+  assert(skills.getSkillDirectory('delivery-evidence-separation'))
+  assert.equal(await f.runtime.run('encapsulator', signal()), false)
+}))
+
+test('host audit recovers rejected physical ID against exact event ref across attempts, not real I/O errors', async t => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const correct = 'v:sessions/web_chat-example-v2-f83865aca7a-0/overview'
+  const wrong = 'v:sessions/web_chat-example-v2-f838aca7a-0/overview'
+  const batch = f.runtime.ledger.create('encapsulator', [], [{ id: 'typo', path: 'memory/events/day.jsonl', origin: 'web:example', when: 'then', who: 'reflector', what: 'Challenge', refs: [correct] }])
+  f.runtime.ledger.bind(batch.id, 'cron:old')
+  f.runtime.ledger.interrupt(batch.id, 'retry')
+  f.runtime.ledger.bind(batch.id, 'cron:new')
+  for (const id of ['cron:old', 'cron:new']) f.records.set(id, { sessionId: id, segmentIndex: 0, projectId: 'a' })
+  let error = 'Error: Physical history does not belong to this Project session'
+  const exchange = (path: string, text: string): ChatMessage[] => [
+    { role: 'assistant', content: '', tool_calls: [{ id: 'read', type: 'function', function: { name: 'read', arguments: JSON.stringify({ path, offset: 1, limit: 100 }) } }] },
+    { role: 'tool', content: text, tool_call_id: 'read' },
+  ]
+  t.mock.method(f.sessions, 'getHistory', async (id: string) => {
+    const messages = id === 'cron:old' ? exchange(wrong, error) : exchange(correct, 'complete overview')
+    return { messages, total: messages.length }
+  })
+  await f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true)
+  error = 'Error: filesystem denied'
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /filesystem denied/)
+}))
+
+
+test('lesson maintenance preflights size, consolidates a full replacement and verifies real edit-store receipt', async () => withTempWorkspace(async workspace => {
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  const name = 'bounded-maintenance'
+  const header = `---\nname: ${name}\ndescription: Consolidate diagnostic lessons without losing conditions\n---\n`
+  const constraints = 'Trigger: conflicting delivery evidence. Never retry a send without authorization. Unknown cause remains unknown. Exception: recipient receipt settles only that attempt. Revalidate after a recipient outcome. Source: fixture 2026-11-06.\n'
+  const original = header + constraints + 'Repeated explanation. '.repeat(330)
+  assert(original.length <= 8000)
+  await f.runtime.skillStore!.save(name, { 'SKILL.md': original }, null, false, signal())
+  f.runtime.ledger.create('encapsulator', [], [])
+  f.onRun(async id => {
+    const ctx = f.context(id)
+    const baseline = JSON.parse(await f.tools.skill.execute({ action: 'read', name }, ctx))
+    assert.equal(baseline.limits.maxLength, 8000)
+    assert.equal(baseline.limits.lengthUnit, 'UTF-16 code units')
+    assert.equal(baseline.contentLength, original.length)
+    const oversized = original + 'New repeated explanation. '.repeat(80)
+    const checked = JSON.parse(await f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content: oversized }, ctx))
+    assert.equal(checked.withinLimit, false)
+    assert.equal(checked.overBy, oversized.trim().length - 8000)
+    assert.equal(checked.saved, false)
+    assert.equal(f.runtime.skillStore!.read(name).revision, baseline.revision)
+    assert.equal(f.runtime.ledger.batchFor(id)!.artifacts.length, 0)
+    for (const [content, withinLimit, length] of [['😀'.repeat(4000), true, 8000], ['😀'.repeat(4001), false, 8002], ['  ', false, 0]] as const) {
+      const boundary = JSON.parse(await f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content }, ctx))
+      assert.equal(boundary.withinLimit, withinLimit)
+      assert.equal(boundary.contentLength, length)
+    }
+    await assert.rejects(f.tools.skill.execute({ action: 'save', name, revision: baseline.revision, content: oversized }, ctx), /8000/)
+    const consolidated = header + constraints + 'Steps: separate reported tests, active backend build and actual recipient evidence. A passing test is not delivery. Example: missing recipient evidence leaves delivery unknown; counterexample: verified receipt.\n'
+    const check = JSON.parse(await f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content: consolidated }, ctx))
+    assert.equal(check.withinLimit, true)
+    await f.tools.skill.execute({ action: 'save', name, revision: baseline.revision, content: consolidated }, ctx)
+    assert.equal(f.runtime.skillStore!.read(name).files['SKILL.md'].toString(), consolidated.trim())
+    assert(skills.getSkillDirectory(name))
+    await assert.rejects(f.tools.skill.execute({ action: 'check', name, revision: baseline.revision, content: consolidated }, ctx), /changed since read/)
+    await f.tools.result.execute({ status: 'applied', summary: 'Consolidated repeated wording, preserving all scoped conditions. Synthetic fixture only.' }, ctx)
+  })
+  const id = await f.runtime.run('encapsulator', signal())
+  assert.equal(f.runtime.ledger.outcome(String(id))?.status, 'applied')
+  assert.equal(f.runtime.ledger.outcome(String(id))?.artifacts, 1)
+}))
+
+test('encapsulation prompts expose bounded maintenance and useful small experiments without publication', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const task = learningTask(f.runtime.ledger.create('encapsulator', [], []))
+  assert.match(task, /A separate check is optional size feedback, not a prerequisite/)
+  assert.match(task, /eighth is receipt-only/)
+  assert.match(task, /finish the first supported save by the seventh request/)
+  assert.match(task, /8000 UTF-16 code units/)
+  assert.match(task, /preserving conditions, exceptions, uncertainty and evidence/)
+  assert.match(task, /proven high frequency is not required/)
+  const role = await readFile(new URL('../types/builtin/encapsulator/AGENT.md', import.meta.url), 'utf8')
+  assert.match(role, /one concrete\ncostly or error-prone step/)
+  assert.match(role, /NOT an installed tool/)
+  assert.match(role, /one focused\nconsolidation/)
+}))
+
+
+test('oversize failed skill save is recovered by same-name successful replacement, not size check alone', async t => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const batch = f.runtime.ledger.create('encapsulator', [], [])
+  f.runtime.ledger.bind(batch.id, 'cron:old')
+  f.runtime.ledger.interrupt(batch.id, 'oversize write')
+  f.runtime.ledger.bind(batch.id, 'cron:new')
+  for (const id of ['cron:old', 'cron:new']) f.records.set(id, { sessionId: id, segmentIndex: 0, projectId: 'a' })
+  let action = 'check'
+  let name = 'same-lesson'
+  t.mock.method(f.sessions, 'getHistory', async (id: string) => {
+    const old = id === 'cron:old'
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: '', tool_calls: [{ id: 'skill', type: 'function', function: { name: 'learned_skill', arguments: JSON.stringify({ action: old ? 'save' : action, name: old ? 'same-lesson' : name }) } }] },
+      { role: 'tool', content: old ? 'Error: content exceeds 8000 characters' : '{"status":"discoverable"}', tool_call_id: 'skill' },
+    ]
+    return { messages, total: messages.length }
+  })
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /exceeds 8000/)
+  action = 'save'
+  name = 'different-lesson'
+  await assert.rejects(f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true), /exceeds 8000/)
+  name = 'same-lesson'
+  await f.runtime.inspectEffects(f.runtime.ledger.batchFor('cron:new')!, false, true)
+}))
+
+
+test('legacy ten-deferral pending batch without paused text stays parked after recover; manual selection preserves attempts', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace, 0)
+  const batch = f.runtime.ledger.create('encapsulator', [], [])
+  for (let i = 0; i < 10; i++) {
+    f.runtime.ledger.bind(batch.id, `cron:legacy-${i}`)
+    f.runtime.ledger.interrupt(batch.id, 'retained rejected history reference')
+    f.runtime.ledger.defer(batch.id, true)
+  }
+  const path = projectStoragePath(workspace, '.learning', 'state.v1.json')
+  const state = JSON.parse(await readFile(path, 'utf8'))
+  delete state.batches[0].retry.paused
+  state.batches[0].retry.notBefore = 0
+  await writeFile(path, JSON.stringify(state)) // Disposable legacy fixture, never production state.
+  const restarted = new LearningRuntime(f.sessions, 'a')
+  await restarted.recover()
+  assert.equal(restarted.ledger.pending('encapsulator', true), undefined)
+  assert.equal(restarted.ledger.select('encapsulator', [], []), undefined)
+  assert.equal(restarted.ledger.select('encapsulator', [], [], true)?.id, batch.id)
+  assert.equal(restarted.ledger.batch(batch.id).retry!.attempts, 10)
+  assert.equal(restarted.ledger.batch(batch.id).attempts.length, 10)
+  assert.equal(restarted.ledger.batch(batch.id).state, 'pending')
+}))
+
+test('direct save uses last work call, rejects oversized and stale drafts without effects, preserves receipt reserve', async () => withTempWorkspace(async workspace => {
+  const skills = new SkillsManager(workspace)
+  const f = fixture(workspace, 0, skills)
+  const batch = f.runtime.ledger.create('encapsulator', [], [])
+  f.runtime.ledger.bind(batch.id, 'cron:bounded')
+  f.records.set('cron:bounded', { sessionId: 'cron:bounded', segmentIndex: 0, projectId: 'a' })
+  const ctx = f.context('cron:bounded')
+  const base = new Tools(workspace)
+  base.register(f.tools.skill); base.register(f.tools.result)
+  ctx.tools = new SessionTools(base, workspace, ['learned_skill', 'learning_result'])
+  ctx.tools.setTrustedLimits({ allowedTools: ['learned_skill', 'learning_result'], inferenceRequests: 8, toolCalls: 4, argumentBytes: 48000 })
+  ctx.tools.reserveReceipt('learning_result')
+  const name = 'direct-bounded-save'
+  const content = `---\nname: ${name}\ndescription: Check evidence before claiming success\n---\nExperimental fixture. Preserve uncertainty and authorization boundaries. Source: synthetic 2026-11-07. Revalidate after observed outcome.`
+  const original = await f.runtime.skillStore!.save(name, { 'SKILL.md': content }, null, false, signal())
+  assert.match(String(await ctx.tools.execute('learned_skill', { action: 'save', name, revision: original.revision, content: 'x'.repeat(8001) }, ctx)), /8000/)
+  assert.match(String(await ctx.tools.execute('learned_skill', { action: 'save', name, revision: '', content }, ctx)), /changed since read/)
+  assert.equal(f.runtime.ledger.batch(batch.id).artifacts.length, 0)
+  assert.equal(f.runtime.skillStore!.read(name).revision, original.revision)
+  const replacement = content + '\nCounterexample: a receipt proves that attempt only.'
+  const saved = JSON.parse(String(await ctx.tools.execute('learned_skill', { action: 'save', name, revision: original.revision, content: replacement }, ctx)))
+  assert.equal(saved.status, 'discoverable')
+  assert.equal(f.runtime.skillStore!.read(name).files['SKILL.md'].toString(), replacement)
+  assert(skills.getSkillDirectory(name))
+  assert.match(String(await ctx.tools.execute('learned_skill', { action: 'read', name }, ctx)), /receipt capacity/)
+  ctx.tools.restrictToReceipt('learning_result')
+  const receipt = await ctx.tools.execute('learning_result', { status: 'partial', summary: 'Retained one real fixture effect; failed drafts remain unresolved.' }, ctx)
+  assert.doesNotMatch(String(receipt), /^Error:/)
+  assert.equal(f.runtime.ledger.batch(batch.id).proposal?.status, 'partial', String(receipt))
+  assert.equal(f.runtime.ledger.batch(batch.id).artifacts.length, 1)
+}))
