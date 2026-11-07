@@ -1,0 +1,38 @@
+{
+  "base": "35d36575c1eb4d23d4b54534a7030d855db890e7",
+  "finalProjects": [
+    {
+      "project": 6,
+      "newSandboxMounts": 3,
+      "cleanCloses": 3,
+      "pass": true
+    },
+    {
+      "project": 7,
+      "newSandboxMounts": 3,
+      "cleanCloses": 3,
+      "pass": true
+    },
+    {
+      "project": 8,
+      "newSandboxMounts": 3,
+      "cleanCloses": 3,
+      "pass": true
+    }
+  ],
+  "deliveredHarness": {
+    "newSandboxMounts": 3,
+    "cleanCloses": 3,
+    "pass": true
+  },
+  "preliminaryProjects": [
+    3,
+    4,
+    5
+  ],
+  "officialMain": {
+    "mountSuccess": 1,
+    "mountFailure": 1,
+    "cleanCloseSuccess": 1
+  }
+}

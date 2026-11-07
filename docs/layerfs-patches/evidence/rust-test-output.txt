@@ -1,0 +1,11 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.02s
+     Running tests/container_labels.rs (target/debug/deps/container_labels-1b0c1e76bf4fd7d6)
+
+running 4 tests
+test bad_labels_are_refused_before_any_engine_request ... ok
+test labels_are_sent_at_create_and_found_in_any_order_beside_the_image_s ... ok
+test direct_bridge_is_explicit_and_fail_closed_on_the_exact_inspection ... ok
+test a_missing_or_different_label_or_another_mount_is_a_topology_mismatch ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
