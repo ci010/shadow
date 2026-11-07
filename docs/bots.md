@@ -433,6 +433,20 @@ exposed only by each binding's explicit `tools` list. No global custom-tool regi
 or separate provider loop is created: existing SessionManager/policy execution owns
 the conversation.
 
+The model-facing conversation tail separates execution rules, an authorized
+repository index (display name plus exact `folder:<id>/` prefix), read/search
+guidance, and compact binding provenance. Names are untrusted labels, never path
+aliases. Read directories first and use returned relative paths; after a failed
+path, return to the last confirmed parent listing rather than guessing. Search is
+case-insensitive literal matching within one specified file or directory listing,
+not recursive repository search. Host filesystem paths are not included.
+
+The tail does not serialize binding parameters, grant URLs/routes, module allowlists
+or tool imports. Models learn capabilities from the exposed tool contracts; those
+implementation details remain in host configuration and execution authorization,
+not model instructions. Binding provenance contains only Project/session/revision,
+Agent name, BOT instance and conversation identity.
+
 The common guest context is deliberately capability-backed:
 
 - `ctx.services.call(name, input)`: a named HTTP/inbox grant, declared in the tool's
