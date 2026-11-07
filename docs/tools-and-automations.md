@@ -1250,7 +1250,6 @@ oldest related briefings before oldest own briefings, with an explicit omission
 notice; a budget too small for even the notice returns no block. No topic
 aggregation, retrospective migration or additional LLM summarization is involved.
 
-
 ## Programmable EventSourceProviders
 
 The lazy `event_provider` tool handles external sources; internal bus subscriptions use `event_subscribe`.
