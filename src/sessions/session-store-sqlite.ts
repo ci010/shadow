@@ -1,3 +1,4 @@
+import { parseChannelSource, parseServiceGeneration } from '../channels/passive-contract.ts'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
 import { parseSessionFocus } from './session-metadata.ts'
 import { parseTaskRecord } from './task-record.ts'
@@ -44,6 +45,8 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'lastUserMessageAt',
   'retirement',
   'channelBoundary',
+  'channelSource',
+  'serviceGeneration',
   'workPolicy',
   'automaticWork',
   'name',
@@ -112,6 +115,8 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   const metadata: SessionMetadata = { ownershipVersion: 2, ...parseTopicSessionFields(value) }
   if (value.lastUserMessageAt !== undefined) metadata.lastUserMessageAt = parseContextResetAt(value.lastUserMessageAt)
   if (value.retirement !== undefined) metadata.retirement = retirementReceiptSchema.parse(value.retirement)
+  if (value.serviceGeneration !== undefined) metadata.serviceGeneration = parseServiceGeneration(value.serviceGeneration)
+  if (value.channelSource !== undefined) metadata.channelSource = parseChannelSource(value.channelSource)
   if (value.channelBoundary !== undefined) metadata.channelBoundary = parseChannelBoundary(value.channelBoundary)
   if (value.automaticWork !== undefined) metadata.automaticWork = automaticWorkSessionSchema.parse(value.automaticWork)
   if (value.workPolicy !== undefined) metadata.workPolicy = parseWorkPolicy(value.workPolicy)
@@ -368,6 +373,7 @@ export class SqliteSessionStore implements SessionStore {
         throw new OwnershipValidationError('Invalid session prototype metadata')
       }
     }
+    parseChannelSource(metadata.channelSource, row.key, metadata.projectId)
     return {
       sessionId: row.key,
       segmentIndex: row.segment_count ?? 0,
@@ -413,6 +419,8 @@ export class SqliteSessionStore implements SessionStore {
         completed: state.completed,
         focus: state.focus === undefined ? undefined : parseSessionFocus(state.focus),
         generatedTitle: state.generatedTitle === undefined ? undefined : parseSessionName(state.generatedTitle),
+        serviceGeneration: parseServiceGeneration(state.serviceGeneration),
+        channelSource: parseChannelSource(state.channelSource, state.sessionId, state.projectId),
         chatName: state.chatName === undefined ? undefined : parseSessionName(state.chatName),
         decisionOwnerSessionId: parseDecisionOwner(state.decisionOwnerSessionId),
         ...parseTopicSessionFields(state),

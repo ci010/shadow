@@ -1340,3 +1340,48 @@ test('directory constructor fails closed before applying old mutable lifecycle d
   assert.equal(await readFile(file,'utf8'),before)
   assert.equal(JSON.parse(before).value.agents.length,0)
 })
+
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}: one source parent rule covers new public posts with separate contexts, no sibling replay and live generation revocation`, async t => {
+  const { BotDeployments } = await import('../bots/deployments.ts')
+  const { DirectoryBots } = await import('../bots/runtime.ts')
+  const { assignChannelSource } = await import('../bots/channel-assignment.ts')
+  const f = await fixture(t, Store)
+  const deployments = new BotDeployments({ directory: join(f.root, 'parent-rule-deployments'), projectId: f.projectId, runGit: async () => { throw new Error('No git') } })
+  const runtime = new DirectoryBots(deployments)
+  const base = { 'BOT.md': '---\nid: parent-support\nconfig: bot.json\nmode: service\n---\nParent rule support', 'bot.json': JSON.stringify({ allowedModules: [], tools: [], bindings: [], subscriptions: [] }) }
+  const source = { version: 1, projectId: f.projectId, botInstanceId: f.bot.id, platform: 'discord', conversationId: '406', kind: 'thread', parentId: '405', guildId: '100', botUserId: '900' } as const
+  const permission = { enabled: true, trigger: 'mention', participants: { everyone: false, userIds: ['500'], roleIds: [] }, tools: [], readDomains: [], inheritThreads: true, manage: false }
+  let files = assignChannelSource(base, source, permission, 'parent').files
+  const publish = async () => {
+    const frozen = deployments.freeze(files)
+    await deployments.deploy({ id: 'parent-support', source: { folderId: 'fixture', directory: 'parent-support' }, ...frozen, expectedRevision: deployments.read('parent-support')?.deployment.revision })
+    const projected = runtime.discord()
+    await f.config.validateBotDeployment(projected.agents, projected.bindings, signal())
+    f.config.refreshBotDeployments(projected.bindings.map(binding => binding.id))
+  }
+  await publish(); f.config.setBotDeployments(() => runtime.discord())
+  const location = (id: string, parentId: string, type = 11) => ({ id, parentId, type, name: `Post ${id}`, parentName: 'Forum parent', guildId: '100', guildName: 'Server', recipientId: null })
+  f.inspections.set('406', { location: location('406', '405') }); f.inspections.set('407', { location: location('407', '405') })
+  f.inspections.set('408', { location: location('408', '999') }); f.inspections.set('409', { location: location('409', '405', 12) })
+  await f.send('406', 'POST_A_PRIVATE_CONTEXT')
+  f.requests.length = 0
+  await f.send('407', 'POST_B_ONLY')
+  assert.doesNotMatch(JSON.stringify(f.requests), /POST_A_PRIVATE_CONTEXT/)
+  const a = f.sessions.getSessionState(f.id('406'))!, b = f.sessions.getSessionState(f.id('407'))!
+  assert.equal(a.channelBoundary?.bindingId, b.channelBoundary?.bindingId)
+  assert.notEqual(a.channelBoundary?.domainId, b.channelBoundary?.domainId)
+  assert.notEqual(a.channelBoundary?.epoch, b.channelBoundary?.epoch)
+  assert.equal(a.parent, undefined); assert.equal(b.parent, undefined)
+  assert.equal(runtime.definition('parent-support')?.bindings.length, 1, 'No per-post binding materialization')
+  await assert.rejects(f.input('408', 'Body claims parent 405'), /not assigned/)
+  await assert.rejects(f.input('409'), /not assigned|private|unsupported/)
+  const oldEpoch = b.channelBoundary!.epoch
+  files = assignChannelSource(files, source, { ...permission, enabled: false }, 'parent').files
+  await publish(); await assert.rejects(f.input('407'), /disabled|not assigned/)
+  files = assignChannelSource(files, source, permission, 'parent').files
+  await publish(); f.requests.length = 0
+  await f.send('407', 'POST_B_NEW_GENERATION')
+  assert.notEqual(f.sessions.getSessionState(f.id('407'))?.channelBoundary?.epoch, oldEpoch)
+  assert.doesNotMatch(JSON.stringify(f.requests), /POST_B_ONLY|POST_A_PRIVATE_CONTEXT/)
+})

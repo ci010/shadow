@@ -7,7 +7,7 @@
       <p v-for="issue in overview.deploymentIssues" :key="issue.agentId" role="status">{{ issue.agentId }} · {{ issue.message }}</p>
       <h4>{{ t('Saved assignments') }}</h4>
       <p v-if="!bindings.length">{{ t('No channels or DMs are assigned to this Bot.') }}</p>
-      <details v-for="binding in bindings" :key="binding.id"><summary>{{ bindingLabel(binding, []) }} · {{ binding.enabled ? t('Enabled') : t('Disabled') }}</summary><pre>{{ JSON.stringify(binding, null, 2) }}</pre></details>
+      <details v-for="binding in bindings" :key="binding.id"><summary>{{ bindingLabel(binding, []) }} · {{ binding.target.kind === 'channel' && binding.inheritThreads ? t('Parent channel rule') : t('Exact conversation') }} · {{ binding.enabled ? t('Enabled') : t('Disabled') }}</summary><p v-if="binding.target.kind === 'channel' && binding.inheritThreads">{{ t('One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed.') }}</p><pre>{{ JSON.stringify(binding, null, 2) }}</pre></details>
       <h4>{{ t('Agents') }}</h4>
       <details v-for="agent in agents" :key="agent.id"><summary>{{ agent.displayName }}</summary><pre>{{ agent.markdown }}</pre></details>
       <h4>{{ t('Knowledge') }}</h4>

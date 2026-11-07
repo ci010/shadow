@@ -29,6 +29,7 @@ export function channelInputSource(message: InboundMessage): InputRoute & { pare
 /** Receipt permission, used at ingress and again by the selected handler. Web
  * authentication is performed on the real Request before this in-process boundary. */
 export function assertChannelMessage(bots: BotInstanceStore, message: InboundMessage) {
+  if (message.channelInputGuard !== undefined) { if (typeof message.channelInputGuard !== 'function') throw new ChannelAdmissionError('Invalid arrival lease', 403); message.channelInputGuard() }
   const address = message.channelAddress
   if (message.channel === 'web') {
     if (address) throw new ChannelAdmissionError('Web cannot impersonate a Bot connection', 403)

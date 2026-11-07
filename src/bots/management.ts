@@ -1,3 +1,5 @@
+import { assignChannelSource } from './channel-assignment.ts'
+import { parseChannelSource, type ChannelSource } from '../channels/passive-contract.ts'
 import { lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -5,12 +7,13 @@ import type { Hono } from 'hono'
 import type { Tool, ToolResult } from '../tools/tool.ts'
 import type { FolderRegistry } from '../folders/registry.ts'
 import { BotDeployments } from './deployments.ts'
-import { bindingSubscription, botSubscriptionKey, subscribedBindings, parseBot, type BotDefinition } from './sdk.ts'
+import { parseBotPackage, bindingSubscription, botSubscriptionKey, subscribedBindings, parseBot, type BotDefinition } from './sdk.ts'
 import { DirectoryBots } from './runtime.ts'
 import { snapshotBotDirectory, sourceUsesGit } from './directory.ts'
 import { botProposalBaseline } from './format.ts'
 
 type Options = {
+  channelSource?: (sessionId: string) => ChannelSource
   inventory?:()=>unknown
   projectId: string; deployments: BotDeployments; runtime: DirectoryBots
   folders: Pick<FolderRegistry,'acquireAccess'|'requireAvailable'|'list'>
@@ -19,7 +22,9 @@ type Options = {
   pending: Map<string, unknown>
   publish: <T>(id:string,change:()=>Promise<T>, candidate?:BotDefinition) => Promise<T>; changed: (ids:string[]) => void
 }
-const proposal = z.object({action:z.literal('propose'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),expectedRevision:z.string().optional(),summary:z.string().trim().min(1).max(800)}).strict()
+const proposal = z.object({action:z.literal('propose'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),expectedRevision:z.string().optional(),sourceRevision:z.string().regex(/^[a-f0-9]{64}$/).optional(),summary:z.string().trim().min(1).max(800)}).strict()
+const sourceRequest = z.object({action:z.literal('source'),folderId:z.string().min(1).max(128),directory:z.string().max(1024).default(''),channelSessionId:z.string().max(8192).optional()}).strict()
+const assignment = proposal.extend({action:z.literal('assign'),scope:z.enum(['conversation','parent']).default('conversation'),channelSessionId:z.string().min(1).max(8192),sourceRevision:z.string().regex(/^[a-f0-9]{64}$/),bindingJson:z.string().max(128000)}).strict()
 
 function location(binding: ReturnType<typeof parseBot>['bindings'][number]): string {
   return binding.platform === 'discord' ? `Discord ${binding.target.kind === 'dm' ? 'DM '+binding.target.userId : binding.target.guildId+'/'+binding.target.channelId}` : `${binding.platform} ${binding.botInstanceId}/${binding.conversationId}`
@@ -69,8 +74,8 @@ function disclosedBindings(bot: BotDefinition): unknown[] {
 
 export function botPackageTool(options: Options): Tool {
   return {name:'bot_package',optIn:true,
-    description:'Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then asks one exact-content owner confirmation. Supply a concise user-facing summary. No review history or embedded source snapshots. Edit source and propose again to update.',
-    parameters:{type:'object',properties:{action:{type:'string',enum:['status','propose']},folderId:{type:'string'},directory:{type:'string'},expectedRevision:{type:'string'},summary:{type:'string'}},required:['action'],additionalProperties:false},
+    description:'Manage unified directory BOTs for QQ, Feishu and Discord. Read v:bots/overview for read-only state first; status remains a compatibility inventory of deployed revisions and registered folders. propose snapshots a local registered source directory, validates data without executing code, then asks one exact-content owner confirmation. Supply a concise user-facing summary. No secondary binding database or approval shortcut. Edit source and propose again to update. source reads sourceRevision and resolves a passive channelSessionId from trusted host metadata. assign prepares an exact source edit for the referenced channel using explicit bindingJson permissions (no target identity keys). It never writes files or deploys. Apply the returned match/content with the ordinary authorized write tool in source.folderId, then propose with sourceRevision=candidateRevision for exact-content owner confirmation. QQ/Feishu policy: {enabled,trigger,allowFrom,tools,readFolders?}. Discord policy: {enabled,trigger,participants:{everyone,userIds,roleIds},tools,readDomains,inheritThreads,manage}. Unassign sets enabled:false. scope defaults to conversation; scope:parent requires a referenced public Discord thread and explicit inheritThreads:true, producing one parent-channel rule for new child events, never shared child context or history replay. Reference alone never grants authority; old inbox messages are not replayed.',
+    parameters:{type:'object',properties:{action:{type:'string',enum:['status','source','assign','propose']},folderId:{type:'string'},directory:{type:'string'},expectedRevision:{type:'string'},summary:{type:'string'},scope:{type:'string',enum:['conversation','parent']},channelSessionId:{type:'string'},sourceRevision:{type:'string'},bindingJson:{type:'string'}},required:['action'],additionalProperties:false},
     execute:async(raw,context) => {
       context.signal.throwIfAborted()
       if (context.projectId !== options.projectId || context.channel !== 'web' || context.inputSource !== 'user' || context.admin !== true || context.isGroup || context.channelAddress || context.remoteWorkdir || context.memoryAccess || context.tools.executionMode !== 'session' || !options.canAuthor(context.sessionId)) throw new Error('Use an authenticated owner conversation in this Project.')
@@ -78,7 +83,10 @@ export function botPackageTool(options: Options): Tool {
         z.object({action:z.literal('status')}).strict().parse(raw)
         return JSON.stringify({projectId:options.projectId,deployments:options.deployments.list(),folders:options.folders.list(),inventory:options.inventory?.(),format:'BOT.md {id, config: bot.json, mode, Service model/temperature/maxTokens/thinking/reasoningEffort OR Personal agent} + JSON connection/subscriptions/bindings/tools/allowedModules/skills/read scopes + tool modules; whole legacy JSON behavior supported temporarily, mixed/duplicate fields rejected',receivePolicy:'Service QQ/Feishu bindings own trigger: mention (default) or all. Connection triggerMode is not inherited. Existing Service packages without trigger narrow to mention; explicitly configure all and confirm deployment if that behavior is intended.'})
       }
-      const input = proposal.parse(raw)
+      const input = raw.action === 'assign' ? assignment.parse(raw) : raw.action === 'source' ? sourceRequest.parse(raw) : proposal.parse(raw)
+      const target = 'channelSessionId' in input && input.channelSessionId ? options.channelSource?.(input.channelSessionId) : undefined
+      if ('channelSessionId' in input && input.channelSessionId && !target) throw new Error('Referenced passive channel session is unavailable in this Project')
+      if (target) parseChannelSource(target, 'channelSessionId' in input ? input.channelSessionId : undefined, options.projectId)
       const parts = input.directory ? input.directory.split('/') : []
       if (parts.some(part => !/^[a-zA-Z0-9_.-]+$/.test(part) || part === '.' || part === '..')) throw new Error('Choose a relative BOT directory without traversal.')
       const release = options.folders.acquireAccess()
@@ -90,6 +98,23 @@ export function botPackageTool(options: Options): Tool {
         if (lstatSync(path).isSymbolicLink()) throw new Error('BOT source symlinks are forbidden.')
         for (const part of parts) {path=join(path,part);if(lstatSync(path).isSymbolicLink())throw new Error('BOT source symlinks are forbidden.')}
         frozen = options.deployments.freeze(snapshotBotDirectory(path))
+        if (input.action === 'source') {
+          const parsed = parseBotPackage(frozen.files)
+          return JSON.stringify({ sourceRevision: frozen.revision, bot: parsed.bot.id, configPath: parsed.configPath, channelSource: target, note: 'Read-only origin evidence; choose permissions explicitly. Assignment and deployment require separate exact owner confirmation.' })
+        }
+        if (input.action === 'assign') {
+          if (frozen.revision !== input.sourceRevision) throw new Error('BOT source changed; inspect it again before assignment')
+          const activeId = parseBot(frozen.files).id
+          if (options.deployments.read(activeId)?.deployment.revision !== input.expectedRevision) throw new Error('BOT active revision changed. Read status before assigning.')
+          const updated = assignChannelSource(frozen.files, target!, JSON.parse(input.bindingJson), input.scope)
+          await options.validate(updated.files, context.signal)
+          context.signal.throwIfAborted()
+          return JSON.stringify({ status: 'assignment-prepared', scope: input.scope, source: { folderId: input.folderId, directory: input.directory }, channelSessionId: input.channelSessionId,
+            sourceRevision: frozen.revision, candidateRevision: options.deployments.freeze(updated.files).revision,
+            edit: { path: [...parts, updated.configPath].join('/'), match: frozen.files[updated.configPath], content: updated.content },
+            next: 'Use the ordinary authorized write tool for this registered source folder and exact match/content; then bot_package propose with sourceRevision=candidateRevision, the same expectedRevision and summary. Preparation is not a write, deployment, permission or history-replay grant.' })
+        }
+        if (input.sourceRevision && frozen.revision !== input.sourceRevision) throw new Error('BOT source changed; inspect it again before proposing')
         gitSource = sourceUsesGit(path)
       } finally {release()}
       const bot = parseBot(frozen.files)

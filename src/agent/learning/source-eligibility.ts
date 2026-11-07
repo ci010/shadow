@@ -13,7 +13,7 @@ export function isLearningSourceEligible(
 ): boolean {
   if (!state || state.parentSessionId || state.parentToolCallId) return false
   if (projectId && state.projectId && state.projectId !== projectId
-    || state.channelBoundary || managed(state.sessionId)
+    || state.channelSource || state.channelBoundary || managed(state.sessionId)
     || state.sessionId.startsWith('heartbeat:') || state.sessionId.startsWith('sleep:')) return false
   const source = resolveAutomationSession(state)?.config?.source
   return source !== 'learning' && source !== 'system'

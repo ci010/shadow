@@ -1,3 +1,5 @@
+import { buildUserChatMessage } from '../agent/message-builder.ts'
+import { parseChannelSource, passiveChannelId, PASSIVE_CHANNEL_PREFIX, type ChannelSource, type PassiveChannelMessage } from '../channels/passive-contract.ts'
 import { localFolderWorkdirRef } from './locality.ts'
 import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
 import { parseSessionFocus, selfSessionMetadata, sessionTopic } from './session-metadata.ts'
@@ -1440,6 +1442,51 @@ ${JSON.stringify(request)}`,
     return this.stopPromise
   }
 
+  private passiveInputIds = new Map<string, Set<string>>()
+  /** Trusted adapter host path only. No Agent/Session loop or reply is constructed. */
+  recordPassiveChannel(source: ChannelSource, message: PassiveChannelMessage, assertLive: () => void): Promise<DeliveryReceipt> {
+    const sessionId = passiveChannelId(source)
+    parseChannelSource(source, sessionId, this.deps.projectId)
+    return this.withSessionPreparation(sessionId, async () => {
+      assertLive()
+      if (this.stopped || this.deleting.has(sessionId)) throw new Error('Passive inbox unavailable')
+      if (message.channel !== source.platform || message.chatId !== source.conversationId || !message.messageId || !message.senderId) throw new Error('Passive input origin mismatch')
+      const address = message.channelAddress
+      if (address && (address.projectId !== source.projectId || address.botInstanceId !== source.botInstanceId || address.platform !== source.platform || address.conversationId !== source.conversationId)) throw new Error('Passive input address mismatch')
+      if ([message.messageId, message.senderId].some(value => value.length > 512 || /[\x00-\x1f\x7f]/.test(value))) throw new Error('Invalid passive message identity')
+      let state = this.sessionStates[sessionId]
+      if (!state) {
+        await this.buildSession(sessionId, undefined, { channelSource: source, mode: 'session' })
+        state = this.sessionStates[sessionId]
+      }
+      const old = parseChannelSource(state.channelSource, sessionId, this.deps.projectId)!
+      // Names refresh; immutable routing ancestry cannot silently drift.
+      for (const key of ['kind', 'parentId', 'guildId', 'recipientId', 'botUserId'] as const) if (old[key] !== source[key]) throw new Error('Passive origin ancestry changed')
+      const physicalId = SessionManager.currentPhysicalId(state)
+      let seen = this.passiveInputIds.get(physicalId)
+      if (!seen) {
+        seen = new Set<string>()
+        for await (const record of this.store.readSessionLog(physicalId)) if (typeof record.channel_input_id === 'string') seen.add(record.channel_input_id)
+        this.passiveInputIds.set(physicalId, seen)
+      }
+      if (seen.has(message.messageId)) return { status: 'accepted', disposition: 'filtered', sessionId, inputId: message.messageId, delivery: 'silent' }
+      {
+        const refs = message.attachmentReferences ?? []
+        const text = message.content.slice(0, 32000) + (refs.length ? '\n[Passive attachment references; not downloaded] ' + JSON.stringify(refs) : '')
+        const input = channelMessageInput({ ...message, content: text, media: undefined, silent: true, retry: undefined, delivery: undefined, admin: false })
+        if (input.kind !== 'message') throw new Error('Passive input must be a message')
+        const entry = { ...await buildUserChatMessage(input, this.workspace, this.workspace), timestamp: message.timestamp }
+        assertLive()
+        await this.store.appendMessages(physicalId, [{ role: entry.role, content: entry.content, name: entry.name, timestamp: message.timestamp, channel_input_id: message.messageId }])
+        seen.add(message.messageId)
+        this.deps.bus.emit('session.message.appended', { sessionId, physicalSessionId: physicalId, message: entry })
+      }
+      assertLive()
+      await this.saveState(sessionId, { ...state, channelSource: source, chatName: source.name ?? state.chatName, lastActivityAt: message.timestamp })
+      return { status: 'accepted', sessionId, inputId: message.messageId, delivery: 'silent' }
+    })
+  }
+
   /**
    * Legacy channel adapter. Directed internal producers use deliver instead.
    */
@@ -1462,7 +1509,9 @@ ${JSON.stringify(request)}`,
     return admit()
   }
   private deliverOwned(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig, beforeDispatch?: () => void): Promise<DeliveryReceipt> {
+    if (sessionId.startsWith(PASSIVE_CHANNEL_PREFIX)) return Promise.reject(new Error('Passive channel inbox is read-only. Configure a BOT from an owner Web chat.'))
     return this.withSessionPreparation(sessionId, async (): Promise<DeliveryReceipt> => {
+      if (input.source.kind === 'user') input.source.sender.channelInputGuard?.()
       this.deps.conversationPolicies?.authorize(sessionId, input)
       await this.reconcileChannelContext(sessionId)
       const personal = this.deps.conversationPolicies?.personal?.(sessionId)
@@ -1576,7 +1625,8 @@ ${JSON.stringify(request)}`,
       if (deliveryInput.kind === 'message' && deliveryInput.policy === 'silent' && deliveryInput.source.kind === 'user'
         && deliveryInput.source.sender.channelAddress && session instanceof Session) {
         try {
-          this.deps.conversationPolicies?.authorize(sessionId, input)
+          if (input.source.kind === 'user') input.source.sender.channelInputGuard?.()
+      this.deps.conversationPolicies?.authorize(sessionId, input)
           await this.updateChannelConversationName(sessionId, deliveryInput.source.sender)
           await session.archiveChannelInput(deliveryInput)
           this.deps.bus.emit('session.input.accepted', { sessionId, input: deliveryInput })
@@ -1602,7 +1652,8 @@ ${JSON.stringify(request)}`,
         }
       }
       try {
-        this.deps.conversationPolicies?.authorize(sessionId, input)
+        if (input.source.kind === 'user') input.source.sender.channelInputGuard?.()
+      this.deps.conversationPolicies?.authorize(sessionId, input)
         if (input.source.kind === 'user') {
           await this.updateChannelConversationName(sessionId, input.source.sender)
           if (input.kind === 'message') {
@@ -1675,10 +1726,12 @@ ${JSON.stringify(request)}`,
   }
 
   isManagedConversation(sessionId: string): boolean {
-    return this.deps.conversationPolicies?.managed(sessionId) ?? false
+    return sessionId.startsWith(PASSIVE_CHANNEL_PREFIX) || !!this.sessionStates[sessionId]?.channelSource || (this.deps.conversationPolicies?.managed(sessionId) ?? false)
   }
 
   authorizeConversationInput(sessionId: string, input: SessionInput): void {
+    if (sessionId.startsWith(PASSIVE_CHANNEL_PREFIX)) throw new Error('Passive channel inbox is read-only')
+    if (input.source.kind === 'user') input.source.sender.channelInputGuard?.()
     this.deps.conversationPolicies?.authorize(sessionId, input)
   }
 
@@ -1690,11 +1743,23 @@ ${JSON.stringify(request)}`,
   }
 
   private async reconcileChannelContext(sessionId: string): Promise<void> {
-    if (!this.deps.conversationPolicies?.boundary || !this.isManagedConversation(sessionId)) return
+    if (!this.deps.conversationPolicies || !this.isManagedConversation(sessionId)) return
     const policy = this.deps.conversationPolicies.resolve(sessionId)
     if (!policy) return
     const state = this.sessionStates[sessionId] ?? await this.getOrCreateState(sessionId)
-    const boundary = this.deps.conversationPolicies.boundary(policy, sessionId, state)
+    if (['qq', 'feishu'].includes(policy.binding.platform)) {
+      const generation = policy.generation ?? policy.revision
+      if (state.serviceGeneration === generation) return
+      const active = this.sessions[sessionId]
+      active?.stop(); await active?.completion
+      const timestamp = new Date().toISOString()
+      const next = { ...state, serviceGeneration: generation, segmentIndex: state.segmentIndex + 1, contextResetAt: timestamp, lastKnownTokens: 0, recovery: undefined, preloadTools: undefined }
+      await this.store.createSessionLog(physicalSessionId(next), [{ sessionId, physicalIdVersion: next.physicalIdVersion, previous_physical_id: physicalSessionId(state), timestamp, context_reset: true, service_generation: generation }])
+      await this.saveState(sessionId, next)
+      this.acceptedInputs.delete(sessionId)
+      return
+    }
+    const boundary = this.deps.conversationPolicies.boundary?.(policy, sessionId, state)
     if (!boundary || state.channelBoundary?.epoch === boundary.epoch) return
     const active = this.sessions[sessionId]
     active?.stop()
@@ -1724,6 +1789,11 @@ ${JSON.stringify(request)}`,
     Object.assign(state, next)
     this.acceptedInputs.delete(sessionId)
     this.deps.bus.emit('session.changed', { sessionId })
+  }
+
+  /** Fence service execution immediately; publication does not wait for a provider to honor abort. */
+  fenceConversationContexts(matches: (sessionId: string) => boolean): void {
+    for (const [id, session] of Object.entries(this.sessions)) if (matches(id)) session.stop()
   }
 
   async retireIdleConversationContexts(matches: (sessionId: string) => boolean): Promise<void> {
@@ -1861,6 +1931,7 @@ ${JSON.stringify(request)}`,
     sessionId: string,
     parent?: SessionParent,
     stateFields?: {
+      channelSource?: ChannelSource
       model?: string
       agentType?: string
       initiativeId?: string
@@ -1983,6 +2054,7 @@ ${JSON.stringify(request)}`,
       sessionId,
       physicalIdVersion: 2,
       projectId: this.deps.projectId,
+      channelSource: parseChannelSource(stateFields?.channelSource, sessionId.startsWith(PASSIVE_CHANNEL_PREFIX) ? sessionId : undefined, this.deps.projectId),
       ...topicFields,
       sessionKind: topicFields.sessionKind,
       previous_physical_id: null,
@@ -2012,6 +2084,7 @@ ${JSON.stringify(request)}`,
       physicalIdVersion: 2,
       projectId: this.deps.projectId,
       automaticWork: stateFields?.automaticWork ? automaticWorkSessionSchema.parse(stateFields.automaticWork) : undefined,
+      channelSource: parseChannelSource(stateFields?.channelSource, sessionId.startsWith(PASSIVE_CHANNEL_PREFIX) ? sessionId : undefined, this.deps.projectId),
       ...topicFields,
       sessionKind: topicFields.sessionKind,
       mode: stateFields?.mode ?? agent.defaultMode ?? 'session',
@@ -2683,6 +2756,7 @@ ${JSON.stringify(request)}`,
     return (await this.listHistoryStates()).filter(state => !state.retirement).map(state => ({
       ...(state.projectId ? { projectId: state.projectId } : {}),
       sessionId: state.sessionId,
+      channelSource: state.channelSource,
       topic: sessionTopic(state),
       name: state.topic ?? state.name ?? state.generatedTitle ?? state.chatName,
       focus: state.focus,
@@ -2808,6 +2882,7 @@ ${JSON.stringify(request)}`,
       ...(state.projectId ? { projectId: state.projectId } : {}),
       ...(state.completed === undefined ? {} : { completed: state.completed }),
       ...parseTopicSessionFields(state),
+      channelSource: state.channelSource,
       topic: sessionTopic(state),
       focus: state.focus,
       description: state.mode === 'task' || state.mode === 'call' ? state.description : undefined,
@@ -3024,12 +3099,13 @@ ${JSON.stringify(request)}`,
   }
 
   listSessions(): Array<
-    Pick<SessionState, 'projectId' | 'sessionId' | 'name' | 'topic' | 'focus' | 'description' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'createdBySessionId'
+    Pick<SessionState, 'channelSource' | 'projectId' | 'sessionId' | 'name' | 'topic' | 'focus' | 'description' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'createdBySessionId'
       | 'initiativeId' | 'automation' | 'agentType' | 'mode' | 'completed' | 'executionStatus'>
   > {
     return Object.values(this.sessionStates).filter(s => !s.retirement).map((s) => ({
       ...(s.projectId ? { projectId: s.projectId } : {}),
       sessionId: s.sessionId,
+      channelSource: s.channelSource,
       topic: sessionTopic(s),
       name: s.topic ?? s.name ?? s.generatedTitle ?? s.chatName,
       focus: s.focus,
@@ -3565,7 +3641,7 @@ ${JSON.stringify(request)}`,
           ? { parentPhysicalId: state.parent.physicalId, forkAt: state.parent.index }
           : undefined,
       )
-      : (await this.getHistory(sessionId, state.channelBoundary ? { shallow: true } : undefined)).messages
+      : (await this.getHistory(sessionId, state.channelBoundary || state.serviceGeneration ? { shallow: true } : undefined)).messages
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },

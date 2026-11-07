@@ -329,6 +329,9 @@ export class SessionTools extends Tools {
     if (!channelSupportsAsk(channel, sessionId)) this.askAvailable = false
   }
 
+  /** Host-only live output stamp; never populated by serialized configuration. */
+  assertSnapshot?: () => void
+  stampOutput?: (message: import('../bus/events.ts').OutboundMessage) => import('../bus/events.ts').OutboundMessage
   boundary?: import('../sessions/runtime-boundary.ts').RuntimeBoundary
   override getWorkGuard(): WorkToolGuard | undefined { return super.getWorkGuard() ?? this.base.getWorkGuard() }
   private borrowedOwner?: SessionTools
@@ -667,6 +670,7 @@ export class SessionTools extends Tools {
   }
 
   override getDefinitions(): ToolDefinition[] {
+    this.assertSnapshot?.()
     this.boundary?.assertCurrent()
     const scope = this.scope
     return this.base.getDefinitions().filter((d) =>

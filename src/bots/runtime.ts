@@ -114,7 +114,7 @@ export class DirectoryBots {
       // Receive configuration belongs to the BOT handler, not Session tool grants.
       const { tools, trigger: _trigger, ...data } = binding
       const agent = parseAgentFile(`---\n${stringify({...botInferenceSettings(bot),name:agentName(bot.id), defaultMode:'session', allowedTools:tools, allowedModules:bot.allowedModules})}---\n${bot.prompt}`, agentName(bot.id), this.deployments.runtimeDirectory(bot.id))
-      return [{ revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding), skills: [], agent: agentName(bot.id) }, agent,
+      return [{ generation: deployment.generation, revision: deployment.revision, binding: { ...data, enabled: data.enabled && bindingSubscribed(bot, binding), skills: [], agent: agentName(bot.id) }, agent,
         skillPrompts: bot.skills ?? [], tools: bot.tools.filter(tool => tools.includes(tool.name)) }]
     }))
     if (matches.length > 1) throw new Error('Conversation is owned by multiple BOT deployments.')
@@ -134,7 +134,7 @@ export class DirectoryBots {
         version:deployment.revision,publishedAt:new Date(0).toISOString() })
       for (const binding of selected) {
         const {platform: _platform,...data} = binding
-        bindings.push({...data,enabled:data.enabled && bindingSubscribed(bot,binding),agentId:id,epochRevision:parseInt(deployment.revision.slice(0,12),16)})
+        bindings.push({...data,enabled:data.enabled && bindingSubscribed(bot,binding),agentId:id,epochRevision:parseInt((deployment.generation ? digest(deployment.generation) : deployment.revision).slice(0,12),16)})
       }
     }
     if (new Set(bindings.map(binding => binding.id)).size !== bindings.length || new Set(bindings.map(binding => JSON.stringify([binding.botInstanceId,binding.target]))).size !== bindings.length) throw new Error('Discord conversation is owned by multiple BOT deployments.')

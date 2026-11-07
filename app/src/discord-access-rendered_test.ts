@@ -73,3 +73,22 @@ test('settings keeps read-only entry optional and old review deep links never ap
   assert.match(view.text(), /Customer support/)
   assert.ok(methods.every(method => method === 'GET'))
 })
+
+
+test('parent subscription UI shows one rule, not each persisted thread context', async t => {
+  const data = overview(), binding = data.bindings[0]!, paths: string[] = []
+  binding.inheritThreads = true
+  data.sessions = ['301', '302'].map(conversationId => ({ version: 1, sessionId: `bot:p:discord-bot:discord:${conversationId}`, bindingId: binding.id, revision: 'a'.repeat(64), agentId: binding.agentId, agentVersion: 'a'.repeat(64), epoch: randomUUID(), domainId: randomUUID(), startSegment: 0, startedAt: new Date().toISOString(), botInstanceId: binding.botInstanceId, botUserId: '900', conversationId, sources: [], location: { id: conversationId, name: `Hidden post ${conversationId}`, type: 11, guildId: '100', guildName: 'Server', parentId: '201', parentName: 'Parent forum', recipientId: null } }))
+  t.mock.method(globalThis, 'fetch', async (input: URL | RequestInfo, init?: RequestInit) => {
+    assert.equal(init?.method ?? 'GET', 'GET'); paths.push(new URL(String(input)).pathname)
+    return Response.json(data)
+  })
+  const view = mountBotUi(t, 'BotServiceStatus.vue', props)
+  await settleBotUi()
+  assert.equal((view.text().match(/Parent channel rule/g) ?? []).length, 1)
+  assert.match(view.text(), /Each thread keeps its own context/)
+  assert.match(view.text(), /Child threads are not listed as separate configurations/)
+  assert.doesNotMatch(view.text(), /Hidden post 301|Hidden post 302/)
+  assert.equal(data.sessions.length, 2, 'Configuration presentation does not delete persisted histories')
+  assert.deepEqual(paths, ['/projects/p/api/integrations/discord'])
+})

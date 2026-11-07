@@ -4138,5 +4138,14 @@
   "Configure BOT behavior and bindings in chat using BOT.md and bot.json in the registered source folder. This page only shows deployment status; it does not maintain a second binding configuration.": "在对话中通过已注册源目录中的 BOT.md 和 bot.json 配置 BOT 行为与绑定。本页仅展示部署状态，不维护第二份绑定配置。",
   "Configure BOTs in chat": "在对话中配置 BOT",
   "In chat, describe the BOT and source folder to configure. Review the exact content and permissions before deployment. For credentials, an authorized owner Web chat can open a private connection card; never paste secrets into chat or ordinary ask replies. QQ and Discord chats cannot open this private card.": "在对话中说明要配置的 BOT 和源目录，并在部署前审核精确内容与权限。需要凭据时，已授权的拥有者 Web 对话可打开私密连接卡；切勿将秘密粘贴到聊天或普通提问回复中。QQ 和 Discord 对话无法打开此私密卡。",
-  "Manage platform connections": "管理平台连接"
+  "Manage platform connections": "管理平台连接",
+  "Passive channel inbox": "被动频道收件箱",
+  "Received messages are stored here without invoking an Agent, tools or replies. Only messages delivered by the platform can be recorded. Attachments are metadata references, not downloaded files.": "收到的消息仅在此持久保存，不会触发智能体、工具或回复。只能记录平台实际投递的消息。附件仅保存元数据引用，不下载文件。",
+  "Channel source": "频道来源",
+  "In an owner Web chat, type @ and select this inbox to assign a BOT. The reference identifies the target, not permission. BOT files and exact deployment approval still control execution. Old inbox history is never replayed automatically; unassigning stops inference, not receipt.": "在拥有者 Web 对话中输入 {'@'} 并选择此收件箱，即可为其指定 BOT。引用只标识目标，不授予权限；执行仍由 BOT 文件与精确部署批准控制。旧收件历史不会自动回放；解绑只停止推理，不停止收件。",
+  "Open owner chat": "打开拥有者对话",
+  "{name} · passive inbox": "{name} · 被动收件箱",
+  "Parent channel rule": "父频道规则",
+  "Exact conversation": "精确会话",
+  "One parent-channel subscription covers new permitted public thread and forum-post events. Each thread keeps its own context. Child threads are not listed as separate configurations; existing history is not replayed.": "一个父频道订阅覆盖该频道下新到达且获准接收的公开 thread 和论坛帖子事件。每个 thread 保持独立上下文。子 thread 不会逐项列为配置，也不会回放已有历史。"
 }
