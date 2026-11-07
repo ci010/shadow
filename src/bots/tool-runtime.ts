@@ -17,6 +17,7 @@ export interface ExecuteBotToolOptions {
   /** Recheck current binding/identity/revision before execution AND every callback. */
   authorize(request: { bot: BotDefinition; tool: BotDefinition['tools'][number]; args: Record<string, unknown> }, signal: AbortSignal): void | Promise<void>
   callModule?(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
+  host?(operation: 'wake' | 'watermark' | 'messages' | 'work' | 'send', input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
   services?(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
   channel?(operation: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
   storage?(operation: 'get' | 'set' | 'delete', input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
@@ -34,6 +35,7 @@ const rpc = async (kind, name, input = {}) => {
   catch { throw new Error('Bot capability failed'); }
 };
 const ctx = Object.freeze({
+  ...Object.fromEntries(['wake', 'watermark', 'messages', 'work', 'send'].map(name => [name, Object.freeze({call: input => rpc('host', name, input)})])),
   services: Object.freeze({call: (name, input) => rpc('services', name, input)}),
   channel: Object.freeze({call: (name, input) => rpc('channel', name, input)}),
   storage: Object.freeze({get: key => rpc('storage', 'get', {key}), set: (key, value) => rpc('storage', 'set', {key, value}), delete: key => rpc('storage', 'delete', {key})}),
@@ -97,7 +99,7 @@ async function bundle(files: Record<string, string>, tool: BotDefinition['tools'
   return code
 }
 
-const requestSchema = z.object({ kind: z.enum(['services', 'channel', 'storage', 'log']), name: z.string().min(1).max(128), input: z.record(z.unknown()) }).strict()
+const requestSchema = z.object({ kind: z.enum(['host', 'services', 'channel', 'storage', 'log']), name: z.string().min(1).max(128), input: z.record(z.unknown()) }).strict()
 const keySchema = z.string().min(1).max(256)
 
 /** Host callbacks implement capability-scoped operations, not raw clients,
@@ -133,6 +135,11 @@ export async function executeBotTool(options: ExecuteBotToolOptions): Promise<un
         return await options.callModule(name, input, signal)
       }
       const request = requestSchema.parse(input)
+      if (request.kind === 'host' && options.host) {
+        const operation = z.enum(['wake', 'watermark', 'messages', 'work', 'send']).parse(request.name)
+        if (!bot.hostCapabilities?.includes(operation)) throw new Error('BOT host operation is not approved.')
+        return await options.host(operation, request.input, signal)
+      }
       if (request.kind === 'services' && options.services) return await options.services(request.name, request.input, signal)
       if (request.kind === 'channel' && options.channel) return await options.channel(request.name, request.input, signal)
       if (request.kind === 'storage' && options.storage) {

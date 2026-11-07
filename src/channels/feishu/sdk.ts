@@ -252,6 +252,8 @@ async function apiRequest<T = unknown>(
     body?: unknown
     binary?: boolean
     signal?: AbortSignal
+    /** Trusted host authorization recheck after asynchronous token acquisition. */
+    beforeRequest?: () => void
   } = {},
 ): Promise<T> {
   opts.signal?.throwIfAborted()
@@ -273,6 +275,8 @@ async function apiRequest<T = unknown>(
     reqBody = JSON.stringify(opts.body)
   }
 
+  opts.beforeRequest?.()
+  opts.signal?.throwIfAborted()
   const resp = await fetch(url, { method, headers, body: reqBody, signal: opts.signal })
   if (!resp.ok) {
     const { bodyText, apiCode, apiMsg, requestId } = await parseApiError(resp)
@@ -402,6 +406,8 @@ class Client {
       create: (req: {
         params: { receive_id_type: string }
         data: { receive_id: string; msg_type: string; content: string }
+        signal?: AbortSignal
+        beforeRequest?: () => void
       }): Promise<ImMessageCreateResp> =>
         apiRequest<ImMessageCreateResp>(
           this._tokens,
@@ -410,6 +416,8 @@ class Client {
           {
             params: { receive_id_type: req.params.receive_id_type },
             body: req.data,
+            signal: req.signal,
+            beforeRequest: req.beforeRequest,
           },
         ),
 
@@ -417,6 +425,8 @@ class Client {
       reply: (req: {
         path: { message_id: string }
         data: { msg_type: string; content: string; reply_in_thread?: boolean }
+        signal?: AbortSignal
+        beforeRequest?: () => void
       }): Promise<ImMessageCreateResp> =>
         apiRequest<ImMessageCreateResp>(
           this._tokens,
@@ -424,7 +434,7 @@ class Client {
           `/open-apis/im/v1/messages/${
             encodeURIComponent(req.path.message_id)
           }/reply`,
-          { body: req.data },
+          { body: req.data, signal: req.signal, beforeRequest: req.beforeRequest },
         ),
 
       /** Update (patch) the content of an existing message. */

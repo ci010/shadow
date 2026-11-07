@@ -309,9 +309,14 @@ export class Tools {
  */
 export class SessionTools extends Tools {
   inferenceRequestLimit?: number
-  private trustedLimits?: { allowedTools: readonly string[]; toolCalls: number; argumentBytes: number }
+  private trustedLimits?: { allowedTools?: readonly string[]; toolCalls: number; argumentBytes: number }
   private trustedCalls = 0
   private trustedBytes = 0
+  /** Apply host ceilings without widening or replacing the role's tool permissions. */
+  setTrustedBudgets(limits: { inferenceRequests: number; toolCalls: number; argumentBytes: number }): void {
+    this.trustedLimits = { toolCalls: limits.toolCalls, argumentBytes: limits.argumentBytes }
+    this.inferenceRequestLimit = limits.inferenceRequests
+  }
   setTrustedLimits(limits: { allowedTools: readonly string[]; inferenceRequests: number; toolCalls: number; argumentBytes: number }): void {
     this.trustedLimits = { ...limits, allowedTools: [...limits.allowedTools] }
     this.inferenceRequestLimit = limits.inferenceRequests
@@ -543,8 +548,8 @@ export class SessionTools extends Tools {
   }
 
   executionDenial(name: string, args: Record<string, unknown>): string | undefined {
-    if (this.trustedLimits && !this.trustedLimits.allowedTools.includes(name)) return this.rejectExecution("Tool is outside the trusted one-shot allowlist.")
-    if (this.trustedLimits && name === 'import_tool' &&
+    if (this.trustedLimits?.allowedTools && !this.trustedLimits.allowedTools.includes(name)) return this.rejectExecution("Tool is outside the trusted one-shot allowlist.")
+    if (this.trustedLimits?.allowedTools && name === 'import_tool' &&
       (typeof args.source !== 'string' || !args.source.startsWith('v:tools/') ||
         !this.trustedLimits.allowedTools.includes(args.source.slice('v:tools/'.length)) ||
         args.args !== undefined || args.server !== undefined)) {

@@ -1,3 +1,5 @@
+import { localFolderWorkdirRef } from './locality.ts'
+import { automaticWorkSessionSchema } from '../cron/work-dispatch-contract.ts'
 import { parseSessionFocus, selfSessionMetadata, sessionTopic } from './session-metadata.ts'
 import { UserPresence, resolveUserWaitPolicy, type UserWaitPolicy } from './presence.ts'
 import { createTaskLifecycle, transitionTaskLifecycle, type TaskLifecycleAction } from './task-lifecycle.ts'
@@ -1050,6 +1052,10 @@ ${JSON.stringify(request)}`,
     await startup.measure('session-migrate', async () => {
       for (const state of Object.values(this.sessionStates)) {
         const persisted = JSON.stringify(state)
+        if (state.automaticWork) {
+          state.automaticWork = automaticWorkSessionSchema.parse(state.automaticWork)
+          if (state.mode !== 'session') throw new Error('Automatic Work executor must be durable')
+        }
         const historicalAutomation = resolveAutomationSession(state)
         if (historicalAutomation?.config?.source !== 'system') state.automation ??= historicalAutomation
         state.automationVersion = 1
@@ -1441,8 +1447,21 @@ ${JSON.stringify(request)}`,
     await this.deliver(deriveSessionId(msg), channelMessageInput(msg), llm)
   }
 
+  private automaticWorkAdmission?: (sessionId: string, input: SessionInput, admit: (beforeDispatch?: () => void) => Promise<DeliveryReceipt>) => Promise<DeliveryReceipt>
+  /** Host controller owns all automatic executor admissions, including ordinary resume/replies. */
+  setAutomaticWorkAdmission(handler: NonNullable<SessionManager['automaticWorkAdmission']>): void {
+    this.automaticWorkAdmission = handler
+  }
   /** Resolves after preparation and admission, never after model completion. */
   deliver(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig): Promise<DeliveryReceipt> {
+    const admit = (beforeDispatch?: () => void) => this.deliverOwned(sessionId, input, llm, beforeDispatch)
+    if (this.sessionStates[sessionId]?.automaticWork) {
+      if (!this.automaticWorkAdmission) return Promise.reject(new Error('Automatic Work admission controller is unavailable'))
+      return this.automaticWorkAdmission(sessionId, input, admit)
+    }
+    return admit()
+  }
+  private deliverOwned(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig, beforeDispatch?: () => void): Promise<DeliveryReceipt> {
     return this.withSessionPreparation(sessionId, async (): Promise<DeliveryReceipt> => {
       this.deps.conversationPolicies?.authorize(sessionId, input)
       await this.reconcileChannelContext(sessionId)
@@ -1468,6 +1487,10 @@ ${JSON.stringify(request)}`,
       }
       if (resume && (state?.recovery?.pendingToolCalls ?? 0) > 0 && resume.acknowledgeToolReplay !== true) {
         throw new SessionResumeError('Confirm that unfinished tools may run again and repeat side effects. Remote shells only reconcile saved execution records.')
+      }
+      if (state?.automaticWork && (!state.folderId || !state.workdir || state.workdir.nodeId !== LOCAL_NODE_ID
+        || state.workdir.workdirId !== localFolderWorkdirRef(state.folderId).workdirId) && !(input.kind === 'control' && input.command.type === 'cancel')) {
+        throw new Error('Automatic Work has no prepared isolated Workspace; source-directory fallback is prohibited')
       }
       const ownerId = delegationOwner(state)
       const sourceSessionId = input.source.kind === 'session' ? input.source.sessionId
@@ -1605,6 +1628,15 @@ ${JSON.stringify(request)}`,
           await this.store.saveState(sessionId, { ...state, task: next })
           state.task = next
         }
+        if (state?.automaticWork && !(deliveryInput.kind === 'control' && deliveryInput.command.type === 'cancel')) {
+          const record = this.alignment?.get(state.automaticWork.key)
+          if (!record || record.paused || ['done', 'cancelled'].includes(record.workflow?.status ?? '')
+            || record.workflow?.assignee !== sessionId || record.automaticExecution?.sessionId !== sessionId
+            || record.workflow.assignmentRevision !== record.automaticExecution.assignmentRevision) {
+            throw new Error('Automatic Work changed, paused, cancelled or reassigned before admission')
+          }
+        }
+        beforeDispatch?.()
         session.dispatch(deliveryInput, resolveInferenceSettings(
           config, this.deps.conversationPolicies?.resolve(sessionId)?.agent ?? (personal ? this.deps.agentTypes.resolve(personal.agent) : undefined), state?.config,
         ))
@@ -1791,6 +1823,19 @@ ${JSON.stringify(request)}`,
     }
   }
 
+  isWaitingForExternalExecution(sessionId: string): boolean {
+    return !!this.deps.hasPendingExternalExecution?.(sessionId)
+      || this.deps.backgroundTasks.listTasks(sessionId).some(task => task.status === 'running' || task.status === 'cancelling')
+  }
+
+  /** Queued input, preparation, maintenance and external waits are not idle/crashed. */
+  isSessionBusy(sessionId: string): boolean {
+    const session = this.sessions[sessionId]
+    return this.preparations.has(sessionId) || !!session && (!('quiescent' in session) || !session.quiescent)
+      || !!this.inputs.get(sessionId) || !!this.yields.get(sessionId) || this.isWaitingForCall(sessionId)
+      || this.isWaitingForExternalExecution(sessionId)
+  }
+
   getSessionRecovery(sessionId: string): SessionRecovery | undefined {
     const session = this.sessions[sessionId]
     if (this.preparations.has(sessionId) || (session && (!('quiescent' in session) || !session.quiescent))) return
@@ -1825,6 +1870,7 @@ ${JSON.stringify(request)}`,
       name?: string
       description?: string
       focus?: string
+      automaticWork?: SessionState['automaticWork']
       /** Host-authored setup record; persisted without scheduling an inference. Never guest supplied. */
       setupInstructions?: string
       preloadTools?: Record<string, string[]>
@@ -1965,6 +2011,7 @@ ${JSON.stringify(request)}`,
       ownershipVersion: 2,
       physicalIdVersion: 2,
       projectId: this.deps.projectId,
+      automaticWork: stateFields?.automaticWork ? automaticWorkSessionSchema.parse(stateFields.automaticWork) : undefined,
       ...topicFields,
       sessionKind: topicFields.sessionKind,
       mode: stateFields?.mode ?? agent.defaultMode ?? 'session',
@@ -2125,6 +2172,21 @@ ${JSON.stringify(request)}`,
       `[session-manager] Started session ${sessionId} (${opts.agentType})`,
     )
     return sessionId
+  }
+
+  /** Bind only a host-created automatic executor that has never admitted work. */
+  async bindAutomaticWorkWorkspace(sessionId: string, folderId: string): Promise<void> {
+    await this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state?.automaticWork || state.mode !== 'session' || state.lastActivityAt || this.acceptedInputs.has(sessionId)
+        || this.sessions[sessionId] || this.preparations.has(sessionId)) throw new Error('Automatic executor locality is already sealed')
+      if (!this.deps.ownsFolder?.(folderId)) throw new Error('Workspace belongs to another Project')
+      const next = { ...state, folderId, workdir: localFolderWorkdirRef(folderId) }
+      if (!this.deps.ownsWorkdir?.(next.workdir)) throw new Error('Isolated Workdir belongs to another Project')
+      this.deps.assertSessionFolder?.(next)
+      await this.store.saveState(sessionId, next)
+      Object.assign(state, next)
+    })
   }
 
   // ── Child session tracking (persisted on parent state) ─────────────
@@ -2832,12 +2894,15 @@ ${JSON.stringify(request)}`,
         }
       }
       const attention = record.notes.attention
-      if (attention && !attention.reviewed && (!previous?.notes?.attention || previous.notes.attention.reviewed) && authority.manager) {
+      const hostAutomaticBlock = record.automaticExecution?.stage === 'blocked' && attention?.by === record.automaticExecution.sessionId
+      if (!hostAutomaticBlock && attention && !attention.reviewed && (!previous?.notes?.attention || previous.notes.attention.reviewed) && authority.manager) {
         recipients.set(authority.manager, `A branch needs an impact assessment (${attention.kind}): ${attention.summary}\nResolve within existing authority or ask at the affected ancestor; do not forward raw implementation questions.`)
       }
       for (const [target, reason] of recipients) {
         const state = this.getSessionState(target)
         if (target === record.changedBy || !state) continue
+        // The program dispatcher owns the first admission and its crash barrier.
+        if (target === record.automaticExecution?.sessionId && record.automaticExecution.stage === 'claimed') continue
         if (!previous?.workflow?.assignee && state.topicRequestHash && state.executionStatus === 'pending' && !state.lastActivityAt) continue
         this.assertFolderAccess(target)
         await this.deliver(target, {
@@ -3516,8 +3581,10 @@ ${JSON.stringify(request)}`,
       blockedTools,
       resolvedAgentType.allowedModules,
     )
+    const automatic = state.automaticWork ? automaticWorkSessionSchema.parse(state.automaticWork) : undefined
     const limits = this.executionLimits.get(sessionId)
     if (limits) sessionTools.setTrustedLimits(limits)
+    else if (automatic) sessionTools.setTrustedBudgets(automatic.limits)
     if (!conversationPolicy && !this.calls.has(sessionId)) sessionTools.setExecutionScope(state.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
     const executionPolicy = this.deps.tools.getExecutionPolicy()
     if (executionPolicy) sessionTools.setExecutionPolicy(executionPolicy)

@@ -27,6 +27,16 @@ Unknown effort metadata is not evidence of support. Curated guidance is a starti
 heuristic, not a benchmark, cost/latency ranking or guarantee of task quality.
 
 
+## Automatic Work dispatch
+
+The standard `default:work-dispatch-v1` automation performs a program-only scan
+(default `every 60s`) and calls no model when there is no eligible Work. Configure
+its one registered local repository Workspace before enabling it. Claims are
+atomic, executors use isolated real Git worktrees, and blocked/failed executions
+retain their assignee and recovery context. See [Automatic Work dispatch](work-auto-dispatch.md)
+for the authorized configuration/recovery API, capacity and isolation guarantees,
+normal waiting versus failure, and unverified live GitHub/remote boundaries.
+
 ## Learning outcomes and recovery
 
 Learning aims to improve future decisions, not accumulate a transcript-shaped
@@ -1224,3 +1234,33 @@ for complete REST/HTML authoring examples, virtual views/reload/create/subscribe
 security, pagination/dedup bounds and inbox-acceptance reliability limitations.
 No arbitrary browser/JS-site support or exactly-once claim; fixture tests do not
 verify live sources.
+
+### Derived Workspaces
+
+Import `workspace_create` from `v:tools/workspace_create`, then invoke it with
+`source` (a registered Workspace selector in the current Project) and `branch`
+(a local branch or existing remote-tracking ref). Optional fields are `description`,
+`workKey`, `name` (safe directory prefix) and `idempotencyKey`. Reuse the same key
+and parameters after an interrupted creation; conflicting requests fail closed.
+The tool is owner-session only and does not change the current session's Workspace.
+
+The shared `DerivedWorkspaces.createDerivedWorkspace` service creates an independent
+Git branch at a resolved commit in a uniquely named directory **beside** the source
+repository, then registers it through the Project's existing Workspace registry.
+Success includes the Workspace ID, source identity/path, actual path, base branch
+and commit, independent branch, and visible description. User descriptions retain
+the generated source/worktree identity. Optional Work association is recorded in
+the creation receipt and description; it neither claims Work nor changes assignees.
+No dirty files are copied, no source checkout/reset occurs, and no fetch/pull runs.
+Remote execution and LayerFS are not implemented by this backend.
+
+Automatic Work admission calls the same service and binds the returned Workspace
+to its executor. Old Project-Home `work-executions` worktrees remain in place and
+retain their original identity-verification recovery path. New worktrees use the
+beside layout. Failed registration retains both the worktree and creation record
+for retry, rather than deleting user resources. Concurrent host instances fail
+closed on a SQLite OS-backed admission lock, released automatically when the host
+exits. Journals are atomically published with synced file contents. Partial failures
+report a recovery idempotency key even when none was supplied. An interrupted Git
+checkout with unknown completion is retained for inspection and never registered
+as a completed creation; no retry resets or deletes it.
