@@ -9,8 +9,6 @@ import type { Tool, ToolParameters } from './tool.ts'
 const readSchema = z.object({
   name: z.string().min(1),
   path: z.string().min(1).optional(),
-  offset: z.number().int().nonnegative().default(0),
-  limit: z.number().int().min(1).max(8000).default(8000),
 }).strict()
 const saveSchema = z.object({
   name: z.string().min(1),
@@ -49,17 +47,17 @@ export class SkillEditing {
     this.baselines.set(context.tools, entries)
   }
 
-  read(raw: Record<string, unknown>, context: ExecutionContext): string {
+  read(raw: Record<string, unknown>, context: ExecutionContext, continuation = false): string {
     this.authorize(context)
     const args = readSchema.parse(raw)
     const snapshot = this.options.store.read(args.name, context.admin)
+    const baseline = this.baselines.get(context.tools)?.get(args.name)
+    if ((continuation || args.path) && baseline !== undefined && baseline !== snapshot.revision) {
+      throw new Error('Skill changed between reads. Reread v:skills/.raw/<name> and merge the current content before saving.')
+    }
     if (snapshot.source === 'missing') {
       this.remember(context, args.name, null)
       return JSON.stringify({ name: args.name, source: 'missing', files: [], message: 'Create with skill_save, including SKILL.md and any tool sources in one save.' })
-    }
-    const baseline = this.baselines.get(context.tools)?.get(args.name)
-    if ((args.offset > 0 || args.path) && baseline !== undefined && baseline !== snapshot.revision) {
-      throw new Error('Skill changed between reads. Restart skill_read without path/offset and merge the current content before saving.')
     }
     const path = args.path ?? 'SKILL.md'
     if (!args.path && !Object.hasOwn(snapshot.files, 'SKILL.md')) {
@@ -74,17 +72,22 @@ export class SkillEditing {
     let content: string
     try { content = new TextDecoder('utf-8', { fatal: true }).decode(snapshot.files[path]) }
     catch (error) { throw new Error('This Skill resource is not UTF-8 text and cannot be edited with skill_save.', { cause: error }) }
-    if (args.offset > content.length) throw new Error('Offset exceeds the Skill resource length.')
-    const end = Math.min(content.length, args.offset + args.limit)
     this.remember(context, args.name, snapshot.revision)
     return JSON.stringify({
       name: args.name, source: snapshot.source, files: Object.keys(snapshot.files).sort(),
-      path, content: content.slice(args.offset, end), offset: args.offset,
-      totalCharacters: content.length, nextOffset: end < content.length ? end : null,
+      path, content,
       message: snapshot.source === 'builtin'
         ? 'Built-in Skills are read-only. Create a differently named Project Skill to adapt this content.'
         : 'Edit with skill_save. The host remembers this read for conflict detection; no Change, revision argument, or publication is needed.',
     })
+  }
+
+  /** Raw editing view: normal read handles line paging; no Skill activation. */
+  readRaw(subpath: string, context: ExecutionContext, continuation = false): string {
+    const [name, ...parts] = subpath.split('/')
+    const snapshot = JSON.parse(this.read({ name, ...(parts.length ? { path: parts.join('/') } : {}) }, context, continuation))
+    const { content, ...metadata } = snapshot
+    return JSON.stringify(metadata, null, 2) + (content === undefined || content === null ? '' : `\n\n${content}`)
   }
 
   async save(raw: Record<string, unknown>, context: ExecutionContext): Promise<string> {
@@ -93,7 +96,7 @@ export class SkillEditing {
     const expected = this.baselines.get(context.tools)?.get(args.name) ?? null
     const current = this.options.store.read(args.name, context.admin)
     if (current.source !== 'missing' && !this.baselines.get(context.tools)?.has(args.name)) {
-      throw new Error('Read the existing Skill with skill_read before editing it. No files were saved.')
+      throw new Error('Read the existing Skill with read on v:skills/.raw/<name> before editing it. No files were saved.')
     }
     const result = await this.options.store.save(args.name, args.files, expected, context.admin, context.signal)
     this.remember(context, args.name, result.revision)
@@ -105,30 +108,10 @@ export class SkillEditing {
   }
 }
 
-export class SkillReadTool implements Tool {
-  readonly name = 'skill_read'
-  readonly optIn = true
-  readonly description = 'Read raw shared Skill files for editing without activating tools. Omit path for SKILL.md and a file listing. Remembers the edit baseline internally. Use normal read on v:skills/<name> to use a Skill.'
-  readonly parameters: ToolParameters = {
-    type: 'object',
-    properties: {
-      name: { type: 'string', description: 'Skill directory name.' },
-      path: { type: 'string', description: 'Optional exact relative file path from the listing; defaults to SKILL.md.' },
-      offset: { type: 'integer', description: 'Character offset, default 0.' },
-      limit: { type: 'integer', description: 'Characters per read, 1-8000.' },
-    },
-    required: ['name'], additionalProperties: false,
-  }
-  constructor(private editing: SkillEditing) {}
-  async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
-    return this.editing.read(args, context)
-  }
-}
-
 export class SkillSaveTool implements Tool {
   readonly name = 'skill_save'
   readonly optIn = true
-  readonly description = 'Create or edit a shared Project Skill directly, including its tool scripts. Send all related file edits in one save; null deletes a resource. Read existing Skills with skill_read first. Validates and conflict-checks without a Change or publication. No history backup, new execution grants or Bot deployment.'
+  readonly description = 'Create or edit a shared Project Skill directly, including its tool scripts. Send all related file edits in one save; null deletes a resource. Read existing Skills with read on v:skills/.raw/<name> first. Validates and conflict-checks without a Change or publication. No history backup, new execution grants or Bot deployment.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {

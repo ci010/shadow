@@ -1003,7 +1003,9 @@ its module exports `async function run(args)`. Later invocations validate the
 declared arguments. Reread after editing a skill to refresh its declarations;
 search or bundled-resource reads alone do not activate them.
 
-Project Skill edits use the scoped `skill_read` and `skill_save` tools. Read an
+Project Skill edits use `read` on `v:skills/.raw/<name>` and the scoped
+`skill_save` tool. Raw reads do not activate tools; append a relative resource
+path to inspect a file, and use normal line-based offset/limit for paging. Read an
 existing skill before saving so revision checks protect concurrent changes;
 built-ins are read-only. Saving does not grant tool permissions or publish a
 restricted conversation agent. Script execution is **not an OS sandbox**. See

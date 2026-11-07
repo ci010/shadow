@@ -27,7 +27,7 @@ test('one-shot role and common guidance omit unavailable operation tutorials', a
       const prompt = String(await guidelineProvider().getPromptSection({ ...ctx(mode), agent }))
       assert.doesNotMatch(prompt, /<!-- capability:|### Shared work notes|`work update`|`work review`|Use session for permitted durable peers|### Coordinator Capability Boundary/)
       if (mode === 'call') {
-        assert.doesNotMatch(prompt, /### Delegation|## Execution and Delegation|## Task Assessment|### Questions and decisions|### Messaging|Use `skill_read`\/`skill_save`|prefer `task`/)
+        assert.doesNotMatch(prompt, /### Delegation|## Execution and Delegation|## Task Assessment|### Questions and decisions|### Messaging|v:skills\/\.raw\/|prefer `task`/)
       }
     }
   }

@@ -6,7 +6,7 @@ import type { ExecutionContext } from './context.ts'
 
 const names = ['read', 'write', 'exec', 'ask', 'reply', 'message', 'cancel', 'subagent',
   'session', 'work', 'initiative', 'continuation', 'cron', 'cron_add', 'cron_list', 'cron_remove',
-  'event_provider', 'event_subscribe', 'skill_read', 'skill_save']
+  'event_subscribe', 'event_provider', 'skill_save']
 
 for (const mode of ['session', 'task', 'call'] as ExecutionMode[]) {
   test(`${mode}: mode ceiling applies to definitions, static execution, dynamic import and gateway`, async () => {

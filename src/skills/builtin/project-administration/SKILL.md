@@ -78,7 +78,7 @@ ceiling; platform administrator status is not Shadow ownership. Participant
 restrictions control invocation, not who can read channel replies. Scoped
 conversation memory and learning never become global by sharing a BOT.
 
-Shared runtime Skill maintenance uses `skill_read` and `skill_save` after reading
+Shared runtime Skill maintenance uses `read` on `v:skills/.raw/<name>` and `skill_save` after reading
 `v:skills/tool-operations`. Editing repository source Skills is a code change,
 not a runtime shared Skill update. Neither operation executes scripts or deploys
 Bots. `agent_tool_test` remains a bounded synthetic script test helper, not a
