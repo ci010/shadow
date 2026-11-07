@@ -61,7 +61,7 @@ test('settings keeps read-only entry optional and old review deep links never ap
     if (String(url).endsWith('/api/bot-package')) return Response.json({ pending: [], deployments: [] })
     return Response.json(overview())
   })
-  const view = mountBotUi(t, 'ChannelsView.vue', { ...props, active: true, available: true, requestedReviewId: randomUUID(), reviewBotId: bot.id })
+  const view = mountBotUi(t, 'ChannelsView.vue', { ...props, active: true, available: true, section: 'connections', requestedReviewId: randomUUID(), reviewBotId: bot.id })
   await settleBotUi()
   assert.match(view.text(), /retired Discord configuration workflow. No change has been approved or published/)
   assert.doesNotMatch(view.text(), /Approve and apply|Channels & people|Review new domain/)
