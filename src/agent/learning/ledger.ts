@@ -35,7 +35,7 @@ const batchSchema = z.object({
   inputEvents: z.array(eventSchema), events: z.array(eventSchema), artifacts: z.array(artifactSchema),
   attempts: z.array(z.string()), state: z.enum(['pending', 'running', 'done']),
   excluded: z.string().optional(),
-  retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative() }).optional(),
+  retry: z.object({ attempts: z.number().int().nonnegative(), notBefore: z.number().nonnegative(), paused: z.string().optional() }).optional(),
   proposal: outcomeSchema.optional(), evaluated: z.array(z.string()), error: z.string().optional(),
 }).strict()
 export type LearningBatch = z.infer<typeof batchSchema>
@@ -111,7 +111,7 @@ export class LearningLedger {
   }
   pending(pipeline: Pipeline, dueOnly = false): LearningBatch | undefined {
     return structuredClone(this.state.batches.filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded
-      && (!dueOnly || batch.state === 'running' || (batch.retry?.notBefore ?? 0) <= Date.now()))
+      && (!dueOnly || batch.state === 'running' || ((batch.retry?.attempts ?? 0) < 3 && (batch.retry?.notBefore ?? 0) <= Date.now())))
       .sort((a, b) => (a.retry?.notBefore ?? 0) - (b.retry?.notBefore ?? 0))[0])
   }
   /** Selection frontier reserves failed work without acknowledging it. */
@@ -122,7 +122,7 @@ export class LearningLedger {
   defer(id: string, retryable: boolean): void {
     const batch = this.required(id)
     const attempts = (batch.retry?.attempts ?? 0) + 1
-    batch.retry = { attempts, notBefore: Date.now() + (retryable
+    batch.retry = { attempts, ...(attempts >= 3 ? { paused: 'Automatic retry limit reached after three deferrals; evidence and effects retained. Manual /learn may retry.' } : {}), notBefore: Date.now() + (retryable
       ? Math.min(3_600_000, 60_000 * 2 ** Math.min(attempts - 1, 6)) : 3_600_000) }
     this.save()
   }

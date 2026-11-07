@@ -122,3 +122,26 @@ test('retry budget is exponential and capped, nonretryable failures cool down fo
     assert.equal(ledger.batch(batch.id).retry!.notBefore, Date.now() + 3_600_000)
   })
 })
+
+test('three deferrals park unchanged automatic retries durably, retaining manual recovery and fresh input', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 })
+  await withTempWorkspace(async workspace => {
+    let ledger = new LearningLedger(workspace, 'a')
+    const batch = ledger.create('reflector', [source(0, 1)], [])
+    for (let i = 0; i < 3; i++) {
+      ledger.bind(batch.id, `attempt-${i}`)
+      ledger.interrupt(batch.id, 'maximum iterations with retained evidence')
+      ledger.defer(batch.id, true)
+      t.mock.timers.tick(3_600_001)
+    }
+    ledger = new LearningLedger(workspace, 'a')
+    assert.equal(ledger.pending('reflector', true), undefined)
+    assert.match(ledger.batch(batch.id).retry!.paused!, /Automatic retry limit/)
+    assert.equal(ledger.cursor(source(0, 1)), 0)
+    assert.equal(ledger.unfinished().length, 1)
+    assert.equal(ledger.select('reflector', [], []), undefined)
+    assert.equal(ledger.select('reflector', [], [], true)?.id, batch.id)
+    assert.notEqual(ledger.select('reflector', [source(1, 2)], [])?.id, batch.id)
+    assert.deepEqual(ledger.batch(batch.id).attempts, ['attempt-0', 'attempt-1', 'attempt-2'])
+  })
+})
