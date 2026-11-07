@@ -311,7 +311,7 @@ The Agent type browser separates definition browsing from runtime inspection. A 
 
 Desktop conversation rows form a centered column of `calc(100cqw - 112px)` with a (0.5rem) gap. Bubbles and message actions are content-fitting with a maximum of (80%); user bubbles align right, assistant/action rows align left. The shared `--conversation-item-max-width` caps assistant, system, compaction, tool, execution, and action rows. Some structural rows, including execution cards, request full available width **within** that cap; do not force every row to have identical intrinsic width.
 
-Compacted-history navigation, unlinked execution traces, and the conversation summary share that same capped rail. Use transparent secondary navigation, (12px) disclosure labels, (40px) minimum rows, and (44px) touch targets on coarse pointers. Expanded execution lists and summary Markdown share a one-pixel neutral guide; execution titles wrap in quiet full-width rows rather than filled primary buttons. Summaries remain collapsed and render Markdown only when opened, with no nested vertical scroller. Initiative title, goal, scope, and non-goals live in the session-title details popover (or mobile sheet), not in a second heading row; Project coordination guidance follows the same rule.
+Compacted-history navigation, unlinked execution traces, and the conversation summary share that same capped rail. Use transparent secondary navigation, (12px) disclosure labels, (40px) minimum rows, and (44px) touch targets on coarse pointers. Expanded execution lists and summary Markdown share a one-pixel neutral guide; execution titles wrap in quiet full-width rows rather than filled primary buttons. Summaries remain collapsed and render Markdown only when opened, with no nested vertical scroller. Work title, goal, scope, and non-goals live in the session-title details popover (or mobile sheet), not in a second heading row; Project coordination guidance follows the same rule.
 
 Work realignment events keep their agent-facing instructions and JSON in the shared tool payload renderer, mounted only when expanded: (12px) monospace, secondary text on a muted surface, token-based corners, and wrapping identifiers. Event metadata uses the same chevron disclosure as other trace details, not the browser's default marker. Preserve event content and behavior; these are read-only records, not adoption controls.
 
@@ -450,9 +450,12 @@ banner.
 
 The live conversation is a continuous timeline. Older physical segments load on
 approaching the top or using Load older messages; prepending preserves the reading
-position and keeps the live composer available. History disclosures sit at actual
-segment boundaries, retaining summary/event rows without inferring a compact or
-handoff reason from the segment link. Return to latest resumes bottom following. Its icon-only square arrow control
+position and keeps the live composer available. The timeline does not add History / View previous segment disclosures at segment
+boundaries; lazy loading and the heading history navigation provide access to
+older messages. Persisted summary/event rows remain in chronological order,
+without inferring a compact or handoff reason from the segment link. On initial
+open, a current segment with fewer than 20 non-summary, non-event rows seeds one
+recent segment above the current handoff, while continuing to follow latest. Return to latest resumes bottom following. Its icon-only square arrow control
 floats inside the conversation pane above the measured composer allowance, with
 space reserved for the history rail. Use shared HoverInfo and a localized accessible
 label, not a visible text banner. Load older messages is a quiet centered text
@@ -471,7 +474,7 @@ return to current, and next. In targeted history, next retraces visited segments
 one at a time; the middle control jumps directly to the live session.
 Automation run navigation retains its existing run semantics. If multiple physical
 rollovers were missed, retained messages keep their known physical identity;
-unloaded intervening segments remain reachable through boundary History links,
+unloaded intervening segments remain reachable through targeted history navigation,
 rather than being fabricated or eagerly fetched.
 Keep all three slots stable, disable unavailable directions and navigation while
 loading, and provide explicit hover/accessibility labels. On narrow or touch

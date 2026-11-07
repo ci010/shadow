@@ -125,7 +125,11 @@ function updateCurrent() {
   let current = props.entries[0].index
   for (const entry of props.entries.flatMap(entry => entry.members ?? [entry])) {
     const element = container.querySelector<HTMLElement>(`[data-msg-idx="${entry.index}"]`)
-    if (element && element.getBoundingClientRect().top > top) break
+    // Do not unlock skipped content just to track the current marker. Keep
+    // exact positions for visible multi-message rows (e.g. a following decision).
+    const skipped = element?.checkVisibility?.({ contentVisibilityAuto: true }) === false
+    const anchor = skipped ? element?.closest<HTMLElement>('[data-history-row-key]') ?? element : element
+    if (anchor && anchor.getBoundingClientRect().top > top) break
     current = entry.index
   }
   currentIndex.value = current

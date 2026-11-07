@@ -277,7 +277,9 @@ function registerGatewayRoutes(
         .split(',').map(header => header.trim()).filter(Boolean)
       if (!exposedHeaders.some(header => header.toLowerCase() === 'etag')) exposedHeaders.push('ETag')
       c.header('Access-Control-Expose-Headers', exposedHeaders.join(', '))
-      c.header('Vary', 'Origin')
+      const vary = (c.res.headers.get('Vary') ?? '').split(',').map(value => value.trim()).filter(Boolean)
+      if (!vary.includes('*') && !vary.some(value => value.toLowerCase() === 'origin')) vary.push('Origin')
+      c.header('Vary', vary.join(', '))
     }
   })
   app.delete('/api/html-preview-leases/:token', c => {

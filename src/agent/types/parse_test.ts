@@ -13,10 +13,10 @@ test('agent module ceilings are explicit validated declarations', () => {
   }
 })
 
-test('legacy planning tool policies rename to Initiative without widening access', () => {
+test('unknown tool policies remain literal without aliasing retired planning tools', () => {
   const role = parseAgentFile('---\nallowedTools: [read, project]\nblockedTools: project, exec\n---\nRole', 'legacy', 'fixture')
-  assert.deepEqual(role.allowedTools, ['read', 'initiative'])
-  assert.deepEqual(role.blockedTools, ['initiative', 'exec'])
+  assert.deepEqual(role.allowedTools, ['read', 'project'])
+  assert.deepEqual(role.blockedTools, ['project', 'exec'])
 })
 
 test('execution modes are a closed runtime-validated contract', () => {

@@ -25,7 +25,7 @@ test('initiative provider uses the explicit linkage and warns that prompt state 
   assert.match(result ?? '', /Item one: needs_attention; assignment retained/)
   assert.match(result ?? '', /snapshot/)
   assert.match(result ?? '', /sleep, idle, recovery, restart, stopped or unknown sessions do not release work/)
-  assert.match(result ?? '', /only explicitly unowned\/unassigned work/)
+  assert.match(result ?? '', /Ordinary conversations and execution need no Work record/)
   assert.match(result ?? '', /Messages, requests and handoff notes are coordination, not assignment changes/)
   assert.match(result ?? '', /common folders do not imply work ownership/)
 })

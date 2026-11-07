@@ -65,10 +65,9 @@ export function parseAgentFile(
 
 /** Coerce a YAML value (string[] or comma-separated string) into string[] | undefined. */
 function toStringArray(val: unknown): string[] | undefined {
-  if (Array.isArray(val)) return val.map(String).filter(Boolean).map(name => name === 'project' ? 'initiative' : name)
+  if (Array.isArray(val)) return val.map(String).filter(Boolean)
   if (typeof val === 'string' && val) {
     return val.replace(/[\[\]]/g, '').split(',').map((t) => t.trim()).filter(Boolean)
-      .map(name => name === 'project' ? 'initiative' : name)
   }
   return undefined
 }

@@ -16,8 +16,8 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('Ctrl+F searches real conversations across all segments, split panes and lifecycle changes', {
-  timeout: 90_000,
+test('conversation search and split panes survive cached heavy-history activation with offscreen rendering skipped', {
+  timeout: 150_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
   const directory = resolve(root, '.test-artifacts', `conversation-search-${randomUUID()}`)
@@ -37,6 +37,12 @@ test('Ctrl+F searches real conversations across all segments, split panes and li
     ], previousPhysicalId: null },
     'web:child': { messages: [{ role: 'assistant', content: 'Child-only searchable text.' }], previousPhysicalId: null },
     'web:chat-two': { messages: [{ role: 'assistant', content: 'Second conversation.' }], previousPhysicalId: null },
+    'web:chat-heavy': { messages: Array.from({ length: 48 }, (_, index) => ({
+      role: index % 8 === 0 ? 'user' : 'assistant',
+      content: `History row ${index}. ${index === 0 ? 'UniqueOldHistoryTarget' : ''}\n\n` +
+        ('$$\\sum_{i=1}^{n} \\frac{i^2 + \\sqrt{i}}{1 + i} = \\int_0^1 x^2 \\, dx$$\n\n').repeat(3) +
+        '| Evidence | Result |\n| --- | --- |\n' + '| Retained history | Verified synthetic content |\n'.repeat(12),
+    })), previousPhysicalId: null },
   }
   let failHistory = false
   const searchReads: string[] = []
@@ -50,25 +56,31 @@ test('Ctrl+F searches real conversations across all segments, split panes and li
       load(id) {
         if (id !== '\0search-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import {createApp, h, reactive, ref} from 'vue';
+          import {createApp, h, KeepAlive, reactive, ref} from 'vue';
           import {createRouter, createMemoryHistory} from 'vue-router';
           import ChatWorkspace from '/src/components/ChatWorkspace.vue';
           const router = createRouter({history:createMemoryHistory(), routes:[
-            {name:'chat',path:'/projects/:projectId/chat/:sessionId?',component:{}}
+            {name:'chat',path:'/projects/:projectId/chat/:sessionId?',component:{}},
+            {name:'settings',path:'/settings',component:{}}
           ]});
           await router.push('/projects/fixture/chat/web:chat-one');
-          const state = reactive({visible:true, sessionId:'web:chat-one', childSessionId:''});
+          const state = reactive({visible:true, settings:false, sessionId:'web:chat-one', childSessionId:''});
           const workspace = ref();
           window.__searchFixture = {state, select:id => {
             state.sessionId=id;
             workspace.value.$refs.primary.restoreSession(id);
+          }, settings:async active => {
+            await router.push(active ? '/settings' : '/projects/fixture/chat/' + state.sessionId);
+            state.settings=active;
           }};
-          const app = createApp({render:() => h(ChatWorkspace, {
-            ref:workspace,
-            apiBase:location.origin + '/projects/fixture/', projectId:'fixture', managed:true,
-            sessionId:state.sessionId, childSessionId:state.childSessionId, visible:state.visible,
-            style:'height:100dvh',
-          })});
+          const app = createApp({render:() => h(KeepAlive, null, {default:() => state.settings
+            ? h('div', {id:'fixture-settings'}, 'Synthetic settings')
+            : h(ChatWorkspace, {
+              ref:workspace,
+              apiBase:location.origin + '/projects/fixture/', projectId:'fixture', managed:true,
+              sessionId:state.sessionId, childSessionId:state.childSessionId, visible:state.visible,
+              style:'height:100dvh',
+            })})});
           app.provide(Symbol.for('shadow.live-client-pool'), {onDispose:() => () => {}, observeHost:(_base, callback) => { callback({phase:'live'}); return () => {}; },client:() => ({
             subscribe:() => ({close(){},ready:async()=>{}})
           })});
@@ -87,7 +99,7 @@ test('Ctrl+F searches real conversations across all segments, split panes and li
             response.setHeader('Content-Type', 'text/html')
             response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="app"></div><script type="module" src="/search-fixture.ts"></script></body></html>')
           } else if (path === '/__fail') { failHistory = url.searchParams.get('value') === 'true'; json({ ok: true }) }
-          else if (path.endsWith('/api/sessions/graph')) json({ sessions: ['web:chat-one', 'web:child', 'web:chat-two'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
+          else if (path.endsWith('/api/sessions/graph')) json({ sessions: ['web:chat-one', 'web:child', 'web:chat-two', 'web:chat-heavy'].map(sessionId => ({ sessionId, mode: 'session' })), nodes: [] })
           else if (path.endsWith('/api/sessions/stages')) json({ stages: {}, activeRequestIds: {}, recoveries: {} })
           else if (path.endsWith('/api/chat/session')) {
             const data = { history: histories[`web:${url.searchParams.get('chatId')}`]?.messages ?? [], systemPrompt: '', tools: [] }
@@ -133,10 +145,13 @@ test('Ctrl+F searches real conversations across all segments, split panes and li
   let output = ''
   child.stdout.setEncoding('utf8').on('data', chunk => { output += chunk })
   child.stderr.setEncoding('utf8').on('data', chunk => { output += chunk })
-  const timer = setTimeout(() => child.kill(), 75_000)
+  const timer = setTimeout(() => child.kill(), 135_000)
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close')
   assert.equal(code, 0, output)
   assert.match(output, /CONVERSATION_SEARCH_OK/)
+  const rendering = output.match(/HISTORY_RESTORE_MS \d+ SKIPPED_ROWS \d+/)?.[0]
+  assert.ok(rendering, 'Exercise retained heavy-history activation and offscreen rendering')
+  t.diagnostic(rendering)
   assert.ok(searchReads.includes('physical:oldest'))
 })

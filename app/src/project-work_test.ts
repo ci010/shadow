@@ -15,7 +15,7 @@ const items = [
   item('second', { parentKey: 'root', dependencies: ['first'], status: 'blocked' }),
   item('third', { parentKey: 'second', status: 'done' }), item('independent'),
 ]
-test('board filters preserve unassigned work, recursive Initiative membership and the authoritative progress', () => {
+test('board filters preserve unassigned work, recursive Work membership and the authoritative progress', () => {
   assert.equal(workRoots(items).get('third'), 'root')
   assert.deepEqual(filterWork(items, { query: '', root: 'root', assignee: '', terminal: false }).map(item => item.key), ['root', 'first', 'second'])
   assert.deepEqual(filterWork(items, { query: '', root: '', assignee: 'web:one', terminal: true }).map(item => item.key), ['first'])

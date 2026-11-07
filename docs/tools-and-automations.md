@@ -688,6 +688,15 @@ reports no change and never replays the callback, including while delivery is
 pending. Callback failures remain visible in the execution output; continuation
 is not a delivery retry command.
 
+Background completion callbacks carry a bounded text preview, not unlimited
+process output. Oversized callback content is saved in the owning Project's
+`.tmp` storage and the event includes a `read` reference to the full text. Use
+line-based `offset` and `limit` to page that file. This bounds both persisted
+conversation events and subsequent model input; it does not retroactively
+rewrite oversized events already in history. If saving the full text fails,
+the notification remains bounded and explicitly reports that failure instead
+of claiming a file was saved.
+
 ## Shared work notes and the Project canvas
 
 ### Overview graph disclosure
@@ -777,7 +786,7 @@ Create a note with `data: {title, definition: {objective}, notes: {kind}}`.
 Kinds are `goal`, `approach`, `task` and `finding`. Children also supply parentKey
 and notes.relation with a kind (`supports`, `requires` or `assumption`) and reason.
 Distinguish a chosen approach from a real prerequisite or unverified premise.
-An Initiative derives from a root and descendants; it has no second editable
+The Work tree shows a note and its descendants; it has no second editable
 goal/status store. Parent/completion-dependency cycles are rejected.
 
 Parents maintain causal structure; assigned workers maintain current
@@ -1211,6 +1220,34 @@ not another instructions object. Task/call discovery title/description remain
 separate parent-owned contracts. Self views adapt task title to read-only topic,
 never task description to focus. New focus is persisted independently; clearing it
 falls back to topic without erasing any historical discovery metadata.
+
+### Event briefings and detail lookup
+
+Project event injection keeps the existing provenance split and relevance gate
+(initiative/shared modified files, or capped pass-through without signals).
+Both own and related events now inject short briefings instead of complete
+`what`/`why`/`challenge`/`refs`. New reflector `log` events require a standalone
+`summary` of 1–280 Unicode code points; whitespace is normalized and oversized
+summaries are rejected, not silently truncated. The ledger accepts absent summaries
+for old records. Ordinary non-learning log callers remain backwards compatible.
+Automatically logged decision events use a short decision-status briefing.
+
+`what` retains observed sequence and attributed outcomes, `why` retains evidenced
+reasons/context, and `challenge` retains obstacles/counterevidence/unknown scope.
+Exact evidence stays in `refs`. Learning routing audit, including why no Wiki
+update was appropriate, stays in `learning_result` rather than event details.
+
+Old events are not rewritten or summarized by another model: injection explicitly
+labels a bounded 180-code-point `what` preview as **not a summary**. Every briefing
+has a `v:memory/events/YYYY-MM-DD.jsonl` reference and physical line number; use
+`read` with that path, `offset` and `limit` to retrieve original details. VFS memory
+reads support these JSONL files; direct writes remain prohibited. The event block
+has a default total budget of 6,000 UTF-16 characters (including headings and
+references), in addition to existing per-section counts. Budget pressure removes
+oldest related briefings before oldest own briefings, with an explicit omission
+notice; a budget too small for even the notice returns no block. No topic
+aggregation, retrospective migration or additional LLM summarization is involved.
+
 
 ## Programmable EventSourceProviders
 

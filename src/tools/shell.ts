@@ -254,7 +254,7 @@ export class ExecTool implements Tool<ToolResult> {
     context: ExecutionContext,
   ): Promise<ToolResult> {
     if (this.nodeOnly && String(args.workspace ?? args.folder ?? '').startsWith('layerfs:')) throw new ToolNoEffectError('LayerFS OS shells are unavailable in node-only exec.')
-    const layerResult = await layerfsRoute('exec', args, context)
+    const layerResult = await layerfsRoute('exec', args, context, this.workspace)
     if (layerResult !== undefined) return layerResult
     context = await executionTargetContext(args, context, 'workdir.process.execute-once')
     context.signal.throwIfAborted()

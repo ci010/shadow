@@ -195,7 +195,7 @@ export class WriteTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
-    const layerResult = await layerfsRoute('write', args, context)
+    const layerResult = await layerfsRoute('write', args, context, this.workspace)
     if (layerResult !== undefined) {
       if (isCompletedToolFailure(layerResult)) throw new Error(toolResultText(layerResult))
       return toolResultText(layerResult)

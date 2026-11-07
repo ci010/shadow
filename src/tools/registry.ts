@@ -24,7 +24,7 @@ const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
 /** Self-limited outputs and structured execution receipts must remain intact. */
-const EXEMPT_TOOLS = new Set(['use_project', 'read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative', 'sql', 'skill_read'])
+const EXEMPT_TOOLS = new Set(['use_project', 'read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'sql', 'skill_read'])
 
 export function toolInvocationContract(tools: Tool[]): string {
   return 'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +
@@ -184,7 +184,8 @@ export class Tools {
       return images.length ? { content: [{ type: 'text', text }, ...images], ...(typeof result !== 'string' && result.isError ? { isError: true } : {}) } : text
     } catch (err) {
       admission?.finish(true, !context.signal?.aborted && err instanceof ToolNoEffectError ? 'none' : undefined)
-      // An interrupted invocation has no result to persist or send to the model.
+      // Preserve cancellation and missing-effect evidence through nested callers.
+      // The session boundary records typed uncertainty without replaying the call.
       if (context.signal?.aborted || err instanceof ToolOutcomeUnknownError) throw err
       // handle abort
       if (err instanceof Error && err.name === 'AbortError') {
