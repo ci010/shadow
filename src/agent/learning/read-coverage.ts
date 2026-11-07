@@ -50,3 +50,18 @@ export class ReadCoverage {
   }
   errors(): string[] { return this.failures.map(item => `${item.path} lines [${item.start}, ${item.end}): ${item.error}. Recover by reading this exact resource with explicit positive offset in complete pages; different views/aliases do not prove coverage.`) }
 }
+
+/** A rejected physical ID is not a real resource. Only an unambiguous exact batch
+ * reference with the same logical session, segment and view can repair a typo.
+ * Coverage still has to be proved by subsequent complete reads of that reference. */
+export function rejectedHistoryReference(path: string, error: string, references: string[]): string {
+  if (!/^Error(?::| executing )[\s\S]*Physical history does not belong to this Project session/.test(error)) return path
+  const identity = (value: string) => value.match(/^(v:sessions\/[^/]+-v2-)[a-f0-9]+(-\d+\/(?:overview|full))$/)
+  const wrong = identity(path)
+  if (!wrong) return path
+  const candidates = [...new Set(references)].filter(reference => {
+    const correct = identity(reference)
+    return correct && correct[1] === wrong[1] && correct[2] === wrong[2]
+  })
+  return candidates.length === 1 ? candidates[0] : path
+}

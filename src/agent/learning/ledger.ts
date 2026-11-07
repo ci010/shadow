@@ -145,11 +145,18 @@ export class LearningLedger {
   outcome(sessionId: string): LearningOutcome | undefined { return structuredClone(this.state.outcomes[sessionId]) }
   retry(pipeline: Pipeline): LearningRetry { return structuredClone(this.state.retries[pipeline] ?? { attempts: 0 }) }
   setRetry(pipeline: Pipeline, retry: LearningRetry): void { this.state.retries[pipeline] = retrySchema.parse(retry); this.save() }
-  eventsFor(pipeline: 'encapsulator' | 'soulReflector'): LearningEvent[] {
+  eventsFor(pipeline: 'encapsulator' | 'soulReflector', retained: LearningEvent[] = []): LearningEvent[] {
     const consumed = new Set([...this.state.consumed[pipeline], ...this.state.batches
       .filter(batch => batch.pipeline === pipeline && batch.state !== 'done' && !batch.excluded).flatMap(batch => batch.inputEvents.map(event => event.id))])
-    return structuredClone(this.state.batches.filter(batch => batch.pipeline === 'reflector' && batch.state === 'done')
-      .flatMap(batch => batch.events).filter(event => !consumed.has(event.id)).slice(0, 40))
+    const candidates = [...this.state.batches.filter(batch => batch.pipeline === 'reflector' && batch.state === 'done')
+      .flatMap(batch => batch.events), ...retained.filter(event => !this.state.batches.some(batch =>
+        batch.events.some(known => known.id === event.id)))]
+    const seen = new Set(consumed)
+    return structuredClone(candidates.filter(event => {
+      if (seen.has(event.id)) return false
+      seen.add(event.id)
+      return true
+    }).slice(0, pipeline === 'encapsulator' ? 8 : 40))
   }
   create(pipeline: Pipeline, sources: LearningSource[], inputEvents: LearningEvent[]): LearningBatch {
     const batch = batchSchema.parse({ id: randomUUID(), createdAt: new Date().toISOString(), pipeline, sources, inputEvents,
