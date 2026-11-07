@@ -277,11 +277,17 @@ export function createSkillsHandler(
   skills: SkillsManager,
   registerTools?: (skill: Skill, context: ExecutionContext) => Promise<string[]>,
   folderScope?: (context: ExecutionContext) => FolderSkillScope | undefined,
+  readRaw?: (subpath: string, context: ExecutionContext, continuation: boolean) => string,
 ): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
 } {
-  const read: VirtualFsHandler = async (subpath, context) => {
+  const read: VirtualFsHandler = async (subpath, context, options) => {
+    // Dot-prefixed names cannot be shared Skills, so this editing view cannot shadow one.
+    if (subpath === '.raw' || subpath.startsWith('.raw/')) {
+      if (!readRaw) throw new Error('Raw Skill editing reads are not configured')
+      return readRaw(subpath.slice(5), context, (options?.offset ?? 1) > 1)
+    }
     if (!subpath) {
       const names = skills.availableSkills(context.admin).map(skill => skill.meta.name)
       const scope = folderScope?.(context)

@@ -1848,7 +1848,7 @@ flexible explanatory layouts only when they improve clarity over more prose.
 Renderer syntax, examples and HTML safety constraints live in those on-demand
 skills; these formats enhance inline replies rather than create applications.
 
-`SkillEditStore` and `skill_read`/`skill_save` provide ordinary shared Skill
+`SkillEditStore`, `read` on `v:skills/.raw/<name>`, and `skill_save` provide ordinary shared Skill
 editing, including bundled tool sources, to durable local Web sessions. These tools do not grant extra filesystem or execution rights. Raw editing reads do not register tools. Session-local read
 baselines detect stale saves without model-provided revisions. The save path
 validates the complete candidate, rejects unsafe paths/symlinks and invalid

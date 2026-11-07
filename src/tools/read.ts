@@ -279,7 +279,7 @@ export class ReadTool implements Tool<ToolResult> {
           }
           return page
         }
-        const result = this.virtualFs.resolve(rel, context)
+        const result = this.virtualFs.resolve(rel, context, { offset: args.offset as number | undefined })
         if (result != null) {
           if (args.encoding !== undefined) throw new Error('read encoding is not supported for virtual paths.')
           const content = await result

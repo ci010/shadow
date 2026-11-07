@@ -116,7 +116,7 @@ import { ContinuationTool } from '../../tools/background.ts'
 import { CommandHandlerManager } from '../../tools/shell-commands/command-handler.ts'
 import { createUserLinkCommandHandler } from '../../tools/shell-commands/userlink.ts'
 import { registerCronTools } from '../../tools/cron.ts'
-import { SkillEditing, SkillReadTool, SkillSaveTool } from '../../tools/skill-edit.ts'
+import { SkillEditing, SkillSaveTool } from '../../tools/skill-edit.ts'
 import { SkillEditStore } from '../../skills/edit-store.ts'
 import { LogTool } from '../../tools/log.ts'
 import { registerInternalEventTools } from '../../tools/internal-events.ts'
@@ -1124,13 +1124,16 @@ export async function createProjectRuntime(
   const bgVfs = createBgTasksHandler(backgroundTasks, sessions, a2a.sessions)
   vfs.mount('v:bg', 'owned executions: background work, local task/call, and remote A2A status and output', bgVfs.read, bgVfs.list)
 
+  const skillEditing = new SkillEditing({
+    projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: id => canAuthor(id),
+  })
   const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context), ctx => {
     const state = sessions.getSessionState(ctx.sessionId)
     if (!state?.folderId) return undefined
     const location = resolveSessionLocations(workspace, state, undefined, workdirLookup).workdir
     if (!location.available) throw new Error('Selected folder skill scope is unavailable')
     return location.locality === 'local' ? { folderId: state.folderId, path: location.path } : undefined
-  })
+  }, (path, context, continuation) => skillEditing.readRaw(path, context, continuation))
   vfs.mount(
     'v:skills',
     'read skill bodies and category listings',
@@ -1226,10 +1229,7 @@ export async function createProjectRuntime(
   const learningTools = new LearningTools(learningRuntime)
   for (const tool of [learningTools.memory, learningTools.skill, learningTools.soul, learningTools.result]) tools.register(tool)
   tools.register(new LogTool(workspace, (entry, key, context) => learningTools.appendEvent(entry, key, context)))
-  const skillEditing = new SkillEditing({
-    projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: canAuthor,
-  })
-  for (const tool of [new SkillReadTool(skillEditing), new SkillSaveTool(skillEditing)]) {
+  for (const tool of [new SkillSaveTool(skillEditing)]) {
     tools.register(tool)
     importTool.registerBuiltin(tool.name, tool)
   }
