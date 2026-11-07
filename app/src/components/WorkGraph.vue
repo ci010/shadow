@@ -3,7 +3,7 @@
     <p class="graph-legend"><span class="child-line" /> {{ t('Parent → child') }} <span class="dependency-line" /> {{ t('Prerequisite → dependent') }}
       <span v-if="layout.outside">{{ layout.outside }} {{ t('links leave this filtered view.') }}</span>
     </p>
-    <p v-if="items.length > 200" role="status">{{ t('Too many items for a readable graph. Filter to an Initiative or session, or use the board.') }}</p>
+    <p v-if="items.length > 200" role="status">{{ t('Too many items for a readable graph. Filter to a Work or session, or use the board.') }}</p>
     <div v-else class="graph-scroll" tabindex="0" :aria-label="t('Scrollable work graph')">
       <div class="graph-canvas" :style="{ width: `${layout.width}px`, height: `${layout.height}px` }">
         <svg :width="layout.width" :height="layout.height" aria-hidden="true">

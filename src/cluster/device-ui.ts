@@ -45,7 +45,7 @@ export function deviceUiRequestPath(path: string, method: string): boolean {
 }
 export function deviceUiHeaders(headers: Headers): Headers {
   const result = new Headers()
-  for (const key of ['content-type', 'accept', 'range', 'if-none-match', 'if-modified-since']) {
+  for (const key of ['content-type', 'accept', 'accept-encoding', 'range', 'if-none-match', 'if-modified-since']) {
     const value = headers.get(key); if (value) result.set(key, value)
   }
   return result
@@ -112,8 +112,13 @@ export class MainDeviceUi {
         const controller = new AbortController()
         this.active.set(controller, authentication)
         const signal = AbortSignal.any([c.req.raw.signal, controller.signal])
+        const headers = deviceUiHeaders(c.req.raw.headers)
+        // Encoding is not authority. This explicit compatibility signal keeps old Child
+        // versions (which do not normalize fetch-decoded response headers) on
+        // identity inner responses, even when Node fetch adds Accept-Encoding.
+        if (c.req.header('X-Shadow-Ui-Compression') !== 'decoded-v1') headers.delete('accept-encoding')
         const request = new Request(new URL(path, 'http://workspace.internal'), {
-          method, headers: deviceUiHeaders(c.req.raw.headers), signal,
+          method, headers, signal,
           ...(!['GET', 'HEAD'].includes(method) ? { body: c.req.raw.body, duplex: 'half' } : {}),
         } as RequestInit)
         const identity = `device-ui:${authentication.credentialId}`

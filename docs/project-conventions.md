@@ -35,7 +35,7 @@ history live in `conventions.sqlite` inside the owning Project Home. Successful
 tool mutations invalidate durable Session prompts for their next inference;
 idle sessions do not need an artificial wakeup.
 
-The initial dialect deliberately reuses the closed Initiative SQL parser:
+The initial dialect deliberately reuses the closed Work SQL parser:
 single-table projections, literal comparisons joined by `AND`, sorting and
 limits. It does **not** accept joins, aggregates, expressions, subqueries,
 arbitrary SQLite statements, DDL, PRAGMA or filesystem database paths.

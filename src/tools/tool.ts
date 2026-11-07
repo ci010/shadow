@@ -5,7 +5,8 @@ export type ToolResult = string | { content: ContentPart[]; isError?: boolean }
 
 /** Only trusted implementations may attest that a failed operation had no effect. */
 export class ToolNoEffectError extends Error {}
-/** Missing effect evidence must stop the turn, not invite an automatic model retry. */
+/** Missing effect evidence must cross nested wrappers unchanged. The session records
+ * an uncertainty result and prevents exact replay, rather than claiming no effects. */
 export class ToolOutcomeUnknownError extends Error {}
 
 const completedResults = new WeakSet<object>()

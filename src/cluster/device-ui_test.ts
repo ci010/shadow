@@ -4,7 +4,11 @@ import { join } from 'node:path'
 import { folderFixture } from '../folders/test-fixtures.ts'
 import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { once } from 'node:events'
-import { createServer } from 'node:http'
+import { createServer, get as httpGet } from 'node:http'
+import { gunzipSync } from 'node:zlib'
+import { WebChannel } from '../channels/web.ts'
+import { Bus } from '../bus/bus.ts'
+import type { SessionManager } from '../sessions/session-manager.ts'
 import WebSocket, { WebSocketServer } from 'ws'
 import { ChildLocalControlService } from '../runtime/child-local-control.ts'
 import { normalizeGatewayUpgradeRequest } from '../gateway/websocket.ts'
@@ -55,7 +59,7 @@ async function fixture(developmentUrl?: string) {
   const child = new Hono()
   registerGatewayRoutes(child, [], { launchCredential: 'child-private' })
   childWorkspacePlugin({ endpoint: 'http://main.test:3124', proof, fetch: networkFetch })(child)
-  return { bridge, main, ingress, child, registry, proof, networkFetch, setEndpoint: (value: string) => { endpoint = value } }
+  return { bridge, main, ingress, child, registry, addresses, proof, networkFetch, setEndpoint: (value: string) => { endpoint = value } }
 }
 
 test('workspace tunnels only business routes, never control/credentials or path escapes', () => {
@@ -223,4 +227,96 @@ test('Child preview relay owns create/read/revoke across gateways without sharin
   const untrusted = await create()
   f.registry.revoke({ deviceId: 'device-1', nodeId: 'node-1', credentialId: 'credential-1' }, 'removed', new Date())
   assert.equal((await read(untrusted.url)).status, 404, 'fresh device proof is required for every relay read')
+})
+
+
+test('history gzip survives real Main/Child HTTP hops without double decoding or losing Vary', { timeout: 15_000 }, async t => {
+  const f = await fixture(); t.after(() => f.bridge.close())
+  const project = new Hono()
+  const channel = new WebChannel(new Bus(), { authorize: request => f.bridge.authorize(request), sessionManager: {
+    getSessionState: () => ({ sessionId: 'web:large', segmentIndex: 0 }),
+    getContext: async () => ({ systemPrompt: 'Prompt', tools: [] }),
+    getHistory: async () => ({ messages: [{ role: 'user', content: 'history fixture '.repeat(20_000) }] }),
+    getCommandResults: async () => [], getYieldRecords: async () => [],
+  } as unknown as SessionManager })
+  await channel.start(project); t.after(() => channel.stop())
+  f.main.all('/projects/test/*', c => {
+    const url = new URL(c.req.url); url.pathname = url.pathname.slice('/projects/test'.length)
+    const request = new Request(url, c.req.raw)
+    f.addresses.inherit(c.req.raw, request)
+    return project.fetch(request)
+  })
+  f.main.get('/api/range-fixture', c => c.body('234', 206, { 'Content-Type': 'application/octet-stream', 'Content-Range': 'bytes 2-4/10' }))
+  f.main.get('/api/opaque-fixture', c => c.body('opaque', 200, { 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'fixture-unknown' }))
+  // Simulate an older Main that serves identity history even to an updated Child.
+  f.main.get('/api/chat/session', c => c.json({ history: [{ content: 'old Main '.repeat(2000) }] }))
+  const mainServer = serveGateway(f.ingress, { host: '127.0.0.1', port: 0 }); await mainServer.ready
+  t.after(() => mainServer.shutdown())
+  const endpoint = `http://127.0.0.1:${mainServer.addr.port}`; f.setEndpoint(endpoint)
+  const transportEncodings: (string | null)[] = []
+  const transport: typeof fetch = async (input, init) => {
+    const response = await fetch(input, init)
+    transportEncodings.push(response.headers.get('content-encoding'))
+    return response
+  }
+  const child = new ChildLocalControlService({ port: 0, launchCredential: 'child-private', requestShutdown: () => {},
+    workspace: childWorkspacePlugin({ endpoint, proof: f.proof, fetch: transport }),
+  })
+  await child.start(new AbortController().signal); t.after(() => child.shutdown())
+  const base = `http://127.0.0.1:${child.address!.port}`
+  const read = (encoding: string, etag?: string, path = '/projects/test/api/chat/session?chatId=large', authorized = true) => new Promise<{
+    status: number; headers: import('node:http').IncomingHttpHeaders; bytes: Buffer
+  }>((resolve, reject) => {
+    // Native HTTP deliberately does NOT auto-decompress: assert actual wire bytes.
+    const request = httpGet(base + path, { headers: { Origin: base, 'Accept-Encoding': encoding,
+      ...(authorized ? { Authorization: 'Bearer child-private' } : {}), ...(etag ? { 'If-None-Match': etag } : {}),
+    } }, response => {
+      const chunks: Buffer[] = []; response.on('data', chunk => chunks.push(Buffer.from(chunk)))
+      response.on('end', () => resolve({ status: response.statusCode!, headers: response.headers, bytes: Buffer.concat(chunks) }))
+      response.on('error', reject)
+    })
+    request.on('error', reject)
+  })
+  for (const compatibility of [undefined, 'unsupported-version']) {
+    const proof = await f.proof(new AbortController().signal, DEVICE_UI_CHALLENGE)
+    const legacy = await fetch(endpoint + DEVICE_UI_REQUEST, { method: 'POST', headers: {
+      'X-Shadow-Device-Proof': proof, 'X-Shadow-Ui-Path': '/projects/test/api/chat/session?chatId=large',
+      'X-Shadow-Ui-Method': 'GET', 'Accept-Encoding': 'gzip',
+      ...(compatibility ? { 'X-Shadow-Ui-Compression': compatibility } : {}),
+    } })
+    assert.equal(legacy.status, 200)
+    assert.equal(legacy.headers.get('content-encoding'), null, 'old/unknown Child keeps identity responses despite Node fetch defaults')
+    assert.equal((await legacy.json()).history[0].content, 'history fixture '.repeat(20_000))
+  }
+  const compressed = await read('gzip, deflate, br')
+  assert.equal(compressed.status, 200)
+  assert.equal(transportEncodings.at(-1), 'gzip', 'Main history is compressed across the network tunnel')
+  assert.equal(compressed.headers['content-encoding'], 'gzip', 'Child negotiates browser-facing compression after fetch decoding')
+  assert.match(String(compressed.headers.vary), /Accept-Encoding/i)
+  assert.match(String(compressed.headers.vary), /Origin/i)
+  const decoded = gunzipSync(compressed.bytes)
+  assert.equal(JSON.parse(decoded.toString()).history[0].content, 'history fixture '.repeat(20_000))
+  assert.ok(compressed.bytes.length < decoded.length / 10)
+  for (const encoding of ['identity', 'gzip;q=0, *;q=1']) {
+    const plain = await read(encoding)
+    assert.equal(plain.status, 200)
+    assert.equal(plain.headers['content-encoding'], undefined)
+    assert.deepEqual(plain.bytes, decoded)
+  }
+  const olderMain = await read('gzip', undefined, '/api/chat/session?chatId=old')
+  assert.equal(transportEncodings.at(-1), null)
+  assert.equal(olderMain.headers['content-encoding'], 'gzip')
+  assert.equal(JSON.parse(gunzipSync(olderMain.bytes).toString()).history[0].content, 'old Main '.repeat(2000))
+  const unchanged = await read('gzip', String(compressed.headers.etag))
+  assert.equal(unchanged.status, 304)
+  assert.equal(unchanged.bytes.length, 0)
+  const range = await read('gzip', undefined, '/api/range-fixture')
+  assert.equal(range.status, 206)
+  assert.equal(range.headers['content-encoding'], undefined)
+  assert.equal(range.headers['content-range'], 'bytes 2-4/10')
+  assert.equal(range.bytes.toString(), '234')
+  const opaque = await read('gzip', undefined, '/api/opaque-fixture')
+  assert.equal(opaque.headers['content-encoding'], 'fixture-unknown', 'do not strip an encoding that fetch did not decode')
+  assert.equal(opaque.bytes.toString(), 'opaque')
+  assert.equal((await read('gzip', undefined, undefined, false)).status, 401)
 })

@@ -524,3 +524,19 @@ test('readable-size batching preserves exact cursors and isolates atomic oversiz
     assert.deepEqual((await f.runtime.sources(signal())).map(s => [s.offset, s.end]), [[2, 3]])
   })
 })
+
+test('new reflector events require bounded briefings; persisted briefings survive restart', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace, 3)
+  f.onRun(async id => {
+    const ctx = f.context(id)
+    const entry = { who: 'user', what: 'Full observed details', origin: 'web:source' }
+    assert.throws(() => f.tools.appendEvent(entry, 'brief', ctx), /require a short summary/)
+    assert.throws(() => f.tools.appendEvent({ ...entry, summary: '😀'.repeat(281) }, 'brief', ctx), /summary/)
+    f.tools.appendEvent({ ...entry, summary: '😀'.repeat(280) }, 'brief', ctx)
+    f.runtime.ledger.propose(f.runtime.ledger.batchFor(id)!.id, 'applied', 'Recorded event')
+  })
+  await f.runtime.run('reflector', signal())
+  const reloaded = new LearningLedger(workspace, 'a')
+  assert.equal(reloaded.eventsFor('encapsulator')[0].summary, '😀'.repeat(280))
+  assert.equal(reloaded.eventsFor('encapsulator')[0].what, 'Full observed details')
+}))

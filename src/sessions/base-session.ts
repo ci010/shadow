@@ -27,7 +27,7 @@ import {
   isContextSizeError,
 } from '../providers/provider.ts'
 import type { SessionTools } from '../tools/registry.ts'
-import { toolResultText, transientToolSummary, type ToolDefinition, type ToolResult } from '../tools/tool.ts'
+import { ToolOutcomeUnknownError, toolResultText, transientToolSummary, type ToolDefinition, type ToolResult } from '../tools/tool.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import { activeSpan, Span, spanAttributes, uspan } from '../otel/tracing.ts'
 import { physicalSessionId } from './session-identity.ts'
@@ -44,6 +44,7 @@ import type { Executor } from '../execution/executor.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import { ReadTool } from '../tools/read.ts'
 import { pendingToolCalls } from './recovery.ts'
+import { isToolUncertaintyResult, toolInvocationKey, toolUncertaintyResult, uncertainInvocations } from './tool-uncertainty.ts'
 import type { PromptCaptureStore } from './prompt-capture.ts'
 import { saveToolImages } from './tool-images.ts'
 import { modelMessages } from '../providers/message-content.ts'
@@ -488,6 +489,7 @@ export abstract class BaseSession {
     let terminal: string | undefined
     const groups = groupTools(calls, this.tools)
     const pendingResults = new Map(calls.map(call => [call.id, call]))
+    const uncertain = uncertainInvocations(this.messages)
     const traceAttributes = { sessionId: this.id, physicalSessionId: this.physicalSessionId }
     using span = uspan('agent.tools', { attributes: traceAttributes })
     const publishedCallbacks = new Map<string, Array<() => void>>()
@@ -513,8 +515,9 @@ export abstract class BaseSession {
       await this.appendMessages(llm, { role: 'tool', content, tool_call_id: call.id, name: call.name })
       // Legacy unbounded sessions log persistence errors and continue. Deferred
       // process-lifecycle effects must instead fail closed on an unsafe history.
-      if (publishedCallbacks.has(call.id) && this.messagePersistenceFailed) {
-        throw new Error('Cannot run deferred tool action after session message persistence failure')
+      if (this.messagePersistenceFailed) {
+        if (publishedCallbacks.has(call.id)) throw new Error('Cannot run deferred tool action after session message persistence failure')
+        if (isToolUncertaintyResult(result)) throw new Error('Cannot continue after uncertain tool result persistence failure')
       }
       if (transient !== undefined && typeof result !== 'string') transientResults.set(call.id, result.content)
       pendingResults.delete(call.id)
@@ -584,11 +587,27 @@ export abstract class BaseSession {
             recordFileChange: file_change => this.store.appendRawEvents(fileChangePhysicalId, [{ file_change }]),
             readFileChange: (id, signal) => readSessionFileChange(this.store, this.state, id, signal),
           }
-          const result = await activeSpan('agent.tool',
-            () => this.tools.execute(tc.name, tc.arguments, context),
-            { attributes: { ...traceAttributes, 'tool.call_id': tc.id, 'tool.name': tc.name } },
-            span.context,
-          )
+          const invocation = toolInvocationKey(tc, context)
+          const original = uncertain.get(invocation)
+          let result: ToolResult
+          if (original !== undefined) {
+            result = toolUncertaintyResult(invocation, original, 'An identical invocation has an unresolved outcome; it was not dispatched again.', true)
+          } else {
+            try {
+              result = await activeSpan('agent.tool',
+                () => this.tools.execute(tc.name, tc.arguments, context),
+                { attributes: { ...traceAttributes, 'tool.call_id': tc.id, 'tool.name': tc.name } },
+                span.context,
+              )
+            } catch (error) {
+              // Keep cancellation semantics. Typed missing-effect evidence crosses
+              // nested tool/script wrappers, then becomes a durable result here.
+              if (signal.aborted || !(error instanceof ToolOutcomeUnknownError)) throw error
+              publishedCallbacks.delete(tc.id)
+              uncertain.set(invocation, tc.id)
+              result = toolUncertaintyResult(invocation, tc.id, errMsg(error))
+            }
+          }
           if (this.state.mode !== 'call') {
             writes = writes.then(() => recordResult(tc, result))
             await writes
@@ -820,13 +839,18 @@ export abstract class BaseSession {
       }
       fact.status = 'failed'
       fact.error = errMsg(err)
-      console.error(errDetail(err), 'LLM provider error')
+      // Fallback for uncertainty outside the per-tool result boundary. Ordinary
+      // typed tool uncertainty is recorded there and does not fail this turn.
+      const toolOutcomeUnknown = err instanceof ToolOutcomeUnknownError
+      console.error(errDetail(err), toolOutcomeUnknown ? 'Tool outcome unknown' : 'LLM provider error')
       this.emitOutbound({
         channel: msg.channel,
         chatId: msg.chatId,
         channelAddress: msg.channelAddress,
-        content: `⚠️ Request failed: ${errMsg(err)}`,
-        inferenceError: true,
+        content: toolOutcomeUnknown
+          ? `⚠️ Tool outcome unknown: ${errMsg(err)}\nPartial effects may remain or work may still be running. The turn stopped without automatically retrying. Inspect the outcome before any manual retry.`
+          : `⚠️ Request failed: ${errMsg(err)}`,
+        inferenceError: !toolOutcomeUnknown,
         replyTo: msg.platformMessageId,
         done: true,
         event: 'response',

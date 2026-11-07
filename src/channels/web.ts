@@ -9,6 +9,7 @@ import type { Bus } from '../bus/bus.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
 import type { Hono } from 'hono'
+import { compress } from 'hono/compress'
 import { saveToUploads, sessionWorkspacePath } from '../utils/paths.ts'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { resolveSessionLocations } from '../sessions/locality.ts'
@@ -497,7 +498,10 @@ export class WebChannel extends AbstractChannel {
     }, 410))
 
     // ── GET /api/chat/session?chatId=<id> — retrieve session context + history ──
-    app.get('/api/chat/session', async (c) => {
+    // Compress only history reads, never realtime or media/range responses.
+    // Hono negotiates Accept-Encoding, adds Vary and weakens compressed ETags;
+    // snapshot revisions still validate the complete uncompressed representation.
+    app.get('/api/chat/session', compress({ encoding: 'gzip' }), async (c) => {
       const chatId = c.req.query('chatId')
       if (!chatId) return c.json({ error: 'chatId is required' }, 400)
 

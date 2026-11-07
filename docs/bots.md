@@ -545,7 +545,9 @@ arbitrary destinations or authorize local session management:
 - `ctx.work.call({ action: "create", idempotencyKey, title, definition: { objective,
   acceptance: [], boundaries: [] } })` creates a **normal Project Work record** with
   `pending`, `manager=null`, `assignee=null`. No session is created, selected,
-  assigned, focused or messaged. Unassigned Work is never automatically picked up.
+  assigned, focused or messaged by Bot intake itself. An explicitly configured and
+  enabled automatic Work dispatch may subsequently claim eligible unassigned Work
+  and start an isolated executor; see [automatic Work dispatch](work-auto-dispatch.md).
 - `ctx.work.call({ action: "query", key?, offset?, limit? })` reads only Work created
   by this Project/Bot/binding source. The projection contains the original submitted
   definition, coarse progress and recent source supplements, not private owner

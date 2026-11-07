@@ -65,7 +65,7 @@ export function buildSenderTag(msg: SessionMessageInput): string {
   const coordination = msg.source.kind === 'session' ? msg.source.coordination : undefined
   const work = coordination
     ? ` intent="${escapeAttr(coordination.intent)}"` +
-      (coordination.initiativeId ? ` initiative-id="${escapeAttr(coordination.initiativeId)}"` : '') +
+      (coordination.initiativeId ? ` work-root="${escapeAttr(coordination.initiativeId)}"` : '') +
       (coordination.itemId ? ` item-id="${escapeAttr(coordination.itemId)}"` : '')
     : ''
   const revisions = msg.source.kind === 'session' && msg.source.workStamps?.length

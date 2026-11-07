@@ -542,7 +542,7 @@ export class WorkAlignment implements WorkToolGuard {
         query: z.string().trim().max(500).default(''), limit: z.number().int().min(1).max(20).default(5),
         offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
       }).strict().parse(data ?? {})
-      if (action === 'tree' && !key) throw new WorkConflict('Select a root work key for the Initiative view.')
+      if (action === 'tree' && !key) throw new WorkConflict('Select a root work key for the Work view.')
       const tree = action === 'tree' ? this.store.initiativeView(key!) : undefined
       const terms = request.query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
       const records = (tree?.items ?? this.store.workRecords()).filter(record => {
@@ -654,7 +654,7 @@ export class WorkAlignment implements WorkToolGuard {
         ? workChangeSchema.parse({ definition: update!.definition, change: update!.change, reason: update!.reason, paused: update!.paused,
           subject: this.get(key).subject, expectedRevision: revision })
         : workChangeSchema.parse(data)
-      if (this.store.unifiedWork && !key) throw new WorkConflict('Use create for new work; revise existing work by key and revision.')
+      if (!key) throw new WorkConflict('Use create for new work; revise existing work by key and revision.')
       const work = workKey(change.subject)
       const prior = this.store.workRecords().find(record => record.key === work)
       if ((prior?.revision ?? 0) !== change.expectedRevision) throw new WorkConflict('Work revision changed; reload before editing.')
@@ -816,17 +816,7 @@ export class WorkAlignment implements WorkToolGuard {
       await this.deps.changed(record, previous)
       return record
     }
-    if (action === 'release') {
-      const successor = record.successors?.findLast(edge => edge.fromSessionId === authority.executor)
-      if (actor.kind !== 'session' || actor.sessionId !== authority.executor || record.subject.kind !== 'item'
-        || !successor) {
-        throw new WorkConflict('Only the current assignee can explicitly release work after a successor has been prepared.')
-      }
-      const result = this.store.query(`UPDATE initiative_items SET assignee_session_id=NULL WHERE id='${record.subject.itemId}' AND assignee_session_id=actor_session_id()`, actor.sessionId)
-      if (result.changes !== 1) throw new WorkConflict('Assignment changed; release was not applied.')
-      this.store.workEvent(key, name, 'assignment_released', { successorId: successor.sessionId })
-      return { status: 'released', notice: 'Unassigned, not transferred. The Initiative owner must explicitly assign the prepared successor using a guarded update.' }
-    }
+    if (action === 'release') throw new WorkConflict('Legacy item release is unsupported. Use assign for current Work responsibility changes.')
     if (action === 'settle') {
       const request = z.object({ effectId: z.string().uuid(), evidence: z.unknown().optional() }).strict().parse(data)
       this.assertController(record, actor)
@@ -1018,7 +1008,7 @@ export class WorkAlignment implements WorkToolGuard {
 
   handoff(record: WorkRecord): string {
     return 'Intentional work realignment, not a continuity summary. The current contract is the authority; ' +
-      'old reasoning/memory/documents are historical until checked against it. No permissions or Initiative assignments transfer.\n' +
+      'old reasoning/memory/documents are historical until checked against it. No permissions or Work assignments transfer.\n' +
       JSON.stringify({ contract: record.definition, origin: record.origin, key: record.key, revision: record.revision,
         inventory: record.checkpoint, transitionId: record.transition?.id })
   }

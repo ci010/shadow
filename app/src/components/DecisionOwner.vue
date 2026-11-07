@@ -1,7 +1,7 @@
 <template>
   <component :is="embedded ? 'section' : 'details'" v-show="!embedded || expanded" class="decision-owner" :class="{ 'is-embedded': embedded }" @toggle="toggle">
     <summary v-if="!embedded">{{ t('Decision reporting responsibility') }}</summary>
-    <p>{{ t('Choose who checks premises and explains this session\'s decisions to you. This does not change answer authority, parenthood or Initiative assignments.') }}</p>
+    <p>{{ t('Choose who checks premises and explains this session\'s decisions to you. This does not change answer authority, parenthood or Work assignments.') }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <template v-if="candidates.length">
       <label>{{ t('Reporting session') }} <UiSelect v-model="selected" :disabled="busy">

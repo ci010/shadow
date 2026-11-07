@@ -9,6 +9,7 @@ import { localFolderWorkdirRef } from './locality.ts'
 import { absoluteDirectoryPath, type FolderRegistry } from '../folders/registry.ts'
 import type { InputSource } from './input.ts'
 import { parseSessionName } from './session-name.ts'
+import { parseWorkRoot } from './initiative-metadata.ts'
 import { workBindingSchema } from './work-policy.ts'
 import { selectFolder } from '../folders/identifier.ts'
 import { REASONING_EFFORTS, type InferenceSettings } from '../agent/llm-config.ts'
@@ -24,10 +25,13 @@ const createRequest = z.object({
   agentType: z.string().trim().min(1).max(100).default('general'),
   model: z.string().trim().min(1).max(512).optional(),
   effort: z.enum(REASONING_EFFORTS).optional(),
-  initiativeId: z.string().trim().min(1).max(600).optional(),
+  workRoot: z.string().trim().min(1).max(600).optional(),
   initialMessage: z.string().trim().min(1).max(32_000).optional(),
   work: workBindingSchema.optional(),
-}).strict()
+}).strict().transform(({ workRoot, ...request }) => {
+  const initiativeId = parseWorkRoot(workRoot)
+  return { ...request, ...(initiativeId === undefined ? {} : { initiativeId }) }
+})
 const discoveryRequest = z.object({
   query: z.string().trim().max(500).default(''),
   limit: z.number().int().min(1).max(20).default(5),
@@ -49,7 +53,7 @@ export interface TopicSummary {
   topic: string
   focus?: string
   folderId?: string
-  initiativeId?: string
+  workRoot?: string
   createdBySessionId?: string
   status: string
   completed: boolean
@@ -78,7 +82,7 @@ function topicSummary(projectId: string, state: SessionState, firstMessage?: str
     topic: sessionTopic(state) || firstMessage?.split('\n')[0]?.slice(0, 160) || state.sessionId,
     ...(state.focus ? { focus: state.focus } : {}),
     folderId: state.folderId,
-    initiativeId: state.initiativeId,
+    workRoot: state.initiativeId,
     createdBySessionId: state.createdBySessionId,
     completed: state.completed ?? false,
     status: state.completed ? 'completed' : state.recovery ? 'needs_attention' : state.executionStatus ?? 'idle',
@@ -111,7 +115,7 @@ export class TopicService {
     const entries = (await this.summaries())
       .filter(topic => {
         const text = [topic.sessionId, topic.topic, topic.focus,
-          topic.folderId, topic.initiativeId].join('\n').toLocaleLowerCase()
+          topic.folderId, topic.workRoot].join('\n').toLocaleLowerCase()
         return terms.every(term => text.includes(term))
       })
     const sessions = entries.slice(offset, offset + limit)

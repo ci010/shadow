@@ -6,6 +6,7 @@ import { configuration, layerfsName, runBridge } from './bridge.ts'
 import { validateLayerArgs, LayerFSTool } from '../../tools/layerfs.ts'
 import { ToolOutcomeUnknownError, isCompletedToolFailure, toolResultText } from '../../tools/tool.ts'
 import type { ExecutionContext } from '../../tools/context.ts'
+import { resolveExecShell } from '../processes/shells.ts'
 
 test('workspace IDs are Project-bound, source selectors are not host paths, reads bounded', () => {
  const project = layerfsName('one')
@@ -69,7 +70,7 @@ test('different workspaces run concurrently; same workspace is refused while bus
   const id = (path: string) => Buffer.from(JSON.stringify({ project, sandbox: '1', path })).toString('base64url')
   const a = {action:'exec', workspace:id('/workspaces/1'), command:'test'}
   const b = {action:'exec', workspace:id('/workspaces/2'), command:'test'}
-  const context = { projectId:'one', signal:new AbortController().signal } as ExecutionContext
+  const context = { projectId:'one', sessionId:'web:bridge', signal:new AbortController().signal } as ExecutionContext
   const tool = new LayerFSTool('one')
   const first = tool.execute(a, context)
   await assert.rejects(tool.execute(a, context), /already in flight/)
@@ -84,13 +85,15 @@ test('different workspaces run concurrently; same workspace is refused while bus
  }
 })
 
-test('sandbox read/write use quoted literal content and do not overwrite source', async () => {
+test('sandbox read/write use quoted literal content and do not overwrite source', async t => {
+ const shell = await resolveExecShell(process.platform === 'win32' ? 'git-bash' : 'sh')
+ if (!shell) { t.skip('POSIX shell required for the local SDK fixture'); return }
  const dir = await mkdtemp(join(process.cwd(), '.layerfs-test-'))
  try {
   const sdkModule = join(dir, 'sdk.mjs')
-  await writeFile(sdkModule, `import {execSync} from 'node:child_process';
+  await writeFile(sdkModule, `import {execFileSync} from 'node:child_process';
    export const LayerFS = {open: async()=>({workspace:{exec:async(ws,command,message,sinks)=>{
-    const output=execSync(command,{cwd: ${JSON.stringify(dir)}}); await new Promise((ok,no)=>sinks.stdout.write(output,e=>e?no(e):ok())); return {code:0};
+    const output=execFileSync(${JSON.stringify(shell.command)},['-lc',command],{cwd: ${JSON.stringify(dir)}}); await new Promise((ok,no)=>sinks.stdout.write(output,e=>e?no(e):ok())); return {code:0};
    }},close:async()=>{}})}`)
   const project = layerfsName('one'), workspace = Buffer.from(JSON.stringify({project,sandbox:'1',path:'/workspaces/1'})).toString('base64url')
   const config = {sdkModule, env:{LAYERFS_HOME:dir}}, signal = new AbortController().signal
@@ -133,16 +136,18 @@ test('create accepts a registered source selector and SDK refusals are completed
   await writeFile(configPath,JSON.stringify({projects:{one:{sdkModule,env:{LAYERFS_HOME:dir,LAYERFS_STORE_PATH:join(dir,'store'),LAYERFS_WORKER_ENDPOINT:join(dir,'worker')}}}}))
   process.env.SHADOW_LAYERFS_CONFIG = configPath
   let selected = ''
-  const context = {projectId:'one',signal:new AbortController().signal,resolveToolTarget:async(selector:string,operation:string)=>{
+  const context = {projectId:'one',sessionId:'web:bridge',signal:new AbortController().signal,resolveToolTarget:async(selector:string,operation:string)=>{
    selected = selector; assert.equal(operation,'filesystem.read'); return {cwd:dir,fileChangeTarget:{nodeId:'main',workdirId:'registered'}};
   }} as ExecutionContext
   const tool = new LayerFSTool('one')
-  const created = await tool.execute({action:'create',workspace:'shadow-991eee02'},context)
+  const preview = JSON.parse(toolResultText(await tool.execute({action:'import_preview',workspace:'shadow-991eee02'},context))).result
+  const created = await tool.execute({action:'create',workspace:'shadow-991eee02',sourceReview:preview.reviewToken,sourceReviewed:true},context)
   assert.equal(selected,'shadow-991eee02')
   assert.equal(isCompletedToolFailure(created),false)
   const receipt = JSON.parse(toolResultText(created))
   assert.equal(receipt.ok,true)
   assert.equal(receipt.result.kind,'Initialized')
+  assert.equal(receipt.result.timeout,300000, 'Shared default reaches the SDK unchanged')
   assert.equal(receipt.result.source,dir)
   assert.equal(receipt.result.project,layerfsName('one'))
   const workspace = Buffer.from(JSON.stringify({project:layerfsName('one'),sandbox:'1',path:'/workspaces/1'})).toString('base64url')
@@ -158,4 +163,39 @@ test('create accepts a registered source selector and SDK refusals are completed
   if (prior === undefined) delete process.env.SHADOW_LAYERFS_CONFIG; else process.env.SHADOW_LAYERFS_CONFIG = prior
   await rm(dir,{recursive:true,force:true})
  }
+})
+
+
+for (const fails of [false, true]) test(`operator import uses the SDK budget and heartbeat liveness, not a competing wall-clock timeout; fails=${fails}`, async () => {
+ const dir = await mkdtemp(join(process.cwd(), '.layerfs-timeout-test-'))
+ try {
+  const sdkModule = join(dir, 'sdk.mjs')
+  await writeFile(sdkModule, `export const LayerFS = { init: async (_project,_source,timeout) => {
+   if(timeout!==1000) throw Error('Wrong native import budget');
+   await new Promise(resolve=>setTimeout(resolve,1700));
+   ${fails ? "throw Object.assign(Error('Project(Deadline)'),{code:'Failed'});" : "return {created:{kind:'Initialized',timeout},close:async()=>{}};"}
+  } }`)
+  // 1250ms is only the silence watchdog. The 1s helper heartbeat must keep
+  // observation alive until the SDK's own result, even beyond its nominal budget.
+  const receipt = JSON.parse(await runBridge({sdkModule,env:{}}, 'fixture', 'create', {source:dir,importTimeoutMs:1000}, new AbortController().signal, 1250))
+  assert.equal(receipt.ok, !fails)
+  if (fails) { assert.equal(receipt.error.code, 'Failed'); assert.equal(receipt.error.message, 'Project(Deadline)') }
+  else assert.equal(receipt.result.timeout, 1000)
+ } finally { await rm(dir,{recursive:true,force:true}) }
+})
+
+test('silent or cancelled operator imports remain unknown; no automatic retry', async () => {
+ const dir = await mkdtemp(join(process.cwd(), '.layerfs-timeout-test-'))
+ try {
+  const sdkModule = join(dir, 'sdk.mjs')
+  // Blocking the fixture event loop prevents heartbeats. It is not a native import.
+  await writeFile(sdkModule, `export const LayerFS={init:async()=>{const until=Date.now()+2000;while(Date.now()<until){};return {created:{kind:'Initialized'},close:async()=>{}}}}`)
+  await assert.rejects(runBridge({sdkModule,env:{}}, 'fixture', 'create', {source:dir}, new AbortController().signal, 250), (error: unknown) => error instanceof ToolOutcomeUnknownError && /heartbeat lost/.test(error.message))
+  await writeFile(sdkModule, `export const LayerFS={init:async()=>{await new Promise(resolve=>setTimeout(resolve,2000));return {created:{kind:'Initialized'},close:async()=>{}}}}`)
+  const controller = new AbortController()
+  const request = runBridge({sdkModule,env:{}}, 'fixture', 'create', {source:dir}, controller.signal)
+  const timer = setTimeout(()=>controller.abort(),250)
+  try { await assert.rejects(request, (error: unknown) => error instanceof ToolOutcomeUnknownError && /cancelled/.test(error.message)) }
+  finally { clearTimeout(timer) }
+ } finally { await rm(dir,{recursive:true,force:true}) }
 })

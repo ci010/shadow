@@ -5,7 +5,7 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 import { workspacePath } from '../utils/paths.ts'
 import { CronService } from './service.ts'
 
-test('cron restores legacy Initiative linkage independently from its folder', async () => {
+test('cron rejects legacy planning metadata instead of silently importing it', async () => {
   await withTempWorkspace(async home => {
     await mkdir(workspacePath(home, '.cron'), { recursive: true })
     await writeFile(workspacePath(home, '.cron', 'jobs.json'), JSON.stringify({
@@ -18,11 +18,7 @@ test('cron restores legacy Initiative linkage independently from its folder', as
     }))
     const service = new CronService(home)
     try {
-      await service.start()
-      const job = service.listJobs()[0]
-      assert.equal(job.folderId, 'folder-one')
-      assert.equal(job.initiativeId, 'cleanup')
-      assert.equal('projectName' in job, false)
+      await assert.rejects(service.start(), /Unsupported legacy Work context/)
     } finally { await service.stop() }
   })
 })

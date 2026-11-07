@@ -166,10 +166,10 @@ cancel({ executionId: "<returned-executionId>" })
 A remote `sessionId` is a stable, owner-scoped conversation reference
 (`remote:<local-id>`); each send/reply produces a distinct `executionId` under
 that conversation. These are A2A journal views, not local executable sessions:
-no local parent relationship, workdir, transcript or Initiative is adopted.
+no local parent relationship, workdir, transcript or Work is adopted.
 Only explicitly supplied task/message text leaves Shadow. Remote subagent
 delegation supports `task`, not blocking `call`, and rejects `report_to`,
-`preload_tools` and Initiative selectors. Remote `message` accepts only
+`preload_tools` and Work selectors. Remote `message` accepts only
 `sessionId` and `content`; silent/archive, attention and attachment semantics
 are not silently approximated.
 
