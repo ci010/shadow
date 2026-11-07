@@ -4132,5 +4132,11 @@
   "Binary asset; inspect the source file before opening.": "Binary asset; inspect the source file before opening.",
   "Project owner access is required to run apps.": "Project owner access is required to run apps.",
   "Cancel author testing and stop": "Cancel author testing and stop",
-  "Closing that window stops the app. Its saved data and usage remain.": "Closing that window stops the app. Its saved data and usage remain."
+  "Closing that window stops the app. Its saved data and usage remain.": "Closing that window stops the app. Its saved data and usage remain.",
+  "Connections": "Connections",
+  "Manage platform credentials, connection status and owner pairing here. Multiple BOTs can reuse one service connection without sharing their permissions.": "Manage platform credentials, connection status and owner pairing here. Multiple BOTs can reuse one service connection without sharing their permissions.",
+  "Configure BOT behavior and bindings in chat using BOT.md and bot.json in the registered source folder. This page only shows deployment status; it does not maintain a second binding configuration.": "Configure BOT behavior and bindings in chat using BOT.md and bot.json in the registered source folder. This page only shows deployment status; it does not maintain a second binding configuration.",
+  "Configure BOTs in chat": "Configure BOTs in chat",
+  "In chat, describe the BOT and source folder to configure. Review the exact content and permissions before deployment. For credentials, an authorized owner Web chat can open a private connection card; never paste secrets into chat or ordinary ask replies. QQ and Discord chats cannot open this private card.": "In chat, describe the BOT and source folder to configure. Review the exact content and permissions before deployment. For credentials, an authorized owner Web chat can open a private connection card; never paste secrets into chat or ordinary ask replies. QQ and Discord chats cannot open this private card.",
+  "Manage platform connections": "Manage platform connections"
 }

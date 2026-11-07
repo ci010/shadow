@@ -4132,5 +4132,11 @@
   "Binary asset; inspect the source file before opening.": "二进制资源；打开前请检查源文件。",
   "Project owner access is required to run apps.": "运行应用需要项目所有者权限。",
   "Cancel author testing and stop": "取消作者测试并停止应用",
-  "Closing that window stops the app. Its saved data and usage remain.": "关闭该窗口会停止应用，已保存的数据和使用量仍会保留。"
+  "Closing that window stops the app. Its saved data and usage remain.": "关闭该窗口会停止应用，已保存的数据和使用量仍会保留。",
+  "Connections": "连接",
+  "Manage platform credentials, connection status and owner pairing here. Multiple BOTs can reuse one service connection without sharing their permissions.": "在此管理平台凭据、连接状态和拥有者配对。多个 BOT 可以复用同一个服务连接，但不会因此共享权限。",
+  "Configure BOT behavior and bindings in chat using BOT.md and bot.json in the registered source folder. This page only shows deployment status; it does not maintain a second binding configuration.": "在对话中通过已注册源目录中的 BOT.md 和 bot.json 配置 BOT 行为与绑定。本页仅展示部署状态，不维护第二份绑定配置。",
+  "Configure BOTs in chat": "在对话中配置 BOT",
+  "In chat, describe the BOT and source folder to configure. Review the exact content and permissions before deployment. For credentials, an authorized owner Web chat can open a private connection card; never paste secrets into chat or ordinary ask replies. QQ and Discord chats cannot open this private card.": "在对话中说明要配置的 BOT 和源目录，并在部署前审核精确内容与权限。需要凭据时，已授权的拥有者 Web 对话可打开私密连接卡；切勿将秘密粘贴到聊天或普通提问回复中。QQ 和 Discord 对话无法打开此私密卡。",
+  "Manage platform connections": "管理平台连接"
 }
