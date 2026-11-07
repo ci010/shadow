@@ -11,8 +11,6 @@ import { Bus } from '../bus/bus.ts'
 import { QQChannel } from '../channels/qq.ts'
 import { BackgroundTaskManager } from '../agent/background-task.ts'
 import { EventService } from '../events/service.ts'
-import { PollingSources } from '../events/polling-sources.ts'
-import { CapabilityBroker } from '../execution/grants.ts'
 import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 import type { LLMProvider, LLMResponse, ChatMessage } from '../providers/provider.ts'
 import type { HandoffManager } from './handoff/manager.ts'
@@ -1961,40 +1959,4 @@ test('automatic rate-limit waiting stays in the same turn, rejects duplicate Con
     assert.equal(waits[0]?.status, 429)
     assert.equal(waits.at(-1), undefined)
   } finally { await f.close() }
-})
-
-
-test('generic polling signal wakes its persistent owner through SessionManager without Work', async () => {
-  const f = await fixture({ manager: true })
-  const events = new EventService(f.workspace, f.bus, (id, value) => f.manager.deliver(id, value))
-  await events.start()
-  let revision = 'baseline'
-  const broker = new CapabilityBroker({ projectId: 'fixture', directory: join(f.workspace, 'receipts'),
-    resolveSecret: async () => undefined, deliver: async () => undefined, canDeliver: () => false,
-    request: async () => new Response(JSON.stringify({ revision }), { status: 200 }) })
-  const sources = new PollingSources(f.workspace, events, broker, id => id === f.state.sessionId, () => false)
-  sources.start()
-  try {
-    events.subscribe({ sessionId: f.state.sessionId, source: 'custom:generic-signal', event: 'resource.changed', delivery: { urgency: 'queue' } })
-    events.subscribe({ sessionId: 'foreign-session', source: 'custom:generic-signal', event: 'resource.changed' })
-    sources.create({ id: 'generic-signal', ownerSessionId: f.state.sessionId, intervalMs: 86400000,
-      grant: { id: 'fetch', kind: 'http', origin: 'https://example.com', routes: [{ method: 'GET', path: '/signal' }] },
-      code: `import { fetch } from '@shadow/fetch'; export async function run({checkpoint}) {
-        const response = await fetch('/signal'); if(response.status !== 200) throw new Error('read failed');
-        const revision = response.body.revision;
-        return {events: checkpoint === null || checkpoint === revision ? [] : [{id:revision,type:'resource.changed',content:'External generic signal '+revision}],checkpoint:revision};
-      }` })
-    assert.equal(await sources.run('generic-signal', f.state.sessionId), 0)
-    assert.equal(f.calls.length, 0)
-    revision = 'changed-once'
-    assert.equal(await sources.run('generic-signal', f.state.sessionId), 1)
-    await waitFor(() => f.calls.length === 1)
-    assert.match(JSON.stringify(f.calls[0].messages), /External generic signal changed-once/)
-    f.calls[0].resolve(done('Handled signal'))
-    await waitFor(() => f.facts.length === 1)
-    assert.equal(f.facts[0].status, 'completed')
-    assert.equal(await sources.run('generic-signal', f.state.sessionId), 0)
-    assert.equal(f.calls.length, 1)
-    assert.equal(f.manager.listActiveSessions().some(s => s.sessionId === 'foreign-session'), false)
-  } finally { await sources.stop(); await events.stop(); await f.close() }
 })

@@ -1,7 +1,7 @@
 # Programmable EventSourceProviders
 
-`event_provider` is the general authored provider path, separate from legacy
-`event_source` / `event_subscribe`, cron and EventService. A provider is restricted
+`event_provider` is the general authored provider path, separate from internal
+`event_subscribe`, cron and EventService. A provider is restricted
 code plus a self-describing manifest, not a GraphQL transport abstraction.
 REST, GraphQL and public HTML/text acquisition are implementation choices.
 Project runtime constructs, starts/stops the runtime and registers the lazy tool.
@@ -11,10 +11,47 @@ Installation does not create instances, provision credentials or perform IO.
 
 Discover tools with `search({handler:"glob",path:"v:tools/events",query:"**"})`,
 read the exact returned contract, then invoke `event_provider` via `invoke_tool`.
-`discover` lists revisions, schemas/examples, HTTP declarations, owned instances,
-shared instance IDs, subscriptions and sanitized pending/error status. `inspect`
-with `id` and `version` also returns code and fixed legacy query text. No resolved
-credentials are returned. Definitions/code are Project-wide discoverable; do not
+Start with `v:events/` (“可订阅的事件来源”), then read
+`v:events/providers/<id>`: **one complete consumer file**, not a directory.
+It includes capabilities/noncapabilities, demand and event-data schemas, examples,
+baseline/update/repeat semantics, minimal instance purpose/availability and exact
+`invoke_tool` subscription calls. With multiple applicable versions the same file
+shows each contract with its pinned instances; latest does not override older pins.
+No instances/examples means setup is needed, not an invented executable call.
+
+Implementation details require explicit authoring paths:
+- `v:events/authoring/providers/<id>/revisions/<version>/manifest.json`, `source.ts`
+- `v:events/authoring/subscriptions/<id>/diagnostics.json` for pending job diagnostics.
+Explicit management paths remain `v:events/instances/<id>/{config.json,status.json}`,
+`v:events/subscriptions/<id>/{config.json,processor.ts,status.json}` and
+`v:events/status.json`. Consumer subscription status is a count and next-step hint,
+not internal job IDs. Management config includes bindings/transport and secret
+reference names, never resolved credentials or cookies.
+
+Root recursive list/search includes consumer files only; `providers/` lists files,
+not revision directories. To search implementation code explicitly scope search to
+`v:events/authoring`. There are no implementation aliases under `providers/`.
+Directories list children; normal read offset/limit and search paging apply.
+This is progressive disclosure, **not an authorization boundary**. Views are
+generated from runtime state, not duplicate persistence; writes are rejected.
+Internal runtime subscriptions and sources are at `v:events/internal/` and
+`v:events/internal/sources`. They remain available to internal-event consumers
+without a provider-authoring session. Unrecognized root paths are rejected;
+internal subscriptions are not mixed into consumer root search.
+
+Author manifests may provide structured `consumer: {summary, unsupported?, capabilities,
+limitations, semantics}` (bounded strings/arrays); do not place implementation
+bindings in consumer prose. Missing metadata uses explicit “not documented”
+defaults, never regex extraction from descriptions/code. Schemas/examples remain
+single-source manifest fields. Instance `purpose` is optional, short consumer-safe
+text; omit secrets and implementation addresses.
+
+GitHub emits observed issue revisions with validated `id`, `number`, `title`,
+`url`, `state` (OPEN/CLOSED), `updatedAt`, not a guaranteed transition history.
+The 500-issue bound fails closed; PRs/comments/deletions and live guarantees are
+unsupported. Acquisition batching/query details belong to authoring, not consumption.
+The old provider `discover`, `inspect`, and `share` actions are removed.
+All eligible local sessions in this Project can read all these views. Do not
 put secrets in them or in queries, bodies, output, checkpoints or chat.
 
 Create `providers/changes.json` and adjacent `changes.ts` inside the session's
@@ -33,6 +70,7 @@ establishes a silent first batch and incrementally consumes subsequent batches.
 ```json
 {
   "id":"changes", "description":"Incremental public change feed",
+  "consumer":{"summary":"Observe public change entries.","unsupported":"No historical replay or live guarantee.","capabilities":["Change ID and title."],"limitations":["Only this feed's published entries; no external state transitions."],"semantics":["Stable occurrence IDs identify feed entries; intermediate unpublished changes are not observed."]},
   "stateVersion":"changes-delta-v1", "code_file":"changes.ts",
   "http":{
     "origin":"https://api.example.org",
@@ -81,13 +119,13 @@ Do not advance past pages that were not successfully represented in output.
 
 Reload with `invoke_tool({name:"event_provider",args:{action:"reload",path:"providers/changes.json"}})`.
 The host assigns version 1 (or the next version) and probes empty demands: code
-must return `{}` with no IO. Repeat edit + reload to repin only your instances.
+must return `{}` with no IO. Repeat edit + reload to repin all matching Project instances.
 A lower-level `publish` accepts the same metadata with explicit `version` and
 inline `code` instead of `code_file`, registering without repinning instances.
 
 On an actual direct-user turn, create using `action:"create", input_json`:
 ```json
-{"id":"changes-watch","provider":"changes","version":1,"allowedSubscribers":["session-b"]}
+{"id":"changes-watch","provider":"changes","version":1}
 ```
 Then each authorized subscribing session uses `action:"subscribe", input_json`:
 ```json
@@ -98,7 +136,7 @@ Processors have no IO capabilities; they may import the pure local `@shadow/html
 module and return 0–16 `{content}` drafts.
 Conditional `[]` filters; multiple drafts fan out. Their persisted failures and
 retries are isolated. `run` requests a host cycle (no rate-limit bypass), and
-`discover` reports processor/delivery stages. Establish a successful baseline
+`v:events/subscriptions/<id>/status.json` reports a queued count and actionable next step. Establish a successful baseline
 before claiming monitoring; a fixture is not live source verification.
 
 ### Complete public HTML/text crawler example
@@ -107,6 +145,7 @@ before claiming monitoring; a fixture is not live source verification.
 ```json
 {
   "id":"headline","description":"Public static HTML headline","code_file":"headline.ts",
+  "consumer":{"summary":"Observe public headline text changes.","unsupported":"No dynamic pages or complete edit history.","capabilities":["Current headline text."],"limitations":["Only sampled static text is observed; intermediate edits may be missed."],"semantics":["Changed headline snapshots emit after the silent initial baseline."]},
   "stateVersion":"headline-snapshot-v1",
   "http":{"origin":"https://news.example.org","routes":[{"method":"GET","path":"/news"}]},
   "demandSchema":{"type":"object","additionalProperties":false},
@@ -210,7 +249,7 @@ safe or recommended. No arbitrary fetch or host imports are exposed.
 
 ## Collection contract and persistence
 
-`run({demands,queries})` receives unique `{key,demand,checkpoint}` records. Generic
+`run({demands})` receives unique `{key,demand,checkpoint}` records. Generic
 demand normalization is finite canonical JSON: object keys sorted for identity,
 array order/case/numeric values preserved. It does not execute custom host
 normalizers. GitHub additionally lowercases its validated repository demand.
@@ -245,26 +284,38 @@ Collection caps 40 requests and 32 KiB request input; restricted execution
 
 Private state is `projectStoragePath(ProjectHome,'.events','providers-v1.json')`,
 not the selected workdir. One Project runtime is the sole supported writer; atomic
-private-file replacement is used. Old GraphQL-only records migrate their
-existing policy into a fixed instance binding at startup. Do not edit runtime
+private-file replacement is used. Legacy query-only custom definitions must be
+reauthored with an explicit HTTP declaration before loading. Obsolete bindings using
+the removed query-allowlist contract must be recreated under an explicit HTTP policy;
+unsupported persisted state fails closed rather than silently dropping constraints. Do not edit runtime
 state manually. The four latest authored revisions and all pinned revisions are
-retained on reload; other owners' pins are preserved.
+retained on reload; all matching Project instances are coherently repinned.
 
-## Sharing, revocation and host lifecycle
+## Project scope and host lifecycle
 
-Owners use `share` with `{id,allowedSubscribers:[sessionId]}` to replace the full
-list. Only available durable local sessions in this Project qualify. Sharing
-exposes instance ID/provider/version/enabled, not credential refs/configuration
-or other sessions' subscriptions. Exact demands deduplicate across authorized
-sessions in one instance, never across credential/instance boundaries. Each
-subscriber has its own processor and self destination. Revocation/unsubscribe
-discards pending work, including saved drafts; regrant does not replay discarded
-jobs. Eligibility and credential availability are rechecked at collection,
-fanout, processing and delivery boundaries. A delivery already started may be
-accepted and cannot be recalled. `pause` retains jobs/checkpoints and suspends
-collection/delivery; `resume` honors the reserved deadline. There is no instance
-deletion, credential rebinding, interval customization or processor replacement;
-use a new instance/subscription as appropriate.
+Instances belong to the Project runtime. Any eligible available durable local
+session in the same Project can create/use instances, subscribe itself, pause,
+resume, reload matching instances, or request exact-identity browser rebinding.
+Creator metadata is provenance, not an access gate. There is no sharing allowlist
+or revocation action; obsolete stored instance allowlists are ignored on loading.
+Cross-Project access remains rejected. Remote sessions remain unsupported.
+Exact demands deduplicate within an instance, never across credential/instance
+boundaries. Each subscription has an independent processor, outbox, and self
+destination. Only its subscriber may unsubscribe; this discards its pending work.
+Eligibility and credential availability are rechecked at collection, fanout,
+processing and delivery boundaries. Native collection uses an available subscriber
+as invocation provenance and does not depend on the creator remaining available.
+An already-started delivery may be accepted and cannot be recalled.
+`pause` retains jobs/checkpoints and suspends collection/delivery; `resume` honors
+the reserved deadline. There is no instance deletion, credential rebinding,
+interval customization or processor replacement; use a new instance/subscription.
+
+Project access does **not** confer managed-browser authority. The caller binding
+or rebinding a browser must independently hold the existing explicit managed
+browser authorization; exact persisted instance/target identity is required.
+The host retains that browser access check throughout collection; if its actual
+holder becomes unavailable, browser collection stops until independently authorized
+same-identity rebind. It never exports cookies or falls back to native transport.
 
 Reload pauses new cycles globally, aborts network/scripts, drains active work
 and any already-started inbox call, probes candidate empty-demand behavior and
@@ -281,9 +332,10 @@ the manifest is not a guarantee of application-level read semantics.
 host-injected Bearer PAT and **fixed read-only GraphQL** constraints. Create with
 `{id:"issues",provider:"github-issues",version:1,secretRef:"github-events"}`;
 subscribe with demand `{repository:"owner/repo"}`. The origin is fixed to
-`https://api.github.com`; query allowlists remain broker-enforced on reload.
-The legacy `queries` declaration uses `call({query,variables})` returning GraphQL
-`data`; only this compatibility path uses that shorthand, not general providers.
+`https://api.github.com`. GitHub owns the static query, aliases, variables, pagination
+and response validation. It uses standard `call({method:"POST",path:"/graphql",body:{query,variables}})`
+and reads the normal `{status,body}` response. Its route body schema pins the exact query
+and rejects changed queries/mutations before credentials or IO. Reload cannot expand the binding.
 
 The POC batches up to four independent repository connections, 50 issues/page,
 ten pages/500 issues per repository. Partial GraphQL errors, missing connections,
@@ -319,7 +371,7 @@ unchanged. Browser instances require **no `http.credential` and no `secretRef`**
 combining browser cookies with native header secrets is explicitly unsupported.
 No cookie extraction, storage API access, credential export, or provider-supplied
 headers/evaluation/CDP URL is available. Authenticated response data is still
-available to authored code and its authorized subscribers: share cautiously.
+available to authored code and all eligible Project subscribers: bind only sources appropriate for this Project.
 
 Workflow (requires user authorization, not merely code publication):
 1. Use existing `browser_setup` selection/approval workflow to bind the owner's
@@ -386,3 +438,12 @@ against fixture fetch, and runtime/broker tests cover selection, credentials,
 restrictions, cancellation/draining, restart/reload and native/GitHub regression.
 No logged-in browser, personal profile, cookies, external API or live CORS/auth
 flow was accessed or verified by these tests.
+
+### Read-only POST acquisition
+
+A host-bound route may declare `effect:"read"` to acquire fresh data without mutation
+receipts (including repeated identical POST polls). This is a trusted policy assertion,
+not proof inferred from HTTP syntax. It is never a per-call guest override. Only bind
+this assertion to known read-only endpoints with appropriately restrictive body/query
+schemas. Other non-GET routes still require stable idempotency keys and receipts.
+The broker has no GraphQL parser, query field, or endpoint special case.

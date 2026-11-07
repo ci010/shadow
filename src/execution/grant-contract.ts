@@ -6,9 +6,11 @@ export const JsonSchema = z.record(z.unknown())
 const route = z.object({
   method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
   path: z.string().min(1).max(1024).regex(/^\/[^?#\\]*$/),
+  // Host-bound acquisition assertion, never accepted from a capability call.
+  effect: z.literal('read').optional(),
   bodySchema: JsonSchema.optional(),
   querySchema: JsonSchema.optional(),
-}).strict()
+}).strict().refine(value => !value.effect || value.method === 'POST', 'Read acquisition assertions are only supported for POST routes.')
 
 export const CapabilityGrantSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -18,8 +20,6 @@ export const CapabilityGrantSchema = z.discriminatedUnion('kind', [
       return url.protocol === 'https:' && url.origin === value && !url.username && !url.password
     }, 'HTTP grants require an HTTPS origin without credentials or a path.'),
     routes: z.array(route).min(1).max(32),
-    // Optional fail-closed read semantics for fixed GraphQL POST queries. No mutation ledger.
-    readOnlyGraphqlQueries: z.array(z.string().min(1).max(16000)).min(1).max(8).optional(),
     credential: z.object({ secretRef: ResourceName, header: z.string().regex(/^[A-Za-z][A-Za-z0-9-]*$/), prefix: z.string().max(64).default('') }).strict().optional(),
   }).strict(),
   z.object({

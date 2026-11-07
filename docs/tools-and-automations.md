@@ -1204,17 +1204,23 @@ falls back to topic without erasing any historical discovery metadata.
 
 ## Programmable EventSourceProviders
 
-The lazy `event_provider` tool is independent of legacy polling subscriptions.
+The lazy `event_provider` tool handles external sources; internal bus subscriptions use `event_subscribe`.
 Author a local manifest/restricted module and reload for REST JSON APIs, cursor
-feeds or public HTML/text acquisition. Discover/inspect exposes demand/event
-schemas, examples and HTTP declarations. Shared Project instances capture narrow
+feeds or public HTML/text acquisition. Read `v:events/providers/<id>` for the complete consumer contract; explicitly use
+`v:events/authoring/providers/<id>/revisions/<version>` for
+revision manifests, code, schemas and examples; `instances` and `subscriptions`
+expose Project-wide configuration, processors and sanitized status. Generated views
+are read-only. Internal bus views live at `v:events/internal/`. Provider discover/inspect/share
+actions are removed. Project instances capture narrow
 authorized origin/routes/methods/query/body/optional credential bindings that code
 reload cannot expand. Public sources need no secret. Exact demands deduplicate
-across allowed sessions; each subscription has an isolated processor/outbox.
+across eligible local Project sessions; each subscription has an isolated processor/outbox.
 Snapshot and bounded-retention delta modes commit checkpoints with fanout jobs.
-The built-in `github-issues@1` retains broker-enforced fixed read-only GraphQL
-batching and host-injected PAT. See [EventSourceProviders](event-source-providers.md)
-for complete REST/HTML authoring examples, discovery/reload/create/subscribe,
+The built-in `github-issues@1` owns its fixed GraphQL query, batching and read-only
+body schema, using the same standard HTTP call API and host-injected PAT. The
+broker only enforces protocol-neutral origin/routes/schemas and host-bound route
+`effect:"read"` acquisition assertions; ordinary writes retain mutation receipts. See [EventSourceProviders](event-source-providers.md)
+for complete REST/HTML authoring examples, virtual views/reload/create/subscribe,
 security, pagination/dedup bounds and inbox-acceptance reliability limitations.
 No arbitrary browser/JS-site support or exactly-once claim; fixture tests do not
 verify live sources.
