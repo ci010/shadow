@@ -25,6 +25,8 @@ import {
   type LLMResponseUsage,
   type ToolCall,
   isContextSizeError,
+  isImageRequestTimeout,
+  ProviderHttpError,
 } from '../providers/provider.ts'
 import type { SessionTools } from '../tools/registry.ts'
 import { ToolOutcomeUnknownError, toolResultText, transientToolSummary, type ToolDefinition, type ToolResult } from '../tools/tool.ts'
@@ -48,6 +50,7 @@ import { isToolUncertaintyResult, toolInvocationKey, toolUncertaintyResult, unce
 import type { PromptCaptureStore } from './prompt-capture.ts'
 import { saveToolImages } from './tool-images.ts'
 import { modelMessages } from '../providers/message-content.ts'
+import { prepareNewMessageImages } from '../providers/new-message-images.ts'
 import { usageProvider } from './usage.ts'
 import { providerFailureKind, type ProviderFailureKind } from '../providers/provider.ts'
 
@@ -65,6 +68,7 @@ export abstract class BaseSession {
   private suppressWakeOutput = false
   private messagePersistenceFailed = false
   private boundedSystemTask = false
+  private imagePreparationSignal?: AbortSignal
   private providerFailure?: ProviderFailureKind
   private providerWaiting?: RateLimitWait
   get rateLimitWait(): RateLimitWait | undefined { return this.providerWaiting }
@@ -135,8 +139,13 @@ export abstract class BaseSession {
   ): Promise<void> {
     if (messages.length === 0) return
     if (messages.some(message => message.role === 'user')) await this.ensureWorkingContext()
+    // A single admission guard covers user attachments and every tool result.
+    // Only the new messages are prepared; loaded/replayed history is never rewritten.
+    // Preserve the existing cancellation archive path without starting image work.
+    const prepared = this.imagePreparationSignal?.aborted ? messages
+      : await prepareNewMessageImages(messages, this.imagePreparationSignal)
     const now = new Date().toISOString()
-    const stampedMessages = messages.map(message => ({ ...message, timestamp: now }))
+    const stampedMessages = prepared.map(message => ({ ...message, timestamp: now }))
     this.messages.push(...stampedMessages)
     try {
       const stored: StoredMessage[] = stampedMessages.map((e) => ({
@@ -216,6 +225,13 @@ export abstract class BaseSession {
     return Promise.resolve(false)
   }
 
+  /** Only sessions with an existing durable compaction lifecycle may recover.
+   * Ephemeral/bounded calls must not silently acquire a new execution budget.
+   */
+  protected handleImageRequestTimeout(_llm: LlmRuntimeConfig, _signal: AbortSignal): Promise<boolean> {
+    return Promise.resolve(false)
+  }
+
   protected onToolPhaseEnd(): void {}
 
   protected emitOutbound(message: OutboundMessage): void {
@@ -275,6 +291,16 @@ export abstract class BaseSession {
     executionContext = { ...executionContext, model, temperature, maxTokens, thinking, reasoningEffort }
     const budget = new InferenceBudget(this.tools.inferenceRequestLimit)
     let contextRecoveryAttempted = false
+    let timeoutRecovery: { error: ProviderHttpError; sourcePhysicalId: string } | undefined
+    const recordTimeoutRecovery = async (phase: string, error: ProviderHttpError, status?: number) => {
+      await this.store.appendRawEvents(this.physicalSessionId, [{ provider_recovery: {
+        kind: 'image-request-timeout', phase, at: new Date().toISOString(), turnId,
+        sourcePhysicalId: timeoutRecovery?.sourcePhysicalId ?? this.physicalSessionId,
+        provider: error.provider, model, attempts: error.timeoutAttempts ?? 1,
+        originalRequest: error.requestStats, messages: this.messages.length,
+        ...(status !== undefined ? { status } : {}),
+      } }])
+    }
     const transientResults = new Map<string, ContentPart[]>()
     executionContext.infer = createNodeInference({
       provider: this.provider, budget,
@@ -395,14 +421,41 @@ export abstract class BaseSession {
       ).catch((err) => err as Error), signal)
 
       signal.throwIfAborted()
-      if (isContextSizeError(response)) {
-        console.warn(`[${this.id}] Provider context/request size limit exceeded`)
-        // One forced handoff per turn: oversized system prompts/tools or a
-        // provider limit smaller than the summary cannot be repaired by looping.
-        if (!contextRecoveryAttempted) {
-          contextRecoveryAttempted = true
-          if (await this.handleTokenLimitExceeded(llm)) continue
+      if (timeoutRecovery) {
+        const failed = response instanceof Error
+        await recordTimeoutRecovery(failed ? 'post-compact-failed' : 'recovered', timeoutRecovery.error,
+          response instanceof ProviderHttpError ? response.status : undefined)
+        span.span.setAttribute('provider.recovery.outcome', failed ? 'failed' : 'recovered')
+        timeoutRecovery = undefined
+      }
+      const imageTimeout = isImageRequestTimeout(response) && response.timeoutRetryExhausted === true
+      if (isContextSizeError(response) || imageTimeout) {
+        // One forced handoff per turn, shared with 413/token-limit recovery.
+        // Compaction deliberately replaces the cached prefix only AFTER retries.
+        if (imageTimeout) {
+          await recordTimeoutRecovery('retry-exhausted', response)
+          span.span.setAttribute('provider.recovery.reason', 'image-request-timeout')
         }
+        if (!contextRecoveryAttempted && (!imageTimeout || budget.remaining > 0)) {
+          contextRecoveryAttempted = true
+          if (imageTimeout) {
+            timeoutRecovery = { error: response, sourcePhysicalId: this.physicalSessionId }
+            span.span.setAttribute('provider.recovery.compact_attempted', true)
+            let compacted: boolean
+            try { compacted = await this.handleImageRequestTimeout({ ...llm, model }, signal) }
+            catch (error) {
+              if (!signal.aborted) await recordTimeoutRecovery('compact-failed', response)
+              throw error
+            }
+            signal.throwIfAborted()
+            if (compacted) {
+              await recordTimeoutRecovery('compact-completed', response)
+              continue
+            }
+            await recordTimeoutRecovery('compact-unsupported', response)
+            timeoutRecovery = undefined
+          } else if (await this.handleTokenLimitExceeded(llm)) continue
+        } else if (imageTimeout) await recordTimeoutRecovery('recovery-limit-reached', response)
         throw response
       } else if (response instanceof Error) {
         throw response
@@ -510,6 +563,13 @@ export abstract class BaseSession {
         } catch { /* Tool errors are not terminal receipts. */ }
       }
       const transient = transientToolSummary(result)
+      // Prepare before closing the durable tool pair: cancellation/validation
+      // errors must not append a second result after a summary was persisted.
+      let transientContent: ContentPart[] | undefined
+      if (transient !== undefined && typeof result !== 'string') {
+        const [prepared] = await prepareNewMessageImages([{ role: 'tool', content: result.content }], signal)
+        transientContent = prepared.content as ContentPart[]
+      }
       const media = typeof result === 'string' || transient !== undefined ? [] : await saveToolImages(
         resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup).sessionDataDir,
         result.content, signal,
@@ -525,7 +585,7 @@ export abstract class BaseSession {
         if (publishedCallbacks.has(call.id)) throw new Error('Cannot run deferred tool action after session message persistence failure')
         if (isToolUncertaintyResult(result)) throw new Error('Cannot continue after uncertain tool result persistence failure')
       }
-      if (transient !== undefined && typeof result !== 'string') transientResults.set(call.id, result.content)
+      if (transientContent) transientResults.set(call.id, transientContent)
       pendingResults.delete(call.id)
       await this.tools.boundary?.beforeOutput(signal)
       this.emitOutbound({
@@ -716,6 +776,7 @@ export abstract class BaseSession {
         signal = AbortSignal.any([signal, this.tools.boundary.signal])
         await this.tools.boundary.begin(input, signal)
       }
+      this.imagePreparationSignal = signal
       spanAttributes(attributes)
       if (attempted) {
         this.state.executionStatus = 'running'
@@ -862,6 +923,7 @@ export abstract class BaseSession {
         event: 'response',
       })
     } finally {
+      this.imagePreparationSignal = undefined
       try {
         if (attempted) await this.finishTurn(fact)
       } finally {

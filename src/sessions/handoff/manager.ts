@@ -98,10 +98,13 @@ export class HandoffManager {
     boundary?: RuntimeBoundary,
     sourceState?: SessionState,
     contextWindow = this.contextWindow,
+    externalSignal?: AbortSignal,
   ): Promise<CompactResult> {
     if (this.stopped) throw new Error('HandoffManager is stopped')
     const controller = new AbortController()
-    const signal = boundary ? AbortSignal.any([controller.signal, boundary.signal]) : controller.signal
+    const signals = [controller.signal, ...(boundary ? [boundary.signal] : []), ...(externalSignal ? [externalSignal] : [])]
+    const signal = signals.length > 1 ? AbortSignal.any(signals) : controller.signal
+    signal.throwIfAborted()
     const create = () => this.createWithinScope(sessionId, sourceSessionId, targetSessionId, messages, model, signal, boundary, sourceState, contextWindow)
     const pending = this.scope ? this.scope.run(create) : create()
     this.running.set(pending, controller)

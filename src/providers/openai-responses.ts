@@ -411,7 +411,7 @@ export async function openaiResponses(params: {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${params.apiKey}`, ...params.headers, ...prepared.headers },
       body: prepared.body, signal: params.signal,
     }).catch(error => { throw providerTransportFailure(error, 'connect', params.signal) })
-    if (!response.ok) throw await httpFailure(response, params.providerName ?? 'LLM', params.model, params.signal)
+    if (!response.ok) throw await httpFailure(response, params.providerName ?? 'LLM', params.model, params.signal, prepared.stats)
 
     let result: unknown
     try {
