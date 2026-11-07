@@ -11,6 +11,7 @@ import type { Bus } from '../bus/bus.ts'
 import type { CompactResult, HandoffManager } from './handoff/manager.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
+import { prepareNewMessageImages } from '../providers/new-message-images.ts'
 import type { SessionStore } from './session-store.ts'
 import type { SessionStartEvent, SessionState } from './session-store.ts'
 import type { SessionTools } from '../tools/registry.ts'
@@ -21,6 +22,7 @@ import {
 } from './locality.ts'
 import { SessionResumeError } from './recovery.ts'
 import type { PromptCaptureStore } from './prompt-capture.ts'
+import { saveToolImages } from './tool-images.ts'
 
 /** Tracks whether the LLM loop is calling the provider or executing tools. */
 export type TurnPhase = 'llm' | 'tool'
@@ -269,7 +271,8 @@ export class Session extends BaseSession {
           const locations = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup)
           if (!locations.workdir.available) throw new Error(`Session workdir unavailable: ${locations.workdir.reason}`)
           const cwd = locations.workdir.locality === 'local' ? locations.workdir.path : locations.sessionDataDir
-          const message = { ...await buildUserChatMessage(input, this.workspace, cwd), timestamp: input.timestamp }
+          const [prepared] = await prepareNewMessageImages([await buildUserChatMessage(input, this.workspace, cwd)], this.stopController.signal)
+          const message = { ...prepared, timestamp: input.timestamp }
           await this.store.appendMessages(physicalId, [{
             role: message.role, content: message.content, name: message.name,
             timestamp: message.timestamp, channel_input_id: input.id,
@@ -514,6 +517,34 @@ export class Session extends BaseSession {
     return true
   }
 
+  protected override async handleImageRequestTimeout(llm: LlmRuntimeConfig, signal: AbortSignal): Promise<boolean> {
+    // Do not turn a hard-bounded evaluation/automation into extra model work.
+    if (this.tools.inferenceRequestLimit !== undefined) return false
+    signal.throwIfAborted()
+    const locations = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup)
+    const candidates = this.messages.flatMap(message => Array.isArray(message.content)
+      ? message.content.filter(part => part.type === 'image_url' && part.displayOnly !== true
+        && /^data:image\//i.test(part.image_url.url)) : [])
+    const selected = candidates.slice(-64).reverse()
+    const paths = new Set<string>()
+    let failed = 0
+    for (const part of selected) {
+      signal.throwIfAborted()
+      try {
+        for (const path of await saveToolImages(locations.sessionDataDir, [part], signal)) paths.add(path)
+      } catch {
+        signal.throwIfAborted()
+        failed++ // Old malformed/oversized records must not prevent text-only recovery.
+      }
+    }
+    await this.store.appendRawEvents(this.physicalSessionId, [{ provider_recovery_images: {
+      at: new Date().toISOString(), saved: paths.size, failed,
+      omitted: Math.max(0, candidates.length - selected.length),
+    } }])
+    await this.compact(llm, signal, [...paths])
+    return true
+  }
+
   // ── Inbox helpers ──────────────────────────────────────────────────────
 
   private pushEvent(event: LoopEvent): void {
@@ -647,8 +678,11 @@ export class Session extends BaseSession {
   /**
    * Synthesize a compact continuity context and persist it as a handoff snapshot.
    */
-  private async compact(llm: LlmRuntimeConfig): Promise<CompactResult> {
-    await this.tools.boundary?.beforeInference(this.stopController.signal)
+  private async compact(
+    llm: LlmRuntimeConfig, signal = this.stopController.signal, imageReferences: string[] = [],
+  ): Promise<CompactResult> {
+    signal.throwIfAborted()
+    await this.tools.boundary?.beforeInference(signal)
     const sessionId = this.id
     const state = this.state
     await this.recordContextEvent('work', this.tools.getWorkGuard()?.prompt(this.id) ?? '')
@@ -665,8 +699,14 @@ export class Session extends BaseSession {
       this.tools.boundary,
       this.state,
       llm.contextWindow,
+      signal,
     )
+    signal.throwIfAborted()
     this.tools.boundary?.assertCurrent()
+    if (imageReferences.length) handoff.prompt += '\n\n## Retained image snapshots\n'
+      + 'Compacted to recover repeated request timeouts. Pixels are not included in this summary. '
+      + 'Read only the images needed for the current task; these are immutable model-input snapshots.\n'
+      + imageReferences.map(path => `- ${JSON.stringify(path)}`).join('\n')
 
     const startEvent: SessionStartEvent = {
       sessionId,

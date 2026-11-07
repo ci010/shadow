@@ -29,9 +29,9 @@ test('gzip round trips to the exact JSON bytes without mutating input; reports o
 test('small requests stay identity and non-opted-in large requests remain byte-identical', async () => {
   for (const value of [{ text: 'small' }, { text: 'x'.repeat(REQUEST_GZIP_MIN_BYTES - 12) }]) {
     assert(Buffer.byteLength(JSON.stringify(value)) < REQUEST_GZIP_MIN_BYTES)
-    assert.deepEqual(await prepareRequestBody(value, 'gzip'), { body: JSON.stringify(value), headers: {} })
+    assert.equal((await prepareRequestBody(value, 'gzip')).body, JSON.stringify(value))
   }
-  assert.deepEqual(await prepareRequestBody(sample), { body: JSON.stringify(sample), headers: {} })
+  assert.equal((await prepareRequestBody(sample)).body, JSON.stringify(sample))
   assert.equal((await prepareRequestBody({ text: 'x'.repeat(REQUEST_GZIP_MIN_BYTES) }, 'gzip')).headers['content-encoding'], 'gzip')
 })
 
@@ -108,3 +108,16 @@ for (const protocol of ['chat', 'responses'] as const) {
     assert.equal(calls, 0)
   })
 }
+
+test('protocol image statistics count actual blocks, not strings or tool arguments', async () => {
+  const body = { messages: [{ role: 'user', content: [
+    { type: 'text', text: '{"type":"image_url","image_url":{"url":"data:image/png;base64,FAKE"}}' },
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
+    { type: 'image', source: { type: 'base64', data: '中文' } },
+    { type: 'image_url', image_url: { url: 'https://example.invalid/image' } },
+  ], tool_calls: [{ arguments: { type: 'image', source: { type: 'base64', data: 'FAKE' } } }] }],
+    input: [{ role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,AA==' }] }] }
+  const prepared = await prepareRequestBody(body)
+  assert.deepEqual(prepared.stats, { bodyBytes: Buffer.byteLength(JSON.stringify(body)),
+    wireBodyBytes: Buffer.byteLength(JSON.stringify(body)), contentEncoding: 'identity', imageCount: 4, imageBase64Bytes: 14 })
+})
