@@ -1,8 +1,9 @@
 <template>
   <details class="compaction-summary" @toggle.self="onToggle">
     <summary class="compaction-summary-header" @click="emit('interact')">
-      <span class="summary-chevron i-lucide-chevron-right" aria-hidden="true" />
+      <span class="summary-icon i-lucide-history" aria-hidden="true" />
       <span class="compaction-summary-title">{{ t('Previous Conversation Summary') }}</span>
+      <span class="summary-chevron i-lucide-chevron-right" aria-hidden="true" />
     </summary>
     <div v-if="expanded" class="compaction-summary-body prose" v-markdown-link-hints v-html="renderContent(content)" />
   </details>
@@ -26,35 +27,38 @@ function onToggle(event: Event) {
 .compaction-summary {
   width: 100%;
   min-width: 0;
+  border: 1px solid var(--c-chat-border);
   border-radius: var(--radius-surface);
+  background: var(--c-chat-action-bg);
   color: var(--c-text-secondary);
 }
 .compaction-summary-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   min-height: 40px;
-  padding: 8px;
+  padding: 12px;
   box-sizing: border-box;
   list-style: none;
   cursor: pointer;
-  font-size: 12px;
-  line-height: 20px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 .compaction-summary-header::-webkit-details-marker { display: none; }
-.compaction-summary-header:hover { background: var(--c-bg-soft); color: var(--c-text); }
-.compaction-summary-header:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.summary-chevron { display: block; width: 14px; height: 14px; flex: 0 0 14px; }
+.compaction-summary-header:hover { background: var(--c-bg-muted); color: var(--c-text); }
+.compaction-summary-header:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.summary-icon, .summary-chevron { display: block; width: 16px; height: 16px; flex: 0 0 16px; }
+.compaction-summary[open] > summary { border-bottom: 1px solid var(--c-chat-border); }
 .compaction-summary[open] > summary .summary-chevron { transform: rotate(90deg); }
-.compaction-summary-title { min-width: 0; font-weight: 500; overflow-wrap: anywhere; }
+.compaction-summary-title { flex: 1; min-width: 0; color: var(--c-text); font-weight: 500; overflow-wrap: anywhere; }
 .compaction-summary-body {
   box-sizing: border-box;
-  margin: 0 8px 16px 15px;
-  padding: 4px 0 12px 14px;
-  border-left: 1px solid var(--c-border);
-  color: var(--c-text);
+  max-width: 72ch;
+  margin: 0;
+  padding: 12px;
+  color: var(--c-text-body);
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 .compaction-summary-body :deep(h1),
@@ -73,7 +77,7 @@ function onToggle(event: Event) {
 .compaction-summary-body :deep(table) { display: block; max-width: 100%; overflow-x: auto; font-size: 12px; }
 .compaction-summary-body :deep(> :first-child) { margin-top: 0; }
 .compaction-summary-body :deep(> :last-child) { margin-bottom: 0; }
-@media (pointer: coarse) {
+@media (max-width: 700px), (pointer: coarse) {
   .compaction-summary-header { min-height: 44px; }
 }
 </style>
