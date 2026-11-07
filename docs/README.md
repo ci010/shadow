@@ -41,6 +41,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Image input optimization](image-input-optimization.md)
 - [Provider Flash support](providers-flash.md)
 - [Fresh automation state persistence](fresh-automation-state.md)
+- [Encapsulation candidates and acceptance](encapsulation-automation.md), including the [tested script-tool draft](encapsulation-tool-handoff.md)
 
 ## Operations and verification
 

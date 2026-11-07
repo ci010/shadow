@@ -13,7 +13,8 @@ import type { SkillsManager } from '../../skills/loader.ts'
 import { SkillEditStore } from '../../skills/edit-store.ts'
 import type { ChatMessage } from '../../providers/provider.ts'
 
-import { ReadCoverage } from './read-coverage.ts'
+import { ReadCoverage, rejectedHistoryReference } from './read-coverage.ts'
+import { encapsulationInputs } from './inputs.ts'
 import { isLearningSourceEligible } from './source-eligibility.ts'
 
 export class LearningRunError extends Error {
@@ -27,7 +28,7 @@ export function learningJob(pipeline: Pipeline): CronJob {
 // Host-selected only; editable cron records cannot override pipeline execution ceilings.
 export const LEARNING_LIMITS = {
   reflector: { allowedTools: ['read', 'search', 'write', 'view_edit', 'log', 'learning_memory', 'learning_result'], inferenceRequests: 6, toolCalls: 18, argumentBytes: 96000 },
-  encapsulator: { allowedTools: ['read', 'search', 'write', 'view_edit', 'learning_memory', 'learned_skill', 'learning_result'], inferenceRequests: 8, toolCalls: 24, argumentBytes: 192000 },
+  encapsulator: { allowedTools: ['read', 'search', 'write', 'view_edit', 'learning_memory', 'learned_skill', 'invoke_tool', 'agent_tool_test', 'learning_result'], inferenceRequests: 8, toolCalls: 24, argumentBytes: 192000 },
   'soulReflector': { allowedTools: ['read', 'search', 'learning_soul', 'learning_result'], inferenceRequests: 4, toolCalls: 12, argumentBytes: 48000 },
 } as const
 
@@ -188,7 +189,7 @@ export class LearningRuntime {
             const path = typeof args.path === 'string' ? args.path : undefined
             const tracked = name === 'write' || name === 'log'
               || ['learning_memory', 'learning_soul', 'learned_skill'].includes(name) && args.action === 'save'
-              || name === 'read' && path?.startsWith('v:sessions/')
+              || name === 'read' && ['v:sessions/', 'v:memory/', 'v:skills/'].some(prefix => path?.startsWith(prefix))
             if (!tracked) continue
             const key = name === 'learning_memory' ? `memory/decisions/${args.name}.md`
               : name === 'learning_soul' ? 'SOUL.md'
@@ -197,7 +198,7 @@ export class LearningRuntime {
               : path ? this.memoryPath(path) ?? path.replace(/[?].*$/, '') : `${name}:${args.name ?? args.origin ?? ''}`
             const text = this.messageText(message)
             if (name === 'read' && path) {
-              if (/^(Error(?::| executing )|Blocked:|Tool execution aborted:)/.test(text)) reads.fail(path, args, text)
+              if (/^(Error(?::| executing )|Blocked:|Tool execution aborted:)/.test(text)) reads.fail(rejectedHistoryReference(path, text, batch.inputEvents.flatMap(event => event.refs ?? [])), args, text)
               else reads.success(path, args, text)
               continue
             }
@@ -277,7 +278,8 @@ export class LearningRuntime {
       // Also reconcile pending/cooldown batches on manual runs, without dispatch or acknowledgement.
       for (const previous of this.ledger.unfinished()) this.excludeIneligible(previous)
       const sources = pipeline === 'reflector' ? await this.sources(signal, true) : []
-      const events = pipeline === 'reflector' ? [] : this.ledger.eventsFor(pipeline)
+      const events = pipeline === 'reflector' ? [] : this.ledger.eventsFor(pipeline,
+        pipeline === 'encapsulator' ? await encapsulationInputs(this.sessions.workspace, signal) : [])
       batch = this.ledger.select(pipeline, sources, events, manual)
       if (!batch) return false
       const id = batch.id

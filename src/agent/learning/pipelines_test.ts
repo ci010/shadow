@@ -156,7 +156,9 @@ test('decision writes preserve conditions, uncertainty and evidence; downstream 
     assert.equal(events.length, 1)
     f.onRun(async id => {
       const batch = f.runtime.ledger.batchFor(id)!
-      assert.deepEqual(batch.inputEvents, events)
+      assert.deepEqual(batch.inputEvents.slice(0, events.length), events)
+      assert.equal(batch.inputEvents.length, 2)
+      assert.equal(batch.inputEvents[1].origin, 'v:memory/decisions/readable-outcomes.md')
       assert.match(learningTask(batch), new RegExp(events[0].id))
       await f.tools.result.execute({ status: 'no_change', summary: 'Decision is sufficient; no separate skill justified.' }, f.context(id))
     })

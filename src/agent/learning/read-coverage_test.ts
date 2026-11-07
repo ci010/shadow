@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ReadCoverage } from './read-coverage.ts'
+import { ReadCoverage, rejectedHistoryReference } from './read-coverage.ts'
 
 test('oversized historical read is repaired by complete later pages', () => {
   const reads = new ReadCoverage()
@@ -42,4 +42,23 @@ test('only consistent terminal footers prove coverage; nested metadata and recei
   reads.fail('a', { offset: 1, limit: 99 }, 'failure')
   reads.success('a', { offset: 1, limit: 2 }, 'a\nb')
   assert.deepEqual(reads.errors(), [])
+})
+
+test('rejected typo history can recover only via unambiguous batch reference and complete later coverage', () => {
+  const wrong = 'v:sessions/web_chat-example-v2-f838aca7a-0/overview'
+  const correct = 'v:sessions/web_chat-example-v2-f83865aca7a-0/overview'
+  const error = 'Error: Physical history does not belong to this Project session'
+  assert.equal(rejectedHistoryReference(wrong, error, [correct]), correct)
+  for (const refs of [[], [correct.replace('example', 'foreign')], [correct.replace('-0/', '-1/')], [correct, correct.replace('65', '66')]]) {
+    assert.equal(rejectedHistoryReference(wrong, error, refs), wrong)
+  }
+  assert.equal(rejectedHistoryReference(wrong, 'Error: denied', [correct]), wrong)
+  const reads = new ReadCoverage()
+  reads.fail(rejectedHistoryReference(wrong, error, [correct]), { offset: 1, limit: 900 }, error)
+  reads.success(correct, { offset: 3, limit: 2 }, 'c\nd')
+  assert.equal(reads.errors().length, 1)
+  reads.success(correct, { offset: 1, limit: 2 }, 'a\nb\n\n[truncated: showing lines 1-2 of 4; use offset=3 to continue]')
+  assert.deepEqual(reads.errors(), [])
+  reads.fail(correct, { offset: 1, limit: 4 }, 'Error: unavailable')
+  assert.equal(reads.errors().length, 1)
 })

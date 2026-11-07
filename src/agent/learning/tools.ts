@@ -22,7 +22,13 @@ const decisionSchema = z.object({
   evidence: z.array(text).min(1).max(16),
 }).strict()
 const readSchema = z.object({ action: z.literal('read'), name: slug }).strict()
-const skillSchema = z.object({ action: z.literal('save'), name: slug, revision, content: text }).strict()
+export const LEARNED_SKILL_MAX_LENGTH = 8000
+const skillLimits = Object.freeze({ maxLength: LEARNED_SKILL_MAX_LENGTH, lengthUnit: 'UTF-16 code units', recommendedMaxLength: 7200 })
+const skillSchema = z.object({ action: z.literal('save'), name: slug, revision,
+  content: z.string().trim().min(1).max(LEARNED_SKILL_MAX_LENGTH),
+}).strict()
+// Preflight accepts oversized drafts so checking is not itself a failed write.
+const skillCheckSchema = z.object({ action: z.literal('check'), name: slug, revision, content: z.string() }).strict()
 const resultSchema = z.object({
   status: z.enum(['applied', 'no_change', 'partial', 'blocked', 'draft_only']), summary: text,
 }).strict()
@@ -129,18 +135,29 @@ export class LearningTools {
 
   readonly skill: Tool = {
     name: 'learned_skill', optIn: true,
-    description: 'Read/save a lesson-only Project skill with revision checking and immediate discovery. Does not install code, tools, agents or admin capabilities.',
+    description: 'Read/check/save a lesson-only Project skill with revision checking and immediate discovery. Complete replacement, not append-only: consolidate duplicates while preserving conditions, evidence and exceptions. Save validates size, package and revision and persists in one call; a separate check is optional size feedback, not a prerequisite. Max 8000 UTF-16 code units, target <=7200. Does not install code, tools, agents or admin capabilities.',
     parameters: { type: 'object', properties: {
-      action: { type: 'string', enum: ['read', 'save'] }, name: { type: 'string' },
-      revision: { type: 'string', description: 'Read revision, or empty string for a missing skill.' }, content: { type: 'string' },
+      action: { type: 'string', enum: ['read', 'check', 'save'] }, name: { type: 'string' },
+      revision: { type: 'string', description: 'Read revision, or empty string for a missing skill.' },
+      content: { type: 'string', description: 'Complete SKILL.md, including frontmatter. Save limit: 8000 UTF-16 code units after trim; target <=7200. check accepts oversized drafts without writing and returns size feedback.' },
     }, required: ['action', 'name'] },
     execute: (raw, context) => this.serial(async () => {
       const batch = this.authorize(context)
       if (batch.pipeline !== 'encapsulator' || !this.runtime.skillStore) throw new Error('Learned skills require the Project encapsulation runtime.')
-      const args = z.union([readSchema, skillSchema]).parse(raw)
+      const args = z.union([readSchema, skillSchema, skillCheckSchema]).parse(raw)
       const store = this.runtime.skillStore
       const current = store.read(args.name)
-      if (args.action === 'read') return JSON.stringify({ name: args.name, revision: current.revision ?? '', content: current.files['SKILL.md']?.toString() ?? '' })
+      const currentContent = current.files['SKILL.md']?.toString() ?? ''
+      if (args.action === 'read') return JSON.stringify({ name: args.name, revision: current.revision ?? '', content: currentContent,
+        contentLength: currentContent.length, limits: skillLimits })
+      if (args.revision !== (current.revision ?? '')) throw new Error('Skill changed since read. Read it again and merge before checking or saving.')
+      if (args.action === 'check') {
+        const length = args.content.trim().length
+        return JSON.stringify({ name: args.name, status: 'size_checked', saved: false, contentLength: length,
+          withinLimit: length > 0 && length <= LEARNED_SKILL_MAX_LENGTH,
+          overBy: Math.max(0, length - LEARNED_SKILL_MAX_LENGTH), limits: skillLimits,
+          message: 'Size check only, not package validation or a write. Reorganize and deduplicate, preserving triggers, conditions, exceptions, uncertainty and evidence; never truncate. Save a complete replacement with this revision. Reserve capacity for learning_result; if it cannot fit, report partial with the unsaved scope.' })
+      }
       const parsed = parseSkillFile(args.content, args.name)
       if (current.source === 'builtin' || Object.keys(current.files).some(path => path !== 'SKILL.md')
         || parsed.meta.admin || parsed.meta.tools || parsed.meta.toolsError || parsed.meta.core || parsed.meta.name !== args.name) {
