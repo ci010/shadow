@@ -25,7 +25,7 @@ export function allowedSubagentModes(
 // Mode limits are hard ceilings, including for dynamically imported tools.
 const SESSION_ONLY_TOOLS = new Set([
   'session', 'work', 'initiative', 'continuation',
-  'event_subscribe', 'event_source', 'cron', 'cron_add', 'cron_list', 'cron_remove',
+  'event_subscribe', 'event_provider', 'cron', 'cron_add', 'cron_list', 'cron_remove',
 ])
 const CALL_COORDINATION_TOOLS = new Set([
   'subagent', 'task', 'ask', 'reply', 'message', 'cancel', 'skill_read', 'skill_save',

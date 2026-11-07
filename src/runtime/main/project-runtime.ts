@@ -105,7 +105,7 @@ import { registerCronTools } from '../../tools/cron.ts'
 import { SkillEditing, SkillReadTool, SkillSaveTool } from '../../tools/skill-edit.ts'
 import { SkillEditStore } from '../../skills/edit-store.ts'
 import { LogTool } from '../../tools/log.ts'
-import { registerEventTools } from '../../tools/event-source.ts'
+import { registerInternalEventTools } from '../../tools/internal-events.ts'
 import { WriteTool } from '../../tools/filesystem.ts'
 import { ViewEditTool } from '../../tools/view-edit.ts'
 import type { LoadableEntry } from '../../tools/load-tool.ts'
@@ -146,6 +146,7 @@ import {
   createSkillsHandler,
 } from '../../vfs/mounts.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
+import { createProviderEventsHandler } from '../../events/providers/vfs.ts'
 import { createModelsHandler } from '../../vfs/models.ts'
 import { createAgentsHandler } from '../../vfs/agents.ts'
 
@@ -167,7 +168,6 @@ import { ProjectActions } from '../../projects/actions.ts'
 import { projectActionsPlugin } from '../../projects/action-routes.ts'
 import { ProjectActionTool } from '../../tools/project-action.ts'
 import { EventService } from '../../events/service.ts'
-import { PollingSources } from '../../events/polling-sources.ts'
 import { EventProviderRuntime } from '../../events/providers/runtime.ts'
 import { EventProviderTool } from '../../tools/event-provider.ts'
 import { watchAutomationSessions } from '../../cron/notifications.ts'
@@ -1127,14 +1127,6 @@ export async function createProjectRuntime(
     memoryVfs.write,
   )
 
-  const eventsVfs = createEventsHandler(events)
-  vfs.mount(
-    'v:events',
-    "list this session's event subscriptions",
-    eventsVfs.read,
-    eventsVfs.list,
-  )
-
   // ── Create agent loop ──────────────────────────────────────────────
   const commandDispatcher = new CommandDispatcher()
   const agent = new AgentApp({
@@ -1176,18 +1168,21 @@ export async function createProjectRuntime(
     return locations.workdir.available && locations.workdir.locality === 'local'
   }
   importTool.registerBuiltin('project_action', new ProjectActionTool(userActions, project.id, canAuthor))
-  const pollingSources = new PollingSources(
-    workspace, events, capabilityBroker,
-    id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
-    ref => agentCredentials.names().includes(ref),
-  )
-  cleanup.push(() => pollingSources.stop())
   const eventProviders = new EventProviderRuntime(
     workspace, capabilityBroker, (id, input) => deliverInput(id, input),
     id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
     ref => agentCredentials.names().includes(ref),
   )
   cleanup.push(() => eventProviders.stop())
+  const eventsVfs = createProviderEventsHandler(eventProviders, project.id, createEventsHandler(events))
+  vfs.mount(
+    'v:events',
+    'read Project provider revisions, instances and subscriptions; internal session events',
+    eventsVfs.read,
+    eventsVfs.list,
+    undefined,
+    eventsVfs.directory,
+  )
   const eventProviderTool = new EventProviderTool(eventProviders, project.id, {
     contexts: (context, instance) => importTool.providerBrowserContexts(context, instance),
     bind: (context, binding) => importTool.bindProviderBrowser(context, binding),
@@ -1334,7 +1329,7 @@ export async function createProjectRuntime(
     return id === 'learning:reflector' ? 'reflector' : id === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
   }
   registerCronTools(importTool, cronService, sessions, name => !!agentTypes.resolve(name))
-  registerEventTools(importTool, events, pollingSources, canAuthor, [eventProviderTool])
+  registerInternalEventTools(importTool, events, [eventProviderTool])
   // Clean up event subscriptions linked to one-shot cron jobs when they are
   // auto-removed after firing (prevents orphaned subscriptions in `list`).
   cronService.setOnJobRemoved((jobId) => {
@@ -1638,7 +1633,6 @@ export async function createProjectRuntime(
       () => microApps.shutdown(),
       () => knowledgeSchedule.stop(),
       () => knowledgeMaintenance.stop(),
-      () => pollingSources.stop(),
       () => eventProviders.stop(),
       () => github.stop(),
       () => cronService.stop(),
@@ -1691,7 +1685,6 @@ export async function createProjectRuntime(
   })
   await ready
   await cronService.ensureDefaultJob(SESSION_CLEANUP_DEFAULT_KEY, SESSION_CLEANUP_AUTOMATION)
-  pollingSources.start()
   eventProviders.start()
   events.registerManagedSource({ source: 'github', kind: 'custom', description: 'Explicit Project GitHub resource subscriptions' })
   github.start()

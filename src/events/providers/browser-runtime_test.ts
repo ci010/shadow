@@ -34,19 +34,19 @@ test('browser transport stays instance-bound across reload, permissions and rest
   const { runtime, broker, native } = await setup(workspace, access)
   t.after(() => runtime.stop())
   await runtime.run(); assert.equal(requests, 1)
-  assert.equal(runtime.discover('owner').instances[0].transport.kind, 'browser')
+  assert.equal(runtime.snapshot('owner').instances[0].transport.kind, 'browser')
   assert.throws(() => runtime.reload('owner', { ...reloadDefinition, http: { ...definition.http, routes: [{ method: 'GET', path: '/other' }] } }), /expansion/)
   assert.throws(() => runtime.reload('owner', { ...reloadDefinition, transport: { kind: 'native' } }), /Unrecognized/)
   await runtime.reload('owner', reloadDefinition)
-  assert.deepEqual(runtime.discover('owner').instances[0].transport, transport)
+  assert.deepEqual(runtime.snapshot('owner').instances[0].transport, transport)
   assert.throws(() => runtime.bindBrowser('stranger', 'feed-watch', access), /durable/)
   assert.throws(() => runtime.bindBrowser('owner', 'feed-watch', { ...access, binding: { ...transport, targetId: 'other' } }), /mismatch/)
   allowed = false; now += 60001; await runtime.run()
-  assert.equal(requests, 1); assert.equal(runtime.discover('owner').errors['feed-watch'], 'browser_context_unavailable')
+  assert.equal(requests, 1); assert.equal(runtime.snapshot('owner').errors['feed-watch'], 'browser_context_unavailable')
   await runtime.stop(); allowed = true
   const restarted = new EventProviderRuntime(workspace, broker, async () => { throw new Error('unexpected') }, id => id === 'owner', () => true)
   restarted.start(); t.after(() => restarted.stop()); now += 60001; await restarted.run()
-  assert.equal(restarted.discover('owner').errors['feed-watch'], 'browser_context_unavailable'); assert.equal(native(), 0)
+  assert.equal(restarted.snapshot('owner').errors['feed-watch'], 'browser_context_unavailable'); assert.equal(native(), 0)
   restarted.bindBrowser('owner', 'feed-watch', access); now += 60001; await restarted.run(); assert.equal(requests, 2)
 }))
 
@@ -59,7 +59,7 @@ test('browser requires explicit authorization and disallows secret/native/builti
   assert.throws(() => create({ provider: 'github-issues', secretRef: 'pat' }, access), /cookie-only/)
   assert.throws(() => create({ transport: { kind: 'native' } }, access), /cannot bind/)
   runtime.create('owner', { id: 'native-default', provider: 'feed', version: 1 })
-  assert.deepEqual(runtime.discover('owner').instances.find(i => i.id === 'native-default')?.transport, { kind: 'native' })
+  assert.deepEqual(runtime.snapshot('owner').instances.find(i => i.id === 'native-default')?.transport, { kind: 'native' })
 }))
 
 for (const action of ['stop', 'reload'] as const) test(`${action} drains cancellation of pending browser fetch before returning`, async t => withTempWorkspace(async workspace => {
@@ -98,7 +98,7 @@ for (const code of ['browser_fetch_failed', 'browser_cleanup_unconfirmed']) test
   const access: ProviderBrowserAccess = { binding: transport, assertCurrent() {}, request: async () => { throw new CapabilityError(code, 'sanitized fixture failure') } }
   const { runtime } = await setup(workspace, access)
   await runtime.run()
-  assert.equal(runtime.discover('owner').errors['feed-watch'], code)
+  assert.equal(runtime.snapshot('owner').errors['feed-watch'], code)
   if (code === 'browser_cleanup_unconfirmed') {
     await assert.rejects(runtime.reload('owner', reloadDefinition), /sanitized fixture failure/)
     await assert.rejects(runtime.stop(), /sanitized fixture failure/)
@@ -114,7 +114,7 @@ test('POST cleanup uncertainty blocks lifecycle while retaining mutation no-repl
   const { runtime, broker } = await setup(workspace, access, post)
   await runtime.run()
   assert.equal(requests, 1)
-  assert.equal(runtime.discover('owner').errors['feed-watch'], 'browser_cleanup_unconfirmed')
+  assert.equal(runtime.snapshot('owner').errors['feed-watch'], 'browser_cleanup_unconfirmed')
   const { version: _version, ...reloadPost } = post
   await assert.rejects(runtime.reload('owner', reloadPost), /cleanup unconfirmed/)
   await assert.rejects(runtime.stop(), /cleanup unconfirmed/)

@@ -8,7 +8,6 @@ import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import type { DeliverInput } from '../sessions/input.ts'
 import { CapabilityGrantSchema, type CapabilityGrant } from './grant-contract.ts'
-import { assertReadQuery } from './graphql-read.ts'
 
 export type DeliverInputPayload = Parameters<DeliverInput>[1]
 export interface CapabilityInvocationContext {
@@ -575,14 +574,10 @@ export class CapabilityBroker {
     if (!match) fail('route_denied', 'HTTP method and path are not granted.')
     if (match.route.querySchema) validateJsonSchema(match.route.querySchema, input.query ?? {})
     if (input.method === 'GET' && Object.hasOwn(raw, 'body')) fail('invalid_input', 'GET requests must not contain a body.')
-    const readOnlyGraphql = grant.readOnlyGraphqlQueries !== undefined
-    if (readOnlyGraphql) {
-      try { grant.readOnlyGraphqlQueries!.forEach(assertReadQuery) } catch { fail('invalid_grant', 'Invalid read-only GraphQL query allowlist.') }
-      const body = z.object({ query: z.string(), variables: z.record(z.unknown()) }).strict().safeParse(input.body)
-      if (input.method !== 'POST' || input.path !== '/graphql' || input.query !== undefined || !body.success ||
-        !grant.readOnlyGraphqlQueries!.includes(body.data.query)) fail('route_denied', 'Only exact approved read-only GraphQL POST bodies are granted.')
-    }
-    if (input.method !== 'GET' && !readOnlyGraphql && !input.idempotencyKey) fail('invalid_input', 'HTTP mutations require a stable idempotencyKey.')
+    // Only the trusted host binding may assert read-only acquisition. Guest input
+    // cannot opt out of mutation receipts; schemas still constrain read POSTs.
+    const readAcquisition = match.route.effect === 'read'
+    if (input.method !== 'GET' && !readAcquisition && !input.idempotencyKey) fail('invalid_input', 'HTTP mutations require a stable idempotencyKey.')
     if (match.route.bodySchema) {
       validateJsonSchema(match.route.bodySchema, input.body)
     }
@@ -615,7 +610,7 @@ export class CapabilityBroker {
         fail('network_error', 'HTTP capability transport failed.')
       }
     }
-    if (readOnlyGraphql || (input.method === 'GET' && !input.idempotencyKey)) return perform()
+    if (readAcquisition || (input.method === 'GET' && !input.idempotencyKey)) return perform()
     return this.keyed(grant, input.idempotencyKey!, raw, context, async (record, save) => {
       // Existence, not an in-memory flag, distinguishes a crashed pending write
       // from a new operation. No automatic retry is safe for such mutations.

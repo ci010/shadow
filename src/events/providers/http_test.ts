@@ -50,7 +50,7 @@ test('REST JSON pages: silent delta baseline, cursor plus jobs, bounded dedup su
    assert.throws(()=>runtime.reload('owner',{...manifest,http:changed}),/binding|expansion/)
   }
   assert.throws(()=>runtime.reload('owner',{...manifest,http:{...http,routes:[{method:'GET',path:'/private'}]}}),/binding/)
-  assert.equal(runtime.discover('owner').instances[0].version,1)
+  assert.equal(runtime.snapshot('owner').instances[0].version,1)
   await runtime.stop()
  })
 })
@@ -61,12 +61,12 @@ test('public HTML acquisition and pure local HTML extraction fan out to subscrib
   const broker=new CapabilityBroker({projectId:'fixture',directory:join(workspace,'receipts'),resolveSecret:async()=>{throw new Error('no credential')},deliver:async()=>undefined,canDeliver:()=>false,request:async()=>new Response('<html><h1>'+headline+'</h1></html>',{headers:{'content-type':'text/html'}})})
   const runtime=new EventProviderRuntime(workspace,broker,async(id,input)=>{messages.push(input.kind === 'message' ? input.content : '');return {status:'accepted',sessionId:id,inputId:input.id}},()=>true,()=>false)
   runtime.start();runtime.publish('owner',{id:'html',version:1,description:'public HTML',http:{origin:http.origin,routes:[{method:'GET',path:'/news'}]},...schemas,code:`import {call} from '@shadow/fetch';import {parseHtml} from '@shadow/html';export async function run({demands}){const r={};for(const d of demands){const response=await call({method:'GET',path:'/news'});if(response.status!==200||typeof response.body!=='string')throw new Error('HTML expected');const title=parseHtml(response.body).querySelector('h1')?.textContent;if(!title)throw new Error('missing title');r[d.key]={mode:'snapshot',events:[{id:title,data:{title}}],checkpoint:null}}return r}`})
-  runtime.create('owner',{id:'news',provider:'html',version:1,allowedSubscribers:['reader']});runtime.subscribe('reader',{id:'headlines',instance:'news',demand:{},processor:`import {parseHtml} from '@shadow/html';export function run({event}){return [{content:parseHtml('<p>'+event.data.title+'</p>').querySelector('p').textContent}]}`})
+  runtime.create('owner',{id:'news',provider:'html',version:1});runtime.subscribe('reader',{id:'headlines',instance:'news',demand:{},processor:`import {parseHtml} from '@shadow/html';export function run({event}){return [{content:parseHtml('<p>'+event.data.title+'</p>').querySelector('p').textContent}]}`})
   await runtime.run();headline='new';now+=60001;await runtime.run();assert.deepEqual(messages,['new']);await runtime.stop()
  })
 })
 
-test('broker enforces provider route/query/body and fixed GraphQL restrictions before transport',async()=>{
+test('broker enforces protocol-neutral provider route/query/body restrictions before transport',async()=>{
  await withTempWorkspace(async workspace=>{
   let requests=0
   const broker=new CapabilityBroker({projectId:'fixture',directory:join(workspace,'receipts'),resolveSecret:async()=>{throw new Error('no secrets')},deliver:async()=>undefined,canDeliver:()=>false,request:async()=>{requests++;return new Response('{}')}})
@@ -97,7 +97,7 @@ test('REST broker requests abort on reload/stop; restricted looping collector is
   await runtime.reload('owner',{...manifest,code:'export function run({demands}){if(!demands.length)return {};while(true){}}'})
   now+=60001;run=runtime.run();await new Promise(resolve=>setTimeout(resolve,150))
   await runtime.reload('owner',manifest);await run
-  assert.equal(runtime.discover('owner').pending.length,0)
+  assert.equal(runtime.snapshot('owner').pending.length,0)
   await runtime.reload('owner',{...manifest,code:'export function run({demands}){if(!demands.length)return {};while(true){}}'})
   now+=60001;run=runtime.run();await new Promise(resolve=>setTimeout(resolve,150))
   await runtime.stop();await run
