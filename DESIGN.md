@@ -460,8 +460,8 @@ floats inside the conversation pane above the measured composer allowance, with
 space reserved for the history rail. Use shared HoverInfo and a localized accessible
 label, not a visible text banner. Load older messages is a quiet centered text
 action; a reached window limit is separate muted explanatory text, not a disabled
-button. Segment History disclosures use neutral text navigation and do not expose
-raw physical IDs as reading content.
+button. Targeted history navigation does not expose raw physical IDs as reading
+content.
 The first version loads one segment per request, stops manual/lazy loading after
 eight older segments or 2,000 loaded messages, and does not virtualize messages
 within a segment. A single fetched segment may exceed that soft message limit;
