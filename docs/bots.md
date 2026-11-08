@@ -683,3 +683,10 @@ never replays messages, grants access, starts a synthetic session, or enables a
 quarantined BOT. Parent names come from persisted metadata where available, with
 an explicit channel-ID fallback otherwise. New graph ancestry metadata requires
 the updated backend as well as the updated renderer.
+
+Older passive Discord records may have mislabeled a category parent as thread
+ancestry. Navigation uses exact Project/Bot/guild category evidence from ordinary
+channel records to keep those channels at the Bot root; this never rewrites the
+persisted origin or routing. A single child without a known parent name/record
+opens directly instead of adding a numeric-only parent index. Named forums and
+multi-post parents retain their index.

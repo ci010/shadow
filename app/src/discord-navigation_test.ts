@@ -37,7 +37,7 @@ test('parent title evidence is retained when later passive metadata omits the na
   passive.discordChannel!.parentName = null
   assert.equal(projectDiscordChannels([old, passive])[0].label, 'Forum')
   assert.equal(projectDiscordChannels([passive, old])[0].label, 'Forum')
-  assert.equal(projectDiscordChannels([passive])[0].label, '100')
+  assert.equal(projectDiscordChannels([passive])[0], passive, 'A lone unnamed parent adds no extra navigation level')
 })
 
 test('single ordinary text channel opens directly, forums and parents with threads use an index', () => {
@@ -57,4 +57,25 @@ test('post projection groups exact conversations but retains every original hist
   assert.equal(posts[0].title, 'Thread')
   assert.equal(posts[0].lastActivityAt, passive.lastActivityAt)
   assert.deepEqual(posts[0].histories.map(s => s.sessionId), ['old', 'channel-inbox:passive'])
+})
+
+test('legacy passive category ancestry cannot create a redundant category index', () => {
+  const oldChat = session('old-chat', 0, '400')
+  oldChat.discordChannel!.name = 'Chat'
+  const passiveChat = session('channel-inbox:chat', 11, '400')
+  passiveChat.discordChannel!.parentName = null
+  const theme = session('channel-inbox:theme', 11, '400')
+  theme.channelAddress!.conversationId = theme.discordChannel!.id = '301'
+  theme.discordChannel!.name = 'Theme'; theme.discordChannel!.parentName = null
+  const original = structuredClone([oldChat, passiveChat, theme])
+  const rows = projectDiscordChannels([oldChat, passiveChat, theme])
+  assert.equal(rows.length, 2)
+  assert.ok(rows.every(row => discordChannelKey(row.sessionId)?.channelId !== '400'))
+  assert.deepEqual(rows[0].discordHistoryIds, ['old-chat', 'channel-inbox:chat'])
+  assert.equal(rows[1].sessionId, theme.sessionId)
+  assert.deepEqual(discordChannelHistories([oldChat, passiveChat, theme], discordChannelKey(rows[0].sessionId)!).map(s => s.sessionId), ['old-chat', 'channel-inbox:chat'])
+  assert.deepEqual([oldChat, passiveChat, theme], original, 'Display normalization never rewrites persisted origin or history')
+  const foreign = session('foreign', 11, '400', 'other')
+  foreign.discordChannel!.parentName = 'Real foreign forum'
+  assert.equal(projectDiscordChannels([oldChat, foreign]).at(-1)!.label, 'Real foreign forum')
 })

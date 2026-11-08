@@ -27,14 +27,31 @@ export function discordParentKey(session: SidebarSession): DiscordChannelKey | u
   if (!channelId) return
   return { projectId: address.projectId, botInstanceId: address.botInstanceId, guildId: channel.guildId, channelId }
 }
+/** Earlier passive origins confused any parent_id with thread ancestry. A known
+ * text/forum channel's parent is a category, which cannot contain Discord threads.
+ * Normalize only this display projection, using exact Project/Bot/guild evidence. */
+function navigationSessions(sessions: readonly SidebarSession[]): SidebarSession[] {
+  const categories = new Set<string>()
+  for (const session of sessions) {
+    const key = discordParentKey(session), channel = session.discordChannel
+    if (key && channel && !discordThread(channel.type) && channel.parentId)
+      categories.add(discordChannelId({ ...key, channelId: channel.parentId }))
+  }
+  return sessions.map(session => {
+    const key = discordParentKey(session), channel = session.discordChannel
+    return key && channel && discordThread(channel.type) && categories.has(discordChannelId(key))
+      ? { ...session, discordChannel: { ...channel, type: 0, parentId: null, parentName: null } } : session
+  })
+}
 export function discordChannelHistories(sessions: readonly SidebarSession[], key: DiscordChannelKey): SidebarSession[] {
   const id = discordChannelId(key)
-  return sessions.filter(session => {
+  return navigationSessions(sessions).filter(session => {
     const parent = discordParentKey(session)
     return parent && discordChannelId(parent) === id
   })
 }
 export function projectDiscordChannels(sessions: SidebarSession[]): SidebarSession[] {
+  sessions = navigationSessions(sessions)
   const result: SidebarSession[] = [], parents = new Map<string, SidebarSession>()
   for (const session of sessions) {
     const key = discordParentKey(session)
@@ -57,7 +74,10 @@ export function projectDiscordChannels(sessions: SidebarSession[]): SidebarSessi
     if (!row.discordHistoryIds || row.discordHistoryIds.length !== 1) return row
     const original = sessions.find(session => session.sessionId === row.discordHistoryIds![0])!
     const type = original.discordChannel!.type
-    return !discordThread(type) && type !== 15 && type !== 16 ? original : row
+    // A lone child without any parent name/record needs no numeric-only wrapper.
+    // Named forums and multi-post parents still keep their channel index.
+    const unnamedSingleChild = discordThread(type) && !original.discordChannel!.parentName?.trim()
+    return unnamedSingleChild || !discordThread(type) && type !== 15 && type !== 16 ? original : row
   })
 }
 
