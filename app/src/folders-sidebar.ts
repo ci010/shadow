@@ -141,7 +141,9 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       || (session.description !== undefined && typeof session.description !== 'string')) throw invalid()
     const channelSource = parseChannelSource(session.channelSource, session.sessionId, projectId ?? session.projectId as string | undefined)
     let channelAddress: ChannelAddress | undefined
-    try { channelAddress = channelSource ?? channelAddressFromSessionId(session.sessionId) }
+    // Navigation metadata only, never routing authority.
+    try { channelAddress = channelSource ?? channelAddressFromSessionId(session.sessionId.startsWith('channel-inbox:')
+      ? `bot:${session.sessionId.slice('channel-inbox:'.length)}` : session.sessionId) }
     catch { throw invalid() }
     if (channelAddress && (projectId !== undefined && channelAddress.projectId !== projectId
       || session.projectId !== undefined && channelAddress.projectId !== session.projectId)) throw invalid()
