@@ -4162,5 +4162,11 @@
   "Read means seen, not accepted. It does not change Work or notify agents.": "已读仅表示知悉，不代表验收，不改变 Work 状态，也不会通知 agent。",
   "No matching completed work": "没有匹配的已完成工作",
   "Unread": "未读",
-  "Completion time unavailable": "完成时间不可用"
+  "Completion time unavailable": "完成时间不可用",
+  "Channel content": "频道内容",
+  "Choose a post or thread to open its original history.": "选择帖子或讨论串，打开原始历史记录。",
+  "Search posts and threads": "搜索帖子和讨论串",
+  "No posts or threads found.": "未找到帖子或讨论串。",
+  "Passive inbox": "被动收件箱",
+  "Original history": "原始历史记录"
 }
