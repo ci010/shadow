@@ -138,7 +138,10 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       || (session.focus !== undefined && typeof session.focus !== 'string')
       || (session.description !== undefined && typeof session.description !== 'string')) throw invalid()
     let channelAddress: ChannelAddress | undefined
-    try { channelAddress = channelAddressFromSessionId(session.sessionId) }
+    // Both active Bot conversations and passive inboxes carry the same scoped
+    // address tuple. This is navigation metadata only, never routing authority.
+    try { channelAddress = channelAddressFromSessionId(session.sessionId.startsWith('channel-inbox:')
+      ? `bot:${session.sessionId.slice('channel-inbox:'.length)}` : session.sessionId) }
     catch { throw invalid() }
     if (channelAddress && (projectId !== undefined && channelAddress.projectId !== projectId
       || session.projectId !== undefined && channelAddress.projectId !== session.projectId)) throw invalid()
